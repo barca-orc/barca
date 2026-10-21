@@ -44,18 +44,26 @@ __all__ = [
 
 
 class Always:
-    """Auto-materializes whenever stale and all upstreams are fresh."""
+    """The default: under `barca serve`, brought up to date at each tick of a
+    scheduled node above it."""
 
 
 class Manual:
-    """Only runs on explicit refresh."""
+    """Refreshed by hand only (`--refresh <name>`): never by a tick or by a
+    request for something below it, which reads its current result."""
 
 
 class Schedule:
-    """Runs on a cron schedule."""
+    """Runs on a cron schedule under `barca serve`.
 
-    def __init__(self, cron: str, /) -> None:
+    `max_failures` caps consecutive failed ticks (default 5): past it the
+    schedule is skipped and reported `failing` until an explicit request or a
+    change in its inputs.
+    """
+
+    def __init__(self, cron: str, /, *, max_failures: int = 5) -> None:
         self.cron = cron
+        self.max_failures = max_failures
 
 
 # ─── Decorators ───────────────────────────────────────────────────────────────

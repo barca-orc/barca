@@ -399,6 +399,34 @@ the asset that reads it, and everything built from it re-runs.
 Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
 consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
 
+### A `Manual` upstream is read as it is
+
+A `Manual` asset or task (`@asset(freshness=Manual)`) is refreshed by hand only. When
+`barca get` or `barca run` reads one on the way to the target, it is not recomputed, even when
+its inputs or code changed: the run reads its latest successful result, and does not plan
+anything above it. Its step is `cached` with a `detail` saying so (`Manual: its last result is
+read as it is`, or `Manual and stale: ...`). Nodes below it are hashed against that result, so
+they are served from cache until it changes. When it is stale, stderr says how to recompute it:
+
+```text
+[barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
+```
+
+- Only naming it in `--refresh` recomputes it: `--refresh baseline` (with the cascade,
+  everything below it in the cone too) or `--refresh-all`. That holds when it is the target too:
+  `barca get baseline` without `--refresh baseline` returns its current result, with the same
+  note when it is stale. A `Manual` task named as the target of `barca run` runs, since
+  `--refresh` names assets only.
+- `--refresh` cannot name an asset behind it: the run does not plan it, so the name is a usage
+  error that lists the assets you can refresh.
+- A `Manual` node that has never been computed cannot be read: the command exits 2 and the
+  remediation is the command that computes it. `--dry-run` predicts the same.
+- Sensors are polled whenever a run needs them, whatever their freshness. A partitioned `Manual`
+  node is not pinned yet: it is checked like any other asset.
+- On `barca serve`, `POST /runs` (what `--server` sends) and ticks read them as they are, as
+  `barca get` does (`barca docs scheduling`); the older aliases `POST /get/{target}`,
+  `POST /run/{target}` and `POST /run` compute `Manual` upstreams as before.
+
 ## Seeing what will happen: `--dry-run`
 
 `barca get` and `barca run` take `--dry-run`. It reports, for exactly that command and flags, which
@@ -717,7 +745,7 @@ Known limits:
 `--env <name>` (or `BARCA_ENV`, or `default_env` in `barca.toml`, else `default`) fully
 separates cache, artifacts, history and its backups. Use it for dev/staging/prod isolation.
 
-`get`, `run` and `serve` print the environment and artifact store they use once at startup, on
+`get` and `run` print the environment and artifact store they use once at startup, on
 stderr, when the environment comes from `default_env` in `barca.toml` or an artifact store is
 configured, so a one-off command on a box set up for another environment says so:
 
@@ -728,7 +756,9 @@ configured, so a one-off command on a box set up for another environment says so
 
 The source in brackets is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in
 default`. Credentials and signed URI queries are redacted. The line is never on stdout, so
-`--json` output is unchanged. With neither setting, nothing is printed.
+`--json` output is unchanged. With neither setting, nothing is printed. `serve` always prints
+the line, with `; metadata <path> (db format <n>)` added (`barca docs scheduling`, "The metadata
+DB at startup").
 
 ## Concurrent runs
 
@@ -837,6 +867,7 @@ The change is local to the selected environment's metadata database.
 .barca/metadata.db                          run history and materialization records (local DB)
 .barca/backups/<name>.db, <name>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
 .barca/metadata.db.pre-restore              the database `barca state restore` replaced
+.barca/metadata.db.reset-<UTC>              a database `barca state reset` moved aside (with its -wal, -shm)
 .barca/serve.lock                           held by a running `barca serve`, so `barca state restore` refuses to run under it
 .barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result

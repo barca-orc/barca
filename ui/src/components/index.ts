@@ -36,3 +36,6 @@ export type { SkeletonProps } from './Skeleton'
 
 export { ConnectionBadge } from './ConnectionBadge'
 export type { ConnectionBadgeProps } from './ConnectionBadge'
+
+export { ResetDatabaseButton, ResetDatabaseDialog } from './ResetDatabase'
+export type { ResetDatabaseButtonProps, ResetDatabaseDialogProps, ResetPhase } from './ResetDatabase'

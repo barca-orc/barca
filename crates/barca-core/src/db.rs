@@ -492,8 +492,64 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
     let conn = db
         .connect()
         .map_err(|e| BarcaError::Db(format!("failed to connect: {e}")))?;
-    crate::db_schema::check(&conn).await?;
+    crate::db_schema::check(&conn)
+        .await
+        .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
+}
+
+/// A [`BarcaError::MetadataUnusable`] that does not name the database yet; [`unusable_at`]
+/// names it.
+pub(crate) fn unusable(why: String) -> BarcaError {
+    BarcaError::MetadataUnusable {
+        path: String::new(),
+        why,
+    }
+}
+
+/// `error`, naming `path` if it is a [`BarcaError::MetadataUnusable`] that names no database.
+pub(crate) fn unusable_at(error: BarcaError, path: &str) -> BarcaError {
+    match error {
+        BarcaError::MetadataUnusable { path: p, why } if p.is_empty() => {
+            BarcaError::MetadataUnusable {
+                path: path.to_string(),
+                why,
+            }
+        }
+        e => e,
+    }
+}
+
+/// Why the file at `path` cannot be a metadata DB before it is opened: it is empty with no
+/// write-ahead log to hold its pages, or it is not a SQLite file. None for a missing file (a new
+/// database is created there) and for one that looks like a database.
+pub fn unusable_file(path: &str) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    if meta.is_dir() {
+        return Some("it is a directory".to_string());
+    }
+    if empty_file(path) {
+        return Some("it is empty (0 bytes)".to_string());
+    }
+    not_a_database(path)
+}
+
+/// [`BarcaError::MetadataUnusable`] when `path` is a directory, which no snapshot can copy. Other
+/// checks of the file wait for its lock ([`init_db_as`]).
+pub fn directory_check(path: &str) -> Result<(), BarcaError> {
+    if Path::new(path).is_dir() {
+        return Err(BarcaError::MetadataUnusable {
+            path: path.to_string(),
+            why: "it is a directory".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether `path` is a 0-byte file with no write-ahead log beside it: no database, though
+/// SQLite would start one there. barca never leaves a database it creates empty.
+pub(crate) fn empty_file(path: &str) -> bool {
+    fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) && wal_is_clean(path)
 }
 
 /// Open the database at `db_path` and connect. Callers must hold [`db_guard`]
@@ -555,9 +611,82 @@ pub fn wal_is_clean(db_path: &str) -> bool {
 }
 
 pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
+    init_db_as(db_path, db_path).await.map(|_| ())
+}
+
+/// [`init_db`] on the file at `path`, naming `shown` when the database cannot be used (a
+/// snapshot names the database it copies). Returns the format version (`PRAGMA user_version`,
+/// [`crate::db_schema::VERSION`] once initialized).
+///
+/// A database this release cannot use is [`BarcaError::MetadataUnusable`]: an empty file, a file
+/// that is not SQLite, a newer format, or a malformed schema. A lock or I/O failure is
+/// [`BarcaError::Db`].
+pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
     let _g = db_guard().await;
-    let (_db, conn) = open_conn(db_path).await?;
-    init_schema(&conn).await
+    let initialized = async {
+        // Under the lock: a database another process is creating is empty until it commits.
+        let lock = acquire_file_lock(path, DB_FILE_LOCK_WAIT).await?;
+        if let Some(why) = unusable_file(path) {
+            return Err(unusable(why));
+        }
+        let (db, conn) = connect(path).await?;
+        let _handle = DbHandle {
+            _db: db,
+            _lock: lock,
+        };
+        init_schema(&conn).await?;
+        crate::db_schema::read_version(&conn).await
+    }
+    .await;
+    initialized.map_err(|e| named(e, shown))
+}
+
+/// `error` naming `shown`, if it says the database cannot be used. Turso's own words for a file
+/// it cannot read as a database count.
+fn named(error: BarcaError, shown: &str) -> BarcaError {
+    match error {
+        BarcaError::MetadataUnusable { why, .. } => BarcaError::MetadataUnusable {
+            path: shown.to_string(),
+            why,
+        },
+        BarcaError::Db(msg) if msg.contains("not a database") || msg.contains("malformed") => {
+            BarcaError::MetadataUnusable {
+                path: shown.to_string(),
+                why: msg,
+            }
+        }
+        e => e,
+    }
+}
+
+/// The format version of the metadata DB at `path`, read from a private snapshot without
+/// writing the file: `None` when there is no database yet. A database this release cannot use
+/// is [`BarcaError::MetadataUnusable`] naming `path`. For a read-only server, which never
+/// migrates the file itself.
+pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
+    directory_check(path)?;
+    let Some(snapshot) = DbSnapshot::take(path).await? else {
+        return Ok(None);
+    };
+    // The copy is private, so it can be judged without a lock.
+    if let Some(why) = unusable_file(snapshot.path()) {
+        return Err(BarcaError::MetadataUnusable {
+            path: path.to_string(),
+            why,
+        });
+    }
+    // The format the file is in, before the copy is migrated.
+    let version = {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(snapshot.path())
+            .await
+            .map_err(|e| named(e, path))?;
+        crate::db_schema::read_version(&conn)
+            .await
+            .map_err(|e| named(e, path))?
+    };
+    init_db_as(snapshot.path(), path).await?;
+    Ok(Some(version))
 }
 
 /// Migrate legacy metadata atomically, preserving authoritative history. Unknown versions
@@ -572,15 +701,20 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     let version = crate::db_schema::check(conn).await?;
     if version == crate::db_schema::VERSION {
         if crate::db_schema::additions_missing(conn).await? {
+            // A table that is there but lacks a column the additions do not bring is malformed,
+            // not behind: refuse it before any write.
+            crate::state_validate::legacy_schema(conn)
+                .await?
+                .map_err(unusable)?;
             return add_to_current_schema(conn).await;
         }
         return crate::state_validate::usable_schema(conn)
             .await?
-            .map_err(BarcaError::Db);
+            .map_err(unusable);
     }
     crate::state_validate::legacy_schema(conn)
         .await?
-        .map_err(BarcaError::Db)?;
+        .map_err(unusable)?;
     conn.execute("BEGIN IMMEDIATE", ())
         .await
         .map_err(|e| BarcaError::Db(format!("failed to begin schema migration: {e}")))?;
@@ -588,7 +722,7 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
         migrate_legacy_schema(conn).await?;
         crate::state_validate::usable_schema(conn)
             .await?
-            .map_err(BarcaError::Db)?;
+            .map_err(unusable)?;
         conn.execute(
             &format!("PRAGMA user_version = {}", crate::db_schema::VERSION),
             (),
@@ -639,7 +773,7 @@ async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaErro
         }
         crate::state_validate::usable_schema(conn)
             .await?
-            .map_err(BarcaError::Db)?;
+            .map_err(unusable)?;
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| BarcaError::Db(format!("failed to commit schema migration: {e}")))?;
@@ -1108,6 +1242,187 @@ pub async fn set_schedule_pause(
     .await
     .map_err(|e| BarcaError::Db(format!("failed to record schedule pause: {e}")))?;
     Ok(())
+}
+
+/// Consecutive failed ticks of one scheduled node (`schedule_failures`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScheduleFailures {
+    /// Consecutive ticks whose run failed.
+    pub failures: u32,
+    /// The nodes that failed in the last counted tick.
+    pub failed_nodes: Vec<String>,
+    /// The highest materialization id when the last failure was counted.
+    pub mark: i64,
+}
+
+/// Consecutive failed ticks for every scheduled node that has any.
+pub async fn get_schedule_failures(
+    db_path: &str,
+) -> Result<HashMap<String, ScheduleFailures>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT node_id, failures, failed_nodes, mark FROM schedule_failures",
+            (),
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query schedule_failures: {e}")))?;
+    let mut out = HashMap::new();
+    while let Ok(Some(row)) = rows.next().await {
+        let node_id = row.get::<String>(0).unwrap_or_default();
+        if node_id.is_empty() {
+            continue;
+        }
+        out.insert(
+            node_id,
+            ScheduleFailures {
+                failures: u32::try_from(row.get::<i64>(1).unwrap_or_default()).unwrap_or(0),
+                failed_nodes: row
+                    .get::<String>(2)
+                    .ok()
+                    .and_then(|j| serde_json::from_str(&j).ok())
+                    .unwrap_or_default(),
+                mark: row.get::<i64>(3).unwrap_or_default(),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// Record `node_id`'s consecutive failed ticks; zero failures removes its row.
+pub async fn set_schedule_failures(
+    db_path: &str,
+    node_id: &str,
+    state: &ScheduleFailures,
+) -> Result<(), BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let failed = |e| BarcaError::Db(format!("failed to write schedule_failures: {e}"));
+    if state.failures == 0 {
+        conn.execute(
+            "DELETE FROM schedule_failures WHERE node_id = ?1",
+            [node_id.to_string()],
+        )
+        .await
+        .map_err(failed)?;
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO schedule_failures (node_id, failures, failed_nodes, mark)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(node_id) DO UPDATE SET failures = ?2, failed_nodes = ?3, mark = ?4",
+        [
+            node_id.to_string(),
+            state.failures.to_string(),
+            serde_json::to_string(&state.failed_nodes).unwrap_or_else(|_| "[]".into()),
+            state.mark.to_string(),
+        ],
+    )
+    .await
+    .map_err(failed)?;
+    Ok(())
+}
+
+/// The highest materialization id recorded so far (0 when there is none).
+pub async fn max_materialization_id(db_path: &str) -> Result<i64, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query("SELECT COALESCE(MAX(id), 0) FROM materializations", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    Ok(match rows.next().await {
+        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0),
+        _ => 0,
+    })
+}
+
+/// Whether a successful materialization of one of `nodes` (or of one of their partitions) was
+/// recorded after materialization id `mark`.
+pub async fn succeeded_since(
+    db_path: &str,
+    mark: i64,
+    nodes: &[String],
+) -> Result<bool, BarcaError> {
+    if nodes.is_empty() {
+        return Ok(false);
+    }
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT node_id FROM materializations WHERE id > ?1 AND status = 'success'",
+            [mark.to_string()],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    while let Ok(Some(row)) = rows.next().await {
+        let id = row.get::<String>(0).unwrap_or_default();
+        let base = id.split('[').next().unwrap_or(&id);
+        if nodes.iter().any(|n| n == base) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The latest successful materialization of one step (a display id) that has an artifact.
+#[derive(Debug, Clone)]
+pub(crate) struct LatestSuccess {
+    /// Its row id: a later success of another step has a higher one.
+    pub(crate) id: i64,
+    pub(crate) run_hash: String,
+    pub(crate) output: OutputRef,
+}
+
+/// The latest successful materialization of `node_id` (a display id) whose artifact this run may
+/// read; `None` when it never succeeded.
+pub(crate) async fn latest_success(cache: &CacheReader, node_id: &str) -> Option<LatestSuccess> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
+             output_hash FROM materializations WHERE node_id = ?1 AND status = 'success' \
+             AND artifact_path IS NOT NULL ORDER BY id DESC",
+            [node_id.to_string()],
+        )
+        .await
+        .ok()?;
+    while let Ok(Some(row)) = rows.next().await {
+        let Ok(path) = row.get::<String>(2) else {
+            continue;
+        };
+        if !cache.allows_artifact(&path) {
+            continue;
+        }
+        return Some(LatestSuccess {
+            id: row.get::<i64>(0).ok()?,
+            run_hash: row.get::<String>(1).ok().unwrap_or_default(),
+            output: OutputRef {
+                path,
+                format: row.get::<String>(3).ok()?,
+                size_bytes: row.get::<i64>(4).ok()? as u64,
+                elapsed_seconds: None,
+                content_hash: row.get::<String>(5).ok().filter(|h| !h.is_empty()),
+            },
+        });
+    }
+    None
+}
+
+/// The id of the latest successful materialization of `node_id` (a display id), artifact or
+/// not; `None` when it never succeeded.
+pub(crate) async fn latest_success_id(cache: &CacheReader, node_id: &str) -> Option<i64> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT MAX(id) FROM materializations WHERE node_id = ?1 AND status = 'success'",
+            [node_id.to_string()],
+        )
+        .await
+        .ok()?;
+    rows.next().await.ok()??.get::<i64>(0).ok()
 }
 
 /// The output hash of the latest successful materialization of each step of `base_ids` (the
@@ -1590,6 +1905,43 @@ pub(crate) async fn live_runs(conn: &turso::Connection, db_path: &str) -> Vec<St
         .map(|run| run.run_id)
         .filter(|id| !gone.contains(id))
         .collect()
+}
+
+/// The `running` runs whose owner this process can see is alive: on this machine, a process
+/// that exists. A run whose owner cannot be judged from here (another machine, an older row
+/// from another host) is not listed: unlike [`live_runs`], which keeps those, this is for a
+/// refusal that must not hold forever because of a row nobody will finish (`barca state
+/// reset`). Best effort: empty when nothing can be read.
+pub(crate) async fn runs_alive_here(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+    use crate::run_owner::{Owner, judge_json};
+    let on = crate::run_owner::System::for_db(db_path);
+    let this_host = crate::run_owner::Observer::here(&on).host;
+    running_runs(conn)
+        .await
+        .into_iter()
+        .filter(|run| {
+            if run.owner.is_empty() {
+                !this_host.is_empty()
+                    && run.host == this_host
+                    && run.pid.is_some_and(|pid| pid > 0 && pid_alive(pid))
+            } else {
+                judge_json(run.pid, &run.owner, &on) == Owner::Alive
+            }
+        })
+        .map(|run| run.run_id)
+        .collect()
+}
+
+/// Open the database file at `db_path`, taking no lock, for a caller that holds it
+/// ([`lock_db`]). `None` when it cannot be opened or is not one this version reads.
+pub(crate) async fn connect_locked(db_path: &str) -> Option<(turso::Database, turso::Connection)> {
+    connect(db_path).await.ok()
+}
+
+/// Create barca's tables in a new database at `db_path`, for a caller that holds its lock.
+pub(crate) async fn init_locked(db_path: &str) -> Result<(), BarcaError> {
+    let (_db, conn) = connect(db_path).await?;
+    init_schema(&conn).await
 }
 
 // ─── Cache size limit (RFC-0012) ─────────────────────────────────────────────

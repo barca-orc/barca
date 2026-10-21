@@ -59,8 +59,11 @@ def test_every_node_except_wide_asset_runs(project):
     for name, kind in sorted(nodes(project).items()):
         if name in SKIP:
             continue
-        command = "run" if kind == "task" else "get"
-        out = result(barca(project, command, name, PIPELINE, "--json"))
+        # A Manual asset (`manual_only`) is computed only when named in --refresh (RFC-0008).
+        args = {"task": ["run", name], "sensor": ["get", name]}.get(
+            kind, ["get", name, "--refresh", name]
+        )
+        out = result(barca(project, *args, PIPELINE, "--json"))
         assert out["status"] == "success", (name, out)
 
 

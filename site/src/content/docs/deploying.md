@@ -160,7 +160,7 @@ server {
 ```
 $ docker compose up -d
 $ curl -s http://127.0.0.1:8080/health
-{"read_only":false,"scheduler":true,"status":"ok","version":"0.24.0","load_errors":[]}
+{"read_only":false,"scheduler":true,"scheduler_enabled":true,"metadata_error":null,"status":"ok","version":"0.28.0","load_errors":[]}
 ```
 
 `docker compose ps` shows the `barca` service as `healthy` once the first check passes, and
@@ -194,7 +194,19 @@ What each part is for:
   timeout. With `docker stop` that is `-t 40`; in Kubernetes, `terminationGracePeriodSeconds`
   (default 30) should exceed it too.
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
-  While it drains it still returns 200, with `"status": "draining"`.
+  While it drains it still returns 200, with `"status": "draining"`. Alert on
+  `scheduler_enabled: false` for a server that should schedule, and on a non-null
+  `metadata_error`.
+- **The metadata DB.** The first line `serve` prints names the environment, the artifact store
+  and the database with its format, e.g. `[barca] env prod (--env); artifact store local
+  (.barca/envs/prod/artifacts); metadata .barca/envs/prod/metadata.db (db format 1)`. Check it
+  names the environment you meant: with `default_env` in `barca.toml` and no `--env`, it is that
+  one. A writer server that cannot set the database up (empty, not SQLite, written by a newer
+  barca, a malformed schema, or not openable) exits 3 before it binds, naming the file and what
+  to do, so the restart policy and the health check show it; before 0.28 it kept serving with
+  the scheduler off. A `--read-only` admin server keeps serving and reports the error in
+  `metadata_error`. An empty or invalid `.barca/metadata.db` left beside the env's database
+  gets a warning naming both; remove it.
   The check runs inside the container, so it can use `127.0.0.1`. The slim image has no
   `curl`, so the check uses Python.
 - **The port.** With the default loopback address, publishing barca's own port

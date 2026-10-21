@@ -56,6 +56,7 @@ outside the `GENERATED` blocks is written by hand.
 | `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
+| `barca state reset` and its JSON, `POST /state/reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, `SINK FAILED`) whose wording may change |
 
@@ -85,9 +86,10 @@ outside the `GENERATED` blocks is written by hand.
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
 | `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a named view |
-| `barca state` | - | stable | Metadata backups: list them, or put one back in place of the local database |
+| `barca state` | - | stable | Metadata backups: list them, put one back in place of the local database, or start over |
 | `barca state backups` | - | stable | List the metadata backups, local and in the store, newest first |
 | `barca state restore` | - | stable | Put a metadata backup in place of the local database (the current one is kept aside) |
+| `barca state reset` | - | experimental: new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use | Start the metadata database over: move it aside and create an empty one (experimental) |
 | `barca docs` | `[<TOPIC>]` | stable | Show the built-in manual: concepts, output formats, examples, agent conventions |
 | `barca version` | - | stable | Print version information |
 | `barca help` | - | stable | Print this message or the help of the given subcommand(s) |
@@ -298,10 +300,19 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `--from` | `N\|NAME` | - | stable | Which backup: its index in `barca state backups` (1 = newest) or its name; default the newest |
+| `--from` | `N\|NAME\|PATH` | - | stable | Which backup: its index in `barca state backups` (1 = newest) or its name; default the newest. Or the path of a database file, such as one `barca state reset` moved aside |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
+
+#### barca state reset
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `-y, --yes` | - | default `false` | experimental (with the command) | Do not ask: required when stdin is not a terminal |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
 #### barca docs
 
@@ -430,7 +441,10 @@ task/asset misuse, a `.py` file that does not parse, a decorator called with an 
 not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `barca docs assets`,
 "Accepted arguments"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
-`collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
+`collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`, a
+`get`/`run` that reads (or a `get` that targets) a `Manual` node that has never been computed,
+without naming it in `--refresh` (the remediation is the command that computes it;
+`barca docs cache`). `infra`:
 barca or its environment failed (metadata DB, workers, the store, I/O); retrying may help.
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
 `docker stop` sends), at any point of a `get` or `run`: while steps run, and
@@ -459,12 +473,18 @@ were cancelled, so deploy tooling can tell a forced stop from a clean drain (`ba
 scheduling`, "Stopping the server"). Exit 1 from `serve` means a forced stop, not a failed step
 of yours.
 
+A writer `barca serve` (not `--read-only`) sets its metadata DB up before it binds the port. When
+it cannot (the file is empty, not SQLite, in a newer format or has a malformed schema, or cannot be
+opened) it exits 3 with the error naming the file and the remediation, and serves nothing. A
+`--read-only` server keeps serving and reports the error in `GET /health` `metadata_error`
+(`barca docs scheduling`, "The metadata DB at startup").
+
 With `BARCA_LOG=json`, `barca serve` writes its lines, an error that stops it included, as JSON
 objects on stdout instead of text on stderr. Exit codes do not change. `get`, `run` and every
 other command keep progress and errors on stderr whatever `BARCA_LOG` says.
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
-invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
+invalid `env=`, cron or `max_failures=`) fails every command that reads that file, whatever the target: `list`,
 `plan`, `status`, `get`, `run`, `stats` and `sql` exit 2 and run nothing. With no file arguments
 that is every pipeline file of the project. The envelope's `error` starts with `Parse error:
 <file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
@@ -614,7 +634,10 @@ the set of `kind` values grows additively.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. `artifact_missing` is a step that has a cached result whose artifact file is gone
+  words. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
+  stale; `barca docs cache`) carries a `detail` starting `Manual`. Breaking in this release: a
+  stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
+  `artifact_missing` is a step that has a cached result whose artifact file is gone
   and is needed (`barca docs cache`); `evicted` is the same when the cache size limit deleted
   the file (experimental, "Disk use").
 - `cache` (experimental) appears only when the check after the run found `.barca/` over its
@@ -1425,7 +1448,7 @@ counts every node even when `nodes` is truncated.
   by format `rows`, `columns[]`, `keys`, `key_count`, `sample` (with `--sample`), or only `note`
   when it cannot be read.
 
-### state backups and state restore
+### state backups, state restore and state reset
 
 `barca state backups` prints `{backups, local_dir, store}` and, when the store could not be
 listed, `store_error` (a string; the local backups are still listed and stderr has a warning).
@@ -1437,15 +1460,29 @@ Each entry of `backups`, newest first: `index` (integer, 1 = newest), `name`
 `barca_version` (strings or `null`; from the backup's sidecar), and `agree` (boolean when the
 backup is in both places, else `null`). No backups is an empty array, exit 0.
 
-`barca state restore [--from N|NAME]` puts a backup in place of the metadata DB and moves the
+`barca state restore [--from N|NAME|PATH]` puts a backup (or, with a path, any barca database
+file, such as one `barca state reset` moved aside) in place of the metadata DB and moves the
 current one to `metadata.db.pre-restore`. One `[barca] restored ...` line on stderr (not
 contract); with `--json` (or piped), stdout has `{restored, from, source, pre_restore, rows,
-run_id}`: `from` is `local` or `store`, `source` the copy's path or redacted URI,
+run_id}`: `from` is `local`, `store` or `file` (`--from PATH`; `rows` and `run_id` are then
+`null`), `source` the copy's path or redacted URI,
 `pre_restore` the path of the replaced database or `null`. Exit 2 (`usage`): no backup, an
 unknown `--from`, a copy that fails validation (the message names the next newest), a copy in a
 format this barca cannot use. Exit 3 (`infra`): a `barca serve` holds the environment, or no
 local backup exists and the store cannot be listed. Nothing is changed on any error.
 Stability: stable.
+
+`barca state reset [--yes]` moves the metadata DB and its `-wal` and `-shm` aside to
+`metadata.db.reset-<UTC>` (and `<that>-wal`, `<that>-shm`) in the same directory and creates an
+empty one; nothing is deleted. Without `--yes` it asks on stderr when stdin is a terminal (an
+answer other than `y` changes nothing, exit 0). One `[barca] reset the metadata database ...`
+line on stderr (not contract); with `--json` (or piped), stdout has `{database, moved_to, moved,
+undo}`: `database` the path of the new empty DB, `moved_to` the moved file's path or `null` when
+there was no DB, `moved` an array of every moved path (the DB first), `undo` the
+`barca state restore --from ...` command line or `null`. Exit 2 (`usage`): no `--yes` and stdin
+is not a terminal. Exit 3 (`infra`): a run is in progress on this machine (the message names it),
+or a `barca serve` holds the environment (use `POST /state/reset`). Nothing is changed on any
+error. Stability: experimental.
 
 ### history
 
@@ -1768,6 +1805,14 @@ An argument the parser rejects (here `--jsn`) gives the same shape:
 `code` equals the exit code. `remediation` can be `null`. In human mode the same error is prose
 with the remediation before the final run summary.
 
+`reason` (string) is present only on an error a client may handle on its own, and names it
+stably; any other error has no `reason` key. The one value so far is `metadata_unusable`
+(`kind` `infra`, exit 3): the metadata DB is there but this barca cannot use it (empty, not a
+SQLite file, a newer format, a malformed schema). `error` names the file and `remediation` says
+to upgrade barca, put a backup back with `barca state restore`, or start over with
+`barca state reset` (the UI's Reset database button under `barca serve`). The HTTP
+API returns the same envelope (`500`).
+
 ### --agent lines
 
 With `--agent`, `get` and `run` print plain progress lines on stderr instead of a progress bar.
@@ -1804,7 +1849,8 @@ placeholders:
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
-| `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get`, `run` and `serve` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
+| `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get` and `run` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
+| `[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>)` | once at startup of `serve`, always, after its metadata DB is set up: the line above plus the database and its format (`PRAGMA user_version`). `(unusable)` in place of `(db format <n>)` when it cannot be used (a writer then exits 3), `(not created yet)` when there is no database yet (the first run creates it) | experimental |
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
 | `[barca] uploading <n> pending results to <store> from an earlier run` | before workers start, when results an earlier run could not upload are retried (every mode); followed by `[barca] uploaded <n> pending results` or `[barca] <n> pending results still not uploaded (<k> uploaded): <why>` | experimental |

@@ -529,7 +529,7 @@ fn entries(
 pub struct Restored {
     /// The backup put in place.
     pub restored: String,
-    /// `local` or `store`: which copy was used.
+    /// `local` or `store`: which copy was used; `file` for `--from <path>`.
     pub from: String,
     /// That copy's path or store location (credentials redacted).
     pub source: String,
@@ -539,8 +539,9 @@ pub struct Restored {
     pub run_id: Option<String>,
 }
 
-/// Put a backup in place of the local database, only when asked. `from` is an index into the
-/// listing (1 = newest) or a backup name (`.db` optional); `None` is the newest.
+/// Put a backup in place of the local database, only when asked. `from` is a path to a
+/// database file (one [`reset`] moved aside, say), an index into the listing (1 = newest) or a
+/// backup name (`.db` optional); `None` is the newest.
 ///
 /// The chosen copy is staged next to the database and validated
 /// ([`crate::state_validate`]: whole file, integrity, barca's tables, a format this version
@@ -560,6 +561,11 @@ pub async fn restore(
             "cannot restore while barca serve is using this environment ({holder}): stop the \
              server first. Nothing was changed."
         )));
+    }
+    if let Some(sel) = from
+        && Path::new(sel).is_file()
+    {
+        return restore_file(cfg, Path::new(sel)).await;
     }
     let (found, store_error) = find(python, cfg).await;
     let listing = entries(cfg, &found, store_error.clone());
@@ -783,6 +789,177 @@ async fn swap(db_path: &str, staged: &Path) -> Result<Option<String>, BarcaError
         std::fs::File::open(parent).and_then(|d| d.sync_all()).ok();
     }
     Ok(had.then_some(pre))
+}
+
+// ─── Reset ───────────────────────────────────────────────────────────────────
+
+/// What `barca state reset` (and the server's `POST /state/reset`) did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, rename = "ResetResult"))]
+pub struct Reset {
+    /// The metadata database, now a new empty one.
+    pub database: String,
+    /// Where the database it replaced was moved: `<db>.reset-<UTC>` in the same directory.
+    /// `null` when there was no database.
+    pub moved_to: Option<String>,
+    /// Every file moved: the database and, when they were there, its `-wal` and `-shm` beside
+    /// it as `<moved_to>-wal` and `<moved_to>-shm`.
+    pub moved: Vec<String>,
+    /// The command that puts the moved database back (`barca state restore --from <moved_to>`,
+    /// with `barca serve` stopped). `null` when nothing was moved.
+    pub undo: Option<String>,
+}
+
+/// Start the metadata database over: under the database's lock, move it and its `-wal` and
+/// `-shm` aside to `<db>.reset-<UTC>` in the same directory, and create an empty database in
+/// its place. Nothing is deleted, artifacts are left alone, and a database that cannot be
+/// opened (corrupt, a format this barca does not read) is moved as it is.
+///
+/// `admit` is called under the lock, before anything moves, with the runs the database says
+/// are running in a process that is alive on this machine; an error from it refuses the reset
+/// and nothing changes. The caller decides what counts as in flight (the CLI: any such run;
+/// the server: those, and its own pending and running runs).
+pub async fn reset<E: From<BarcaError>>(
+    cfg: &ResolvedConfig,
+    admit: impl FnOnce(&[String]) -> Result<(), E>,
+) -> Result<Reset, E> {
+    let db_path = cfg.db_path.as_str();
+    if let Some(dir) = Path::new(db_path).parent()
+        && !dir.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| BarcaError::Db(format!("failed to create {}: {e}", dir.display())))?;
+    }
+    let _lock = crate::db::lock_db(db_path).await?;
+    let had = Path::new(db_path).exists();
+    let running = if had {
+        match crate::db::connect_locked(db_path).await {
+            Some((_db, conn)) => crate::db::runs_alive_here(&conn, db_path).await,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    admit(&running)?;
+    let mut moved = Vec::new();
+    let mut moved_to = None;
+    if had {
+        // Fold the log in when it can be, so the moved file is one database on its own; a
+        // database that cannot be opened moves with its log beside it.
+        let _ = crate::db::fold_log(db_path).await;
+        let stamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S%.3fZ");
+        let aside = format!("{db_path}.reset-{stamp}");
+        for suffix in ["", "-wal", "-shm"] {
+            if Path::new(&format!("{aside}{suffix}")).exists() {
+                return Err(BarcaError::Db(format!(
+                    "{aside}{suffix} already exists; retry in a moment. Nothing was changed."
+                ))
+                .into());
+            }
+        }
+        for suffix in ["", "-wal", "-shm"] {
+            let from = format!("{db_path}{suffix}");
+            let to = format!("{aside}{suffix}");
+            match std::fs::rename(&from, &to) {
+                Ok(()) => moved.push(to),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && !suffix.is_empty() => {}
+                Err(e) => {
+                    return Err(
+                        BarcaError::Db(format!("failed to move {from} to {to}: {e}")).into(),
+                    );
+                }
+            }
+        }
+        moved_to = Some(aside);
+    }
+    crate::db::init_locked(db_path).await?;
+    if let Some(parent) = Path::new(db_path).parent() {
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        std::fs::File::open(parent).and_then(|d| d.sync_all()).ok();
+    }
+    let undo = moved_to.as_ref().map(|aside| {
+        let mut cmd = format!(
+            "barca state restore --from {}",
+            crate::envelope::shell_quote(aside)
+        );
+        if cfg.env != crate::config::DEFAULT_ENV {
+            cmd.push_str(&format!(
+                " --env {}",
+                crate::envelope::shell_quote(&cfg.env)
+            ));
+        }
+        cmd
+    });
+    Ok(Reset {
+        database: db_path.to_string(),
+        moved_to,
+        moved,
+        undo,
+    })
+}
+
+/// [`restore`] from a database file named by its path (as [`reset`] leaves one), with its
+/// `-wal` beside it when there is one.
+async fn restore_file(cfg: &ResolvedConfig, file: &Path) -> Result<Restored, BarcaError> {
+    let source = std::fs::canonicalize(file)
+        .unwrap_or_else(|_| file.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    if Path::new(&source) == Path::new(&cfg.db_path)
+        || std::fs::canonicalize(&cfg.db_path).is_ok_and(|db| db == Path::new(&source))
+    {
+        return Err(BarcaError::Usage(format!(
+            "--from {}: that is the current database. Nothing was changed.",
+            file.display()
+        )));
+    }
+    let staged = PathBuf::from(format!("{}.restore-{}", cfg.db_path, std::process::id()));
+    let staged_str = staged.to_string_lossy().into_owned();
+    let copied = std::fs::copy(file, &staged).map(drop).and_then(|()| {
+        let wal = format!("{source}-wal");
+        if !crate::db::wal_is_clean(&source) {
+            std::fs::copy(&wal, format!("{staged_str}-wal")).map(drop)?;
+        }
+        Ok(())
+    });
+    if let Err(e) = copied {
+        discard(&staged);
+        return Err(BarcaError::Other(format!(
+            "could not copy {source}: {e}. Nothing was changed."
+        )));
+    }
+    match validate(&staged).await {
+        Ok(()) => {
+            let pre_restore = swap(&cfg.db_path, &staged).await;
+            discard(&staged);
+            Ok(Restored {
+                restored: file
+                    .file_name()
+                    .map_or_else(|| source.clone(), |n| n.to_string_lossy().into_owned()),
+                from: "file".to_string(),
+                source,
+                pre_restore: pre_restore?,
+                rows: None,
+                run_id: None,
+            })
+        }
+        Err(Invalid::Machine(e)) => {
+            discard(&staged);
+            Err(e)
+        }
+        Err(Invalid::Copy(invalid)) => {
+            discard(&staged);
+            Err(BarcaError::Usage(format!(
+                "{} is not a database barca can use: {}. Nothing was changed.",
+                file.display(),
+                invalid.why
+            )))
+        }
+    }
 }
 
 // ─── barca serve's hold on an environment ────────────────────────────────────
@@ -1191,6 +1368,86 @@ mod tests {
                 Err(BarcaError::Usage(_))
             ));
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reset_moves_the_database_aside_starts_empty_and_the_moved_file_restores() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = cfg(dir.path());
+        let python = python(dir.path());
+        with_runs(&cfg, 2).await;
+        // A run in progress in a live process (this one) is handed to `admit`, which refuses.
+        let live = crate::db::generate_run_id();
+        crate::db::create_run(&cfg.db_path, &live, "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        let before = std::fs::read(&cfg.db_path).unwrap();
+        let refused = reset(&cfg, |running| {
+            assert_eq!(running, std::slice::from_ref(&live));
+            Err(BarcaError::Other("in flight".into()))
+        })
+        .await;
+        assert!(matches!(refused, Err(BarcaError::Other(_))));
+        assert_eq!(
+            std::fs::read(&cfg.db_path).unwrap(),
+            before,
+            "refused: untouched"
+        );
+        crate::db::finish_run(&cfg.db_path, &live, "success", 0, 0, 0.1)
+            .await
+            .unwrap();
+
+        let done = reset(&cfg, |running| {
+            assert!(running.is_empty(), "{running:?}");
+            Ok::<_, BarcaError>(())
+        })
+        .await
+        .unwrap();
+        let moved = done.moved_to.clone().unwrap();
+        let name = Path::new(&moved).file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("metadata.db.reset-"), "{name}");
+        assert_eq!(Path::new(&moved).parent(), Path::new(&cfg.db_path).parent());
+        assert_eq!(done.moved[0], moved);
+        assert_eq!(done.database, cfg.db_path);
+        assert_eq!(
+            done.undo.as_deref(),
+            Some(format!("barca state restore --from {moved}").as_str())
+        );
+        assert_eq!(crate::db::count_runs(&cfg.db_path).await.unwrap(), 0);
+        assert_eq!(crate::db::count_runs(&moved).await.unwrap(), 3);
+
+        // The moved file restores, by its path.
+        let restored = restore(&python, &cfg, Some(&moved)).await.unwrap();
+        assert_eq!(restored.from, "file");
+        assert_eq!(crate::db::count_runs(&cfg.db_path).await.unwrap(), 3);
+        assert!(Path::new(&moved).exists(), "restore copies; the file stays");
+        // A file that is not a database is a usage error, and nothing changes.
+        let junk = dir.path().join("junk.db");
+        std::fs::write(&junk, b"not a database").unwrap();
+        assert!(matches!(
+            restore(&python, &cfg, Some(&junk.to_string_lossy())).await,
+            Err(BarcaError::Usage(_))
+        ));
+        assert_eq!(crate::db::count_runs(&cfg.db_path).await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn reset_moves_a_database_that_cannot_be_opened_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = cfg(dir.path());
+        // No database yet: an empty one is created, nothing is moved.
+        let none = reset(&cfg, |_| Ok::<_, BarcaError>(())).await.unwrap();
+        assert_eq!((none.moved_to, none.undo), (None, None));
+        assert!(none.moved.is_empty());
+        std::fs::write(&cfg.db_path, b"garbage, not SQLite").unwrap();
+        std::fs::write(format!("{}-wal", cfg.db_path), b"a log").unwrap();
+        let done = reset(&cfg, |_| Ok::<_, BarcaError>(())).await.unwrap();
+        let moved = done.moved_to.unwrap();
+        assert_eq!(done.moved, vec![moved.clone(), format!("{moved}-wal")]);
+        assert_eq!(std::fs::read(&moved).unwrap(), b"garbage, not SQLite");
+        assert_eq!(std::fs::read(format!("{moved}-wal")).unwrap(), b"a log");
+        assert_eq!(crate::db::count_runs(&cfg.db_path).await.unwrap(), 0);
     }
 
     #[test]

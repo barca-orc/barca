@@ -96,6 +96,19 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
             PRIMARY KEY (job, integration)
         )",
     ),
+    // Consecutive failed ticks per scheduled node (RFC-0008 rule 9): how many, which nodes
+    // failed in the last one, and the highest materialization id when it was counted. A
+    // success recorded after `mark` for one of those nodes, for one of their direct inputs or
+    // for the scheduled node itself (an explicit request, or an input change) resets it.
+    (
+        "schedule_failures",
+        "CREATE TABLE IF NOT EXISTS schedule_failures (
+            node_id TEXT PRIMARY KEY,
+            failures INTEGER NOT NULL,
+            failed_nodes TEXT NOT NULL,
+            mark INTEGER NOT NULL
+        )",
+    ),
 ];
 
 /// Create every table of [`ADDED_TABLES`] that is missing.
@@ -140,8 +153,10 @@ pub(crate) fn compatible_version(version: i64) -> Result<i64, String> {
     }
 }
 
+/// The format version, or [`BarcaError::MetadataUnusable`] (naming no path) for one this
+/// release cannot read.
 pub(crate) async fn check(conn: &Connection) -> Result<i64, BarcaError> {
-    compatible_version(read_version(conn).await?).map_err(BarcaError::Db)
+    compatible_version(read_version(conn).await?).map_err(crate::db::unusable)
 }
 
 /// Whether a version-1 database lacks an additive column, table or index of this release, so that
@@ -376,7 +391,8 @@ mod tests {
 
     /// A format-1 database last written by 0.24.3 lacks everything format 1 gained since: the
     /// cache size limit's columns and index (0.25.0), and `runs.job`, `idx_runs_job`,
-    /// `notifications` and `pending_uploads` (0.26.0). Opening it adds all of them in place,
+    /// `notifications` and `pending_uploads` (0.26.0), and `schedule_failures` (0.28.0). Opening
+    /// it adds all of them in place,
     /// keeps its rows, and leaves exactly the schema a new database gets.
     #[tokio::test]
     async fn a_format_1_database_from_0_24_3_gains_everything_added_since() {
@@ -390,6 +406,7 @@ mod tests {
             for statement in [
                 "DROP TABLE pending_uploads",
                 "DROP TABLE notifications",
+                "DROP TABLE schedule_failures",
                 "DROP INDEX idx_runs_job",
                 "DROP INDEX idx_mat_path",
                 "ALTER TABLE runs DROP COLUMN job",
@@ -419,6 +436,10 @@ mod tests {
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM notifications").await, 0);
         assert_eq!(
             scalar(&conn, "SELECT COUNT(*) FROM pending_uploads").await,
+            0
+        );
+        assert_eq!(
+            scalar(&conn, "SELECT COUNT(*) FROM schedule_failures").await,
             0
         );
     }
@@ -653,5 +674,96 @@ mod tests {
             1
         );
         assert_eq!(scalar(&conn, "PRAGMA user_version").await, 0);
+    }
+
+    fn unusable(error: BarcaError) -> (String, String) {
+        match error {
+            BarcaError::MetadataUnusable { path, why } => (path, why),
+            e => panic!("not MetadataUnusable: {e:?}"),
+        }
+    }
+
+    /// A database this release cannot use is `MetadataUnusable` naming it (#513), with the
+    /// `metadata_unusable` reason and a remediation in its envelope, and is left as it was.
+    #[tokio::test]
+    async fn a_database_barca_cannot_use_is_named_and_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty.db").display().to_string();
+        std::fs::write(&empty, b"").unwrap();
+        let junk = dir.path().join("junk.db").display().to_string();
+        std::fs::write(&junk, "not sqlite ".repeat(100)).unwrap();
+        let future = dir.path().join("future.db").display().to_string();
+        populated(&future, "saved").await;
+        {
+            let (_db, conn) = raw(&future).await;
+            conn.execute("PRAGMA user_version=7", ()).await.unwrap();
+            db::checkpoint(&conn).await.unwrap();
+        }
+        let malformed = dir.path().join("malformed.db").display().to_string();
+        {
+            let (_db, conn) = raw(&malformed).await;
+            conn.execute("CREATE TABLE runs (run_id TEXT)", ())
+                .await
+                .unwrap();
+            conn.execute("CREATE TABLE materializations (node_id TEXT)", ())
+                .await
+                .unwrap();
+            conn.execute(&format!("PRAGMA user_version={VERSION}"), ())
+                .await
+                .unwrap();
+            db::checkpoint(&conn).await.unwrap();
+        }
+        for (path, says) in [
+            (&empty, "it is empty (0 bytes)"),
+            (&junk, "does not start with a SQLite header"),
+            (&future, "metadata schema version 7 is not supported"),
+            (&malformed, "runs"),
+        ] {
+            let before = std::fs::read(path).unwrap();
+            let error = db::init_db(path).await.unwrap_err();
+            let envelope = crate::outcome::envelope_of(error, &Default::default()).to_json();
+            assert_eq!(envelope["reason"], "metadata_unusable", "{envelope}");
+            assert_eq!(envelope["code"], 3);
+            assert!(
+                envelope["remediation"]
+                    .as_str()
+                    .unwrap()
+                    .contains("barca state restore")
+            );
+            let (named, why) = unusable(db::init_db(path).await.unwrap_err());
+            assert_eq!(&named, path);
+            assert!(why.contains(says), "{path}: {why}");
+            // A read-only probe names the same file, and migrates only its private copy.
+            let (named, _) = unusable(db::probe_metadata(path).await.unwrap_err());
+            assert_eq!(&named, path);
+            assert_eq!(&std::fs::read(path).unwrap(), &before, "{path} was changed");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_read_only_probe_reports_the_format_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        assert_eq!(db::probe_metadata(&path).await.unwrap(), None);
+        assert!(!std::path::Path::new(&path).exists(), "nothing is created");
+        populated(&path, "saved").await;
+        {
+            let (_db, conn) = raw(&path).await;
+            conn.execute("PRAGMA user_version=0", ()).await.unwrap();
+            db::checkpoint(&conn).await.unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(db::probe_metadata(&path).await.unwrap(), Some(0));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(db::init_db_as(&path, &path).await.unwrap(), VERSION);
+        assert_eq!(db::probe_metadata(&path).await.unwrap(), Some(VERSION));
+    }
+
+    #[test]
+    fn an_error_envelope_without_a_reason_has_no_reason_key() {
+        let envelope =
+            crate::outcome::envelope_of(BarcaError::Db("locked".into()), &Default::default())
+                .to_json();
+        assert!(envelope.get("reason").is_none(), "{envelope}");
     }
 }

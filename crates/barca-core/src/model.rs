@@ -39,9 +39,9 @@ pub enum NodeKind {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", content = "value")]
 pub enum Freshness {
-    /// Auto-materializes whenever stale and all upstreams are fresh.
+    /// Brought up to date at each tick of a scheduled node above it (RFC-0008).
     Always,
-    /// Only runs on explicit `barca assets refresh`.
+    /// Refreshed by explicit request only; what is below it reads its current result.
     Manual,
     /// Runs when a cron tick has elapsed since last execution.
     Schedule(CronExpr),
@@ -390,6 +390,10 @@ pub struct ExtractedNode {
     pub explicit_name: Option<String>,
     /// Freshness policy.
     pub freshness: Freshness,
+    /// `Schedule(..., max_failures=N)`: consecutive failed ticks before the schedule is skipped
+    /// and reported `failing`. `None` when not written (the scheduler's default applies).
+    #[serde(default)]
+    pub max_failures: Option<u32>,
     /// Declared inputs (parameter → upstream mapping). Typically 0–4 items.
     pub inputs: SmallVec<[DeclaredInput; 4]>,
     /// Partition dimensions.

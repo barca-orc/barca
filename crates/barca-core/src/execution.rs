@@ -172,6 +172,9 @@ pub(crate) struct ExecuteRequest<'a> {
     pub(crate) partition: Option<crate::selection::PartitionSelection>,
     /// The run id to use and what started the run.
     pub(crate) options: crate::outcome::RunOptions,
+    /// Freshness rules (RFC-0008): whether `Manual` upstreams are read as they are, and
+    /// whether this is a scheduled tick.
+    pub(crate) rules: crate::freshness::RunRules,
 }
 
 struct Trace {
@@ -345,17 +348,30 @@ async fn execute_started(
     // Held from before anything is decided: until the plan is known, eviction in this process
     // keeps to leftovers and superseded results.
     let pin = crate::gc::pin(&started.run_id);
-    let prepared = prepare_run(
-        request.dag.take(),
-        request.target_names,
-        request.file_args,
-        request.python,
-        &request.policy,
-        request.command_label,
-        request.partition.as_ref(),
-        |point| trace_point!(started.trace, "{point}"),
-    )
+    let prepared = prepare_run(request.dag.take(), &request, |point| {
+        trace_point!(started.trace, "{point}")
+    })
     .await?;
+    // A tick whose every target reads a `Manual` node that has never been computed: nothing
+    // to run, and not an error of the tick.
+    if prepared.targets.is_empty() && !prepared.blocked.is_empty() {
+        return Ok(Executed {
+            result: GetResult {
+                run_id: started.run_id.clone(),
+                elapsed_seconds: 0.0,
+                steps_executed: 0,
+                phases: 0,
+                final_output: None,
+                steps: blocked_steps(&prepared.dag, &prepared.blocked),
+                warnings: Vec::new(),
+                partitions: None,
+                cache: None,
+                uploads: None,
+            },
+            targets: prepared.blocked,
+            step_failure: None,
+        });
+    }
     pin.nodes(
         prepared
             .exec_plan
@@ -381,6 +397,7 @@ async fn execute_started(
     let mut session = open_run(&request, &prepared, started).await?;
     session.state.pin = Some(pin);
     drive_phases(&mut session).await?;
+    note_stale_pins(&mut session).await?;
     // What the run read (its inputs, and the outputs it returns) gets its `last_read_at` before
     // the run is recorded, so that the run's backup carries it and nothing is written locally
     // after it (RFC-0012).
@@ -463,6 +480,48 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
             .collect(),
     }
 }
+/// After the steps ran: say which `Manual` nodes this run read as they are although they are
+/// stale, now that the sensors it polled are known (not under a tick, which reads them
+/// silently). The step report of each gets the stale wording too.
+async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError> {
+    let request = session.request;
+    if session.prepared.pinned.is_empty() || request.rules.tick.is_some() {
+        return Ok(());
+    }
+    let cache = db::CacheReader::for_config(request.cfg).await?;
+    let dag = &session.prepared.dag;
+    let state = &session.state.decide_state;
+    let mut found: Vec<(&str, bool)> = Vec::new();
+    for id in dag.topo_order() {
+        let Some(pin) = session.prepared.pinned.get(id) else {
+            continue;
+        };
+        let stale = crate::freshness::is_stale(
+            &cache,
+            dag,
+            id,
+            &pin.run_hash,
+            state.run_hashes(),
+            &state.sensor_outputs,
+        )
+        .await;
+        found.push((id, stale));
+    }
+    drop(cache);
+    for (id, stale) in found {
+        if stale {
+            note(
+                &session.pb,
+                &crate::freshness::stale_note(dag, id, request.file_args),
+            );
+        }
+        if let Some(report) = session.state.step_reports.iter_mut().find(|r| r.id == id) {
+            report.detail = Some(crate::cache::Held::Manual { stale }.detail().to_string());
+        }
+    }
+    Ok(())
+}
+
 async fn open_state(
     request: &ExecuteRequest<'_>,
     prepared: &Prepared,
@@ -881,11 +940,13 @@ async fn open_run<'a, 'r>(
             return Err(error);
         }
     };
-    let state = RunState {
+    let mut state = RunState {
         total_steps: prepared.exec_plan.total_steps,
         total_estimated,
         ..Default::default()
     };
+    state.decide_state.pinned = prepared.pinned.clone();
+    state.decide_state.tick = request.rules.tick.clone();
     Ok(RunSession {
         request,
         prepared,
@@ -1688,6 +1749,11 @@ async fn return_outputs(
         }
     }
 
+    // Under a tick, a target blocked on a never-computed `Manual` node is a skipped step.
+    step_reports.extend(blocked_steps(
+        &session.prepared.dag,
+        &session.prepared.blocked,
+    ));
     Ok(Executed {
         result: GetResult {
             run_id: std::mem::take(&mut session.started.run_id),
@@ -1701,7 +1767,10 @@ async fn return_outputs(
             cache: None,
             uploads: session.state.uploads.take(),
         },
-        targets: outcomes,
+        targets: outcomes
+            .into_iter()
+            .chain(session.prepared.blocked.iter().cloned())
+            .collect(),
         step_failure: session
             .state
             .step_failure
@@ -1728,28 +1797,173 @@ struct Prepared {
     pool_size: usize,
     exec_plan: ExecutionPlan,
     plan_warnings: Vec<crate::warnings::PlanWarning>,
+    /// `Manual` nodes read as they are (RFC-0008), by id.
+    pinned: HashMap<String, crate::freshness::Pin>,
+    /// Under a tick: the targets that read a `Manual` node that has never been computed.
+    blocked: Vec<(String, TargetOutcome)>,
+}
+
+/// The step reports of a tick's targets blocked on a `Manual` node that has never been
+/// computed: `skipped`, reason `blocked`, the detail naming the `Manual` node.
+fn blocked_steps(dag: &Dag, blocked: &[(String, TargetOutcome)]) -> Vec<StepReport> {
+    blocked
+        .iter()
+        .map(|(id, outcome)| StepReport {
+            id: id.clone(),
+            kind: kind_str(dag.get_node(id).map(|n| n.kind())),
+            status: Some("skipped".to_string()),
+            reason: Some("blocked".to_string()),
+            detail: outcome.error.clone(),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// The metadata DB for a read, or `None` when there is none yet (nothing was computed).
+async fn existing_cache(
+    cfg: &crate::config::ResolvedConfig,
+) -> Result<Option<db::CacheReader>, BarcaError> {
+    if std::path::Path::new(&cfg.db_path).exists() {
+        Ok(Some(db::CacheReader::for_config(cfg).await?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// The `Manual` nodes a request for `targets` reads as they are (RFC-0008), and what is planned:
+/// the cone, not walking past them. A `Manual` node that has never been computed is a usage
+/// error; under a tick it blocks the targets that read it instead, which are moved to the
+/// returned list. Stale ones get a note on stderr (not under a tick).
+struct Planned<'a> {
+    cone: Option<Vec<&'a str>>,
+    pinned: HashMap<String, crate::freshness::Pin>,
+    blocked: Vec<(String, TargetOutcome)>,
+}
+
+async fn pin_manual<'a>(
+    dag: &'a Dag,
+    targets: &mut Vec<(String, String)>,
+    cfg: &crate::config::ResolvedConfig,
+    policy: &CachePolicy,
+    rules: &crate::freshness::RunRules,
+    file_args: &[String],
+) -> Result<Planned<'a>, BarcaError> {
+    let mut planned = Planned {
+        cone: None,
+        pinned: HashMap::new(),
+        blocked: Vec::new(),
+    };
+    if !rules.pin_manual || targets.is_empty() {
+        return Ok(planned);
+    }
+    let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
+    let walk = crate::freshness::walk(dag, &ids, policy);
+    if walk.stops.is_empty() {
+        return Ok(planned);
+    }
+    let cache = existing_cache(cfg).await?;
+    let pins = crate::freshness::load_pins(cache.as_ref(), dag, &walk.stops).await;
+    drop(cache);
+    if let Some(first) = pins.never.first() {
+        if rules.tick.is_none() {
+            return Err(crate::freshness::never_computed(dag, first, file_args));
+        }
+        targets.retain(|(name, id)| {
+            match crate::freshness::blocked_on(dag, id, policy, &pins.never) {
+                Some(manual) => {
+                    planned.blocked.push((
+                        name.clone(),
+                        TargetOutcome {
+                            status: "blocked".to_string(),
+                            final_output: None,
+                            error: Some(format!(
+                                "blocked on '{}', a Manual node that has never been computed",
+                                short_name(&manual)
+                            )),
+                            failed_node: Some(manual),
+                            partitions: None,
+                        },
+                    ));
+                    false
+                }
+                None => true,
+            }
+        });
+    }
+    let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
+    let mut cone = crate::freshness::walk(dag, &ids, policy).cone;
+    // Outside a tick, the sensors a pinned node reads directly are polled too, so the stale note
+    // compares against what they return now, not what they returned last time.
+    if rules.tick.is_none() {
+        let mut planned_ids: std::collections::HashSet<&str> = cone.iter().copied().collect();
+        for id in pins.pinned.keys() {
+            for up in dag.upstream(id) {
+                if dag
+                    .get_node(up)
+                    .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+                {
+                    planned_ids.insert(up);
+                }
+            }
+        }
+        cone = dag
+            .topo_order()
+            .into_iter()
+            .filter(|id| planned_ids.contains(id))
+            .collect();
+    }
+    planned.cone = Some(cone);
+    planned.pinned = pins.pinned;
+    Ok(planned)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn prepare_run(
     supplied_dag: Option<Dag>,
-    target_names: &[String],
-    file_args: &[String],
-    python: &std::path::Path,
-    policy: &CachePolicy,
-    command_label: &str,
-    partition: Option<&crate::selection::PartitionSelection>,
+    request: &ExecuteRequest<'_>,
     trace: impl Fn(&str),
 ) -> Result<Prepared, BarcaError> {
+    let (target_names, file_args, python, policy, command_label, partition) = (
+        request.target_names,
+        request.file_args,
+        request.python,
+        &request.policy,
+        request.command_label,
+        request.partition.as_ref(),
+    );
     let dag = match supplied_dag {
         Some(dag) => dag,
         None => build_dag(file_args, python).await?,
     };
     trace("dag_built");
 
-    let targets = resolve_targets(&dag, target_names, command_label)?;
+    // A tick's targets are its scheduled node and the `Always` nodes below it, of any kind.
+    let resolve_as = if request.rules.tick.is_some() {
+        ""
+    } else {
+        command_label
+    };
+    let mut targets = resolve_targets(&dag, target_names, resolve_as)?;
+    let Planned {
+        cone,
+        pinned,
+        blocked,
+    } = pin_manual(
+        &dag,
+        &mut targets,
+        request.cfg,
+        policy,
+        &request.rules,
+        file_args,
+    )
+    .await?;
+    let cone: Option<Vec<String>> = cone.map(|c| c.into_iter().map(str::to_string).collect());
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let job_name = canonical_job(&target_ids);
+    // A tick reports as its scheduled node's job, as a skipped tick does.
+    let job_name = match &request.rules.tick {
+        Some(scheduled) => scheduled.clone(),
+        None => canonical_job(&target_ids),
+    };
     if command_label == "get"
         && target_ids.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
@@ -1774,7 +1988,16 @@ async fn prepare_run(
         pool_size,
         concurrency_groups: HashMap::new(),
     };
-    let mut exec_plan = plan_for_targets(&dag, &target_ids, &config, command_label);
+    let mut exec_plan = match &cone {
+        Some(cone) => {
+            let cone: Vec<&str> = cone.iter().map(String::as_str).collect();
+            crate::queries::filter_plan_to_subgraph(
+                crate::planner::plan_from_dag(&dag, &config),
+                &cone,
+            )
+        }
+        None => plan_for_targets(&dag, &target_ids, &config, command_label),
+    };
     if let Some(selection) = partition {
         selection.validate(&dag, &target_ids, &exec_plan)?;
         selection.narrow_plan(&mut exec_plan, &target_ids);
@@ -1782,7 +2005,16 @@ async fn prepare_run(
     trace("planned");
 
     if let CachePolicy::RefreshSelective { names, .. } = policy {
-        validate_refresh_names(&dag, &target_ids, names, command_label == "get")?;
+        let planned: Option<Vec<&str>> = cone
+            .as_ref()
+            .map(|c| c.iter().map(String::as_str).collect());
+        validate_refresh_names(
+            &dag,
+            &target_ids,
+            names,
+            command_label == "get",
+            planned.as_deref(),
+        )?;
     }
     // Plan-time warnings for the steps this command planned, before anything runs.
     let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
@@ -1797,6 +2029,8 @@ async fn prepare_run(
         pool_size,
         exec_plan,
         plan_warnings,
+        pinned,
+        blocked,
     })
 }
 
@@ -1944,15 +2178,26 @@ pub(crate) async fn explain_dag(
     policy: CachePolicy,
     command_label: &str,
     partition: Option<&crate::selection::PartitionSelection>,
+    file_args: &[String],
 ) -> Result<ExplainResult, BarcaError> {
-    Ok(
-        explain_dag_with_membership(dag, cfg, target_names, policy, command_label, partition)
-            .await?
-            .0,
+    // A dry run predicts `barca get` / `barca run`, which read a stale `Manual` upstream as it is.
+    let rules = crate::freshness::RunRules::request();
+    Ok(explain_dag_with_membership(
+        dag,
+        cfg,
+        target_names,
+        policy,
+        command_label,
+        partition,
+        &rules,
+        file_args,
     )
+    .await?
+    .0)
 }
 
 /// Full actual prediction membership, moved without changing public reports.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn explain_dag_with_membership(
     dag: &Dag,
     cfg: &crate::config::ResolvedConfig,
@@ -1960,21 +2205,38 @@ pub(crate) async fn explain_dag_with_membership(
     policy: CachePolicy,
     command_label: &str,
     partition: Option<&crate::selection::PartitionSelection>,
+    rules: &crate::freshness::RunRules,
+    file_args: &[String],
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
-    let targets = resolve_targets(dag, target_names, command_label)?;
+    let mut targets = resolve_targets(dag, target_names, command_label)?;
+    // The `Manual` nodes a real run would read as they are, and the cone it would plan.
+    let Planned { cone, pinned, .. } =
+        pin_manual(dag, &mut targets, cfg, &policy, rules, file_args).await?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
     let pool_size = default_pool_size();
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
     };
-    let mut exec_plan = plan_for_targets(dag, &target_ids, &config, command_label);
+    let mut exec_plan = match &cone {
+        Some(cone) => crate::queries::filter_plan_to_subgraph(
+            crate::planner::plan_from_dag(dag, &config),
+            cone,
+        ),
+        None => plan_for_targets(dag, &target_ids, &config, command_label),
+    };
     if let Some(selection) = partition {
         selection.validate(dag, &target_ids, &exec_plan)?;
         selection.narrow_plan(&mut exec_plan, &target_ids);
     }
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
-        validate_refresh_names(dag, &target_ids, names, command_label == "get")?;
+        validate_refresh_names(
+            dag,
+            &target_ids,
+            names,
+            command_label == "get",
+            cone.as_deref(),
+        )?;
     }
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
 
@@ -1997,6 +2259,7 @@ pub(crate) async fn explain_dag_with_membership(
     };
 
     let mut state = DecideState::default();
+    state.pinned = pinned;
     // A dry run executes nothing, so it cannot know what a sensor will return. It predicts with
     // each sensor's last recorded output (#183); a consumer of a sensor with none is unknown.
     if let Some(cache) = &cache {
@@ -2296,10 +2559,12 @@ async fn predict_steps(
                 ctx.summary.will_run += step.partition_keys.len().max(1);
                 to_run.push(step);
             }
-            Decision::Cached { oref, .. } => {
+            Decision::Cached { oref, held, .. } => {
                 ctx.summary.cached += 1;
                 ctx.all_outputs.insert(step.step_id.display(), oref);
-                ctx.cached_steps.remember(step);
+                if !matches!(held, Some(crate::cache::Held::Manual { .. })) {
+                    ctx.cached_steps.remember(step);
+                }
             }
             Decision::Partitioned { cached, missing } => {
                 ctx.summary.cached += cached.len();
@@ -2409,7 +2674,11 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         let display_id = step.step_id.display();
         match decision {
             Decision::Run(_) => uncached_steps.push(step),
-            Decision::Cached { oref, stale_root } => {
+            Decision::Cached {
+                oref,
+                stale_root,
+                held,
+            } => {
                 if let Some(root) = stale_root {
                     note(
                         pb,
@@ -2432,7 +2701,11 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
                 }
                 all_outputs.insert(display_id.clone(), oref);
                 cached_node_ids.insert(display_id);
-                cached_steps.remember(step);
+                // A `Manual` node read as it is cannot be computed again in this run: its inputs
+                // are not planned.
+                if !matches!(held, Some(crate::cache::Held::Manual { .. })) {
+                    cached_steps.remember(step);
+                }
             }
             Decision::Partitioned { cached, missing } => {
                 let any_cached = !cached.is_empty();
@@ -2957,6 +3230,16 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             report.reason = cancel_reason;
         }
         report.trigger = trigger.clone();
+        // A tick reports as its scheduled node's job; its span names every target it ran.
+        if decide_state.tick.is_some() {
+            let mut names: Vec<String> = targets
+                .iter()
+                .map(|(_, id)| crate::telemetry::short_name(id).to_string())
+                .collect();
+            names.sort();
+            names.dedup();
+            report.targets = names;
+        }
         let history = crate::telemetry::JobHistory::new(db_path);
         crate::telemetry::export(telemetry, &report, &history).await;
         trace_point!("telemetry_exported");
@@ -2988,7 +3271,11 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
                 );
                 publish_error = Some(why);
             }
-            Err(e @ (BarcaError::Cancelled | BarcaError::Db(_))) => return Err(e),
+            Err(
+                e @ (BarcaError::Cancelled
+                | BarcaError::Db(_)
+                | BarcaError::MetadataUnusable { .. }),
+            ) => return Err(e),
             Err(e) => {
                 let e = e.to_string();
                 let e = e.lines().next().unwrap_or_default().to_string();

@@ -318,7 +318,8 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--drain-timeout`, `--env`. SIGTERM drains runs in flight; `BARCA_LOG=json` writes its lines as JSON on stdout |
 | &nbsp;&nbsp;`--server [<url>]`, `--local` | On `get`, `run`, `status`, `list`, `history`, `stats` (experimental): `--server` runs the command on a `barca serve` and prints it here as a local run would; with no URL it uses `BARCA_SERVER` or `[server] url` in `barca.toml`. `--local` ignores a configured server. See `barca docs server-mode` |
 | `barca state backups` | The metadata backups, local and in the store, newest first. `--json`, `--pretty`, `--env` |
-| `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME`, `--json`, `--env` |
+| `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME\|PATH`, `--json`, `--env` |
+| `barca state reset` | Start the metadata DB over (experimental): it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. Asks in a terminal; `--yes`, `--json`, `--env`. Also the UI's **Reset database** button (`POST /state/reset`) |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
 
@@ -384,9 +385,11 @@ barca serve job.py --host 0.0.0.0         # every interface; authenticate at the
 Schedules fire only while `barca serve` is running; `barca get` and `barca run` do not
 look at the clock. A scheduled task runs on every tick. A scheduled asset is brought up to
 date on every tick, which means it runs only if it is not cached: data from outside still
-has to come in through a sensor. A scheduled sensor's tick runs the sensor and does not
-trigger the assets that read it. The other freshness values, `Always` (the default) and
-`Manual`, are recorded and shown by `barca list` and have no effect at run time today.
+has to come in through a sensor. The same tick brings up to date every `Always` node (the
+default) below the scheduled one, so a scheduled sensor keeps the assets and tasks that read
+it current. A `Manual` node is refreshed by hand only: ticks skip it, and `barca get` of
+something below it reads its last result. `Schedule(cron, max_failures=N)` (default 5) stops
+a node's ticks after N consecutive failed ones.
 
 Server mode (RFC-0007, experimental) makes the server the team's ledger. With
 `[server] url` (or `BARCA_SERVER`) and the server's `[remote]` store in `barca.toml`, `barca get`

@@ -55,6 +55,9 @@ barca.run        get daily_revenue        the run; error.message names the first
   short names, `run publish` or `get daily_revenue,orders`; a run of everything in its files
   is `get pipeline.py`, and one with no file named `get all`. `publish` and
   `pipeline.py:publish` are the same resource. The target as typed stays in `barca.target`.
+  A scheduled tick is one run with several targets, the scheduled node and the `Always` nodes
+  below it (`barca docs scheduling`): its resource names all of them (`get inbox,orders`), its
+  `barca.job` is the scheduled node and its `barca.trigger` is `schedule`.
 - **A step** is a child span, `barca.step`, one per node, whose resource is the node's short
   name (`orders`). Short names are unique in a project; when two files define a node of the same
   name, both are named by their id (`a.py:orders`, `b.py:orders`).
@@ -256,7 +259,6 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
   counted per step, not per key. A partition that failed does carry its own count.
 - Calls made through `parallel()` are not in `barca.steps.total` and have no synthetic
   `barca.step` span; the optional Python SDK reports their executions as described above.
-- Whether a run was started by a schedule, the API or a person is not on `barca.run` yet.
 - The traceback of a chained exception (`raise ... from e`) does not include its cause.
 - A failed upload to a remote store is not in the trace: the step shows as succeeded, and
   the upload is retried by the next command (`barca docs remote`).

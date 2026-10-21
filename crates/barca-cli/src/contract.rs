@@ -67,6 +67,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes are aliases until the next minor",
     ),
     (
+        "state reset",
+        "new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use",
+    ),
+    (
         "run --output",
         "kept for compatibility; --json / --pretty are the canonical spelling",
     ),
@@ -284,14 +288,20 @@ fn experimental(key: &str) -> Option<&'static str> {
         .map(|(_, why)| *why)
 }
 
-/// An argument of an experimental command is experimental with it.
+/// An argument of an experimental command (`state reset --yes` of `state reset`) is
+/// experimental with it.
 fn stability(key: &str) -> String {
-    let command = key.split_once(' ').map(|(c, _)| c);
-    match (experimental(key), command.and_then(experimental)) {
-        (Some(why), _) => format!("experimental: {why}"),
-        (None, Some(_)) => "experimental (with the command)".to_string(),
-        (None, None) => "stable".to_string(),
+    if let Some(why) = experimental(key) {
+        return format!("experimental: {why}");
     }
+    let mut rest = key;
+    while let Some((command, _)) = rest.rsplit_once(' ') {
+        if experimental(command).is_some() {
+            return "experimental (with the command)".to_string();
+        }
+        rest = command;
+    }
+    "stable".to_string()
 }
 
 /// The CLI definition as the binary sees it, with the generated `--help` / `--version` flags.
@@ -429,7 +439,7 @@ fn commands_block() -> String {
             } else {
                 format!("`{}`", positionals.join(" "))
             },
-            cell(&stability(name.split(' ').next().unwrap_or(name))),
+            cell(&stability(name)),
             cell(&one_line(sub.get_about())),
         ));
     }
@@ -561,8 +571,10 @@ fn every_experimental_key_names_a_real_command_or_argument() {
                 .unwrap_or_else(|| panic!("EXPERIMENTAL names unknown command `{cmd}`"))
         };
         if !arg.is_empty() {
+            // `state reset`: a nested command.
+            let nested = command.find_subcommand(arg).is_some();
             assert!(
-                command.get_arguments().any(|a| arg_key(a) == arg),
+                nested || command.get_arguments().any(|a| arg_key(a) == arg),
                 "EXPERIMENTAL names unknown argument `{arg}` of `{cmd}`"
             );
         }

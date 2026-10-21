@@ -122,6 +122,10 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
 - `schedule_state.paused_at` and `schedule_state.paused_until` (INTEGER unix seconds, nullable,
   0.27.0, #435): a schedule paused with `POST /schedule/{id}/pause`; `paused_until` NULL means
   until it is resumed.
+- `schedule_failures (node_id, failures, failed_nodes, mark)` (0.28.0, RFC-0008 rule 9), primary
+  key `node_id`: the consecutive failed ticks of one scheduled node, the nodes that failed in the
+  last counted tick (a JSON array), and the highest `materializations.id` when it was counted. A
+  scheduled node with no failures has no row. Older binaries ignore the table.
 
 Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` and
 `a_format_1_database_from_0_24_3_gains_everything_added_since` and

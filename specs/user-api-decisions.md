@@ -432,6 +432,23 @@ and `Manual` are parsed and shown by `barca list`, and nothing acts on them:
 `barca get` and `barca run` are decided by the cache alone. What they should do
 under `serve` is RFC-0008 (PR #276, decision in #253).
 
+**Status (2026-10-20):** RFC-0008 is implemented (#253). A tick of a scheduled
+node is one run whose targets are that node and every `Always` node below it;
+the walk stops at a node with its own `Schedule`, so a mid-DAG schedule still
+defers that node to its own cron. `Manual` differs from the "gate" described
+above: it pins itself rather than blocking what is below it. A tick never runs
+a `Manual` asset or task, and a tick, `barca get` or `barca run` of something
+below it reads its latest successful result, even when stale; the nodes below
+are hashed against that result and still update for their other inputs. Only
+naming it in `--refresh` (or `--refresh-all`) recomputes it, also when it is
+the target of `barca get`; a `Manual` task named as the target of `barca run`
+runs. Only a `Manual` node that was never computed blocks: `barca get`
+exits 2, and a tick reports its readers as skipped with reason `blocked`.
+Sensors are never pinned, a partitioned `Manual` node is not pinned yet, and
+HTTP requests compute `Manual` upstreams as before. Consecutive failed ticks
+are capped by `Schedule(cron, max_failures=N)`. Current behaviour:
+`barca docs scheduling` and [Scheduling](../site/src/content/docs/scheduling.md).
+
 ## Design principle: when unsure, add less
 
 Several decisions above share a common thread: when there are multiple valid
