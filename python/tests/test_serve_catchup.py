@@ -23,7 +23,9 @@ from pathlib import Path
 
 from barca.api import _find_binary
 
-from .test_serve_schedule import SCRUB, _free_port, _rows
+from .served import _free_port
+from .served import rows as _rows
+from .test_serve_schedule import SCRUB
 
 # Midnight on the 1st of the month six months from now: always months away.
 MONTH = (datetime.date.today().month + 5) % 12 + 1

@@ -257,7 +257,7 @@ def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path):
     import urllib.error
     import urllib.request
 
-    from .test_serve_schedule import _free_port
+    from .served import _free_port
 
     store = tmp_path / "store"
     root = tmp_path / "project"
