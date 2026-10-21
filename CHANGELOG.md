@@ -106,6 +106,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Performance
 
+- A warm run with a store no longer pays for work that changes nothing (#554). A sensor that
+  returned what the store already holds at its location, by this machine's record of the
+  confirmed upload, is not uploaded again. A run that recorded no new result takes no metadata
+  backup at its end: nothing failed or was uploaded, every step it ran was such a sensor, and every
+  earlier run is in a backup the store confirmed. Its run row goes with the next backup. The
+  store is asked about all of a `get`'s cached targets at once rather than one by one. On a
+  9-node project with two file sensors and a MinIO store on localhost, a warm `barca get` went
+  from about 1.4 s to 0.5 s on a loaded machine (0.13 s without a store). What is left is the
+  transfer helper's start and the startup check, which a `get` of a cached target still needs.
+
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle
   worker, every worker it can use (up to the pool size) is started at once and each joins when
   it connects, where they started one at a time with a 30-40 ms wait for each; a one-step run

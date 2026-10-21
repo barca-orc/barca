@@ -160,7 +160,10 @@ nothing is ever downloaded before a run. With a store configured by `[remote] ur
 `BARCA_REMOTE_URI`, the database is backed up:
 
 - by `barca get` and `barca run`, on a one-minute checkpoint when the run recorded something
-  since the last backup, and once when the run ends;
+  since the last backup, and once when the run ends. A run that recorded no new result takes no
+  backup at its end: nothing failed or was uploaded, and every step it ran was a sensor whose
+  value the store already held (a warm `get` whose data did not change). Its run row goes with
+  the next backup;
 - by `barca serve`, every minute in which the database changed, and once when it shuts down
   (not with `--read-only`).
 
@@ -301,15 +304,17 @@ that copy. A final output that is only in the store is downloaded first.
 
 - Nothing is downloaded before the run: the local metadata DB is used as it is.
 - Steps always read and write local files under `.barca/artifacts/`. A helper process
-  uploads each artifact in the background as soon as its step finishes.
+  uploads each artifact in the background as soon as its step finishes. A sensor that returned
+  what the store already holds at that location, by this machine's record of a confirmed upload
+  (its data did not change), is not uploaded again; an asset is uploaded whenever it runs.
 - A cache hit whose file is only in the store is downloaded just before the first step that
   reads it eagerly. Cached intermediates nothing reads are never downloaded, and neither are
   parquet results that are only read lazily (below).
 - Before results are recorded, barca waits for every upload. A result whose upload failed is
   still recorded, and kept on this machine as a pending upload (see "When an upload fails
   after the steps succeeded"); every other row points at an object that is in the store.
-- The metadata DB is backed up on the minute checkpoint and at the end (see "Backups and
-  restore").
+- The metadata DB is backed up on the minute checkpoint and at the end, unless the run
+  recorded no new result (see "Backups and restore").
 
 stderr reports each part, so remote cost is visible. The first line names the environment
 and the store, printed once at startup by `get`, `run` and `serve` whenever a store is

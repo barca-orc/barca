@@ -131,6 +131,57 @@ fn read_sidecar(path: &Path) -> Option<Sidecar> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
+/// The run whose end-of-run backup was skipped last (#554), in the local backup directory.
+fn covered_path(dir: &Path) -> PathBuf {
+    dir.join(".covered-run")
+}
+
+/// Whether the end-of-run backup of `run_id`, a run that recorded no new result, may be skipped
+/// (#554): every other run is already in a backup the store confirmed. That is, the newest local
+/// backup has no unsent marker, and the run recorded before `run_id` succeeded and either took
+/// it or was itself skipped by this rule. A run that was killed, cancelled (even after its
+/// backup, while its output was fetched), failed, or failed to back up is then backed up by the
+/// next run, whatever that run did.
+pub(crate) async fn covered(cfg: &ResolvedConfig, run_id: &str) -> bool {
+    let dir = cfg.local_backup_dir();
+    let Some(newest) = local_names(&dir).into_iter().next() else {
+        return false;
+    };
+    if unsent_path(&dir, &newest).exists() {
+        return false;
+    }
+    let Some((previous, status)) = previous_run(&cfg.db_path, run_id).await else {
+        return false;
+    };
+    if status != "success" {
+        return false;
+    }
+    let took_it = read_sidecar(&sidecar_path(&dir, &newest))
+        .and_then(|s| s.run_id)
+        .is_some_and(|r| r == previous);
+    took_it || std::fs::read_to_string(covered_path(&dir)).is_ok_and(|r| r.trim() == previous)
+}
+
+/// Remember that `run_id`'s end-of-run backup was skipped by [`covered`].
+pub(crate) fn mark_covered(cfg: &ResolvedConfig, run_id: &str) {
+    std::fs::write(covered_path(&cfg.local_backup_dir()), run_id).ok();
+}
+
+/// The run recorded last before `run_id`, and its status.
+async fn previous_run(db_path: &str, run_id: &str) -> Option<(String, String)> {
+    let _g = crate::db::db_guard().await;
+    let (_db, conn) = crate::db::open_conn(db_path).await.ok()?;
+    let mut rows = conn
+        .query(
+            "SELECT run_id, status FROM runs WHERE run_id != ?1 ORDER BY rowid DESC LIMIT 1",
+            [run_id],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    Some((row.get::<String>(0).ok()?, row.get::<String>(1).ok()?))
+}
+
 /// What one backup did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Taken {
