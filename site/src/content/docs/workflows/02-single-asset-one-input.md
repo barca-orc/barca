@@ -32,7 +32,7 @@ must be the name of a parameter of the function. Barca does not check this when 
 mismatch fails when the step runs:
 
 ```
-Worker failed: TypeError: b() got an unexpected keyword argument 'fruit'
+Step 'pipeline.py:b' failed: TypeError: b() got an unexpected keyword argument 'fruit'
 ```
 
 `b` is still an ordinary function. Called from Python, `b("kiwi")` returns `"KIWI"`.

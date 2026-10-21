@@ -82,7 +82,7 @@ relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
   parameter the step fails:
 
   ```
-  Worker failed: TypeError: seed_data() got an unexpected keyword argument '_migrate'
+  Step 'pipeline.py:seed_data' failed: TypeError: seed_data() got an unexpected keyword argument '_migrate'
   ```
 
 - **There is no `after=` keyword.** Early prototypes had one. On 0.18.0 `@task(after=[migrate_db])`

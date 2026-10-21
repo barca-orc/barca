@@ -87,7 +87,7 @@ pub enum BarcaError {
     Parse(String),
 
     /// A user step failed permanently (after its retries).
-    #[error("Worker failed: {}", .0.message)]
+    #[error("Step '{}' failed: {}", .0.node, .0.message)]
     WorkerFailed(Box<FailedStep>),
 
     #[error("run cancelled")]

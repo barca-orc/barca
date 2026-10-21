@@ -167,7 +167,7 @@ def amer_total(orders: duckdb.DuckDBPyRelation, _after) -> dict:
 $ barca get amer_total pipeline.py
 [barca] 2/3 steps | failed in 25.1s
 [barca] run failed: step 'pipeline.py:amer_total' failed (exit 1)
-Worker failed: CatalogException: Catalog Error: View with name "picked" already exists!
+Step 'pipeline.py:amer_total' failed: CatalogException: Catalog Error: View with name "picked" already exists!
 ```
 
 Running the same command again succeeds: `emea_total` is now cached, so `amer_total` is the

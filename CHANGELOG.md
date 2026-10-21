@@ -12,6 +12,15 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Polish
+
+- A failed step's message starts `Step '<node>' failed:` instead of `Worker failed:`, which read like
+  a barca fault. Its remediation fits the failure: a timeout says to raise `timeout_seconds=`, a
+  worker that died without a Python exception (`os._exit`, a native crash, SIGKILL) says so, and
+  "see the traceback" appears only when there is one.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

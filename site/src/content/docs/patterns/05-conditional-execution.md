@@ -73,7 +73,7 @@ barca run publish_gated pipeline.py
 ```
 [barca] 0/3 steps | failed in 0.0s
 [barca] run failed: step 'pipeline.py:gate' failed (exit 1)
-Worker failed: ValueError: validation failed for ids [2]
+Step 'pipeline.py:gate' failed: ValueError: validation failed for ids [2]
   File ".../pipeline.py", line 21, in gate
     raise ValueError(f"validation failed for ids {result['bad_ids']}")
 ```

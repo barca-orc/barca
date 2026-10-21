@@ -89,7 +89,7 @@ results = parallel_map(deploy, ["us-east-1", "eu-west-1"], version=m["version"])
   (which runs in the caller and passes its return value), fails the step:
 
   ```
-  Worker failed: TypeError: parallel() expects functools.partial objects, got function
+  Step 'pipeline.py:deploy_all' failed: TypeError: parallel() expects functools.partial objects, got function
   ```
 
 - **Branches are not retried and have a fixed time limit.** A branch runs once, whatever

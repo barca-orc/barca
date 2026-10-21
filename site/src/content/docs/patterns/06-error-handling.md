@@ -93,7 +93,7 @@ broken runs
 broken runs
 [barca] 0/2 steps | failed in 0.0s
 [barca] run failed: step 'pipeline.py:broken' failed (exit 1)
-Worker failed: ValueError: always fails
+Step 'pipeline.py:broken' failed: ValueError: always fails
   File ".../pipeline.py", line 27, in broken
     raise ValueError("always fails")
 
@@ -119,10 +119,12 @@ because the downstream step never starts.
 
 An attempt that runs longer than `timeout_seconds` fails like any other error and is retried
 if attempts remain. With `@asset(timeout_seconds=1)` on a function that sleeps for five
-seconds, the command fails after about one second:
+seconds, the command fails after about one second, and the remediation says to raise the limit:
 
 ```
-Worker failed: TimeoutError: Function '<lambda>' exceeded timeout of 1s
+Step 'pipeline.py:slow' failed: TimeoutError: Step 'pipeline.py:slow' exceeded timeout of 1s
+
+'pipeline.py:slow' ran longer than its timeout_seconds= (300 when not set). Raise it on the decorator or make the step faster, then re-run the same command. Steps that succeeded are cached and will not re-run.
 ```
 
 ## Limits
