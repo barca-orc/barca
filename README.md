@@ -75,9 +75,9 @@ Change `summary` (say, `"total"` becomes `"sum"`) and ask what is stale. `status
 
 ```
 $ barca status
-NAME      KIND   STATE   WHY           LAST RUN                           SHAPE           DEPS
-raw_data  asset  cached  materialized  success 2026-10-21 02:41:21 0.00s  3 rows x 1 col  -
-summary   asset  stale   changed       success 2026-10-21 02:41:21 0.00s  dict (2 keys)   raw_data
+NAME      KIND   STATE   WHY           LAST RUN                               SHAPE           DEPS
+raw_data  asset  cached  materialized  success 2026-10-21 02:41:21 UTC 0.00s  3 rows x 1 col  -
+summary   asset  stale   changed       success 2026-10-21 02:41:21 UTC 0.00s  dict (2 keys)   raw_data
 
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 
