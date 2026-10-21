@@ -380,3 +380,155 @@ def test_run_of_a_manual_task_runs_it(tmp_path):
     done = _barca(tmp_path, "run", "publish", "pipeline.py")
     assert done.returncode == 0, done.stderr
     assert _lines(tmp_path / "published.log") == ["p1"]
+
+
+# ─── A refreshed Manual node reaches what reads it (#548) ────────────────────
+
+# A `Manual` reference table that reads external data: its code and inputs never change, so a
+# refresh gives the same run hash and (when the data changed) new bytes.
+REFERENCE = """
+from pathlib import Path
+
+from barca import asset, partitions, partitions_from, sensor, Manual, Schedule
+
+
+@asset(freshness=Manual)
+def fx() -> float:
+    return float(Path("ref.txt").read_text())
+
+
+@asset(inputs={"rate": fx})
+def price_eur(rate: float) -> float:
+    return round(100 * rate, 2)
+
+
+@asset(inputs={"rate": fx}, partitions={"k": partitions(["a", "b"])})
+def keyed(k: str, rate: float) -> str:
+    return f"{k}:{rate}"
+
+
+@asset(partitions={"r": partitions(["a", "b"])}, freshness=Manual)
+def table(r: str) -> str:
+    return Path(f"{r}.txt").read_text()
+
+
+@asset(partitions={"r": partitions_from(table)})
+def mapped(r: str, table: str) -> str:
+    return table.upper()
+
+
+@sensor(freshness=Schedule("* * * * * *"))
+def clock() -> tuple[bool, str]:
+    return True, Path("clock.txt").read_text()
+
+
+@asset(inputs={"rate": fx, "tick": clock})
+def priced(rate: float, tick: str) -> float:
+    return round(100 * rate, 2)
+"""
+
+
+def _value(root: Path, *args: str):
+    done = _barca(root, "get", *args, "-o", "value", "--json")
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)["final_output"]
+
+
+def _status(root: Path) -> dict[str, dict]:
+    done = _barca(root, "status", "pipeline.py", "--json")
+    assert done.returncode == 0, done.stderr
+    return {n["name"]: n["cache"] for n in json.loads(done.stdout)["nodes"]}
+
+
+def _dry_run(root: Path, target: str) -> dict[str, str]:
+    done = _barca(root, "get", target, "pipeline.py", "--dry-run", "--json")
+    assert done.returncode == 0, done.stderr
+    return {s["id"].rsplit(":", 1)[1]: s["action"] for s in json.loads(done.stdout)["steps"]}
+
+
+def _reference(root: Path) -> None:
+    (root / "pipeline.py").write_text(REFERENCE)
+    _write(root, "ref.txt", "1.08")
+    _write(root, "clock.txt", "c1")
+    for key in ("a", "b"):
+        _write(root, f"{key}.txt", f"{key}1")
+
+
+def test_a_refreshed_manual_node_reaches_what_reads_it(tmp_path):
+    _reference(tmp_path)
+    assert _value(tmp_path, "fx", "pipeline.py", "--refresh", "fx") == 1.08
+    assert _value(tmp_path, "price_eur", "pipeline.py") == 108.0
+    assert _status(tmp_path)["price_eur"]["state"] == "cached"
+
+    # The reference data changes and the Manual node is refreshed by hand, alone.
+    _write(tmp_path, "ref.txt", "1.20")
+    assert _value(tmp_path, "fx", "pipeline.py", "--refresh", "fx") == 1.2
+    assert _rows(tmp_path).get("fx") == 2
+
+    # What reads it is stale relative to the new result: status and the dry run say so.
+    cache = _status(tmp_path)["price_eur"]
+    assert cache["state"] == "stale", cache
+    assert _dry_run(tmp_path, "price_eur") == {"fx": "cached", "price_eur": "run"}
+
+    # The next get recomputes it from the new result; fx itself is read as it is.
+    assert _value(tmp_path, "price_eur", "pipeline.py") == 120.0
+    rows = _rows(tmp_path)
+    assert rows.get("fx") == 2 and rows.get("price_eur") == 2, rows
+    assert _status(tmp_path)["price_eur"]["state"] == "cached"
+
+    # A refresh that gives the same bytes changes nothing below it.
+    assert _value(tmp_path, "fx", "pipeline.py", "--refresh", "fx") == 1.2
+    assert _dry_run(tmp_path, "price_eur") == {"fx": "cached", "price_eur": "cached"}
+    assert _value(tmp_path, "price_eur", "pipeline.py") == 120.0
+    assert _rows(tmp_path).get("price_eur") == 2
+
+
+def test_a_refresh_with_the_cascade_leaves_what_reads_it_up_to_date(tmp_path):
+    # `--refresh fx` with a target below it recomputes both in one run; the next get of the
+    # target serves it from cache (its run hash took fx's new result into account).
+    _reference(tmp_path)
+    assert _value(tmp_path, "price_eur", "pipeline.py", "--refresh", "fx") == 108.0
+    _write(tmp_path, "ref.txt", "1.20")
+    assert _value(tmp_path, "price_eur", "pipeline.py", "--refresh", "fx") == 120.0
+    assert _rows(tmp_path).get("price_eur") == 2
+    assert _dry_run(tmp_path, "price_eur") == {"fx": "cached", "price_eur": "cached"}
+    assert _value(tmp_path, "price_eur", "pipeline.py") == 120.0
+    assert _rows(tmp_path).get("price_eur") == 2
+
+
+def test_a_refreshed_manual_node_reaches_selected_partition_keys(tmp_path):
+    _reference(tmp_path)
+    assert _value(tmp_path, "fx", "pipeline.py", "--refresh", "fx") == 1.08
+    assert _value(tmp_path, "keyed", "pipeline.py", "--partition", "k=a") == {"k=a": "a:1.08"}
+    _write(tmp_path, "ref.txt", "1.20")
+    assert _value(tmp_path, "fx", "pipeline.py", "--refresh", "fx") == 1.2
+    assert _value(tmp_path, "keyed", "pipeline.py", "--partition", "k=a") == {"k=a": "a:1.2"}
+
+
+def test_a_refreshed_key_of_a_partitioned_manual_node_reaches_what_reads_it(tmp_path):
+    _reference(tmp_path)
+    assert _value(tmp_path, "mapped", "pipeline.py") == {"r=a": "A1", "r=b": "B1"}
+    _write(tmp_path, "a.txt", "a2")
+    _value(tmp_path, "table", "pipeline.py", "--partition", "r=a", "--refresh", "table")
+    assert _dry_run(tmp_path, "mapped")["mapped"] == "partial"
+    assert _value(tmp_path, "mapped", "pipeline.py") == {"r=a": "A2", "r=b": "B1"}
+    assert _rows(tmp_path).get("mapped") == 3
+
+
+def test_a_tick_below_a_refreshed_manual_node_reads_its_new_result(tmp_path):
+    _reference(tmp_path)
+    assert _value(tmp_path, "fx", "pipeline.py", "--refresh", "fx") == 1.08
+    with Serve(tmp_path) as serve:
+        serve.wait("priced", lambda: serve.count().get("priced") == 1)
+        rows = serve.settle()
+        assert rows.get("priced") == 1 and rows.get("fx") == 1, rows
+
+        # Refreshed by hand while the service runs: the next tick recomputes `priced`.
+        _write(tmp_path, "ref.txt", "1.20")
+        done = _barca(tmp_path, "get", "fx", "pipeline.py", "--refresh", "fx")
+        assert done.returncode == 0, done.stderr
+        serve.wait("priced after refresh", lambda: serve.count().get("priced") == 2)
+        rows = serve.settle()
+        # Once: the ticks after it serve `priced` from cache, and never recompute fx.
+        assert rows.get("priced") == 2 and rows.get("fx") == 2, rows
+    assert _value(tmp_path, "priced", "pipeline.py") == 120.0
