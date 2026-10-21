@@ -308,11 +308,10 @@ mod tests {
         }
     }
 
-    /// Topics close with their cross-links, so nothing is appended after them. `cache` is being
-    /// restructured separately and joins this check once it ends with its See also.
+    /// Topics close with their cross-links, so nothing is appended after them.
     #[test]
     fn every_topic_ends_with_see_also() {
-        for t in TOPICS.iter().filter(|t| t.name != "cache") {
+        for t in TOPICS.iter() {
             let last = t.body.trim_end().rsplit("\n\n").next().unwrap_or("");
             assert!(
                 last.starts_with("See also: "),
