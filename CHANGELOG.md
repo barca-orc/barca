@@ -79,6 +79,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - A syntax error in a pipeline file names its line and column (`syntax error in pipeline.py: line
   5, column 18: Expected ':', found newline`) instead of a byte range (`at byte range 112..113`).
 
+- `barca get` with no target names at most five of the tasks it skipped (`... and 37 more; barca
+  list shows them`) and suggests `barca run <task>` without repeating every discovered file. On
+  the 116-node fixture the line was 2,000 characters.
+
 ### Performance
 
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle

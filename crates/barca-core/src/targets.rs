@@ -216,8 +216,23 @@ pub fn skipped_tasks_note_among(
         .map(|(id, _)| short_name(id))
         .collect();
     let first = tasks.first()?;
-    let run_hint = format!("barca run {first} {}", file_args.join(" "));
-    let listed = tasks.join(", ");
+    // One file is worth naming; with several (often every discovered file), `barca run <task>`
+    // reads the project the same way and stays one short line.
+    let run_hint = match file_args {
+        [one] => format!("barca run {first} {one}"),
+        _ => format!("barca run {first}"),
+    };
+    // A large project can skip dozens of tasks: name a few, count the rest.
+    const NAMED: usize = 5;
+    let listed = if tasks.len() > NAMED {
+        format!(
+            "{} and {} more; barca list shows them",
+            tasks[..NAMED].join(", "),
+            tasks.len() - NAMED
+        )
+    } else {
+        tasks.join(", ")
+    };
     Some(if tasks.len() == order.len() {
         format!(
             "[barca] nothing to get: no assets or sensors, only tasks ({listed}). \
@@ -599,6 +614,24 @@ def lone() -> int:
         let assets = "from barca import asset\n\n@asset()\ndef a() -> int:\n    return 1\n";
         let assets = Dag::build(&crate::parse::extract_nodes(assets, "a.py").unwrap()).unwrap();
         assert!(skipped_tasks_note(&assets, &names(&["a.py"])).is_none());
+    }
+
+    #[test]
+    fn skipped_tasks_note_stays_one_short_line_in_a_large_project() {
+        let kinds: Vec<(String, crate::NodeKind)> =
+            std::iter::once(("a.py:src".to_string(), crate::NodeKind::Asset))
+                .chain((0..42).map(|i| (format!("checks.py:validate_{i}"), crate::NodeKind::Task)))
+                .collect();
+        let kinds: Vec<(&str, crate::NodeKind)> =
+            kinds.iter().map(|(id, k)| (id.as_str(), *k)).collect();
+        let files = names(&["a.py", "checks.py", "helpers.py"]);
+        let note = skipped_tasks_note_among(&kinds, &files).unwrap();
+        assert!(note.starts_with("[barca] skipped 42 tasks (validate_0, validate_1, validate_2, validate_3, validate_4 and 37 more; barca list shows them)"), "{note}");
+        assert!(
+            note.ends_with("Run a task with: barca run validate_0"),
+            "{note}"
+        );
+        assert!(note.len() < 250, "{note}");
     }
 
     #[test]
