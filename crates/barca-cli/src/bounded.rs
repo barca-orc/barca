@@ -205,6 +205,7 @@ mod tests {
             status: s(),
             reason: s(),
             detail: s(),
+            changed: Some(Vec::new()),
             run_hash: s(),
             artifact: s(),
             artifact_mismatch: Some(true),

@@ -136,9 +136,9 @@ uv run barca get summary --dry-run
 ```
 
 ```
-NAME      KIND   STATE   WHY           LAST RUN                               SHAPE           DEPS
-raw_data  asset  cached  materialized  success 2026-10-21 02:36:50 UTC 0.00s  3 rows x 1 col  -
-summary   asset  stale   changed       success 2026-10-21 02:36:50 UTC 0.00s  dict (2 keys)   raw_data
+NAME      KIND   STATE   WHY            LAST RUN                               SHAPE           DEPS
+raw_data  asset  cached  materialized   success 2026-10-21 02:36:50 UTC 0.00s  3 rows x 1 col  -
+summary   asset  stale   changed: code  success 2026-10-21 02:36:50 UTC 0.00s  dict (2 keys)   raw_data
 
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 ```
@@ -146,9 +146,9 @@ summary   asset  stale   changed       success 2026-10-21 02:36:50 UTC 0.00s  di
 ```
 Dry run: barca get summary (nothing executed, nothing written)
 
-STATUS    WHY                                              STEP
-cached    -                                                pipeline.py:raw_data
-will run  no cached result for this code and these inputs  pipeline.py:summary
+STATUS    WHY            STEP
+cached    -              pipeline.py:raw_data
+will run  changed: code  pipeline.py:summary
 
 1 will run, 1 cached, 0 unknown
 ```

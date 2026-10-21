@@ -200,7 +200,7 @@ exit code is still 2 and nothing runs.
 | `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
 | `--partition KEY=V[,V]` | Select keys of a partitioned target (a JSON object for compound keys); only they run, are returned and are refreshed. |
 | `--agent` | Plain progress lines on stderr in place of the progress bar. |
-| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
+| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
 | `--env <name>` | Use a named environment's cache and history. |
 
 `--no-cache` was removed in 0.24.0; use `--refresh-all`.

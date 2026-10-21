@@ -13,7 +13,6 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 
 COMMON = """
@@ -82,6 +81,7 @@ def barca(project: Path, *args: str, env: dict | None = None) -> subprocess.Comp
         env={**os.environ, **ENV, **(env or {})},
         capture_output=True,
         text=True,
+        check=False,
     )
 
 

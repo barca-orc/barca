@@ -200,7 +200,13 @@ TIMING_CASE = (
 # `get` on a project over a 1-byte cache limit: the result gains `cache`, after a recompute
 # made a superseded result to evict (see `_cache_limit_run`).
 CACHE_CASE = ("get_cache_evicted", ["get", "total", "pipeline.py", "--json"], "stdout", 0)
-ALL_CASES = CASES + SETUP_CASES + UPLOAD_CASES + [TIMING_CASE, CACHE_CASE]
+# A project whose asset's code was edited after it ran (#558): status and the dry run name what
+# changed (`cache.changed`, `steps[].changed`).
+CHANGED_CASES: list[tuple[str, list[str], str, int]] = [
+    ("status_changed", ["status", "pipeline.py", "--json"], "stdout", 0),
+    ("get_dry_run_changed", ["get", "total", "pipeline.py", "--dry-run", "--json"], "stdout", 0),
+]
+ALL_CASES = CASES + SETUP_CASES + UPLOAD_CASES + [TIMING_CASE, CACHE_CASE] + CHANGED_CASES
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
 USER_VALUES = {
@@ -493,6 +499,12 @@ def runs(tmp_path_factory) -> dict:
     s = command_schema(json.loads(proc_cache.stdout))
     out[CACHE_CASE[0]] = (s, render_snapshot(CACHE_CASE[1], "stdout", 0, s), proc_cache)
 
+    changed_case = tmp_path_factory.mktemp("contract_changed")
+    for case, changed in _changed_runs(binary, changed_case, env):
+        argv, stream, code = next(c[1:] for c in CHANGED_CASES if c[0] == case)
+        s = command_schema(json.loads(changed.stdout))
+        out[case] = (s, render_snapshot(argv, stream, code, s), changed)
+
     agent: set[str] = set()
     for line in proc.stderr.splitlines():
         if line.startswith(
@@ -516,6 +528,34 @@ def runs(tmp_path_factory) -> dict:
                 agent.add(normalize_agent_line(line))
     out["agent_lines"] = sorted(agent)
     return out
+
+
+def _changed_runs(
+    binary: str, cwd: Path, env: dict
+) -> list[tuple[str, subprocess.CompletedProcess]]:
+    """`CHANGED_CASES` after `numbers`, which `total` reads, was edited since `total` ran."""
+
+    def barca(argv: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [binary, *argv],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    (cwd / "pipeline.py").write_text(STORE_PIPELINE)
+    first = barca(["get", "total", "pipeline.py", "--json"])
+    assert first.returncode == 0, first.stderr
+    (cwd / "pipeline.py").write_text(STORE_PIPELINE.replace("[1, 2, 3]", "[1, 2, 3, 4]"))
+    runs = []
+    for case, argv, _, code in CHANGED_CASES:
+        proc = barca(argv)
+        assert proc.returncode == code, proc.stderr
+        runs.append((case, proc))
+    return runs
 
 
 def _cache_limit_run(binary: str, cwd: Path, env: dict) -> subprocess.CompletedProcess:
