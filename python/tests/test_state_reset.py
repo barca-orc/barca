@@ -174,6 +174,7 @@ def test_reset_is_refused_while_a_run_is_in_progress(project):
         refused = error(cli(root, "state", "reset", "--yes", "--json"), 3)
         assert refused["kind"] == "infra", refused
         assert running["run_id"] in refused["error"], refused
+        assert "Wait for it to finish" in refused["remediation"], refused
         assert moved_aside(root) == []
     finally:
         os.killpg(run.pid, signal.SIGINT)
@@ -215,7 +216,10 @@ def test_under_serve_the_cli_refuses_and_the_server_resets(project):
     server, url = serve(root)
     try:
         refused = error(cli(root, "state", "reset", "--yes", "--json"), 3)
-        assert "barca serve" in refused["error"] and "POST /state/reset" in refused["error"]
+        assert "barca serve" in refused["error"], refused
+        # What to do instead is the remediation, not the generic infra "Retrying may succeed".
+        assert "POST /state/reset" in refused["remediation"], refused
+        assert "Retrying" not in refused["remediation"], refused
         assert moved_aside(root) == []
         status, body = post(f"{url}/state/reset")
         assert status == 200, body

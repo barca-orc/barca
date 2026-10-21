@@ -685,8 +685,13 @@ async fn start_workers(
             _ = cancel.cancelled() => Err(BarcaError::Cancelled),
             checked = tokio::time::timeout(limit, client.preflight()) => match checked {
                 Ok(Ok(())) => Ok(()),
-                Ok(Err(why)) => Err(BarcaError::Other(format!("artifact store preflight at {location} failed: {why}"))),
-                Err(_) => Err(BarcaError::Other(format!("artifact store preflight at {location} timed out after {}s", limit.as_secs()))),
+                Ok(Err(why)) => Err(BarcaError::Other(format!(
+                    "artifact store preflight at {location} failed: {why}\n{STORE_PREFLIGHT_FIX}"
+                ))),
+                Err(_) => Err(BarcaError::Other(format!(
+                    "artifact store preflight at {location} timed out after {}s\n{STORE_PREFLIGHT_FIX}",
+                    limit.as_secs()
+                ))),
             },
         };
         if let Err(error) = checked {
@@ -3389,6 +3394,13 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
 
     Ok(elapsed)
 }
+
+/// What to do when the artifact store cannot be reached before a run: the second line of the
+/// error, so it is the envelope's `remediation` instead of the generic infra one.
+const STORE_PREFLIGHT_FIX: &str = "Nothing ran. Check the store's URI (BARCA_REMOTE_URI or \
+     [remote] uri), that the bucket or container exists (barca does not create it), the \
+     endpoint (FSSPEC_S3_ENDPOINT_URL for MinIO or R2) and the credentials. BARCA_REMOTE=off \
+     runs one command without the store (barca docs remote).";
 
 struct StopProgress<'a> {
     pool: crate::io_loop::WorkerPool,

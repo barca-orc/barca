@@ -69,6 +69,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   worker that died without a Python exception (`os._exit`, a native crash, SIGKILL) says so, and
   "see the traceback" appears only when there is one.
 
+- Refusals that are not barca failures no longer end with "Not a problem in your code: barca or its
+  environment failed. Retrying may succeed.": an unreachable or missing artifact store says what to
+  check (URI, that the bucket exists, endpoint, credentials, `BARCA_REMOTE=off`), and
+  `barca state reset` / `restore` refused under `barca serve` or a running run say what to do
+  instead (the UI's Reset database button or `POST /state/reset`; stop the server; wait or
+  cancel).
+
 ### Performance
 
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle
