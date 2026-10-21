@@ -20,9 +20,56 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   signature, or give the parameter a default. `**kwargs` takes any key; a `@task`'s parameters
   are not required (they are how `parallel()` branches get their arguments).
 
-### Testing
+- **Breaking:** a retry after an exception may run in the same Python process as the failed
+  attempt (#523): the worker that raised takes the retry, so module state (globals, caches,
+  clients) carries over from the failed attempt instead of starting fresh. A step that needs a
+  fresh interpreter per attempt should reset that state itself; a worker is still replaced after
+  `sys.exit()`, `MemoryError`, a timeout, a failed module import, an unfinished `parallel()`
+  exchange or a crash.
 
-- Three tests no longer fail by chance or by environment: the `barca state restore` refusal test waits for the server's lock to be released instead of assuming it is immediate (a child process started by another test briefly holds it) (#524); the Datadog parallel-span test counts each span once and only its own run's (ddtrace resends a payload it timed out on, and the fake Agent now serves requests concurrently) (#530); the coordination-socket tests build their fixtures under `/tmp`, so they pass when the runner's `TMPDIR` is long (#571).
+### Features
+
+- Heavy steps can be kept from running all at once (experimental, #436). A new decorator
+  argument `weight=N` (a whole number, default 1) on `@asset`, `@task` and `@sensor` says how
+  much of the pool's capacity a step takes while it runs, and the steps running at once add up
+  to at most the capacity: the pool size unless `[execution] capacity` in barca.toml or
+  `BARCA_CAPACITY` sets it (the variable wins). Under a container's memory limit, three heavy
+  assets with `weight=2` and a capacity of 4 run two at a time instead of three, and light steps
+  still use what is left; outputs and cache decisions do not change (`weight=` is not part of
+  the run hash). A step heavier than the capacity runs alone, with a warning. A heavy step
+  waiting for room is not overtaken by lighter steps that became ready after it. Partition keys
+  and `parallel()` branches take their node's weight. `barca plan` gains `pool_size`,
+  `capacity`, `capacity_source` and `weights`, `--dry-run` gains `capacity` and `steps[].weight`,
+  and `barca doctor` a `capacity` check. See `barca docs assets`, "Heavy steps", and
+  `barca docs scheduling`, "Containers with a memory limit".
+
+- "What did my last run do?" is one command (#555). `barca history` has a TARGET column between
+  CMD and STATUS: the run's job by function name (`kpis`, `country_report,weekly_summary`), `all`
+  for a run without targets, cut at 24 characters with `…`. History JSON gains `job` (additive):
+  `all` or the resolved node ids, sorted and comma-separated, `null` for older runs; `--fields`
+  accepts it, and `GET /history` carries it (OpenAPI specification 7). `barca logs` without a
+  run id reads the most recent run and names it on stderr
+  (`barca: logs of the most recent run: <run_id> (run notify, success, started ...)`).
+
+- `barca status` and `--dry-run` say what changed in a stale node's run hash, not only that it
+  changed (#558): `cache.changed` (status) and `steps[].changed` (dry run) list the parts that
+  differ from the node's last successful materialization, `code`, `decorator argument NAME`,
+  `decorator NAME`, `helper FILE:NAME`, `input ID`, `sensor ID`, `env NAME` or `kind`, and the
+  WHY column and `detail` read `changed: helper pipelines/common.py:bucket_ltv (+1 more)`. Each
+  successful materialization records a short digest per part in a new nullable
+  `materializations.components` column (format 1, additive); a result recorded before keeps the
+  plain `changed`.
+
+- Backups say which machine took them (#553). Each sidecar records `host` and `project` (the
+  project directory); `barca state backups` shows a HOST column and gains `host`, `project` and
+  `mine` in JSON (`null` for a backup an older barca took, which is still listed and restored).
+  Two machines backing up to one store, which is not supported without a server, now get one
+  warning per command, on a backup or `barca state backups`, when another machine took a backup
+  after this one's own, naming it and pointing at server mode. Pruning the store keeps the
+  newest backup of every other machine taken in the last week (at most five), so one machine
+  can no longer rotate out the other's last backup, and `barca state restore` without `--from`
+  restores this machine's newest backup, saying so when newer ones came from elsewhere
+  (`--from 1` is the newest). `barca state restore --json` gains `host` and `project`.
 
 ### Bug Fixes
 
@@ -35,6 +82,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   helper runs barca's JSON-in/JSON-out Python helpers, one runs a database transaction, and the
   Python file hash, identifier quoting and JSON conversion each have one copy; five unused
   functions are gone.
+
 - A syntax error in a project helper module is reported when barca plans, not in the worker
   (#550). A command that plans a step of a file importing the module (directly, through other
   project modules, or inside a function: `get`, `run`, `--dry-run`, `plan`, `status`) exits 2
@@ -42,6 +90,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   and the source line with a caret; commands whose steps do not import it, and `barca list`,
   are unaffected. A `SyntaxError` the worker still meets on an import barca cannot see
   (`importlib.import_module`) shows the file, line and caret instead of importlib's frames.
+
 - Naming one file of a package project works (#551): `barca run notify pipelines/reports.py`
   also reads the pipeline files the named file takes inputs from (`from pipelines.transforms
   import daily_revenue`, `asset_ref(...)`), transitively, and keeps only the nodes the named file
@@ -51,6 +100,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   file the import reaches, never a path like `pipelines/pipelines/transforms.py`. An input only
   the whole project can resolve (a bare name, a re-export through `__init__.py`) says to name
   the defining file or drop the file arguments.
+
 - `barca state reset` and `barca state restore` no longer leak the cache (#552). The artifacts
   the old database named, which no record names afterwards, are now tier-1 leftovers: the cache
   size limit evicts them first and `barca gc --max-size off` deletes them (an unnamed file is
@@ -63,6 +113,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   aside, backups, other), and when it cannot reach its target it prints `held by:` instead of
   only "nothing to evict". The next check after a reset or restore measures `.barca/` again
   instead of trusting the last walk.
+
 - A run held for its uploads and posted to the server later (#507) no longer prints "the
   function is not deterministic" for a hand-refreshed `Manual` asset when the server answers that
   it held other bytes: the held post keeps which of its steps barca checks for changed bytes, so
@@ -81,6 +132,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   attempt. A worker is still replaced after `sys.exit()`, `MemoryError`, a timeout, a failed
   module import, an unfinished `parallel()` exchange or a crash, and a crash still names the
   exit signal.
+
 - A warm run with a store no longer pays for work that changes nothing (#554). A sensor that
   returned what the store already holds at its location, by this machine's record of the
   confirmed upload, is not uploaded again. A run that recorded no new result takes no metadata
@@ -91,46 +143,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   from about 1.4 s to 0.5 s on a loaded machine (0.13 s without a store). What is left is the
   transfer helper's start and the startup check, which a `get` of a cached target still needs.
 
-### Features
+### Testing
 
-- Heavy steps can be kept from running all at once (experimental, #436). A new decorator
-  argument `weight=N` (a whole number, default 1) on `@asset`, `@task` and `@sensor` says how
-  much of the pool's capacity a step takes while it runs, and the steps running at once add up
-  to at most the capacity: the pool size unless `[execution] capacity` in barca.toml or
-  `BARCA_CAPACITY` sets it (the variable wins). Under a container's memory limit, three heavy
-  assets with `weight=2` and a capacity of 4 run two at a time instead of three, and light steps
-  still use what is left; outputs and cache decisions do not change (`weight=` is not part of
-  the run hash). A step heavier than the capacity runs alone, with a warning. A heavy step
-  waiting for room is not overtaken by lighter steps that became ready after it. Partition keys
-  and `parallel()` branches take their node's weight. `barca plan` gains `pool_size`,
-  `capacity`, `capacity_source` and `weights`, `--dry-run` gains `capacity` and `steps[].weight`,
-  and `barca doctor` a `capacity` check. See `barca docs assets`, "Heavy steps", and
-  `barca docs scheduling`, "Containers with a memory limit".
-- "What did my last run do?" is one command (#555). `barca history` has a TARGET column between
-  CMD and STATUS: the run's job by function name (`kpis`, `country_report,weekly_summary`), `all`
-  for a run without targets, cut at 24 characters with `…`. History JSON gains `job` (additive):
-  `all` or the resolved node ids, sorted and comma-separated, `null` for older runs; `--fields`
-  accepts it, and `GET /history` carries it (OpenAPI specification 7). `barca logs` without a
-  run id reads the most recent run and names it on stderr
-  (`barca: logs of the most recent run: <run_id> (run notify, success, started ...)`).
-- `barca status` and `--dry-run` say what changed in a stale node's run hash, not only that it
-  changed (#558): `cache.changed` (status) and `steps[].changed` (dry run) list the parts that
-  differ from the node's last successful materialization, `code`, `decorator argument NAME`,
-  `decorator NAME`, `helper FILE:NAME`, `input ID`, `sensor ID`, `env NAME` or `kind`, and the
-  WHY column and `detail` read `changed: helper pipelines/common.py:bucket_ltv (+1 more)`. Each
-  successful materialization records a short digest per part in a new nullable
-  `materializations.components` column (format 1, additive); a result recorded before keeps the
-  plain `changed`.
-- Backups say which machine took them (#553). Each sidecar records `host` and `project` (the
-  project directory); `barca state backups` shows a HOST column and gains `host`, `project` and
-  `mine` in JSON (`null` for a backup an older barca took, which is still listed and restored).
-  Two machines backing up to one store, which is not supported without a server, now get one
-  warning per command, on a backup or `barca state backups`, when another machine took a backup
-  after this one's own, naming it and pointing at server mode. Pruning the store keeps the
-  newest backup of every other machine taken in the last week (at most five), so one machine
-  can no longer rotate out the other's last backup, and `barca state restore` without `--from`
-  restores this machine's newest backup, saying so when newer ones came from elsewhere
-  (`--from 1` is the newest). `barca state restore --json` gains `host` and `project`.
+- Three tests no longer fail by chance or by environment: the `barca state restore` refusal test waits for the server's lock to be released instead of assuming it is immediate (a child process started by another test briefly holds it) (#524); the Datadog parallel-span test counts each span once and only its own run's (ddtrace resends a payload it timed out on, and the fake Agent now serves requests concurrently) (#530); the coordination-socket tests build their fixtures under `/tmp`, so they pass when the runner's `TMPDIR` is long (#571).
 
 ## 0.28.3 (2026-10-21)
 
