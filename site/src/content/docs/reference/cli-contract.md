@@ -1546,6 +1546,7 @@ and `barca get total pipeline.py --dry-run --json`:
 <!-- BEGIN GENERATED schema get_dry_run_changed -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
 | `command` | string | always |
 | `dry_run` | boolean | always |
 | `steps` | array | always |
