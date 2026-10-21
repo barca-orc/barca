@@ -64,6 +64,7 @@ outside the `GENERATED` blocks is written by hand.
 | `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
 | `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL` and the Slack posts | new: the message text and layout are not a contract and may change in any release |
 | `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
+| `undeclared_env`: the plan-warning kind, `steps[].undeclared_env` in `get`/`run` (and `--dry-run`) JSON, `nodes[].undeclared_env` in `status --json` | new in 0.29.1 (#574): which environment reads are found statically may grow |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
 | `barca state reset` and its JSON, `POST /state/reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
@@ -160,7 +161,7 @@ default, and any aliases.
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -178,7 +179,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -282,7 +283,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `local` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
@@ -604,9 +605,9 @@ Each item is an object with exactly these keys, all strings and always present:
 
 | Key | Value |
 |---|---|
-| `kind` | what was found. `unused_input` is the only value so far; treat an unknown value as "other" |
+| `kind` | what was found: `unused_input` or `undeclared_env`; treat an unknown value as "other" |
 | `node` | the step's node id, `file.py:name` (never a partition key: a partitioned step is reported once) |
-| `param` | the parameter concerned |
+| `param` | the parameter concerned (`unused_input`), or the environment variable (`undeclared_env`) |
 | `message` | the warning in words, with what to do about it. The wording is not contract |
 
 The list covers the steps the command planned (the targets' cones; the whole project for `plan`
@@ -623,6 +624,12 @@ API).
 inputs", has the exact rule and what is never reported). Stability: the key, its presence and the
 item keys are stable on `get` and `run`, and experimental with the rest of the output on `plan`;
 the set of `kind` values grows additively.
+
+`undeclared_env`: a step's code reads an environment variable it does not declare in `env=[...]`
+(`barca docs cache`, "Environment variables"), one item per step and variable. All the items of
+one step carry the same `message`, so stderr has one line per step. A variable name built at run
+time is a pattern with `*` (`*_REGISTRY_CSV`). The kind is experimental: which reads are found
+may grow.
 
 ### get and run: one target
 
@@ -881,6 +888,8 @@ With `--partition k=a -o value --json`, only the selected keys, each its value:
 | `steps[].reason` | string | sometimes |
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
+| `steps[].undeclared_env` | array | sometimes |
+| `steps[].undeclared_env[]` | string | always |
 | `steps_executed` | integer | always |
 | `warnings` | array | always |
 | `warnings[]` | object | always |
@@ -1215,6 +1224,8 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `steps[].reason` | string | sometimes |
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
+| `steps[].undeclared_env` | array | sometimes |
+| `steps[].undeclared_env[]` | string | always |
 | `steps_executed` | integer | always |
 | `targets` | object | always |
 | `targets.<name>` | object | always |
@@ -1287,6 +1298,8 @@ The top-level `summary` counts the union once.
 | `steps[].kind` | string | always |
 | `steps[].reason` | string | sometimes |
 | `steps[].run_hash` | string | always |
+| `steps[].undeclared_env` | array | sometimes |
+| `steps[].undeclared_env[]` | string | always |
 | `summary` | object | always |
 | `summary.cached` | integer | always |
 | `summary.unknown` | integer | always |
@@ -1449,6 +1462,8 @@ counts every node even when `nodes` is truncated.
 | `nodes[].shape.rows` | integer | sometimes |
 | `nodes[].shape.sample` | `<user value>` | always |
 | `nodes[].shape.type` | string | always |
+| `nodes[].undeclared_env` | array | sometimes |
+| `nodes[].undeclared_env[]` | string | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -1999,6 +2014,7 @@ placeholders:
 [barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
 [barca] uploading <n> pending results to <store>/default/artifacts from an earlier run
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
+[barca] warning: pipeline.py:report reads an environment variable it does not declare: CONTRACT_REPORT_TITLE. Changing it does not re-run the step, which keeps serving its cached result; add it to env=[...] so that it does (`barca docs cache`, "Environment variables")
 ```
 <!-- END GENERATED agent-lines -->
 

@@ -79,6 +79,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "import_seconds",
     "partitions",
     "env",
+    "undeclared_env",
     "weight",
 ];
 
@@ -105,6 +106,7 @@ pub const STATUS_FIELDS: &[&str] = &[
     "last_bytes_change",
     "shape",
     "env",
+    "undeclared_env",
     "local",
 ];
 
@@ -219,6 +221,7 @@ mod tests {
             warning: s(),
             partitions: Some(Default::default()),
             env: Some(Default::default()),
+            undeclared_env: Some(vec![String::new()]),
             weight: Some(2),
         };
         assert_eq!(keys(&serde_json::to_value(step).unwrap()), set(STEP_FIELDS));
@@ -268,6 +271,7 @@ mod tests {
             }),
             shape: None,
             env: vec![],
+            undeclared_env: vec![String::new()],
             local: Some(true),
         };
         assert_eq!(

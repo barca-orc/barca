@@ -449,6 +449,11 @@ pub struct ExtractedNode {
     /// (see [`crate::unused_inputs`]). Reported as plan warnings; not part of any hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_inputs: Vec<String>,
+    /// Environment variables the function and the helper code it reaches read, found by static
+    /// analysis (see [`crate::env_reads`]), sorted; a name built at run time is a `*` pattern.
+    /// Those not in [`Self::env`] are reported; not part of any hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_reads: Vec<String>,
 }
 
 fn default_weight() -> u32 {
@@ -456,6 +461,12 @@ fn default_weight() -> u32 {
 }
 
 impl ExtractedNode {
+    /// The environment variables the step reads without declaring them in `env=[...]`, sorted.
+    pub fn undeclared_env(&self) -> Vec<String> {
+        let reads = self.env_reads.iter().cloned().collect();
+        crate::env_reads::undeclared(&reads, &self.env)
+    }
+
     /// The continuity key — stable identity for this node.
     pub fn continuity_key(&self) -> String {
         if let Some(ref name) = self.explicit_name {

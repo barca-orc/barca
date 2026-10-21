@@ -249,9 +249,10 @@ def get_exited(root: Path, csv: str | None = None) -> dict:
 def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
     """The account-exit registry reads its CSV path from `ACCOUNT_EXIT_REGISTRY_CSV`.
 
-    Undeclared, as in the original pipeline: switching the variable changes nothing barca sees.
-    The step stays cached with the old rows, and no output names the variable (#574).
-    Operators re-read with `--refresh`. Declared with `env=[...]`, the switch re-runs the
+    Undeclared, as in the original pipeline: switching the variable does not change the run
+    hash, so the step stays cached with the old rows. Barca reports the read instead (#574): the
+    registry builds the name in an f-string, so the step's `undeclared_env` and a plan warning
+    name the pattern `*_REGISTRY_CSV`, once on stderr. Operators re-read with `--refresh`. Declared with `env=[...]`, the switch re-runs the
     registry and its consumer, and the step reports the value. But barca reads the variable from
     its own environment: a value the pipeline loads from its `.env` at import is not the one
     hashed or reported (#575)."""
@@ -262,11 +263,30 @@ def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
     original = exited(root)
     assert original == {4}
 
-    # Undeclared: not detected, not reported.
+    # Undeclared: not detected, but reported.
     switched = get_exited(root, V2_CSV)
     assert {s["status"] for s in switched.values()} == {"cached"}
     assert all("env" not in s for s in switched.values())
+    assert "*_REGISTRY_CSV" in switched["account_exit_registry"]["undeclared_env"]
     assert exited(root) == original  # stale: the rows of the old CSV
+    proc = subprocess.run(
+        [_find_binary(), "get", "exited_accounts", "assets.py", "--json"],
+        cwd=root,
+        env={**os.environ, "ACCOUNT_EXIT_REGISTRY_CSV": V2_CSV},
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+    warnings = json.loads(proc.stdout)["warnings"]
+    assert {
+        "kind": "undeclared_env",
+        "node": "assets.py:account_exit_registry",
+        "param": "*_REGISTRY_CSV",
+    }.items() <= next(w for w in warnings if w["param"] == "*_REGISTRY_CSV").items()
+    lines = [line for line in proc.stderr.splitlines() if "assets.py:account_exit_registry" in line]
+    assert len(lines) == 1, proc.stderr  # one line for the step, however many variables
+    assert "*_REGISTRY_CSV" in lines[0] and "env=[...]" in lines[0]
     out = barca(
         root,
         "get",
@@ -293,6 +313,8 @@ def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
         "account_exit_registry": "ran",
         "exited_accounts": "ran",
     }
+    # The declared name covers the pattern; the other registry variables are still reported.
+    assert "*_REGISTRY_CSV" not in declared["account_exit_registry"].get("undeclared_env", [])
     assert declared["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": V2_CSV}
     assert exited(root, V2_CSV) == {1, 2}
     back = get_exited(root, "registries/account_exit.csv")

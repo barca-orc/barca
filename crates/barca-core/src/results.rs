@@ -213,6 +213,11 @@ pub struct StepReport {
     /// `"<redacted>"` for secret-looking names. Absent when the node declares no env.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
+    /// Environment variables the step's code reads without declaring them in `env=[...]`
+    /// (`barca docs cache`, "Environment variables"), sorted; a name built at run time is a `*`
+    /// pattern. Not part of the run hash. Absent when there are none. Experimental (#574).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undeclared_env: Option<Vec<String>>,
     /// Dry run only: the node's `weight=` when it is above 1 (#436). Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight: Option<u32>,

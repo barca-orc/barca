@@ -227,8 +227,14 @@ the step's run hash:
 `env=` is also accepted on `@task` and `@sensor`. Those always run, so there it only records the
 values each run used.
 
-**Limitation:** environment variables your code reads without declaring them are not seen by
-barca. They are not part of the cache key, so changing one does not invalidate anything.
+**Undeclared reads are reported, not hashed.** Environment variables your code reads without
+declaring them are not part of the cache key, so changing one does not invalidate anything.
+Barca finds such reads statically, in the function and in the project helpers it reaches
+(`os.environ["NAME"]`, `os.environ.get("NAME")`, `os.getenv("NAME")`, pydantic settings
+fields), and warns once per step before anything runs, naming the variables and the `env=[...]`
+fix. The JSON result lists them per step as `undeclared_env` (also in `--dry-run` and
+`barca status --json`, experimental), and the `warnings` array has one `undeclared_env` item per
+variable. `barca docs cache`, "Environment variables", has the exact rules.
 
 ### Heavy steps (`weight=`)
 

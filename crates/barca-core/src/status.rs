@@ -58,6 +58,11 @@ pub struct NodeStatus {
     /// are part of its run hash.
     #[serde(default)]
     pub env: Vec<String>,
+    /// Environment variables the node's code reads without declaring them in `env=[...]`
+    /// (`barca docs cache`, "Environment variables"), sorted; not part of its run hash. Absent
+    /// when there are none. Experimental (#574).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub undeclared_env: Vec<String>,
     /// With a configured server (`barca status` answered by the server's ledger): whether this
     /// machine has a copy of the node's result (RFC-0007 section 4.1). Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,6 +381,7 @@ async fn status_from_dag_with_membership(
                 .filter(|_| crate::cache::checks_bytes(node)),
             shape: None,
             env: node.extracted.env.clone(),
+            undeclared_env: node.extracted.undeclared_env(),
             local: None,
         });
     }
@@ -919,6 +925,7 @@ mod tests {
             last_bytes_change: None,
             shape: None,
             env: vec![],
+            undeclared_env: vec![],
             local: Some(false),
         }
     }

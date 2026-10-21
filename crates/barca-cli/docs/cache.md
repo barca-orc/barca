@@ -23,6 +23,7 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 - Environment variables a function reads **without** declaring them are not part of the hash:
   changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
   (`barca docs assets`). Nodes that declare no env hash exactly as if `env=` did not exist.
+  Barca warns about the undeclared reads it can see ("Environment variables" below).
 - Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files
   or the project modules they import: their `__pycache__` .pyc files are checked against a hash
   of the source, not its mtime and size, so an edit that keeps both (a same-size edit within one
@@ -31,6 +32,43 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 
 How the coordinator assembles a step's hash from its upstreams, and the guarantees that come
 with it, are specified in `specs/cache-decisions.md`.
+
+### Environment variables
+
+A declared variable (`env=["NAME"]`) is part of the run hash. A variable the code reads without
+declaring it is not, so switching it, for example pointing a registry at another CSV, leaves
+the step `cached` with the result computed from the old value. To make that visible, barca looks
+for environment reads in the step's function and in every project definition its hash follows
+(the same helpers as "What the definition covers"), without importing anything. A read counts
+when the name is a string literal:
+
+- `os.environ["NAME"]`, `os.environ.get("NAME")`, `.setdefault("NAME", ...)`, `.pop("NAME")`
+  and `"NAME" in os.environ`, also through `from os import environ`;
+- `os.getenv("NAME")`, or `getenv("NAME")` imported from `os`;
+- a pydantic settings class (`class Settings(BaseSettings)`): each field reads its name in upper
+  case after the class's `env_prefix`, or the name given by `Field(env=...)`,
+  `Field(validation_alias=...)` or `Field(alias=...)`.
+
+A name built in an f-string with a literal part (`os.environ.get(f"{name.upper()}_CSV")`) is
+reported as a pattern with `*` for the interpolated parts (`*_CSV`); declaring any name that
+matches the pattern covers it. Names that are not literal at all (`os.environ[key]`), reads in
+installed packages, and reads of variables starting with `BARCA_` are not reported.
+
+The reads not declared in `env=` are reported, and nothing about caching changes:
+
+- `get`, `run`, their `--dry-run` and `plan` print one `[barca] warning:` line per step on
+  stderr before anything runs, naming the variables (the first six, then a count) and the
+  `env=[...]` fix. Like every plan warning it is printed once per command, for the steps the
+  command planned, whether they run or are served from cache.
+- The JSON `warnings` array has one item per step and variable: `kind: "undeclared_env"`, the
+  variable in `param` (`barca docs contract`, "Plan warnings").
+- Each JSON `steps[]` entry of `get`, `run` and `--dry-run`, and each `nodes[]` entry of
+  `barca status --json`, carries `undeclared_env`, the sorted list, when it is not empty.
+  Experimental.
+
+Declare a variable the result depends on; leave the rest (a log level, a credential that does
+not change the data). To recompute once after switching an undeclared variable, use
+`--refresh <step>`.
 
 ### What the definition covers
 

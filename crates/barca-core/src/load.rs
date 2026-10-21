@@ -236,6 +236,8 @@ fn load_files(
     }
     // Nodes in command-line order (the last asset is `get file.py`'s final value).
     let mut all_nodes: Vec<crate::model::ExtractedNode> = Vec::new();
+    // Each helper's environment reads, parsed once however many steps reach it.
+    let mut env_scanned = std::collections::HashMap::new();
     for (index, nodes) in nodes_by_file.into_iter().enumerate() {
         if partial && !import_errors.is_empty() {
             let path = &sources[index].0;
@@ -251,7 +253,15 @@ fn load_files(
         }
         let pipeline = cones.pipeline(index);
         for mut node in nodes {
-            (node.cone_hash, node.cone_parts) = pipeline.hash_and_parts(&node.function_name);
+            let reads;
+            (node.cone_hash, node.cone_parts, reads) =
+                pipeline.hash_parts_and_env_reads(&node.function_name, &mut env_scanned);
+            if !reads.is_empty() {
+                let mut all: std::collections::BTreeSet<String> =
+                    std::mem::take(&mut node.env_reads).into_iter().collect();
+                all.extend(reads);
+                node.env_reads = all.into_iter().collect();
+            }
             all_nodes.push(node);
         }
     }
@@ -462,6 +472,70 @@ fn resolve_dynamic_partitions(nodes: &mut [crate::model::ExtractedNode], python:
 mod source_dir_tests {
     use super::{build_dag, build_partial_dag, source_dir};
     use std::path::{Path, PathBuf};
+
+    /// #574: the environment variables a step reads, in its function and in the project
+    /// helpers it reaches, are found statically; the undeclared ones are plan warnings, one line
+    /// per step, and no hash changes.
+    #[tokio::test]
+    async fn undeclared_env_reads_are_found_through_helpers_and_warned_once_per_step() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.py"),
+            "import os\n\nclass Settings:\n    ROOT = os.environ.get(\"APP_ROOT\", \"data\")\n\n\
+             def registry(name):\n    return os.environ.get(f\"{name.upper()}_REGISTRY_CSV\")\n\n\
+             def unused():\n    return os.environ[\"NEVER_REACHED\"]\n",
+        )
+        .unwrap();
+        let file = dir.path().join("p.py").display().to_string();
+        let source = "import os\nfrom barca import asset\nfrom settings import Settings, registry\n\n\
+                      @asset(env=[\"ACCOUNT_REGISTRY_CSV\"])\ndef reg():\n    return [Settings.ROOT, registry(\"account\")]\n\n\
+                      @asset(inputs={\"r\": reg})\ndef plain(r):\n    return r, os.getenv(\"TOKEN_A\"), os.environ[\"TOKEN_B\"]\n\n\
+                      @asset()\ndef quiet():\n    return 1\n";
+        std::fs::write(&file, source).unwrap();
+        let dag = build_dag(
+            std::slice::from_ref(&file),
+            std::path::Path::new("/nonexistent-python"),
+        )
+        .await
+        .unwrap();
+        let node = |name: &str| dag.get_node(&format!("{file}:{name}")).unwrap();
+        assert_eq!(
+            node("reg").extracted.env_reads,
+            ["*_REGISTRY_CSV", "APP_ROOT"]
+        );
+        // The pattern is covered by the declared name that matches it.
+        assert_eq!(node("reg").extracted.undeclared_env(), ["APP_ROOT"]);
+        assert_eq!(
+            node("plain").extracted.undeclared_env(),
+            ["TOKEN_A", "TOKEN_B"]
+        );
+        assert!(node("quiet").extracted.env_reads.is_empty());
+
+        let plan = crate::planner::plan_from_dag(
+            &dag,
+            &crate::planner::ResourceConfig {
+                pool_size: 2,
+                concurrency_groups: Default::default(),
+            },
+        );
+        let warnings = crate::warnings::for_plan(&dag, &plan);
+        let items: Vec<(&str, &str, &str)> = warnings
+            .iter()
+            .map(|w| (w.kind.as_str(), &w.node[file.len() + 1..], w.param.as_str()))
+            .collect();
+        assert_eq!(
+            items,
+            [
+                ("undeclared_env", "plain", "TOKEN_A"),
+                ("undeclared_env", "plain", "TOKEN_B"),
+                ("undeclared_env", "reg", "APP_ROOT"),
+            ]
+        );
+        // One line per step: every item of a step carries the same message.
+        assert_eq!(warnings[0].message, warnings[1].message);
+        assert!(warnings[0].message.contains("TOKEN_A, TOKEN_B"));
+        assert!(warnings[0].message.contains("env=[...]"));
+    }
 
     #[tokio::test]
     async fn partial_loading_keeps_colocated_healthy_nodes_without_imports() {

@@ -382,6 +382,9 @@ fn try_extract_function(
             names.modules.get(local).map(|m| Imported::Module(m))
         });
 
+    // Completed with the helper code the function reaches once the cone is known (`load`).
+    let env_reads = crate::env_reads::in_function(func).into_iter().collect();
+
     let start = func.range().start().to_usize();
     // What the definition hash covers: the function from `def` on and the decorator parts that
     // count, in canonical form. Never the decorators as written (`crate::definition`).
@@ -416,6 +419,7 @@ fn try_extract_function(
         parallel_calls,
         env,
         unused_inputs,
+        env_reads,
     }))
 }
 

@@ -38,6 +38,12 @@ pub fn warn_once(message: &str) -> bool {
 /// The `kind` of the unused-input warning.
 pub const UNUSED_INPUT: &str = "unused_input";
 
+/// The `kind` of the undeclared-environment warning (#574).
+pub const UNDECLARED_ENV: &str = "undeclared_env";
+
+/// At most this many variable names are spelled out in the stderr line; JSON has them all.
+const NAMES_IN_LINE: usize = 6;
+
 /// A plan-time warning about one step, found by static analysis (no user code is imported).
 ///
 /// `get`, `run`, their `--dry-run` and `plan` report the same list for the same plan: one line
@@ -45,17 +51,18 @@ pub const UNUSED_INPUT: &str = "unused_input";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PlanWarning {
-    /// What was found. `unused_input` is the only kind so far.
+    /// What was found: `unused_input` or `undeclared_env`.
     pub kind: String,
     /// The step's node id (`file.py:name`).
     pub node: String,
-    /// The parameter concerned.
+    /// The parameter concerned (`unused_input`), or the environment variable (`undeclared_env`).
     pub param: String,
     /// The warning in words, with what to do about it.
     pub message: String,
 }
 
-/// The warnings for the steps of `plan`, sorted by node, parameter and kind: one per (step, unused input).
+/// The warnings for the steps of `plan`, sorted by node, parameter and kind: one per (step,
+/// unused input) and one per (step, undeclared environment variable).
 ///
 /// Only planned steps are looked at, so a command warns about the cone it was asked for and
 /// not about the rest of the file. A partitioned step is one step here, whatever its key
@@ -76,6 +83,7 @@ pub fn for_plan(dag: &Dag, plan: &ExecutionPlan) -> Vec<PlanWarning> {
         }
         if let Some(node) = dag.get_node(id) {
             out.extend(unused_input_warnings(dag, node));
+            out.extend(undeclared_env_warnings(node));
         }
     }
     out.sort_by(|a, b| (&a.node, &a.param, &a.kind).cmp(&(&b.node, &b.param, &b.kind)));
@@ -123,6 +131,50 @@ pub fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarning> {
             }
         })
         .collect()
+}
+
+/// One warning per environment variable `node`'s code reads without declaring it
+/// ([`crate::env_reads`]). Every item of a step carries the same message, naming all of them,
+/// so [`print`] writes one line per step.
+pub fn undeclared_env_warnings(node: &DagNode) -> Vec<PlanWarning> {
+    let names = node.extracted.undeclared_env();
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let message = undeclared_env_message(&node.id, &names);
+    names
+        .into_iter()
+        .map(|name| PlanWarning {
+            kind: UNDECLARED_ENV.to_string(),
+            node: node.id.clone(),
+            param: name,
+            message: message.clone(),
+        })
+        .collect()
+}
+
+/// `<id> reads environment variables it does not declare: A, B. ...`
+fn undeclared_env_message(id: &str, names: &[String]) -> String {
+    let shown = names.iter().take(NAMES_IN_LINE).map(String::as_str);
+    let mut list = shown.collect::<Vec<_>>().join(", ");
+    if names.len() > NAMES_IN_LINE {
+        list.push_str(&format!(" and {} more", names.len() - NAMES_IN_LINE));
+    }
+    let (noun, them) = if names.len() == 1 {
+        ("an environment variable", "it")
+    } else {
+        ("environment variables", "them")
+    };
+    let pattern = if names.iter().any(|n| n.contains('*')) {
+        " (a name with * is built at run time: declare each full name the step reads)"
+    } else {
+        ""
+    };
+    format!(
+        "{id} reads {noun} it does not declare: {list}. Changing {them} does not re-run the \
+         step, which keeps serving its cached result; add {them} to env=[...]{pattern} so \
+         that it does (`barca docs cache`, \"Environment variables\")"
+    )
 }
 
 /// Print each warning on stderr as `[barca] warning: <message>`, once per process.
