@@ -98,8 +98,9 @@ PROXIED="http://127.0.0.1:${NGINX_PORT}/barca/"
 fail() { echo "FAIL: $*"; cat "$TMP/serve.log"; exit 1; }
 cd "$TMP/laptop"
 
-# A run through the proxy: its step's lines arrive, its value is printed, exit 0.
-"$BARCA" get total pipeline.py --pretty --server "$PROXIED" >"$TMP/out" 2>"$TMP/err" \
+# A run through the proxy: its step's lines arrive, its value is printed (-o value: paths are
+# the default since 0.25), exit 0.
+"$BARCA" get total pipeline.py -o value --pretty --server "$PROXIED" >"$TMP/out" 2>"$TMP/err" \
     || fail "get through the proxy exited $?: $(cat "$TMP/err")"
 grep -q '^\[pipeline.py:total\] tick 2$' "$TMP/err" || fail "the step's lines did not stream: $(cat "$TMP/err")"
 grep -q '"total": 6' "$TMP/out" || fail "no value: $(cat "$TMP/out")"
