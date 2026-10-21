@@ -1779,7 +1779,10 @@ async fn return_outputs(
             }
         }
     }
-    // A `Manual` asset refreshed by hand gives new bytes on purpose (#548): no warning.
+    // Only an asset promises the same bytes for the same code and inputs. A sensor returns a
+    // new value under the same run hash whenever the data it watches changes, a task runs
+    // every time, and a `Manual` asset is refreshed by hand to pick up new data (#548): none
+    // of them is a nondeterministic function.
     changed.retain(|node| {
         let base = crate::StepId::parse(node).base_id().to_string();
         session

@@ -502,9 +502,11 @@ differ, barca warns that the function is not deterministic and sets `steps[].byt
 in run JSON. A new run hash is an expected change and does not warn; a result recorded without a
 digest sets the baseline. The check is on serialized bytes, so a serializer that writes variable
 metadata can also warn. Artifact paths and exit codes are unchanged. Partitioned steps are
-compared per key; the run's step is marked if any key changed.
+compared per key; the run's step is marked if any key changed. Only assets are checked: a sensor
+returns a new value under the same run hash whenever the data it watches changes, and a task runs
+every time, so new bytes from either are expected and never warn.
 
-A `Manual` asset is not checked. It is refreshed by hand with the same code and inputs to pick up
+A `Manual` asset is not checked either. It is refreshed by hand with the same code and inputs to pick up
 new data, so new bytes are what the refresh is for: no warning, no `bytes_changed`, no
 `last_bytes_change`. What reads it is stale after such a refresh, since its bytes count in their
 run hashes (`barca docs scheduling`).

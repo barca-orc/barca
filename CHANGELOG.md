@@ -56,6 +56,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   error names the path, the limit and the fix. Sockets left by a killed coordinator are removed
   by the next run (#557).
 
+- A sensor that returns a new value, or a task whose output changes, no longer prints "produced
+  different bytes for the same code and inputs; the function is not deterministic", and
+  `barca status` no longer keeps that event for it. The byte check now applies to assets only.
+
 ### Performance
 
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle
