@@ -107,9 +107,9 @@ barca status pipeline.py
 ```
 
 ```
-NAME  KIND   STATE  WHY             LAST RUN                           SHAPE  DEPS
-a     asset  stale  changed: code   success 2026-10-07 18:23:36 0.00s  str    -
-b     asset  stale  upstream_stale  success 2026-10-07 18:23:36 0.00s  str    a
+NAME  KIND   STATE  WHY             LAST RUN                               SHAPE  DEPS
+a     asset  stale  changed: code   success 2026-10-21 21:07:49 UTC 0.00s  str    -
+b     asset  stale  upstream_stale  success 2026-10-21 21:07:49 UTC 0.00s  str    a
 
 0 cached, 2 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 ```

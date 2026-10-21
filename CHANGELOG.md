@@ -6,6 +6,17 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Documentation
+
+- Sample output on the site is re-captured on 0.29.1 (#503): the `barca status`, `barca history`
+  and `barca list` tables on the workflow pages, Pattern 01 and the cron comparison show times
+  with `UTC` (local time for `NEXT FIRE`), and the execution-controls page shows the retry count
+  (`attempts=3`), the timeout error naming the step, and the real elapsed time in the progress
+  line. The `barca docs status` example of a changed-bytes line ends its time in `UTC`.
+  `DIRECTION.md` says what shipped from 0.24.2 to 0.29.1 and what is next.
+
 ## 0.29.1 (2026-10-21)
 
 ### Features

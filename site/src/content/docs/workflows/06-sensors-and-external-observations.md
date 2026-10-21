@@ -239,10 +239,10 @@ barca status pipeline.py
 ```
 
 ```
-NAME            KIND    STATE        WHY             LAST RUN                           SHAPE            DEPS
-orders_version  sensor  always-runs  sensor          success 2026-10-07 18:13:43 0.01s  str              -
-orders          asset   stale        changed         success 2026-10-07 18:13:29 0.00s  4 rows x 2 cols  orders_version
-total           asset   stale        upstream_stale  success 2026-10-07 18:13:29 0.00s  dict (2 keys)    orders
+NAME            KIND    STATE        WHY                                                                                                                 LAST RUN                               SHAPE            DEPS
+orders_version  sensor  always-runs  sensor                                                                                                              success 2026-10-21 21:07:50 UTC 0.00s  str              -
+orders          asset   stale        changed: sensor pipeline.py:orders_version; assumes sensor 'orders_version' returns the same value as its last run  success 2026-10-21 21:07:49 UTC 0.00s  3 rows x 2 cols  orders_version
+total           asset   stale        upstream_stale                                                                                                      success 2026-10-21 21:07:49 UTC 0.00s  dict (2 keys)    orders
 
 0 cached, 2 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```

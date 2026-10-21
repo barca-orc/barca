@@ -1,9 +1,9 @@
 ---
 title: "Workflow: Execution Controls and Ad Hoc Params"
-description: Timeouts, retries and cancellation as they work in barca 0.18.0. Ad hoc runtime parameters are not implemented.
+description: Timeouts, retries and cancellation as they work in barca 0.29.1. Ad hoc runtime parameters are not implemented.
 ---
 
-This page covers timeouts, retries and cancellation. Everything shown was run with barca 0.18.0.
+This page covers timeouts, retries and cancellation. Everything shown was run with barca 0.29.1.
 
 **Ad hoc runtime parameters are not implemented.** An earlier version of this page proposed a
 `--param x=7` flag. No such flag exists: `barca get flaky pipeline.py --param x=7` exits 2 with
@@ -60,21 +60,21 @@ barca get flaky pipeline.py --agent -o value --json
 ```
 
 ```
-[barca] step:pipeline.py:flaky completed 1.5s (1/1)
-[barca] 1/1 steps | done in 1.5s
-{"elapsed_seconds":4.736054959,"final_output":{"attempts":3}, ... "status":"success", ... "steps_executed":1,"warnings":[]}
+[barca] step:pipeline.py:flaky completed 0.0s (1/1) attempts=3
+[barca] 1/1 steps | done in 3.1s
+{"elapsed_seconds":3.057922537,"final_output":{"attempts":3}, ... "status":"success","steps":[{"attempts":3, ... "status":"ran"}],"steps_executed":1,"warnings":[]}
 ```
 
-The function ran three times and the third attempt succeeded. The output does not say how many
-attempts were made: failed attempts that are followed by a success are not reported, and the
-step counts once. With `retries=4`, the measured gaps between the starts of attempts were 1.1 s,
+The function ran three times and the third attempt succeeded. The `--agent` line and the
+step's `attempts` say how many attempts were made; the step counts once, and its time is the
+successful attempt's. With `retries=4`, the measured gaps between the starts of attempts were 1.1 s,
 2.2 s and 3.2 s for `retry_backoff=1.0`, and about 0.1 s each for `retry_backoff=0`.
 
 When every attempt fails, the step fails with the last error and the run exits 1:
 
 ```
-[barca] step:pipeline.py:flaky failed: RuntimeError: attempt 2 failed
-[barca] 0/1 steps | failed in 0.0s
+[barca] step:pipeline.py:flaky failed: RuntimeError: attempt 3 failed attempts=3
+[barca] 0/1 steps | failed in 3.1s
 ```
 
 A retry re-runs one step. It does not re-run the step's upstream, and a downstream step's
@@ -89,16 +89,16 @@ barca get after_slow pipeline.py --agent
 ```
 
 ```
-[barca] step:pipeline.py:slow failed: TimeoutError: Function '<lambda>' exceeded timeout of 2s
-[barca] 0/2 steps | failed in 0.0s
-{"elapsed_seconds":2.111709792,"error":"TimeoutError: Function '<lambda>' exceeded timeout of 2s","failed_node":"pipeline.py:slow", ... "status":"failed","steps":[{... "id":"pipeline.py:slow", ... "status":"failed"},{"detail":"a step it depends on failed","id":"pipeline.py:after_slow","kind":"asset","reason":"upstream_failed", ... "status":"skipped"}],"steps_executed":1,"warnings":[]}
-[barca] run failed: step 'pipeline.py:slow' failed (exit 1)
+[barca] step:pipeline.py:slow failed: TimeoutError: Step 'pipeline.py:slow' exceeded timeout of 2s
+[barca] 0/2 steps | failed in 2.0s
+{"elapsed_seconds":2.048452779,"error":"TimeoutError: Step 'pipeline.py:slow' exceeded timeout of 2s","failed_node":"pipeline.py:slow", ... "status":"failed","steps":[{... "id":"pipeline.py:slow", ... "status":"failed"},{"detail":"a step it depends on failed","id":"pipeline.py:after_slow","kind":"asset","reason":"upstream_failed", ... "status":"skipped"}],"steps_executed":1,"warnings":[]}
+{"artifact_dir":".barca/artifacts/pipeline.py--slow","code":1,"error":"step 'pipeline.py:slow' failed: TimeoutError: Step 'pipeline.py:slow' exceeded timeout of 2s","kind":"step_failed", ...}
+[barca] run failed: step 'pipeline.py:slow' failed: TimeoutError: Step 'pipeline.py:slow' exceeded timeout of 2s; 1 downstream steps skipped (exit 1)
 ```
 
 A timeout is a step failure: exit code 1, the step is `failed`, and steps that depend on it are
-`skipped` with reason `upstream_failed`. The error names the function as `<lambda>`, not `slow`;
-`failed_node` has the real name. The progress line reports `failed in 0.0s` although the run
-took 2.1 seconds; `elapsed_seconds` in the JSON is the correct figure.
+`skipped` with reason `upstream_failed`. The error and `failed_node` name the step, and the
+remediation names `timeout_seconds=`.
 
 ## Cancellation
 
@@ -109,7 +109,7 @@ barca get long_running pipeline.py --agent     # then Ctrl-C after two seconds
 ```
 
 ```
-[barca] 0/1 steps | cancelled after 0.0s
+[barca] 0/1 steps | cancelled after 2.0s
 {"code":130,"error":"run cancelled","kind":"cancelled","remediation":"Re-run the same command; steps that finished before the cancel are cached and will not re-run."}
 ```
 
@@ -129,17 +129,19 @@ barca status pipeline.py
 ```
 RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
 ------------------------------------------------------------------------------------------------------
-51fd65520f50   get     long_running             cancelled       1      0   2.0s 2026-10-07 18:14:54
-51faebb38cf0   get     slow                     failed          1      0   2.1s 2026-10-07 18:14:52
-51f883ff8a10   get     long_running             success         1      0   4.7s 2026-10-07 18:14:45
+d870c314e71c   get     long_running             cancelled       1      0   2.0s 2026-10-21 21:07:56 UTC
+d8738262e1cc   get     after_slow               failed          1      0   2.0s 2026-10-21 21:07:54 UTC
+d8772824e362   get     flaky                    success         1      0   3.1s 2026-10-21 21:07:50 UTC
 ```
 
 ```
-NAME          KIND    STATE        WHY           LAST RUN                           SHAPE         DEPS
-long_running  asset   never-run    no_record     -                                  -             -
-slow          asset   never-run    failed        failed 2026-10-07 18:14:54         -             -
-after_slow    asset   never-run    no_record     -                                  -             slow
-flaky         asset   cached       materialized  success 2026-10-07 18:14:50 1.48s  dict (1 key)  -
+NAME          KIND   STATE      WHY           LAST RUN                               SHAPE         DEPS
+long_running  asset  never-run  no_record     -                                      -             -
+slow          asset  never-run  failed        failed 2026-10-21 21:07:56 UTC         -             -
+after_slow    asset  never-run  no_record     -                                      -             slow
+flaky         asset  cached     materialized  success 2026-10-21 21:07:54 UTC 0.00s  dict (1 key)  -
+
+1 cached, 0 stale, 3 never run, 0 partial, 0 unknown, 0 always run
 ```
 
 Run statuses in `barca history` are `success`, `failed`, `cancelled`, `running` and

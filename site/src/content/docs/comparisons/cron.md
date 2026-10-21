@@ -62,12 +62,12 @@ barca serve job.py
 ```
 
 `barca list job.py` shows the schedule and its next fire time without starting the server
-(output from barca 0.18.0):
+(output from barca 0.29.1):
 
 ```
 NAME            KIND  FRESHNESS           NEXT FIRE (LOCAL TIME)  DEPS
 ----------------------------------------------------------------------
-job.py:refresh  task  cron: */10 * * * *  2026-10-07 14:20:00     -
+job.py:refresh  task  cron: */10 * * * *  2026-10-21 17:10:00     -
 ```
 
 ## Feature by feature

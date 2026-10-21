@@ -104,8 +104,8 @@ barca status pipeline.py
 ```
 
 ```
-NAME  KIND   STATE   WHY           LAST RUN                           SHAPE  DEPS
-a     asset  cached  materialized  success 2026-10-07 18:18:14 0.00s  str    -
+NAME  KIND   STATE   WHY           LAST RUN                               SHAPE  DEPS
+a     asset  cached  materialized  success 2026-10-21 21:07:49 UTC 0.00s  str    -
 
 1 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 ```
