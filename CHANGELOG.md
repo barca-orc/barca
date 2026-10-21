@@ -17,6 +17,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   printed once, and the next `get` and `barca status` find the result `cached`. With a server,
   its ledger keeps its record as before.
 
+- A variable declared with `env=[...]` that is not set in barca's environment is now read from
+  the project's `.env` (#575). A pipeline that loads `.env` at import (`load_dotenv()`) was
+  hashed with the variable unset, so editing the value in `.env` served the old result; now the
+  edit re-runs the asset, and `steps[].env` and the `--agent` line report the value from `.env`.
+  The environment still wins over the file. Barca reads the file statically and does not set its
+  values for the step.
+
 ### Testing
 
 - The remote planning-pipeline test reads the whole-tree and largest-process peak RSS from the

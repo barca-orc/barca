@@ -666,8 +666,8 @@ the set of `kind` values grows additively.
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
   cascading and on a step with `artifact_mismatch` (see "A store copy that differs from its
-  recorded hash" below), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
-  `"<redacted>"` for secret-looking names).
+  recorded hash" below), `env` on nodes that declare `env=[...]` (the value in barca's environment, else in the
+  project's `.env`; `null` when unset in both, `"<redacted>"` for secret-looking names).
 
 Executed steps also carry `attempts` and `elapsed_seconds`, including failures.
 Elapsed seconds sum active reported time across attempts; backoff is excluded. For

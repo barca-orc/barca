@@ -216,7 +216,8 @@ every upstream had run.
 ## Environment variables: `env=`
 
 An asset that reads an environment variable (a source path, a region, a model name) should
-declare it. Barca reads the declared variables when it plans the run, folds each name and value
+declare it. Barca reads the declared variables when it plans the run (from its environment, else from the
+project's `.env`), folds each name and value
 into the run hash, and reports the values each step used.
 
 ```python
@@ -246,6 +247,15 @@ barca get summary pipeline.py --agent     # raw and summary run again
 - Changing a declared variable re-materializes the asset and everything downstream of it.
   Unset is its own value, distinct from an empty string. Variables that are not declared are
   not part of the cache key.
+- A declared variable that is not set in barca's environment is read from the project's `.env`
+  (in the project root, next to `barca.toml`), so a pipeline that loads `.env` at import
+  (`load_dotenv()`, before a settings class reads the environment) is hashed with the value it
+  runs with: editing `SOURCE_CSV=b.csv` in `.env` re-runs `raw` like an `export` does. The
+  environment wins over the file, as with `load_dotenv()`'s default. Barca reads the file
+  without importing anything, understands `KEY=VALUE` lines, `export `, `#` comments, single and
+  double quotes and `${NAME}` / `${NAME:-default}`, and does not set its values for the step:
+  a pipeline that uses them loads the file itself. Another dotenv file (`.env.local`, a path
+  given to `load_dotenv(...)`) is not read; declare such variables by exporting them.
 - The JSON result's `steps` entry for the node carries `"env": {"API_TOKEN": null,
   "SOURCE_CSV": "b.csv"}` (`null` = unset), and `--agent` step lines end with
   `env API_TOKEN=<unset> SOURCE_CSV=b.csv`.

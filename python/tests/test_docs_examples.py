@@ -541,6 +541,56 @@ def test_assets_topic_env_example(binary, topics, tmp_path):
     assert "ENV" in table.splitlines()[0] and "SOURCE_CSV, API_TOKEN" in table
 
 
+DOTENV_PIPELINE = """
+import os
+from pathlib import Path
+
+from barca import asset
+
+# What `load_dotenv()` does by default: the environment wins over the file.
+for line in (Path(__file__).parent / ".env").read_text().splitlines():
+    key, _, value = line.partition("=")
+    os.environ.setdefault(key.strip(), value.strip().strip("'\\""))
+
+
+@asset(env=["SOURCE_CSV"])
+def raw() -> dict:
+    return {"source": os.environ.get("SOURCE_CSV", "default.csv")}
+"""
+
+
+def test_assets_topic_env_from_the_projects_dotenv(binary, topics, tmp_path):
+    """`barca docs assets`: a declared variable unset in barca's environment is read from the
+    project's `.env`, so editing it there re-runs the asset; the environment wins (#575)."""
+    import os
+
+    assert "editing `SOURCE_CSV=b.csv` in `.env` re-runs `raw`" in topics["assets"]
+    (tmp_path / "pipeline.py").write_text(DOTENV_PIPELINE)
+    dotenv = tmp_path / ".env"
+
+    def get(**env):
+        base = {k: v for k, v in os.environ.items() if k != "SOURCE_CSV"}
+        out = result(
+            subprocess.run(
+                [binary, "get", "raw", "pipeline.py", "-o", "value", "--json"],
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                env={**base, **env},
+            )
+        )
+        return out["steps_executed"], out["final_output"]["source"], out["steps"][0]["env"]
+
+    dotenv.write_text("# loaded by pipeline.py\nSOURCE_CSV='a.csv'\n")
+    assert get() == (1, "a.csv", {"SOURCE_CSV": "a.csv"})
+    assert get() == (0, "a.csv", {"SOURCE_CSV": "a.csv"})
+    dotenv.write_text("SOURCE_CSV=b.csv\n")
+    assert get() == (1, "b.csv", {"SOURCE_CSV": "b.csv"})
+    # The environment wins over the file, in barca as in the pipeline.
+    assert get(SOURCE_CSV="c.csv") == (1, "c.csv", {"SOURCE_CSV": "c.csv"})
+    assert get() == (0, "b.csv", {"SOURCE_CSV": "b.csv"})
+
+
 def test_env_must_be_a_literal_list(binary, tmp_path):
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset\n\nNAMES = ['A']\n\n\n"

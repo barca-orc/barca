@@ -321,8 +321,9 @@ concerns: `steps[].warning`, and for a store copy that differs from its recorded
 
 ## Environment variables
 
-A node that declares `env=["SOURCE_CSV"]` has those values in its cache key, and each `--agent`
-step line ends with them so a log records which inputs a run used:
+A node that declares `env=["SOURCE_CSV"]` has those values in its cache key (from barca's
+environment, else from the project's `.env`), and each `--agent` step line ends with them so a
+log records which inputs a run used:
 
 ```
 [barca] step:pipeline.py:raw completed 0.0s (1/2) env API_TOKEN=<unset> SOURCE_CSV=b.csv
