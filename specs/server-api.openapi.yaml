@@ -2,12 +2,12 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '5'
-  description: 'Normative current wire contract; specification version 5 is independent of package versions.
+  version: '6'
+  description: 'Normative current wire contract; specification version 6 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
-    /stats/{name}, /project), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. Every error body is the CLI error
+    /stats/{name}, /project), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema

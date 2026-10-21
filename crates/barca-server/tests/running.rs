@@ -1,6 +1,7 @@
 //! #534: `GET /state`, `GET /assets/{name}` and `GET /runs?status=running` show what is running
-//! now, whoever started it: a `POST /runs` run, a scheduler tick, a CLI run on the same
-//! `.barca/`. Each shows within one poll and clears when it ends.
+//! now, whoever started it: a `POST /runs` run and a scheduler tick here; a CLI run on the same
+//! `.barca/` (another process) in `python/tests/test_serve_running.py`. Each shows within one
+//! poll and clears when it ends.
 #![cfg(unix)]
 
 use axum::body::Body;
@@ -250,53 +251,5 @@ async fn a_scheduler_run_shows_as_running_and_clears_when_it_ends() {
     let (status, body) = send(&app, "DELETE", &format!("/runs/{run_id}"), None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     wait_for(&app, "ticking", "cleared", Value::is_null).await;
-    assert!(in_flight(&app).await.is_empty());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_cli_run_on_the_same_project_shows_as_running_and_clears_when_it_ends() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = config(dir.path(), false);
-    let db_path = config.resolved.db_path.clone();
-    let source = config.files[0].clone();
-    let app = barca_server::app(config);
-    let slow = format!("{source}:slow");
-    // A `barca get slow` in a shell writes its row when it starts, with its job and owner:
-    // here the owner is this test process, alive until the row is finished.
-    let trigger = barca_core::outcome::Trigger::default();
-    barca_core::db::init_db(&db_path).await.unwrap();
-    barca_core::db::create_run_with(
-        &db_path,
-        barca_core::db::NewRun {
-            run_id: "cli-run-1",
-            command: "get",
-            files: "[]",
-            target: Some("slow"),
-            steps_total: Some(2),
-            job: Some(&slow),
-            trigger: &trigger,
-        },
-    )
-    .await
-    .unwrap();
-
-    let running = running_of(&app, "slow").await;
-    assert_eq!(running["run_id"], "cli-run-1", "{running}");
-    assert_eq!(running["triggered_by"], "manual", "{running}");
-    assert_eq!(running["step"], "running", "{running}");
-    // A CLI run reports no steps here: only its job's nodes count.
-    assert!(running_of(&app, "first").await.is_null());
-    let (_, detail) = send(&app, "GET", "/assets/slow", None).await;
-    assert_eq!(detail["running"]["run_id"], "cli-run-1", "{detail}");
-    let runs = in_flight(&app).await;
-    assert_eq!(runs.len(), 1, "{runs:?}");
-    assert_eq!(runs[0]["id"], "cli-run-1");
-    assert_eq!(runs[0]["status"], "running");
-    assert_eq!(runs[0]["triggered_by"], "manual");
-
-    barca_core::db::finish_run(&db_path, "cli-run-1", "success", 1, 1, 4.0)
-        .await
-        .unwrap();
-    assert!(running_of(&app, "slow").await.is_null());
     assert!(in_flight(&app).await.is_empty());
 }
