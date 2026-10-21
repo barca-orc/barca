@@ -119,7 +119,13 @@ def settle(machine: Machine) -> None:
     # Repaired once: the next get finds nothing to say.
     again = machine.cli("get", REGISTRY, "assets.py", "--json")
     assert again.returncode == 0, again.stderr
-    assert "warning" not in again.stderr, again.stderr
+    # The pipeline's undeclared environment reads are reported on every command (#574).
+    warnings = [
+        line
+        for line in again.stderr.splitlines()
+        if "warning" in line and "not declared in env=" not in line
+    ]
+    assert warnings == [], again.stderr
 
 
 def test_overlapping_refreshes_leave_one_consistent_result(machine):
