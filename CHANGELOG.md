@@ -12,6 +12,17 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Documentation
+
+- First-run pages show what barca prints today (#495): Getting Started, the Patterns pages and
+  the CLI reference were re-captured on 0.27.0 (artifact paths with a small json preview, the
+  worker's `importing` line, prefixed step output), their "run with barca 0.18.0" stamps are
+  gone, `after=` and `when=` are documented as the usage errors they now are, and the remote
+  store is described everywhere as this machine's backup and read-through cache, with sharing
+  through a server.
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking

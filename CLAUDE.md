@@ -52,7 +52,9 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
    - No DB access — Rust owns all persistence
    - Artifacts are always local; with a remote store, `python -m barca._transfer` (one per run,
      driven by `transfer.rs` over its own UDS) uploads them in the background and fetches
-     other machines' cache hits before they are read
+     cache hits this machine lacks (evicted locally, or recorded by a server's ledger) before
+     they are read. The store is this machine's backup and read-through cache; sharing means a
+     server (`barca docs server-mode`)
 
 3. **Python stubs** (`from barca import asset, ...`):
    - Pure no-ops — decorators return the function unchanged
