@@ -620,6 +620,7 @@ async fn persist_outcome(
             files: &db::encode_files(run_files(state, &spec.files)),
             target: target.as_deref(),
             steps_total: None,
+            job: None,
             trigger: &spec.trigger,
         },
         status,

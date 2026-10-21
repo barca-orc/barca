@@ -1597,6 +1597,7 @@ pub async fn create_run(
             files,
             target,
             steps_total,
+            job: None,
             trigger: &crate::outcome::Trigger::default(),
         },
     )
@@ -1611,6 +1612,10 @@ pub struct NewRun<'a> {
     pub files: &'a str,
     pub target: Option<&'a str>,
     pub steps_total: Option<usize>,
+    /// The canonical job id (`persist::canonical_job`), when known at the start. Written with
+    /// the row, so a `barca serve` on the same project sees which nodes a running CLI run
+    /// covers and skips their ticks (#479). [`crate::persist`] writes it again at the end.
+    pub job: Option<&'a str>,
     pub trigger: &'a crate::outcome::Trigger,
 }
 
@@ -1622,7 +1627,7 @@ pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), Barca
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''))",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -1635,6 +1640,7 @@ pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), Barca
             run.trigger.triggered_by.as_str().to_string(),
             run.trigger.scheduled_at.clone().unwrap_or_default(),
             run.trigger.schedule_id.clone().unwrap_or_default(),
+            run.job.unwrap_or("").to_string(),
         ],
     )
     .await
@@ -1806,7 +1812,7 @@ async fn interrupted_runs(conn: &turso::Connection, db_path: &str) -> Vec<String
     interrupted_among(&running_runs(conn).await, &on, pid_alive)
 }
 
-/// A `running` row, as much of it as says who is running it.
+/// A `running` row, as much of it as says who is running it and what.
 #[derive(Debug, Clone)]
 struct RunningRun {
     run_id: String,
@@ -1814,13 +1820,16 @@ struct RunningRun {
     host: String,
     /// The `owner` column: empty on rows from older versions.
     owner: String,
+    command: String,
+    /// The `job` column: empty on rows from older versions.
+    job: String,
 }
 
 async fn running_runs(conn: &turso::Connection) -> Vec<RunningRun> {
     // A database this version has not migrated (history read from one an older barca wrote)
-    // has no `owner` column yet.
-    let with_owner = "SELECT run_id, pid, COALESCE(host, ''), COALESCE(owner, '') FROM runs WHERE status = 'running'";
-    let without = "SELECT run_id, pid, COALESCE(host, ''), '' FROM runs WHERE status = 'running'";
+    // has no `owner` or `job` column yet. `idx_runs_status` serves the filter.
+    let with_owner = "SELECT run_id, pid, COALESCE(host, ''), COALESCE(owner, ''), command, COALESCE(job, '') FROM runs WHERE status = 'running' ORDER BY id";
+    let without = "SELECT run_id, pid, COALESCE(host, ''), '', command, '' FROM runs WHERE status = 'running' ORDER BY id";
     let mut rows = match conn.query(with_owner, ()).await {
         Ok(rows) => rows,
         Err(_) => match conn.query(without, ()).await {
@@ -1836,6 +1845,8 @@ async fn running_runs(conn: &turso::Connection) -> Vec<RunningRun> {
                 pid: row.get::<i64>(1).ok(),
                 host: row.get::<String>(2).unwrap_or_default(),
                 owner: row.get::<String>(3).unwrap_or_default(),
+                command: row.get::<String>(4).unwrap_or_default(),
+                job: row.get::<String>(5).unwrap_or_default(),
             });
         }
     }
@@ -1911,13 +1922,21 @@ pub(crate) async fn live_runs(conn: &turso::Connection, db_path: &str) -> Vec<St
 /// that exists. A run whose owner cannot be judged from here (another machine, an older row
 /// from another host) is not listed: unlike [`live_runs`], which keeps those, this is for a
 /// refusal that must not hold forever because of a row nobody will finish (`barca state
-/// reset`). Best effort: empty when nothing can be read.
+/// reset`, and the scheduler's skip of a node a CLI run covers). Best effort: empty when
+/// nothing can be read.
 pub(crate) async fn runs_alive_here(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+    alive_here(running_runs(conn).await, db_path)
+        .into_iter()
+        .map(|run| run.run_id)
+        .collect()
+}
+
+/// The rows of `running` whose owner this process can see is alive (see [`runs_alive_here`]).
+fn alive_here(running: Vec<RunningRun>, db_path: &str) -> Vec<RunningRun> {
     use crate::run_owner::{Owner, judge_json};
     let on = crate::run_owner::System::for_db(db_path);
     let this_host = crate::run_owner::Observer::here(&on).host;
-    running_runs(conn)
-        .await
+    running
         .into_iter()
         .filter(|run| {
             if run.owner.is_empty() {
@@ -1928,7 +1947,6 @@ pub(crate) async fn runs_alive_here(conn: &turso::Connection, db_path: &str) -> 
                 judge_json(run.pid, &run.owner, &on) == Owner::Alive
             }
         })
-        .map(|run| run.run_id)
         .collect()
 }
 
@@ -1942,6 +1960,49 @@ pub(crate) async fn connect_locked(db_path: &str) -> Option<(turso::Database, tu
 pub(crate) async fn init_locked(db_path: &str) -> Result<(), BarcaError> {
     let (_db, conn) = connect(db_path).await?;
     init_schema(&conn).await
+}
+
+/// A `running` run of another process whose owner is alive, and what it runs: see
+/// [`alive_running_runs`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AliveRun {
+    pub run_id: String,
+    /// `get` or `run`.
+    pub command: String,
+    /// The canonical job id (`all`, or the resolved node ids joined by `,`); empty when the
+    /// run was started by a barca that wrote it only at the end.
+    pub job: String,
+}
+
+/// The `running` runs of other processes whose owner this process can see is alive
+/// ([`runs_alive_here`]), oldest first: a `barca get` or `barca run` in progress on this
+/// machine. `barca serve` skips a tick of a node one of them covers (#479).
+///
+/// This process's own rows are left out: the server knows its runs from memory, and a row of
+/// its own left `running` (its outcome could not be written) must not hold a schedule back.
+/// A row whose owner cannot be judged from here (another machine's, restored from a backup)
+/// is left out too, so it never holds a schedule back for ever. One query of the `running`
+/// rows (`idx_runs_status`); best effort: empty when nothing can be read.
+pub async fn alive_running_runs(db_path: &str) -> Vec<AliveRun> {
+    let running = {
+        let _g = db_guard().await;
+        let Ok((_db, conn)) = open_conn(db_path).await else {
+            return Vec::new();
+        };
+        running_runs(&conn).await
+    };
+    let others = running
+        .into_iter()
+        .filter(|run| !crate::run_owner::is_this_process(run.pid, &run.host, &run.owner))
+        .collect();
+    alive_here(others, db_path)
+        .into_iter()
+        .map(|run| AliveRun {
+            run_id: run.run_id,
+            command: run.command,
+            job: run.job,
+        })
+        .collect()
 }
 
 // ─── Cache size limit (RFC-0012) ─────────────────────────────────────────────
@@ -3029,6 +3090,7 @@ mod tests {
                 files: "[]",
                 target: Some("p.py:a"),
                 steps_total: Some(1),
+                job: Some("p.py:a"),
                 trigger: &trigger,
             },
         )
@@ -3064,6 +3126,7 @@ mod tests {
                 files: "[]",
                 target: Some("t"),
                 steps_total: None,
+                job: None,
                 trigger: &crate::outcome::Trigger::api(),
             },
             "cancelled",
@@ -3333,6 +3396,8 @@ mod tests {
             pid: Some(1),
             host: "container-1".into(),
             owner: json(&run),
+            command: "get".into(),
+            job: String::new(),
         }];
         let restarted = run_owner::tests::Fake {
             here: Here {
@@ -3598,6 +3663,69 @@ mod tests {
         } else {
             assert_eq!(reported(&db_path).await["then"], "running");
         }
+    }
+
+    #[tokio::test]
+    async fn only_runs_whose_owner_is_alive_hold_a_schedule_back() {
+        // #479: `barca serve` skips a tick while a CLI run of the node is going. A run
+        // records its job when it starts, not only at the end.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = metadata_db(&dir).await;
+        create_run_with(
+            &db_path,
+            NewRun {
+                run_id: "mine",
+                command: "get",
+                files: "[]",
+                target: Some("a"),
+                steps_total: Some(1),
+                job: Some("p.py:a"),
+                trigger: &crate::outcome::Trigger::default(),
+            },
+        )
+        .await
+        .unwrap();
+        // Another process on this host, still going (a row as an older barca writes it).
+        let mut other =
+            crate::helper_proc::spawn_std(std::process::Command::new("sleep").arg("30")).unwrap();
+        add_running(&db_path, "cli", other.id(), &local_host(), "").await;
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&db_path).await.unwrap();
+            conn.execute("UPDATE runs SET job = 'p.py:a' WHERE run_id = 'cli'", ())
+                .await
+                .unwrap();
+        }
+        // Killed without recording an outcome: its owner is gone.
+        add_running(
+            &db_path,
+            "stale",
+            a_dead_pid(),
+            &local_host(),
+            &json(&this_process(None)),
+        )
+        .await;
+        // Another machine's row, restored from a backup: nobody here can tell.
+        let mut theirs = this_process(None);
+        theirs.boot = "a-kernel-somewhere".into();
+        add_running(&db_path, "foreign", 1, "elsewhere", &json(&theirs)).await;
+        // An older barca's row, its pid gone.
+        add_running(&db_path, "old", a_dead_pid(), &local_host(), "").await;
+        // This process's own row ("mine") is left out: a server knows its runs from memory.
+        assert_eq!(
+            alive_running_runs(&db_path).await,
+            [AliveRun {
+                run_id: "cli".into(),
+                command: "get".into(),
+                job: "p.py:a".into(),
+            }]
+        );
+        other.kill().ok();
+        other.wait().ok();
+        assert!(alive_running_runs(&db_path).await.is_empty());
+        finish_run(&db_path, "mine", "success", 1, 0, 0.1)
+            .await
+            .ok();
     }
 
     #[tokio::test]

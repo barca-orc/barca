@@ -79,7 +79,8 @@ enum TickAction<'a> {
     /// Skip because the job is paused (`POST /schedule/{id}/pause`).
     Paused(&'a ScheduledJob),
     /// Skip because a run of this job's node (`handle`) is still in flight, whoever started
-    /// it: an earlier tick, `POST /get`, `POST /run/{task}` or `POST /run`.
+    /// it: an earlier tick, `POST /get`, `POST /run/{task}` or `POST /run`, or a `barca get`
+    /// / `barca run` from a shell on the same project.
     Skip {
         job: &'a ScheduledJob,
         handle: String,
@@ -142,6 +143,36 @@ fn run_in_flight_for(state: &AppState, job: &ScheduledJob) -> Option<String> {
         .filter(|r| run_covers(&r.command, &r.nodes, job))
         .min_by(|a, b| a.started_at.total_cmp(&b.started_at))
         .map(|r| r.handle.clone())
+}
+
+/// The run id of the oldest CLI run in `alive` ([`db::alive_running_runs`]: the `running`
+/// rows of the project's metadata database whose owner is alive) that covers `job`
+/// ([`run_covers`]). A `barca get` or `barca run` from a shell on the same project and
+/// `.barca/` is not in the server's memory; its row says which job it runs (`runs.job`:
+/// `all`, or the resolved node ids joined by `,`). A row with no job (an older barca) does
+/// not count.
+fn cli_run_in_flight_for(alive: &[db::AliveRun], job: &ScheduledJob) -> Option<String> {
+    alive
+        .iter()
+        .find(|run| {
+            let nodes: Vec<String> = match run.job.as_str() {
+                "" => return false,
+                "all" => Vec::new(),
+                ids => ids.split(',').map(str::to_string).collect(),
+            };
+            run_covers(&run.command, &nodes, job)
+        })
+        .map(|run| run.run_id.clone())
+}
+
+/// The run of `job`'s node in flight, if any: one the server holds ([`run_in_flight_for`])
+/// or else a CLI run on the same project ([`cli_run_in_flight_for`]).
+fn any_run_in_flight_for(
+    state: &AppState,
+    cli: &[db::AliveRun],
+    job: &ScheduledJob,
+) -> Option<String> {
+    run_in_flight_for(state, job).or_else(|| cli_run_in_flight_for(cli, job))
 }
 
 /// What the scheduler records about each job between ticks, for `GET /schedule`.
@@ -461,11 +492,13 @@ fn needs_catchup<Tz: TimeZone>(cron: &Cron, last_fired: &DateTime<Tz>, now: &Dat
 /// the server was down, however many ticks that was, and move its last-fired record to `now`.
 /// A job with no record is anchored to `now` and does not run (no stampede on first launch).
 /// A job whose node already has a run in flight (one started over HTTP while the server was
-/// loading) is skipped like a tick, and its last-fired record still moves to `now`.
+/// loading, or a CLI run on the same project) is skipped like a tick, and its last-fired record still moves to `now`.
 ///
-/// `now` is a parameter so a restart across a tick can be tested with fixed times.
+/// `now` is a parameter so a restart across a tick can be tested with fixed times, and `cli`
+/// ([`db::alive_running_runs`]) so a CLI run can be given without another process.
 async fn catch_up(
     state: &AppState,
+    cli: &[db::AliveRun],
     jobs: &[ScheduledJob],
     zone: &Zone,
     now: &DateTime<FixedOffset>,
@@ -516,7 +549,7 @@ async fn catch_up(
                                 book.failures(job)
                             ),
                         );
-                    } else if let Some(handle) = run_in_flight_for(state, job) {
+                    } else if let Some(handle) = any_run_in_flight_for(state, cli, job) {
                         record_skip(
                             &mut book,
                             job,
@@ -684,11 +717,20 @@ pub async fn run_scheduler(state: AppState) {
     }
 
     // Handle issued, last-fired epoch and last skip per job, for the `/schedule` view;
-    // `last_fired` also powers durability. The overlap skip reads `state.runs`, not
-    // these. Entries for jobs removed on reload are harmless.
+    // `last_fired` also powers durability. The overlap skip reads `state.runs` and the
+    // `running` rows of the metadata database, not these. Entries for jobs removed on reload are harmless.
     // Catch-up requires durability; it is skipped entirely if the DB is unavailable.
     let mut book = match &db_path {
-        Some(dbp) => match catch_up(&state, &jobs, &zone, &zone.now(), dbp).await {
+        Some(dbp) => match catch_up(
+            &state,
+            &db::alive_running_runs(dbp).await,
+            &jobs,
+            &zone,
+            &zone.now(),
+            dbp,
+        )
+        .await
+        {
             Ok(caught_up) => caught_up,
             Err(error) => {
                 barca_core::errln!(
@@ -734,11 +776,17 @@ pub async fn run_scheduler(state: AppState) {
         // "scheduled run.*:probe" to count ticks independent of worker execution — keep
         // that substring ("scheduled run", plus the job id) if this wording changes.
         let epoch = now.timestamp();
+        // CLI runs on the same project, read only on a second some job is due: one indexed
+        // query of the `running` rows.
+        let cli = match &db_path {
+            Some(dbp) if !due_jobs(&now, &jobs).is_empty() => db::alive_running_runs(dbp).await,
+            _ => Vec::new(),
+        };
         let actions = plan_tick(
             &now,
             &jobs,
             |job| crate::pause::active(&state, &job.id, epoch).is_some(),
-            |job| run_in_flight_for(&state, job),
+            |job| any_run_in_flight_for(&state, &cli, job),
             |job| book.failures(job),
         );
         for action in actions {
@@ -1569,9 +1617,16 @@ mod tests {
     async fn a_missed_tick_is_skipped_at_startup_while_its_node_is_running() {
         let (_dir, db_path) = schedule_db().await;
         let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
-        catch_up(&app_state(), &jobs, &Zone::Utc, &utc(2, 5, 0), &db_path)
-            .await
-            .unwrap();
+        catch_up(
+            &app_state(),
+            &[],
+            &jobs,
+            &Zone::Utc,
+            &utc(2, 5, 0),
+            &db_path,
+        )
+        .await
+        .unwrap();
 
         let st = app_state();
         insert_run(
@@ -1584,7 +1639,7 @@ mod tests {
             1.0,
         );
         let back = utc(3, 9, 0);
-        let book = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+        let book = catch_up(&st, &[], &jobs, &Zone::Utc, &back, &db_path)
             .await
             .unwrap();
         assert!(book.last_handle.is_empty());
@@ -1597,6 +1652,147 @@ mod tests {
             book.last_fired["f.py:daily"],
             back.timestamp(),
             "not caught up again"
+        );
+    }
+
+    fn alive(run_id: &str, command: &str, job: &str) -> db::AliveRun {
+        db::AliveRun {
+            run_id: run_id.into(),
+            command: command.into(),
+            job: job.into(),
+        }
+    }
+
+    #[test]
+    fn a_cli_run_counts_when_its_job_covers_the_node() {
+        let daily = job("f.py:daily", NodeKind::Asset, "0 5 * * *");
+        let task = job("f.py:t", NodeKind::Task, "0 5 * * *");
+        let one = [alive("cli", "get", "f.py:daily")];
+        assert_eq!(cli_run_in_flight_for(&one, &daily).as_deref(), Some("cli"));
+        let several = [alive("cli", "get", "f.py:a,f.py:daily")];
+        assert_eq!(
+            cli_run_in_flight_for(&several, &daily).as_deref(),
+            Some("cli")
+        );
+        // `barca get` with no target gets every asset and sensor, not tasks.
+        let all = [alive("cli", "get", "all")];
+        assert_eq!(cli_run_in_flight_for(&all, &daily).as_deref(), Some("cli"));
+        assert_eq!(cli_run_in_flight_for(&all, &task), None);
+        let run = [alive("cli", "run", "f.py:t")];
+        assert_eq!(cli_run_in_flight_for(&run, &task).as_deref(), Some("cli"));
+        // Another node, a prefix of the id, or a row with no job: no.
+        for rows in [
+            [alive("cli", "get", "f.py:other")],
+            [alive("cli", "get", "f.py:dail")],
+            [alive("cli", "get", "")],
+        ] {
+            assert_eq!(cli_run_in_flight_for(&rows, &daily), None);
+        }
+        // The oldest is named.
+        let two = [
+            alive("first", "get", "f.py:daily"),
+            alive("second", "get", "all"),
+        ];
+        assert_eq!(
+            cli_run_in_flight_for(&two, &daily).as_deref(),
+            Some("first")
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_tick_skips_for_a_cli_run_on_the_same_project() {
+        let st = app_state();
+        let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
+        let max = jobs[0].max_failures;
+        let cli = [alive("cli", "get", "f.py:daily")];
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |_| false,
+            |j| any_run_in_flight_for(&st, &cli, j),
+            |_| max - 1,
+        );
+        let [TickAction::Skip { job, handle }] = &plan[..] else {
+            panic!("expected a skip");
+        };
+        assert_eq!(handle, "cli");
+        // The skip is not a failed tick: nothing is counted toward `max_failures`.
+        let mut book = Bookkeeping::default();
+        book.failures.insert(
+            job.id.clone(),
+            db::ScheduleFailures {
+                failures: max - 1,
+                ..db::ScheduleFailures::default()
+            },
+        );
+        record_skip(&mut book, job, Some(handle), 1, "scheduled run");
+        assert!(!count_outcomes(&st, &jobs, &mut book, None).await);
+        assert_eq!(book.failures(job), max - 1);
+        // Pause, then failing, come before the in-flight skip.
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |_| false,
+            |j| any_run_in_flight_for(&st, &cli, j),
+            |_| max,
+        );
+        assert!(matches!(plan[..], [TickAction::Failing { .. }]));
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |_| true,
+            |j| any_run_in_flight_for(&st, &cli, j),
+            |_| max,
+        );
+        assert!(matches!(plan[..], [TickAction::Paused(_)]));
+        // A run the server holds is named first.
+        insert_run(
+            &st,
+            "api",
+            RunStatus::Running,
+            "get",
+            Some("daily"),
+            Some("f.py:daily"),
+            1.0,
+        );
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |_| false,
+            |j| any_run_in_flight_for(&st, &cli, j),
+            |_| 0,
+        );
+        match &plan[..] {
+            [TickAction::Skip { handle, .. }] => assert_eq!(handle, "api"),
+            _ => panic!("expected a skip"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missed_tick_is_skipped_at_startup_while_a_cli_run_of_its_node_is_going() {
+        let (_dir, db_path) = schedule_db().await;
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
+        catch_up(
+            &app_state(),
+            &[],
+            &jobs,
+            &Zone::Utc,
+            &utc(2, 5, 0),
+            &db_path,
+        )
+        .await
+        .unwrap();
+        // A `barca get daily` from a shell, still going.
+        let cli = [alive("cli", "get", "f.py:daily")];
+        let st = app_state();
+        let back = utc(3, 9, 0);
+        let book = catch_up(&st, &cli, &jobs, &Zone::Utc, &back, &db_path)
+            .await
+            .unwrap();
+        assert!(st.runs.is_empty(), "no second run of the node");
+        assert_eq!(
+            book.last_skip["f.py:daily"],
+            (back.timestamp(), "in_flight", Some("cli".to_string()))
         );
     }
 
@@ -1641,9 +1837,16 @@ mod tests {
     async fn a_paused_job_is_not_caught_up_and_its_skip_says_paused() {
         let (_dir, db_path) = schedule_db().await;
         let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
-        catch_up(&app_state(), &jobs, &Zone::Utc, &utc(2, 5, 0), &db_path)
-            .await
-            .unwrap();
+        catch_up(
+            &app_state(),
+            &[],
+            &jobs,
+            &Zone::Utc,
+            &utc(2, 5, 0),
+            &db_path,
+        )
+        .await
+        .unwrap();
         // Paused until resumed, across the restart: the missed 06:00 tick is skipped.
         db::set_schedule_pause(
             &db_path,
@@ -1658,7 +1861,7 @@ mod tests {
         .unwrap();
         let st = app_state();
         let back = utc(3, 9, 0);
-        let book = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+        let book = catch_up(&st, &[], &jobs, &Zone::Utc, &back, &db_path)
             .await
             .unwrap();
         assert!(st.runs.is_empty(), "a paused job does not run");
@@ -1669,9 +1872,16 @@ mod tests {
 
         // A pause that ended counts from when it ended: the ticks inside it are not caught up.
         let (_dir, db_path) = schedule_db().await;
-        catch_up(&app_state(), &jobs, &Zone::Utc, &utc(2, 5, 0), &db_path)
-            .await
-            .unwrap();
+        catch_up(
+            &app_state(),
+            &[],
+            &jobs,
+            &Zone::Utc,
+            &utc(2, 5, 0),
+            &db_path,
+        )
+        .await
+        .unwrap();
         db::set_schedule_pause(
             &db_path,
             "f.py:daily",
@@ -1684,7 +1894,7 @@ mod tests {
         .await
         .unwrap();
         let st = app_state();
-        let book = catch_up(&st, &jobs, &Zone::Utc, &utc(4, 8, 0), &db_path)
+        let book = catch_up(&st, &[], &jobs, &Zone::Utc, &utc(4, 8, 0), &db_path)
             .await
             .unwrap();
         assert!(
@@ -1693,7 +1903,7 @@ mod tests {
         );
         assert!(book.last_skip.is_empty());
         let st = app_state();
-        let book = catch_up(&st, &jobs, &Zone::Utc, &utc(5, 8, 0), &db_path)
+        let book = catch_up(&st, &[], &jobs, &Zone::Utc, &utc(5, 8, 0), &db_path)
             .await
             .unwrap();
         assert_eq!(
@@ -1712,6 +1922,7 @@ mod tests {
         // or trigger jobs as if the durable schedule history were simply absent.
         let error = catch_up(
             &st,
+            &[],
             &jobs,
             &Zone::Utc,
             &utc(2, 9, 0),
@@ -1735,7 +1946,7 @@ mod tests {
             last_handle: handles,
             last_fired: fired,
             ..
-        } = catch_up(&st, &jobs, &Zone::Utc, &now, &db_path)
+        } = catch_up(&st, &[], &jobs, &Zone::Utc, &now, &db_path)
             .await
             .unwrap();
 
@@ -1765,14 +1976,18 @@ mod tests {
             last_handle: handles,
             last_fired: fired,
             ..
-        } = catch_up(&st, &jobs, &zone, &early, &db_path).await.unwrap();
+        } = catch_up(&st, &[], &jobs, &zone, &early, &db_path)
+            .await
+            .unwrap();
         assert!(handles.is_empty() && st.runs.is_empty());
         assert_eq!(fired["f.py:daily"], before.timestamp());
         let due = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 10, 0, 0).unwrap());
         let Bookkeeping {
             last_handle: handles,
             ..
-        } = catch_up(&st, &jobs, &zone, &due, &db_path).await.unwrap();
+        } = catch_up(&st, &[], &jobs, &zone, &due, &db_path)
+            .await
+            .unwrap();
         assert_eq!(handles.len(), 1);
     }
 
@@ -1785,7 +2000,7 @@ mod tests {
         ];
         // Running at 05:10: both jobs are anchored. The server then stops.
         let stopped = utc(2, 5, 10);
-        catch_up(&app_state(), &jobs, &Zone::Utc, &stopped, &db_path)
+        catch_up(&app_state(), &[], &jobs, &Zone::Utc, &stopped, &db_path)
             .await
             .unwrap();
 
@@ -1796,7 +2011,7 @@ mod tests {
             last_handle: handles,
             last_fired: fired,
             ..
-        } = catch_up(&st, &jobs, &Zone::Utc, &early, &db_path)
+        } = catch_up(&st, &[], &jobs, &Zone::Utc, &early, &db_path)
             .await
             .unwrap();
         assert!(handles.is_empty() && st.runs.is_empty());
@@ -1814,7 +2029,7 @@ mod tests {
             last_handle: handles,
             last_fired: fired,
             ..
-        } = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+        } = catch_up(&st, &[], &jobs, &Zone::Utc, &back, &db_path)
             .await
             .unwrap();
         assert_eq!(handles.len(), 2);
@@ -1836,7 +2051,7 @@ mod tests {
             last_handle: handles,
             last_fired: fired,
             ..
-        } = catch_up(&st, &jobs, &Zone::Utc, &again, &db_path)
+        } = catch_up(&st, &[], &jobs, &Zone::Utc, &again, &db_path)
             .await
             .unwrap();
         assert!(handles.is_empty() && st.runs.is_empty());
@@ -1849,6 +2064,7 @@ mod tests {
         let old = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
         catch_up(
             &app_state(),
+            &[],
             std::slice::from_ref(&old),
             &Zone::Utc,
             &utc(2, 5, 0),
@@ -1864,7 +2080,7 @@ mod tests {
             last_handle: handles,
             last_fired: fired,
             ..
-        } = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+        } = catch_up(&st, &[], &jobs, &Zone::Utc, &back, &db_path)
             .await
             .unwrap();
 

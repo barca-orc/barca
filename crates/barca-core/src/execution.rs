@@ -547,6 +547,7 @@ async fn open_state(
             files: &db::encode_files(file_args),
             target: target_label.as_deref(),
             steps_total: Some(exec_plan.total_steps),
+            job: Some(&prepared.job_name),
             trigger: &request.options.trigger,
         },
     )

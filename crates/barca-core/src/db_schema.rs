@@ -13,9 +13,10 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // and the marker it holds. It lets a reader tell a dead process from a live one
     // where pid and host cannot, in a container. NULL on rows from older versions.
     "owner TEXT",
-    // The canonical resolved job ids of a finished run (`RunReport.job`), set with its outcome.
-    // How a notification integration finds the job's previous run. NULL on rows from older
-    // versions and on runs that never finished.
+    // The canonical resolved job ids of a run (`RunReport.job`), set when it starts and again
+    // with its outcome. How a notification integration finds the job's previous run, and how
+    // `barca serve` sees which nodes a running CLI run covers (#479). NULL on rows from older
+    // versions and on runs recorded before they started.
     "job TEXT",
     // What started the run (`manual`, `api`, `schedule`, `client`), and for a scheduled run
     // the tick and the schedule (#393). NULL on rows from older versions.

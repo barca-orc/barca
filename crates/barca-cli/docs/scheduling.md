@@ -176,7 +176,12 @@ failures and are not counted.
 
 A tick is skipped, not queued, while a run of the same node is pending or running, whoever
 started it: an earlier tick, `POST /runs` naming the node, or a `POST /runs` of every asset and
-sensor (it does not hold back a scheduled task). The skip is a line on stderr naming the run
+sensor (it does not hold back a scheduled task). A `barca get` or `barca run` started from a
+shell on the same project (the same `.barca/`) counts the same way: `barca get <node>`,
+`barca run <task>`, or a `barca get` of every asset and sensor. The server finds it in the
+metadata database as a `running` run whose process is alive; a `running` row left by a run that
+was killed does not hold a tick back, nor does one whose process cannot be checked from here
+(another machine's run in a restored backup). The skip is a line on stderr naming the run
 in flight, `last_skipped`, `skip_reason: "in_flight"` and `skipped_for` in `GET /schedule`
 (kept in memory: a restart clears them), and, with telemetry on, a `barca.run` span with status
 `skipped` (`barca docs telemetry`).
