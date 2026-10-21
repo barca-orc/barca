@@ -6,6 +6,18 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Features
+
+- Barca reports the environment variables a step reads without declaring them in `env=[...]`
+  (#574). They are found statically, in the function and in the project helpers it reaches
+  (`os.environ[...]`, `os.environ.get(...)`, `os.getenv(...)`, pydantic settings fields), and
+  reported as one `[barca] warning:` line per step, an `undeclared_env` item per variable in the
+  `warnings` array, and `undeclared_env` on each `get`/`run`/`--dry-run` step and `status` node
+  (experimental). Run hashes do not change: switching such a variable still serves the cached
+  result, and the warning names the `env=` fix.
+
 ## 0.29.0 (2026-10-21)
 
 ### Breaking
@@ -28,14 +40,6 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   exchange or a crash.
 
 ### Features
-
-- Barca reports the environment variables a step reads without declaring them in `env=[...]`
-  (#574). They are found statically, in the function and in the project helpers it reaches
-  (`os.environ[...]`, `os.environ.get(...)`, `os.getenv(...)`, pydantic settings fields), and
-  reported as one `[barca] warning:` line per step, an `undeclared_env` item per variable in the
-  `warnings` array, and `undeclared_env` on each `get`/`run`/`--dry-run` step and `status` node
-  (experimental). Run hashes do not change: switching such a variable still serves the cached
-  result, and the warning names the `env=` fix.
 
 - Heavy steps can be kept from running all at once (experimental, #436). A new decorator
   argument `weight=N` (a whole number, default 1) on `@asset`, `@task` and `@sensor` says how
