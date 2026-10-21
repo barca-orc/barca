@@ -334,6 +334,26 @@ def test_the_inspect_helper_degrades_without_pyarrow(project, monkeypatch):
     assert "pyarrow" in shape["note"]
 
 
+def test_a_shape_sample_encodes_values_as_barca_sql_does(tmp_path):
+    """One JSON conversion for `status` samples and `barca sql` rows (#506): a NaN is null
+    (it used to make the shape reader's output invalid JSON), a datetime is ISO 8601."""
+    pq = pytest.importorskip("pyarrow.parquet")
+    pa = pytest.importorskip("pyarrow")
+    import datetime as dt
+
+    from barca import _inspect
+
+    path = tmp_path / "t.parquet"
+    when = dt.datetime(2026, 10, 21, 12, 30)
+    pq.write_table(pa.table({"x": [float("nan"), 1.5], "at": [when, when]}), path)
+    shape = _inspect.shape(str(path), "parquet", sample=2)
+    assert shape["sample"] == [
+        {"x": None, "at": "2026-10-21T12:30:00"},
+        {"x": 1.5, "at": "2026-10-21T12:30:00"},
+    ]
+    json.dumps(shape, allow_nan=False)
+
+
 DYNAMIC = """
 from barca import asset, partitions, partitions_from
 

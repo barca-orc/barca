@@ -2917,6 +2917,48 @@ async fn partitioned_avg_elapsed_on(
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    async fn with_tx_commits_a_body_that_succeeds_and_rolls_back_one_that_fails() {
+        use crate::BarcaError;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        let _guard = super::db_guard().await;
+        let (_db, conn) = super::open_conn(&path).await.unwrap();
+        let insert = |key: &'static str| {
+            let conn = &conn;
+            async move {
+                conn.execute(
+                    "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, 'n', 0, 'l')",
+                    [key],
+                )
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))
+            }
+        };
+        let kept = super::with_tx(&conn, "BEGIN", "test", async {
+            insert("kept").await?;
+            Ok(7)
+        })
+        .await;
+        assert!(matches!(kept, Ok(7)));
+        let failed = super::with_tx(&conn, "BEGIN IMMEDIATE", "test", async {
+            insert("dropped").await?;
+            Err::<(), _>(BarcaError::Other("body failed".into()))
+        })
+        .await;
+        assert!(matches!(failed, Err(BarcaError::Other(ref m)) if m == "body failed"));
+        let mut rows = conn
+            .query("SELECT run_id FROM logs ORDER BY run_id", ())
+            .await
+            .unwrap();
+        let mut keys = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            keys.push(row.get::<String>(0).unwrap());
+        }
+        assert_eq!(keys, ["kept"]);
+    }
+
+    #[tokio::test]
     async fn cancelled_snapshot_copy_stops_between_chunks_and_cleans_partial_stage() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source.db");
