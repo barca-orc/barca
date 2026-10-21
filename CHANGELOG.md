@@ -12,6 +12,21 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Features
+
+- **Reset the metadata database** from the web UI and with `barca state reset` (#508). A
+  **Reset database** button on the "Can't load pipeline" panel and in the sidebar, behind a dialog
+  that says what happens and how to undo it, calls the new `POST /state/reset`. The database and
+  its `-wal` and `-shm` move aside to `metadata.db.reset-<UTC>` in the same directory and an empty
+  one takes its place; nothing is deleted, artifacts stay, and a database that cannot be opened
+  or migrated moves as it is. Refused with `409` (exit 3 on the CLI) while a run is pending or
+  running, `403` under `--read-only`, `503` while draining. `barca state reset` asks in a
+  terminal (`--yes` otherwise) and refuses while `barca serve` holds the environment. Undo with
+  `barca state restore --from <the moved file>`: `--from` now also takes a database file's path.
+  Experimental.
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking
@@ -49,16 +64,6 @@ and these tags are available on the same releases page.
 
 ### Features
 
-- **Reset the metadata database** from the web UI and with `barca state reset` (#508). A
-  **Reset database** button on the "Can't load pipeline" panel and in the sidebar, behind a dialog
-  that says what happens and how to undo it, calls the new `POST /state/reset`. The database and
-  its `-wal` and `-shm` move aside to `metadata.db.reset-<UTC>` in the same directory and an empty
-  one takes its place; nothing is deleted, artifacts stay, and a database that cannot be opened
-  or migrated moves as it is. Refused with `409` (exit 3 on the CLI) while a run is pending or
-  running, `403` under `--read-only`, `503` while draining. `barca state reset` asks in a
-  terminal (`--yes` otherwise) and refuses while `barca serve` holds the environment. Undo with
-  `barca state restore --from <the moved file>`: `--from` now also takes a database file's path.
-  Experimental.
 - `barca serve` runs the server half of the `--server` run contract (RFC-0007 §3.4, #393).
   `POST /runs` takes the flags of `barca get` / `barca run` as JSON and answers with the run's
   database id at once (`dry_run` answers with the `--dry-run` JSON); targets are checked first,
