@@ -16,6 +16,9 @@ pub struct Dag {
     pub groups: Vec<crate::groups::NodeGroup>,
     pub graph: DiGraph<DagNode, EdgeKind>,
     index: HashMap<String, NodeIndex>,
+    /// Pipeline files (as node `source_file`s) that import a project module that does not
+    /// parse (#550). Their steps cannot run: [`Dag::check_imports`] refuses a plan with one.
+    pub(crate) broken_imports: HashMap<String, crate::project_modules::BrokenImport>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -745,6 +748,7 @@ impl Dag {
             graph,
             index,
             groups: Vec::new(),
+            broken_imports: HashMap::new(),
         };
 
         // Verify acyclicity.
@@ -807,6 +811,47 @@ impl Dag {
     /// Get a node by ID.
     pub fn get_node(&self, id: &str) -> Option<&DagNode> {
         self.index.get(id).map(|idx| &self.graph[*idx])
+    }
+
+    /// Refuse to plan a step whose file imports a project module that does not parse (#550):
+    /// the worker's import of the file would fail, after the steps before it had run. Only the
+    /// steps given are looked at, so a command whose steps do not import the module is not
+    /// affected. The first such step, in the order given, is named.
+    pub fn check_imports<'a>(
+        &self,
+        step_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), crate::BarcaError> {
+        if self.broken_imports.is_empty() {
+            return Ok(());
+        }
+        for id in step_ids {
+            let Some(node) = self.get_node(id) else {
+                continue;
+            };
+            let file = &node.extracted.source_file;
+            let Some(broken) = self.broken_imports.get(file) else {
+                continue;
+            };
+            let via = if broken.imported_by == *file {
+                String::new()
+            } else {
+                format!(" through {}", broken.imported_by)
+            };
+            return Err(crate::BarcaError::Parse(format!(
+                "syntax error in {}: {} (imported by {file}{via}, so step '{id}' cannot run)\n\
+                 {}:{}:{}:\n{}\n\
+                 Fix the syntax error: the worker imports {} when it loads {file}, so no step of \
+                 {file} can run until it parses.",
+                broken.file,
+                broken.problem,
+                broken.file,
+                broken.problem.line,
+                broken.problem.column,
+                broken.problem.excerpt(),
+                broken.file,
+            )));
+        }
+        Ok(())
     }
 
     /// Get upstream node IDs.

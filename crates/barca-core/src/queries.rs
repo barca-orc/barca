@@ -18,6 +18,8 @@ pub async fn plan(
     python: &std::path::Path,
 ) -> Result<PlanResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
+    // `barca plan` plans every step of the files it reads (#550).
+    dag.check_imports(dag.graph.node_weights().map(|n| n.id.as_str()))?;
     let cwd = std::env::current_dir()
         .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
     let result = plan_from_dag(&dag, crate::config::capacity_in(&cwd)?);

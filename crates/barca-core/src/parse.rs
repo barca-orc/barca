@@ -59,11 +59,62 @@ pub enum ParseError {
 /// A syntax error as a person reads it: `line 12, column 18: Expected ':', found newline`.
 /// The parser reports a byte range, which says nothing to someone looking at an editor.
 fn syntax_message(source: &str, error: &ruff_python_parser::ParseError) -> String {
-    let offset = usize::from(error.location.start()).min(source.len());
-    let before = source.get(..offset).unwrap_or(source);
-    let line = before.matches('\n').count() + 1;
-    let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-    format!("line {line}, column {column}: {}", error.error)
+    SyntaxProblem::of(source, error).to_string()
+}
+
+/// Where a file stops parsing, and why: `line 12, column 18: Expected ':', found newline`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyntaxProblem {
+    /// 1-based.
+    pub line: usize,
+    /// 1-based, in characters.
+    pub column: usize,
+    /// The parser's message.
+    pub message: String,
+    /// The text of that line, without its newline.
+    pub text: String,
+}
+
+impl SyntaxProblem {
+    pub(crate) fn of(source: &str, error: &ruff_python_parser::ParseError) -> Self {
+        let offset = usize::from(error.location.start()).min(source.len());
+        let before = source.get(..offset).unwrap_or(source);
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+        let text = source
+            .lines()
+            .nth(line - 1)
+            .unwrap_or("")
+            .trim_end()
+            .to_string();
+        SyntaxProblem {
+            line,
+            column,
+            message: error.error.to_string(),
+            text,
+        }
+    }
+
+    /// The line, and a caret under the column: what an editor would point at.
+    pub fn excerpt(&self) -> String {
+        let pad: String = self
+            .text
+            .chars()
+            .take(self.column.saturating_sub(1))
+            .map(|c| if c == '\t' { '\t' } else { ' ' })
+            .collect();
+        format!("    {}\n    {pad}^", self.text)
+    }
+}
+
+impl std::fmt::Display for SyntaxProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "line {}, column {}: {}",
+            self.line, self.column, self.message
+        )
+    }
 }
 
 /// Parse a Python source file and extract all barca-decorated nodes.

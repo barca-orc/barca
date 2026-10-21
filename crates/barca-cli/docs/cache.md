@@ -68,6 +68,24 @@ does not. `from helpers import clean` + `clean(...)`, `import pkg.mod as m` + `m
 `import pkg.mod` + `pkg.mod.f()` and `from pkg import mod` + `mod.f()` hash exactly the same
 way: only the definitions the step uses, never the whole module.
 
+A project module that does not parse stops the steps that cannot run without it, before
+anything runs. If `helpers.py` has a syntax error, every step of a file that imports it
+(directly, through another project module, or inside a function) is refused with exit 2 by the
+command that plans it (`get`, `run`, `--dry-run`, `plan`, `status`), with the module, the line,
+the column and the source line:
+
+```
+Parse error: syntax error in helpers.py: line 4, column 20: Expected `:`, found newline (imported by pipeline.py, so step 'pipeline.py:raw' cannot run)
+helpers.py:4:20:
+    def normalize(rows)
+                       ^
+Fix the syntax error: the worker imports helpers.py when it loads pipeline.py, so no step of pipeline.py can run until it parses.
+```
+
+A command that plans only steps of files that do not import the module is not affected, and
+`barca list` plans nothing. An import barca cannot see (`importlib.import_module("helpers")`)
+still fails in the step; its traceback ends with the file, the line and a caret at the error.
+
 The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
 `./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
 directory all compute the same run hash and the same node id, relative to the project root

@@ -32,6 +32,17 @@ pub struct ExecutionPlan {
     pub total_steps: usize,
 }
 
+impl ExecutionPlan {
+    /// The node id of every planned step, in plan order (a partitioned step once per stream).
+    pub fn step_ids(&self) -> impl Iterator<Item = &str> {
+        self.phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .map(|step| step.step_id.base_id())
+    }
+}
+
 /// A phase — all streams execute concurrently; all must complete before next phase.
 #[derive(Debug, Clone)]
 pub struct Phase {

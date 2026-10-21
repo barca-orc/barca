@@ -503,6 +503,12 @@ that is every pipeline file of the project. The envelope's `error` starts with `
 <file>:<function> (line <n>):` for a decorator argument or a parameter mismatch, and its `remediation` says what to
 change; the wording is not contract.
 
+A syntax error in a project module that a pipeline file imports (a helper) fails the commands
+that plan a step of that file (`plan`, `status`, `get`, `run`, `--dry-run`) with exit 2 before
+anything runs; a command whose steps are all in other files, and `list`, are not affected. The
+envelope's `error` starts with `Parse error: syntax error in <module file>: line <n>, column
+<c>:` and names the step; its `remediation` shows the source line with a caret.
+
 ### A closed stdout or stderr (stable)
 
 When the reader of barca's output goes away (`barca list | head -1`, a pager that quits, a

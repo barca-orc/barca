@@ -725,7 +725,10 @@ See [the CLI contract](/reference/cli-contract/#a-closed-stdout-or-stderr-stable
 An error in a pipeline file fails every command that reads the file with exit 2, whatever the
 target: a syntax error, or a decorator called with an argument it does not define
 (`@asset(after=other)`, `input=` for `inputs=`). See
-[Accepted arguments](/reference/api/decorators/#accepted-arguments).
+[Accepted arguments](/reference/api/decorators/#accepted-arguments). A syntax error in a helper
+module a pipeline file imports fails, with exit 2 before anything runs, every command that plans
+a step of that file (`plan`, `status`, `get`, `run`, `--dry-run`), naming the module, line,
+column and source line; `list` and steps of other files are not affected.
 
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the

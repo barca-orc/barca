@@ -276,6 +276,20 @@ pub struct ProjectCones {
     /// Pipeline files that share a directory and a layout share an import path, and with it
     /// every helper module already resolved. Two `helpers.py` in different directories never do.
     import_paths: HashMap<(PathBuf, Vec<PathBuf>), ImportPath>,
+    /// For each pipeline file (canonical path), the first project module it imports, directly
+    /// or through other project modules, that does not parse ([`ProjectCones::validate_imports`]).
+    broken: std::collections::BTreeMap<PathBuf, BrokenImport>,
+}
+
+/// A project module a pipeline file imports that does not parse (#550). The worker's import of
+/// the pipeline file would fail, so no step of that file can run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokenImport {
+    /// The module's file, relative to the project root when it is under it.
+    pub file: String,
+    /// The file whose `import` reaches it: the pipeline file or another project module.
+    pub imported_by: String,
+    pub problem: crate::parse::SyntaxProblem,
 }
 
 impl ProjectCones {
@@ -317,6 +331,7 @@ impl ProjectCones {
             by_stem: Rc::new(by_stem),
             packages: HashMap::new(),
             import_paths: HashMap::new(),
+            broken: std::collections::BTreeMap::new(),
         }
     }
 
@@ -354,6 +369,7 @@ impl ProjectCones {
         nodes: &[Vec<crate::model::ExtractedNode>],
     ) -> std::collections::BTreeMap<PathBuf, String> {
         let mut errors = std::collections::BTreeMap::new();
+        let mut broken = std::collections::BTreeMap::new();
         type ImportSites =
             std::collections::BTreeMap<Option<PathBuf>, std::collections::BTreeSet<PathBuf>>;
         let mut bindings: std::collections::BTreeMap<String, ImportSites> =
@@ -376,13 +392,35 @@ impl ProjectCones {
         for (index, source_nodes) in nodes.iter().enumerate() {
             let source = self.pipelines[index].path.clone();
             let pipeline = self.pipeline(index);
-            let mut pending = vec![Rc::new(pipeline.module)];
+            let root = pipeline.modules.root.clone();
+            let label = |file: &Path| {
+                file.strip_prefix(&root)
+                    .unwrap_or(file)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            };
+            // (module, its file, the file that imports it); the pipeline file has no importer.
+            let mut pending = vec![(Rc::new(pipeline.module), source.clone(), None::<PathBuf>)];
             let mut visited = std::collections::HashSet::new();
-            while let Some(module) = pending.pop() {
+            while let Some((module, module_file, importer)) = pending.pop() {
                 if !visited.insert(module.name.clone()) {
                     continue;
                 }
-                for name in module.import_modules() {
+                let imports = module.import_modules();
+                if let Some(importer) = importer
+                    && let Some(problem) = module.syntax_error()
+                    && !broken.contains_key(&source)
+                {
+                    broken.insert(
+                        source.clone(),
+                        BrokenImport {
+                            file: label(&module_file),
+                            imported_by: label(&importer),
+                            problem: problem.clone(),
+                        },
+                    );
+                }
+                for name in imports {
                     let (selected, imported) = match pipeline.modules.find(&name) {
                         Found::Module(module, _, file) => {
                             let file = file.canonicalize().unwrap_or(file);
@@ -412,7 +450,7 @@ impl ProjectCones {
                                 .entry(name.clone())
                                 .or_default()
                                 .insert(source.clone());
-                            (Some(file), Some(module))
+                            (Some(file.clone()), Some((module, file)))
                         }
                         _ => (None, None),
                     };
@@ -456,8 +494,8 @@ impl ProjectCones {
                         .entry(selected)
                         .or_default()
                         .insert(source.clone());
-                    if let Some(imported) = imported {
-                        pending.push(imported);
+                    if let Some((imported, file)) = imported {
+                        pending.push((imported, file, Some(module_file.clone())));
                     }
                 }
             }
@@ -485,7 +523,14 @@ impl ProjectCones {
                 }
             }
         }
+        self.broken = broken;
         errors
+    }
+
+    /// The project module that does not parse that the `index`th pipeline file imports, if
+    /// any. Known after [`ProjectCones::validate_imports`].
+    pub(crate) fn broken_import(&self, index: usize) -> Option<&BrokenImport> {
+        self.broken.get(&self.pipelines[index].path)
     }
 
     /// The files read from disk so far (pipeline files are given, not read).
@@ -620,6 +665,96 @@ mod tests {
         fn hash(&self, pipeline: &str) -> String {
             self.plan(&[pipeline]).0.remove(0)
         }
+    }
+
+    /// What [`ProjectCones::validate_imports`] records for each of `pipelines`: the broken
+    /// module, its importer and the position, or `None`.
+    fn broken(project: &Project, pipelines: &[&str]) -> Vec<Option<(String, String, String)>> {
+        let sources: Vec<(PathBuf, Rc<str>)> = pipelines
+            .iter()
+            .map(|rel| {
+                let path = project.root.join(rel);
+                (path.clone(), fs::read_to_string(&path).unwrap().into())
+            })
+            .collect();
+        let mut cones = ProjectCones::new(
+            &project.root,
+            sources.iter().map(|(p, s)| (p.as_path(), s.clone())),
+        );
+        let nodes = vec![Vec::new(); sources.len()];
+        cones.validate_imports(&nodes);
+        (0..sources.len())
+            .map(|index| {
+                cones
+                    .broken_import(index)
+                    .map(|b| (b.file.clone(), b.imported_by.clone(), b.problem.to_string()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_helper_that_does_not_parse_is_recorded_for_the_files_that_import_it() {
+        let project = Project::new(&[
+            (
+                "helpers.py",
+                "def compute()
+    return 1
+",
+            ),
+            ("uses.py", USES_HELPERS),
+            (
+                "other.py",
+                "import json
+
+
+def step():
+    return json.dumps(1)
+",
+            ),
+            ("pkg/__init__.py", ""),
+            (
+                "pkg/deep.py",
+                "from helpers import compute
+",
+            ),
+            (
+                "indirect.py",
+                "def step():
+    from pkg.deep import compute
+    return compute()
+",
+            ),
+        ]);
+        let found = broken(&project, &["uses.py", "other.py", "indirect.py"]);
+        let position = "line 1, column 14: Expected `:`, found newline".to_string();
+        assert_eq!(
+            found[0],
+            Some(("helpers.py".into(), "uses.py".into(), position.clone()))
+        );
+        assert_eq!(
+            found[1], None,
+            "a file that does not import it is not affected"
+        );
+        // Through another project module, from an import inside a function.
+        assert_eq!(
+            found[2],
+            Some(("helpers.py".into(), "pkg/deep.py".into(), position))
+        );
+    }
+
+    #[test]
+    fn the_excerpt_points_at_the_column() {
+        let source = "x = 1
+def normalize(rows)
+    return rows
+";
+        let error = ruff_python_parser::parse_module(source).unwrap_err();
+        let problem = crate::parse::SyntaxProblem::of(source, &error);
+        assert_eq!((problem.line, problem.column), (2, 20));
+        assert_eq!(
+            problem.excerpt(),
+            "    def normalize(rows)\n                       ^"
+        );
     }
 
     /// Editing `loaded` (the file Python imports) changes the hash; editing `shadowed` (a

@@ -35,6 +35,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   helper runs barca's JSON-in/JSON-out Python helpers, one runs a database transaction, and the
   Python file hash, identifier quoting and JSON conversion each have one copy; five unused
   functions are gone.
+- A syntax error in a project helper module is reported when barca plans, not in the worker
+  (#550). A command that plans a step of a file importing the module (directly, through other
+  project modules, or inside a function: `get`, `run`, `--dry-run`, `plan`, `status`) exits 2
+  before anything runs, with `syntax error in helpers.py: line 4, column 20: ...`, the step,
+  and the source line with a caret; commands whose steps do not import it, and `barca list`,
+  are unaffected. A `SyntaxError` the worker still meets on an import barca cannot see
+  (`importlib.import_module`) shows the file, line and caret instead of importlib's frames.
 
 ### Performance
 
