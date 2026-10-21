@@ -12,6 +12,24 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## 0.28.1 (2026-10-21)
+
+### Bug Fixes
+
+- Concurrent `barca get` / `barca run` processes in one project no longer fail now and then with
+  `Failed locking file '.barca/metadata.db'. File is locked by another process` (exit 3) (#537).
+  Since 0.28.0, setting up the metadata DB released barca's cross-process lock before closing
+  the database, so another process could open it while it was still held.
+
+- An empty metadata.db is initialized, not refused (#537). A 0-byte `.barca/metadata.db` holds no
+  history: a `touch`, a backup tool or a script that opened the path before barca created the
+  database leaves one. `barca serve`, `get` and `run` now initialize it as a new database, with
+  one line on stderr naming it (`[barca] note: the metadata DB <path> was empty (0 bytes);
+  initialized it as a new database`), where a writer `serve` exited 3. A `--read-only` server
+  reads it as no history yet and leaves it alone. A file that is not SQLite, a newer format or a
+  malformed schema is still refused, and an empty `.barca/metadata.db` beside a named env's
+  database still gets the stray-file warning.
+
 ## 0.28.0 (2026-10-21)
 
 ### Breaking
@@ -30,9 +48,10 @@ and these tags are available on the same releases page.
 - **Breaking:** a writer `barca serve` whose metadata DB cannot be set up exits 3 before it binds,
   naming the file and what to do (upgrade barca, `barca state restore`, or `barca state reset`),
   where it used to keep serving with the scheduler off and one `scheduler disabled` line (#513).
-  A database barca cannot use (not SQLite, a newer format, a malformed schema) is now one
+  A database barca cannot use (empty, not SQLite, a newer format, a malformed schema) is now one
   error, `reason: "metadata_unusable"` in the envelope (new optional key; CLI and HTTP), instead
-  of a raw SQL error such as `Parse error: no such column`. A `--read-only` server keeps
+  of a raw SQL error such as `Parse error: no such column`; `get` and `run` on a 0-byte
+  `metadata.db` now exit 3 instead of starting a new history in it. A `--read-only` server keeps
   serving and reports the error. `GET /health` gains `scheduler_enabled` and `metadata_error`.
   `serve`'s startup line is always printed and ends with `; metadata <path> (db format <n>)`, and
   a stray empty or invalid `.barca/metadata.db` beside a named env's database gets a warning
@@ -68,18 +87,6 @@ and these tags are available on the same releases page.
   HTTP (#479): the skip names the CLI run's id on stderr, in `GET /schedule` (`skipped_for`) and
   on the skipped `barca.run` span. A `running` row whose process is gone (a killed run) does not
   block. A run now records its job (`runs.job`) when it starts, not only when it ends.
-- An empty metadata.db is initialized, not refused (#537). A 0-byte `.barca/metadata.db` holds no
-  history: a `touch`, a backup tool or a script that opened the path before barca created the
-  database leaves one. `barca serve`, `get` and `run` now initialize it as a new database, with
-  one line on stderr naming it (`[barca] note: the metadata DB <path> was empty (0 bytes);
-  initialized it as a new database`), where a writer `serve` exited 3. A `--read-only` server
-  reads it as no history yet and leaves it alone. A file that is not SQLite, a newer format or a
-  malformed schema is still refused, and an empty `.barca/metadata.db` beside a named env's
-  database still gets the stray-file warning.
-- Concurrent `barca get` / `barca run` processes in one project no longer fail now and then with
-  `Failed locking file '.barca/metadata.db'. File is locked by another process` (exit 3) (#537).
-  Since 0.28.0, setting up the metadata DB released barca's cross-process lock before closing
-  the database, so another process could open it while it was still held.
 
 ### Performance
 
