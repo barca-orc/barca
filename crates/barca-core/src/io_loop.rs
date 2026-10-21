@@ -134,6 +134,16 @@ enum IoEvent {
     },
 }
 
+/// The task that takes connections, stopped when dropped: a pool dropped on some path that did
+/// not shut it down (a long-lived `barca serve` runs many) leaves no task holding its socket.
+struct Acceptor(JoinHandle<()>);
+
+impl Drop for Acceptor {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// A worker that has been started and has not connected yet.
 struct PendingWorker {
     child: Child,
@@ -289,8 +299,9 @@ async fn worker_io_task(
 pub struct WorkerPool {
     config: IoConfig,
     socket_path: PathBuf,
-    /// Takes connections to the socket ([`accept_connections`]); aborted at shutdown.
-    acceptor: JoinHandle<()>,
+    /// Takes connections to the socket ([`accept_connections`]); stopped at shutdown, or when
+    /// the pool is dropped without one.
+    acceptor: Acceptor,
     event_tx: mpsc::Sender<IoEvent>,
     event_rx: mpsc::Receiver<IoEvent>,
     workers: HashMap<usize, WorkerHandle>,
@@ -383,7 +394,7 @@ impl WorkerPool {
         let (event_tx, event_rx) = mpsc::channel::<IoEvent>(config.pool_size.max(1) * 8);
         sweep_branch_results(&branch_results_parent());
         let branch_root = branch_results_root(&config.run_id);
-        let acceptor = tokio::spawn(accept_connections(listener, event_tx.clone()));
+        let acceptor = Acceptor(tokio::spawn(accept_connections(listener, event_tx.clone())));
         Ok(Self {
             config,
             socket_path,
@@ -916,7 +927,7 @@ impl WorkerPool {
     /// `BARCA_TRACE_TIMING=1` — see benchmarks/RESULTS.md's docker-harness
     /// re-run notes).
     pub async fn shutdown(self) {
-        self.acceptor.abort();
+        drop(self.acceptor);
         let workers = self.workers;
         let frozen = self.frozen;
         let pending = self.pending;
@@ -2466,7 +2477,7 @@ mod tests {
                     storage_options_json: None,
                 },
                 socket_path: socket_path.clone(),
-                acceptor: tokio::spawn(accept_connections(listener, event_tx.clone())),
+                acceptor: Acceptor(tokio::spawn(accept_connections(listener, event_tx.clone()))),
                 event_tx,
                 event_rx,
                 workers,
