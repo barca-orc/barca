@@ -9,15 +9,14 @@ is, with a note, and refuses (exit 2) when it has never been computed.
 
 import json
 import os
-import signal
-import socket
-import sqlite3
 import subprocess
 import time
-import urllib.request
 from pathlib import Path
 
 from barca.api import _find_binary
+
+from . import served
+from .served import rows as _rows
 
 # Settings from the developer's shell that would point the service at a real store.
 SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
@@ -94,12 +93,6 @@ def flaky(value: str) -> None:
 """
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
 
@@ -111,103 +104,14 @@ def _write(root: Path, name: str, value: str) -> None:
     os.replace(tmp, root / name)
 
 
-def _rows(root: Path, status: str = "success") -> dict[str, int]:
-    """Materializations per node with `status`; empty while the database is not there yet."""
-    try:
-        # Read-only: a plain connect would create an empty file before the server does.
-        db = sqlite3.connect(f"file:{root / '.barca' / 'metadata.db'}?mode=ro", uri=True)
-        try:
-            return {
-                node.rsplit(":", 1)[1]: count
-                for node, count in db.execute(
-                    "select node_id, count(*) from materializations"
-                    " where status = ? group by node_id",
-                    (status,),
-                )
-            }
-        finally:
-            db.close()
-    except sqlite3.Error:
-        return {}
-
-
-def _wait(what: str, check, timeout: float = 60):
-    deadline = time.monotonic() + timeout
-    while True:
-        value = check()
-        if value:
-            return value
-        if time.monotonic() > deadline:
-            raise AssertionError(f"timed out waiting for {what}")
-        time.sleep(0.2)
-
-
 def _lines(path: Path) -> list[str]:
     return path.read_text().splitlines() if path.exists() else []
 
 
-class Serve:
-    """`barca serve` on a free port in `root`, stopped on exit."""
-
-    def __init__(self, root: Path, *args: str):
-        self.root = root
-        self.port = _free_port()
-        self.proc = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--port", str(self.port), *args],
-            cwd=root,
-            env=_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self.err = ""
-
-    def __enter__(self) -> "Serve":
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        self.stop()
-
-    def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.send_signal(signal.SIGTERM)
-        try:
-            _, self.err = self.proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            _, self.err = self.proc.communicate()
-
-    def get(self, path: str):
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5) as r:
-            return json.loads(r.read())
-
-    def post(self, path: str, body: dict):
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}",
-            data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=5) as r:
-            return json.loads(r.read())
-
-    def ready(self) -> None:
-        def health():
-            try:
-                return self.get("/health")
-            except OSError:
-                return None
-
-        _wait("GET /health", health)
-
-    def schedule(self) -> dict:
-        def fetch():
-            try:
-                return self.get("/schedule")
-            except OSError:
-                return None
-
-        return {job["id"].rsplit(":", 1)[1]: job for job in _wait("GET /schedule", fetch)}
+def Serve(root: Path, *args: str) -> served.Serve:
+    """`barca serve` on a free port in `root`. While it runs, a test reads what it recorded
+    through its HTTP API, never from the database file (#537)."""
+    return served.Serve(root, *args, env=_env())
 
 
 def _barca(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -216,39 +120,30 @@ def _barca(root: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _settle(root: Path, seconds: float = 3) -> dict[str, int]:
-    """Let several ticks pass and return the rows after them."""
-    time.sleep(seconds)
-    return _rows(root)
-
-
 def test_a_tick_brings_the_always_nodes_below_a_sensor_up_to_date_in_one_run(tmp_path):
     (tmp_path / "pipeline.py").write_text(SHARED)
     _write(tmp_path, "inbox.txt", "a")
     sent = tmp_path / "sent.log"
     with Serve(tmp_path) as serve:
         # A new task fires at the first tick that reaches it.
-        _wait("first value", lambda: _lines(sent) == ["a"])
-        rows = _settle(tmp_path)
+        serve.wait("first value", lambda: _lines(sent) == ["a"])
+        rows = serve.settle()
         # The sensor returns the same value: nothing below it runs again.
         assert rows.get("orders") == 1 and rows.get("summary") == 1, rows
         assert _lines(sent) == ["a"], _lines(sent)
 
         # A new value: one run computes `orders` once, then both consumers.
         _write(tmp_path, "inbox.txt", "b")
-        _wait("second value", lambda: _lines(sent) == ["a", "b"])
-        rows = _settle(tmp_path)
+        serve.wait("second value", lambda: _lines(sent) == ["a", "b"])
+        rows = serve.settle()
         assert rows.get("orders") == 2 and rows.get("summary") == 2, rows
         assert _lines(sent) == ["a", "b"]
 
         jobs = serve.schedule()
         assert set(jobs) == {"inbox"}, jobs
         assert jobs["inbox"]["failures"] == 0 and jobs["inbox"]["failing"] is False
-        # The latest tick may still be going (one fires every second): wait for its outcome.
-        last = jobs["inbox"]["last_run"]
-        run = _wait(
-            "the last tick's outcome", lambda: (r := serve.get(f"/runs/{last}"))["outcome"] and r
-        )
+        # The last tick's run may still be going (one starts every second).
+        run = serve.finished(jobs["inbox"]["last_run"])
         ids = {step["id"].rsplit(":", 1)[1] for step in run["outcome"]["steps"]}
         assert ids == {"inbox", "orders", "summary", "send_report"}, run
         # One run with several targets, recorded as the schedule's tick (#469).
@@ -266,18 +161,16 @@ def test_manual_pins_itself_and_a_refresh_lets_the_next_tick_through(tmp_path):
     published = tmp_path / "published.log"
     with Serve(tmp_path) as serve:
         # `baseline` was never computed: what reads it is blocked, the tick is not an error.
-        _wait("a few sensor polls", lambda: _rows(tmp_path).get("prices", 0) >= 2)
-        rows = _rows(tmp_path)
+        serve.wait("a few sensor polls", lambda: serve.count().get("prices", 0) >= 2)
+        rows = serve.count()
         assert "baseline" not in rows and "report" not in rows, rows
-        # The latest tick may still be going (one fires every second).
-        jobs = _wait(
-            "a finished tick",
-            lambda: (
-                (j := serve.schedule())["prices"]["last_status"] not in ("pending", "running") and j
-            ),
+        # A tick starts every second: read one that has ended.
+        jobs = serve.wait(
+            "a tick that has ended",
+            lambda: (j := serve.schedule())["prices"]["last_status"] not in served.LIVE and j,
         )
         assert jobs["prices"]["last_status"] == "complete", jobs
-        run = serve.get(f"/runs/{jobs['prices']['last_run']}")
+        run = serve.finished(jobs["prices"]["last_run"])
         assert run["status"] == "success", run
         blocked = {
             s["id"].rsplit(":", 1)[1]
@@ -294,14 +187,14 @@ def test_manual_pins_itself_and_a_refresh_lets_the_next_tick_through(tmp_path):
         # Computing it by hand lets the next tick reach what reads it.
         done = _barca(tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline")
         assert done.returncode == 0, done.stderr
-        _wait("report and publish", lambda: _lines(published) == ["p1"])
-        _wait("report", lambda: _rows(tmp_path).get("report") == 1)
+        serve.wait("report and publish", lambda: _lines(published) == ["p1"])
+        serve.wait("report", lambda: serve.count().get("report") == 1)
 
         # The sensor changes: `report` is recomputed reading the pinned baseline; `baseline`
         # is not recomputed, and `publish` (whose only input is baseline) does not fire.
         _write(tmp_path, "prices.txt", "p2")
-        _wait("report on p2", lambda: _rows(tmp_path).get("report") == 2)
-        rows = _settle(tmp_path)
+        serve.wait("report on p2", lambda: serve.count().get("report") == 2)
+        rows = serve.settle()
         assert rows.get("baseline") == 1 and rows.get("report") == 2, rows
         assert _lines(published) == ["p1"]
         value = json.loads(
@@ -312,9 +205,9 @@ def test_manual_pins_itself_and_a_refresh_lets_the_next_tick_through(tmp_path):
         # A refresh of the Manual node: the next tick recomputes `report` and fires `publish`.
         done = _barca(tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline")
         assert done.returncode == 0, done.stderr
-        _wait("publish after refresh", lambda: _lines(published) == ["p1", "p2"])
-        _wait("report after refresh", lambda: _rows(tmp_path).get("report") == 3)
-        rows = _settle(tmp_path)
+        serve.wait("publish after refresh", lambda: _lines(published) == ["p1", "p2"])
+        serve.wait("report after refresh", lambda: serve.count().get("report") == 3)
+        rows = serve.settle()
         assert rows.get("baseline") == 2 and rows.get("report") == 3, rows
         assert _lines(published) == ["p1", "p2"]
 
@@ -324,22 +217,22 @@ def test_a_failing_node_retries_each_tick_up_to_max_failures(tmp_path):
     _write(tmp_path, "signal.txt", "s1")
     (tmp_path / "fail").write_text("")
     with Serve(tmp_path) as serve:
-        _wait("failing", lambda: serve.schedule()["signal"]["failing"])
+        serve.wait("failing", lambda: serve.schedule()["signal"]["failing"])
         job = serve.schedule()["signal"]
         assert job["failures"] == 2 and job["max_failures"] == 2, job
         # Skipped past the cap: no more attempts while nothing changes.
-        _settle(tmp_path)
-        assert _rows(tmp_path, "failed").get("flaky") == 2, _rows(tmp_path, "failed")
-        polls = _rows(tmp_path).get("signal")
+        serve.settle()
+        assert serve.count("failed").get("flaky") == 2, serve.count("failed")
+        polls = serve.count().get("signal")
         time.sleep(2)
-        assert _rows(tmp_path).get("signal") == polls, "a failing job was still polled"
+        assert serve.count().get("signal") == polls, "a failing job was still polled"
 
         # An explicit request that succeeds resets the count; the next tick runs again.
         (tmp_path / "fail").unlink()
         done = _barca(tmp_path, "run", "flaky", "pipeline.py")
         assert done.returncode == 0, done.stderr
-        _wait("reset", lambda: not serve.schedule()["signal"]["failing"])
-        _wait("ticks again", lambda: _rows(tmp_path).get("signal", 0) > polls)
+        serve.wait("reset", lambda: not serve.schedule()["signal"]["failing"])
+        serve.wait("ticks again", lambda: serve.count().get("signal", 0) > polls)
         assert serve.schedule()["signal"]["failures"] == 0
     assert "failing: 2 consecutive failed ticks" in serve.err, serve.err
 
@@ -348,12 +241,12 @@ def test_a_restart_does_not_refire_a_task_that_is_up_to_date(tmp_path):
     (tmp_path / "pipeline.py").write_text(SHARED)
     _write(tmp_path, "inbox.txt", "a")
     sent = tmp_path / "sent.log"
-    with Serve(tmp_path):
+    with Serve(tmp_path) as serve:
         # Recorded, not only run: a stop before the record would cancel the run.
-        _wait("first fire", lambda: _rows(tmp_path).get("send_report") == 1)
+        serve.wait("first fire", lambda: serve.count().get("send_report") == 1)
         assert _lines(sent) == ["a"]
-    with Serve(tmp_path):
-        _wait("ticks after restart", lambda: _rows(tmp_path).get("inbox", 0) >= 4)
+    with Serve(tmp_path) as serve:
+        serve.wait("ticks after restart", lambda: serve.count().get("inbox", 0) >= 4)
         time.sleep(1)
     assert _lines(sent) == ["a"]
 
@@ -361,13 +254,13 @@ def test_a_restart_does_not_refire_a_task_that_is_up_to_date(tmp_path):
 def test_a_watch_edit_to_an_always_node_is_picked_up_at_the_next_tick(tmp_path):
     (tmp_path / "pipeline.py").write_text(SHARED)
     _write(tmp_path, "inbox.txt", "a")
-    with Serve(tmp_path, "--watch"):
-        _wait("summary", lambda: _rows(tmp_path).get("summary") == 1)
+    with Serve(tmp_path, "--watch") as serve:
+        serve.wait("summary", lambda: serve.count().get("summary") == 1)
         (tmp_path / "pipeline.py").write_text(
             SHARED.replace('{"summary": orders["files"]}', '{"summary": orders["files"] * 2}')
         )
-        _wait("summary after the edit", lambda: _rows(tmp_path).get("summary") == 2)
-        assert _rows(tmp_path).get("orders") == 1
+        serve.wait("summary after the edit", lambda: serve.count().get("summary") == 2)
+        assert serve.count().get("orders") == 1
 
 
 def test_post_runs_reads_a_manual_upstream_as_barca_get_does(tmp_path):
@@ -382,12 +275,7 @@ def test_post_runs_reads_a_manual_upstream_as_barca_get_does(tmp_path):
         run_id = serve.post(
             "/runs", {"command": "get", "targets": ["report"], "values": True}
         )["run_id"]
-        run = _wait(
-            "the run",
-            lambda: (r := serve.get(f"/runs/{run_id}"))["status"]
-            in ("success", "failed", "cancelled", "error")
-            and r,
-        )
+        run = serve.finished(run_id)
         assert run["status"] == "success", run
         assert run["outcome"]["final_output"] == {"baseline": "p1", "etag": "p2"}, run
         detail = {s["id"].rsplit(":", 1)[1]: s.get("detail") for s in run["outcome"]["steps"]}

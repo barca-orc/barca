@@ -19,6 +19,8 @@ import pytest
 
 from barca.api import _find_binary
 
+from . import served
+
 # Two quick steps, then one that holds the run open until the test lets it go (or kills it).
 PIPELINE = """
 import time
@@ -166,11 +168,11 @@ def remote_progress(project, monkeypatch):
         assert proc.poll() is None
         run = latest_run(project)
         assert (run["status"], run["steps_executed"], run["finished_at"]) == ("running", 2, None)
-        with sqlite3.connect(project / ".barca" / "metadata.db") as conn:
+        # The run is live: read a snapshot, never the database it is writing (#537).
+        with served.snapshot(project) as conn:
             rows = conn.execute(
                 "SELECT artifact_path, output_hash FROM materializations ORDER BY id"
             ).fetchall()
-        conn.close()
         assert len(rows) == 2
         for path, digest in rows:
             artifact = Path(path)
@@ -333,13 +335,11 @@ def test_a_cancelled_run_is_recorded_as_cancelled_not_interrupted(project):
 
 
 def run_rows(cwd: Path) -> dict[str, tuple]:
-    db = sqlite3.connect(cwd / ".barca" / "metadata.db")
-    try:
+    """Every run's row, from a snapshot: some callers read it while the run is live (#537)."""
+    with served.snapshot(cwd) as db:
         return {
             r[0]: r[1:] for r in db.execute("select run_id, status, pid, host, owner from runs")
         }
-    finally:
-        db.close()
 
 
 def markers(cwd: Path) -> list[str]:
