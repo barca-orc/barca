@@ -76,6 +76,15 @@ def requests(stderr: str, kind: str) -> list[str]:
     return [line.split(marker, 1)[1] for line in stderr.splitlines() if marker in line]
 
 
+def expire_store_check(root: Path) -> None:
+    """Move the remembered store checks (`.barca/gc-state.json`) past the 5-minute window."""
+    path = root / ".barca" / "gc-state.json"
+    state = json.loads(path.read_text())
+    for check in state["store_checks"]:
+        check["at"] -= 301
+    path.write_text(json.dumps(state))
+
+
 def ran(result: dict) -> set[str]:
     return {s["id"] for s in result["steps"] if s.get("status") == "ran"}
 
@@ -94,6 +103,9 @@ def test_a_warm_run_with_unchanged_sensors_uploads_nothing_and_takes_no_backup(p
     assert len(requests(cold, "put")) == 4, cold
     assert "[barca] backed up the metadata DB" in cold, cold
 
+    # Past the 5-minute store check window (#593), so this run checks the store as it would
+    # after a while: the window's own savings are tested in test_store_check_window.py.
+    expire_store_check(project)
     warm_result, warm = get(project)
     assert ran(warm_result) == {"pipeline.py:feed", "pipeline.py:other"}, warm_result
     assert requests(warm, "put") == [], warm

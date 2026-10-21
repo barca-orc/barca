@@ -273,6 +273,9 @@ struct RunStart {
     run_started: std::time::SystemTime,
     telemetry: Vec<(String, Box<dyn crate::telemetry::Integration>)>,
     transfer_start: Option<crate::transfer::Launching>,
+    /// The artifact store was checked less than five minutes ago and this run does not
+    /// refresh: its transfer helper is started only if the run transfers something (#593).
+    store_checked: bool,
     upload_snapshots: Option<UploadSnapshots>,
 }
 impl RunStart {
@@ -300,7 +303,12 @@ impl RunStart {
             .remote_artifacts()
             .then(|| UploadSnapshots::new(&run_id))
             .transpose()?;
-        let transfer_start = match cfg.remote_artifacts() {
+        // A store checked in the last five minutes is not checked again by a run that does not
+        // refresh (#593); `start_workers` still checks it when uploads are pending.
+        let store_checked = cfg.remote_artifacts()
+            && matches!(request.policy, CachePolicy::CacheAware)
+            && crate::gc::store_checked_recently(&cfg.env, &cfg.artifact_root);
+        let transfer_start = match cfg.remote_artifacts() && !store_checked {
             true => Some(TransferClient::launch(python, cfg, &run_id)?),
             false => None,
         };
@@ -312,6 +320,7 @@ impl RunStart {
             run_started,
             telemetry,
             transfer_start,
+            store_checked,
             upload_snapshots,
         })
     }
@@ -710,7 +719,25 @@ async fn start_workers(
     // Separate artifact store: workers still read and write only the local
     // artifact dir; the transfer helper uploads finished artifacts in the
     // background and fetches cache hits recorded by other machines.
-    let store: Option<StoreSync> = if let Some(start) = started.transfer_start.take() {
+    //
+    // A store checked in the last five minutes is not checked again (#593): the client starts
+    // its helper at the first transfer, and a run that transfers nothing starts none. Results
+    // an earlier command could not upload end that: they are retried first, as below.
+    if started.store_checked && !crate::pending_uploads::list(db_path).await?.is_empty() {
+        started.store_checked = false;
+        started.transfer_start = Some(TransferClient::launch(python, cfg, run_id)?);
+    }
+    let store: Option<StoreSync> = if started.store_checked {
+        trace_point!(
+            started.trace,
+            "store_check_skipped (checked within {}s)",
+            crate::gc::STORE_CHECK_WINDOW.as_secs()
+        );
+        Some(StoreSync::new(
+            TransferClient::deferred(python, cfg, run_id)?,
+            cancel.clone(),
+        ))
+    } else if let Some(start) = started.transfer_start.take() {
         let mut client = start.connect().await?;
         let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(10));
         let location = crate::transfer::diagnostic_uri(&cfg.artifact_root);
@@ -735,8 +762,10 @@ async fn start_workers(
         };
         if let Err(error) = checked {
             client.abort().await;
+            crate::gc::forget_store_check(&cfg.env, &cfg.artifact_root);
             return Err(error);
         }
+        crate::gc::remember_store_check(&cfg.env, &cfg.artifact_root);
         // Results an earlier command computed here and could not upload go first (#390), and
         // with a server, the runs they held back are posted to its ledger (#507).
         match retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
@@ -3263,8 +3292,12 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     // A `get` of a target that is cached here but missing from the store, or different there,
     // repairs the store from this machine's copy without a step running (RFC-0009). The
     // uploads are drained, and kept pending on failure, with the run's own below.
+    //
+    // A run inside the store check window that started no helper (it transferred nothing)
+    // does not ask the store either (#593).
     if !cancel.is_cancelled()
         && let Some(s) = store.as_mut()
+        && s.client.started()
     {
         // What is already pending was retried before the run; it is not repaired twice.
         let pending: std::collections::HashSet<String> = crate::pending_uploads::list(db_path)
@@ -3309,6 +3342,10 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         p.run_id = Some(run_id.to_string());
     }
     crate::pending_uploads::record(db_path, &pending).await?;
+    // A transfer that failed: the next run checks the store again (#593).
+    if store_location.is_some() && (upload_error.is_some() || transfer_error.is_some()) {
+        crate::gc::forget_store_check(&cfg.env, &cfg.artifact_root);
+    }
 
     let steps_cached = cached_node_ids.len();
     let elapsed = t0.elapsed().as_secs_f64();

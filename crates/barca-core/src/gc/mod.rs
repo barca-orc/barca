@@ -337,6 +337,74 @@ struct State {
     checked_size: u64,
     #[serde(default)]
     checked_limit: u64,
+    /// When the artifact store was last checked and found there, by environment and store
+    /// URI: seconds since the epoch ([`store_checked_recently`], #593).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    store_checks: Vec<StoreCheck>,
+}
+
+/// One successful check of an artifact store (#593).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StoreCheck {
+    env: String,
+    uri: String,
+    at: u64,
+}
+
+/// How long a successful check of the artifact store is trusted by a run that needs no
+/// transfer (#593): such a run starts no transfer helper.
+pub const STORE_CHECK_WINDOW: Duration = Duration::from_secs(300);
+
+/// Whether the artifact store `uri` of environment `env` was checked and found there less than
+/// [`STORE_CHECK_WINDOW`] ago, by this project's `.barca/gc-state.json`. A clock that went back
+/// counts as not recent.
+pub(crate) fn store_checked_recently(env: &str, uri: &str) -> bool {
+    let Ok(project) = Project::here() else {
+        return false;
+    };
+    let now = now_secs();
+    read_state(&project).is_some_and(|s| {
+        s.store_checks.iter().any(|c| {
+            c.env == env
+                && c.uri == uri
+                && c.at <= now
+                && now - c.at < STORE_CHECK_WINDOW.as_secs()
+        })
+    })
+}
+
+/// Remember that the artifact store `uri` of `env` was just checked and found there (#593).
+pub(crate) fn remember_store_check(env: &str, uri: &str) {
+    if let Ok(project) = Project::here() {
+        update_store_checks(&project, env, uri, Some(now_secs()));
+    }
+}
+
+/// Forget the last check of the artifact store `uri` of `env`: a transfer to it failed, so the
+/// next run checks it again (#593).
+pub(crate) fn forget_store_check(env: &str, uri: &str) {
+    if let Ok(project) = Project::here() {
+        update_store_checks(&project, env, uri, None);
+    }
+}
+
+fn update_store_checks(project: &Project, env: &str, uri: &str, at: Option<u64>) {
+    if !project.barca.is_dir() {
+        return;
+    }
+    let mut state = read_state(project).unwrap_or_default();
+    let before = state.store_checks.clone();
+    state.store_checks.retain(|c| c.env != env || c.uri != uri);
+    if let Some(at) = at {
+        state.store_checks.push(StoreCheck {
+            env: env.to_string(),
+            uri: uri.to_string(),
+            at,
+        });
+    }
+    if state.store_checks != before {
+        write_state(project, &state);
+    }
 }
 
 /// How long a check that could not get under the limit is not repeated (unless the size grows
@@ -900,6 +968,9 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
         &State {
             surveyed_at: now_secs(),
             artifact_adjust: walked.artifacts as i64 - recorded as i64,
+            store_checks: read_state(project)
+                .map(|s| s.store_checks)
+                .unwrap_or_default(),
             ..Default::default()
         },
     );
