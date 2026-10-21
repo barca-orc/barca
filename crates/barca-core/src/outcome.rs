@@ -774,8 +774,11 @@ mod tests {
         assert_eq!(value["envelope"]["kind"], "usage");
         // Only a target error points at `barca list` (#492).
         assert_eq!(value["envelope"]["remediation"], "See `barca get --help`.");
-        let unknown =
-            Outcome::of_error(BarcaError::AssetNotFound("x".into(), "a.py:y".into()), &ctx);
+        // A name far from every node: no "Did you mean" (#556) before the pointer.
+        let unknown = Outcome::of_error(
+            BarcaError::AssetNotFound("missing".into(), "a.py:y".into()),
+            &ctx,
+        );
         let value: Value = serde_json::from_str(unknown.text()).unwrap();
         assert_eq!(
             value["envelope"]["remediation"],
