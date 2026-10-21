@@ -168,7 +168,8 @@ def test_a_mistyped_refresh_name_suggests_the_closest_upstream_asset(project):
     err = usage_error(barca(project, "run", "report", "pipeline.py", "--refresh", "srcc"))
     assert "no upstream asset named 'srcc'" in err
     assert "\nDid you mean 'src'?\n" in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    # Not a target error: its own fix (the valid names), no `barca list` pointer (#492).
+    assert "barca list" not in err, err
 
 
 def test_a_mistyped_flag_or_subcommand_suggests_the_closest(project):
