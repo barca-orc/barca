@@ -61,6 +61,25 @@ fn render(r: &GcResult) {
             );
         }
     }
+    // Over the target after evicting what could go: say what holds the rest.
+    if r.target_bytes.is_some_and(|t| r.after_bytes > t) && !r.held.is_empty() {
+        let parts: Vec<String> = r
+            .held
+            .iter()
+            .map(|h| {
+                let words = match h.what.as_str() {
+                    "results" => "cached results",
+                    "unreferenced" => "files no result names (kept while a run is in flight or for a minute after they are written)",
+                    "metadata" => "metadata databases (never evicted)",
+                    "db_copies" => "databases moved aside by state reset/restore (never evicted; delete them once you no longer need to undo)",
+                    "backups" => "metadata backups (never evicted)",
+                    _ => "other",
+                };
+                format!("{} {words}", human(h.bytes))
+            })
+            .collect();
+        barca_core::outln!("held by: {}", parts.join(", "));
+    }
     if let Some(why) = &r.restricted {
         barca_core::errln!("[barca] {why}: only leftovers and superseded results were considered");
     }

@@ -780,6 +780,7 @@ async fn swap(db_path: &str, staged: &Path) -> Result<Option<String>, BarcaError
         .map_err(|e| io(format!("sync {}", staged.display()), e))?;
     std::fs::rename(staged, db_path)
         .map_err(|e| io(format!("move {} to {db_path}", staged.display()), e))?;
+    crate::gc::forget_survey();
     if let Some(parent) = Path::new(db_path).parent() {
         let parent = if parent.as_os_str().is_empty() {
             Path::new(".")
@@ -873,6 +874,7 @@ pub async fn reset<E: From<BarcaError>>(
         moved_to = Some(aside);
     }
     crate::db::init_locked(db_path).await?;
+    crate::gc::forget_survey();
     if let Some(parent) = Path::new(db_path).parent() {
         let parent = if parent.as_os_str().is_empty() {
             Path::new(".")

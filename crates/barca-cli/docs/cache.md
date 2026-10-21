@@ -670,7 +670,7 @@ the limit:
 
 | Order | What | Which first | Costs when needed again |
 |---|---|---|---|
-| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, `sql-cache/` copies not used in the last 5 minutes | dead staging, then moved-aside, then the least recently used copies | nothing (nothing reads them) |
+| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, files in an artifact directory that no metadata row of any environment names, `sql-cache/` copies not used in the last 5 minutes | dead staging, then moved-aside, then unnamed files (oldest first), then the least recently used copies | nothing (nothing reads them) |
 | 2 | Superseded results: a node (a partition key, for a partitioned asset) whose newest successful result is another one | oldest first | a recompute, only if the code and inputs return to that exact state |
 | 3 | Local copies the artifact store holds (its upload was confirmed with a digest) | least recently read first | a download |
 | 4 | Current results | least recently read first | a recompute |
@@ -691,9 +691,23 @@ the limit:
   evicted;
 - a result whose upload to the artifact store is still pending (`unsynced`, `local only` in `barca status`):
   its local copy is the only one until the next command uploads it;
-- the metadata DBs, their logs, locks and backups, and any file under `.barca/artifacts/` that no
-  result names (written by hand, or by another tool): counted, never deleted. Nothing outside
-  `.barca/` is ever deleted, and the artifact store is never touched.
+- a file in an artifact directory that no result names, while a run is in progress on this
+  `.barca/` (in any process) or for a minute after it was written (unless it is older than the
+  metadata DB): its row may not be written yet;
+- the metadata DBs, their logs, locks and backups, and the databases `barca state reset` and
+  `barca state restore` moved aside (`metadata.db.reset-<UTC>`, `metadata.db.pre-restore`):
+  counted, never deleted. Nothing outside `.barca/` is ever deleted, and the artifact store is
+  never touched.
+
+**After `barca state reset` or `barca state restore`.** The artifacts the old database named stay
+on disk, and the new one names none of them (after a restore, none the restored copy does not
+name). They are leftovers: the next check past the limit evicts them first, and `barca gc
+--max-size off` deletes them now. Until then, putting the old database back (`barca state restore
+--from <the moved file>`) uses them again; one that was evicted is computed again when it is
+needed. A reset says how much stays:
+`[barca] the 129 KB of artifacts under .barca/artifacts stay on disk, and no record names them now: ...`.
+With a server, a result fetched from the store for a hit in the server's ledger is also a file
+this machine's database does not name; evicting it costs a download.
 
 **What you see.** One line on stderr when something was evicted:
 
@@ -726,14 +740,27 @@ barca gc --dry-run              # what would be evicted, per tier, and what it l
 barca gc                        # evict now, down to 80% of max_size
 barca gc --max-size 5GB         # a one-off tighter budget
 barca gc --max-size off         # no limit: every leftover and superseded result, nothing else
-barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, ...}
+barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, held, ...}
 ```
 
 `--dry-run` lists exactly what `barca gc` then deletes (the same order, from the same
 measurement), unless something changes in between. With the limit `off`, `barca gc` evicts every
 leftover and superseded result, which never costs a recompute of anything current. `--env NAME`
-evicts only that environment's results (leftovers are shared). A file that cannot be deleted is
-skipped with one warning; `barca gc` exits 3 only when a metadata DB cannot be read.
+evicts only that environment's results (leftovers are shared; every environment's rows decide
+which files are named). A file that cannot be deleted is skipped with one warning; `barca gc`
+exits 3 only when a metadata DB cannot be read.
+
+When `barca gc` cannot get down to its target, a `held by:` line says what holds the rest, and
+`held` in the JSON lists it, largest first, as `{what, bytes, evictable}`: `results` (files a
+result names), `unreferenced` (files none names, kept for now), `metadata` (the metadata DBs),
+`db_copies` (databases reset and restore moved aside), `backups` and `other`. The DBs, their
+moved-aside copies and the backups are never evicted (`evictable: false`); delete a
+`metadata.db.reset-<UTC>` yourself once you no longer need to undo the reset:
+
+```
+nothing to evict: 355 KB of 1 KB
+held by: 115 KB metadata databases (never evicted), 111 KB databases moved aside by state reset/restore (never evicted; delete them once you no longer need to undo), 2 B other
+```
 
 **How it is measured.** The check after a command adds the recorded sizes of the results the
 metadata DBs hold, walks everything outside the artifact directories, and applies what the last

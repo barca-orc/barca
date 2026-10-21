@@ -172,6 +172,16 @@ pub(crate) async fn state_reset_cmd(
             reset.database
         ),
     }
+    let left = barca_core::gc::bytes_under(std::path::Path::new(&cfg.local_artifact_dir));
+    if reset.moved_to.is_some() && left > 0 {
+        barca_core::errln!(
+            "[barca] the {} of artifacts under {} stay on disk, and no record names them now: \
+             the cache size limit evicts them first, barca gc --max-size off deletes them now, \
+             and until then the undo above brings them back",
+            barca_core::gc::size::human(left),
+            cfg.local_artifact_dir
+        );
+    }
     if json {
         barca_core::outln!(
             "{}",
