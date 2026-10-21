@@ -18,23 +18,36 @@ pub async fn plan(
     python: &std::path::Path,
 ) -> Result<PlanResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
-    let result = plan_from_dag(&dag);
+    let cwd = std::env::current_dir()
+        .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
+    let result = plan_from_dag(&dag, crate::config::capacity_in(&cwd)?);
     crate::warnings::print(&result.warnings);
+    crate::execution::warn_over_capacity(&result.weights, result.capacity, &result.capacity_source);
     Ok(result)
 }
 
-/// Render a previously validated graph using the same planner as strict commands.
-pub fn plan_from_dag(dag: &crate::dag::Dag) -> PlanResult {
+/// Render a previously validated graph using the same planner as strict commands. `capacity`
+/// is the configured capacity, if any (`ResolvedConfig::capacity`); the pool size otherwise.
+pub fn plan_from_dag(
+    dag: &crate::dag::Dag,
+    capacity: crate::config::CapacitySetting,
+) -> PlanResult {
+    let pool_size = crate::execution::default_pool_size();
     let config = ResourceConfig {
-        pool_size: crate::execution::default_pool_size(),
+        pool_size,
         concurrency_groups: HashMap::new(),
     };
     let plan = planner::plan_from_dag(dag, &config);
+    let (capacity, capacity_source) = crate::execution::capacity(capacity, pool_size);
 
     let warnings = crate::warnings::for_plan(dag, &plan);
     PlanResult {
         plan_version: crate::results::PLAN_VERSION,
         warnings,
+        pool_size,
+        capacity,
+        capacity_source: capacity_source.to_string(),
+        weights: crate::execution::planned_weights(&plan),
         total_steps: plan.total_steps,
         phases: plan
             .phases

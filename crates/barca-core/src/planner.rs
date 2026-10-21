@@ -77,6 +77,8 @@ pub struct StreamStep {
     pub timeout_seconds: u32,
     /// Total number of attempts on failure (1 = no retry). Rust-side only.
     pub retries: u32,
+    /// `weight=`: how much of the pool's capacity the step takes while it runs (#436).
+    pub weight: u32,
     /// Base backoff in seconds between attempts; delay = `retry_backoff_seconds * attempt`.
     pub retry_backoff_seconds: f64,
     /// Late-expanded partition keys: workers loop over these internally.
@@ -416,6 +418,7 @@ fn build_phases(
                                     run_hashes: step.run_hashes.clone(),
                                     timeout_seconds: step.timeout_seconds,
                                     retries: step.retries,
+                                    weight: step.weight,
                                     retry_backoff_seconds: step.retry_backoff_seconds,
                                     partition_keys: chunk.to_vec(),
                                     param_types: step.param_types.clone(),
@@ -457,6 +460,7 @@ fn build_phases(
                                     run_hashes: step.run_hashes.clone(),
                                     timeout_seconds: step.timeout_seconds,
                                     retries: step.retries,
+                                    weight: step.weight,
                                     retry_backoff_seconds: step.retry_backoff_seconds,
                                     partition_keys: pks,
                                     param_types: step.param_types.clone(),
@@ -506,6 +510,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
         let sinks: Vec<crate::model::SinkDecl> = node.extracted.sinks.to_vec();
         let timeout_seconds = node.extracted.timeout_seconds;
         let retries = node.extracted.retries;
+        let weight = node.extracted.weight;
         let retry_backoff_seconds = node.extracted.retry_backoff_seconds;
         let function_name: Arc<str> = Arc::from(node.function_name());
         let source_file: Arc<str> = Arc::from(node.source_file());
@@ -527,6 +532,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
                 run_hashes: HashMap::new(),
                 timeout_seconds,
                 retries,
+                weight,
                 retry_backoff_seconds,
                 partition_keys: pks,
                 param_types: param_types.clone(),
@@ -545,6 +551,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
                 run_hashes: HashMap::new(),
                 timeout_seconds,
                 retries,
+                weight,
                 retry_backoff_seconds,
                 partition_keys: Vec::new(),
                 param_types: param_types.clone(),
@@ -563,6 +570,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
                 run_hashes: HashMap::new(),
                 timeout_seconds,
                 retries,
+                weight,
                 retry_backoff_seconds,
                 partition_keys: Vec::new(),
                 param_types,
@@ -772,6 +780,7 @@ mod tests {
                     sinks: SmallVec::new(),
                     timeout_seconds: 300,
                     retries: 1,
+                    weight: 1,
                     retry_backoff_seconds: 0.0,
                     description: None,
                     tags: HashMap::new(),
@@ -829,6 +838,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1258,6 +1268,7 @@ mod tests {
                 sinks: SmallVec::new(),
                 timeout_seconds: 300,
                 retries: 1,
+                weight: 1,
                 retry_backoff_seconds: 0.0,
                 description: None,
                 tags: HashMap::new(),
@@ -1402,6 +1413,7 @@ mod tests {
                     sinks: SmallVec::new(),
                     timeout_seconds: 300,
                     retries: 1,
+                    weight: 1,
                     retry_backoff_seconds: 0.0,
                     description: None,
                     tags: HashMap::new(),
@@ -1687,6 +1699,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1717,6 +1730,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1798,6 +1812,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1829,6 +1844,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1859,6 +1875,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),

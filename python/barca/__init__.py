@@ -86,6 +86,7 @@ def asset(
     description=None,
     tags=None,
     env: list[str] | None = None,
+    weight: int = 1,
 ):
     """Declare a cached asset node.
 
@@ -104,6 +105,12 @@ def asset(
     lines and JSON results. Names ending in `_TOKEN`, `_SECRET`, `_KEY` or
     `_PASSWORD` are hashed but shown as `<redacted>`. Variables read without
     being declared are not tracked.
+
+    `weight` (a whole number, default 1) is how much of the pool's capacity the step
+    takes while it runs: the steps running at once total at most the capacity (the
+    pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it). Give a step
+    that needs a lot of memory a higher weight so fewer run beside it. It does not
+    count toward the run hash. Experimental.
 
     `retries` is the total number of attempts on failure (1 = no retry).
     `retry_backoff` is the base delay in seconds between attempts (delay grows
@@ -134,12 +141,13 @@ def sensor(
     description=None,
     tags=None,
     env: list[str] | None = None,
+    weight: int = 1,
 ):
     """Declare a sensor node (observes external state).
 
     Sensors must use `Manual` or `Schedule(...)` freshness — `Always` is not
     valid for a sensor (its polling cadence must be declared explicitly). See
-    `asset` for `env`, `retries` and `retry_backoff` semantics.
+    `asset` for `env`, `weight`, `retries` and `retry_backoff` semantics.
 
     `partitions` runs the sensor once per key, with the key passed as the parameter
     named in the dict, as on `asset`. `serializer` forces the format its value is
@@ -169,6 +177,7 @@ def task(
     description=None,
     tags=None,
     env: list[str] | None = None,
+    weight: int = 1,
 ):
     """Declare a task node (always re-runs; never cached).
 
@@ -179,8 +188,8 @@ def task(
 
     A `@task(freshness=Schedule("<cron>"))` is the simplest way to run something
     on a timer: leave `barca serve` running and it fires on each cron tick (see
-    the Scheduling guide). See `asset` for `env`, `retries` and `retry_backoff`
-    semantics; a task always runs, so `env` only records the values it used.
+    the Scheduling guide). See `asset` for `env`, `weight`, `retries` and
+    `retry_backoff` semantics; a task always runs, so `env` only records the values it used.
 
     `partitions` runs the task once per key, with the key passed as the parameter
     named in the dict, as on `asset`. `serializer` forces the format its return

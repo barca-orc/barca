@@ -102,6 +102,22 @@ fn cache_size(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
     }
 }
 
+/// How many workers a run starts and the capacity their steps' `weight=` shares (#436).
+/// Informational.
+fn capacity(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
+    let pool_size = crate::execution::default_pool_size();
+    let (capacity, source) = crate::execution::capacity(cfg.capacity, pool_size);
+    report.add(
+        "capacity",
+        true,
+        format!(
+            "steps running at once total at most weight {capacity} ({source}); pool of {pool_size} worker{}",
+            if pool_size == 1 { "" } else { "s" }
+        ),
+        json!({"capacity": capacity, "pool_size": pool_size, "source": source}),
+    );
+}
+
 pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> DoctorReport {
     let mut report = DoctorReport::default();
     let root = match std::env::current_dir() {
@@ -191,6 +207,7 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
                 json!({"path":cfg.db_path}),
             );
             cache_size(&mut report, &cfg);
+            capacity(&mut report, &cfg);
             Some(cfg)
         }
         Err(error) => {

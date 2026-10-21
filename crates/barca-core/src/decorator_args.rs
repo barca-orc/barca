@@ -76,6 +76,7 @@ pub const SIGNATURES: &[Signature] = &[
             "description",
             "tags",
             "env",
+            "weight",
         ],
         deferred: &[],
         usage: "@asset(inputs={\"param\": upstream}, ...)",
@@ -96,6 +97,7 @@ pub const SIGNATURES: &[Signature] = &[
             "description",
             "tags",
             "env",
+            "weight",
         ],
         // "sensor '...' cannot have inputs", when the DAG is built.
         deferred: &["inputs"],
@@ -118,6 +120,7 @@ pub const SIGNATURES: &[Signature] = &[
             "description",
             "tags",
             "env",
+            "weight",
         ],
         deferred: &[],
         usage: "@task(inputs={\"param\": upstream}, ...)",

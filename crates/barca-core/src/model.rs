@@ -404,6 +404,10 @@ pub struct ExtractedNode {
     pub timeout_seconds: u32,
     /// Total number of attempts on failure (1 = no retry).
     pub retries: u32,
+    /// `weight=`: how much of the pool's capacity the step takes while it runs, at least 1
+    /// (#436). Not part of the run hash.
+    #[serde(default = "default_weight")]
+    pub weight: u32,
     /// Base backoff in seconds between attempts; delay = `retry_backoff_seconds * attempt`.
     pub retry_backoff_seconds: f64,
     /// Human-readable description.
@@ -440,6 +444,10 @@ pub struct ExtractedNode {
     /// (see [`crate::unused_inputs`]). Reported as plan warnings; not part of any hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_inputs: Vec<String>,
+}
+
+fn default_weight() -> u32 {
+    1
 }
 
 impl ExtractedNode {

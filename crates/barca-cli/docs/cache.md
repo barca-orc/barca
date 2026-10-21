@@ -126,6 +126,7 @@ re-run, never a stale result.
 | `retries=` | no | decides how often a failing step is tried, not what it returns |
 | `retry_backoff=` | no | decides how long to wait between attempts, not what the step returns |
 | `timeout_seconds=` | no | decides how long the step may take, not what it returns |
+| `weight=` | no | decides how many steps run at once, not what the step returns |
 | `description=` | no | documentation |
 | `tags=` | no | labels for people and tools |
 | `@unsafe` | no | a marker barca reads and does not act on |

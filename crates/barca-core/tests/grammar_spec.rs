@@ -596,6 +596,56 @@ def flaky() -> dict:
 }
 
 #[test]
+fn weight_is_parsed_on_every_node_kind_and_defaults_to_one() {
+    let src = r#"
+from barca import Manual, asset, sensor, task
+
+@asset(weight=3)
+def heavy() -> dict:
+    return {}
+
+@task(weight=2)
+def job() -> None:
+    pass
+
+@sensor(freshness=Manual, weight=4)
+def probe() -> dict:
+    return {}
+
+@asset()
+def light() -> dict:
+    return {}
+"#;
+    let nodes = extract_nodes(src, "test.py").unwrap();
+    let weight = |name: &str| {
+        nodes
+            .iter()
+            .find(|n| n.function_name == name)
+            .unwrap()
+            .weight
+    };
+    assert_eq!(weight("heavy"), 3);
+    assert_eq!(weight("job"), 2);
+    assert_eq!(weight("probe"), 4);
+    assert_eq!(weight("light"), 1);
+}
+
+#[test]
+fn a_weight_that_is_not_a_whole_number_of_at_least_one_is_refused() {
+    for bad in ["0", "-1", "1.5", "\"2\"", "WEIGHT"] {
+        let src = format!(
+            "from barca import asset\n\nWEIGHT = 2\n\n@asset(weight={bad})\ndef heavy() -> dict:\n    return {{}}\n"
+        );
+        let err = extract_nodes(&src, "test.py").unwrap_err().to_string();
+        assert!(
+            err.contains("weight= must be a whole number"),
+            "{bad}: {err}"
+        );
+        assert!(err.contains("(line 5)"), "{bad}: {err}");
+    }
+}
+
+#[test]
 fn retry_backoff_accepts_int_literal() {
     let src = r#"
 from barca import asset
