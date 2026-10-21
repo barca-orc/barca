@@ -8,7 +8,9 @@ import tempfile
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-AIRFLOW_BIN = os.path.join(SCRIPT_DIR, ".venv", "bin", "airflow")
+# BARCA_BENCH_AIRFLOW_VENV points every Airflow harness at one shared venv.
+AIRFLOW_VENV = os.environ.get("BARCA_BENCH_AIRFLOW_VENV", os.path.join(SCRIPT_DIR, ".venv"))
+AIRFLOW_BIN = os.path.join(AIRFLOW_VENV, "bin", "airflow")
 
 
 def run():

@@ -251,3 +251,20 @@ Each benchmark directory contains:
 - `barca/` — barca implementation + `run.sh`
 - `dagster/` — equivalent Dagster implementation + `run.sh`
 - `prefect/` — equivalent Prefect implementation + `run.sh`
+
+### Airflow harnesses
+
+`trivial`, `chain_100`, `deep_diamond` and `fan_out_500_50ms` also have an `airflow/` harness.
+`bench.sh` does not run them. Each `airflow/run.sh` uses the venv named by
+`BARCA_BENCH_AIRFLOW_VENV`, falling back to `airflow/.venv` in its own directory. To share one
+Airflow install across all four:
+
+```bash
+uv venv ~/.cache/barca-bench/airflow && uv pip install --python ~/.cache/barca-bench/airflow apache-airflow
+export BARCA_BENCH_AIRFLOW_VENV=~/.cache/barca-bench/airflow
+benchmarks/trivial/airflow/run.sh
+```
+
+`partitioned_10k` is Docker-only: its `Dockerfile` builds the barca wheel from source and
+`airflow/run.sh` runs Airflow from the `apache/airflow` image, so neither needs a local venv or
+a prebuilt wheel.
