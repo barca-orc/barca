@@ -1,16 +1,21 @@
 # Changelog
 
-Current release notes are published on [GitHub Releases](https://github.com/barca-orc/barca/releases).
-Recent tagged release notes include [v0.21.0](https://github.com/barca-orc/barca/releases/tag/v0.21.0)
-(2026-10-09): SQL installation extra, remote-off override, storage startup checks,
-non-destructive metadata evolution, transactional terminal outcomes and genuine
-Barca decorator aliases. See its upgrade notes for the storage permission and
-binding compatibility requirements. The preceding [v0.20.1](https://github.com/barca-orc/barca/releases/tag/v0.20.1)
-(2026-10-09) shipped inspectable run history and triggered runs, shared-history cancellation
-reconciliation, and verified shared DuckDB worker lifetime. See
-[v0.20.0](https://github.com/barca-orc/barca/releases/tag/v0.20.0) for the preceding
-upgrade and breaking-change notes. Releases between the historical entries below
-and these tags are available on the same releases page.
+Release notes for barca, newest first: each `## <version> (<date>)` section is published as that
+version's [GitHub release](https://github.com/barca-orc/barca/releases) body, and changes not
+released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their notes only on
+GitHub Releases; the "0.1.2 to 0.8.0" summary below lists what the earlier of them shipped.
+
+## Pending
+
+### Documentation
+
+- `CHANGELOG.md` is the source of release notes (#504). The release workflow publishes the
+  version's `## <version> (<date>)` section as the GitHub release body, from a `release-notes`
+  job that the GitHub release and the PyPI upload both need, so a version without a section
+  publishes nothing (`scripts/changelog-section.py`). `cliff.toml` and git-cliff are gone. Every
+  section now uses `## <version> (<date>)` and the Breaking, Features, Bug Fixes, Performance,
+  Removed and Documentation subsections, and the GitHub release bodies of 0.24.2 to 0.26.1 were
+  rewritten from their sections.
 
 ## 0.27.0 (2026-10-20)
 
@@ -133,13 +138,6 @@ and these tags are available on the same releases page.
   Datadog event on start and stop.
 ## 0.26.1 (2026-10-20)
 
-### Removed
-
-- Leftovers of the shared history: barca-core's `state_sync` module (its deadline and
-  helper-error code moved to `helper_proc`; the WAL-fold wrapper only its own test called is
-  deleted), and the cache manual's limitation about eviction marks in a pushed history. Docs,
-  specs and comments no longer describe a shared-history push. No user-visible surface changes.
-
 ### Bug Fixes
 
 - Metadata backups no longer overwrite each other when several directories back up to one
@@ -148,6 +146,13 @@ and these tags are available on the same releases page.
   (`2026-10-14T18-02-11.482Z-3f9a1c2e.db`). `barca state backups` stays newest first and
   `barca state restore --from <name>` takes both these names and the to-the-second ones 0.26.0
   wrote, which are still listed and pruned.
+
+### Removed
+
+- Leftovers of the shared history: barca-core's `state_sync` module (its deadline and
+  helper-error code moved to `helper_proc`; the WAL-fold wrapper only its own test called is
+  deleted), and the cache manual's limitation about eviction marks in a pushed history. Docs,
+  specs and comments no longer describe a shared-history push. No user-visible surface changes.
 
 ## 0.26.0 (2026-10-20)
 
@@ -159,8 +164,6 @@ and these tags are available on the same releases page.
   `--dry-run`, and record the results; `barca status` shows them `unsynced` / `local_only`
   (`summary.unsynced`) until the next command that opens the store uploads them first. Read
   `uploads` instead of exit 3 to detect unpublished results.
-
-### Removed
 
 - **Breaking:** the shared history (`optimistic` mode) is removed (RFC-0009, #403; closes
   #243): `[remote] state`, `[remote] state_uri`, `[remote] push_retries`, `BARCA_STATE`,
@@ -179,12 +182,15 @@ and these tags are available on the same releases page.
   sidecar). New `barca state backups` lists them and `barca state restore [--from N|NAME]` puts
   one back after validating it, keeping the replaced database as `metadata.db.pre-restore`.
   A backup that fails to upload is a warning and `uploads.error`, never a failed run (#403).
+
 - `barca status` with a store reports `unsynced` with `cache.reason` `store_only` and
   `mismatch` besides `local_only`, by comparing this machine's copy, the store object and the
   recorded digest; `barca get` repairs an `unsynced` target without running a step (upload,
   fetch, or re-upload with the changed-bytes warning and `steps[].bytes_changed`) (#403).
+
 - `barca serve` runs with a remote store (it used to require `BARCA_STATE=off`) and backs its
   history up.
+
 - Signed URLs (experimental, RFC-0011, #452): `barca.signed_url(uri, expires=3600)` returns a
   time-limited, read-only HTTPS link to any object in S3 (also R2 and MinIO), GCS or Azure, signed
   with the credentials barca already uses: SigV4 on S3, V4 on GCS (IAM `signBlob` when there is no
@@ -192,6 +198,7 @@ and these tags are available on the same releases page.
   `DefaultAzureCredential`. `barca get <target> -o url [--expires 30m|12h|7d|seconds]` prints one
   link per result (default 1 hour, at most 7 days); with `--json` each `_barca_artifact` gains
   `url` and `url_expires_at`. Links download as `<node>.<ext>`. The URL goes to stdout only.
+
 - Slack notifications (RFC-0010, #450): set `BARCA_SLACK_WEBHOOK_URL` to an incoming webhook and
   barca posts when a job starts failing, when it recovers, and once a day while it keeps failing,
   for `barca get`, `barca run` and every run `barca serve` starts. `BARCA_SLACK_NOTIFY`
@@ -201,6 +208,7 @@ and these tags are available on the same releases page.
   `notifications` table, both added in place within metadata format 1. The binary now carries an
   HTTPS client (`reqwest` with `rustls`), shared with the coming `--server` client. See
   `barca docs telemetry`.
+
 - A cached result whose upload is pending is never evicted by the cache size limit, and
   `.barca/backups/` counts toward it but is never evicted. `barca get -o url` uploads a
   `local only` result before signing it.
@@ -212,6 +220,7 @@ and these tags are available on the same releases page.
 - `barca status` reports a partitioned node's last materialization by a fixed rule: the latest
   run (by row id), and within it the first key in sort order. Before, it was whichever key
   finished last, so two identical runs could report different keys (#475).
+
 - The release workflow's `verify-published-linux` jobs wait for the PyPI simple index to serve a
   new version before installing it, retrying every 20 s for up to 12 minutes (PyPI's CDN caches
   the index with `max-age=600`), so a release no longer needs a manual rerun for index lag (#480).
@@ -224,13 +233,13 @@ and these tags are available on the same releases page.
   stdout is piped) `final_output` is always the pointer `{"_barca_artifact": {"path", "format",
   "size_bytes"}}`, for json artifacts too, and a terminal shows the path with a small json value
   previewed under it. The old default, the value, is `-o value` (`-o value --json` for the JSON
-  line); `-o path` prints only the paths. `barca.get()` still returns the value. **Breaking:** a
-  partitioned target returns every key, sorted, never one key (#287): `final_output` is an object
-  keyed by partition key (`"region=emea"`), and `barca.get()` returns a dict of key to value.
+  line); `-o path` prints only the paths. `barca.get()` still returns the value.
+
+- **Breaking:** a partitioned target returns every key, sorted, never one key (#287):
+  `final_output` is an object keyed by partition key (`"region=emea"`), and `barca.get()`
+  returns a dict of key to value.
   `--partition region=emea,amer` (or a JSON object for compound keys) selects keys, computes only
   those and scopes `--refresh` of the target; `barca.get(..., partition=...)` does the same.
-
-### Features
 
 - **Breaking:** `.barca/` now has a size limit, `[cache] max_size` in `barca.toml` or
   `BARCA_CACHE_MAX_SIZE` (`"20GB"`, `"500MB"`, `"20GiB"`, bytes, `"10%"` of the filesystem, or
@@ -295,7 +304,25 @@ and these tags are available on the same releases page.
   import each other terminate. Editing such a helper now invalidates its consumers. Existing
   affected consumers may recompute once after upgrading.
 
-## 0.24.0
+## 0.24.0 (2026-10-15)
+
+### Breaking
+
+- **Breaking:** agent completion and permanent failure lines append `attempts=N` after
+  retries. Allow this optional suffix when parsing those lines, or read the structured
+  `steps[].attempts` field instead.
+
+- **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
+  Use `--refresh-all` and `refresh_all=True`, respectively. The CLI alias is now an
+  unknown-flag usage error (exit 2); Python rejects the removed keyword.
+
+### Features
+
+- Add `barca doctor` prerequisite checks, credential identity diagnostics and a documented local-only debugging profile.
+
+- Run JSON reports executed-step durations and attempts, with slow module imports
+  reported separately. History JSON totals recorded materialization attempts; stats
+  retains per-materialization attempts. Timeout errors identify the step id.
 
 ### Bug Fixes
 
@@ -317,35 +344,16 @@ and these tags are available on the same releases page.
 - Retain project-helper provenance for unpacked and augmented module constants, including aliases captured before later overwrites. Consumers conservatively hash the module source and static references.
 
 - Track project star imports in ordinary helper modules conservatively, including functions/classes, captured constants, forwarded exports, multiple/conditional imports and transitive stars.
+
 - Follow project helper references in function and lambda default arguments, including
   nested functions and keyword-only defaults. Editing those helpers now invalidates their
   consumers. Existing affected consumers may recompute once after upgrading.
 
 - Retain project-helper provenance for names, functions and classes bound inside module-level `for`, `while`, `with` and `match` blocks. Consumers conservatively hash module source and static references.
 
-### Features
+## 0.1.2 to 0.8.0 (summary)
 
-- Add `barca doctor` prerequisite checks, credential identity diagnostics and a documented local-only debugging profile.
-- Run JSON reports executed-step durations and attempts, with slow module imports
-  reported separately. History JSON totals recorded materialization attempts; stats
-  retains per-materialization attempts. Timeout errors identify the step id.
-- **Breaking:** agent completion and permanent failure lines append `attempts=N` after
-  retries. Allow this optional suffix when parsing those lines, or read the structured
-  `steps[].attempts` field instead.
-
-### Removed
-
-- **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
-  Use `--refresh-all` and `refresh_all=True`, respectively. The CLI alias is now an
-  unknown-flag usage error (exit 2); Python rejects the removed keyword.
-
-The older notes below are preserved as historical records. Their former
-"Unreleased" section describes work that has already shipped; it is not the
-current pending-release queue.
-
-## Historical notes (formerly "Unreleased")
-
-### Breaking changes
+### Breaking
 
 - `barca run` is now cache-aware for upstream assets by default (same as `barca get`);
   the task itself still always re-runs. Previously every upstream asset was force-rerun.
@@ -361,11 +369,13 @@ current pending-release queue.
   `steps` array (and `[barca] step:<id> cached` in `--agent` mode). The dry run and the real run
   share one decision function, and tests check that the predicted `will_run` equals the real
   run's `steps_executed`.
+
 - `barca docs`: a manual compiled into the binary (concepts, output formats, caching, tasks,
   partitions, scheduling, runnable examples, conventions for scripts and AI agents). Every
   command's `--help` now ends with runnable examples, and `list`, `history` and `stats` take
   `--json`. Docs, help examples and JSON output are now part of the feature workflow
   (see CLAUDE.md); tests execute the manual's examples.
+
 - DuckDB: steps returning a `DuckDBPyRelation` or a pyarrow `Table` are written as parquet
   without `serializer="parquet"` (a relation used to crash with "cannot pickle", a Table was
   silently pickled). Barca now owns one DuckDB connection per worker process and binds every
@@ -374,18 +384,27 @@ current pending-release queue.
   one-time configuration (extensions, credentials, settings). Steps that mix relations from
   their own `duckdb.connect()` with inputs still fail, but the failure now carries a `barca:`
   note explaining the conflict and the fix instead of only DuckDB's cryptic message.
+
 - Sub-minute cron scheduling: `Schedule(...)` now accepts a 6-field cron with a
   leading seconds field (e.g. `*/15 * * * * *` — every 15 seconds); the `barca serve`
   scheduler evaluates at 1-second resolution. 5-field crons are unchanged (seconds
   pinned to `0`).
+
 - Built-in cron scheduler in `barca serve`: enforces `@asset`/`@task`/`@sensor`
   `freshness=Schedule(...)`, timezone-aware (`--timezone`), durable catch-up on
   restart, self-overlap skip, and live status via `GET /schedule`; toggle with
   `--no-schedule`.
+
 - Shared remote state and content-addressed artifacts: `barca.toml` config, `--env`
   environment separation, and remote artifact storage (Azure/S3/GCS/R2 via fsspec)
   with the metadata DB pushed/pulled as a blob.
+
 - Minimal standalone scheduler example under `examples/scheduler`.
+
+- Async-native core: the async runtime is owned by the caller, with cancellable runs.
+
+- Centralized cron parsing behind a single `CronExpr::parse` helper so validation,
+  the scheduler, and the `/schedule` handler share one grammar.
 
 ### Bug Fixes
 
@@ -393,11 +412,14 @@ current pending-release queue.
   lists the valid names (it used to silently do nothing), `--refresh a b` says to use a comma
   instead of failing with "No such file", and barca warns when a refresh leaves cached assets
   downstream of it stale (run hashes cover upstream hashes, not outputs, so they stay cached).
+
 - A step that runs for 15 s or more is now reported on stderr (`[barca] still running (45s): ...`,
   `BARCA_PROGRESS_SECS` to tune) in every mode, so a slow step no longer looks hung.
+
 - Partitioned assets are now cached per key. Previously every partition re-executed on each
   run (a `TODO` in the coordinator); now unchanged keys are served from cache and only new or
   changed keys run, with the fan-in re-running only when its inputs change.
+
 - Concurrent barca processes in one project no longer fail with `Failed locking file
   '.barca/metadata.db'. File is locked by another process`. Turso opens the DB
   single-process (its multi-process mode is experimental), and `barca get`/`run` held the DB
@@ -405,56 +427,31 @@ current pending-release queue.
   only while it reads or writes the DB and releases it while your Python runs, so processes
   queue instead of failing.
 
-### Refactor
-
-- Async-native core: the async runtime is owned by the caller, with cancellable runs.
-- Centralized cron parsing behind a single `CronExpr::parse` helper so validation,
-  the scheduler, and the `/schedule` handler share one grammar.
-
 ### Documentation
 
 - Surface the task-scheduler workflow in the README and docs splash; new
   "Barca vs cron / systemd timers" comparison; sub-minute cron documented across
   the Scheduling guide and reference.
+
 - Real `freshness=` (and other) keyword parameters on the `@asset`/`@sensor`/`@task`
   Python stubs for IDE autocomplete and type checking.
 
-## [0.1.1] - 2026-06-04
+## 0.1.1 (2026-06-04)
+
+### Features
+
+- Correct __main__.py entry-point description in CLAUDE.md
+- Clean up stale files from pre-Rust rewrite
+- Polish: Result errors, default subcommand, versions, test isolation, README
+- V0.1.1: Engine refactor + clap CLI + Python API
 
 ### Bug Fixes
 
 - Fix 3 PR review issues: artifact key collision, binary caching, deterministic partition get
 
-### Changes
+## 0.1.0 (2026-06-04)
 
-- Correct __main__.py entry-point description in CLAUDE.md
-- Clean up stale files from pre-Rust rewrite
-
-### Polish
-
-- Polish: Result errors, default subcommand, versions, test isolation, README
-
-### Release
-
-- V0.1.1: Engine refactor + clap CLI + Python API
-- V0.1.1: Engine refactor + clap CLI + Python API
-
-## [0.1.0] - 2026-06-04
-
-### Bug Fixes
-
-- Fix PyPI license metadata: use SPDX identifier instead of text table
-- Fix all 11 PR review issues: CI, correctness, latent bugs, nits
-- Fix all 3 staleness gaps: cross-file imports, sensor bypass, partition cascade
-- Fix chain caching (ordered persist) + add cached benchmarks
-- Fix run_hash consistency: 13/13 cache tests pass
-- Fix: user print() statements no longer corrupt worker protocol
-- Fix all clippy warnings, tighten idiomatic Rust
-- Fix thread-safety in MetadataStore for concurrent per-thread usage (#27)
-- Fix: make UI reactive to asset state changes after reset/reindex (#14)
-- Fix: support bare @asset decorator (no parentheses) (#12)
-
-### Changes
+### Features
 
 - File-based artifact persistence: replace JSON-over-stderr with format-aware artifacts
 - Require Python >=3.12, build wheels for 3.12/3.13/3.14
@@ -505,6 +502,27 @@ current pending-release queue.
 - Add test coverage roadmap with detailed spec for 100+ new tests (#18)
 - Improve dependency tracking with codebase merkle hash, snapshots, and batch worker (#17)
 - Add benchmark suite: Barca vs Prefect vs Dagster orchestration performance (#16)
+- Refactor to align with barca.allium: freshness, sinks, run/dev/prune (#32)
+- Release polish: metadata, changelog, serializer= parsing, __version__
+
+### Bug Fixes
+
+- Fix PyPI license metadata: use SPDX identifier instead of text table
+- Fix all 11 PR review issues: CI, correctness, latent bugs, nits
+- Fix all 3 staleness gaps: cross-file imports, sensor bypass, partition cascade
+- Fix chain caching (ordered persist) + add cached benchmarks
+- Fix run_hash consistency: 13/13 cache tests pass
+- Fix: user print() statements no longer corrupt worker protocol
+- Fix all clippy warnings, tighten idiomatic Rust
+- Fix thread-safety in MetadataStore for concurrent per-thread usage (#27)
+- Fix: make UI reactive to asset state changes after reset/reindex (#14)
+- Fix: support bare @asset decorator (no parentheses) (#12)
+
+### Removed
+
+- Drop linux-arm64 from release matrix (simsimd NEON cross-compile failure)
+- Remove dead code: plan.rs, NodeState, classify_shape, stats
+- Remove AssetStatusBadge web component; use data-persist for dark mode (#15)
 
 ### Documentation
 
@@ -513,28 +531,22 @@ current pending-release queue.
 - Docs: fix datastar-reference for RC.8 syntax (#13)
 - Docs: fix Quick Start so new users can actually run barca (#11)
 
-### Refactor
+## 0.0.3 (2026-03-14)
 
-- Refactor to align with barca.allium: freshness, sinks, run/dev/prune (#32)
+### Features
 
-### Release
-
-- Release polish: metadata, changelog, serializer= parsing, __version__
-
-### Removed
-
-- Drop linux-arm64 from release matrix (simsimd NEON cross-compile failure)
-- Remove dead code: plan.rs, NodeState, classify_shape, stats
-- Remove AssetStatusBadge web component; use data-persist for dark mode (#15)
-
-## [0.0.3] - 2026-03-14
-
-### Changes
-
-- Chore: bump version to 0.0.3
 - Chore: use cross for Linux CLI builds in just release
 
-## [0.0.3rc1] - 2026-03-14
+## 0.0.3rc1 (2026-03-14)
+
+### Features
+
+- Ci: replace release workflow with local just release recipe
+- Ci: use macos-latest for x86_64 macOS wheel (macos-13 unavailable)
+- Chore: bump all crate versions to 0.0.3
+- Ci: fix manylinux glibc compatibility for bundled CLI binary (#10)
+- Init (#1)
+- Initial commit
 
 ### Bug Fixes
 
@@ -542,14 +554,3 @@ current pending-release queue.
 - Fix: use uv tool install ziglang + symlink to zig in setup recipe
 - Fix: ignore untracked files in dirty check
 - Fix: handle PEP 440 rc versions in just release (convert to semver for Cargo)
-
-### Changes
-
-- Chore: bump version to 0.0.3rc1
-- Chore: sync uv.lock
-- Ci: replace release workflow with local just release recipe
-- Ci: use macos-latest for x86_64 macOS wheel (macos-13 unavailable)
-- Chore: bump all crate versions to 0.0.3
-- Ci: fix manylinux glibc compatibility for bundled CLI binary (#10)
-- Init (#1)
-- Initial commit
