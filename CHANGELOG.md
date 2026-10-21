@@ -12,6 +12,17 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Removed
+
+- Committed junk and two broken examples (#497): the three `benchmarks/*/airflow/.venv`
+  symlinks to macOS paths, the 0.1.5 macOS wheel under `benchmarks/partitioned_10k/wheels/` and
+  `examples/chain_100/stderr.txt`. The Airflow harnesses take their venv from
+  `BARCA_BENCH_AIRFLOW_VENV` (`benchmarks/README.md`); `examples/nested_tasks` and
+  `examples/pathological_assets` load again (their `barca.toml` dropped the unsupported
+  `[project]` table), and a test runs `barca list` in every example.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes
