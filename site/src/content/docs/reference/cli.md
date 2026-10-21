@@ -44,7 +44,7 @@ barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] 
 barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca doctor [file.py|dir/ ...] [--json]      Diagnose project prerequisites without running steps
-barca logs <run_id> [--step NAME] [--json]    A run's captured step stdout
+barca logs [run_id] [--step NAME] [--json]    A run's captured step stdout (default: the most recent run)
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
@@ -350,25 +350,28 @@ still keep an uncertain owner `running`; reconciliation is your assertion that i
 The change is local to the selected environment's metadata database.
 
 
-Show recent runs from `.barca/metadata.db`: run id, command, status, step counts and timing.
+Show recent runs from `.barca/metadata.db`: run id, command, target, status, step counts and
+timing. TARGET is the run's job by function name, `all` for a run without targets, cut at 24
+characters with `…`.
 The human table defaults to the 10 most recent; JSON returns every run unless `--limit` is explicit.
 
 ```
 $ barca history
-RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
------------------------------------------------------------------------------
-14f1e316840c   run     success         1      2   0.1s 2026-10-21 02:39:25 UTC
-14f01f296a75   get     success         0      2   0.0s 2026-10-21 02:39:25 UTC
-14f3870e173f   get     success         2      0   0.1s 2026-10-21 02:39:25 UTC
+RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
+------------------------------------------------------------------------------------------------------
+14f1e316840c   run     notify                   success         1      2   0.1s 2026-10-21 02:39:25 UTC
+14f01f296a75   get     country_report,weekly_s… success         0      2   0.0s 2026-10-21 02:39:25 UTC
+14f3870e173f   get     all                      success         2      0   0.1s 2026-10-21 02:39:25 UTC
 ```
 
-Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`,
+Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `job`, `status`,
 `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`,
 `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`. `triggered_by` says what
 started the run: `manual` (a command typed on a machine), `api` (an HTTP request to
 `barca serve`), `schedule` (a cron tick, with the tick in `scheduled_at`, RFC 3339 in UTC, and
 the scheduled node in `schedule_id`) or `client`; it is `null` for runs recorded before barca
-recorded it.
+recorded it. `job` is the run's job in full: `all`, or its resolved node ids sorted and
+comma-separated (`null` for runs recorded before 0.29.0); `target` is the target as typed.
 
 ```bash
 barca history --fields run_id,triggered_by,scheduled_at   # what started each run
@@ -836,6 +839,9 @@ on stderr when `default_env` or an artifact store is in effect. See
 ## Recorded stdout
 
 `barca logs RUN_ID --pretty` prints recorded step stdout, without progress or prefixes.
+Without a run id, `barca logs` reads the most recent run (running or finished) and names it in a
+line on stderr: `barca: logs of the most recent run: 07c4a64d0540 (run notify, success, started
+2026-10-21 06:40:36 UTC)`.
 `--json` returns `[{node_id, line}]` in recorded order. `--step report` selects a function
 name; use an exact node id if names collide, or a partitioned id to select one key.
 `--env dev` reads that environment's local history. It reads no pipeline source and makes

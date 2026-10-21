@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '6'
-  description: 'Normative current wire contract; specification version 6 is independent of package versions.
+  version: '7'
+  description: 'Normative current wire contract; specification version 7 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
@@ -3680,6 +3680,7 @@ components:
       - command
       - files
       - target
+      - job
       - status
       - steps_total
       - steps_executed
@@ -3699,6 +3700,12 @@ components:
           type: array
           items: *id005
         target: *id042
+        job:
+          type:
+          - string
+          - 'null'
+          description: The run's job, all for a run without targets, otherwise its resolved node ids
+            sorted and comma-separated; null for runs recorded before barca stored it.
         status: *id005
         steps_total: *id058
         steps_executed: *id056

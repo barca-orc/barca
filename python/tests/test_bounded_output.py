@@ -121,6 +121,34 @@ def test_history_json_envelope_reports_truncation(project):
     assert "1 of 3" in table.stderr
 
 
+def test_history_shows_each_runs_target(project):
+    """#555: the table's TARGET column and the JSON `job` key."""
+    ok(barca(project, "get", "pipeline.py"))
+    ok(barca(project, "get", "total", "pipeline.py"))
+    ok(barca(project, "get", "a000,a001,a002,a003,a004,a005", "big.py"))
+    ok(barca(project, "run", "report", "pipeline.py"))
+    runs = ok(barca(project, "history", "--json", "--fields", "command,target,job"))["runs"]
+    assert runs == [
+        {"command": "run", "target": "report", "job": "pipeline.py:report"},
+        {
+            "command": "get",
+            "target": "a000,a001,a002,a003,a004,a005",
+            "job": "big.py:a000,big.py:a001,big.py:a002,big.py:a003,big.py:a004,big.py:a005",
+        },
+        {"command": "get", "target": "total", "job": "pipeline.py:total"},
+        {"command": "get", "target": None, "job": "all"},
+    ]
+
+    table = barca(project, "history", "--pretty")
+    assert table.returncode == 0, table.stderr
+    header, _, *rows = table.stdout.splitlines()
+    assert header.split()[:4] == ["RUN_ID", "CMD", "TARGET", "STATUS"]
+    targets = [row.split()[2] for row in rows]
+    # Function names, `all` without a target, cut at 24 characters with an ellipsis.
+    assert targets == ["report", "a000,a001,a002,a003,a00…", "total", "all"]
+    assert all(row.split()[3] == "success" for row in rows)
+
+
 def test_history_on_an_empty_project(project):
     out = ok(barca(project, "history", "--json"))
     assert out == {"runs": [], "total": 0, "truncated": False}

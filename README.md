@@ -132,7 +132,7 @@ examples.
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. |
 | `barca list [files...]` | Every asset, sensor and task, with its kind, freshness and inputs. |
 | `barca status [target] [files...]` | Per node: cached or stale and why, the last run, and the artifact's rows and columns. |
-| `barca logs RUN_ID` | A run's recorded step stdout, without progress messages. |
+| `barca logs [RUN_ID]` | A run's recorded step stdout, without progress messages; the most recent run without an id. |
 | `barca history` | Recent runs. |
 | `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (experimental). |

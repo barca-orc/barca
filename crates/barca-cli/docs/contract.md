@@ -79,7 +79,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
 | `barca doctor` | `[<FILES>...]` | experimental: new prerequisite report; check names and provider-specific data may evolve | Diagnose project prerequisites without running pipeline steps |
-| `barca logs` | `<RUN_ID>` | stable | Read a run's captured step stdout, without progress messages |
+| `barca logs` | `[<RUN_ID>]` | stable | Read a run's captured step stdout, without progress messages |
 | `barca history` | - | stable | Show recent run history |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
@@ -192,7 +192,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<RUN_ID>` | - | required | stable | Exact run id from get/run JSON or history |
+| `<RUN_ID>` | - | - | stable | Exact run id from get/run JSON or history (default: the most recent run) |
 | `--step` | `STEP` | - | stable | Function name or exact node id (including a partition key when desired) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
@@ -207,7 +207,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -1530,6 +1530,11 @@ has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled 
 a `client` run had on the laptop that posted it (`barca docs server-mode`), `null` on every other
 run; additive and experimental.
 
+`runs[].job` (additive, 0.29.0) is what the run was for: `all` for a run without targets,
+otherwise its resolved node ids, sorted and comma-separated (`barca.job` in telemetry);
+`null` for runs recorded before barca stored it. `target` stays the target as typed. The human
+table's TARGET column shows the job by function name, cut at 24 characters with `…`.
+
 
 <!-- BEGIN GENERATED schema history -->
 | Key | Type | Present |
@@ -1544,6 +1549,7 @@ run; additive and experimental.
 | `runs[].files` | array | always |
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
+| `runs[].job` | string | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -1585,6 +1591,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].elapsed_seconds` | null | always |
 | `runs[].files` | array | always |
 | `runs[].finished_at` | null | always |
+| `runs[].job` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -2033,6 +2040,10 @@ See `barca docs types` and `specs/artifact-formats.md`.
 in recorded order; text returns only the lines. `--step` selects an exact id/base id/function
 name; ambiguous or absent steps and missing runs exit 2. Silent recorded steps return no
 lines. `--env` selects local history; logs does not import source or contact a remote store.
+Without `RUN_ID` (additive, 0.29.0), logs reads the newest run in history, running or
+finished, and names it on stderr (`barca: logs of the most recent run: <run_id> (<command>
+<target>, <status>, started <time>)`; the wording is not stable); stdout is unchanged. With no
+run recorded it exits 2.
 Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
 stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. Agent framework lines
 remain `[barca]`-prefixed. Retrieve captured output with `barca logs`. See `barca docs logs`

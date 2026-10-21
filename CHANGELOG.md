@@ -80,6 +80,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   `capacity`, `capacity_source` and `weights`, `--dry-run` gains `capacity` and `steps[].weight`,
   and `barca doctor` a `capacity` check. See `barca docs assets`, "Heavy steps", and
   `barca docs scheduling`, "Containers with a memory limit".
+- "What did my last run do?" is one command (#555). `barca history` has a TARGET column between
+  CMD and STATUS: the run's job by function name (`kpis`, `country_report,weekly_summary`), `all`
+  for a run without targets, cut at 24 characters with `…`. History JSON gains `job` (additive):
+  `all` or the resolved node ids, sorted and comma-separated, `null` for older runs; `--fields`
+  accepts it, and `GET /history` carries it (OpenAPI specification 7). `barca logs` without a
+  run id reads the most recent run and names it on stderr
+  (`barca: logs of the most recent run: <run_id> (run notify, success, started ...)`).
 
 ## 0.28.3 (2026-10-21)
 

@@ -127,11 +127,11 @@ barca status pipeline.py
 ```
 
 ```
-RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
------------------------------------------------------------------------------
-51fd65520f50   get     cancelled       1      0   2.0s 2026-10-07 18:14:54
-51faebb38cf0   get     failed          1      0   2.1s 2026-10-07 18:14:52
-51f883ff8a10   get     success         1      0   4.7s 2026-10-07 18:14:45
+RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
+------------------------------------------------------------------------------------------------------
+51fd65520f50   get     long_running             cancelled       1      0   2.0s 2026-10-07 18:14:54
+51faebb38cf0   get     slow                     failed          1      0   2.1s 2026-10-07 18:14:52
+51f883ff8a10   get     long_running             success         1      0   4.7s 2026-10-07 18:14:45
 ```
 
 ```

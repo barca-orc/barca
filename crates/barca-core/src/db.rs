@@ -121,6 +121,10 @@ pub struct RunRecord {
     /// The `.py` files the run was given.
     pub files: Vec<String>,
     pub target: Option<String>,
+    /// The run's job: `all` for a run without targets, otherwise its resolved node ids, sorted
+    /// and comma-separated (`barca.job` in telemetry). `null` for runs recorded before 0.29.0.
+    #[serde(default)]
+    pub job: Option<String>,
     pub status: String,
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
@@ -2369,9 +2373,14 @@ async fn read_runs(
     } else {
         "NULL"
     };
+    let job = if has_column(&conn, "runs", "job").await? {
+        "job"
+    } else {
+        "NULL"
+    };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -2414,6 +2423,7 @@ async fn read_runs(
             scheduled_at: row.get::<String>(13).ok().filter(|t| !t.is_empty()),
             schedule_id: row.get::<String>(14).ok().filter(|t| !t.is_empty()),
             client_run_id: row.get::<String>(15).ok().filter(|t| !t.is_empty()),
+            job: row.get::<String>(16).ok().filter(|t| !t.is_empty()),
         });
     }
     Ok(records)

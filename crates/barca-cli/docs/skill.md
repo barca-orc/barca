@@ -79,7 +79,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   `warnings`: always an
   array, `[]` or plan-time warnings such as an input a step never uses (also one
   `[barca] warning: ...` line each on stderr; fix them, they cost load time).
-- Retrieve captured step stdout with `barca logs RUN_ID --json`. JSON runs suppress captured
+- Retrieve captured step stdout with `barca logs RUN_ID --json` (`barca logs --json` reads the
+  most recent run and names it on stderr). JSON runs suppress captured
   prints; other modes show them on stderr with `[node_id]` prefixes.
 - **stderr** has progress and errors. In JSON mode find the error-envelope JSON line
   `{"error", "code", "kind", "remediation"}`, plus `node`, `traceback`, `artifact_dir` for a
@@ -136,7 +137,7 @@ barca run report pipeline.py | jq '.status'
 | Asset path / value / run a task   | `barca get <asset> <files>` / add `-o value` / `barca run <task> <files>` |
 | Re-run upstream assets            | `barca run <task> <files> --refresh a,b`   |
 | Pick up data changed in place     | a `@sensor` returning its etag, read by the asset |
-| Past runs                         | `barca history`                            |
+| Past runs / the last run's prints | `barca history` / `barca logs`             |
 | Flags / concepts                  | `barca <command> --help` / `barca docs <topic>` |
 
 Use these spellings. Older ones still parse for compatibility (`-o json`, `barca pipeline.py`
