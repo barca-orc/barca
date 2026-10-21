@@ -12,7 +12,7 @@ Options:
 Examples:
   barca state restore                  # the newest backup
   barca state restore --from 2         # the second newest
-  barca state restore --from 2026-10-14T18-02-11Z     # by name, .db optional
+  barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
   barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
 
 The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca

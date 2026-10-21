@@ -317,7 +317,7 @@ def test_ctrl_c_during_the_end_of_run_backup(project, whole_group):
     assert sorted(recorded(run.root)) == ["numbers", "total"]
     assert len(run.arrivals("backup")) == 1
     assert "the metadata backup was stopped" in run.stderr, run.stderr
-    assert not list((store / "default" / "state" / "backups").glob("*Z.db"))
+    assert not list((store / "default" / "state" / "backups").glob("*.db"))
     assert len(list((run.root / ".barca" / "backups").glob("*.unsent"))) == 1
     recovers(run, "total", {"sum": 6})
 
@@ -356,7 +356,7 @@ def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_long
         f"[barca] the metadata backup did not finish (not within {WRAP_UP_LIMIT}s); the run is "
         "recorded on this machine and the next backup takes it" in run.stderr
     ), run.stderr
-    assert not list((store / "default" / "state" / "backups").glob("*Z.db"))
+    assert not list((store / "default" / "state" / "backups").glob("*.db"))
     # The store answers again: the next run backs the cancelled run's record up with its own.
     recovers(run, "numbers", [1, 2, 3])
     assert [r["status"] for r in history(run.root, store)] == ["success", "cancelled"]
@@ -376,7 +376,7 @@ def test_a_second_ctrl_c_abandons_the_wrap_up_at_once(project, whole_group):
 
     cancelled_cleanly(run)
     assert "the metadata backup did not finish (stopped by a second interrupt)" in run.stderr
-    assert not list((store / "default" / "state" / "backups").glob("*Z.db"))
+    assert not list((store / "default" / "state" / "backups").glob("*.db"))
     recovers(run, "numbers", [1, 2, 3])
 
 

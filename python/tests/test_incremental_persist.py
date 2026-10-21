@@ -207,7 +207,7 @@ def test_confirmed_remote_progress_is_visible_and_finalization_does_not_duplicat
     assert len(rows) == 3 and all(count == 1 for _, count in rows)
     assert not (store / "default" / "state" / "metadata.db").exists()
     # The run ended with a backup of the history, here and in the store.
-    backups = sorted(p.name for p in (store / "default" / "state" / "backups").glob("*Z.db"))
+    backups = sorted(p.name for p in (store / "default" / "state" / "backups").glob("*.db"))
     assert len(backups) == 1
     assert (project / ".barca" / "backups" / backups[0]).is_file()
 

@@ -197,7 +197,7 @@ def test_a_failed_backup_upload_after_the_steps_is_a_warning(tmp_path):
     store = tmp_path / "store"
     ok(cli(root, store, "get", "numbers", "--json"))
     backups = store / "default" / "state" / "backups"
-    assert len(list(backups.glob("*Z.db"))) == 1
+    assert len(list(backups.glob("*.db"))) == 1
     read_only(backups)
     try:
         proc = cli(root, store, "get", "total", "-o", "value", "--json")
@@ -207,14 +207,14 @@ def test_a_failed_backup_upload_after_the_steps_is_a_warning(tmp_path):
         assert "backup to" in doc["uploads"]["error"], doc
         assert "[barca] warning: the metadata backup was not uploaded" in proc.stderr, proc.stderr
         # The copy was taken here, and waits for the store.
-        assert len(list((root / ".barca" / "backups").glob("*Z.unsent"))) == 1
+        assert len(list((root / ".barca" / "backups").glob("*.unsent"))) == 1
     finally:
         writable(backups)
     # The next run's backup reaches the store.
     doc = ok(cli(root, store, "get", "total", "--json"))
     assert "uploads" not in doc
-    assert not list((root / ".barca" / "backups").glob("*Z.unsent"))
-    newest = max(p.name for p in (root / ".barca" / "backups").glob("*Z.db"))
+    assert not list((root / ".barca" / "backups").glob("*.unsent"))
+    newest = max(p.name for p in (root / ".barca" / "backups").glob("*.db"))
     assert (backups / newest).is_file()
 
 

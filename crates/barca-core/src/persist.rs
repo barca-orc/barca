@@ -1124,7 +1124,7 @@ sys.exit(_state.main())
             .flatten()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.ends_with("Z.db"))
+            .filter(|n| crate::backup::is_backup_name(n))
             .collect();
         names.sort();
         names

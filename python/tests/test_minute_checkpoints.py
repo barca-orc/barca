@@ -25,7 +25,7 @@ def backup_rows(path):
 
 
 def store_backups(store):
-    return sorted((store / "default/state/backups").glob("*Z.db"))
+    return sorted((store / "default/state/backups").glob("*.db"))
 
 
 def test_real_minute_checkpoint_backs_up_progress_and_restores_a_wiped_machine(tmp_path):

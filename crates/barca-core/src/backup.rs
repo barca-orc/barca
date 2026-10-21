@@ -2,9 +2,10 @@
 //!
 //! With a remote store (`[remote] uri`), the store is this machine's backup and read-through
 //! cache. The metadata database is copied on the minute checkpoint of a run, once when a run
-//! ends, and every minute from `barca serve`: to `<backups>/<UTC>.db` beside the database
-//! (`.barca/backups/`) and then to `{uri}/{env}/state/backups/<UTC>.db` in the store, each with
-//! a `<UTC>.json` sidecar ([`Sidecar`]). A copy that would be the same bytes as the newest one
+//! ends, and every minute from `barca serve`: to `<backups>/<name>.db` beside the database
+//! (`.barca/backups/`) and then to `{uri}/{env}/state/backups/<name>.db` in the store, each with
+//! a `<name>.json` sidecar ([`Sidecar`]). Names are the UTC time to the millisecond and a short
+//! suffix ([`name_at`]). A copy that would be the same bytes as the newest one
 //! is not taken. Each place keeps the [`BACKUPS_KEPT`] newest, pruned after a successful write.
 //!
 //! Nothing is ever downloaded before a run: this machine's database is the truth for this
@@ -24,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// What a backup's `<UTC>.json` sidecar says about it.
+/// What a backup's `<name>.json` sidecar says about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sidecar {
     /// The run that took it, when a run did (`null` for `barca serve`'s minute backup).
@@ -39,17 +40,32 @@ pub struct Sidecar {
     pub db_format: i64,
 }
 
-/// `2026-10-14T18-02-11Z.db`: a UTC timestamp, so names sort by age.
-pub(crate) fn name_at(at: chrono::DateTime<chrono::Utc>) -> String {
-    at.format("%Y-%m-%dT%H-%M-%SZ.db").to_string()
+/// `2026-10-14T18-02-11.123Z-1a2b3c4d.db`: the UTC time to the millisecond, then the first eight
+/// hex digits of a digest of this machine's host name, the database's path and the copy's
+/// digest. Several directories backing up to one store location in the same millisecond still
+/// get different names (#487); names sort by age ([`order_key`]).
+pub(crate) fn name_at(at: chrono::DateTime<chrono::Utc>, db_path: &str, digest: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(crate::db::local_host().as_bytes());
+    h.update(b"\n");
+    h.update(db_path.as_bytes());
+    h.update(b"\n");
+    h.update(digest.as_bytes());
+    let suffix: String = h.finalize()[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("{}Z-{suffix}.db", at.format("%Y-%m-%dT%H-%M-%S%.3f"))
 }
 
-/// Whether `name` has the form of a backup ([`name_at`]). Nothing else in a backup directory is
-/// ever listed or removed.
+/// Whether `name` has the form of a backup ([`name_at`]), or the to-the-second form 0.26.0
+/// wrote (`2026-10-14T18-02-11Z.db`), which is still listed, restored and pruned. Nothing else
+/// in a backup directory is ever listed or removed.
 pub(crate) fn is_backup_name(name: &str) -> bool {
     let b = name.as_bytes();
     let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
-    b.len() == 23
+    let second = b.len() >= 23
         && digits(0..4)
         && b[4] == b'-'
         && digits(5..7)
@@ -60,8 +76,28 @@ pub(crate) fn is_backup_name(name: &str) -> bool {
         && b[13] == b'-'
         && digits(14..16)
         && b[16] == b'-'
-        && digits(17..19)
-        && &b[19..] == b"Z.db"
+        && digits(17..19);
+    if !second {
+        return false;
+    }
+    let rest = &b[19..];
+    rest == b"Z.db"
+        || (rest.len() == 17
+            && rest[0] == b'.'
+            && rest[1..4].iter().all(u8::is_ascii_digit)
+            && &rest[4..6] == b"Z-"
+            && rest[6..14]
+                .iter()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
+            && &rest[14..] == b".db")
+}
+
+/// What backups sort by, oldest first: a to-the-second name counts as millisecond `.000`.
+fn order_key(name: &str) -> String {
+    match name.strip_suffix("Z.db") {
+        Some(second) if second.len() == 19 => format!("{second}.000Z"),
+        _ => name.to_string(),
+    }
 }
 
 fn stem(name: &str) -> &str {
@@ -87,7 +123,7 @@ fn local_names(dir: &Path) -> Vec<String> {
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
         .filter(|n| is_backup_name(n))
         .collect();
-    names.sort_unstable_by(|a, b| b.cmp(a));
+    names.sort_unstable_by_key(|n| std::cmp::Reverse(order_key(n)));
     names
 }
 
@@ -146,7 +182,7 @@ pub async fn take(
         crate::db::copy_for_backup(&cfg.db_path, &staged, newest_digest.as_deref(), until).await?;
     let name = match copied {
         Some(digest) => {
-            let written = write_local(&dir, &staged, digest, run_id).await;
+            let written = write_local(&dir, &cfg.db_path, &staged, digest, run_id).await;
             let _ = std::fs::remove_file(&staged);
             let _ = crate::db::remove_sidecars(&staged.to_string_lossy());
             let (name, size) = written?;
@@ -167,6 +203,7 @@ pub async fn take(
 /// Give the staged copy its name and its sidecar. Returns the name and the size.
 async fn write_local(
     dir: &Path,
+    db_path: &str,
     staged: &Path,
     digest: String,
     run_id: Option<&str>,
@@ -175,7 +212,7 @@ async fn write_local(
         BarcaError::Other(format!("failed to {what} in {}: {e}", dir.display()))
     };
     let (rows, db_format) = count_rows(staged).await?;
-    let name = name_at(chrono::Utc::now());
+    let name = name_at(chrono::Utc::now(), db_path, &digest);
     let sidecar = Sidecar {
         run_id: run_id.map(str::to_string),
         rows,
@@ -313,7 +350,7 @@ async fn helper(cmd: tokio::process::Command, until: Until<'_>) -> Result<Vec<u8
 pub struct BackupEntry {
     /// 1 for the newest; what `barca state restore --from N` takes.
     pub index: usize,
-    /// `2026-10-14T18-02-11Z.db`.
+    /// `2026-10-14T18-02-11.123Z-1a2b3c4d.db` (`2026-10-14T18-02-11Z.db` from 0.26.0).
     pub name: String,
     /// `local`, `store` or `both`.
     #[serde(rename = "where")]
@@ -434,9 +471,10 @@ fn entries(
     found: &BTreeMap<String, Found>,
     store_error: Option<String>,
 ) -> Backups {
-    let backups = found
-        .iter()
-        .rev()
+    let mut newest_first: Vec<(&String, &Found)> = found.iter().collect();
+    newest_first.sort_unstable_by_key(|(name, _)| std::cmp::Reverse(order_key(name)));
+    let backups = newest_first
+        .into_iter()
         .enumerate()
         .map(|(i, (name, f))| {
             let sidecar = f
@@ -818,16 +856,41 @@ mod tests {
 
     #[test]
     fn names_sort_by_age_and_only_backup_names_count() {
-        let at = chrono::DateTime::parse_from_rfc3339("2026-10-14T18:02:11Z")
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-14T18:02:11.123Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let name = name_at(at);
-        assert_eq!(name, "2026-10-14T18-02-11Z.db");
+        let name = name_at(at, "/a/.barca/metadata.db", "d1");
+        assert!(name.starts_with("2026-10-14T18-02-11.123Z-"), "{name}");
+        assert!(name.ends_with(".db") && name.len() == 36, "{name}");
         assert!(is_backup_name(&name));
+        // The same millisecond from another directory, or another copy, is another name (#487).
+        assert_ne!(name, name_at(at, "/b/.barca/metadata.db", "d1"));
+        assert_ne!(name, name_at(at, "/a/.barca/metadata.db", "d2"));
+        // 0.26.0's to-the-second names still count, and sort among the new ones by time.
+        assert!(is_backup_name("2026-10-14T18-02-11Z.db"));
+        let mut names = vec![
+            "2026-10-14T18-02-10.999Z-00000000.db".to_string(),
+            name.clone(),
+            "2026-10-14T18-02-11Z.db".to_string(),
+            "2026-10-14T18-02-12Z.db".to_string(),
+        ];
+        names.sort_unstable_by_key(|n| std::cmp::Reverse(order_key(n)));
+        assert_eq!(
+            names,
+            [
+                "2026-10-14T18-02-12Z.db",
+                name.as_str(),
+                "2026-10-14T18-02-11Z.db",
+                "2026-10-14T18-02-10.999Z-00000000.db",
+            ]
+        );
         for other in [
             "metadata.db",
             "2026-10-14T18-02-11Z.json",
             "2026-10-14T18-02-11Z.db.tmp",
+            "2026-10-14T18-02-11.123Z-1a2b3c4d.json",
+            "2026-10-14T18-02-11.123Z-1A2B3C4D.db",
+            "2026-10-14T18-02-11.123Z-1a2b3c.db",
             ".backup-1.tmp",
             "2026-10-14T18:02:11Z.db",
         ] {
@@ -958,6 +1021,49 @@ mod tests {
             store.join("metadata.db").exists(),
             "only backups are pruned"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn two_directories_backing_up_to_one_store_in_the_same_second_keep_both() {
+        // #487: two project directories share one store location and back up at once.
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store/default/state/backups");
+        let python = python(root.path());
+        let mut cfgs = Vec::new();
+        for project in ["a", "b"] {
+            let dir = root.path().join(project);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut cfg = cfg(&dir);
+            cfg.backup_uri = Some(store.to_string_lossy().into_owned());
+            with_runs(&cfg, 1).await;
+            cfgs.push(cfg);
+        }
+        std::fs::create_dir_all(root.path().join("store")).unwrap();
+        // At once: the two names fall in the same second (and usually the same millisecond).
+        let (a, b) = tokio::join!(
+            take(&python, &cfgs[0], Some("run-a"), Until::done()),
+            take(&python, &cfgs[1], Some("run-b"), Until::done()),
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert!(matches!(a.upload, Some(Ok(_))), "{a:?}");
+        assert!(matches!(b.upload, Some(Ok(_))), "{b:?}");
+        let (a, b) = (a.name.unwrap(), b.name.unwrap());
+        assert_ne!(a, b);
+        // Both are in the store, each with its own sidecar, and both directories list both.
+        let mut stored = local_names(&store);
+        stored.sort();
+        let mut want = vec![a.clone(), b.clone()];
+        want.sort();
+        assert_eq!(stored, want);
+        for (name, run) in [(&a, "run-a"), (&b, "run-b")] {
+            let side = read_sidecar(&sidecar_path(&store, name)).unwrap();
+            assert_eq!(side.run_id.as_deref(), Some(run));
+        }
+        let listed = list(&python, &cfgs[1]).await.unwrap();
+        let names: Vec<&str> = listed.backups.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names.contains(&a.as_str()) && names.contains(&b.as_str()));
     }
 
     #[cfg(unix)]

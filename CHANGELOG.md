@@ -12,6 +12,17 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Bug Fixes
+
+- Metadata backups no longer overwrite each other when several directories back up to one
+  store location in the same second (#487). A backup is now named by the UTC time to the
+  millisecond plus a short suffix from the host name, the database's path and the copy's digest
+  (`2026-10-14T18-02-11.482Z-3f9a1c2e.db`). `barca state backups` stays newest first and
+  `barca state restore --from <name>` takes both these names and the to-the-second ones 0.26.0
+  wrote, which are still listed and pruned.
+
 ## 0.26.0 (2026-10-20)
 
 ### Breaking

@@ -84,7 +84,7 @@ def result(): return {"value": 7}
         assert run(root, "get", "result")["steps_executed"] == 0
     assert list((store / "default/artifacts").rglob("*.json"))
     assert not (store / "default/state/metadata.db").exists()
-    assert list((store / "default/state/backups").glob("*Z.db"))
+    assert list((store / "default/state/backups").glob("*.db"))
 
 
 def test_sql_scalar_list_copy_and_store_side_effects(tmp_path):

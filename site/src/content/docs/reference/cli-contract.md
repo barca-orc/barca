@@ -1395,7 +1395,8 @@ counts every node even when `nodes` is truncated.
 listed, `store_error` (a string; the local backups are still listed and stderr has a warning).
 `store` is the store's backup prefix with credentials redacted, or `null` without a store.
 Each entry of `backups`, newest first: `index` (integer, 1 = newest), `name`
-(`2026-10-14T18-02-11Z.db`), `where` (`local`, `store` or `both`), `size_bytes` (integer),
+(`2026-10-14T18-02-11.482Z-3f9a1c2e.db`; `2026-10-14T18-02-11Z.db` from 0.26.0), `where`
+(`local`, `store` or `both`), `size_bytes` (integer),
 `run_id` (string or `null`), `rows` and `db_format` (integers or `null`), `digest` and
 `barca_version` (strings or `null`; from the backup's sidecar), and `agree` (boolean when the
 backup is in both places, else `null`). No backups is an empty array, exit 0.

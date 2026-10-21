@@ -130,8 +130,8 @@ not turn off a TOML remote root.
 
 ```
 <uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one file per result
-<uri>/<env>/state/backups/<UTC>.db              the five newest backups of the metadata DB
-<uri>/<env>/state/backups/<UTC>.json            what each backup holds (its sidecar)
+<uri>/<env>/state/backups/<name>.db              the five newest backups of the metadata DB
+<uri>/<env>/state/backups/<name>.json            what each backup holds (its sidecar)
 ```
 
 `<env>` is `default` unless you pass `--env` (`barca docs cache`). Barca reads and writes
@@ -160,9 +160,12 @@ A backup whose bytes would equal the newest one is not taken. None is taken unde
 
 A backup is the database's main file, copied under the database's lock right after its
 write-ahead log is folded in, so a write in progress never produces a torn copy. It is written
-locally first, to `.barca/backups/<UTC>.db` (for a named environment
-`.barca/envs/<env>/backups/`), named like `2026-10-14T18-02-11Z.db`, with a sidecar
-`2026-10-14T18-02-11Z.json`:
+locally first, to `.barca/backups/<name>.db` (for a named environment
+`.barca/envs/<env>/backups/`), named like `2026-10-14T18-02-11.482Z-3f9a1c2e.db`: the UTC time
+to the millisecond and a suffix from this machine's host name, the database's path and the
+copy's digest, so directories that share a store location never replace each other's copies.
+Its sidecar is `2026-10-14T18-02-11.482Z-3f9a1c2e.json`. Names barca 0.26.0 wrote, to the second
+(`2026-10-14T18-02-11Z.db`), are still listed, restored and pruned. The sidecar:
 
 ```json
 {"run_id": "7f30b3e9", "rows": 412, "digest": "<sha256>", "barca_version": "0.26.0", "db_format": 1}
@@ -179,7 +182,7 @@ A backup that does not reach the store never fails the run. At the end of a run 
 `[barca] warning: the metadata backup was not uploaded: backup to <store> failed: <why>; the run
 is recorded on this machine, a copy is in .barca/backups, and the next backup uploads it`, the
 exit code stays 0 and the run JSON's `uploads.error` says `backup to <store> failed: ...`. The
-local copy carries a `<UTC>.unsent` marker until the store confirms it, and the next backup
+local copy carries a `<name>.unsent` marker until the store confirms it, and the next backup
 uploads it even if nothing changed. Minute checkpoints that fail print one warning per run, after
 three in a row.
 
@@ -191,9 +194,9 @@ barca state backups --json
 ```
 
 ```
-#  NAME                     WHERE  SIZE     ROWS  RUN
-1  2026-10-14T18-02-11Z.db  both   48.0 KB  412   7f30b3e9
-2  2026-10-14T18-01-10Z.db  both   47.5 KB  401   7f30b3e9
+#  NAME                                  WHERE  SIZE     ROWS  RUN
+1  2026-10-14T18-02-11.482Z-3f9a1c2e.db  both   48.0 KB  412   7f30b3e9
+2  2026-10-14T18-01-10.907Z-3f9a1c2e.db  both   47.5 KB  401   7f30b3e9
 ```
 
 `where` is `local`, `store` or `both`; `agree` (JSON) says whether both copies have the same
@@ -205,7 +208,7 @@ Put one back, only when you ask:
 ```bash
 barca state restore                  # the newest
 barca state restore --from 2         # by index in barca state backups
-barca state restore --from 2026-10-14T18-01-10Z
+barca state restore --from 2026-10-14T18-01-10.907Z-3f9a1c2e
 ```
 
 Stop `barca get` and `barca run` in the project first. `restore` copies the chosen backup next
@@ -215,7 +218,7 @@ and `materializations` tables, and a metadata format this barca can use (an olde
 migrated). Then the current database, its write-ahead log folded in, moves to
 `.barca/metadata.db.pre-restore` (replacing an older one) and the copy takes its place. One line
 on stderr says what happened:
-`[barca] restored 2026-10-14T18-01-10Z.db from the local copy (.barca/backups/...), 401 rows,
+`[barca] restored 2026-10-14T18-01-10.907Z-3f9a1c2e.db from the local copy (.barca/backups/...), 401 rows,
 taken by run 7f30b3e9; the database it replaced is .barca/metadata.db.pre-restore`.
 With `--json`, stdout also gets `{restored, from, source, pre_restore, rows, run_id}`.
 
@@ -274,7 +277,7 @@ stderr reports each part, so remote cost is visible:
 ```
 [barca] fetched 1 cached artifact (672.8 KB) in 0.1s
 [barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
-[barca] backed up the metadata DB (48.0 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11Z.db in 0.31s
+[barca] backed up the metadata DB (48.0 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11.482Z-3f9a1c2e.db in 0.31s
 ```
 
 ## When an upload fails after the steps succeeded
