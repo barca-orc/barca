@@ -34,9 +34,8 @@ s3 = ["fsspec", "s3fs"]
 # Cloudflare R2 is S3-compatible: install the s3 extra and point
 # storage_options at the R2 endpoint (see https://barca.sh/reference/remote-storage/).
 r2 = ["fsspec", "s3fs"]
-# gcsfs speaks the GCS API for artifacts and metadata backups. google-cloud-storage
-# was needed by the shared-history push (removed in 0.26.0); it stays declared so an
-# existing install resolves the same.
+# gcsfs speaks the GCS API for artifacts and metadata backups; google-cloud-storage signs
+# GCS links (barca.signed_url, barca get -o url).
 gcs = ["fsspec", "gcsfs", "google-cloud-storage"]
 remote = ["fsspec", "adlfs", "s3fs", "gcsfs", "google-cloud-storage"]
 # Everything needed to run the full test suite, including the object-store

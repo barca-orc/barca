@@ -8,13 +8,13 @@ use crate::dag::Dag;
 use crate::db;
 use crate::dispatch;
 use crate::dispatch::OutputRef;
+use crate::helper_proc;
 use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
 use crate::recover::{self, Work};
 use crate::report::{
     RunOutcome, cached_step_line, end_of_run_line, env_suffix, failed_step_line, fmt_bytes,
     fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning,
 };
-use crate::state_sync;
 use crate::targets::{
     blocking_failure, final_output_of, plan_for_targets, resolve_targets, short_name,
     skipped_tasks_note, target_outcomes, validate_refresh_names,
@@ -346,8 +346,8 @@ pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed,
     session.state.pin = Some(pin);
     drive_phases(&mut session).await?;
     // What the run read (its inputs, and the outputs it returns) gets its `last_read_at` before
-    // the run is recorded, so that with shared history the upload carries it and nothing is
-    // written locally after it (RFC-0012).
+    // the run is recorded, so that the run's backup carries it and nothing is written locally
+    // after it (RFC-0012).
     let returned: Vec<String> = {
         let ids: Vec<&str> = prepared.targets.iter().map(|(_, id)| id.as_str()).collect();
         let requested = recover::requested(&prepared.exec_plan, &ids);
@@ -3116,12 +3116,12 @@ async fn final_backup(
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
     let started = Instant::now();
     let until = if *cancelled {
-        state_sync::Until {
+        helper_proc::Until {
             cancel: Some(&interrupt.abandon),
             deadline: Some(Instant::now() + crate::interrupt::WRAP_UP_LIMIT),
         }
     } else {
-        state_sync::Until::cancelled(&interrupt.cancel)
+        helper_proc::Until::cancelled(&interrupt.cancel)
     };
     let wrap_up = *cancelled;
     // Whether `until` fired: the backup (its copy, or the upload of a copy already taken) was

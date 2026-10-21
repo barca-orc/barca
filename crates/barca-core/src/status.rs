@@ -549,7 +549,7 @@ pub(crate) async fn stat_objects(
         .map_err(|_| format!("no answer within {}s", limit.as_secs()))?
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(crate::state_sync::helper_cause(&out.stderr));
+        return Err(crate::helper_proc::helper_cause(&out.stderr));
     }
     serde_json::from_slice::<Reply>(&out.stdout)
         .map(|r| r.objects)

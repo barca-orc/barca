@@ -14,6 +14,13 @@ and these tags are available on the same releases page.
 
 ## Pending
 
+### Removed
+
+- Leftovers of the shared history: barca-core's `state_sync` module (its deadline and
+  helper-error code moved to `helper_proc`; the WAL-fold wrapper only its own test called is
+  deleted), and the cache manual's limitation about eviction marks in a pushed history. Docs,
+  specs and comments no longer describe a shared-history push. No user-visible surface changes.
+
 ### Bug Fixes
 
 - Metadata backups no longer overwrite each other when several directories back up to one

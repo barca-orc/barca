@@ -133,7 +133,7 @@ class GcsBackend:
         import json
 
         return {
-            # SDK push path (google-cloud-storage) routes via these:
+            # google-cloud-storage (bucket setup, signing) routes via these:
             "STORAGE_EMULATOR_HOST": GCS_ENDPOINT,
             "GOOGLE_CLOUD_PROJECT": "test",
             # token read (gcsfs) routes via storage_options:

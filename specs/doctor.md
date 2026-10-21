@@ -36,4 +36,4 @@ issue #86; controlled tests do not establish real-provider success.
 Conformance: [CLI/no-execution controls](../python/tests/test_doctor.py),
 [selected-credential adapters and redaction](../python/tests/test_identity.py),
 [CLI JSON snapshots](../python/tests/test_cli_contract.py), shared helper lifecycle tests
-in `helper_proc.rs` and `state_sync.rs`.
+in `helper_proc.rs`.

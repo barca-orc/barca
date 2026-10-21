@@ -19,8 +19,8 @@
 
 use crate::BarcaError;
 use crate::config::{BACKUPS_KEPT, ResolvedConfig};
+use crate::helper_proc::Until;
 use crate::helper_proc::{OutputFailed, run_to_output};
-use crate::state_sync::Until;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -338,7 +338,7 @@ async fn helper(cmd: tokio::process::Command, until: Until<'_>) -> Result<Vec<u8
             OutputFailed::Spawn(e) => format!("failed to start the state helper: {e}"),
         })?;
     if !out.status.success() {
-        return Err(crate::state_sync::helper_cause(&out.stderr));
+        return Err(crate::helper_proc::helper_cause(&out.stderr));
     }
     Ok(out.stdout)
 }

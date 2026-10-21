@@ -55,7 +55,7 @@ python/barca/
   __init__.py                 decorators (they return the function unchanged), parallel()
   _worker.py, _runtime.py     the worker (`python -m barca._worker`) and its socket client
   _artifacts.py, _duckdb.py   json, pickle and parquet reading and writing; DuckDB connections
-  _storage.py, _transfer.py, _state.py   remote store backends, artifact transfer, shared-history blob
+  _storage.py, _transfer.py, _state.py   remote store backends, artifact transfer, metadata backups
   _inspect.py, _sql.py        artifact shape for `barca status`; the query for `barca sql`
   api.py, client.py           Python API that shells out to the binary; HTTP client for `barca serve`
 ui/                           web UI (TypeScript, Vite); its build output is compiled into barca-server

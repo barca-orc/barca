@@ -704,9 +704,6 @@ Known limits:
   and a run that writes more than the free space fails with the operating system's error.
 - A run in another process that has just decided a superseded result is cached (an older run
   hash it went back to) can find it gone while it reads it; it is then computed again.
-- With shared history (`barca docs remote`), the metadata DB another machine pushed carries that
-  machine's eviction marks. Files are measured, not marks, so nothing is deleted on their
-  account, but a result that machine evicted can be reported as `evicted` here.
 - `materializations` rows are never deleted: `barca history` and `barca stats` keep every run.
 
 ## Controlling the cache

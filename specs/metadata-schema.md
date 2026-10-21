@@ -73,8 +73,7 @@ operation within format 1, with no schema change.
 
 Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive format-1
 column. It records a byte mismatch when inserting a recompute with the same node/run
-hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
-`bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).
+hash; legacy rows default to 0. See [materialization-digests.md](materialization-digests.md).
 
 ### Additions within format 1
 

@@ -46,7 +46,7 @@ pub struct GetResult {
 pub struct UploadsReport {
     /// How many results of this machine are waiting to be uploaded.
     pub pending: usize,
-    /// Why: the last upload (or shared-history push) error, `null` when there is none.
+    /// Why: the last upload error, `null` when there is none.
     pub error: Option<String>,
     /// The nodes (partition keys included) whose results are pending, sorted.
     #[serde(default)]

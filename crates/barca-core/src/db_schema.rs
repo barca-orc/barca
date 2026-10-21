@@ -505,7 +505,7 @@ mod tests {
                 &path,
                 &dir.path().join("backup.db"),
                 None,
-                crate::state_sync::Until::done(),
+                crate::helper_proc::Until::done(),
             )
             .await
             .err()
