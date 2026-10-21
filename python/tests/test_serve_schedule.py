@@ -8,14 +8,14 @@ cache when nothing did, and a task itself always runs (#244, #245).
 import json
 import os
 import signal
-import socket
-import sqlite3
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
 
 from barca.api import _find_binary
+
+from . import served
 
 # Settings from the developer's shell that would point the service at a real store.
 SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
@@ -57,41 +57,6 @@ def publish(feed: dict, _model) -> None:
 """
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _rows(root: Path) -> dict[str, int]:
-    """Successful materializations per node; empty while the database is not there yet."""
-    try:
-        db = sqlite3.connect(f"file:{root / '.barca' / 'metadata.db'}?mode=ro", uri=True)
-        try:
-            return {
-                node.rsplit(":", 1)[1]: count
-                for node, count in db.execute(
-                    "select node_id, count(*) from materializations"
-                    " where status = 'success' group by node_id"
-                )
-            }
-        finally:
-            db.close()
-    except sqlite3.Error:
-        return {}
-
-
-def _wait_for(root: Path, done, what: str, timeout: float = 60) -> dict[str, int]:
-    deadline = time.monotonic() + timeout
-    while True:
-        rows = _rows(root)
-        if done(rows):
-            return rows
-        if time.monotonic() > deadline:
-            raise AssertionError(f"timed out waiting for {what}: {rows}")
-        time.sleep(0.25)
-
-
 def _set_version(root: Path, value: str) -> None:
     """Replace the file in one step, so a sensor poll never reads it half-written."""
     tmp = root / "version.txt.tmp"
@@ -103,46 +68,32 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     (tmp_path / "pipeline.py").write_text(PIPELINE)
     _set_version(tmp_path, "v1")
     env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(_free_port())],
-        cwd=tmp_path,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
+    # While it runs, what it recorded is read through its HTTP API, never from the
+    # database file (#537).
+    with served.Serve(tmp_path, env=env) as serve:
         # Several ticks on the first value, then several on the second.
-        first = _wait_for(
-            tmp_path,
-            lambda r: r.get("publish", 0) >= 3 and r.get("tracked", 0) >= 1,
+        first = serve.wait(
             "ticks on v1",
+            lambda: (r := serve.rows()).get("publish", 0) >= 3 and r.get("tracked", 0) >= 1 and r,
         )
         _set_version(tmp_path, "v2")
-        _wait_for(
-            tmp_path,
-            lambda r: (
-                r.get("publish", 0) >= first["publish"] + 3
+        serve.wait(
+            "ticks on v2",
+            lambda: (
+                (r := serve.rows()).get("publish", 0) >= first["publish"] + 3
                 and r.get("tracked", 0) >= 2
                 and r.get("feed", 0) >= 2
             ),
-            "ticks on v2",
         )
-    finally:
-        serve.send_signal(signal.SIGTERM)
-        try:
-            _, err = serve.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            serve.kill()
-            _, err = serve.communicate()
+    err = serve.err
 
-    rows = _rows(tmp_path)
+    rows = served.rows(tmp_path)
     context = f"{rows}\n{err}"
     # The task runs on every tick; its upstream assets only when their inputs changed.
     assert rows.get("publish", 0) >= 6, f"scheduled task did not run per tick: {context}"
     assert rows.get("model") == 1, f"an unchanged upstream of a task was recomputed: {context}"
     assert rows.get("feed") == 2, f"feed should run once per sensor value: {context}"
-    with sqlite3.connect(tmp_path / ".barca" / "metadata.db") as db:
+    with served.snapshot(tmp_path) as db:
         lines = [row[0] for row in db.execute("SELECT line FROM logs")]
     assert "publish v1" in lines and "publish v2" in lines, (
         f"task did not see the new value: {lines}\n{err}"
@@ -192,16 +143,12 @@ def _until(predicate, what: str, timeout: float = 60):
 
 
 def _running(root: Path) -> list[tuple[str, str]]:
-    """The `running` rows of the project's history: (run_id, job). The connection is closed
-    before returning: barca refuses a database another program holds open."""
-    try:
-        db = sqlite3.connect(f"file:{root / '.barca' / 'metadata.db'}?mode=ro", uri=True)
-        try:
-            return list(db.execute("SELECT run_id, job FROM runs WHERE status = 'running'"))
-        finally:
-            db.close()
-    except sqlite3.Error:
-        return []
+    """The `running` rows of the project's history: (run_id, job), read from a snapshot: the
+    CLI run is live, and a test never opens a database barca can write (#537)."""
+    with served.snapshot(root) as db:
+        if db is None:
+            return []
+        return list(db.execute("SELECT run_id, job FROM runs WHERE status = 'running'"))
 
 
 def _schedule(port: int):
@@ -229,7 +176,7 @@ def _start_slow_get(root: Path) -> subprocess.Popen:
 
 
 def _serve(root: Path) -> tuple[subprocess.Popen, int]:
-    port = _free_port()
+    port = served._free_port()
     serve = subprocess.Popen(
         [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
         cwd=root,

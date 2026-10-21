@@ -6,6 +6,8 @@ import threading
 import pytest
 from barca import _artifacts, _storage, _transfer
 
+from . import served
+
 
 @pytest.mark.parametrize("destination", ["directory", "memory"])
 def test_receipt_describes_uploaded_bytes_after_atomic_source_replacement(
@@ -129,7 +131,8 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
         # before allowing the later request to overwrite that shared destination.
         remote = list((store / "default" / "artifacts").rglob("*.json"))
         assert len(remote) == 1 and remote[0].read_bytes() == b"11"
-        with contextlib.closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        # B is still running: read a snapshot, never the database it can write (#537).
+        with served.snapshot(tmp_path) as db:
             rows_a = db.execute(
                 "SELECT run_hash,output_hash,artifact_size_bytes FROM materializations WHERE run_id=?",
                 (a_result["run_id"],),

@@ -2237,7 +2237,8 @@ async fn a_writer_serve_whose_metadata_db_cannot_be_used_fails_before_binding() 
     let mut config = isolated_config(dir.path(), false);
     config.schedule = true;
     let db = config.resolved.db_path.clone();
-    std::fs::write(&db, b"").unwrap();
+    let junk = "not a database at all ".repeat(20);
+    std::fs::write(&db, &junk).unwrap();
     let error = barca_server::serve(config).await.unwrap_err();
     let barca_server::ServeError::Metadata(barca_core::BarcaError::MetadataUnusable { path, why }) =
         &error
@@ -2245,6 +2246,10 @@ async fn a_writer_serve_whose_metadata_db_cannot_be_used_fails_before_binding() 
         panic!("not a metadata error: {error}");
     };
     assert_eq!(path, &db);
-    assert_eq!(why, "it is empty (0 bytes)");
-    assert_eq!(std::fs::read(&db).unwrap(), b"", "left as it was");
+    assert!(why.contains("SQLite header"), "{why}");
+    assert_eq!(
+        std::fs::read_to_string(&db).unwrap(),
+        junk,
+        "left as it was"
+    );
 }

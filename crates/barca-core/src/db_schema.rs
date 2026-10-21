@@ -689,8 +689,6 @@ mod tests {
     #[tokio::test]
     async fn a_database_barca_cannot_use_is_named_and_left_alone() {
         let dir = tempfile::tempdir().unwrap();
-        let empty = dir.path().join("empty.db").display().to_string();
-        std::fs::write(&empty, b"").unwrap();
         let junk = dir.path().join("junk.db").display().to_string();
         std::fs::write(&junk, "not sqlite ".repeat(100)).unwrap();
         let future = dir.path().join("future.db").display().to_string();
@@ -715,7 +713,6 @@ mod tests {
             db::checkpoint(&conn).await.unwrap();
         }
         for (path, says) in [
-            (&empty, "it is empty (0 bytes)"),
             (&junk, "does not start with a SQLite header"),
             (&future, "metadata schema version 7 is not supported"),
             (&malformed, "runs"),
@@ -739,6 +736,29 @@ mod tests {
             assert_eq!(&named, path);
             assert_eq!(&std::fs::read(path).unwrap(), &before, "{path} was changed");
         }
+    }
+
+    /// An empty file holds no history: a writer initializes it as a new database, and the
+    /// read-only probe reports it as none yet, leaving it as it is (#537).
+    #[tokio::test]
+    async fn an_empty_file_is_initialized_as_a_new_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(db::probe_metadata(&path).await.unwrap(), None);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"",
+            "the probe writes nothing"
+        );
+        db::init_db(&path).await.unwrap();
+        assert_eq!(db::probe_metadata(&path).await.unwrap(), Some(VERSION));
+        assert!(
+            !db::empty_file(&path),
+            "a database barca creates is never left empty"
+        );
+        // Once initialized it is an ordinary database: a second open keeps what is in it.
+        assert_eq!(db::init_db_as(&path, &path).await.unwrap(), VERSION);
     }
 
     #[tokio::test]

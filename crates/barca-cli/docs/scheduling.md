@@ -258,17 +258,23 @@ the scheduler creates it). When it cannot, it exits 3 instead of serving with it
 the file and what to do:
 
 ```
-the metadata DB .barca/envs/prod/metadata.db cannot be used: it is empty (0 bytes)
+the metadata DB .barca/envs/prod/metadata.db cannot be used: it does not start with a SQLite header
 
 Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or start an empty history with `barca state reset` (the Reset database button in the web UI of a running `barca serve`), which moves .barca/envs/prod/metadata.db aside and prints how to undo it.
 ```
 
-A database barca cannot use is one that is empty (0 bytes), is not a SQLite file, was written in
-a newer format, or has a malformed schema. A lock another process holds is waited for (up to 60
+A database barca cannot use is one that is not a SQLite file, was written in a newer format, or
+has a malformed schema. An empty file (0 bytes) holds no history, so it is not one: a `touch`, a
+backup tool or a script that opened the path before barca created the database leaves one, and a
+writer initializes it as a new database, with one line on stderr naming it (`[barca] note: the
+metadata DB .barca/metadata.db was empty (0 bytes); initialized it as a new database`). `get` and
+`run` do the same. A lock another process holds is waited for (up to 60
 seconds) before the port is bound; a failure to open or write the file is exit 3 too. `get` and
 `run` give the same error, exit 3, with `reason` `metadata_unusable` in the JSON envelope.
 
-A `--read-only` server never writes the file, so it keeps serving: its startup line says
+A `--read-only` server never writes the file. It reads an empty one as no history yet (its
+startup line says `(not created yet)`, after a note) and leaves it for a writer to initialize.
+For a file it cannot use it keeps serving: its startup line says
 `(unusable)`, a warning follows, `GET /health`
 reports the error in `metadata_error`, and every route that reads history answers `500` with the
 error envelope, `reason` `metadata_unusable` and the remediation. `metadata_error` goes back to
