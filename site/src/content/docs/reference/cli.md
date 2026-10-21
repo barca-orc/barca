@@ -354,9 +354,9 @@ The human table defaults to the 10 most recent; JSON returns every run unless `-
 $ barca history
 RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
 -----------------------------------------------------------------------------
-14f1e316840c   run     success         1      2   0.1s 2026-10-21 02:39:25
-14f01f296a75   get     success         0      2   0.0s 2026-10-21 02:39:25
-14f3870e173f   get     success         2      0   0.1s 2026-10-21 02:39:25
+14f1e316840c   run     success         1      2   0.1s 2026-10-21 02:39:25 UTC
+14f01f296a75   get     success         0      2   0.0s 2026-10-21 02:39:25 UTC
+14f3870e173f   get     success         2      0   0.1s 2026-10-21 02:39:25 UTC
 ```
 
 Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`,
@@ -566,10 +566,10 @@ barca status pipeline.py --json --sample 5       # plus up to 5 sample rows per 
 ```
 
 ```
-NAME    KIND   STATE        WHY           LAST RUN                           SHAPE            DEPS
-orders  asset  cached       materialized  success 2026-10-21 02:39:25 0.00s  3 rows x 2 cols  -
-total   asset  cached       materialized  success 2026-10-21 02:39:25 0.00s  dict (1 key)     orders
-notify  task   always-runs  task          success 2026-10-21 02:39:25 0.00s  dict (1 key)     total
+NAME    KIND   STATE        WHY           LAST RUN                               SHAPE            DEPS
+orders  asset  cached       materialized  success 2026-10-21 02:39:25 UTC 0.00s  3 rows x 2 cols  -
+total   asset  cached       materialized  success 2026-10-21 02:39:25 UTC 0.00s  dict (1 key)     orders
+notify  task   always-runs  task          success 2026-10-21 02:39:25 UTC 0.00s  dict (1 key)     total
 
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
