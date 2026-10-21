@@ -405,8 +405,7 @@ and post what they compute, over `http://` or `https://`. `status`, `history` an
 from the server. `--local` ignores it for one command. A server that cannot be reached, answers
 unexpectedly or speaks another API version is exit 3 naming its URL, with `--local` as the
 remediation; a server whose store is not this project's `[remote]` (or a project with no
-`[remote]`) is exit 2 naming both. With it set, `[remote] state` defaults to `off`, and
-`optimistic` is a usage error.
+`[remote]`) is exit 2 naming both.
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
