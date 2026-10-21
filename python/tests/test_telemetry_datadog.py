@@ -8,7 +8,7 @@ import os
 import subprocess
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -50,11 +50,18 @@ def broken(report: dict) -> None:
 
 
 class FakeAgent:
-    """Records every request to the trace intake; answers with `status`."""
+    """Records every request to the trace intake; answers with `status`.
+
+    Requests are served concurrently, so a worker that the coordinator stops (SIGSTOP) in the
+    middle of a delivery cannot hold up another's. ddtrace resends a payload it timed out on, so
+    a Python span is recorded once per `(trace_id, span_id)` however often it arrives (#530).
+    """
 
     def __init__(self, status: int = 200):
         self.requests: list[dict] = []
         self.python_spans: list[dict] = []
+        seen: set[tuple[int, int]] = set()
+        lock = threading.Lock()
         agent = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -62,12 +69,22 @@ class FakeAgent:
             def do_PUT(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 if self.headers.get("Content-Type") == "application/json":
-                    agent.requests.append(
-                        {"path": self.path, "headers": dict(self.headers), "body": json.loads(body)}
-                    )
+                    with lock:
+                        agent.requests.append(
+                            {
+                                "path": self.path,
+                                "headers": dict(self.headers),
+                                "body": json.loads(body),
+                            }
+                        )
                 elif self.path.startswith("/v0.4/traces") and msgpack is not None:
-                    for trace in msgpack.unpackb(body, raw=False, strict_map_key=False):
-                        agent.python_spans.extend(trace)
+                    with lock:
+                        for trace in msgpack.unpackb(body, raw=False, strict_map_key=False):
+                            for span in trace:
+                                key = (span["trace_id"], span["span_id"])
+                                if key not in seen:
+                                    seen.add(key)
+                                    agent.python_spans.append(span)
                 self.send_response(status)
                 self.send_header("Content-Length", "2")
                 self.end_headers()
@@ -78,7 +95,7 @@ class FakeAgent:
             def log_message(self, *args):
                 pass
 
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_port}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -804,11 +821,14 @@ def fanout():
     assert proc.returncode == 0, proc.stderr
     root = agent.spans()[0]
     (step,) = by_node(agent.spans()).values()
-    executions = [s for s in agent.python_spans if s["name"] == "barca.execute"]
+    assert all(s["trace_id"] == root["trace_id"] for s in agent.python_spans)
+    # This run's spans only, each once (see FakeAgent): the caller and its two children.
+    run_id = root["meta"]["barca.run_id"]
+    spans = [s for s in agent.python_spans if s["meta"].get("barca.run_id") == run_id]
+    executions = [s for s in spans if s["name"] == "barca.execute"]
     assert len(executions) == 3, agent.python_spans
     assert all(s["parent_id"] == step["span_id"] for s in executions)
     assert all(s["resource"] == "fanout" for s in executions)
-    assert all(s["trace_id"] == root["trace_id"] for s in agent.python_spans)
     children = [s for s in agent.python_spans if s["name"] == "child.work"]
     assert len(children) == 2
     assert all(s["parent_id"] in {e["span_id"] for e in executions} for s in children)

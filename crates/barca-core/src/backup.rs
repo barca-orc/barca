@@ -1465,6 +1465,16 @@ mod tests {
         let refused = rt.block_on(restore(Path::new("unused"), &cfg, None));
         assert!(matches!(refused, Err(BarcaError::Other(ref m)) if m.contains("barca serve")));
         drop(held);
-        assert_eq!(ServeLock::holder(&cfg), None);
+        // The lock goes with the last descriptor of its open file. A child that another test
+        // thread is starting at this instant holds a copy until its exec closes it, so the
+        // release is waited for, with a bound, not assumed to be immediate (#524).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while ServeLock::holder(&cfg).is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "still held 10s after the server's lock was dropped"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }
