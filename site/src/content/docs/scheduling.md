@@ -110,8 +110,12 @@ does not fire.
 
 A `Manual` asset or task is never run by a tick, and `barca get` or `barca run` of something
 below it does not recompute it: whatever reads it reads its latest successful result, even when
-its inputs or code have changed since. Nodes below it are hashed against that result, so it does
-not make them stale until it changes. When it is stale, `barca get report` says so on stderr:
+its inputs or code have changed since. Nodes below it are hashed against that result (its run
+hash and its bytes), so it does not make them stale until it changes, and once it has a new
+result they are stale relative to it: a refresh by hand that gives new bytes for the same code
+and inputs (a reference table that reads external data) makes `barca status` report them stale,
+and the next `barca get` or tick recomputes them. A refresh that gives the same bytes changes
+nothing below it. When it is stale, `barca get report` says so on stderr:
 
 ```
 [barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute

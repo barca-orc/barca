@@ -155,11 +155,6 @@ fn is_partitioned(dag: &Dag, id: &str) -> bool {
         .is_some_and(|n| !n.extracted.partitions.is_empty())
 }
 
-fn is_sensor(dag: &Dag, id: &str) -> bool {
-    dag.get_node(id)
-        .is_some_and(|n| n.kind() == crate::model::NodeKind::Sensor)
-}
-
 /// Detect all maximal chains. Every node belongs to exactly one chain.
 fn detect_chains(dag: &Dag) -> Vec<Chain> {
     let mut visited: HashSet<String> = HashSet::new();
@@ -198,9 +193,9 @@ fn detect_chains(dag: &Dag) -> Vec<Chain> {
             if is_partitioned(dag, &current) != is_partitioned(dag, next) {
                 break;
             }
-            // A sensor ends its chain (#183): its consumers' run hashes include the sensor's
-            // output, so they are decided in a later phase, after the sensor has run.
-            if is_sensor(dag, &current) {
+            // A sensor or a `Manual` asset ends its chain (#183, #548): its consumers' run
+            // hashes include its output, so they are decided in a later phase, after it ran.
+            if crate::cache::folds_output(dag, &current) {
                 break;
             }
             nodes.push(next.to_string());
@@ -256,15 +251,15 @@ fn phase_has_pending(phase: &Phase) -> bool {
         .any(|s| s.steps.iter().any(|st| !st.pending_partitions.is_empty()))
 }
 
-/// True if a step in `phase` reads a sensor that runs in `prev`. Such a step's run hash includes
-/// the sensor's output (#183), so it must stay in a later phase: cache decisions for a phase are
-/// made before any of its steps execute.
-fn reads_sensor_of(phase: &Phase, prev: &Phase) -> bool {
+/// True if a step in `phase` reads a sensor or a `Manual` asset that runs in `prev`. Such a
+/// step's run hash includes that output (#183, #548), so it must stay in a later phase: cache
+/// decisions for a phase are made before any of its steps execute.
+fn reads_sensor_of(dag: &Dag, phase: &Phase, prev: &Phase) -> bool {
     let sensors: HashSet<&str> = prev
         .streams
         .iter()
         .flat_map(|s| &s.steps)
-        .filter(|st| st.kind == crate::model::NodeKind::Sensor)
+        .filter(|st| crate::cache::folds_output(dag, st.step_id.base_id()))
         .map(|st| st.step_id.base_id())
         .collect();
     !sensors.is_empty()
@@ -311,7 +306,7 @@ fn merge_single_stream_phases(dag: &Dag, phases: Vec<Phase>) -> Vec<Phase> {
             && merged.last().is_some_and(|prev: &Phase| {
                 prev.streams.len() == 1
                     && !phase_has_pending(prev)
-                    && !reads_sensor_of(&phase, prev)
+                    && !reads_sensor_of(dag, &phase, prev)
                     && !collects_from(dag, &phase, prev)
             });
 
@@ -740,6 +735,12 @@ mod tests {
 
     /// Like `build_test_dag`, with the nodes named in `sensors` declared as `@sensor`.
     fn build_dag_with_sensors(specs: &[(&str, &[&str])], sensors: &[&str]) -> Dag {
+        build_dag_with(specs, sensors, &[])
+    }
+
+    /// Like `build_dag_with_sensors`, with the assets named in `manual` declared
+    /// `freshness=Manual`.
+    fn build_dag_with(specs: &[(&str, &[&str])], sensors: &[&str], manual: &[&str]) -> Dag {
         let extracted: Vec<ExtractedNode> = specs
             .iter()
             .map(|(name, deps)| {
@@ -760,7 +761,7 @@ mod tests {
                     },
                     function_name: name.to_string(),
                     explicit_name: None,
-                    freshness: if sensor {
+                    freshness: if sensor || manual.contains(name) {
                         Freshness::Manual
                     } else {
                         Freshness::Always
@@ -1546,6 +1547,18 @@ mod tests {
     /// are normally merged, which must not pull a sensor's consumer into the sensor's phase.
     #[test]
     fn a_sensor_runs_in_an_earlier_phase_than_its_consumers() {
+        a_node_runs_in_an_earlier_phase_than_its_consumers(true);
+    }
+
+    /// #548: so does a `Manual` asset, whose output is folded into its consumers' run hashes
+    /// the same way (a refresh by hand gives it new bytes under the same run hash).
+    #[test]
+    fn a_manual_asset_runs_in_an_earlier_phase_than_its_consumers() {
+        a_node_runs_in_an_earlier_phase_than_its_consumers(false);
+    }
+
+    /// `etag` in an earlier phase than everything that reads it: a sensor, or a `Manual` asset.
+    fn a_node_runs_in_an_earlier_phase_than_its_consumers(sensor: bool) {
         let shapes: Vec<Vec<(&str, &[&str])>> = vec![
             vec![
                 ("etag", &[]),
@@ -1563,7 +1576,11 @@ mod tests {
         ];
         for specs in &shapes {
             for pool in [1, 2, 10] {
-                let dag = build_dag_with_sensors(specs, &["etag"]);
+                let dag = if sensor {
+                    build_dag_with_sensors(specs, &["etag"])
+                } else {
+                    build_dag_with(specs, &[], &["etag"])
+                };
                 let p = plan_from_dag(&dag, &cfg(pool));
                 let sensor_phase = positions(&p, "test.py:etag")[0].0;
                 for consumer in dag.downstream("test.py:etag") {

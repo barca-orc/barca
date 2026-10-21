@@ -439,7 +439,8 @@ defers that node to its own cron. `Manual` differs from the "gate" described
 above: it pins itself rather than blocking what is below it. A tick never runs
 a `Manual` asset or task, and a tick, `barca get` or `barca run` of something
 below it reads its latest successful result, even when stale; the nodes below
-are hashed against that result and still update for their other inputs. Only
+are hashed against that result (its run hash and its bytes, #548), so a new
+result makes them stale, and they still update for their other inputs. Only
 naming it in `--refresh` (or `--refresh-all`) recomputes it, also when it is
 the target of `barca get`; a `Manual` task named as the target of `barca run`
 runs. Only a `Manual` node that was never computed blocks: `barca get`
