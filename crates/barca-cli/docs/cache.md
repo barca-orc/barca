@@ -1,5 +1,9 @@
 # Caching, artifacts and environments
 
+Barca skips a step when it has already computed the same thing. This topic covers what "the
+same" means (the run hash), what the hash does and does not see, the states a cached result
+can be in, how to force a recompute, the cache size limit, and where everything is stored.
+
 ## What is cached
 
 Each asset step has a **run hash**: a hash of the function's definition, its inputs' run hashes,
@@ -9,12 +13,19 @@ materialization, the artifact is reused and the function does not run. Change th
 code, any upstream, a sensor's output or a declared environment variable and the hash changes, so
 only the affected subgraph re-runs.
 
-Before deciding a consumer, barca checks that every upstream step in the expanded
-plan has a run hash, including all upstream partition keys across worker chunks.
-An incomplete coordinator hash map fails as an infrastructure error before any
-consumer hash or cache lookup; it cannot reuse a result hashed from a partial set.
-The expected keys come from the selected expanded plan, and worker pool size does
-not change valid hashes or cache decisions.
+- Tasks and sensors are never served from cache. Partitioned assets are cached per key (see
+  `barca docs partitions`).
+- Environment variables a function reads **without** declaring them are not part of the hash:
+  changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
+  (`barca docs assets`). Nodes that declare no env hash exactly as if `env=` did not exist.
+- Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files
+  or the project modules they import: their `__pycache__` .pyc files are checked against a hash
+  of the source, not its mtime and size, so an edit that keeps both (a same-size edit within one
+  second, or a tool that pins mtimes such as Nix, Bazel, `touch -t` or `rsync -t`) still runs
+  the new code. Installed packages import as usual.
+
+How the coordinator assembles a step's hash from its upstreams, and the guarantees that come
+with it, are specified in `specs/cache-decisions.md`.
 
 ### What the definition covers
 
@@ -74,11 +85,26 @@ directory all compute the same run hash and the same node id, relative to the pr
 - **Imports inside a function or class body** (`def rows(): from helpers import clean`),
   including in nested blocks and methods, with or without an alias: followed like a
   module-level import, at the same precision.
+- **A module reached through another module's import**: `from wrapper import helpers` or
+  `wrapper.helpers.compute()`, where `wrapper.py` does `import helpers` (or `import helpers as
+  h`, or re-exports it with `from inner import helpers`), hashes what is read from `helpers.py`.
+  Import chains are followed however many project modules deep they go, and modules that import
+  each other are followed once each.
 - **A module used as a value** (`getattr(helpers, name)()`, `run(helpers)`, `m = helpers`):
   which attribute is read cannot be known statically, so the **whole module** is hashed, and
   what its definitions use. This is deliberately conservative: any edit to that module re-runs
   the step. It applies only when the name really is the module: a parameter, local variable,
   loop or comprehension variable called `helpers` is not.
+- **Names anywhere in an expression the function or a helper evaluates**: default argument
+  values (positional-only and keyword-only parameters, nested functions and lambdas included;
+  a default is resolved in the enclosing scope), exception handler types (tuples and `except*`
+  included; a bare `except:` adds nothing), set, list and tuple elements, value, class and
+  mapping-key expressions in `match` patterns (capture names are bindings, not reads),
+  `for`/`while` `else:` blocks (followed even if a run leaves the loop with `break`),
+  decorators of ordinary helper functions and classes with their arguments (resolved in the
+  enclosing scope), and assignment receivers and indices inside functions (`table[key()] =
+  value`, annotated, unpacked and chained targets, targets in `for`, `with` and comprehensions).
+  Writing a bare name does not read its old value.
 
 For functions, classes, constants and `module.attr`, barca does not work out local scopes: a
 parameter called `rate` counts as a use of a module-level `rate`. That can only cause an extra
@@ -104,25 +130,12 @@ re-run, never a stale result.
 | `tags=` | no | labels for people and tools |
 | `@unsafe` | no | a marker barca reads and does not act on |
 
-The same list applies to `@asset`, `@sensor` and `@task`. "Any other decorator" is one that is
-not barca's: `@functools.cache`, a wrapper of your own. "Any other argument" is a keyword barca
-does not define, a positional argument, or `**options`, only in a call that barca cannot
-positively identify from its imports. Positively identified barca node calls reject all of
-these at plan time (`barca docs assets`, "Accepted arguments"); the fallback is conservative
-hashing for unvalidated syntax, not an accepted argument. The hash rules are keyed to the
-same accepted signatures and a test checks every `(decorator, argument)` pair. A decorator
-whose name is not positively bound to a barca import counts in full, even if it is named
-`asset`, `sensor`, `task`, `sink` or `unsafe`: its arguments, their order and the wrapper
-implementation can change the result. Binding proof is conservative: a walrus assignment
-to a decorator name anywhere in the module makes it uncertain, even inside a local scope;
-this can cause an extra recompute rather than risk a stale result. Any unproven decorator on a node (including a wrapper stacked with a known barca decorator)
-counts the whole module source and all dependencies available to the existing static cone,
-so even unrelated edits in that module can recompute it. This does not add tracking for
-dynamically imported modules. Explicit references to `globals`, `locals`, `vars`, `exec`,
-`eval` or `__builtins__` also make every imported barca name uncertain, including aliases and qualified
-or shadowed references. These checks cover the explicit syntax, not arbitrary reflective
-indirection or runtime side effects. Ordinary static imports and dependencies
-remain the tracking boundary; this is not a guarantee about arbitrary dynamic Python.
+The same list applies to `@asset`, `@sensor` and `@task`; a test checks every `(decorator,
+argument)` pair against it. "Any other decorator" is one that is not barca's:
+`@functools.cache`, a wrapper of your own. "Any other argument" is a keyword barca does not
+define, a positional argument, or `**options`, in a call barca cannot positively identify from
+its imports; a call barca does identify rejects these at plan time (`barca docs assets`,
+"Accepted arguments").
 
 What this means in practice:
 
@@ -145,10 +158,10 @@ def sales(region: str) -> dict:
 
 A counted argument is compared by what it says, not how it is typed. Whitespace, line breaks,
 comments, single or double quotes, a trailing comma, the order of barca's own decorator keyword
-arguments and the order of entries in `inputs={...}` do not change the hash. Other Python calls preserve keyword argument order: a wrapper
-decorator can observe it through `**kwargs`, so changing that order must invalidate the cache.
-Two things are compared as written: the function itself, from `def` on, and an f-string or `lambda` inside a counted
-argument.
+arguments and the order of entries in `inputs={...}` do not change the hash. Keyword order in
+any other call does: a wrapper decorator can observe it through `**kwargs`. Two things are
+compared as written: the function itself, from `def` on, and an f-string or `lambda` inside a
+counted argument.
 
 Names in a counted argument are followed into the cone exactly like names in the function body:
 with `@asset(serializer=FMT)` or `@retry(times=ATTEMPTS)`, editing `FMT` or `ATTEMPTS` re-runs
@@ -158,6 +171,16 @@ argument that does not count are not followed: with `partitions(REGIONS)` or
 runs that key). An upstream named in `inputs=`, `collect(...)` or `partitions_from(...)` is not
 followed either, and does not need to be: the upstream's run hash, which covers its code, is
 already part of the step's run hash.
+
+**A decorator barca cannot prove is its own counts in full**, even if it is named `asset`,
+`sensor`, `task`, `sink` or `unsafe`: its arguments, their order and the wrapper's code can
+change the result. Such a decorator on a node (alone or stacked with a barca decorator) makes
+the whole module's source and its static dependencies count, so an unrelated edit in that module
+can re-run the node. The proof is conservative: a walrus assignment to a decorator name anywhere
+in the module, or an explicit reference to `globals`, `locals`, `vars`, `exec`, `eval` or
+`__builtins__`, makes every imported barca name uncertain. This costs an extra recompute, never
+a stale result. These checks cover the explicit syntax, not arbitrary reflection or runtime side
+effects.
 
 Known limits:
 
@@ -185,169 +208,55 @@ project root; and in the packages below those directories, with or without `__in
 
 So a pipeline in `pipelines/p.py` using `from shared.utils import f` follows `shared/utils.py` in
 the root, and a module beside the pipeline file shadows a same-named one in the root, as it does
-when Python imports it. The project root is the boundary (see "Where things live"): a module in
-`../shared/` outside it, or in a directory you add to `sys.path` or `PYTHONPATH` yourself, is not
-followed. As in Python, a package (`helpers/__init__.py`) wins over a module (`helpers.py`) in
-the same directory.
+when Python imports it. As in Python, a package (`helpers/__init__.py`) wins over a module
+(`helpers.py`) in the same directory. A pipeline file is never a package: `shared.sub` means
+`sub.py` inside a `shared/` directory.
 
-Pipeline imports must preserve the producer's ordinary root-relative module identity:
-use `from b.shared import f` for `b/shared.py`, rather than relying on a previously
-loaded pipeline to make `from shared import f` available. Workers use each task's
-own import path; another pipeline's directory is not retained as an implicit fallback.
-Conflicting project bindings or pipeline identities require qualified imports before
-execution (`barca docs discovery`, "Node ids"). Unambiguous non-pipeline sibling
-helpers keep ordinary Python lookup. A pipeline file is never a package:
-`shared.sub` means `sub.py` inside a `shared/` directory.
+Each task imports with its own path; another pipeline's directory is never kept as a fallback.
+Use the root-relative module name: `from b.shared import f` for `b/shared.py`, not `from shared
+import f` in the hope that another pipeline made it importable. Conflicting project imports are
+rejected before user code runs: if two pipeline directories each have `helpers.py`, qualify the
+imports (`from east.helpers import value`, `from west.helpers import value`) so hashing and
+workers pick the same files (`barca docs discovery`, "Node ids"). Literal imports in inactive
+branches and unused functions may conservatively require qualification. Unambiguous sibling
+helpers keep ordinary Python lookup.
 
 Only files a step imports are read, each once per command. Barca never walks the project to
 look for helpers, and it never reads or hashes the standard library or installed packages,
-wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
-a package, recompute with `--refresh-all` or `--refresh` (below).
+wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project).
 
-Names bound inside module-level `if`, `try`, `for`, `while`, `with` and `match` blocks
-are followed conservatively. Barca does not
-execute the condition to choose an import or fallback definition: a step reading such a name
-hashes the module's source and follows its statically visible imports and references. Editing
-an inactive branch's project helper can therefore re-run the step too. This provenance is
-retained through later assignments, functions, classes and imports: an earlier alias may have
-captured the conditional value before that replacement. Even an unconditional replacement can
-therefore retain conservative invalidation. Ordinary definitions
-that do not use these uncertain bindings keep their selective dependency cones.
+#### Followed conservatively
 
-Exception handler types are followed too, including tuples and `except*` handlers.
-If a reached helper catches `helpers.Error`, changing that project definition invalidates
-its consumers. A bare `except:` adds no exception-type dependency. Existing affected
-consumers may recompute once after this dependency-tracking correction.
+Where static analysis cannot tell which definition is meant, barca hashes more rather than less:
+an edit to an unrelated definition in the same module can then re-run the step, but a stale
+result is never served. This happens for a name that comes from:
 
-References in set literal elements are followed, just like list and tuple elements.
-For example, `{helpers.compute()}` includes the project helper's dependency cone; a set of
-constants adds no helper dependency. Existing affected consumers may recompute once after
-this dependency-tracking correction.
+- a module-level `if`, `try`, `for`, `while`, `with` or `match` block: barca does not evaluate
+  the condition, so the step hashes the module's source and follows its static imports and
+  references, inactive branches included;
+- tuple, list or starred unpacking, or an augmented assignment (`x += ...`), at module level;
+- a project star import (`from helpers import *`), in a helper module or in the pipeline file,
+  including several and transitive star imports: the contributing modules' sources count.
 
-Default argument expressions are followed for steps and reached helpers, including
-positional-only and keyword-only parameters, nested functions and lambdas. For example,
-`def value(x=helpers.compute()): ...` includes `helpers.compute` in the dependency cone.
-The default is resolved in the enclosing scope, before the new parameter bindings exist.
-Editing that helper invalidates its consumers; unrelated steps retain their cached results.
-Existing cached consumers may recompute once after this dependency-tracking correction.
-
-Helper references in `for`/`while` `else:` blocks are followed, including inside undecorated
-project helper functions. As with `if` branches, static hashing follows the block even if
-a particular run exits the loop with `break`.
-
-Value, class and mapping-key expressions inside `match` patterns follow project helpers,
-including nested sequence, alternative and capture patterns. Capture names themselves
-are bindings, not reads of an imported value.
-
-Ordinary helper functions and classes follow names used in their decorators, including
-decorator factories/arguments and nested definitions. Decorators are resolved in the
-enclosing scope before the decorated definition's parameters/class bindings. A step's own
-Barca decorator metadata still follows "Which decorator arguments count" above.
-
-Module-level tuple/list/starred unpacking and augmented name assignments retain helper
-provenance conservatively: a consumer hashes the module source and its static references.
-Earlier aliases remain covered even when the binding is overwritten later. Editing an
-unrelated definition in that same module can therefore recompute these consumers; assets
-that do not reach such bindings retain selective cones.
-
-Project star imports in ordinary helper modules are tracked conservatively. Consumers of
-functions, classes, captured constants and forwarded exports include the contributing module
-sources and their static dependencies, including multiple and transitive star imports.
-Conditional star imports are included without selecting a branch. An edit to another export
-in those modules may recompute a consumer. Installed packages remain a separate limitation;
-this does not extend decorator discovery beyond its existing literal-export rules.
-
-A module reached through another module's `import` is followed: `from wrapper import helpers`
-or `wrapper.helpers.compute()`, where `wrapper.py` does `import helpers` (or `import helpers
-as h`, or re-exports it with `from inner import helpers`), hashes what is read from
-`helpers.py`, so editing `helpers.compute` invalidates the consumer. Import chains are
-followed however many project modules deep they go, and modules that import each other are
-followed once each. Existing affected consumers may recompute once after this
-dependency-tracking correction.
+This provenance is kept through later assignments, aliases, functions, classes and imports, so
+even overwriting such a name later keeps the conservative hashing. Definitions that do not use
+these names keep their selective cones. The exact rules are in `specs/cache-decisions.md`.
 
 #### Not followed
 
-An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
+An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`
+("Forcing a recompute"):
 
-- modules outside the project root, and modules only a custom `sys.path` or `PYTHONPATH` entry
-  makes importable;
+- installed packages and the standard library: after upgrading a package, recompute;
+- modules outside the project root (`../shared/`), and modules only a custom `sys.path` or
+  `PYTHONPATH` entry makes importable;
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- names defined dynamically through runtime namespace mutation.
-
-Conflicting ordinary project imports are rejected before user code runs. If two pipeline
-directories each have `helpers.py`, qualify the imports (`from east.helpers import value`,
-`from west.helpers import value`) so both hashing and workers select the same files.
-Unambiguous sibling helpers still work; previous tasks do not add implicit import paths.
-Literal imports in inactive branches and unused functions may conservatively require
-qualification. Dynamic imports and user mutations of import paths are not statically proven.
-
-Inside functions, evaluated assignment receivers and indices are followed, including `table[key()] = value`,
-annotated assignments, unpacking/chained targets, and targets in `for`, `with` and
-comprehensions. Writing a bare name does not read its old imported value.
-
-#### After upgrading to 0.19
-
-Barca 0.19 changed what the definition covers of a step's decorators. Up to 0.18 it was the
-decorators' text as written, so any edit there (a new partition key, a description, a comment,
-a reformat) re-ran the step for every key, and everything downstream. From 0.19 it is the list
-under "Which decorator arguments count".
-
-The hash of every step is computed differently, so **every step recomputes once** on the first
-run after upgrading, in every project and every environment (`--env`). The run after that is
-served from cache as usual. Nothing has to be done by hand; plan for the time and cost of one
-full run.
-
-- Results written by 0.18 stay in `.barca/metadata.db` and their artifacts stay on disk, under
-  their old run hashes. Barca 0.19 does not read them and does not delete them.
-- With an artifact store (`barca docs remote`), 0.19 computes every step once and writes the
-  results under their new run hashes; 0.18 results in the same store are left alone. The two
-  versions do not reuse each other's results.
-- Run hashes appear in the JSON of `barca get`, `barca run` (also with `--dry-run`) and
-  `barca status`; their values change with this upgrade. No command, flag or JSON key changed.
-
-#### After upgrading to 0.18
-
-Barca 0.18 started following classes, imports inside function bodies, aliased `from` imports,
-modules used as values, and root modules imported from a subdirectory. A step that uses one of
-these has a new hash, so it **recomputes once** on the first run after upgrading; its downstream
-steps recompute with it. Specifically, a step recomputes once if its function, or a helper it
-reaches, uses:
-
-- a class defined in the project (in the pipeline file or imported);
-- a project module imported inside a function or class body;
-- `from module import name as alias`, where `module` is a project module;
-- a project module as a value (`getattr(helpers, name)`, passing `helpers` along);
-- from a pipeline in a subdirectory, a module that lives in the project root;
-- a helper module with the same name as a pipeline file in another directory (both are hashed
-  now);
-- or if its pipeline file is inside a package (`pkg/__init__.py` next to it) and imports
-  project modules (`from .helpers import f`, `from pkg.helpers import f`): these now resolve
-  from the root, as they do when the step runs.
-
-One more case can recompute once: a step whose helpers import the **same name from two
-different modules outside the project** (one helper does `from numpy import array`, another
-`from jax.numpy import array`). Before 0.18 such a step had two possible hashes, picked at random
-on every run, so it missed its cache about half the time; it now has one, and recomputes once
-if its last result was recorded under the other.
-
-Every other step keeps its hash and its cached results.
-
-Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files or
-the project modules they import, from the file's directory tree or from the project root: their
-`__pycache__` .pyc files are checked against a hash of the source, not its mtime and size, so an
-edit that keeps both (a same-size edit within one second, or a tool that pins mtimes such as
-Nix, Bazel, `touch -t` or `rsync -t`) still runs the new code. Installed packages import as
-usual.
-
-Environment variables a function reads **without** declaring them are not part of the hash:
-changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
-(`barca docs assets`). Nodes that declare no env hash exactly as they did before `env=` existed,
-so upgrading does not invalidate existing caches.
-
-Tasks and sensors are never served from cache. Partitioned assets are cached per key (see
-`barca docs partitions`).
+- names defined dynamically through runtime namespace mutation, and changes to the import path
+  made by your code;
+- data your function reads that is not an input: a file, a table, an API. Bring it in through a
+  sensor (next section).
 
 ## External data that changes in place
 
@@ -405,8 +314,8 @@ How it works:
 - The `bool` in the sensor's `(update_detected, value)` return is not used for caching; only
   `value` is hashed.
 - A partitioned asset that reads a sensor re-runs every key when the sensor's output changes.
-- `--refresh` (with its cascade), `--no-cascade` and `--refresh-all` work as before, on `get`
-  and `run`.
+- `--refresh` (with its cascade), `--no-cascade` and `--refresh-all` work on assets that read a
+  sensor as on any other, on `get` and `run`.
 
 **The trap: return only what identifies the data.** Every sensor's output is hashed, so a sensor
 whose value changes on every run (a timestamp, `datetime.now()`, a request id, a dict that
@@ -422,63 +331,159 @@ def orders_etag() -> tuple[bool, dict]:
 Return `props.etag` alone. That is the intended meaning: an asset that reads a sensor depends on
 what the sensor returns.
 
-Upgrading: previously a sensor's output was not part of its consumers' run hashes, and an asset
-reading a sensor was served from cache whatever the sensor returned. Assets that read a sensor
-re-run once after upgrading (their run hash now includes the sensor's output). Pipelines without
-sensors keep exactly the same run hashes and caches.
-
 `--dry-run` and `barca status` execute nothing, so they cannot know what a sensor will return.
 They predict with the sensor's **last recorded output**, and the step's `detail` says so:
 `assumes sensor 'orders_etag' returns the same value as its last run`. If the sensor has no
-recorded output (it never ran, or last ran before this version), its consumers and everything
-downstream of them are `unknown` with `reason: "sensor_output_unknown"`. Running the sensor alone
-(`barca get orders_etag pipeline.py`, or a scheduled sensor under `barca serve`) records its
-output, so the next `--dry-run` or `barca status` shows its consumers as stale.
+recorded output (it never ran), its consumers and everything downstream of them are `unknown`
+with `reason: "sensor_output_unknown"`. Running the sensor alone (`barca get orders_etag
+pipeline.py`, or a scheduled sensor under `barca serve`) records its output, so the next
+`--dry-run` or `barca status` shows its consumers as stale.
 
-## Where things live
+## Cached, stale, evicted, unsynced
 
+A result is a row in `.barca/metadata.db` (the run hash it was computed under) plus an artifact
+file. `barca status` (`barca docs status`) names the state each node is in:
+
+| State | Meaning | What the next `get` does |
+|---|---|---|
+| `cached` | a result for the current run hash is recorded and its file is usable | serves it |
+| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's output, a declared env var) or the last attempt failed | runs it |
+| `stale`, reason `artifact_missing` | the result is recorded but its file is gone, and something needs to read it | computes it again under the same run hash ("A cached result whose artifact is missing") |
+| `stale`, reason `evicted` | the same, because the cache size limit deleted the file | computes it again ("Disk use"); a copy the artifact store holds is downloaded instead, and is not stale |
+| `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree; with a configured server, its ledger has not received the result yet | repairs that (an upload, a download) without running a step (`barca docs remote`, `barca docs server-mode`) |
+| `never_run`, `partial`, `unknown`, `always_runs` | no result yet; some partition keys cached; not knowable without running; a task or sensor | `barca docs status` |
+
+A missing or evicted artifact that nothing needs to read leaves the node `cached`.
+
+## Forcing a recompute
+
+| Goal | Command |
+|---|---|
+| Normal, cache-aware | `barca get target pipeline.py` |
+| Recompute everything in the cone | `barca get target pipeline.py --refresh-all` |
+| Recompute chosen assets and everything downstream of them | `barca get target pipeline.py --refresh a,b` |
+| Recompute only the chosen assets | `barca get target pipeline.py --refresh a,b --no-cascade` |
+| Recompute some keys of a partitioned target | `barca get sales pipeline.py --partition region=emea --refresh sales` |
+| Run a task, cached upstream | `barca run task pipeline.py` |
+| Run a task, refresh chosen upstream assets and everything downstream of them | `barca run task pipeline.py --refresh a,b` |
+| Run a task, refresh only the chosen assets | `barca run task pipeline.py --refresh a,b --no-cascade` |
+| Run a task, refresh all upstream assets | `barca run task pipeline.py --refresh-all` |
+
+`barca get` and `barca run` take the same three flags. On `get` the target is an asset, so
+`--refresh` may name it too. In Python, use `barca.get(..., refresh_all=True)` or
+`refresh=[...]`.
+
+### Exactly what `--refresh` does
+
+- `--refresh a,b` re-materializes the assets you name **and every asset downstream of them** in
+  the target's cone (the cascade), so the refreshed data reaches the target. A step re-run by the
+  cascade reports `reason: "refresh_cascade"` and a `detail` naming the asset it cascaded from.
+- It takes one comma-separated list; `--refresh a b` is an error ("'b' is not a .py file"). A
+  name that is not an asset in the target's cone is an error that lists the valid names, so a
+  typo never silently does nothing.
+- It does **not** rebuild the upstream of what you name, or assets in the cone that do not depend
+  on it. Those keep serving from cache.
+- `--no-cascade` re-materializes **only** the assets you name. Run hashes cover definitions and
+  upstream hashes, not output contents, so a cached downstream asset still matches and the
+  refreshed data never reaches it. Barca prints
+  `warning: 'mid' was served from cache but depends on refreshed 'src' ...` when this happens.
+  `--no-cascade` without `--refresh` is a usage error (exit 2).
+- With `--partition`, only the selected keys of the target are planned, so refreshing the target
+  recomputes only them. An upstream partitioned asset named in `--refresh` is recomputed for
+  every key: the selection narrows the target only (`barca docs partitions`).
+
+For external data that changes in place (a blob overwritten at the same path), the canonical
+answer is a sensor ("External data that changes in place" above). Without one, `--refresh`
+the asset that reads it, and everything built from it re-runs.
+
+Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
+consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
+
+## Seeing what will happen: `--dry-run`
+
+`barca get` and `barca run` take `--dry-run`. It reports, for exactly that command and flags, which
+steps would be served from cache and which would run, and why. It executes nothing and writes
+nothing: no `.barca` directory is created and no run is recorded.
+
+```bash
+barca run report pipeline.py --dry-run --json          # JSON on one line
+barca run report pipeline.py --dry-run --pretty        # a table for humans
+barca run report pipeline.py --dry-run --refresh src   # preview a refresh and its cascade
+barca get total pipeline.py --dry-run --refresh-all
 ```
-.barca/metadata.db                          run history and materialization records (local DB)
-.barca/backups/<name>.db, <name>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
-.barca/metadata.db.pre-restore              the database `barca state restore` replaced
-.barca/serve.lock                           held by a running `barca serve`, so `barca state restore` refuses to run under it
-.barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
-.barca/artifacts/<node>/<run_hash>.<ext>    one file per result
-.barca/staging/<pid>/                       a process's files in transit (uploads, downloads, result batches)
-.barca/sql-cache/                           copies of store artifacts `barca sql` downloaded (`barca docs sql`)
-.barca/gc-state.json                        what the last measurement of `.barca/` found ("Disk use")
-.barca/envs/<env>/                          the same layout for a named environment ("Environments")
+
+```json
+{"dry_run": true, "command": "run", "target": "report",
+ "steps": [{"id": "pipeline.py:src", "kind": "asset", "action": "cached",
+            "run_hash": "…", "artifact": ".barca/artifacts/…"},
+           {"id": "pipeline.py:report", "kind": "task", "action": "run",
+            "reason": "task", "detail": "tasks always re-run"}],
+ "summary": {"will_run": 1, "cached": 1, "unknown": 0}}
 ```
 
-`<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). An artifact's path names the
-computation, not the bytes: the run hash covers the step's code and inputs, so the same step
-with the same inputs always writes the same path. A step is meant to be a pure function of its
-code and inputs (what changes outside comes in through a sensor, whose output is part of the
-run hash), so computing it again is expected to write the same bytes.
-Barca does not enforce that. Computing the result again (`--refresh`, `--refresh-all`, or a
-missing artifact that something needs) overwrites the file, and a function that is not
-deterministic then leaves different bytes at the same path; with an artifact store, a copy
-that differs from the recorded hash is reported (`barca docs remote`, "Checking a local copy
-against the store"). To keep artifacts and a backup of the history in a bucket, set
-`BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
+Each step has an `action`:
 
-`.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
-from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
-root. Barca changes into the root before doing anything, so:
+| `action` | Meaning |
+|---|---|
+| `cached` | Served from the cache (`artifact` is the file). |
+| `run` | Will execute; `reason` says why (below). |
+| `partial` | A partitioned asset where some keys are cached; `partitions` lists the counts and the keys that will run. |
+| `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), or an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), and anything that depends on either. |
 
-- running from a subdirectory reads and writes the same cache as running from the root
-  (`cd sub && barca get out ../pipeline.py` is a cache hit after `barca get out pipeline.py`);
-- file arguments are read relative to where you typed them, and node ids are relative to the
-  root, so `pipelines/p.py:out` is the same id from any directory;
-- steps run with the root as their working directory, so `Path("data.txt")` inside a step means
-  the root's `data.txt` wherever you invoke barca;
-- stderr says `barca: project root: <path>` whenever the root is not the current directory.
+`reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
+`refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),
+`not_materialized` (no cached result for this code and these inputs: never run, or the code, an
+upstream or a sensor's output changed), `artifact_missing` (the result is cached, but its
+artifact is gone and something needs to read it) or `evicted` (the same, because the cache size
+limit deleted it). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
+`warning`. A step that reads a sensor is predicted from the sensor's last recorded output, and
+its `detail` says so. `summary` counts steps, one per partition key.
 
-Put an empty `barca.toml` at the top of a project to anchor it.
+A dry run makes the same decisions a real run makes (it calls the same code), and the test suite
+checks that `will_run` equals the real run's `steps_executed` across cold, warm, `--refresh`,
+`--refresh --no-cascade` and `--refresh-all` runs.
 
-Never delete files under `.barca/` to force a recompute: use `--refresh <asset>` (below), which
-also keeps the metadata DB consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
-To keep `.barca/` small, set a size limit and let barca evict ("Disk use", below).
+## What a run reports
+
+A real `barca get` / `barca run` returns the same per-step information in a `steps` array, with a
+`status` of `ran`, `cached` or `partial` (and the same `reason` / `warning`). `steps_executed` is
+the number of steps that actually ran; a fully cached second run reports 0 for assets. In
+`--agent` mode a cached step also prints `[barca] step:<id> cached` on stderr, so a log shows
+what was served from cache as well as what ran. A step whose node declares `env=[...]` also
+carries `env`, the values it was hashed with (`null` when unset, `<redacted>` for secret-looking
+names), in both the JSON `steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). With
+an artifact store, a step whose stored result (or an input it read) is not the copy that was
+recorded carries `artifact_mismatch: true` and a `warning` (`barca docs remote`).
+
+### Recompute byte checks
+
+A step is meant to be a pure function of its code and inputs, so computing it again under the
+same run hash should write the same bytes. Barca checks: every successful materialization records
+a SHA-256 digest of the serialized bytes, and a recompute of the same node and run hash
+(`--refresh`, `--refresh-all`, a missing artifact) compares with the preceding one. If the bytes
+differ, barca warns that the function is not deterministic and sets `steps[].bytes_changed: true`
+in run JSON. A new run hash is an expected change and does not warn; a result recorded without a
+digest sets the baseline. The check is on serialized bytes, so a serializer that writes variable
+metadata can also warn. Artifact paths and exit codes are unchanged. Partitioned steps are
+compared per key; the run's step is marked if any key changed.
+
+`barca status` shows the last such event even after a later unchanged recompute: its JSON has
+`last_bytes_change` (node id, run hash, digest, UTC timestamp) and
+`last_materialization.content_hash` when a digest was recorded. The boundary is specified in
+`specs/materialization-digests.md`.
+
+```bash
+barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
+barca status orders pipeline.py --json                 # last byte-change event and current digest
+```
+
+### Seeing what happened
+
+```bash
+barca history --json            # recent runs: status, steps executed, steps cached
+barca stats total pipeline.py --json   # timing percentiles and cache hit rate for one asset
+barca plan pipeline.py          # what would run, in phases, without running it
+```
 
 ## A cached result whose artifact is missing
 
@@ -499,8 +504,9 @@ barca run publish pipeline.py                    # model is cached again
   `partitions_from` step is expanded from it; or it is the output the command returns: the
   targets you named, or with no target the one asset whose artifact is `final_output` (the last
   asset). A partitioned target returns every key (or the keys `--partition` selects), so every
-  returned partition is checked (one file lookup per key, a few milliseconds at 5,000 keys). Every other asset at the
-  end of a pipeline is treated like an intermediate and is not looked at.
+  returned partition is checked (one file lookup per key, a few milliseconds at 5,000 keys).
+  Every other asset at the end of a pipeline is treated like an intermediate and is not looked
+  at.
 - **Missing** means not on this machine's disk and, with an artifact store, not in the store
   either (`barca docs remote`). The store has to be there for that to count: if its bucket,
   container or directory is gone, misnamed or unreachable, the run fails with exit 3 and
@@ -519,6 +525,26 @@ barca run publish pipeline.py                    # model is cached again
   `artifact_missing` under `barca run publish`, and `cached` under `barca get report`.
 - Under `barca serve` a scheduled task whose input was deleted recomputes the input once, on its
   next tick, and keeps succeeding.
+
+Known limits:
+
+- Only whether the artifact is a file is checked. A file that is there but truncated or edited
+  is read as it is (with an artifact store, a copy that does not match its recorded hash is
+  replaced: `barca docs remote`). A symlink to a file counts as that file and is read; writing
+  the artifact again replaces the link.
+- `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
+  disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
+  the end of the run if nothing needed it. The one exception is a result in a remote store
+  whose object turns out to be deleted when it is fetched: its `cached` line was already
+  printed, and the warning and a `completed` line for the same step follow
+  (`barca docs contract`).
+- A function that is not deterministic may return a different value when it is computed again
+  ("Recompute byte checks"); cached steps downstream of it keep the results they were computed
+  with (as after `--refresh --no-cascade`).
+- A dry run does not contact a remote artifact store. A result recorded in one is predicted as
+  `cached` even if the object has since been deleted from the bucket; the real run finds out
+  when it fetches it, and computes it again. A store that is a directory is checked, and if
+  the directory itself is gone the dry run predicts `cached` where the run exits 3.
 
 ### A directory at an artifact's path
 
@@ -573,26 +599,6 @@ renames and replaces nothing anywhere else:
   path, and is left as it is. The message says to remove or rename it there; `--refresh-all`
   does not help (`barca docs remote`).
 
-Known limits:
-
-- Only whether the artifact is a file is checked. A file that is there but truncated or edited
-  is read as it is (with an artifact store, a copy that does not match its recorded hash is
-  replaced: `barca docs remote`). A symlink to a file counts as that file and is read; writing
-  the artifact again replaces the link.
-- `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
-  disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
-  the end of the run if nothing needed it. The one exception is a result in a remote store
-  whose object turns out to be deleted when it is fetched: its `cached` line was already
-  printed, and the warning and a `completed` line for the same step follow
-  (`barca docs contract`).
-- A function that is not deterministic may return a different value when it is computed again;
-  cached steps downstream of it keep the results they were computed with (as after
-  `--refresh --no-cascade`).
-- A dry run does not contact a remote artifact store. A result recorded in one is predicted as
-  `cached` even if the object has since been deleted from the bucket; the real run finds out
-  when it fetches it, and computes it again. A store that is a directory is checked, and if
-  the directory itself is gone the dry run predicts `cached` where the run exits 3.
-
 ## Disk use
 
 `.barca/` has a size limit. Without one, every recompute under a new run hash (a code edit, an
@@ -605,7 +611,7 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
 ```
 
 - With no `max_size`, the limit is **10% of the filesystem** `.barca/` is on. `"off"` removes the
-  limit (barca before 0.25 had none).
+  limit.
 - `BARCA_CACHE_MAX_SIZE` overrides `barca.toml`, for a container that sets its limit when it is
   deployed. An invalid value is a usage error (exit 2) naming where it came from.
 - `KB`, `MB`, `GB`, `TB` are decimal (`GB` = 10^9 bytes); `KiB`, `MiB`, `GiB`, `TiB` are binary;
@@ -639,8 +645,8 @@ the limit:
   person recomputes a `Manual` node. Barca finds `Manual` nodes by reading the project's source
   files (no import); if one of them does not parse, no current result without a store copy is
   evicted;
-- a result whose upload to the artifact store is still pending (`unsynced`, `local only` in
-  `barca status`): its local copy is the only one until the next command uploads it;
+- a result whose upload to the artifact store is still pending (`unsynced`, `local only` in `barca status`):
+  its local copy is the only one until the next command uploads it;
 - the metadata DBs, their logs, locks and backups, and any file under `.barca/artifacts/` that no
   result names (written by hand, or by another tool): counted, never deleted. Nothing outside
   `.barca/` is ever deleted, and the artifact store is never touched.
@@ -689,9 +695,9 @@ skipped with one warning; `barca gc` exits 3 only when a metadata DB cannot be r
 metadata DBs hold, walks everything outside the artifact directories, and applies what the last
 full walk of the artifact directories found. A full walk happens when that says `.barca/` is over
 the limit, at least once a day, and under `barca gc`. The check under the limit takes about 2 ms
-on a small project and about 0.1 s with 100,000 results recorded. Eviction after a command stops after 5 seconds; what is left
-waits for the next command. When eviction cannot get under the limit, the check does not plan
-again for 10 minutes unless the size grows.
+on a small project and about 0.1 s with 100,000 results recorded. Eviction after a command stops
+after 5 seconds; what is left waits for the next command. When eviction cannot get under the
+limit, the check does not plan again for 10 minutes unless the size grows.
 
 **Read times.** "Least recently read" is the `last_read_at` of a result: set when a step is given
 it as an input, when `barca get` returns it, and when a `barca sql` query names its view. File
@@ -705,239 +711,6 @@ Known limits:
 - A run in another process that has just decided a superseded result is cached (an older run
   hash it went back to) can find it gone while it reads it; it is then computed again.
 - `materializations` rows are never deleted: `barca history` and `barca stats` keep every run.
-
-## Controlling the cache
-
-| Goal | Command |
-|---|---|
-| Normal, cache-aware | `barca get target pipeline.py` |
-| Recompute everything in the cone | `barca get target pipeline.py --refresh-all` |
-| Recompute chosen assets and everything downstream of them | `barca get target pipeline.py --refresh a,b` |
-| Recompute only the chosen assets | `barca get target pipeline.py --refresh a,b --no-cascade` |
-| Recompute some keys of a partitioned target | `barca get sales pipeline.py --partition region=emea --refresh sales` |
-| Run a task, cached upstream | `barca run task pipeline.py` |
-| Run a task, refresh chosen upstream assets and everything downstream of them | `barca run task pipeline.py --refresh a,b` |
-| Run a task, refresh only the chosen assets | `barca run task pipeline.py --refresh a,b --no-cascade` |
-| Run a task, refresh all upstream assets | `barca run task pipeline.py --refresh-all` |
-
-`barca run` previously refreshed every upstream asset by default and called the selective flag
-`--burst`. The default is now cache-aware and the flag is `--refresh`.
-
-Previously `--refresh` did not cascade: it re-ran only the named assets and left their downstream
-assets cached. It now cascades by default; `--no-cascade` keeps the old behavior.
-
-`barca get` takes the same three flags as `barca run`. On `get` the target is an asset,
-so `--refresh` may name it too. The deprecated `--no-cache` alias is removed in 0.24.0;
-use `--refresh-all`. In Python, use `barca.get(..., refresh_all=True)`.
-
-### Exactly what `--refresh` does
-
-- `--refresh a,b` re-materializes the assets you name **and every asset downstream of them** in
-  the target's cone (the cascade), so the refreshed data reaches the target. A step re-run by the
-  cascade reports `reason: "refresh_cascade"` and a `detail` naming the asset it cascaded from.
-- It takes one comma-separated list; `--refresh a b` is an error ("'b' is not a .py file"). A
-  name that is not an asset in the target's cone is an error that lists the valid names, so a
-  typo never silently does nothing.
-- It does **not** rebuild the upstream of what you name, or assets in the cone that do not depend
-  on it. Those keep serving from cache.
-- `--no-cascade` re-materializes **only** the assets you name. Run hashes cover definitions and
-  upstream hashes, not output contents, so a cached downstream asset still matches and the
-  refreshed data never reaches it. Barca prints
-  `warning: 'mid' was served from cache but depends on refreshed 'src' ...` when this happens.
-  `--no-cascade` without `--refresh` is a usage error (exit 2).
-- With `--partition`, only the selected keys of the target are planned, so refreshing the target
-  recomputes only them. An upstream partitioned asset named in `--refresh` is recomputed for
-  every key: the selection narrows the target only (`barca docs partitions`).
-
-For external data that changes in place (a blob overwritten at the same path), the canonical
-answer is a sensor (see "External data that changes in place" above). Without one, `--refresh`
-the asset that reads it, and everything built from it re-runs.
-
-## Seeing what will happen: `--dry-run`
-
-`barca get` and `barca run` take `--dry-run`. It reports, for exactly that command and flags, which
-steps would be served from cache and which would run, and why. It executes nothing and writes
-nothing: no `.barca` directory is created and no run is recorded.
-
-```bash
-barca run report pipeline.py --dry-run --json          # JSON on one line
-barca run report pipeline.py --dry-run --pretty        # a table for humans
-barca run report pipeline.py --dry-run --refresh src   # preview a refresh and its cascade
-barca get total pipeline.py --dry-run --refresh-all
-```
-
-```json
-{"dry_run": true, "command": "run", "target": "report",
- "steps": [{"id": "pipeline.py:src", "kind": "asset", "action": "cached",
-            "run_hash": "…", "artifact": ".barca/artifacts/…"},
-           {"id": "pipeline.py:report", "kind": "task", "action": "run",
-            "reason": "task", "detail": "tasks always re-run"}],
- "summary": {"will_run": 1, "cached": 1, "unknown": 0}}
-```
-
-Each step has an `action`:
-
-| `action` | Meaning |
-|---|---|
-| `cached` | Served from the cache (`artifact` is the file). |
-| `run` | Will execute; `reason` says why (below). |
-| `partial` | A partitioned asset where some keys are cached; `partitions` lists the counts and the keys that will run. |
-| `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), or an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), and anything that depends on either. |
-
-`reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
-`refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),
-`not_materialized` (no cached result for this code and these inputs: never run, or the code, an
-upstream or a sensor's output changed), or `artifact_missing` (the result is cached, but its
-artifact is gone and something needs to read it: see "A cached result whose artifact is missing"
-above). Under `--no-cascade`, a cached step downstream of a
-refreshed asset carries a `warning` (see the refresh notes above). A step that reads a sensor is
-predicted from the sensor's last recorded output, and its `detail` says so. `summary` counts
-steps, one per partition key.
-
-A dry run makes the same decisions a real run makes (it calls the same code), and the test suite
-checks that `will_run` equals the real run's `steps_executed` across cold, warm, `--refresh`,
-`--refresh --no-cascade` and `--refresh-all` runs.
-
-## What a run reports
-
-A real `barca get` / `barca run` returns the same per-step information in a `steps` array, with a
-`status` of `ran`, `cached` or `partial` (and the same `reason` / `warning`). In `--agent` mode a
-cached step also prints `[barca] step:<id> cached` on stderr, so a log shows what was served from
-cache as well as what ran. A step whose node declares `env=[...]` also carries `env`, the values
-it was hashed with (`null` when unset, `<redacted>` for secret-looking names), in both the JSON
-`steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). With an artifact store, a step
-whose stored result (or an input it read) is not the copy that was recorded carries
-`artifact_mismatch: true` and a `warning` (`barca docs remote`). `barca history --json` and
-`barca stats` show runs and timings over time.
-
-## Concurrent runs
-
-Several barca processes can run in one project at once (parallel scripts or agents, `barca serve`
-alongside the CLI). The metadata DB is a single-file database that one process opens at a time,
-so each process holds a short lock on it (`.barca/metadata.db.lock`) only while it reads or
-writes, and releases it while your Python runs. Processes queue instead of failing. If a
-process waits more than 60 seconds for the lock you get an error that names the lock file;
-an `... File is locked by another process` error means something outside barca (a DB browser, a
-backup tool, an older barca) has `.barca/metadata.db` open.
-
-The final run status and its successful/failed step rows commit together. If a required
-database write fails, the command reports an infrastructure error (exit 3), preserves
-earlier committed progress, history and the previous run state (normally unfinished).
-It does not record a new terminal outcome for a partially written ledger. Captured output is still
-written separately after the outcome transaction.
-
-## While a run is going, and after one is killed
-
-A run records completed steps in `.barca/metadata.db` during execution. Local results are
-queued after their artifact is written; with a remote artifact store, they are queued only
-after the upload is confirmed. The local writer batches these rows at most twice a second,
-so progress normally appears within about half a second of that confirmation.
-
-```bash
-barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
-barca history --json            # the run is `running`; `steps_executed` is the steps recorded so far
-```
-
-If a mid-run database write fails, barca retains the batch and retries at the same
-half-second interval, even if no further step finishes. A batch records its rows and
-progress count together; replay does not duplicate rows or count a step twice. Progress
-remains unrecorded while the database cannot commit. The final run write still includes
-completed results that the mid-run recorder has not saved.
-
-- **Progress.** `barca status` in a second terminal shows what a running `barca get` or
-  `barca run` has finished: an asset is `cached`, a partitioned asset is `partial` with its
-  `cached` / `missing` counts. A step that is still running shows its previous state.
-- **A killed run keeps what it finished.** If the process is killed (`kill -9`, out of memory, a
-  lost machine), the next `barca get` serves the recorded steps from cache and computes the rest.
-  A step is recorded only after its artifact is completely written, so a recorded step always has
-  its file. A step that finished in the last half second before the kill may not be recorded: it
-  runs again.
-- **History says so.** `barca history` reports a run whose process no longer exists as
-  `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
-  `steps_executed` at what it had recorded. It does so as soon as the process is gone, and
-  also for a run killed with its container, once a container starts again on the same
-  `.barca` (see the limits below). Ctrl-C and SIGTERM (a supervisor, `docker stop`) are
-  different: the run stops its workers, records itself and is `cancelled` (exit 130).
-  With an artifact store that also holds while
-  artifacts upload or download or the history is backed up, and the cancelled run then backs
-  its record up for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
-
-Known limits:
-
-- With a store (`barca docs remote`) all of this holds on the machine the run is on. Newly
-  committed progress is backed up every minute in healthy operation, without ending the run,
-  and the final outcome when it ends; a backup is restored only by `barca state restore`.
-- With a remote artifact store, an unfinished upload is never recorded as reusable progress.
-  A failed upload is recorded at the end of the run as a pending upload, `unsynced` in
-  `barca status` and uploaded by the next command (`barca docs remote`, "When an upload fails
-  after the steps succeeded"). Confirmed uploads are recorded locally while other steps are still running;
-  the minute backup copies new committed progress. Database and storage failures can delay
-  that cadence; a failed backup leaves local history intact and is retried. Ticks with nothing
-  new take no backup.
-- **When a run is `interrupted`.** For runs started with 0.20.0 or later, only on an observation
-  that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
-  records which kernel its process ran on (the boot id), its pid namespace, its start time,
-  and a marker: a FIFO in `.barca/run-owners/` that the process holds open for as long as it
-  has a run in flight. Three observations count:
-  - On the same kernel and in the same pid namespace, the process table: no process with
-    that id, or one with another start time in the same known time namespace.
-  - On the same kernel in another pid namespace (another container), the marker: the
-    system refuses to open a FIFO for writing when no process has it open for reading, and
-    it closes the owner's end when the owner ends, however it ended. This counts only where
-    barca can show that the file is the one the owner held: same device and inode, and on
-    Linux the same file handle.
-  - On another kernel, that the owner's kernel has shut down: the marker is on a local
-    disk (not a network or VM-shared mount) for both the owner and the reader, it is the
-    same filesystem and inode, and nobody has it open. A local disk is mounted by one
-    kernel at a time, so this is a machine, or a container's machine, that was restarted.
-
-  Machine ids and host names decide nothing. No clock is involved either: a killed run
-  reads `interrupted` at once, and a suspended laptop or a stopped process (Ctrl-Z) does
-  not make a live run look dead.
-- A run that is going is therefore shown as `running` from everywhere that sees the project
-  directory. The one situation in which a history says `interrupted` for a run that is
-  going somewhere is a copy of the whole disk (a cloned or restored virtual machine) taken
-  during the run and started as another machine: the copy's history is a copy too, and in
-  it the run will never end. And two virtual machines resumed from the same memory
-  snapshot are one machine as far as anything observable goes (same boot id, same
-  processes): if they share a project directory, a run killed on one is shown as
-  `interrupted` there while its twin on the other is still going.
-- What stays `running` although its process is gone:
-  - a run another machine started (its row came with a restored backup), until that machine
-    records it;
-  - with Docker Desktop, a run killed on the host as seen from a container, and a run
-    killed in a container as seen from the host: they are different kernels and the
-    directory between them is not a local disk. The side the run was on shows
-    `interrupted`, and once it has recorded that, so does the other;
-  - a run killed with its container when `.barca` is on a Docker Desktop bind mount (which
-    gives no file handle) and another container was started before the replacement, so
-    that the replacement got another pid namespace number. Restarting one container gives
-    the same number in practice. A named volume for `.barca` does not depend on it;
-  - a run killed in a container by a restart of the machine or of Docker's virtual machine
-    when `.barca` is on a bind mount from a Docker Desktop host or on a network
-    filesystem;
-  - a run killed by a restart of the machine when the project is on a network filesystem
-    (0.18.1 reported this one, from the host name and process id);
-  - a run started by barca 0.19.0 or earlier, which is judged by its process id and host
-    name: in a container, on another machine, or once its process id has been reused.
-
-After verifying that the process or container has stopped, explicitly reconcile an uncertain
-row with `barca history --reconcile RUN_ID --json`. This records only that row as
-`interrupted` and prints it in the normal history envelope (`runs`, `total: 1`,
-`truncated: false`); `--fields` and human output also work. It refuses a proven live owner,
-a terminal row, an unknown id, and combining `--reconcile` with `--limit` or `--all`.
-It preserves recorded step counts, successful materializations and artifacts, and leaves
-unknown end time and duration as `null`. It does not stop a process. Ordinary history reads
-still keep an uncertain owner `running`; reconciliation is your assertion that it stopped.
-The change is local to the selected environment's metadata database.
-
-- `interrupted` is written to the history by the next `get` or `run`, under the same rule.
-- A marker is removed by its process when its runs have ended. One left by a killed
-  process stays while its run reads `running`, and is removed by a later `get` or `run`
-  once no `running` run names it and it is an hour old. A process killed in the instant
-  between creating its marker and recording its run leaves a marker no run names; it goes
-  the same way after an hour. Markers are empty files.
-- Failed steps are recorded when the run ends, so a killed run records its successes only.
 
 ## Environments
 
@@ -957,64 +730,146 @@ The source in brackets is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `
 default`. Credentials and signed URI queries are redacted. The line is never on stdout, so
 `--json` output is unchanged. With neither setting, nothing is printed.
 
-## Metadata schema compatibility
+## Concurrent runs
 
-Run history, captured logs and schedules are durable data. Barca records the
-metadata schema version and refuses unsupported versions before
-reading history or writing results. Upgrade Barca to a compatible release if this
-happens; a mismatch never automatically deletes or rebuilds your metadata.
+Several barca processes can run in one project at once (parallel scripts or agents, `barca serve`
+alongside the CLI). The metadata DB is a single-file database that one process opens at a time,
+so each process holds a short lock on it (`.barca/metadata.db.lock`) only while it reads or
+writes, and releases it while your Python runs. Processes queue instead of failing. If a
+process waits more than 60 seconds for the lock you get an error that names the lock file;
+an `... File is locked by another process` error means something outside barca (a DB browser, a
+backup tool, an older barca) has `.barca/metadata.db` open.
 
-Existing unversioned metadata is upgraded with additive changes in one
-transaction, preserving its rows. A failed or interrupted upgrade can be retried.
-Read-only inspection does not migrate your source database. The same checks apply
-to a backup before `barca state restore` puts it in place.
+If a required database write fails, the command reports an infrastructure error (exit 3) and
+records no new outcome; what was already recorded stays. With an artifact store, a refresh in
+one process can replace an artifact another process is reading: the path names the computation,
+not the bytes. What an upload records in that case is specified in
+`specs/artifact-upload-receipts.md`.
 
-## Seeing what happened
+## While a run is going, and after one is killed
 
-```bash
-barca history --json            # recent runs: status, steps executed, steps cached
-barca stats total pipeline.py --json   # timing percentiles and cache hit rate for one asset
-barca plan pipeline.py          # what would run, in phases, without running it
-```
-
-`steps_executed` in `barca get`'s JSON output is the number of steps that actually ran; a fully
-cached second run reports 0 for assets.
-
-A decorated pipeline function in a file with a top-level project star import conservatively
-hashes the imported module and its static imports. Editing any part of that module can
-invalidate the node; this preserves cache safety when discovery proves its literal `__all__`.
-
-## Upload receipts during a concurrent refresh
-
-An upload pins the serializing run's bytes before publishing the reusable local artifact
-path. Its confirmed hash and byte count describe those uploaded bytes, even when another
-run replaces that path before the transfer starts. Sensor content hashes keep their existing
-meaning; ordinary asset rows use the confirmed upload hash. Cancelled uploads do not record
-a successful remote materialization; a failed upload records the result with the worker's
-digest and keeps the upload pending (`barca docs remote`). Staging is removed at confirmation or run
-shutdown, with dead-process cleanup as the crash backstop.
-
-Paths still identify code and inputs, so a later refresh can replace local and remote bytes.
-This receipt guarantee does not isolate concurrent result reads from those replacements.
-
-## Recompute byte checks
-
-Every new successful materialization records a SHA-256 digest of the serialized bytes.
-A recompute of the same node and run hash compares with its preceding successful digest.
-If the bytes differ, barca warns that the function is not deterministic and sets
-`steps[].bytes_changed: true` in run JSON. A new code/input hash is an expected change
-and does not warn. Legacy rows without a digest establish a baseline on recompute.
-This checks serialized bytes, so a serializer that emits variable metadata can also warn.
-Artifact paths and exit codes are unchanged.
-
-`barca status` shows the last such event even after a later unchanged recompute. JSON
-includes `last_bytes_change` with the exact node id, run hash, digest and UTC timestamp,
-and `last_materialization.content_hash` when a digest was recorded. Partition events
-are compared per key; the run's partitioned step report is marked if any key changed.
-Checkpoint and terminal writes retain the same finding without creating a second row.
-See `specs/materialization-digests.md` for the native boundary.
+A run records each completed step in `.barca/metadata.db` while it runs, normally within about
+half a second (with an artifact store, once its upload is confirmed). The order of these writes
+and how a failed write is retried are specified in `specs/cache-decisions.md`.
 
 ```bash
-barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
-barca status orders pipeline.py --json                 # last byte-change event and current digest
+barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
+barca history --json            # the run is `running`; `steps_executed` is the steps recorded so far
 ```
+
+- **Progress.** `barca status` in a second terminal shows what a running `barca get` or
+  `barca run` has finished: an asset is `cached`, a partitioned asset is `partial` with its
+  `cached` / `missing` counts. A step that is still running shows its previous state.
+- **A killed run keeps what it finished.** If the process is killed (`kill -9`, out of memory, a
+  lost machine), the next `barca get` serves the recorded steps from cache and computes the rest.
+  A step is recorded only after its artifact is completely written, so a recorded step always has
+  its file. A step that finished in the last half second before the kill may not be recorded: it
+  runs again. Failed steps are recorded when the run ends, so a killed run records its successes
+  only.
+- **History says so.** `barca history` reports a run whose process no longer exists as
+  `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
+  `steps_executed` at what it had recorded. It does so as soon as the process is gone, and
+  also for a run killed with its container, once a container starts again on the same
+  `.barca` (see the limits below). The next `get` or `run` writes `interrupted` to the history.
+  Ctrl-C and SIGTERM (a supervisor, `docker stop`) are different: the run stops its workers,
+  records itself and is `cancelled` (exit 130). With an artifact store that also holds while
+  artifacts upload or download or the history is backed up, and the cancelled run then backs
+  its record up for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
+
+**When a run is `interrupted`.** Only when barca can observe that the run's process is gone;
+whenever it cannot, the run stays `running`. Barca looks at the process table on the same
+kernel, at a marker file the process holds open (`.barca/run-owners/`) from another container on
+the same kernel, and at whether the owner's kernel has shut down for a marker on a local disk
+(`specs/cache-decisions.md`). Machine ids, host names and clocks decide nothing: a killed run
+reads `interrupted` at once, and a suspended laptop or a stopped process (Ctrl-Z) does not make a
+live run look dead.
+
+Known limits:
+
+- With a store (`barca docs remote`) all of this holds on the machine the run is on. Newly
+  committed progress is backed up every minute in healthy operation, without ending the run,
+  and the final outcome when it ends; a backup is restored only by `barca state restore`.
+- With a remote artifact store, an unfinished upload is never recorded as reusable progress.
+  A failed upload is recorded at the end of the run as a pending upload, `unsynced` in
+  `barca status` and uploaded by the next command (`barca docs remote`, "When an upload fails
+  after the steps succeeded"). A failed backup leaves local history intact and is retried;
+  ticks with nothing new take no backup.
+- A run that is going is shown as `running` from everywhere that sees the project directory.
+  The one situation in which a history says `interrupted` for a run that is going somewhere is
+  a copy of the whole disk (a cloned or restored virtual machine) taken during the run and
+  started as another machine: the copy's history is a copy too, and in it the run will never
+  end. And two virtual machines resumed from the same memory snapshot are one machine as far as
+  anything observable goes (same boot id, same processes): if they share a project directory, a
+  run killed on one is shown as `interrupted` there while its twin on the other is still going.
+- What stays `running` although its process is gone:
+  - a run another machine started (its row came with a restored backup), until that machine
+    records it;
+  - with Docker Desktop, a run killed on the host as seen from a container, and a run
+    killed in a container as seen from the host: they are different kernels and the
+    directory between them is not a local disk. The side the run was on shows
+    `interrupted`, and once it has recorded that, so does the other;
+  - a run killed with its container when `.barca` is on a Docker Desktop bind mount (which
+    gives no file handle) and another container was started before the replacement, so
+    that the replacement got another pid namespace number. Restarting one container gives
+    the same number in practice. A named volume for `.barca` does not depend on it;
+  - a run killed in a container by a restart of the machine or of Docker's virtual machine
+    when `.barca` is on a bind mount from a Docker Desktop host or on a network
+    filesystem;
+  - a run killed by a restart of the machine when the project is on a network filesystem.
+- A marker is removed by its process when its runs have ended. One left by a killed process
+  stays while its run reads `running`, and is removed by a later `get` or `run` once no
+  `running` run names it and it is an hour old; so is one left by a process killed between
+  creating its marker and recording its run. Markers are empty files.
+
+After verifying that the process or container has stopped, explicitly reconcile an uncertain
+row with `barca history --reconcile RUN_ID --json`. This records only that row as
+`interrupted` and prints it in the normal history envelope (`runs`, `total: 1`,
+`truncated: false`); `--fields` and human output also work. It refuses a proven live owner,
+a terminal row, an unknown id, and combining `--reconcile` with `--limit` or `--all`.
+It preserves recorded step counts, successful materializations and artifacts, and leaves
+unknown end time and duration as `null`. It does not stop a process. Ordinary history reads
+still keep an uncertain owner `running`; reconciliation is your assertion that it stopped.
+The change is local to the selected environment's metadata database.
+
+## Where things live
+
+```
+.barca/metadata.db                          run history and materialization records (local DB)
+.barca/backups/<name>.db, <name>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
+.barca/metadata.db.pre-restore              the database `barca state restore` replaced
+.barca/serve.lock                           held by a running `barca serve`, so `barca state restore` refuses to run under it
+.barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result
+.barca/staging/<pid>/                       a process's files in transit (uploads, downloads, result batches)
+.barca/sql-cache/                           copies of store artifacts `barca sql` downloaded (`barca docs sql`)
+.barca/gc-state.json                        what the last measurement of `.barca/` found ("Disk use")
+.barca/envs/<env>/                          the same layout for a named environment ("Environments")
+```
+
+`<ext>` is `.json`, `.pkl`, `.parquet` or `.csv` (see `barca docs types`). An artifact's path
+names the computation, not the bytes: the run hash covers the step's code and inputs, so the same
+step with the same inputs always writes the same path, and computing it again overwrites the file
+("Recompute byte checks"). To keep artifacts and a backup of the history in a bucket, set
+`BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
+
+`.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
+from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
+root. Barca changes into the root before doing anything, so:
+
+- running from a subdirectory reads and writes the same cache as running from the root
+  (`cd sub && barca get out ../pipeline.py` is a cache hit after `barca get out pipeline.py`);
+- file arguments are read relative to where you typed them, and node ids are relative to the
+  root, so `pipelines/p.py:out` is the same id from any directory;
+- steps run with the root as their working directory, so `Path("data.txt")` inside a step means
+  the root's `data.txt` wherever you invoke barca;
+- stderr says `barca: project root: <path>` whenever the root is not the current directory;
+- the project root is the boundary of the dependency cone ("Not followed").
+
+Put an empty `barca.toml` at the top of a project to anchor it. Barca records the metadata
+format version and refuses a database it does not support rather than rebuilding it
+(`specs/metadata-schema.md`).
+
+## Upgrading
+
+A barca release that changes how run hashes are computed recomputes the affected steps once, on
+the first run after upgrading; the release notes say so (`CHANGELOG.md`, GitHub Releases).

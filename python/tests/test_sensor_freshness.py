@@ -314,7 +314,7 @@ def report(clean: dict) -> dict:
 # has nothing to do with sensors: up to 0.18 the definition hash covered the decorator as text
 # (`@asset()`, `@asset(inputs={"clean": clean}, partitions={"region": partitions(["us", "eu"])})`)
 # plus the freshness; from 0.19 it covers the decorator arguments that count, in canonical form
-# (#283, "After upgrading to 0.19" in `barca docs cache`). The run hash itself is combined
+# (#283, 0.19.0 in CHANGELOG.md). The run hash itself is combined
 # exactly as before: `sensor_output_is_folded_into_the_consumer_run_hash` in `cache.rs`
 # pins that with a fixed definition hash and still has its 0.11.0 values.
 PINNED_0_19 = {
