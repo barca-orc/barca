@@ -14,7 +14,7 @@ Freshness says when each node is updated. Under `barca serve` (RFC-0008):
 |---|---|
 | `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
 | `Always` (default for assets/tasks) | Brought up to date at each tick of a scheduled node above it, in that tick's run. |
-| `Manual` (default for sensors) | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. |
+| `Manual` (default for sensors) | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. A sensor is the exception: every run that needs its value polls it, whatever its freshness. |
 
 ```python
 from pathlib import Path

@@ -12,6 +12,16 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Documentation
+
+- The guide's multi-file example imports `rows` as `from pipelines.sources import rows`; the
+  bare `from sources import rows` it showed is refused (exit 2). The guide's sensor section no
+  longer ends with a dozen paragraphs of dependency-tracking release notes, and the scheduling
+  tables say that sensors are polled by every run that needs them, whatever their freshness
+  (`Manual`, their default, does not pin a sensor).
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes
