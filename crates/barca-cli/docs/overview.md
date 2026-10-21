@@ -69,7 +69,7 @@ that; see `barca docs agents`.
 - `barca docs big-inputs` — large inputs: lazy types load only the columns and rows a step needs
 - `barca docs tasks` — tasks and `barca run`
 - `barca docs cache` — what is cached, artifacts, `--refresh` / `--refresh-all`, environments
-- `barca docs remote` — share one cache across machines (S3, GCS, Azure) with a few environment variables
+- `barca docs remote` — this machine's backup and read-through cache (S3, GCS, Azure); sharing means a server (`barca docs server-mode`)
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup

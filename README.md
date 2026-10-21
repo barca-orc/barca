@@ -59,8 +59,7 @@ Run 51fa8fe09d90 | all assets in 0.005s (0 steps, 1 phase)
 ...
 ```
 
-The second run executes 0 steps: both results come from the cache. Output shown in this
-file is from barca 0.25.0.
+The second run executes 0 steps: both results come from the cache.
 
 ## Install
 
@@ -328,7 +327,7 @@ downstream nodes. JSON retains the detailed step and target outcomes.
 
 `--fields a,b` keeps only those keys on each item of the JSON output. Every
 `barca <command> --help` ends with runnable examples. For a full refresh use `--refresh-all`
-(or `refresh_all=True` in Python); the deprecated alias is removed in 0.24.0.
+(or `refresh_all=True` in Python).
 
 ## Partitions
 
@@ -352,7 +351,7 @@ def total(all_sales: list[dict]) -> dict:
 
 `barca get total pipeline.py` runs 4 steps, then 0 on a second run. After `"latam"` is
 added to `REGIONS` it runs 2: `sales` for `latam`, then `total`. The same holds when the keys
-are a literal list written inside the decorator (up to 0.18 that form ran every key again).
+are a literal list written inside the decorator.
 `barca get sales pipeline.py` returns every key's artifact path;
 `--partition region=emea` selects keys, and with `--refresh sales` recomputes only them. In `barca sql` a partitioned asset is one view
 with a `partition` column (`region=emea`).
@@ -415,7 +414,7 @@ its events stream as they happen, and `GET /runs/<run_id>` answers with its outc
 a restart.
 
 ```bash
-curl localhost:8274/health                  # {"api_version":1,"env":"default","scheduler":true,"status":"ok",...}
+curl localhost:8274/health                  # {"api_version":1,"cache":{...},"env":"default","load_errors":[],"read_only":false,"scheduler":true,"status":"ok","store_uri":null,"version":"0.27.0"}
 curl localhost:8274/schedule                # each schedule: last and next fire, last status, pause
 curl -XPOST localhost:8274/runs -d '{"command":"get","targets":["summary"]}'   # -> {"run_id":"..."}
 curl -XPOST localhost:8274/runs -d '{"command":"run","targets":["publish"]}'   # one task

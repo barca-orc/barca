@@ -79,7 +79,7 @@ pub const TOPICS: &[Topic] = &[
     ),
     topic!(
         "remote",
-        "Share one cache across machines: S3, GCS, Azure, configured with environment variables",
+        "This machine's backup and read-through cache: S3, GCS, Azure; sharing means a server",
         "remote.md"
     ),
     topic!(

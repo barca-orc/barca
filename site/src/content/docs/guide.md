@@ -64,10 +64,11 @@ A run creates `.barca/` in the project root:
 - **The format follows the returned value.** A dict, list, string or number is stored as
   json. A DataFrame, Arrow table or DuckDB relation is stored as parquet. Anything else is
   pickled (`barca docs types`).
-- **Results are written locally first.** A remote store is an optional shared copy: set
-  `BARCA_REMOTE_URI` (or `[remote] uri` in `barca.toml`) and machines that use the same
-  location get cache hits for each other's results. See
-  [Remote storage](/reference/remote-storage/).
+- **Results are written locally first.** A remote store is this machine's backup and
+  read-through cache: set `BARCA_REMOTE_URI` (or `[remote] uri` in `barca.toml`) and every
+  result and a backup of the history are uploaded there. See
+  [Remote storage](/reference/remote-storage/). Sharing results between machines means a
+  server they all point at (`barca docs server-mode`, [Deploying](/deploying/)).
 - **`--env <name>`** (or `BARCA_ENV`) keeps a separate cache and history, so dev and prod
   do not share results.
 
