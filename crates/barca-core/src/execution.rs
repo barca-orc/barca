@@ -666,6 +666,7 @@ async fn start_workers(
             }),
         artifact_root: worker_artifact_root,
         storage_options_json: cfg.storage_options_json.clone(),
+        agent_mode: request.agent_mode,
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
     // Finished steps are written to the local metadata DB while the run goes on (#214), and,

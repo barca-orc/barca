@@ -211,7 +211,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
               {node.kind !== 'task' && (
                 <div>
                   <b>{Math.round(stats.cache_hit_rate * 100)}%</b>
-                  <span>cache hits</span>
+                  <span>re-executed, same inputs</span>
                 </div>
               )}
             </div>

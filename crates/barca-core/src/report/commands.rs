@@ -504,7 +504,7 @@ pub fn render_history(
             r.steps_executed,
             r.steps_cached,
             elapsed_str,
-            r.started_at,
+            crate::report::utc_cell(&r.started_at),
         );
     }
     if let Some(note) = page.note(runs.len(), "runs") {
@@ -536,9 +536,10 @@ pub fn render_stats(
         fmt(stats.p95_elapsed_seconds),
         fmt(stats.max_elapsed_seconds),
     );
+    // Not a cache hit rate: hits execute nothing and are not recorded per asset (#496).
     line!(
         rendered,
-        "Cache hit rate: {:.1}%",
+        "Re-executed with unchanged inputs: {:.1}%",
         stats.cache_hit_rate * 100.0
     );
     if !stats.recent_runs.is_empty() {
@@ -562,7 +563,7 @@ pub fn render_stats(
                 elapsed_str,
                 entry.status,
                 entry.attempts,
-                entry.created_at,
+                crate::report::utc_cell(&entry.created_at),
             );
             if entry.status == "failed"
                 && let Some(msg) = &entry.error_message

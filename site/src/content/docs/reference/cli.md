@@ -322,7 +322,8 @@ attempts, including import/input loading/call/serialization and excluding retry 
 After a worker disconnect, the coordinator's observed in-flight time is used. For
 partitioned steps it sums executed keys, while attempts is the maximum for one key.
 
-A worker prints `[barca] importing <module>` before loading a module. Imports longer
+Under `--agent` (and in `barca serve`), a worker prints `[barca] importing <module>` before
+loading a module; without `--agent` it prints nothing of its own. Imports longer
 than one second add `import_seconds`, included in elapsed time and summed across
 attempts/keys. Reused modules add no import time. Agent completion and permanent failure
 lines append `attempts=N` for retries. `history --json` sums recorded materialization
@@ -427,20 +428,24 @@ read. The remote store is never touched.
 
 ## stats
 
-Show statistics for one node: how many times it ran, timings (average, median, p95, max),
-cache hit rate and recent runs. The target is required.
+Show statistics for one node: how many times it executed, timings (average, median, p95,
+max), how many executions repeated unchanged inputs, and recent runs. The target is required.
+Times are UTC.
 
 ```
 $ barca stats total pipeline.py
 Asset: pipeline.py:total
 Total materializations: 1
 Timing:  avg 0.001s  median 0.001s  p95 0.001s  max 0.001s
-Cache hit rate: 0.0%
+Re-executed with unchanged inputs: 0.0%
 
 Recent runs:
   ELAPSED    STATUS    ATTEMPTS CREATED
-  0.001s     success   1        2026-10-07 18:22:40
+  0.001s     success   1        2026-10-07 18:22:40 UTC
 ```
+
+A cache hit executes nothing, so it is not counted here; `barca history` counts cache hits per
+run. In the JSON the re-execution share is `cache_hit_rate` (the key keeps its name).
 
 The JSON has `id`, `total_runs`, `cache_hit_rate`, `avg_elapsed_seconds`,
 `median_elapsed_seconds`, `p95_elapsed_seconds`, `max_elapsed_seconds` and `recent_runs` (each
@@ -676,6 +681,7 @@ barca docs skill              # the agent skill (SKILL.md), with its frontmatter
 barca docs --all              # every topic in one stream
 barca docs --json             # topic index as JSON; add a topic for its full text
 barca docs --fields name      # JSON index with only topic names (name, summary, content)
+barca docs cache --pretty     # markdown, the default even when piped
 ```
 
 `barca docs skill` is the short [agent skill](/reference/agent-skill/) an AI agent loads once.

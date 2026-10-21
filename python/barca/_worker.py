@@ -956,7 +956,10 @@ def _run_daemon_step(step, modules, art_dir, lru):
         activate_source_path(source)
         emitter = _stdout_for_step(node_id)
         if source not in modules:
-            print(f"[barca] importing {source}", file=sys.stderr, flush=True)
+            # Only under `--agent` (and in `barca serve`): a person's terminal shows the progress
+            # bar, and the import time is in the run JSON as `import_seconds` (#496).
+            if os.environ.get("BARCA_WORKER_AGENT") == "1":
+                print(f"[barca] importing {source}", file=sys.stderr, flush=True)
             import_start = time.perf_counter()
             try:
                 with contextlib.redirect_stdout(emitter):

@@ -27,7 +27,8 @@ save it as a file, for example `barca docs skill > .claude/skills/barca/SKILL.md
 So `barca list pipeline.py` shows a table in your terminal, and `barca list pipeline.py | cat`
 or a subprocess call gets JSON. Pass `--json` anyway in scripts: it states the intent
 and survives someone setting `BARCA_OUTPUT=pretty`. `plan` always prints JSON and `docs` always
-prints markdown (`barca docs --json` for JSON); neither follows the rule.
+prints markdown (`barca docs --json` for JSON, and `--pretty` is accepted and changes nothing);
+neither follows the rule.
 
 ```bash
 barca list pipeline.py --json        # JSON even in a terminal
@@ -368,7 +369,7 @@ barca status total,orders pipeline.py --json    # several targets: the union of 
 barca list pipeline.py --json       # {nodes: [{id, kind, freshness, inputs, env}], total, truncated}; freshness: always|manual|schedule
 barca plan pipeline.py              # phases and steps that would run, nothing executes
 barca history --json                # {runs: [...], total, truncated}: every recorded run unless --limit is given
-barca stats total pipeline.py --json  # timings and cache hit rate for one asset
+barca stats total pipeline.py --json  # timings and re-executions for one asset
 ```
 
 Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`

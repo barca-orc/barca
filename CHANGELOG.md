@@ -12,6 +12,16 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+- Quieter first run (#496): the worker's `[barca] importing <module>` line is printed only under
+  `--agent` (and in `barca serve`); the import time stays in the run JSON as `import_seconds`.
+  The human tables of `status`, `history` and `stats` mark their timestamps `UTC`.
+  `barca docs --pretty` is accepted (markdown, the default). `barca stats` labels its rate
+  "Re-executed with unchanged inputs" and counts only the executions that repeated an earlier
+  run hash; it was labelled "Cache hit rate" though cache hits are never recorded per asset. The
+  JSON key is still `cache_hit_rate`.
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking

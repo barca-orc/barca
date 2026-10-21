@@ -72,6 +72,7 @@ fn main() {
         all,
         json,
         fields,
+        ..
     } = &cli
     {
         match docs::run(topic.as_deref(), *all, *json || fields.is_some())
