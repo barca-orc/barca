@@ -1512,6 +1512,46 @@ pub(crate) async fn last_success_components(cache: &CacheReader, node_id: &str) 
     row.get::<String>(0).ok().filter(|c| !c.is_empty())
 }
 
+/// The object this machine knows to be in the artifact store for `node_id` (a display id) at
+/// `run_hash`: the store location and digest of its latest successful row, unless an upload to
+/// that location is pending (#390) or the row has no digest. A row with a store location is
+/// recorded only once its upload was confirmed (`specs/artifact-upload-receipts.md`), so a
+/// step that produces the same digest again need not upload it again (#554).
+pub(crate) async fn confirmed_object(
+    cache: &CacheReader,
+    node_id: &str,
+    run_hash: &str,
+) -> Option<(String, String)> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT artifact_path, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+             WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' \
+             AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1",
+            [node_id.to_string(), run_hash.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    let path = row.get::<String>(0).ok()?;
+    let digest = row.get::<String>(1).ok().filter(|d| !d.is_empty())?;
+    drop(rows);
+    // Any pending upload to that location (this host's or another's), or a database that
+    // cannot say: the object is not known to be there.
+    let mut pending = cache
+        .conn()
+        .query(
+            "SELECT 1 FROM pending_uploads WHERE store_path = ?1",
+            [path.clone()],
+        )
+        .await
+        .ok()?;
+    match pending.next().await {
+        Ok(None) => Some((path, digest)),
+        _ => None,
+    }
+}
+
 /// The id of the latest successful materialization of `node_id` (a display id), artifact or
 /// not; `None` when it never succeeded.
 pub(crate) async fn latest_success_id(cache: &CacheReader, node_id: &str) -> Option<i64> {

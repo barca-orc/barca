@@ -288,6 +288,7 @@ impl Launching {
             io_task,
             socket_path: self.socket_path,
             next_id: 0,
+            uploads_queued: 0,
             uploads: VecDeque::new(),
             settled: Vec::new(),
             fetches: HashMap::new(),
@@ -311,6 +312,8 @@ pub struct TransferClient {
     io_task: JoinHandle<()>,
     socket_path: PathBuf,
     next_id: u64,
+    /// Uploads queued since the helper started ([`Self::uploads_queued`]).
+    uploads_queued: usize,
     /// Uploads queued and not yet collected by [`Self::drain`], oldest first.
     uploads: VecDeque<Pending>,
     /// Outcomes `drain` has collected but not reported yet: (key, store, outcome). Only
@@ -421,6 +424,7 @@ impl TransferClient {
         uploaded: Option<UploadNotice>,
     ) -> Option<String> {
         let store = self.layout.store_for(local)?;
+        self.uploads_queued += 1;
         let rx = self.send_observed(
             |id| TransferRequest::Put {
                 id,
@@ -521,27 +525,44 @@ impl TransferClient {
         self.probe_root(root).await
     }
 
-    /// Whether the object at `store` is in the store: its size and, for a store that is a plain
-    /// directory, its SHA-256. `Ok(None)` when it is not there; `Err` when the store could not
-    /// say (permissions, a store that cannot be reached).
-    pub(crate) async fn stat(
+    /// Whether each object of `stores` is in the store, in the same order: its size and, for a
+    /// store that is a plain directory, its SHA-256. `Ok(None)` when it is not there; `Err` when
+    /// the store could not say (permissions, a store that cannot be reached). Moves no bytes.
+    /// The requests are all sent before
+    /// any answer is awaited, so the helper asks the store about them concurrently: one round
+    /// trip's wait, not one per object.
+    pub(crate) async fn stat_all(
         &mut self,
-        store: &str,
-    ) -> Result<Option<(u64, Option<String>)>, String> {
-        let rx = self.send(|id| TransferRequest::Stat {
-            id,
-            remote: store.to_string(),
-        });
-        match settle(rx).await {
-            Ok(t) => Ok(Some((t.bytes, t.sha256))),
-            Err(f) if f.missing => Ok(None),
-            Err(f) => Err(f.message),
+        stores: &[String],
+    ) -> Vec<Result<Option<(u64, Option<String>)>, String>> {
+        let replies: Vec<ReplyRx> = stores
+            .iter()
+            .map(|store| {
+                self.send(|id| TransferRequest::Stat {
+                    id,
+                    remote: store.clone(),
+                })
+            })
+            .collect();
+        let mut out = Vec::with_capacity(replies.len());
+        for rx in replies {
+            out.push(match settle(rx).await {
+                Ok(t) => Ok(Some((t.bytes, t.sha256))),
+                Err(f) if f.missing => Ok(None),
+                Err(f) => Err(f.message),
+            });
         }
+        out
     }
 
     async fn probe_root(&mut self, root: String) -> Result<(), String> {
         let rx = self.send(|id| TransferRequest::Probe { id, root });
         settle(rx).await.map(|_| ()).map_err(|f| f.message)
+    }
+
+    /// Number of uploads queued since the helper started, drained or not.
+    pub fn uploads_queued(&self) -> usize {
+        self.uploads_queued
     }
 
     /// Number of uploads queued since the last drain.

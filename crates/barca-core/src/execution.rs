@@ -2801,7 +2801,24 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         step_reports.push(report_for(dag, &step, &decision, false));
         let display_id = step.step_id.display();
         match decision {
-            Decision::Run(_) => uncached_steps.push(step),
+            Decision::Run(_) => {
+                // What the store already holds for a sensor at this run hash: a poll whose data
+                // did not change produces the same bytes, which are not uploaded again (#554).
+                // Only a sensor: it runs every time and is never served from the store, so a
+                // store object changed behind this machine's back is never read as its result.
+                // An asset is uploaded whenever it runs (a refresh repairs the store).
+                if let Some(s) = store.as_mut()
+                    && step.partition_keys.is_empty()
+                    && dag
+                        .get_node(step.step_id.base_id())
+                        .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+                    && let Some(run_hash) = decide_state.run_hashes().get(&display_id)
+                    && let Some(known) = db::confirmed_object(&cache, &display_id, run_hash).await
+                {
+                    s.confirmed.insert(display_id.clone(), known);
+                }
+                uncached_steps.push(step)
+            }
             Decision::Cached {
                 oref,
                 stale_root,
@@ -3000,7 +3017,20 @@ async fn dispatch_phase(
                     .map(str::to_string);
                 let source = snapshot.as_deref().unwrap_or(path);
                 let cleanup = snapshot.clone();
-                if let Some(at) = s.client.upload_confirmed(
+                let digest = artifact.get("content_hash").and_then(|v| v.as_str());
+                if let Some(digest) = digest
+                    && s.holds_already(node_id, &at, digest)
+                {
+                    // A sensor poll that returned what the store already holds at this location,
+                    // as this machine recorded on a confirmed upload: record the step now, upload
+                    // nothing (#554).
+                    record(Some(digest.to_string()));
+                    if let Some(path) = &snapshot {
+                        std::fs::remove_file(path).ok();
+                    }
+                    s.unchanged_sensors += 1;
+                    store_paths.insert(node_id.to_string(), at);
+                } else if let Some(at) = s.client.upload_confirmed(
                     node_id,
                     path,
                     source,
@@ -3393,7 +3423,25 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     // copy failing, or Ctrl-C, can change the command's outcome; a failed upload is a warning
     // (#390), and the next backup sends the copy.
     let mut publish_error = None;
-    if cfg.backup_uri.is_some() {
+    // A run that recorded no new result takes no backup (#554): nothing failed, nothing was
+    // uploaded (no new artifact, no repair, no pending retry), every step it ran was a sensor
+    // whose value the store already held, and every earlier run is in a backup the store
+    // confirmed. Its run row reaches the store with the next backup.
+    let nothing_new = cfg.backup_uri.is_some()
+        && !was_cancelled
+        && all_failures.is_empty()
+        && step_failure.is_none()
+        && phase_error.is_none()
+        && transfer_error.is_none()
+        && store.as_ref().is_some_and(|s| {
+            s.client.uploads_queued() == 0 && s.unchanged_sensors == steps_executed
+        })
+        && crate::backup::covered(cfg, run_id).await;
+    if nothing_new {
+        crate::backup::mark_covered(cfg, run_id);
+        trace_point!("backup_skipped (no new result)");
+    }
+    if cfg.backup_uri.is_some() && !nothing_new {
         match final_backup(
             python,
             cfg,
@@ -3785,6 +3833,8 @@ async fn repair_targets(
     pending: &std::collections::HashSet<String>,
     repaired: &mut Vec<String>,
 ) {
+    // Every target that can be checked, then one round of questions to the store (#554).
+    let mut checks: Vec<(&String, &OutputRef, String, u64, String)> = Vec::new();
     for (_, id) in targets {
         if !cached.contains(id) {
             continue;
@@ -3802,7 +3852,7 @@ async fn repair_targets(
         let Some(store) = s.layout.store_for(&oref.path) else {
             continue;
         };
-        if pending.contains(&store) {
+        if pending.contains(&store) || checks.iter().any(|c| c.2 == store) {
             continue;
         }
         let Ok(local_sha) = db::file_sha256(local) else {
@@ -3811,10 +3861,18 @@ async fn repair_targets(
         if oref.content_hash.as_deref().is_some_and(|h| h != local_sha) {
             continue;
         }
-        let differs = match s.client.stat(&store).await {
+        checks.push((id, oref, store, meta.len(), local_sha));
+    }
+    if checks.is_empty() {
+        return;
+    }
+    let stores: Vec<String> = checks.iter().map(|c| c.2.clone()).collect();
+    let answers = s.client.stat_all(&stores).await;
+    for ((id, oref, store, len, local_sha), answer) in checks.into_iter().zip(answers) {
+        let differs = match answer {
             Ok(None) => false,
             Ok(Some((size, sha))) => {
-                if size == meta.len() && sha.as_deref().is_none_or(|h| h == local_sha) {
+                if size == len && sha.as_deref().is_none_or(|h| h == local_sha) {
                     continue;
                 }
                 true

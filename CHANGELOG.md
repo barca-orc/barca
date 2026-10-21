@@ -81,6 +81,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   attempt. A worker is still replaced after `sys.exit()`, `MemoryError`, a timeout, a failed
   module import, an unfinished `parallel()` exchange or a crash, and a crash still names the
   exit signal.
+- A warm run with a store no longer pays for work that changes nothing (#554). A sensor that
+  returned what the store already holds at its location, by this machine's record of the
+  confirmed upload, is not uploaded again. A run that recorded no new result takes no metadata
+  backup at its end: nothing failed or was uploaded, every step it ran was such a sensor, and every
+  earlier run is in a backup the store confirmed. Its run row goes with the next backup. The
+  store is asked about all of a `get`'s cached targets at once rather than one by one. On a
+  9-node project with two file sensors and a MinIO store on localhost, a warm `barca get` went
+  from about 1.4 s to 0.5 s on a loaded machine (0.13 s without a store). What is left is the
+  transfer helper's start and the startup check, which a `get` of a cached target still needs.
 
 ### Features
 
