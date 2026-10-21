@@ -76,6 +76,10 @@ and these tags are available on the same releases page.
   reads it as no history yet and leaves it alone. A file that is not SQLite, a newer format or a
   malformed schema is still refused, and an empty `.barca/metadata.db` beside a named env's
   database still gets the stray-file warning.
+- Concurrent `barca get` / `barca run` processes in one project no longer fail now and then with
+  `Failed locking file '.barca/metadata.db'. File is locked by another process` (exit 3) (#537).
+  Since 0.28.0, setting up the metadata DB released barca's cross-process lock before closing
+  the database, so another process could open it while it was still held.
 
 ### Performance
 

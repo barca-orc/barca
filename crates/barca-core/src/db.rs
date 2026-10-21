@@ -643,12 +643,21 @@ pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
             return Err(unusable(why));
         }
         let (db, conn) = connect(path).await?;
-        let _handle = DbHandle {
+        let handle = DbHandle {
             _db: db,
             _lock: lock,
         };
-        init_schema(&conn).await?;
-        crate::db_schema::read_version(&conn).await
+        let version = match init_schema(&conn).await {
+            Ok(()) => crate::db_schema::read_version(&conn).await,
+            Err(e) => Err(e),
+        };
+        // The connection keeps the file open (and Turso's lock on it) until it is dropped, so
+        // it goes before the handle releases barca's lock. Dropped the other way round, another
+        // process could take barca's lock while the file was still held, and fail with "File
+        // is locked by another process" (#537).
+        drop(conn);
+        drop(handle);
+        version
     }
     .await;
     initialized.map_err(|e| named(e, shown))
