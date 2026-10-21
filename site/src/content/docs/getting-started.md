@@ -46,7 +46,6 @@ uv run barca get pipeline.py
 ```
 
 ```
-[barca] importing /home/you/my-project/pipeline.py
 [barca] 2/2 steps | done in 0.0s
 Run 151401da97ef | all assets in 0.133s (2 steps, 1 phase)
 
@@ -58,8 +57,8 @@ Run 151401da97ef | all assets in 0.133s (2 steps, 1 phase)
 ```
 
 Barca read `pipeline.py` without importing it, saw that `summary` depends on `raw_data`,
-and ran both in a Python worker process, which imports the file to call the functions (the
-`importing` line). It then printed where the last asset's result is, with a preview of the
+and ran both in a Python worker process, which imports the file to call the functions. It
+then printed where the last asset's result is, with a preview of the
 value under it when the value is small json. The `[barca]` lines are progress, on stderr. The
 rest is the result, on stdout. File names are shortened here; barca prints the whole run hash.
 
@@ -162,7 +161,6 @@ uv run barca get summary
 ```
 
 ```
-[barca] importing /home/you/my-project/pipeline.py
 [barca] 1/2 steps | done in 0.0s
 Run 15134f24969a | got 'summary' in 0.068s (1 step, 1 phase)
 

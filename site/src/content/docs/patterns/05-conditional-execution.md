@@ -33,7 +33,6 @@ barca run publish pipeline.py
 ```
 
 ```
-[barca] importing /home/you/project/pipeline.py
 [barca] 2/2 steps | done in 0.0s
 Run 14fcc4d8648c | ran 'publish' in 0.098s (2 steps, 2 phases)
 
@@ -72,7 +71,6 @@ barca run publish_gated pipeline.py
 ```
 
 ```
-[barca] importing /home/you/project/pipeline.py
 [barca] 0/3 steps | failed in 0.0s
 Worker failed: ValueError: validation failed for ids [2]
   File "/home/you/project/pipeline.py", line 21, in gate

@@ -126,12 +126,11 @@ cache.
 
 ```
 $ barca get summary pipeline.py --json
-[barca] importing /home/you/project/pipeline.py
 [barca] 2/2 steps | done in 0.0s
 {"elapsed_seconds":0.08844638,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--summary/2d10....json","size_bytes":24}},"phases":1,"run_id":"14f3f967c1b6","status":"success","steps":[{"attempts":1,"detail":"no cached result for this code and these inputs","elapsed_seconds":0.0023,"id":"pipeline.py:raw_data","kind":"asset","reason":"not_materialized","run_hash":"a8e7...","status":"ran"},{"attempts":1,"detail":"no cached result for this code and these inputs","elapsed_seconds":0.0007,"id":"pipeline.py:summary","kind":"asset","reason":"not_materialized","run_hash":"2d10...","status":"ran"}],"steps_executed":2,"warnings":[]}
 ```
 
-The first two lines are progress, on stderr (the worker's `importing` line, then the run). The JSON is one line on stdout (hashes shortened here).
+The first line is progress, on stderr. The JSON is one line on stdout (hashes shortened here).
 `final_output` is a pointer to the artifact, `{"_barca_artifact": {"path", "format",
 "size_bytes"}}`, whatever its format. Run it again and every step is `"status":"cached"`, with
 its `artifact` path, and `"steps_executed":0`. In a terminal the same run prints a summary and
@@ -236,7 +235,6 @@ only the value.
 
 ```
 $ barca run notify pipeline.py
-[barca] importing /home/you/project/pipeline.py
 [barca] 1/3 steps | done in 0.0s
 Run 14f1e316840c | ran 'notify' in 0.074s (1 step, 1 phase)
 
@@ -328,7 +326,8 @@ attempts, including import/input loading/call/serialization and excluding retry 
 After a worker disconnect, the coordinator's observed in-flight time is used. For
 partitioned steps it sums executed keys, while attempts is the maximum for one key.
 
-A worker prints `[barca] importing <module>` before loading a module. Imports longer
+Under `--agent` (and in every run `barca serve` starts) a worker prints
+`[barca] importing <module>` before loading a module; otherwise it prints nothing. Imports longer
 than one second add `import_seconds`, included in elapsed time and summed across
 attempts/keys. Reused modules add no import time. Agent completion and permanent failure
 lines append `attempts=N` for retries. `history --json` sums recorded materialization

@@ -50,9 +50,6 @@ cat attempts.txt
 ## What barca does
 
 ```
-[barca] importing /home/you/project/pipeline.py
-[barca] importing /home/you/project/pipeline.py
-[barca] importing /home/you/project/pipeline.py
 [barca] 2/2 steps | done in 0.0s
 Run 14f89b37ed6a | ran 'notify' in 3.210s (2 steps, 1 phase)
 
@@ -69,8 +66,7 @@ attempt 3 at 1792550327.1 pid 188716
 ```
 
 The second attempt starts one second after the first and the third two seconds after the
-second. Each attempt runs in a new worker process (three process ids, and an `importing` line
-for each), so nothing in memory
+second. Each attempt runs in a new worker process (three process ids), so nothing in memory
 carries over from a failed attempt. The run reports success and exits 0; the failed attempts
 are not shown in the summary.
 
@@ -93,9 +89,7 @@ barca run after_broken pipeline.py
 ```
 
 ```
-[barca] importing /home/you/project/pipeline.py
 [pipeline.py:broken] broken runs
-[barca] importing /home/you/project/pipeline.py
 [pipeline.py:broken] broken runs
 [barca] 0/2 steps | failed in 0.0s
 Worker failed: ValueError: always fails

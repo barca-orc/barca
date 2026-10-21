@@ -37,7 +37,6 @@ barca run seed_data pipeline.py
 upstream result is not read from disk.
 
 ```
-[barca] importing /home/you/project/pipeline.py
 [pipeline.py:migrate_db] migrating
 [pipeline.py:seed_data] seeding
 [barca] 2/2 steps | done in 0.0s

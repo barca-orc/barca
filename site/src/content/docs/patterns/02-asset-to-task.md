@@ -35,7 +35,6 @@ First run: two steps, `model` and then `deploy`. The task's `print` goes to stde
 with the step's id. In a terminal `run` prints the task's value under the summary.
 
 ```
-[barca] importing /home/you/project/pipeline.py
 [pipeline.py:deploy] deploying model v3
 [barca] 2/2 steps | done in 0.0s
 Run 150dcb149a6c | ran 'deploy' in 0.064s (2 steps, 1 phase)
@@ -49,7 +48,6 @@ Value:
 Second run: one step. `model` is served from cache and `deploy` runs again.
 
 ```
-[barca] importing /home/you/project/pipeline.py
 [pipeline.py:deploy] deploying model v3
 [barca] 1/2 steps | done in 0.0s
 Run 150f3857378c | ran 'deploy' in 0.061s (1 step, 1 phase)

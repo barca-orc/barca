@@ -58,10 +58,6 @@ comes back as a `ParallelError` and the run still succeeds (exit 0), because `de
 did not raise:
 
 ```
-[barca] importing /home/you/project/pipeline.py
-[barca] importing /home/you/project/pipeline.py
-[barca] importing /home/you/project/pipeline.py
-[barca] importing /home/you/project/pipeline.py
 [barca] 4/4 steps | done in 3.2s
 Run 1504cbf23786 | ran 'deploy_all' in 1.229s (2 steps, 1 phase)
 
@@ -73,8 +69,7 @@ Value:
 }
 ```
 
-Each worker process prints its own `importing` line: the one that runs `model` and
-`deploy_all`, and one for each branch. `ParallelError.error` is a string: the exception type,
+`ParallelError.error` is a string: the exception type,
 its message and the traceback lines.
 
 `parallel_map(fn, items, **kwargs)` is the same as
