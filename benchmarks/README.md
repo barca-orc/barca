@@ -191,7 +191,7 @@ worker count is read once, at server startup, from the environment.
 | `partitioned_etl` | — | ETL with partitioning | Parallel partitions |
 | `partitioned_fan_in` | 100 | 50 partitions × 2 assets, 1:1 partition-aligned chain | Parallel partitions |
 | `collect_fan_in` | 51 | 50 partitions → 1 (`collect()`, many-to-one gather) | Parallel partitions |
-| `partitioned_10k` | ~10k | Docker-based cross-framework | Parallel partitions |
+| `partitioned_10k` | 10k | 10 assets × 1000 partitions, barca, Dagster, Prefect and Airflow (`scripts/run_all.py`) | Parallel partitions |
 | `partition_scaling` | 3 × N keys (2k, 20k) | 3 assets × N partitions, cold and warm, barca only (#345); `FAIL_HALF=1` fails every odd key (#461) | Parallel partitions |
 
 ### Dynamic dispatch & resilience (v0.2.0)
@@ -246,6 +246,23 @@ hyperfine --warmup 3 --runs 10 \
   "$(bench_pin benchmarks/trivial/dagster/run.sh)" \
   "$(bench_pin benchmarks/trivial/prefect/run.sh)"
 ```
+
+Each `run.sh` uses the framework's `.venv` next to it. A `.venv` may be a symlink to a venv kept
+outside the repository (`ln -s ~/venvs/dagster benchmarks/trivial/dagster/.venv`); `.venv` is
+gitignored, symlinks included. Two more overrides:
+
+- `BARCA=/path/to/barca benchmarks/trivial/barca/run.sh` runs another barca binary, for example a
+  PyPI release in its own venv, instead of the repository's `.venv/bin/barca`.
+- `AIRFLOW_BIN=/path/to/airflow` points the `airflow/run.py` scripts at an Airflow install; it
+  wins over `BARCA_BENCH_AIRFLOW_VENV` (see "Airflow harnesses" below).
+  They time `airflow dags test` only; `airflow db migrate` runs first, untimed. Without
+  `--use-executor`, `dags test` runs the tasks in process, one after another.
+
+`partitioned_10k/scripts/run_all.py` runs one framework per call, killed after 10 minutes
+(`BENCH_TIMEOUT`): `python run_all.py dagster` with Dagster's venv, `BARCA=... python
+run_all.py barca`, and `AIRFLOW_BIN=... AIRFLOW_SQL_ALCHEMY_CONN=postgresql+psycopg2://...
+python run_all.py airflow` against a PostgreSQL server. With no argument it runs barca,
+Dagster and Prefect in one interpreter, as the Docker image does.
 
 Each benchmark directory contains:
 - `barca/` — barca implementation + `run.sh`
