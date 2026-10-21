@@ -1,9 +1,14 @@
 ---
-title: Doctor and local debugging
-description: Check project prerequisites, stores and credential identity without running steps.
+title: "Doctor and Local Debugging"
+description: "Check project prerequisites, stores and credential identity without running steps."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/doctor.md
 ---
 
-# Doctor: check a project before running it
+<!-- Generated from crates/barca-cli/docs/doctor.md (barca docs doctor). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs doctor`: the CLI prints the same text.
+:::
 
 ```bash
 barca doctor
@@ -26,8 +31,8 @@ Argument errors still exit 2. Check names and provider-specific `data` are exper
 
 `get`, `run` and `serve` also print the selected environment and artifact store once at
 startup, on stderr, when the environment comes from `default_env` in `barca.toml` or a store
-is configured: `[barca] env prod (default_env in barca.toml); artifact store <store>`. See
-[Configuration](/reference/config/#environments---env).
+is configured: `[barca] env prod (default_env in barca.toml); artifact store <store>`
+(`barca docs cache`, "Environments").
 
 The Python probe has a 30-second overall deadline. It lists stores and looks up the
 identity behind the selected credentials where supported: AWS STS caller, Azure token
@@ -58,5 +63,5 @@ barca doctor --pretty
 barca get --refresh-all
 ```
 
-`--env` overrides `BARCA_ENV` for an individual command. See `barca docs remote` for store
-configuration and `barca docs discovery` for project roots and source selection.
+`--env` overrides `BARCA_ENV` for an individual command. See [`barca docs remote`](/reference/remote-storage/) for store
+configuration and [`barca docs discovery`](/reference/discovery/) for project roots and source selection.

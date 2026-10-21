@@ -1,7 +1,14 @@
 ---
-title: Remote Storage
-description: Keep results and backups of the run history in S3, GCS, Azure or Cloudflare R2, configured with environment variables; restore the history with one command.
+title: "Remote Storage"
+description: "Keep results and backups of the run history in S3, GCS, Azure or Cloudflare R2, configured with environment variables; restore the history with one command."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/remote.md
 ---
+
+<!-- Generated from crates/barca-cli/docs/remote.md (barca docs remote). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs remote`: the CLI prints the same text.
+:::
 
 Point barca at a bucket and every result is uploaded there, and the metadata database (run
 history and what is cached) is backed up there. The store is this machine's backup and
@@ -15,7 +22,7 @@ export BARCA_REMOTE_URI=s3://my-bucket/barca/my-project
 barca get total                              # results and a history backup go to the bucket
 ```
 
-Sharing state between machines means a server ([RFC-0007](/rfcs/0007-server-mode/)), not a shared bucket. Up to 0.25,
+Sharing state between machines means a server (RFC-0007), not a shared bucket. Up to 0.25,
 `optimistic` mode pulled a shared history from the bucket before each run and pushed it after;
 barca 0.26.0 removed it (see "Upgrading from the shared history" below).
 
@@ -103,8 +110,8 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 
 Keep secrets out of it: credentials still come from the environment. Precedence, highest first:
 `BARCA_REMOTE_URI` over `[remote].uri`; `BARCA_STORAGE_OPTIONS` (JSON keyed by protocol) over
-`[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the
-[configuration reference](/reference/config/).
+`[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the configuration
+reference: https://barca.sh/reference/config/
 
 ## Storage for one process
 
@@ -254,9 +261,9 @@ through the bucket moves to a server. Leftover local files from those versions
 (`metadata.db.base`, `metadata.db.prev`, `metadata.db.pull-*`, `metadata.db.push-*`) are not
 used and can be deleted.
 
-`barca get --json` reports a result as it does without a store: json values inline, parquet and
-pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
-A final output that is only in the store is downloaded first.
+`barca get --json` reports a result as it does without a store: a pointer
+(`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`, and `-o value` reads
+that copy. A final output that is only in the store is downloaded first.
 
 ## What happens during a run
 
@@ -272,9 +279,12 @@ A final output that is only in the store is downloaded first.
 - The metadata DB is backed up on the minute checkpoint and at the end (see "Backups and
   restore").
 
-stderr reports each part, so remote cost is visible:
+stderr reports each part, so remote cost is visible. The first line names the environment
+and the store, printed once at startup by `get`, `run` and `serve` whenever a store is
+configured (`barca docs cache`, "Environments"):
 
 ```
+[barca] env default (built-in default); artifact store s3://bucket/proj/default/artifacts
 [barca] fetched 1 cached artifact (672.8 KB) in 0.1s
 [barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
 [barca] backed up the metadata DB (48.0 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11.482Z-3f9a1c2e.db in 0.31s
@@ -397,7 +407,7 @@ barca get total --json --fields id,status,artifact_mismatch
 `steps[].artifact_mismatch` is `true` on the step the artifact belongs to and on every step that
 read it as an input in this run; on every other step the key is absent. `steps[].warning` has
 the text. It is reported per step and not in the top-level `warnings` array, which holds plan
-warnings only ([CLI contract](/reference/cli-contract/)).
+warnings only ([`barca docs contract`](/reference/cli-contract/)).
 
 A mismatch and a missing object are different findings and never stand in for each other: a
 copy with other bytes is used and flagged, as above; an object that is not in the store at all
@@ -541,12 +551,13 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   the same directory.
 
 `.barca/artifacts/` doubles as a local cache of the store, bounded by the cache size limit
-(`[cache].max_size`, default 10% of the filesystem; see
-[Cache size](/reference/config/#cache-size)). Past the limit, local copies of results the store
-holds are evicted before any result that would have to be computed again, and are downloaded
-again when something reads them. Deleting the directory by hand is safe too (anything needed
-later is downloaded again, or computed again if it is no longer in the store). barca never
-prunes the store itself: bound it with your bucket's lifecycle rules.
+(`[cache] max_size`, default 10% of the filesystem; `barca docs cache`, "Disk use"). Past the
+limit, local copies of results the store holds are evicted before any result that would have to
+be computed again, and are downloaded again when something reads them. Deleting the directory by
+hand is safe too (anything needed later is downloaded again, or computed again if it is no
+longer in the store); the directories barca moved out of an artifact's way (`*.moved-aside*`)
+go with it. The store itself is never pruned by barca: bound it with your bucket's lifecycle
+rules.
 
 Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
 `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the
@@ -564,7 +575,7 @@ barca sql "select * from total"          # downloads `total` into .barca/sql-cac
 `barca status` reads a parquet footer by ranged requests and downloads json or pickle results of
 up to 16 MB; a store it cannot read is a `note` on each shape, not a failed command
 (`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
-the copies while the objects are unchanged (`barca docs sql`).
+the copies while the objects are unchanged ([`barca docs sql`](/reference/sql/)).
 
 ## Sharing a result: signed URLs
 
@@ -621,52 +632,10 @@ Know before sharing:
   identity barca uses.
 - Sinks are not signed by `-o url`; sign the URI a sink wrote with `barca.signed_url`.
 
-## A server as the ledger
-
-Experimental. Instead of every machine pulling and pushing the history file, one `barca serve`
-can own the record of what exists, and every other machine asks it. Point each laptop at the
-server and at the store the server uses:
-
-```toml
-[server]
-url = "http://barca.internal:8274"
-
-[remote]
-uri = "s3://my-bucket/barca/my-project"   # the server's store
-```
-
-`barca get` and `barca run` still run on the laptop, with its code. With `[server] url` (or
-`BARCA_SERVER`) set, and without `--local`, they:
-
-1. check the server (`GET /health`): it must write to this project's store, else the command is
-   a usage error naming both; a server that cannot be reached is exit 3 naming its URL, with no
-   fallback to local history;
-2. post again any run that could not be posted before;
-3. ask the server's ledger about every run hash of the plan in one request
-   (`POST /ledger/lookup`). Hits are fetched from the store when a step reads them; a local copy
-   whose SHA-256 differs from the server's digest is replaced by the store's copy. Misses run
-   here;
-4. after the uploads are confirmed, post the run and its step rows (`POST /ledger/runs`). The
-   server checks every object (a directory store by SHA-256, an object store by size) before it
-   records anything, and records the run as `triggered_by: client` with the laptop's run id as
-   `client_run_id`.
-
-A post the server refuses (`409`, the error names the node) or that does not arrive leaves the
-run a success: a warning names the run, the post is kept in the local database as `unsynced`,
-and the next command against the server sends it again. When the ledger already holds a run hash
-with other bytes it keeps its row, and the laptop prints the non-determinism warning once.
-
-`barca status`, `history` and `stats` answer from the server;
-`status` marks each node `local: true` when this machine has a copy, and a result whose post is
-still pending as `unsynced` with `cache.reason: "not_in_ledger"`. `--local` runs a command
-against this machine's own ledger and sends nothing; `--server` runs it on the server. Only
-successful runs are posted. See `barca docs server-mode`.
-
 ## Limitations
 
 - Backups are this machine's: two machines on one store without a server interleave them
-  (see "Backups and restore"). Sharing state means a server (RFC-0007): laptops share a server's results through its
-  ledger ([above](#a-server-as-the-ledger)).
+  (see "Backups and restore"). Sharing state means a server (RFC-0007).
 - Retention is fixed at five backups in each place. A backup is a whole copy of the database,
   so the store holds up to five times its size.
 - With `BARCA_ARTIFACT_URI` or `[remote] artifacts_uri` alone (no `[remote] uri`), results go to
@@ -680,4 +649,4 @@ successful runs are posted. See `barca docs server-mode`.
 ## Diagnose configuration
 
 Run `barca doctor --pretty` before a run to check configured stores and credential identity.
-See `barca docs doctor` for check limits and a copyable local-only debugging profile.
+See [`barca docs doctor`](/reference/doctor/) for check limits and a copyable local-only debugging profile.

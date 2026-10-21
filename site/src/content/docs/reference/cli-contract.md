@@ -1,9 +1,14 @@
 ---
-title: CLI Contract
-description: Every barca command, flag, environment variable, exit code and JSON schema, marked stable or experimental, and the policy for changing them.
+title: "CLI Contract"
+description: "Every barca command, flag, environment variable, exit code and JSON schema, marked stable or experimental, and the policy for changing them."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/contract.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract) by scripts/update-cli-snapshots.sh. Edit that file, not this one. -->
+<!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs contract`: the CLI prints the same text.
+:::
 
 This page is the written-down CLI surface of this version of barca: every command, argument,
 environment variable, exit code, JSON output schema, the stderr error envelope and the
@@ -53,7 +58,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
-| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences `barca docs server-mode` lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history` and `stats`; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [`barca docs server-mode`](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history` and `stats`; `--local` ignores it. How the server is chosen and the client's own messages may change |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
@@ -134,7 +139,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`) |
+| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project ([`barca docs discovery`](/reference/discovery/)) |
 | `-o, --output` | `path\|value\|url\|json\|pretty` | - | stable | What to print: artifact paths (the default), values, or signed URLs. Alone, -o path\|value\|url prints only that; with --json, it chooses what `final_output` holds |
 | `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at most 7d). Experimental |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
@@ -154,7 +159,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | required | stable | TARGET[,TARGET...] [file.py\|dir/ ...] — one or more target tasks, comma-separated; no files reads the whole project (`barca docs discovery`) |
+| `<ARGS>...` | - | required | stable | TARGET[,TARGET...] [file.py\|dir/ ...] — one or more target tasks, comma-separated; no files reads the whole project ([`barca docs discovery`](/reference/discovery/)) |
 | `--refresh` | comma-separated names | - | stable | Upstream assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the task's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
@@ -172,7 +177,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
 
 #### barca doctor
 
@@ -222,7 +227,7 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<TARGET>` | - | required | stable | Target asset function name |
-| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
+| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones |
@@ -234,7 +239,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)). With --watch, files added later are not picked up until restart |
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
 | `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication |
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
@@ -248,7 +253,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
+| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--groups` | - | default `false` | experimental: Organizational group hierarchy and metadata shape are experimental | Show the organizational hierarchy (groups are never executable nodes) |
@@ -262,7 +267,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional; no files reads the whole project (`barca docs discovery`) |
+| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional; no files reads the whole project ([`barca docs discovery`](/reference/discovery/)) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
@@ -278,7 +283,7 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<QUERY>` | - | required | experimental (with the command) | The SQL query (DuckDB dialect); quote it as one argument |
-| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | default `100` | experimental (with the command) | Maximum number of rows to return |
@@ -391,16 +396,16 @@ value of its first key only.
 | `BARCA_COMM_COST_SECONDS` | the scheduler's per-dispatch cost estimate | experimental |
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
-| `BARCA_SERVER` | the configured barca server (beats `[server] url` in `barca.toml`): the ledger of a local `get`/`run`, what `status`/`history`/`stats` answer from, and what a bare `--server` uses; empty is unset; an invalid URL is a usage error (`barca docs server-mode`) | experimental |
-| `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`). Its settings are Datadog's own variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_TAGS`, `DD_TRACE_AGENT_URL`, `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT`, `DD_TRACE_ENABLED`, and for `barca serve` metrics `DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, `DD_DOGSTATSD_PORT`) | experimental |
-| `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later (`barca docs telemetry`). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
+| `BARCA_SERVER` | the configured barca server (beats `[server] url` in `barca.toml`): the ledger of a local `get`/`run`, what `status`/`history`/`stats` answer from, and what a bare `--server` uses; empty is unset; an invalid URL is a usage error ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
+| `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one ([`barca docs telemetry`](/reference/telemetry/)). Its settings are Datadog's own variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_TAGS`, `DD_TRACE_AGENT_URL`, `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT`, `DD_TRACE_ENABLED`, and for `barca serve` metrics `DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, `DD_DOGSTATSD_PORT`) | experimental |
+| `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later ([`barca docs telemetry`](/reference/telemetry/)). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
 | `BARCA_UI_URL` | base URL of the web UI; Slack posts link the run id to it | experimental |
-| `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name (`barca docs telemetry`) | experimental |
-| `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
+| `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name ([`barca docs telemetry`](/reference/telemetry/)) | experimental |
+| `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr ([`barca docs telemetry`](/reference/telemetry/), "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 `[server] url` in `barca.toml` or `BARCA_SERVER` (experimental) points `get` and `run` at a
-server's ledger (`barca docs server-mode`): they still run here, read cache hits from the server
+server's ledger ([`barca docs server-mode`](/reference/server-mode/)): they still run here, read cache hits from the server
 and post what they compute, over `http://` or `https://`. `status`, `history` and `stats` answer
 from the server. `--local` ignores it for one command. A server that cannot be reached, answers
 unexpectedly or speaks another API version is exit 3 naming its URL, with `--local` as the
@@ -442,7 +447,7 @@ barca or its environment failed (metadata DB, workers, the store, I/O); retrying
 with an artifact store also while artifacts upload or download or the history is backed up.
 The exit code is 130 whatever the store does: a cancelled run spends at most 10 seconds backing
 its record up, a second Ctrl-C or SIGTERM ends that at once, and a backup that fails then is a
-line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+line on stderr, not exit 3 ([`barca docs remote`](/reference/remote-storage/), "Ctrl-C").
 
 An artifact upload or history-backup upload that fails after every step succeeded is not exit 3
 either: the run exits 0 with a warning and an `uploads` object, and the results are uploaded
@@ -917,7 +922,7 @@ code, and whether the result lists the failed keys, is not decided yet.
 ### get and run: a store copy that differs from its recorded hash
 
 With an artifact store, an artifact fetched from the store is checked against the SHA-256
-recorded when it was written (`barca docs remote`, "Checking a local copy against the store"). A copy with
+recorded when it was written ([`barca docs remote`](/reference/remote-storage/), "Checking a local copy against the store"). A copy with
 other bytes is still used, the exit code does not change, and the result says so on the step
 entries:
 
@@ -1313,7 +1318,7 @@ Truncated (`--limit 1`):
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
 `next_fire` (string, `YYYY-MM-DD HH:MM:SS`): the next match of the cron expression in the local
 time of the machine `list` runs on. `list` talks to no server, so the value does not follow a
-server's `--timezone`; `GET /schedule` on the running server does (`barca docs scheduling`).
+server's `--timezone`; `GET /schedule` on the running server does ([`barca docs scheduling`](/scheduling/)).
 `list` reads no state, so it takes no `--env`.
 
 ### sql (experimental)
@@ -1418,7 +1423,7 @@ counts every node even when `nodes` is truncated.
   `cache.reason` is `materialized`, `local_only`, `store_only`, `mismatch`, `not_in_ledger`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
   `evicted` (experimental), `no_record`, `partitions_missing`, `partitions_unknown`,
   `sensor_output_unknown`, `task` or `sensor`.
-- With a configured server (experimental, `barca docs server-mode`), `barca status` without
+- With a configured server (experimental, [`barca docs server-mode`](/reference/server-mode/)), `barca status` without
   `--server` or `--local` is answered by the server and each node gets `local` (boolean: this
   machine has a copy of the result). A node the server has no result for whose result this
   machine computed and has not posted yet is `unsynced` with reason `not_in_ledger` (the table
@@ -1471,7 +1476,7 @@ preserved, and an unknown end time/duration is not invented. Ordinary history st
 to a server's ledger); `null` for runs recorded before barca recorded it. A scheduled run also
 has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled node); both are
 `null` on every other run. The three keys are additive. `runs[].client_run_id` is the run id
-a `client` run had on the laptop that posted it (`barca docs server-mode`), `null` on every other
+a `client` run had on the laptop that posted it ([`barca docs server-mode`](/reference/server-mode/)), `null` on every other
 run; additive and experimental.
 
 
@@ -1725,7 +1730,7 @@ contract.
 
 stderr carries progress, warnings, your steps' own `print` output and errors. Only the error
 envelope and the `--agent` lines below are contract. Other `[barca] ...` lines, such as
-`[barca] backed up the metadata DB ...` and `[barca] restored ...` (`barca docs remote`), are
+`[barca] backed up the metadata DB ...` and `[barca] restored ...` ([`barca docs remote`](/reference/remote-storage/)), are
 informational and not contract. The same goes for the wording of an error: a backup that fails
 its check in `barca state restore` is exit 2 with `kind` `usage`, and the text that names it and
 the next newest backup is for people.
@@ -1808,7 +1813,7 @@ placeholders:
 | `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
-| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
+| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` ([`barca docs remote`](/reference/remote-storage/), "Ctrl-C") | stable |
 | `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get`, `run` and `serve` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
@@ -1817,7 +1822,7 @@ placeholders:
 | `[barca] progress checkpoint failed; recorded results remain local: <cause>` | a mid-run shared-state publication failed; committed local results are retained and retried at the next minute tick, without changing successful user work into a failed step | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
-| `[barca] server <url> (<source>)` | once when a command uses the configured server (`BARCA_SERVER` or `[server] url in barca.toml`, every mode): a local `get`/`run` reads and posts to its ledger, `status`/`history`/`stats` and a bare `--server` are answered by it (`barca docs server-mode`) | experimental |
+| `[barca] server <url> (<source>)` | once when a command uses the configured server (`BARCA_SERVER` or `[server] url in barca.toml`, every mode): a local `get`/`run` reads and posts to its ledger, `status`/`history`/`stats` and a bare `--server` are answered by it ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
 | `[barca] recorded run <id> on the server (run <server id>)` | a run this machine could not post before was accepted by the server's ledger, before the command's own lookup | experimental |
 | `[barca] warning: run <id> was not recorded on the server <url>: <why>; it stays on this machine (unsynced) and ...`, `[barca] warning: run <id> is still not recorded on the server <url>: <why>` | the server refused a run's post (`409`) or could not be reached after the run; the run's result and exit code are unchanged | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
@@ -1859,7 +1864,7 @@ error envelope or an `--agent` line updates, in the same PR:
    notes. From 1.0: keep the old spelling working for at least one minor release, with a stderr
    warning.
 
-See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.
+See also: `barca docs agents` (how to drive barca from scripts and agents), [`barca docs skill`](/reference/agent-skill/).
 
 ### Static decorator bindings
 

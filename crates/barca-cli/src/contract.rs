@@ -10,6 +10,9 @@
 //!   with their stability, and the exit codes, all rendered from the clap definition and
 //!   [`ErrorKind`].
 //!
+//! - the site reference pages that are manual topics (`SITE_PAGES`): each is its topic with
+//!   site front matter and `barca docs <topic>` references turned into links.
+//!
 //! The JSON output schemas and the error envelope are snapshotted by
 //! `python/tests/test_cli_contract.py`, which runs the real binary on a fixture pipeline.
 //!
@@ -579,32 +582,228 @@ fn block_markers_round_trip() {
     assert!(block(doc, "y").is_none());
 }
 
-// ─── The site copy ───────────────────────────────────────────────────────────
+// ─── The site copies ─────────────────────────────────────────────────────────
 
-/// The site page: frontmatter, then the topic without its `# ` title (the site renders the
-/// frontmatter title).
-fn site_page(topic: &str) -> String {
-    let body = topic
-        .strip_prefix("# CLI contract\n")
-        .expect("contract.md starts with `# CLI contract`")
-        .trim_start_matches('\n');
+/// A site reference page generated from a manual topic. The site renders the topic without
+/// its `# ` title (Starlight renders the frontmatter title) and with `barca docs <topic>`
+/// references that have a page of their own turned into links.
+struct SitePage {
+    /// The manual topic, as `barca docs <topic>` names it.
+    topic: &'static str,
+    /// Its file under `docs/`.
+    file: &'static str,
+    /// The page's slug under `site/src/content/docs/`.
+    slug: &'static str,
+    title: &'static str,
+    description: &'static str,
+}
+
+/// Every site page that is a manual topic. A site page that explains something the manual does
+/// not (`reference/cli`, `reference/config`, `scheduling`, ...) is written by hand and is not here.
+const SITE_PAGES: &[SitePage] = &[
+    SitePage {
+        topic: "contract",
+        file: "contract.md",
+        slug: "reference/cli-contract",
+        title: "CLI Contract",
+        description: "Every barca command, flag, environment variable, exit code and JSON \
+                      schema, marked stable or experimental, and the policy for changing them.",
+    },
+    SitePage {
+        topic: "discovery",
+        file: "discovery.md",
+        slug: "reference/discovery",
+        title: "Discovery",
+        description: "Which files make up a barca project: the root, tree walks, [discovery] in \
+                      barca.toml, and node ids.",
+    },
+    SitePage {
+        topic: "doctor",
+        file: "doctor.md",
+        slug: "reference/doctor",
+        title: "Doctor and Local Debugging",
+        description: "Check project prerequisites, stores and credential identity without \
+                      running steps.",
+    },
+    SitePage {
+        topic: "groups",
+        file: "groups.md",
+        slug: "reference/groups",
+        title: "Groups",
+        description: "Organize pipeline nodes in the UI and CLI without changing execution or \
+                      caching.",
+    },
+    SitePage {
+        topic: "remote",
+        file: "remote.md",
+        slug: "reference/remote-storage",
+        title: "Remote Storage",
+        description: "Keep results and backups of the run history in S3, GCS, Azure or \
+                      Cloudflare R2, configured with environment variables; restore the history \
+                      with one command.",
+    },
+    SitePage {
+        topic: "server-mode",
+        file: "server-mode.md",
+        slug: "reference/server-mode",
+        title: "Server Mode",
+        description: "One barca serve as the team's ledger: laptops read its cache hits and post \
+                      their runs, and --server runs a command on it.",
+    },
+    SitePage {
+        topic: "sql",
+        file: "sql.md",
+        slug: "reference/sql",
+        title: "SQL",
+        description: "barca sql: query cached results with DuckDB while debugging, without \
+                      writing a step.",
+    },
+    SitePage {
+        topic: "telemetry",
+        file: "telemetry.md",
+        slug: "reference/telemetry",
+        title: "Telemetry",
+        description: "Report every run to Datadog as a trace of the pipeline and barca serve as \
+                      DogStatsD metrics, and post to Slack when a job starts failing or recovers.",
+    },
+];
+
+/// Manual topics with a site page that is not generated from them, for links.
+const SITE_ROUTES: &[(&str, &str)] = &[
+    ("scheduling", "/scheduling/"),
+    ("skill", "/reference/agent-skill/"),
+];
+
+fn site_route(topic: &str) -> Option<String> {
+    SITE_PAGES
+        .iter()
+        .find(|p| p.topic == topic)
+        .map(|p| format!("/{}/", p.slug))
+        .or_else(|| {
+            SITE_ROUTES
+                .iter()
+                .find(|(t, _)| *t == topic)
+                .map(|(_, r)| r.to_string())
+        })
+}
+
+/// Turn `` `barca docs <topic>` `` into a link to the topic's site page, outside code blocks.
+/// Topics without a site page stay as they are: the reader runs the command.
+fn link_topics(body: &str) -> String {
+    const OPEN: &str = "`barca docs ";
+    let mut out = String::new();
+    let mut fenced = false;
+    for line in body.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        if fenced {
+            out.push_str(line);
+            continue;
+        }
+        let mut rest = line;
+        while let Some(i) = rest.find(OPEN) {
+            let after = &rest[i + OPEN.len()..];
+            let Some(close) = after.find('`') else { break };
+            let topic = &after[..close];
+            let span_end = i + OPEN.len() + close + 1;
+            match site_route(topic) {
+                Some(route) if !rest[..i].ends_with('[') => {
+                    out.push_str(&rest[..i]);
+                    out.push_str(&format!("[{}]({route})", &rest[i..span_end]));
+                }
+                _ => out.push_str(&rest[..span_end]),
+            }
+            rest = &rest[span_end..];
+        }
+        out.push_str(rest);
+    }
+    out
+}
+
+fn site_page(page: &SitePage, topic: &str) -> String {
+    let (title_line, body) = topic
+        .split_once('\n')
+        .unwrap_or_else(|| panic!("docs/{} is empty", page.file));
+    assert!(
+        title_line.starts_with("# "),
+        "docs/{} must start with a `# ` title",
+        page.file
+    );
+    let yaml = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
     format!(
         "---\n\
-         title: CLI Contract\n\
-         description: Every barca command, flag, environment variable, exit code and JSON \
-         schema, marked stable or experimental, and the policy for changing them.\n\
+         title: {title}\n\
+         description: {description}\n\
+         editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/{file}\n\
          ---\n\n\
-         <!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract) by \
-         scripts/update-cli-snapshots.sh. Edit that file, not this one. -->\n\n\
-         {body}"
+         <!-- Generated from crates/barca-cli/docs/{file} (barca docs {topic}). Edit that file, \
+         then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: \
+         (or scripts/update-cli-snapshots.sh). -->\n\n\
+         :::note\n\
+         This page is the manual topic `barca docs {topic}`: the CLI prints the same text.\n\
+         :::\n\n\
+         {body}",
+        title = yaml(page.title),
+        description = yaml(page.description),
+        file = page.file,
+        topic = page.topic,
+        body = link_topics(body.trim_start_matches('\n')),
     )
 }
 
-/// The site publishes the contract topic verbatim. Skipped outside the repository (an sdist
-/// build has no `site/`).
+fn site_dir() -> Option<PathBuf> {
+    let dir = crate_dir().join("../../site");
+    dir.is_dir().then_some(dir)
+}
+
+fn site_path(site: &Path, page: &SitePage) -> PathBuf {
+    site.join("src/content/docs")
+        .join(format!("{}.md", page.slug))
+}
+
+/// The site publishes the contract topic verbatim. Called by the contract test after it has
+/// updated contract.md. Skipped outside the repository (an sdist build has no `site/`).
 fn check_site_page(topic: &str) {
-    let dir = crate_dir().join("../../site/src/content/docs/reference");
-    if dir.is_dir() {
-        check_file(&dir.join("cli-contract.md"), &site_page(topic));
+    if let Some(site) = site_dir() {
+        let page = &SITE_PAGES[0];
+        check_file(&site_path(&site, page), &site_page(page, topic));
     }
+}
+
+#[test]
+fn site_pages_match_the_manual() {
+    let Some(site) = site_dir() else { return };
+    for page in SITE_PAGES.iter().filter(|p| p.topic != "contract") {
+        assert!(
+            crate::docs::find(page.topic).is_some_and(|t| t.name == page.topic),
+            "SITE_PAGES names `{}`, which is not a manual topic",
+            page.topic
+        );
+        let topic = std::fs::read_to_string(crate_dir().join("docs").join(page.file))
+            .unwrap_or_else(|e| panic!("docs/{}: {e}", page.file));
+        check_file(&site_path(&site, page), &site_page(page, &topic));
+    }
+}
+
+#[test]
+fn site_pages_are_in_the_sidebar() {
+    let Some(site) = site_dir() else { return };
+    let config = std::fs::read_to_string(site.join("astro.config.mjs")).unwrap();
+    for page in SITE_PAGES {
+        assert!(
+            config.contains(&format!("slug: '{}'", page.slug)),
+            "site/astro.config.mjs has no sidebar entry for {}",
+            page.slug
+        );
+    }
+}
+
+#[test]
+fn site_links_skip_code_and_unknown_topics() {
+    let body = "See `barca docs sql` and `barca docs cache`.\n```\n`barca docs sql`\n```\n";
+    assert_eq!(
+        link_topics(body),
+        "See [`barca docs sql`](/reference/sql/) and `barca docs cache`.\n```\n`barca docs sql`\n```\n"
+    );
 }

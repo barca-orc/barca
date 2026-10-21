@@ -130,7 +130,7 @@ url = "https://barca.internal.example.com"
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
-| `[server].url` | none | The `barca serve` that is the team's ledger (`BARCA_SERVER` overrides it): `http://` or `https://`, with any proxy path prefix. `get` and `run` run here and read and post through its ledger (requires `[remote]` pointing at the server's store); `status`, `history` and `stats` answer from it; a bare `--server` runs the command there; `--local` ignores it. See [Server mode](#server-mode) and [Remote Storage](/reference/remote-storage/#a-server-as-the-ledger). |
+| `[server].url` | none | The `barca serve` that is the team's ledger (`BARCA_SERVER` overrides it): `http://` or `https://`, with any proxy path prefix. `get` and `run` run here and read and post through its ledger (requires `[remote]` pointing at the server's store); `status`, `history` and `stats` answer from it; a bare `--server` runs the command there; `--local` ignores it. See [Server mode](#server-mode) and [Server Mode](/reference/server-mode/). |
 
 An unknown key or a malformed file is a usage error (exit 2) that names the key and lists the
 valid ones:

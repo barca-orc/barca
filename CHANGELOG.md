@@ -131,6 +131,15 @@ and these tags are available on the same releases page.
   `barca.serve.schedules`, `barca.serve.files` and `barca.serve.nodes` as DogStatsD gauges
   (`DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, or `DD_AGENT_HOST`:`DD_DOGSTATSD_PORT`), with a
   Datadog event on start and stop.
+### Documentation
+
+- The site's reference pages that are manual topics (CLI Contract, Discovery, Doctor, Groups,
+  Remote Storage, Server Mode, SQL, Telemetry) are generated from `crates/barca-cli/docs/*.md`
+  with `barca docs <topic>` references turned into links, and `cargo test -p barca` fails when one
+  differs from its topic (#501). This brings back in step the pages that had drifted (`barca sql`
+  reads CSV and evicts its `.barca/sql-cache/` copies; `get --json` always returns a pointer), adds
+  Server Mode and Groups to the sidebar, and lists the Reference pages alphabetically.
+
 ## 0.26.1 (2026-10-20)
 
 ### Removed

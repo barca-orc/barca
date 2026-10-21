@@ -1,7 +1,14 @@
 ---
-title: barca sql
-description: Query cached results with DuckDB while debugging, without writing a step.
+title: "SQL"
+description: "barca sql: query cached results with DuckDB while debugging, without writing a step."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/sql.md
 ---
+
+<!-- Generated from crates/barca-cli/docs/sql.md (barca docs sql). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs sql`: the CLI prints the same text.
+:::
 
 `barca sql` runs a DuckDB query over the results barca already has on disk. Use it to look at
 data while debugging, for example to see which keys a validation counted as failing, without
@@ -30,7 +37,7 @@ quote in SQL (`select * from "pipelines/a.py:orders"`); stderr lists them. Pass 
 directories after the query to limit the views to those files
 (`barca sql "select * from orders" pipeline.py`).
 
-Only parquet and json results can be queried: DataFrames, Arrow tables and DuckDB relations are
+Only parquet, CSV and json results can be queried: DataFrames, Arrow tables and DuckDB relations are
 stored as parquet; a dict or a list of dicts as json. A JSON list of scalars is
 a view with one column named `json` (for example, `[1, 2]` becomes two rows). A pickled result (any other Python object)
 is not a view.
@@ -49,7 +56,7 @@ infer a schema from absent current results.
 
 ## Remote storage
 
-With remote storage (`barca docs remote`) a result that exists only in the bucket is a view like
+With remote storage ([`barca docs remote`](/reference/remote-storage/)) a result that exists only in the bucket is a view like
 any other. When a query names such a view, barca downloads its artifact (for a partitioned asset,
 the current keys' artifacts) into `.barca/sql-cache/` and queries the copy. stderr says what was downloaded:
 
@@ -64,8 +71,10 @@ barca: fetched 1 remote artifact (2.1 KB) into .barca/sql-cache/
 - A copy is reused while the object is unchanged. Each query asks the store for the size and
   version of every remote file it reads (one metadata request per file) and downloads again only
   when they differ, for example after `barca get revenue --refresh revenue`.
-- The copies mirror the object's URI (`.barca/sql-cache/s3/my-bucket/...`) and are never removed
-  by barca. Deleting `.barca/sql-cache/` is always safe: it holds nothing but copies.
+- The copies mirror the object's URI (`.barca/sql-cache/s3/my-bucket/...`). They count toward the
+  cache size limit and are the first thing it evicts, least recently used first (a copy used in
+  the last 5 minutes is kept; `barca docs cache`, "Disk use"). Deleting `.barca/sql-cache/` is
+  always safe: it holds nothing but copies.
 - `show tables` lists remote views without downloading them.
 - The download uses the filesystem, credentials and `[remote.storage_options.*]` the steps use.
 
@@ -100,7 +109,9 @@ no longer in the bucket) exits 3 and carries the store's error.
 
 - It never executes a pipeline step or records a new run. Source parsing is static,
   but `partitions(<expression>)` may evaluate Python and import the pipeline module
-  while loading its key list. Remote artifact copies are written under `.barca/sql-cache/`.
+  while loading its key list. Remote artifact copies are written under `.barca/sql-cache/`. The one
+  write to the metadata DB is the read time of the results the query names (`last_read_at`),
+  which the cache size limit uses to evict results nobody reads first.
 - SQL is not restricted to SELECT: an explicit `COPY ... TO 'file.csv'` writes that
   file using DuckDB. Queries run with the process's filesystem permissions.
 - Install SQL support in barca's Python environment: `uv add 'barca[sql]'`.

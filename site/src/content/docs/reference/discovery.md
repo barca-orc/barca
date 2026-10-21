@@ -1,7 +1,14 @@
 ---
-title: Discovery
-description: Which files make up a barca project — the root, tree walks, [discovery] in barca.toml, and node ids.
+title: "Discovery"
+description: "Which files make up a barca project: the root, tree walks, [discovery] in barca.toml, and node ids."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/discovery.md
 ---
+
+<!-- Generated from crates/barca-cli/docs/discovery.md (barca docs discovery). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs discovery`: the CLI prints the same text.
+:::
 
 A barca project is a directory tree. Every command reads the `.py` files in it that import
 barca and builds one DAG from all their `@asset`, `@task` and `@sensor` functions. You do not

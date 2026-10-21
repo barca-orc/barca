@@ -1,10 +1,17 @@
 ---
-title: Telemetry
-description: Report every run to Datadog as one trace of the pipeline (run, a span per node, partition keys and Python calls) in one service and barca serve as DogStatsD metrics, and post to Slack when a job starts failing or recovers, switched on with BARCA_SLACK_WEBHOOK_URL.
+title: "Telemetry"
+description: "Report every run to Datadog as a trace of the pipeline and barca serve as DogStatsD metrics, and post to Slack when a job starts failing or recovers."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/telemetry.md
 ---
 
+<!-- Generated from crates/barca-cli/docs/telemetry.md (barca docs telemetry). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs telemetry`: the CLI prints the same text.
+:::
+
 barca can report every finished run to a telemetry backend, and post to Slack when a job starts
-failing or recovers (see [Slack](#slack) below; it has its own switch). Each backend is off
+failing or recovers (see the Slack section below; it has its own switch). Each backend is off
 unless you switch it on. Datadog is switched on by name:
 
 ```bash
@@ -262,7 +269,7 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
 - Whether a run was started by a schedule, the API or a person is not on `barca.run` yet.
 - The traceback of a chained exception (`raise ... from e`) does not include its cause.
 - A failed upload to a remote store is not in the trace: the step shows as succeeded, and
-  the upload is retried by the next command (`barca docs remote`).
+  the upload is retried by the next command ([`barca docs remote`](/reference/remote-storage/)).
 - The run is reported before the history is backed up. A backup that then fails is not
   reflected in the trace.
 - Uploads to a remote store, and the time spent waiting for them, are not spans.
@@ -273,8 +280,8 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
 - `https://` Agent URLs and URLs with credentials are not supported. An IPv6 address goes in
   brackets: `http://[::1]:8126`.
 
-See also: [Scheduling](/scheduling/), [Groups](/reference/groups/), [Partitions](/workflows/03-parametrized-assets-and-partitions/)
-and the [CLI contract](/reference/cli-contract/).
+See also: [`barca docs scheduling`](/scheduling/), [`barca docs groups`](/reference/groups/), `barca docs partitions`,
+[`barca docs contract`](/reference/cli-contract/).
 
 ## Metrics from `barca serve`
 

@@ -86,7 +86,7 @@ The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted and i
 the run contract over HTTP (#393), the CLI's `--server` (#394) and the ledger (#402). A laptop
 with `[server] url` (or `BARCA_SERVER`) pointing at this server and `[remote]` pointing at its
 store runs `barca get` locally, reads cache hits from the server's ledger and posts what it
-computes ([Remote Storage](/reference/remote-storage/#a-server-as-the-ledger)); `barca status`,
+computes ([Server Mode](/reference/server-mode/)); `barca status`,
 `history` and `stats` answer from the server. `--local` runs against the laptop's own ledger
 and sends nothing. With a remote store the server backs its history up there, as described below.
 `barca.Client` is deprecated in favour of `barca.get(..., server=True)`.
