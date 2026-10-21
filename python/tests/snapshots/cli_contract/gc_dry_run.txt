@@ -10,6 +10,11 @@ evicted[].tier : string
 evicted_bytes : integer
 evicted_files : integer
 failed : array
+held : array
+held[] : object
+held[].bytes : integer
+held[].evictable : boolean
+held[].what : string
 limit_bytes : integer
 restricted : null
 size_bytes : integer

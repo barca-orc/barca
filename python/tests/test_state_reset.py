@@ -100,6 +100,40 @@ def test_reset_moves_the_database_aside_and_restore_puts_it_back(project):
     assert ok(cli(root, "history", "--json"))["total"] == 1
 
 
+def test_the_artifacts_a_reset_leaves_are_leftovers_gc_can_delete(project):
+    """#552: the reset deletes nothing and says how much stays; the files it leaves are named by
+    no record, so the cache size limit evicts them first and `gc` reports them."""
+    root = project
+    path = (
+        root / ok(cli(root, "get", "numbers", "--json"))["final_output"]["_barca_artifact"]["path"]
+    )
+    assert path.is_file()
+    proc = cli(root, "state", "reset", "--yes", "--json")
+    moved = ok(proc)["moved_to"]
+    assert path.is_file(), "a reset deletes nothing"
+    assert "of artifacts under .barca/artifacts stay on disk" in proc.stderr, proc.stderr
+    assert "barca gc --max-size off" in proc.stderr
+    # Over a tiny limit: the unnamed file is the first leftover; the databases are held.
+    plan = ok(cli(root, "gc", "--max-size", "1", "--dry-run", "--json"))
+    rel = str(path.relative_to(root))
+    assert {"tier": "leftovers", "path": rel, "bytes": path.stat().st_size} in plan["evicted"], plan
+    held = {h["what"]: h for h in plan["held"]}
+    assert held["db_copies"]["evictable"] is False
+    assert held["metadata"]["evictable"] is False
+    human = cli(root, "gc", "--max-size", "1", "--dry-run", "--pretty")
+    assert "held by:" in human.stdout and "databases moved aside" in human.stdout, human.stdout
+    done = ok(cli(root, "gc", "--max-size", "off", "--json"))
+    assert rel in [e["path"] for e in done["evicted"]]
+    assert not path.exists()
+    # The moved-aside database is never deleted, and still restores: the result is computed
+    # again when it is needed.
+    assert (root / moved).is_file()
+    restored = ok(cli(root, "state", "restore", "--from", moved, "--json"))
+    assert restored["from"] == "file"
+    assert ok(cli(root, "get", "numbers", "--json"))["steps_executed"] == 1
+    assert path.is_file()
+
+
 def test_reset_mends_a_database_that_cannot_be_opened(project):
     root = project
     (root / ".barca").mkdir()

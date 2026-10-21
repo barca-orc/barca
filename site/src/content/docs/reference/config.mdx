@@ -164,7 +164,8 @@ under `barca serve`, barca checks the size. Over the limit, it deletes files in 
 until `.barca/` is at or below 80% of the limit:
 
 1. **Leftovers**: staging directories of processes that are no longer running, `*.moved-aside*`
-   directories, and `sql-cache/` copies (least recently used first).
+   directories, artifact files no metadata row names (what `barca state reset` and
+   `barca state restore` leave behind), and `sql-cache/` copies (least recently used first).
 2. **Superseded results**: a result whose node (or partition key) has a newer successful
    result. Oldest first.
 3. **Local copies the artifact store holds**: downloaded again when needed. Least recently read
@@ -173,15 +174,18 @@ until `.barca/` is at or below 80% of the limit:
 
 It never deletes what the command produced, read or returned; results a run in flight holds;
 anything but leftovers and superseded results while another run is in progress on this
-`.barca/`; the current result of a `freshness=Manual` node the store does not hold; the metadata
-databases; or anything outside `.barca/`. The remote store is never touched: bound it with your
+`.barca/`; the current result of a `freshness=Manual` node the store does not hold; an unnamed
+artifact file while a run is in progress or in the minute after it was written; the metadata
+databases, their backups and the copies reset and restore moved aside; or anything outside
+`.barca/`. The remote store is never touched: bound it with your
 bucket's lifecycle rules.
 
 When something was evicted, stderr says so in one line, and `--json` results gain
 `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}`. An evicted result that a
 later run needs is downloaded or computed again under the same run hash, with reason
 `evicted`. `barca status` shows it as `stale` with reason `evicted`. `barca gc` runs the same
-eviction on demand (`--dry-run` to see it first, `--max-size` for a one-off limit), and
+eviction on demand (`--dry-run` to see it first, `--max-size` for a one-off limit; when it
+cannot reach its target, `held` says what holds the rest), and
 `barca doctor` reports the size against the limit and the free space. The full description is
 in `barca docs cache`, "Disk use".
 

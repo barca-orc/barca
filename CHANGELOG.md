@@ -51,6 +51,18 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   file the import reaches, never a path like `pipelines/pipelines/transforms.py`. An input only
   the whole project can resolve (a bare name, a re-export through `__init__.py`) says to name
   the defining file or drop the file arguments.
+- `barca state reset` and `barca state restore` no longer leak the cache (#552). The artifacts
+  the old database named, which no record names afterwards, are now tier-1 leftovers: the cache
+  size limit evicts them first and `barca gc --max-size off` deletes them (an unnamed file is
+  kept while a run is in progress, or for a minute after it is written unless it predates the
+  database). Before, any file under `.barca/artifacts/` that no result named was counted and
+  never deleted, so the limit could never be met. The reset still deletes nothing: it says how
+  much stays and how to delete it, and the undo works until the files are evicted (an evicted
+  one is computed again). `barca gc --json` gains `held` (`what`, `bytes`, `evictable`: cached
+  results, unreferenced files, metadata databases, the databases reset and restore moved
+  aside, backups, other), and when it cannot reach its target it prints `held by:` instead of
+  only "nothing to evict". The next check after a reset or restore measures `.barca/` again
+  instead of trusting the last walk.
 
 ### Performance
 

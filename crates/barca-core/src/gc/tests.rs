@@ -604,3 +604,165 @@ async fn a_command_that_wrote_nothing_skips_the_check_the_last_one_passed() {
             .is_some()
     );
 }
+
+/// A file in an artifact directory with no row, last written `ago` seconds ago.
+fn unnamed(f: &Fixture, rel: &str, bytes: usize, ago: u64) -> String {
+    let path = f.root().join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, vec![b'x'; bytes]).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(ago))
+        .unwrap();
+    rel.to_string()
+}
+
+fn held(result: &GcResult, what: &str) -> u64 {
+    result
+        .held
+        .iter()
+        .find(|h| h.what == what)
+        .map_or(0, |h| h.bytes)
+}
+
+#[tokio::test]
+async fn files_no_row_names_are_leftovers_and_recent_ones_stay() {
+    // What `barca state reset` leaves (#552): files the old database named, which the new one
+    // does not. They are leftovers; one written in the last minute may be a step's whose row
+    // is about to be written.
+    let f = Fixture::new().await;
+    let named = f.result("p.py:a", "h1", 1000, "2026-10-01 00:00:00").await;
+    let old = unnamed(&f, ".barca/artifacts/p.py--a/h0.json", 3000, 3600);
+    let fresh = unnamed(&f, ".barca/artifacts/p.py--a/h9.json", 200, 0);
+    // Under a limit that keeps the named result: the old file goes, the fresh one stays.
+    let limit = Fixture::limit_for(f.total().await - 3000);
+    let predicted = f.gc(limit, true).await;
+    // `held` is what is left after evicting.
+    assert_eq!(held(&predicted, "unreferenced"), 200, "{predicted:?}");
+    assert_eq!(held(&predicted, "results"), 1000, "{predicted:?}");
+    let result = f.gc(limit, false).await;
+    assert_eq!(paths(&predicted), paths(&result));
+    assert_eq!(paths(&result), [("leftovers".to_string(), old.clone())]);
+    assert!(!f.exists(&old));
+    assert!(f.exists(&fresh), "a file written a moment ago stays");
+    assert!(f.exists(&named));
+    // Past every leftover, the named file goes as a current result, never as a leftover.
+    let result = f.gc(MaxSize::Bytes(1), false).await;
+    assert_eq!(paths(&result), [("current".to_string(), named.clone())]);
+    assert_eq!(held(&result, "unreferenced"), 200);
+}
+
+#[tokio::test]
+async fn after_the_database_is_replaced_the_next_check_finds_the_old_files() {
+    let f = Fixture::new().await;
+    let a = f.result("p.py:a", "h1", 4000, "2026-10-01 00:00:00").await;
+    let limit = MaxSize::Bytes(f.total().await + 1000);
+    assert!(
+        check_in(&f.project, limit, &Own::default(), None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // `barca state reset`: a new, empty database; the file stays, named by nothing.
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", f.db));
+    }
+    crate::db::init_db(&f.db).await.unwrap();
+    // Written a few seconds ago, but before the database: no run can be about to name it.
+    unnamed(&f, &a, 4000, 5);
+    forget_survey_in(&f.project);
+    // A smaller limit: without a fresh walk the estimate would count no results at all.
+    let limit = MaxSize::Bytes(2000);
+    let report = check_in(&f.project, limit, &Own::default(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.evicted_files, 1, "{report:?}");
+    assert!(!f.exists(&a));
+}
+
+#[tokio::test]
+async fn files_no_row_names_stay_while_a_run_is_in_flight() {
+    let f = Fixture::new().await;
+    let old = unnamed(&f, ".barca/artifacts/p.py--a/h0.json", 3000, 3600);
+    // Another process: its rows are not written yet.
+    f.sql(&format!(
+        "INSERT INTO runs (run_id, command, files, status, pid, host) VALUES \
+         ('elsewhere', 'get', '[]', 'running', {}, '{}')",
+        std::process::id(),
+        crate::db::local_host()
+    ))
+    .await;
+    let result = f.gc(MaxSize::Bytes(1), false).await;
+    assert!(result.evicted.is_empty(), "{result:?}");
+    assert_eq!(held(&result, "unreferenced"), 3000);
+    f.sql("UPDATE runs SET status = 'success' WHERE run_id = 'elsewhere'")
+        .await;
+    // A run in this process.
+    let pin = pin_at("this-process", f.root());
+    pin.nodes(["p.py:z".to_string()]);
+    assert!(f.gc(MaxSize::Bytes(1), false).await.evicted.is_empty());
+    drop(pin);
+    assert_eq!(f.gc(MaxSize::Bytes(1), false).await.evicted_files, 1);
+    assert!(!f.exists(&old));
+}
+
+#[tokio::test]
+async fn a_file_another_environment_names_is_not_a_leftover() {
+    let f = Fixture::new().await;
+    let dev_db = f.root().join(".barca/envs/dev/metadata.db");
+    std::fs::create_dir_all(dev_db.parent().unwrap()).unwrap();
+    let dev_db = dev_db.display().to_string();
+    crate::db::init_db(&dev_db).await.unwrap();
+    let rel = unnamed(&f, ".barca/envs/dev/artifacts/p.py--a/h1.json", 1000, 3600);
+    {
+        let _g = crate::db::db_guard().await;
+        let (_h, conn) = crate::db::open_conn(&dev_db).await.unwrap();
+        conn.execute(
+            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, \
+             artifact_size_bytes, status, created_at) VALUES ('p.py:a', 'h1', ?1, 'json', 1000, \
+             'success', '2026-10-01 00:00:00')",
+            [rel.as_str()],
+        )
+        .await
+        .unwrap();
+    }
+    // `barca gc --env default` reads only the default environment's results, but every
+    // environment's rows say which files are named.
+    let opts = GcOptions {
+        max_size: Some(MaxSize::Bytes(1)),
+        dry_run: false,
+        env: Some(crate::config::DEFAULT_ENV.to_string()),
+    };
+    let result = gc_in(&f.project, MaxSize::Off, &opts).await.unwrap();
+    assert!(result.evicted.is_empty(), "{result:?}");
+    assert!(f.exists(&rel));
+}
+
+#[tokio::test]
+async fn gc_says_what_holds_the_space_it_cannot_free() {
+    let f = Fixture::new().await;
+    for (rel, bytes) in [
+        (".barca/metadata.db.reset-2026-10-20T00-00-00.000Z", 500_000),
+        (".barca/metadata.db.pre-restore", 3000),
+        (".barca/backups/2026-10-20T00-00-00Z.db", 2000),
+    ] {
+        let path = f.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, vec![b'x'; bytes]).unwrap();
+    }
+    let result = f.gc(MaxSize::Bytes(1), true).await;
+    assert!(result.evicted.is_empty());
+    assert_eq!(held(&result, "db_copies"), 503_000, "{result:?}");
+    assert_eq!(held(&result, "backups"), 2000);
+    assert!(held(&result, "metadata") > 0);
+    assert_eq!(result.held[0].what, "db_copies", "largest first");
+    assert!(
+        result
+            .held
+            .iter()
+            .all(|h| h.what != "db_copies" || !h.evictable)
+    );
+}

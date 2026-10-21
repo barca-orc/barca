@@ -1737,6 +1737,11 @@ the first included.
 | `evicted_bytes` | integer | always |
 | `evicted_files` | integer | always |
 | `failed` | array | always |
+| `held` | array | always |
+| `held[]` | object | always |
+| `held[].bytes` | integer | always |
+| `held[].evictable` | boolean | always |
+| `held[].what` | string | always |
 | `limit_bytes` | integer | always |
 | `restricted` | null | always |
 | `size_bytes` | integer | always |
@@ -1758,6 +1763,11 @@ the first included.
   progress on this `.barca/`).
 - `dry_run` says whether anything was deleted. `--dry-run` lists exactly what `barca gc` then
   deletes, unless something changes in between.
+- `held[]` says what holds `after_bytes`, largest first: `what` is `results`, `unreferenced`
+  (artifact files no result names, kept for now), `metadata`, `db_copies` (databases `state
+  reset` and `state restore` moved aside), `backups` or `other`; `bytes`; and `evictable`
+  (`false` for the databases, their copies and the backups). Leftover entries in `evicted[]`
+  include artifact files no result names.
 
 ### get and run: over the cache size limit (experimental)
 

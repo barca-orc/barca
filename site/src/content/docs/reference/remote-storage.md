@@ -257,10 +257,17 @@ barca state reset --yes --json       # {database, moved_to, moved, undo}
 The database and its `-wal` and `-shm` move to `.barca/metadata.db.reset-<UTC>` (and
 `<that>-wal`, `<that>-shm`) in the same directory, and an empty database takes its place. Run
 history, cache records, partition keys and schedule pauses start over, so the next `get`
-recomputes what it needs; artifacts are left alone, and the cache limit (`barca gc`) evicts the
-ones nothing references. A database that cannot be opened moves as it is. One line on stderr
+recomputes what it needs. A database that cannot be opened moves as it is. One line on stderr
 says what moved and how to undo it:
 `[barca] reset the metadata database: the old one is .barca/metadata.db.reset-2026-10-20T18-02-11.482Z, .barca/metadata.db is new and empty. Undo: barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z`.
+
+Artifacts are left on disk, and a second line says how much:
+`[barca] the 129 KB of artifacts under .barca/artifacts stay on disk, and no record names them now: the cache size limit evicts them first, barca gc --max-size off deletes them now, and until then the undo above brings them back`.
+No record names them, so they are the first thing the cache size limit evicts (`barca docs
+cache`, "Disk use"); `barca gc --max-size off` deletes them now. The same holds after `barca
+state restore` for the artifacts the restored copy does not name. The moved-aside databases
+themselves are never deleted: remove a `metadata.db.reset-<UTC>` yourself when you no longer
+need it (`barca gc` lists them under `held` as `db_copies`).
 
 - Not in a terminal without `--yes`: exit 2, nothing changed.
 - A run in progress on this machine (`running` in `barca history`, its process alive): exit 3,
