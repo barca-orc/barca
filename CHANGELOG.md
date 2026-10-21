@@ -71,6 +71,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   progress. The images are in `site/public/readme/`, linked by absolute URLs so they render on
   PyPI. CI now also runs on pushes to `main`, so the badge has a result to show.
 
+- The release workflow deploys the docs site, barca.sh, from each `v*` tag once the GitHub
+  Release and the PyPI upload are done, so the site matches the latest release instead of the
+  last manual `npm run deploy`. Nothing waits on the deploy, so a failure never blocks a
+  release. It needs the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets
+  and fails naming whichever is missing.
+
 ## 0.29.0 (2026-10-21)
 
 ### Breaking

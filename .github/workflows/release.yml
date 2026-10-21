@@ -241,6 +241,47 @@ jobs:
           password: ${{ secrets.PYPI_API_TOKEN }}
           verbose: true
 
+  # Deploys the docs site, barca.sh (Cloudflare Workers, site/wrangler.jsonc), from the tag.
+  # It runs after the release and the PyPI upload and nothing waits on it, so a failed deploy
+  # never blocks or fails a release; rerun this job, or deploy by hand with
+  # `cd site && npm ci && npm run deploy`.
+  deploy-site:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release, publish-pypi]
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - name: Check the Cloudflare secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The repository secret $name is not set, so barca.sh was not deployed. Add it under Settings > Secrets and variables > Actions and rerun this job."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # astro needs Node >= 22.22; 24 matches the UI build above.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Build the site
+        working-directory: site
+        run: |
+          npm ci
+          npm run build
+      - name: Deploy to Cloudflare
+        working-directory: site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
   verify-published-linux:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [release, publish-pypi]
