@@ -56,6 +56,10 @@ pub(crate) struct RunLedger<'a> {
     pub(crate) store_paths: &'a HashMap<String, String>,
     /// Run-end snapshot of the measured-cost EWMA, seeding the next run.
     pub(crate) cost_snapshot: &'a [(String, crate::cost::NodeEstimate)],
+    /// Recorded artifact paths the run read (its inputs, and the outputs it returns): their
+    /// `last_read_at` is set first, on the ledger's connection, so the run's backup carries it
+    /// (RFC-0012). It was a connection of its own (#560).
+    pub(crate) touched: &'a [String],
 }
 
 /// One successful step as a `materializations` row. Built when the step finishes (for the
@@ -642,6 +646,8 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
         .await
         .map_err(|e| BarcaError::Db(format!("failed to begin terminal ledger: {e}")))?;
     let result = async {
+        // In the ledger's transaction: one commit for both. Best effort, as on its own.
+        db::touch_read_in(&conn, l.touched).await;
         write_terminal_ledger(&conn, l).await?;
         conn.execute("COMMIT", ())
             .await
@@ -651,6 +657,8 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
     .await;
     if let Err(error) = result {
         conn.execute("ROLLBACK", ()).await.ok();
+        // The reads happened, whatever became of the ledger.
+        db::touch_read_on(&conn, l.touched).await;
         return Err(error);
     }
     // Only a committed outcome replaces the process-liveness witness.
@@ -933,6 +941,7 @@ mod persist_tests {
                 all_attempts: &self.attempts,
                 all_timings: &self.timings,
                 cached_node_ids: &self.cached,
+                touched: &[],
                 run_hashes: &self.run_hashes,
                 output_hashes: &self.empty,
                 store_paths: &self.empty,

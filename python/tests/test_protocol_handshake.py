@@ -34,6 +34,7 @@ def send(sock, value):
 def test_real_connection_negotiates_before_returning(tmp_path, monkeypatch, role, response):
     path = str(tmp_path / "protocol.sock")
     monkeypatch.setenv("BARCA_SOCKET", path)
+    monkeypatch.delenv("BARCA_WORKER_ID", raising=False)
     monkeypatch.setattr(_runtime, "_socket", None)
     seen, errors = [], []
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
@@ -86,6 +87,42 @@ def test_real_connection_negotiates_before_returning(tmp_path, monkeypatch, role
         assert seen == [
             {"type": "hello", "role": role, "protocol_version": _runtime.PROTOCOL_VERSION}
         ]
+
+
+@pytest.mark.parametrize("role", ["worker", "transfer"])
+def test_a_worker_names_itself_in_its_hello(tmp_path, monkeypatch, role):
+    """Workers start together and connect in any order: the hello's `worker_id` (from
+    `BARCA_WORKER_ID`) pairs the connection with the process the coordinator started."""
+    path = str(tmp_path / "protocol.sock")
+    monkeypatch.setenv("BARCA_SOCKET", path)
+    monkeypatch.setenv("BARCA_WORKER_ID", "5")
+    monkeypatch.setattr(_runtime, "_socket", None)
+    seen = []
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(path)
+        listener.listen(1)
+        listener.settimeout(5)
+
+        def coordinator():
+            peer, _ = listener.accept()
+            with peer:
+                seen.append(receive(peer))
+                send(
+                    peer,
+                    {"type": "hello", "role": "coordinator", "protocol_version": _runtime.PROTOCOL_VERSION},
+                )
+
+        thread = threading.Thread(target=coordinator)
+        thread.start()
+        try:
+            _runtime.connect(role=role)
+        finally:
+            _runtime.disconnect()
+            thread.join(6)
+    expected = {"type": "hello", "role": role, "protocol_version": _runtime.PROTOCOL_VERSION}
+    if role == "worker":
+        expected["worker_id"] = 5
+    assert seen == [expected]
 
 
 @pytest.mark.parametrize("helper", ["worker", "transfer"])

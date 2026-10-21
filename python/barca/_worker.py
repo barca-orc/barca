@@ -16,8 +16,6 @@ import json
 import os
 import sys
 import time
-import traceback
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from barca import _duckdb, _storage
@@ -369,6 +367,8 @@ def _user_traceback(exc) -> str:
     internal (e.g. a TypeError raised by the fn(**kwargs) call itself) — the
     caller always leads with "ErrorType: message", which carries the detail.
     """
+    import traceback  # only on failure: it costs ~10 ms at start-up on Python 3.14
+
     barca_dir = str(Path(__file__).resolve().parent)
     frames = [
         f
@@ -505,6 +505,8 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
         value = deserialize(path, fmt, frame_type=frame_type)
         # The size lookup is I/O too (a request, for a remote path), so it runs in the pool.
         return value, (_artifact_size(path) if lru is not None else None)
+
+    from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor(max_workers=min(len(to_fetch), _COLLECT_IO_MAX_WORKERS)) as ex:
         for (i, artifact), (value, size) in zip(to_fetch, ex.map(_fetch, to_fetch)):

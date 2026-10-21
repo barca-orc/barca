@@ -556,3 +556,51 @@ async fn a_version_1_database_from_an_earlier_release_gains_the_columns() {
     );
     assert_eq!(crate::db_schema::read_version(&conn).await.unwrap(), 1);
 }
+
+/// #560: a command that wrote nothing (a warm run) is not checked again when the last check,
+/// under the same limit, found the cache under it. One that wrote something is.
+#[tokio::test]
+async fn a_command_that_wrote_nothing_skips_the_check_the_last_one_passed() {
+    let (f, files) = project().await;
+    let total = f.total().await;
+    let limit = MaxSize::Bytes(total + 10_000);
+    let wrote = Own {
+        recorded: files.iter().cloned().collect(),
+        ..Default::default()
+    };
+    let nothing = Own {
+        wrote_nothing: true,
+        ..wrote.clone()
+    };
+    // Surveys, finds the cache under the limit, and records that.
+    assert!(
+        check_in(&f.project, limit, &wrote, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Grown past the limit behind the check's back (another process, say).
+    std::fs::write(f.root().join(".barca/grown"), vec![b'x'; 50_000]).unwrap();
+    assert!(
+        check_in(&f.project, limit, &nothing, None)
+            .await
+            .unwrap()
+            .is_none(),
+        "a command that wrote nothing is not checked again"
+    );
+    // Under another limit it is checked.
+    let lower = MaxSize::Bytes(total + 20_000);
+    assert!(
+        check_in(&f.project, lower, &nothing, None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // A command that wrote something is checked, and finds the growth.
+    assert!(
+        check_in(&f.project, limit, &wrote, None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}

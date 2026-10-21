@@ -14,8 +14,13 @@
 //! worker dies mid-batch only its in-flight task consumes retry budget — the
 //! unstarted remainder returns to the queue front untouched.
 //!
+//! Workers start together: when ready work has no idle worker, every worker the ready
+//! queue can use (up to `pool_size`) is started at once, and each connection is taken as
+//! it arrives (identified by the `worker_id` in its hello), so start-ups overlap instead of
+//! adding up (#560). Work goes to whichever worker connects first.
+//!
 //! On parallel(), the requesting worker is SIGSTOP'd, a replacement is
-//! spawned, and children enter the ready queue. When all children complete,
+//! started, and children enter the ready queue. When all children complete,
 //! the original is SIGCONT'd; the pool is then one worker over strength, and
 //! the next worker that has nothing leased is stopped.
 //!
@@ -123,6 +128,75 @@ enum IoEvent {
     RetryReady {
         item_id: ItemId,
     },
+    /// A process connected to the coordination socket and negotiated (or failed to).
+    /// `worker_id` is from its hello, `pid` from the socket (`SO_PEERCRED`).
+    Connected {
+        worker_id: Option<usize>,
+        pid: Option<u32>,
+        stream: Result<UnixStream, String>,
+    },
+}
+
+/// The task that takes connections, stopped when dropped: a pool dropped on some path that did
+/// not shut it down (a long-lived `barca serve` runs many) leaves no task holding its socket.
+struct Acceptor(JoinHandle<()>);
+
+impl Drop for Acceptor {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// A worker that has been started and has not connected yet.
+struct PendingWorker {
+    child: Child,
+    started: std::time::Instant,
+}
+
+/// Take every connection to the coordination socket, each negotiated in a task of its own so
+/// that one slow or silent process holds up no other. Ends when the pool drops its handle.
+async fn accept_connections(listener: UnixListener, event_tx: mpsc::Sender<IoEvent>) {
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            // Transient (out of descriptors): a worker still starting is failed by its
+            // deadline if this does not clear.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            let mut stream = stream;
+            let pid = stream
+                .peer_cred()
+                .ok()
+                .and_then(|c| c.pid())
+                .and_then(|p| u32::try_from(p).ok());
+            let negotiated = tokio::time::timeout(
+                WORKER_CONNECT_LIMIT,
+                crate::protocol::accept_hello(&mut stream, "worker"),
+            )
+            .await;
+            let (worker_id, stream) = match negotiated {
+                Ok(Ok(hello)) => (
+                    hello
+                        .get("worker_id")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|id| usize::try_from(id).ok()),
+                    Ok(stream),
+                ),
+                Ok(Err(e)) => (None, Err(format!("connection/protocol: {e}"))),
+                // The worker's own start deadline reports this.
+                Err(_) => return,
+            };
+            let _ = tx
+                .send(IoEvent::Connected {
+                    worker_id,
+                    pid,
+                    stream,
+                })
+                .await;
+        });
+    }
 }
 
 /// Re-deliver an item to the ready queue after its retry backoff elapses.
@@ -228,10 +302,14 @@ async fn worker_io_task(
 pub struct WorkerPool {
     config: IoConfig,
     socket_path: PathBuf,
-    listener: UnixListener,
+    /// Takes connections to the socket ([`accept_connections`]); stopped at shutdown, or when
+    /// the pool is dropped without one.
+    acceptor: Acceptor,
     event_tx: mpsc::Sender<IoEvent>,
     event_rx: mpsc::Receiver<IoEvent>,
     workers: HashMap<usize, WorkerHandle>,
+    /// Workers started and not connected yet, by worker id.
+    pending: HashMap<usize, PendingWorker>,
     frozen: Vec<FrozenWorker>,
     next_worker_id: usize,
     trace_start: std::time::Instant,
@@ -319,13 +397,15 @@ impl WorkerPool {
         let (event_tx, event_rx) = mpsc::channel::<IoEvent>(config.pool_size.max(1) * 8);
         sweep_branch_results(&branch_results_parent());
         let branch_root = branch_results_root(&config.run_id);
+        let acceptor = Acceptor(tokio::spawn(accept_connections(listener, event_tx.clone())));
         Ok(Self {
             config,
             socket_path,
-            listener,
+            acceptor,
             event_tx,
             event_rx,
             workers: HashMap::new(),
+            pending: HashMap::new(),
             frozen: Vec::new(),
             next_worker_id: 0,
             trace_start: std::time::Instant::now(),
@@ -425,6 +505,10 @@ impl WorkerPool {
             None
         };
 
+        // Polls the workers still starting (`fail_dead_starts`).
+        let mut start_watch = tokio::time::interval(Duration::from_millis(10));
+        start_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             if coord.is_finished() {
                 break;
@@ -434,7 +518,11 @@ impl WorkerPool {
             if cancel.is_cancelled() {
                 return Err("run cancelled".to_string());
             }
-            if self.workers.is_empty() && self.frozen.is_empty() && coord.ready_count() > 0 {
+            if self.workers.is_empty()
+                && self.pending.is_empty()
+                && self.frozen.is_empty()
+                && coord.ready_count() > 0
+            {
                 // Ready work exists but spawning failed — nothing will ever
                 // produce a completion event.
                 return Err("no workers available and work remains".to_string());
@@ -450,6 +538,14 @@ impl WorkerPool {
                     Some(e) => e,
                     None => break,
                 },
+                // A worker that is starting fails when its process exits or its deadline
+                // passes, whichever comes first.
+                _ = start_watch.tick(), if !self.pending.is_empty() => {
+                    // Not started again here: a worker that cannot start would be started
+                    // over and over. With no worker left, the check above ends the phase.
+                    self.fail_dead_starts();
+                    continue;
+                }
                 _ = async {
                     match ticker.as_mut() {
                         Some(t) => { t.tick().await; }
@@ -680,28 +776,9 @@ impl WorkerPool {
                             libc::kill(handle.child.id() as i32, libc::SIGSTOP);
                         }
 
-                        // Spawn a replacement worker in the same slot
-                        let replacement_id = self.next_worker_id;
-                        self.next_worker_id += 1;
-                        match spawn_worker(
-                            &self.config,
-                            &self.socket_path,
-                            replacement_id,
-                            &self.listener,
-                            &self.event_tx,
-                            cancel,
-                        )
-                        .await
-                        {
-                            Ok(replacement) => {
-                                self.workers.insert(replacement_id, replacement);
-                            }
-                            Err(SpawnError::Cancelled) => {}
-                            Err(SpawnError::Failed(e)) => {
-                                crate::errln!("[barca] failed to spawn replacement worker: {e}")
-                            }
-                        }
-
+                        // The frozen worker no longer counts towards the pool: the
+                        // `assign_ready` below starts its replacement when the branches
+                        // need one (no idle worker), without waiting for it to connect.
                         self.frozen.push(FrozenWorker {
                             child: handle.child,
                             cmd_tx: handle.cmd_tx,
@@ -823,6 +900,17 @@ impl WorkerPool {
                     coord.requeue(item_id);
                     self.assign_ready(coord, cost, cancel).await;
                 }
+                IoEvent::Connected {
+                    worker_id,
+                    pid,
+                    stream,
+                } => {
+                    // A connection that fails its handshake starts nobody new here: a worker
+                    // that cannot start would be started over and over.
+                    if self.on_connected(worker_id, pid, stream) {
+                        self.assign_ready(coord, cost, cancel).await;
+                    }
+                }
             }
         }
 
@@ -842,10 +930,27 @@ impl WorkerPool {
     /// `BARCA_TRACE_TIMING=1` — see benchmarks/RESULTS.md's docker-harness
     /// re-run notes).
     pub async fn shutdown(self) {
+        drop(self.acceptor);
         let workers = self.workers;
         let frozen = self.frozen;
+        let pending = self.pending;
         let kill_task = tokio::task::spawn_blocking(move || {
-            let mut children: Vec<Child> = Vec::with_capacity(workers.len() + frozen.len());
+            let mut children: Vec<Child> =
+                Vec::with_capacity(workers.len() + frozen.len() + pending.len());
+
+            // Started and never connected (a cancelled run, or one that ended first): not
+            // members of the pool, and still stopped and reaped here.
+            #[cfg(unix)]
+            for (_, p) in pending {
+                unsafe {
+                    libc::kill(p.child.id() as i32, libc::SIGTERM);
+                }
+                children.push(p.child);
+            }
+            #[cfg(not(unix))]
+            for (_, p) in pending {
+                children.push(p.child);
+            }
 
             #[cfg(unix)]
             for (_, w) in workers {
@@ -880,7 +985,9 @@ impl WorkerPool {
                         .iter_mut()
                         .any(|c| !matches!(c.try_wait(), Ok(Some(_))))
                 {
-                    std::thread::sleep(Duration::from_millis(5));
+                    // A worker exits within a millisecond or two of SIGTERM: polling every
+                    // 5 ms made each run's shutdown about 5 ms (#560).
+                    std::thread::sleep(Duration::from_millis(1));
                 }
             }
 
@@ -930,20 +1037,13 @@ impl WorkerPool {
         }
     }
 
-    /// Assign ready items to idle workers in cost-sized batches, spawning
+    /// Assign ready items to idle workers in cost-sized batches, starting
     /// workers on demand up to `pool_size`.
     ///
-    /// Workers are spawned one at a time, not concurrently: `spawn_worker`
-    /// pairs a spawned child process with whichever connection its own
-    /// `listener.accept()` call happens to receive, and workers never send an
-    /// identifying handshake after connecting (see `_runtime.connect()` in
-    /// python/barca/_runtime.py — a bare `sock.connect()`, nothing else). Two
-    /// concurrent `spawn_worker` calls racing on the same listener could each
-    /// accept the *other's* connection, pairing a `WorkerHandle`'s `Child`
-    /// (kill target) with a socket that's actually talking to a different
-    /// process — a real process-lifecycle bug, not just a cosmetic ID swap.
-    /// Fixing this properly needs a handshake protocol change; not worth it
-    /// for the ~200ms/run this would save.
+    /// When ready work finds no idle worker, every worker it can use is started at once
+    /// ([`Self::start_workers`]) and none is waited for: each joins the pool when it connects
+    /// (`IoEvent::Connected`), and this runs again then. Starting them one at a time, each
+    /// waited for before the next, cost 30-40 ms per worker (#560).
     async fn assign_ready(
         &mut self,
         coord: &mut Coordinator,
@@ -957,77 +1057,27 @@ impl WorkerPool {
                 return;
             }
 
-            // Find an idle worker, or spawn one if the pool is under strength.
-            let wid = match self
+            // Find an idle worker, or start the ones the ready work can use.
+            let Some(wid) = self
                 .workers
                 .iter()
                 .find(|(_, w)| w.leases.is_empty() && !w.batch_open)
                 .map(|(&id, _)| id)
-            {
-                Some(id) => id,
-                None => {
-                    if self.workers.len() >= self.config.pool_size.max(1) {
-                        return; // pool saturated — completions will re-enter here
-                    }
-                    let wid = self.next_worker_id;
-                    self.next_worker_id += 1;
-                    match spawn_worker(
-                        &self.config,
-                        &self.socket_path,
-                        wid,
-                        &self.listener,
-                        &self.event_tx,
-                        cancel,
-                    )
-                    .await
-                    {
-                        Ok(handle) => {
-                            self.workers.insert(wid, handle);
-                            wid
-                        }
-                        Err(SpawnError::Cancelled) => return,
-                        Err(SpawnError::Failed(e)) => {
-                            crate::errln!("[barca] failed to spawn worker: {e}");
-
-                            return;
-                        }
-                    }
-                }
+            else {
+                self.start_workers(coord, cost);
+                return;
             };
 
             // Lease a batch: K sized from the head item's measured cost.
-            // The ceiling input is the pull-eligible pool (ready items), not
-            // pending work blocked on upstreams — items that can't be pulled
-            // this wave mustn't let one worker drain the whole ready queue.
-            let first = coord.next_ready().expect("ready_count checked above");
-            let head_node = coord.item(first).step_id.display();
-            let remaining = coord.ready_count() + 1;
-            let k = cost
-                .batch_size(&head_node, remaining, self.config.pool_size.max(1))
-                .max(1);
-            // Fill the batch up to K, but never pack estimated-heavy items
-            // behind a light head: the batch has a work budget of K × the
-            // head's cost (what K was computed for), and an item that would
-            // blow it goes back for its own pull. Guards the over-batch
-            // tail-block when a phase mixes light and heavy nodes.
-            let head_est = cost.estimate(&head_node);
-            let budget = head_est * k as f64 * 1.5;
-            let mut acc = head_est;
-            let mut batch = vec![first];
-            while batch.len() < k {
-                match coord.next_ready() {
-                    Some(id) => {
-                        let est = cost.estimate(&coord.item(id).step_id.display());
-                        if acc + est > budget {
-                            coord.return_leased(id);
-                            break;
-                        }
-                        acc += est;
-                        batch.push(id);
-                    }
-                    None => break,
-                }
-            }
+            let len = self.batch_len(
+                coord,
+                cost,
+                &mut coord.ready_items().peekable(),
+                coord.ready_count(),
+            );
+            let batch: Vec<ItemId> = (0..len)
+                .map(|_| coord.next_ready().expect("batch_len counts ready items"))
+                .collect();
 
             let msg = if batch.len() == 1 {
                 let step = self.traced_step(coord.item(batch[0]), coord);
@@ -1095,7 +1145,7 @@ impl WorkerPool {
     /// has no step leased, now or when it next finishes its batch: never one in the middle of
     /// a step.
     fn retire_surplus(&mut self) {
-        while self.workers.len() > self.config.pool_size.max(1) {
+        while self.workers.len() + self.pending.len() > self.config.pool_size.max(1) {
             let Some(idle) = self
                 .workers
                 .iter()
@@ -1111,6 +1161,207 @@ impl WorkerPool {
                 });
             }
         }
+    }
+
+    /// How many of the ready items `ready` yields (in queue order, `remaining` of them)
+    /// make the next batch. Consumes those items from the iterator.
+    ///
+    /// K is sized from the head item's measured cost. The ceiling input is the pull-eligible
+    /// pool (ready items), not pending work blocked on upstreams — items that can't be pulled
+    /// this wave mustn't let one worker drain the whole ready queue. The batch is filled up
+    /// to K, but estimated-heavy items are never packed behind a light head: the batch has a
+    /// work budget of K × the head's cost (what K was computed for), and an item that would
+    /// blow it waits for its own pull. Guards the over-batch tail-block when a phase mixes
+    /// light and heavy nodes.
+    fn batch_len(
+        &self,
+        coord: &Coordinator,
+        cost: &CostModel,
+        ready: &mut std::iter::Peekable<impl Iterator<Item = ItemId>>,
+        remaining: usize,
+    ) -> usize {
+        let Some(first) = ready.next() else {
+            return 0;
+        };
+        let head_node = coord.item(first).step_id.display();
+        // The phase's other steps (waiting on upstreams or on their stream) count toward
+        // whether the work is trivial, not toward the ceiling.
+        let backlog = coord.remaining_count().saturating_sub(coord.ready_count());
+        let k = cost
+            .batch_size_with_backlog(&head_node, remaining, backlog, self.config.pool_size.max(1))
+            .max(1);
+        let head_est = cost.estimate(&head_node);
+        let budget = head_est * k as f64 * 1.5;
+        let mut acc = head_est;
+        let mut len = 1;
+        while len < k {
+            let Some(&id) = ready.peek() else {
+                break;
+            };
+            let est = cost.estimate(&coord.item(id).step_id.display());
+            if acc + est > budget {
+                break;
+            }
+            ready.next();
+            acc += est;
+            len += 1;
+        }
+        len
+    }
+
+    /// Start, all at once, the workers the ready queue can use that no worker already
+    /// connected or starting will take: one per batch it would be leased as, up to
+    /// `pool_size` in all. A one-step run starts one worker. None is waited for.
+    fn start_workers(&mut self, coord: &Coordinator, cost: &CostModel) {
+        let room = self
+            .config
+            .pool_size
+            .max(1)
+            .saturating_sub(self.workers.len() + self.pending.len());
+        if room == 0 {
+            return;
+        }
+        // Each worker still starting takes the first batch left when it connects.
+        let mut ready = coord.ready_items().peekable();
+        let mut taken = 0;
+        let mut batches = 0;
+        while taken < coord.ready_count() && batches < self.pending.len() + room {
+            taken += self.batch_len(coord, cost, &mut ready, coord.ready_count() - taken);
+            batches += 1;
+        }
+        let wanted = batches.saturating_sub(self.pending.len()).min(room);
+        if self.trace_on && wanted > 0 {
+            crate::errln!(
+                "[trace]  {:>8.1}ms  starting {wanted} worker(s) ({} already starting)",
+                self.trace_start.elapsed().as_secs_f64() * 1000.0,
+                self.pending.len()
+            );
+        }
+        for _ in 0..wanted {
+            let wid = self.next_worker_id;
+            self.next_worker_id += 1;
+            let cmd = worker_command(&self.config, &self.socket_path, wid);
+            if let Err(e) = self.launch(cmd, wid) {
+                crate::errln!("[barca] failed to spawn worker: {e}");
+                return;
+            }
+        }
+    }
+
+    /// Start `cmd` as worker `worker_id`, without waiting for it to connect.
+    fn launch(&mut self, mut cmd: Command, worker_id: usize) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        let child = crate::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;
+        if self.trace_on {
+            crate::errln!(
+                "[trace]  worker {worker_id} process spawned in {:.1}ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        self.pending
+            .insert(worker_id, PendingWorker { child, started });
+        Ok(())
+    }
+
+    /// A connection arrived: it joins the pool as the worker its hello names (or, without
+    /// a `worker_id`, the one whose process it comes from). One that matches no worker still
+    /// starting (stopped already, or not barca's) is closed. Returns whether a worker joined.
+    fn on_connected(
+        &mut self,
+        worker_id: Option<usize>,
+        pid: Option<u32>,
+        stream: Result<UnixStream, String>,
+    ) -> bool {
+        let wid = worker_id
+            .filter(|id| self.pending.contains_key(id))
+            .or_else(|| {
+                let pid = pid?;
+                self.pending
+                    .iter()
+                    .find(|(_, p)| p.child.id() == pid)
+                    .map(|(&id, _)| id)
+            });
+        let Some(wid) = wid else {
+            if self.trace_on {
+                crate::errln!(
+                    "[trace]  connection from an unknown process (worker id {worker_id:?}, pid {pid:?}) closed"
+                );
+            }
+            return false;
+        };
+        let pending = self.pending.remove(&wid).expect("matched above");
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(e) => {
+                crate::errln!("[barca] failed to spawn worker: worker {wid} {e}");
+                Self::reap(pending.child);
+                return false;
+            }
+        };
+        if self.trace_on {
+            crate::errln!(
+                "[trace]  worker {wid} connected (accept) in {:.1}ms",
+                pending.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        let (cmd_tx, cmd_rx) = mpsc::channel::<serde_json::Value>(16);
+        let task = tokio::spawn(worker_io_task(wid, stream, cmd_rx, self.event_tx.clone()));
+        self.workers.insert(
+            wid,
+            WorkerHandle {
+                child: pending.child,
+                cmd_tx,
+                _task: task,
+                leases: VecDeque::new(),
+                batch_open: false,
+                front_since: std::time::Instant::now(),
+            },
+        );
+        true
+    }
+
+    /// Fail the starting workers whose process has exited, or that have not connected within
+    /// [`WORKER_CONNECT_LIMIT`]. Each is reported and reaped. Returns why each failed.
+    fn fail_dead_starts(&mut self) -> Vec<String> {
+        let mut failed = Vec::new();
+        for (&wid, p) in &mut self.pending {
+            match p.child.try_wait() {
+                Ok(Some(status)) => failed.push((
+                    wid,
+                    format!("worker {wid} exited before it connected ({status})"),
+                )),
+                Err(e) => failed.push((
+                    wid,
+                    format!("worker {wid} exited before it connected (its status could not be read: {e})"),
+                )),
+                Ok(None) if p.started.elapsed() >= WORKER_CONNECT_LIMIT => failed.push((
+                    wid,
+                    format!(
+                        "timeout waiting for worker {wid} to connect and announce protocol v{}; reinstall barca in this Python environment",
+                        crate::protocol::PROTOCOL_VERSION
+                    ),
+                )),
+                Ok(None) => {}
+            }
+        }
+        failed
+            .into_iter()
+            .map(|(wid, why)| {
+                crate::errln!("[barca] failed to spawn worker: {why}");
+                if let Some(p) = self.pending.remove(&wid) {
+                    Self::reap(p.child);
+                }
+                why
+            })
+            .collect()
+    }
+
+    /// Kill and reap a worker that is not part of the pool, off the event loop.
+    fn reap(mut child: Child) {
+        tokio::task::spawn_blocking(move || {
+            let _ = child.kill();
+            let _ = child.wait();
+        });
     }
 
     /// Resume frozen workers whose parallel groups completed.
@@ -1178,31 +1429,11 @@ impl WorkerPool {
 
 // ─── Worker spawning ─────────────────────────────────────────────────────────
 
-/// Why a worker did not start.
-enum SpawnError {
-    /// The run was cancelled while the worker was starting. The worker has been stopped.
-    Cancelled,
-    Failed(String),
-}
-
 /// How long a worker may take from being started to connecting.
 const WORKER_CONNECT_LIMIT: Duration = Duration::from_secs(10);
 
-/// Start one worker and wait for it to connect ([`start_worker`]).
-///
-/// The wait ends as soon as it cannot succeed: when the run is cancelled, and when the worker
-/// process exits without connecting. It used to end only on the connection or after
-/// [`WORKER_CONNECT_LIMIT`], so a Ctrl-C that ended a starting worker held the cancelled
-/// command for those ten seconds (#292). A worker that does not become part of the pool is
-/// killed and reaped here: none is left behind.
-async fn spawn_worker(
-    config: &IoConfig,
-    socket_path: &Path,
-    worker_id: usize,
-    listener: &UnixListener,
-    event_tx: &mpsc::Sender<IoEvent>,
-    cancel: &CancellationToken,
-) -> Result<WorkerHandle, SpawnError> {
+/// The command that starts worker `worker_id` against the socket at `socket_path`.
+fn worker_command(config: &IoConfig, socket_path: &Path, worker_id: usize) -> Command {
     let mut cmd = crate::helper_proc::python_module_std(
         &config.python,
         "barca._worker",
@@ -1238,93 +1469,7 @@ async fn spawn_worker(
     // and joins the job once it handles the signal itself.
     #[cfg(unix)]
     crate::helper_proc::start_outside_the_job(&mut cmd);
-    start_worker(cmd, worker_id, listener, event_tx, cancel).await
-}
-
-/// Start `cmd` as worker `worker_id` and wait for it to connect to `listener`.
-async fn start_worker(
-    mut cmd: Command,
-    worker_id: usize,
-    listener: &UnixListener,
-    event_tx: &mpsc::Sender<IoEvent>,
-    cancel: &CancellationToken,
-) -> Result<WorkerHandle, SpawnError> {
-    let trace_on = std::env::var("BARCA_TRACE_TIMING").is_ok();
-    let t_spawn = std::time::Instant::now();
-    let mut child = crate::helper_proc::spawn_std(&mut cmd)
-        .map_err(|e| SpawnError::Failed(format!("spawn: {e}")))?;
-    if trace_on {
-        crate::errln!(
-            "[trace]  worker {worker_id} process spawned in {:.1}ms",
-            t_spawn.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-
-    let t_accept = std::time::Instant::now();
-    let connected = tokio::select! {
-        // A connection that is there is taken, whatever else is also true by now.
-        biased;
-        accepted = tokio::time::timeout(WORKER_CONNECT_LIMIT, async {
-            let (mut stream, _) = listener.accept().await?;
-            crate::protocol::accept_hello(&mut stream, "worker").await?;
-            Ok::<_, std::io::Error>(stream)
-        }) => match accepted {
-            Ok(Ok(stream)) => Ok(stream),
-            Ok(Err(e)) => Err(SpawnError::Failed(format!("worker {worker_id} connection/protocol: {e}"))),
-            Err(_) => Err(SpawnError::Failed(format!(
-                "timeout waiting for worker {worker_id} to connect and announce protocol v{}; reinstall barca in this Python environment", crate::protocol::PROTOCOL_VERSION
-            ))),
-        },
-        _ = cancel.cancelled() => Err(SpawnError::Cancelled),
-        status = exited(&mut child) => Err(SpawnError::Failed(format!(
-            "worker {worker_id} exited before it connected ({status})"
-        ))),
-    };
-    let stream = match connected {
-        Ok(stream) => stream,
-        Err(e) => {
-            // Not a member of the pool, so `shutdown` would never see it.
-            tokio::task::spawn_blocking(move || {
-                let _ = child.kill();
-                let _ = child.wait();
-            })
-            .await
-            .ok();
-            return Err(e);
-        }
-    };
-    if trace_on {
-        crate::errln!(
-            "[trace]  worker {worker_id} connected (accept) in {:.1}ms",
-            t_accept.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-
-    let (cmd_tx, cmd_rx) = mpsc::channel::<serde_json::Value>(16);
-    let etx = event_tx.clone();
-    let task = tokio::spawn(worker_io_task(worker_id, stream, cmd_rx, etx));
-
-    Ok(WorkerHandle {
-        child,
-        cmd_tx,
-        _task: task,
-        leases: VecDeque::new(),
-        batch_open: false,
-        front_since: std::time::Instant::now(),
-    })
-}
-
-/// Resolves when `child` has exited, with its exit status as text.
-async fn exited(child: &mut Child) -> String {
-    let mut poll = tokio::time::interval(Duration::from_millis(10));
-    loop {
-        poll.tick().await;
-        match child.try_wait() {
-            Ok(Some(status)) => return status.to_string(),
-            Ok(None) => {}
-            Err(e) => return format!("its status could not be read: {e}"),
-        }
-    }
+    cmd
 }
 
 // ─── Process lifecycle ────────────────────────────────────────────────────────
@@ -2042,17 +2187,45 @@ mod tests {
         sweep_branch_results(&dir.path().join("absent"));
     }
 
-    fn test_listener(name: &str) -> (UnixListener, PathBuf) {
-        let path =
-            std::env::temp_dir().join(format!("barca_test_{name}_{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        (UnixListener::bind(&path).unwrap(), path)
-    }
-
     fn sh(script: &str) -> Command {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", script]);
         cmd
+    }
+
+    fn test_spec(name: &str) -> ItemSpec {
+        ItemSpec {
+            fn_ref: format!("p.py:{name}"),
+            function_name: name.to_string(),
+            source_file: "p.py".to_string(),
+            direct_args: Vec::new(),
+            direct_kwargs: HashMap::new(),
+            dag_inputs: HashMap::new(),
+            timeout_seconds: 300,
+            retries: 1,
+            retry_backoff_seconds: 0.0,
+            serializer: None,
+            sinks: Vec::new(),
+            run_hash: None,
+            upstream_inputs: HashMap::new(),
+            collected_inputs: HashMap::new(),
+            param_types: HashMap::new(),
+            return_type: None,
+            kind: "asset".to_string(),
+            is_dynamic: false,
+        }
+    }
+
+    fn test_config(run_id: &str, pool_size: usize) -> IoConfig {
+        IoConfig {
+            upload_snapshot_prefix: None,
+            python: PathBuf::from("python3"),
+            pool_size,
+            run_id: format!("{run_id}-{}", std::process::id()),
+            datadog: None,
+            artifact_root: ".".to_string(),
+            storage_options_json: None,
+        }
     }
 
     /// #292: a worker that ends without connecting (a Ctrl-C used to end one that was still
@@ -2060,73 +2233,162 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_worker_that_exits_before_connecting_fails_the_start_at_once() {
-        let (listener, path) = test_listener("exits_early");
-        let (event_tx, _event_rx) = mpsc::channel(8);
+        let mut pool = WorkerPool::start(test_config("exits-early", 1)).unwrap();
+        pool.launch(sh("exit 3"), 0).unwrap();
         let started = std::time::Instant::now();
-        let result = start_worker(
-            sh("exit 3"),
-            0,
-            &listener,
-            &event_tx,
-            &CancellationToken::new(),
-        )
-        .await;
-        let Err(SpawnError::Failed(why)) = result else {
-            panic!("a worker that exited must not count as started");
+        let why = loop {
+            let failed = pool.fail_dead_starts();
+            if let Some(why) = failed.into_iter().next() {
+                break why;
+            }
+            assert!(
+                started.elapsed() < WORKER_CONNECT_LIMIT / 2,
+                "still waiting"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
         };
         assert!(
             why.contains("exited before it connected") && why.contains("exit status: 3"),
             "{why}"
         );
-        assert!(
-            started.elapsed() < WORKER_CONNECT_LIMIT / 2,
-            "waited {:?} for a worker that had exited",
-            started.elapsed()
-        );
-        let _ = std::fs::remove_file(path);
+        assert!(pool.pending.is_empty());
+        pool.shutdown().await;
     }
 
-    /// #292: cancelling a run while a worker starts ends the wait for it at once, and the
-    /// worker, which never became part of the pool, is not left running.
+    /// #292: a worker that is still starting when the run ends (cancelled, say) is not left
+    /// running: `shutdown` stops and reaps it, though it never joined the pool.
     #[cfg(unix)]
     #[tokio::test]
-    async fn cancelling_while_a_worker_starts_stops_waiting_and_stops_the_worker() {
-        let (listener, path) = test_listener("cancel_start");
-        let (event_tx, _event_rx) = mpsc::channel(8);
+    async fn shutdown_stops_a_worker_that_never_connected() {
+        let mut pool = WorkerPool::start(test_config("never-connects", 1)).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let pid_file = dir.path().join("pid");
         // Never connects: a worker held in its start-up.
-        let cmd = sh(&format!("echo $$ > {}; exec sleep 60", pid_file.display()));
-        let cancel = CancellationToken::new();
-        let canceller = {
-            let (cancel, pid_file) = (cancel.clone(), pid_file.clone());
-            tokio::spawn(async move {
-                // Cancel once the worker is certainly running.
-                let deadline = std::time::Instant::now() + Duration::from_secs(30);
-                while !std::fs::read_to_string(&pid_file).is_ok_and(|s| s.ends_with('\n')) {
-                    assert!(std::time::Instant::now() < deadline, "the worker never ran");
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-                cancel.cancel();
-                std::time::Instant::now()
-            })
-        };
-        let result = start_worker(cmd, 0, &listener, &event_tx, &cancel).await;
-        let cancelled_at = canceller.await.unwrap();
-        assert!(matches!(result, Err(SpawnError::Cancelled)));
+        pool.launch(
+            sh(&format!("echo $$ > {}; exec sleep 60", pid_file.display())),
+            0,
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !std::fs::read_to_string(&pid_file).is_ok_and(|s| s.ends_with('\n')) {
+            assert!(std::time::Instant::now() < deadline, "the worker never ran");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let at = std::time::Instant::now();
+        pool.shutdown().await;
         assert!(
-            cancelled_at.elapsed() < WORKER_CONNECT_LIMIT / 2,
-            "returned {:?} after the cancellation",
-            cancelled_at.elapsed()
+            at.elapsed() < WORKER_CONNECT_LIMIT / 2,
+            "{:?}",
+            at.elapsed()
         );
-        // Killed and reaped before `start_worker` returned.
         let pid: i64 = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
             .parse()
             .unwrap();
         assert!(!crate::db::pid_alive(pid), "the worker is still running");
-        let _ = std::fs::remove_file(path);
+    }
+
+    /// Connect to the pool's socket as a worker would, with `worker_id` in the hello.
+    async fn connect_as(path: &Path, worker_id: Option<usize>) -> UnixStream {
+        let mut stream = UnixStream::connect(path).await.unwrap();
+        let mut hello = serde_json::json!({
+            "type": "hello", "role": "worker",
+            "protocol_version": crate::protocol::PROTOCOL_VERSION,
+        });
+        if let Some(id) = worker_id {
+            hello["worker_id"] = id.into();
+        }
+        write_frame(&mut stream, &hello).await.unwrap();
+        stream
+    }
+
+    /// #560: workers start together and connect in any order. Each connection joins the pool
+    /// as the worker its hello names, so the process a worker handle stops is the one that
+    /// connection talks to. A connection naming no worker that is starting is closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workers_that_connect_out_of_order_are_paired_by_their_hello() {
+        let mut pool = WorkerPool::start(test_config("pairing", 3)).unwrap();
+        for wid in 0..3 {
+            pool.launch(sh("exec sleep 30"), wid).unwrap();
+        }
+        let pids: HashMap<usize, u32> = pool
+            .pending
+            .iter()
+            .map(|(&wid, p)| (wid, p.child.id()))
+            .collect();
+        let socket = pool.socket_path.clone();
+        let mut clients = Vec::new();
+        for wid in [Some(2), Some(0), Some(7), Some(1)] {
+            clients.push(connect_as(&socket, wid).await);
+            let Some(IoEvent::Connected {
+                worker_id,
+                pid,
+                stream,
+            }) = pool.event_rx.recv().await
+            else {
+                panic!("expected a connection");
+            };
+            assert_eq!(worker_id, wid);
+            assert_eq!(pool.on_connected(worker_id, pid, stream), wid != Some(7));
+        }
+        assert!(pool.pending.is_empty());
+        assert_eq!(pool.workers.len(), 3);
+        for (wid, pid) in pids {
+            assert_eq!(pool.workers[&wid].child.id(), pid, "worker {wid}");
+        }
+        // The stranger's connection was acknowledged, then closed.
+        let stranger = &mut clients[2];
+        let ack: Option<serde_json::Value> = read_frame(stranger).await.unwrap();
+        assert_eq!(ack.unwrap()["type"], "hello");
+        let closed: Result<Option<serde_json::Value>, _> = read_frame(stranger).await;
+        assert!(matches!(closed, Ok(None) | Err(_)));
+        pool.shutdown().await;
+    }
+
+    /// #560: ready work with no idle worker starts every worker it can use at once, without
+    /// waiting on any (one per batch, up to `pool_size`); a one-step run starts one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_workers_a_wave_needs_start_together_and_no_more() {
+        for (ready, pool_size, started) in [(1, 4, 1), (3, 4, 3), (6, 4, 4)] {
+            let mut config = test_config("together", pool_size);
+            // A stand-in for the interpreter that never connects.
+            config.python = PathBuf::from("/bin/true");
+            let mut pool = WorkerPool::start(config).unwrap();
+            let mut coord = Coordinator::new();
+            for i in 0..ready {
+                let name = format!("n{i}");
+                coord.add_item(
+                    crate::StepId {
+                        base: std::sync::Arc::from(format!("p.py:{name}")),
+                        partition: crate::model::PartitionKey(Default::default()),
+                    },
+                    test_spec(&name),
+                    vec![],
+                );
+            }
+            // Heavy enough that each step is a batch of its own.
+            let mut cost = CostModel::new();
+            for i in 0..ready {
+                cost.observe(&format!("p.py:n{i}"), 5.0, 5.0, 0);
+            }
+            let cancel = CancellationToken::new();
+            pool.assign_ready(&mut coord, &cost, &cancel).await;
+            assert_eq!(
+                pool.pending.len(),
+                started,
+                "{ready} ready, pool {pool_size}"
+            );
+            assert!(pool.workers.is_empty());
+            // Nothing is leased before a worker connects.
+            assert_eq!(coord.ready_count(), ready);
+            // Again, with the same workers still starting: nobody more is started.
+            pool.assign_ready(&mut coord, &cost, &cancel).await;
+            assert_eq!(pool.pending.len(), started);
+            pool.shutdown().await;
+        }
     }
 
     /// Regression test for the pool_size*200ms shutdown bug: `shutdown()`
@@ -2224,10 +2486,11 @@ mod tests {
                     agent_mode: false,
                 },
                 socket_path: socket_path.clone(),
-                listener,
+                acceptor: Acceptor(tokio::spawn(accept_connections(listener, event_tx.clone()))),
                 event_tx,
                 event_rx,
                 workers,
+                pending: HashMap::new(),
                 frozen: Vec::new(),
                 next_worker_id: n,
                 trace_start: std::time::Instant::now(),
