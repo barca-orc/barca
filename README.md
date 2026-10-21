@@ -28,7 +28,7 @@ stale, and runs it in Python worker processes. Every result is a file under `.ba
 `barca serve` adds cron schedules, an HTTP API and a web UI when you want them.
 
 <p align="center">
-  <img alt="A terminal: barca get runs two steps, a second barca get runs none, and after an edit barca status marks summary stale with the reason changed: code" src="site/public/readme/terminal.svg" width="820" />
+  <img alt="A terminal: barca get runs two steps, a second barca get runs none, and after an edit barca status marks summary stale with the reason changed: code" src="https://raw.githubusercontent.com/barca-orc/barca/main/site/public/readme/terminal.svg" width="820" />
 </p>
 
 ## Why barca
@@ -144,7 +144,7 @@ run hash does not see.
 what is cached, running and queued:
 
 <p align="center">
-  <img alt="The barca web UI listing a pipeline's six nodes: two cached, two running, one queued and a task that always runs" src="site/public/readme/ui-pipeline.png" width="820" />
+  <img alt="The barca web UI listing a pipeline's six nodes: two cached, two running, one queued and a task that always runs" src="https://raw.githubusercontent.com/barca-orc/barca/main/site/public/readme/ui-pipeline.png" width="820" />
 </p>
 
 From Python, `barca.get("summary")` returns the value, and the decorators return the function
