@@ -307,7 +307,8 @@ impl RunStart {
         // refresh (#593); `start_workers` still checks it when uploads are pending.
         let store_checked = cfg.remote_artifacts()
             && matches!(request.policy, CachePolicy::CacheAware)
-            && crate::gc::store_checked_recently(&cfg.env, &cfg.artifact_root);
+            && !cfg.check_store
+            && crate::gc::store_checked_recently(cfg);
         let transfer_start = match cfg.remote_artifacts() && !store_checked {
             true => Some(TransferClient::launch(python, cfg, &run_id)?),
             false => None,
@@ -733,10 +734,15 @@ async fn start_workers(
             "store_check_skipped (checked within {}s)",
             crate::gc::STORE_CHECK_WINDOW.as_secs()
         );
-        Some(StoreSync::new(
-            TransferClient::deferred(python, cfg, run_id)?,
-            cancel.clone(),
-        ))
+        Some(
+            StoreSync::new(
+                TransferClient::deferred(python, cfg, run_id)?,
+                cancel.clone(),
+            )
+            .check_before_fetching(std::time::Duration::from_secs(
+                cfg.transfer_timeout_secs.min(10),
+            )),
+        )
     } else if let Some(start) = started.transfer_start.take() {
         let mut client = start.connect().await?;
         let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(10));
@@ -762,10 +768,10 @@ async fn start_workers(
         };
         if let Err(error) = checked {
             client.abort().await;
-            crate::gc::forget_store_check(&cfg.env, &cfg.artifact_root);
+            crate::gc::forget_store_check(cfg);
             return Err(error);
         }
-        crate::gc::remember_store_check(&cfg.env, &cfg.artifact_root);
+        crate::gc::remember_store_check(cfg);
         // Results an earlier command computed here and could not upload go first (#390), and
         // with a server, the runs they held back are posted to its ledger (#507).
         match retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
@@ -3344,7 +3350,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     crate::pending_uploads::record(db_path, &pending).await?;
     // A transfer that failed: the next run checks the store again (#593).
     if store_location.is_some() && (upload_error.is_some() || transfer_error.is_some()) {
-        crate::gc::forget_store_check(&cfg.env, &cfg.artifact_root);
+        crate::gc::forget_store_check(cfg);
     }
 
     let steps_cached = cached_node_ids.len();
@@ -3568,10 +3574,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
 
 /// What to do when the artifact store cannot be reached before a run: the second line of the
 /// error, so it is the envelope's `remediation` instead of the generic infra one.
-const STORE_PREFLIGHT_FIX: &str = "Nothing ran. Check the store's URI (BARCA_REMOTE_URI or \
-     [remote] uri), that the bucket or container exists (barca does not create it), the \
-     endpoint (FSSPEC_S3_ENDPOINT_URL for MinIO or R2) and the credentials. BARCA_REMOTE=off \
-     runs one command without the store (barca docs remote).";
+const STORE_PREFLIGHT_FIX: &str = concat!("Nothing ran. ", crate::store_sync::store_check_fix!());
 
 struct StopProgress<'a> {
     pool: crate::io_loop::WorkerPool,

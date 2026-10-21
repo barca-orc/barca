@@ -337,8 +337,8 @@ struct State {
     checked_size: u64,
     #[serde(default)]
     checked_limit: u64,
-    /// When the artifact store was last checked and found there, by environment and store
-    /// URI: seconds since the epoch ([`store_checked_recently`], #593).
+    /// When the artifact store was last checked and found there, by environment, store URI and
+    /// storage options: seconds since the epoch ([`store_checked_recently`], #593).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     store_checks: Vec<StoreCheck>,
 }
@@ -348,59 +348,78 @@ struct State {
 struct StoreCheck {
     env: String,
     uri: String,
+    /// SHA-256 of the storage options (endpoint, credentials) the check used; empty for none.
+    #[serde(default)]
+    options: String,
     at: u64,
+}
+
+impl StoreCheck {
+    /// The store `cfg` uses, checked at `at`.
+    fn of(cfg: &crate::config::ResolvedConfig, at: u64) -> Self {
+        use sha2::{Digest, Sha256};
+        let options = cfg
+            .storage_options_json
+            .as_deref()
+            .map(|o| format!("{:x}", Sha256::digest(o.as_bytes())))
+            .unwrap_or_default();
+        Self {
+            env: cfg.env.clone(),
+            uri: cfg.artifact_root.clone(),
+            options,
+            at,
+        }
+    }
+
+    fn same_store(&self, other: &Self) -> bool {
+        (&self.env, &self.uri, &self.options) == (&other.env, &other.uri, &other.options)
+    }
 }
 
 /// How long a successful check of the artifact store is trusted by a run that needs no
 /// transfer (#593): such a run starts no transfer helper.
 pub const STORE_CHECK_WINDOW: Duration = Duration::from_secs(300);
 
-/// Whether the artifact store `uri` of environment `env` was checked and found there less than
-/// [`STORE_CHECK_WINDOW`] ago, by this project's `.barca/gc-state.json`. A clock that went back
-/// counts as not recent.
-pub(crate) fn store_checked_recently(env: &str, uri: &str) -> bool {
+/// Whether the artifact store of `cfg` (its environment, store URI and storage options) was
+/// checked and found there less than [`STORE_CHECK_WINDOW`] ago, by this project's
+/// `.barca/gc-state.json`. A clock that went back counts as not recent.
+pub(crate) fn store_checked_recently(cfg: &crate::config::ResolvedConfig) -> bool {
     let Ok(project) = Project::here() else {
         return false;
     };
     let now = now_secs();
+    let store = StoreCheck::of(cfg, 0);
     read_state(&project).is_some_and(|s| {
         s.store_checks.iter().any(|c| {
-            c.env == env
-                && c.uri == uri
-                && c.at <= now
-                && now - c.at < STORE_CHECK_WINDOW.as_secs()
+            c.same_store(&store) && c.at <= now && now - c.at < STORE_CHECK_WINDOW.as_secs()
         })
     })
 }
 
-/// Remember that the artifact store `uri` of `env` was just checked and found there (#593).
-pub(crate) fn remember_store_check(env: &str, uri: &str) {
+/// Remember that the artifact store of `cfg` was just checked and found there (#593).
+pub(crate) fn remember_store_check(cfg: &crate::config::ResolvedConfig) {
     if let Ok(project) = Project::here() {
-        update_store_checks(&project, env, uri, Some(now_secs()));
+        update_store_checks(&project, StoreCheck::of(cfg, now_secs()), true);
     }
 }
 
-/// Forget the last check of the artifact store `uri` of `env`: a transfer to it failed, so the
-/// next run checks it again (#593).
-pub(crate) fn forget_store_check(env: &str, uri: &str) {
+/// Forget the last check of the artifact store of `cfg`: a transfer to it failed, so the next
+/// run checks it again (#593).
+pub(crate) fn forget_store_check(cfg: &crate::config::ResolvedConfig) {
     if let Ok(project) = Project::here() {
-        update_store_checks(&project, env, uri, None);
+        update_store_checks(&project, StoreCheck::of(cfg, 0), false);
     }
 }
 
-fn update_store_checks(project: &Project, env: &str, uri: &str, at: Option<u64>) {
+fn update_store_checks(project: &Project, check: StoreCheck, keep: bool) {
     if !project.barca.is_dir() {
         return;
     }
     let mut state = read_state(project).unwrap_or_default();
     let before = state.store_checks.clone();
-    state.store_checks.retain(|c| c.env != env || c.uri != uri);
-    if let Some(at) = at {
-        state.store_checks.push(StoreCheck {
-            env: env.to_string(),
-            uri: uri.to_string(),
-            at,
-        });
+    state.store_checks.retain(|c| !c.same_store(&check));
+    if keep {
+        state.store_checks.push(check);
     }
     if state.store_checks != before {
         write_state(project, &state);

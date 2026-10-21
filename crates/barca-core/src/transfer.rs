@@ -380,8 +380,13 @@ impl TransferClient {
         run_id: &str,
     ) -> Result<Self, BarcaError> {
         let (cmd, socket_path, layout) = Self::command(python, cfg, run_id)?;
+        Ok(Self::deferred_with(cmd, socket_path, layout))
+    }
+
+    /// A client that starts `cmd` as its helper at its first request (see [`Self::deferred`]).
+    fn deferred_with(cmd: Command, socket_path: PathBuf, layout: ArtifactLayout) -> Self {
         let (req_tx, req_rx) = mpsc::unbounded_channel();
-        Ok(Self {
+        Self {
             layout,
             child: None,
             _lifeline: None,
@@ -394,7 +399,7 @@ impl TransferClient {
             uploads: VecDeque::new(),
             settled: Vec::new(),
             fetches: HashMap::new(),
-        })
+        }
     }
 
     /// Whether the helper process was started (a deferred client's starts on its first request).
@@ -556,15 +561,6 @@ impl TransferClient {
         if (sha256.is_none() && local.is_file()) || self.fetches.contains_key(&local) {
             return Some(local);
         }
-        // A helper not started yet is not started to hash a local copy: it is hashed here, and
-        // one that has the recorded hash is used as it is (#593).
-        if self.deferred.is_some()
-            && let Some(expected) = sha256
-            && local.is_file()
-            && crate::db::file_sha256(&local).is_ok_and(|h| h == expected)
-        {
-            return Some(local);
-        }
         let rx = self.send(|id| TransferRequest::Get {
             id,
             remote: store.to_string(),
@@ -580,6 +576,15 @@ impl TransferClient {
             },
         );
         Some(local)
+    }
+
+    /// Whether the local mirror of `store` is there and, when `sha256` is given, has that hash:
+    /// what a fetch would find without downloading. Hashed here, without the helper (#593).
+    pub(crate) fn has_local_copy(&self, store: &str, sha256: Option<&str>) -> bool {
+        self.layout.local_for(store).is_some_and(|local| {
+            local.is_file()
+                && sha256.is_none_or(|h| crate::db::file_sha256(&local).is_ok_and(|l| l == h))
+        })
     }
 
     /// Wait for the fetches of `locals` (paths not being fetched are ready).
@@ -1061,6 +1066,70 @@ for t in threads: t.join()
             .expect("transfer client hung")
     }
 
+    fn fresh_socket() -> PathBuf {
+        crate::protocol::socket_path(
+            &format!("xfer-test-{}-{}", std::process::id(), rand_suffix()),
+            "transfer",
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_deferred_client_starts_its_helper_at_the_first_request() {
+        let fx = Fixture::new();
+        let mut cmd = Command::new("python3");
+        cmd.args(["-c", FAKE_HELPER]).env("FAKE_LOG", &fx.log);
+        let mut c = TransferClient::deferred_with(cmd, fresh_socket(), fx.layout());
+        // A local copy with the recorded hash is checked here, with no helper.
+        let local = fx.write_local("n/h.json", b"same");
+        let store = fx.layout().store_for(&local).unwrap();
+        let sha = crate::db::file_sha256(Path::new(&local)).unwrap();
+        assert!(c.has_local_copy(&store, Some(&sha)));
+        assert!(c.has_local_copy(&store, None));
+        assert!(!c.has_local_copy(&store, Some("other")));
+        assert!(!c.started());
+        assert_eq!(within(c.drain()).await.transferred, 0);
+        assert!(!c.started() && fx.requests().is_empty());
+
+        c.upload("node", &local).unwrap();
+        assert!(c.started());
+        let report = within(c.drain()).await;
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert_eq!(std::fs::read(fx.store.join("n/h.json")).unwrap(), b"same");
+        within(c.shutdown()).await;
+        assert_eq!(fx.requests(), ["put", "shutdown"]);
+    }
+
+    #[tokio::test]
+    async fn a_deferred_client_never_used_stops_at_once() {
+        let fx = Fixture::new();
+        let c = TransferClient::deferred_with(Command::new("python3"), fresh_socket(), fx.layout());
+        within(c.shutdown()).await;
+        let c = TransferClient::deferred_with(Command::new("python3"), fresh_socket(), fx.layout());
+        let (unconfirmed, _) = within(c.abort()).await;
+        assert!(unconfirmed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_deferred_helper_that_cannot_start_fails_its_requests_with_the_reason() {
+        let fx = Fixture::new();
+        let cmd = Command::new(fx.local.join("no-such-python"));
+        let mut c = TransferClient::deferred_with(cmd, fresh_socket(), fx.layout());
+        let local = fx.write_local("n/h.json", b"x");
+        c.upload("node", &local).unwrap();
+        let report = within(c.drain()).await;
+        assert_eq!(report.failures.len(), 1);
+        assert!(
+            report.failures[0]
+                .message
+                .contains("failed to spawn transfer helper"),
+            "{:?}",
+            report.failures
+        );
+        // Later requests fail the same way rather than hang.
+        assert!(within(c.probe()).await.is_err());
+    }
+
     #[tokio::test]
     async fn uploads_drain_clean_and_land_in_the_store() {
         let fx = Fixture::new();
@@ -1244,7 +1313,7 @@ for t in threads: t.join()
     async fn abort_includes_a_success_notified_before_its_reply_was_delivered() {
         let fx = Fixture::new();
         let mut c = fx.client().await;
-        let pid = c.child.id().unwrap();
+        let pid = c.child.as_ref().unwrap().id().unwrap();
         let done = fx.write_local("hashed/h.json", b"42");
         let (started_tx, started_rx) = oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();

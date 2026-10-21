@@ -766,3 +766,33 @@ async fn gc_says_what_holds_the_space_it_cannot_free() {
             .all(|h| h.what != "db_copies" || !h.evictable)
     );
 }
+
+/// The store check window (#593) lives in the same file as the survey: a survey keeps it, and
+/// it is keyed by environment, store URI and storage options.
+#[tokio::test]
+async fn a_survey_keeps_the_store_checks_and_each_store_has_its_own() {
+    let (f, _) = project().await;
+    let mut cfg = crate::config::resolve_in(None, f.root()).unwrap();
+    cfg.artifact_root = "s3://bucket/p/default/artifacts".into();
+    update_store_checks(&f.project, StoreCheck::of(&cfg, 100), true);
+    let mut other = cfg.clone();
+    other.storage_options_json = Some(r#"{"s3":{"anon":true}}"#.into());
+    update_store_checks(&f.project, StoreCheck::of(&other, 200), true);
+    assert_eq!(read_state(&f.project).unwrap().store_checks.len(), 2);
+    // Remembering again replaces that store's entry only.
+    update_store_checks(&f.project, StoreCheck::of(&cfg, 300), true);
+    let checks = read_state(&f.project).unwrap().store_checks;
+    assert_eq!(checks.iter().map(|c| c.at).collect::<Vec<_>>(), [200, 300]);
+
+    check_in(&f.project, MaxSize::Bytes(u64::MAX / 2), &Own::default(), None)
+        .await
+        .unwrap();
+    let state = read_state(&f.project).unwrap();
+    assert!(state.surveyed_at > 0);
+    assert_eq!(state.store_checks, checks);
+
+    update_store_checks(&f.project, StoreCheck::of(&other, 0), false);
+    let left = read_state(&f.project).unwrap().store_checks;
+    assert_eq!(left.len(), 1);
+    assert!(left[0].same_store(&StoreCheck::of(&cfg, 0)));
+}

@@ -167,13 +167,15 @@ def test_a_run_that_uploads_within_the_window_starts_the_helper_when_it_needs_it
     assert json.loads(store_object(project, "feed").read_text()) == "b"
 
 
-def test_a_run_that_fetches_within_the_window_starts_the_helper_when_it_needs_it(project):
+def test_a_run_that_fetches_within_the_window_checks_the_store_first(project):
     get(project)
     local = next((project / ".barca" / "artifacts").rglob("pipeline.py--constant/*.json"))
     local.unlink()
     result, err = get(project, "constant")
     assert helpers(err) == 1, err
-    assert CHECKING not in err, err
+    # A fetch checks the store first, as at startup: a store that is gone is not a missing
+    # object to compute again.
+    assert CHECKING in err and len(requests(err, "probe")) == 1, err
     assert len(requests(err, "get")) == 1, err
     assert local.exists()
     assert result["steps"][0]["status"] == "cached", result

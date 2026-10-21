@@ -37,7 +37,21 @@ pub(crate) struct StoreSync {
     pub(crate) confirmed: HashMap<String, (String, String)>,
     /// Sensor results of this run that were the bytes the store already held, so not uploaded.
     pub(crate) unchanged_sensors: usize,
+    /// Set when the run skipped the startup check (the store was checked in the last 5 minutes,
+    /// #593): the check's time limit. The first fetch makes the check before it starts.
+    check_before_fetching: Option<std::time::Duration>,
 }
+
+/// What to check when the artifact store fails its check (after "Nothing ran." at startup).
+macro_rules! store_check_fix {
+    () => {
+        "Check the store's URI (BARCA_REMOTE_URI or [remote] uri), that the bucket or container \
+         exists (barca does not create it), the endpoint (FSSPEC_S3_ENDPOINT_URL for MinIO or \
+         R2) and the credentials. BARCA_REMOTE=off runs one command without the store (barca \
+         docs remote)."
+    };
+}
+pub(crate) use store_check_fix;
 
 /// What a wait on the artifact store reports when the run is cancelled during it. The run
 /// then ends as cancelled; this text is never the error a user sees.
@@ -55,6 +69,46 @@ impl StoreSync {
             cancel,
             confirmed: HashMap::new(),
             unchanged_sensors: 0,
+            check_before_fetching: None,
+        }
+    }
+
+    /// For a run that skipped the startup check (#593): check the store, within `limit`, before
+    /// the first fetch, so a store that is gone or misconfigured is reported as such and not
+    /// as missing objects to compute again. Uploads are not held back: a failed one is kept
+    /// pending as usual.
+    pub(crate) fn check_before_fetching(mut self, limit: std::time::Duration) -> Self {
+        self.check_before_fetching = Some(limit);
+        self
+    }
+
+    /// The startup check, made now (see [`Self::check_before_fetching`]); once per run.
+    async fn check_now(&mut self) -> Result<(), String> {
+        let Some(limit) = self.check_before_fetching.take() else {
+            return Ok(());
+        };
+        let location = crate::transfer::diagnostic_uri(self.layout.store_root());
+        crate::run_line!(
+            Always,
+            "[barca] checking artifact store {location} (timeout {}s)",
+            limit.as_secs()
+        );
+        let answer = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Err(STORE_WAIT_CANCELLED.to_string()),
+            answer = tokio::time::timeout(limit, self.client.preflight()) => answer,
+        };
+        match answer {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(why)) => Err(format!(
+                "artifact store preflight at {location} failed: {why}\n{}",
+                store_check_fix!()
+            )),
+            Err(_) => Err(format!(
+                "artifact store preflight at {location} timed out after {}s\n{}",
+                limit.as_secs(),
+                store_check_fix!()
+            )),
         }
     }
 
@@ -165,11 +219,24 @@ impl StoreSync {
         paths: impl IntoIterator<Item = &'a str>,
         pb: Option<&indicatif::ProgressBar>,
     ) -> Result<(), String> {
-        let mut locals = Vec::new();
+        let mut wanted = Vec::new();
         for path in paths {
-            if let Some((node, store, sha256)) = self.fetchable.remove(path)
-                && let Some(local) = self.client.fetch(&node, &store, sha256.as_deref())
-            {
+            if let Some(entry) = self.fetchable.remove(path) {
+                wanted.push(entry);
+            }
+        }
+        // A helper that was not started (the store was checked in the last 5 minutes, #593) is
+        // started only if a local copy is missing or is not the recorded one; the store is
+        // checked first.
+        if !self.client.started() {
+            wanted.retain(|(_, store, sha256)| !self.client.has_local_copy(store, sha256.as_deref()));
+            if !wanted.is_empty() {
+                self.check_now().await?;
+            }
+        }
+        let mut locals = Vec::new();
+        for (node, store, sha256) in wanted {
+            if let Some(local) = self.client.fetch(&node, &store, sha256.as_deref()) {
                 locals.push(local);
             }
         }
