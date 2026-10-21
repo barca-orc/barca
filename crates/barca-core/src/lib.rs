@@ -46,7 +46,6 @@ mod run_owner;
 pub mod schedule;
 pub mod selection;
 pub mod sql;
-pub mod state_sync;
 pub(crate) mod state_validate;
 pub mod status;
 mod store_sync;

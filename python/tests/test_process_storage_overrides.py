@@ -153,7 +153,7 @@ def test_empty_keeps_remote_configuration_and_invalid_switch_is_usage_error(proj
     )
     if remote == "":
         assert succeeded(result)["final_output"] == 3
-        assert list((store / "default/state/backups").glob("*Z.db"))
+        assert list((store / "default/state/backups").glob("*.db"))
     else:
         assert result.returncode == 2 and "BARCA_REMOTE" in result.stderr
 
@@ -197,7 +197,7 @@ def test_serve_reuses_explicit_process_overrides_and_backs_up_to_a_store(project
             assert list(observer.glob("*.pids"))
             assert list((store / "default/artifacts").rglob("*.json"))
             # The run's end backed the history up to the store.
-            assert list((store / "default/state/backups").glob("*Z.db"))
+            assert list((store / "default/state/backups").glob("*.db"))
             assert not (store / "default/state/metadata.db").exists()
     finally:
         proc.send_signal(signal.SIGTERM)

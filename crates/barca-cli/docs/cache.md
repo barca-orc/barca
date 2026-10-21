@@ -439,7 +439,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 
 ```
 .barca/metadata.db                          run history and materialization records (local DB)
-.barca/backups/<UTC>.db, <UTC>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
+.barca/backups/<name>.db, <name>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
 .barca/metadata.db.pre-restore              the database `barca state restore` replaced
 .barca/serve.lock                           held by a running `barca serve`, so `barca state restore` refuses to run under it
 .barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
@@ -704,9 +704,6 @@ Known limits:
   and a run that writes more than the free space fails with the operating system's error.
 - A run in another process that has just decided a superseded result is cached (an older run
   hash it went back to) can find it gone while it reads it; it is then computed again.
-- With shared history (`barca docs remote`), the metadata DB another machine pushed carries that
-  machine's eviction marks. Files are measured, not marks, so nothing is deleted on their
-  account, but a result that machine evicted can be reported as `evicted` here.
 - `materializations` rows are never deleted: `barca history` and `barca stats` keep every run.
 
 ## Controlling the cache

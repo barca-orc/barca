@@ -6,7 +6,7 @@ use crate::BarcaError;
 use crate::dag::Dag;
 use crate::db;
 use crate::dispatch;
-use crate::state_sync;
+use crate::helper_proc;
 use std::collections::{HashMap, HashSet};
 use tokio_util::sync::CancellationToken;
 
@@ -227,7 +227,7 @@ impl StepRecorder {
                         // A successful no-op replay never marks unchanged state dirty.
                         if let Ok(inserted) = record_steps_with_until(
                             &db_path, &run_id, &pending,
-                            state_sync::Until::cancelled(&stopped),
+                            helper_proc::Until::cancelled(&stopped),
                         ).await {
                             generation += inserted;
                             pending.clear();
@@ -242,7 +242,7 @@ impl StepRecorder {
                         }
                         let snapshot_generation = generation;
                         let b = backups.as_ref().expect("backups enabled");
-                        let outcome = crate::backup::take(&b.python, &b.cfg, Some(&run_id), state_sync::Until {
+                        let outcome = crate::backup::take(&b.python, &b.cfg, Some(&run_id), helper_proc::Until {
                             cancel: Some(&stopped),
                             deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
                         }).await;
@@ -330,14 +330,14 @@ impl Drop for StepRecorder {
 /// `barca history` shows how far it has got.
 #[cfg(test)]
 async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<u64, BarcaError> {
-    record_steps_with_until(db_path, run_id, rows, state_sync::Until::done()).await
+    record_steps_with_until(db_path, run_id, rows, helper_proc::Until::done()).await
 }
 
 async fn record_steps_with_until(
     db_path: &str,
     run_id: &str,
     rows: &[StepRow],
-    until: state_sync::Until<'_>,
+    until: helper_proc::Until<'_>,
 ) -> Result<u64, BarcaError> {
     let _g = until.admit(db::db_guard()).await?;
     let (_db, conn) = db::open_conn_with_until(db_path, until).await?;
@@ -1124,7 +1124,7 @@ sys.exit(_state.main())
             .flatten()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.ends_with("Z.db"))
+            .filter(|n| crate::backup::is_backup_name(n))
             .collect();
         names.sort();
         names

@@ -209,14 +209,14 @@ pub(crate) struct DbLock {
 }
 
 pub(crate) async fn lock_db(db_path: &str) -> Result<DbLock, BarcaError> {
-    lock_db_with_until(db_path, crate::state_sync::Until::done()).await
+    lock_db_with_until(db_path, crate::helper_proc::Until::done()).await
 }
 
 /// Cancellation applies only to lock admission. The caller must finish any admitted
 /// atomic database mutation before releasing this lock.
 pub(crate) async fn lock_db_with_until(
     db_path: &str,
-    until: crate::state_sync::Until<'_>,
+    until: crate::helper_proc::Until<'_>,
 ) -> Result<DbLock, BarcaError> {
     let guard = until.admit(db_guard()).await?;
     let lock = until
@@ -239,7 +239,7 @@ pub(crate) async fn copy_for_backup(
     db_path: &str,
     copy: &Path,
     unless: Option<&str>,
-    until: crate::state_sync::Until<'_>,
+    until: crate::helper_proc::Until<'_>,
 ) -> Result<Option<String>, BarcaError> {
     let _lock = lock_db_with_until(db_path, until).await?;
     // Finish the admitted WAL checkpoint safely, then observe cancellation again.
@@ -277,7 +277,7 @@ pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
 async fn copy_snapshot_bytes(
     db_path: &str,
     target_path: &Path,
-    until: crate::state_sync::Until<'_>,
+    until: crate::helper_proc::Until<'_>,
 ) -> Result<(), BarcaError> {
     use std::io::{Read, Write};
     let failed = |e| {
@@ -322,12 +322,6 @@ pub(crate) async fn fold_log(db_path: &str) -> Result<(), BarcaError> {
         )));
     }
     Ok(())
-}
-
-/// [`fold_log`] under the database's lock.
-pub(crate) async fn fold_log_locked(db_path: &str) -> Result<(), BarcaError> {
-    let _lock = lock_db(db_path).await?;
-    fold_log(db_path).await
 }
 
 /// Why the file at `path` is certainly not a usable SQLite database: it does not start with
@@ -458,12 +452,12 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
 /// for the duration of their work on the returned connection; the returned
 /// handle holds the cross-process lock until it is dropped.
 pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connection), BarcaError> {
-    open_conn_with_until(db_path, crate::state_sync::Until::done()).await
+    open_conn_with_until(db_path, crate::helper_proc::Until::done()).await
 }
 
 pub(crate) async fn open_conn_with_until(
     db_path: &str,
-    until: crate::state_sync::Until<'_>,
+    until: crate::helper_proc::Until<'_>,
 ) -> Result<(DbHandle, turso::Connection), BarcaError> {
     let lock = until
         .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
@@ -2070,7 +2064,7 @@ mod tests {
         let work = super::copy_snapshot_bytes(
             &source_path,
             &target_path,
-            crate::state_sync::Until::cancelled(&cancel),
+            crate::helper_proc::Until::cancelled(&cancel),
         );
         tokio::pin!(work);
         tokio::select! {
@@ -3259,5 +3253,68 @@ mod tests {
         insert_logs(&path, "r", &lines).await.unwrap();
         insert_logs(&path, "r", &lines).await.unwrap();
         assert_eq!(get_logs(&path, "r").await.unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod fold_log_tests {
+    use turso::Builder;
+
+    async fn open_and_count(db_path: &str, table: &str) -> u64 {
+        let db = Builder::new_local(db_path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+        let mut rows = conn
+            .query(&format!("SELECT COUNT(*) FROM {table}"), ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        row.get_value(0).unwrap().as_integer().copied().unwrap() as u64
+    }
+
+    /// The load-bearing spike for metadata backups: after
+    /// wal_checkpoint(TRUNCATE), the -wal sidecar must be empty/absent and
+    /// all rows must be readable from the main file alone.
+    #[tokio::test]
+    async fn folding_the_log_leaves_every_row_in_the_main_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+
+        // Create a table and write enough rows that data definitely lives in the WAL.
+        {
+            let db = Builder::new_local(&db_path).build().await.unwrap();
+            let conn = db.connect().unwrap();
+            conn.execute(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)",
+                (),
+            )
+            .await
+            .unwrap();
+            for i in 0..200 {
+                conn.execute("INSERT INTO t (v) VALUES (?1)", [format!("value-{i}")])
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // Sanity: without a checkpoint the WAL holds the data.
+        let wal = format!("{db_path}-wal");
+        let wal_size_before = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        assert!(
+            wal_size_before > 0,
+            "expected data in the WAL before checkpoint (got {wal_size_before} bytes) — \
+             if this fails, turso started auto-checkpointing and the sync design should be revisited"
+        );
+
+        super::fold_log(&db_path).await.unwrap();
+        assert!(
+            super::wal_is_clean(&db_path),
+            "WAL must be empty after checkpoint"
+        );
+
+        // The main file alone (as a backup copies it: without the WAL)
+        // must contain every row.
+        let copy = dir.path().join("uploaded.db").to_string_lossy().to_string();
+        std::fs::copy(&db_path, &copy).unwrap();
+        assert_eq!(open_and_count(&copy, "t").await, 200);
     }
 }

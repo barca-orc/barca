@@ -56,7 +56,7 @@ grep -q '"steps_executed":2' "$TMP/machine-a/result-a.json" \
 [ "$(wc -l < "$EXEC_LOG" | tr -d '[:space:]')" = "2" ] || { echo "FAIL: expected 2 executions on A"; exit 1; }
 
 [ ! -e "$SHARED/default/state/metadata.db" ] || { echo "FAIL: a shared history object was written"; exit 1; }
-BACKUP=$(ls "$SHARED"/default/state/backups/*Z.db | tail -1)
+BACKUP=$(ls "$SHARED"/default/state/backups/*.db | tail -1)
 [ -f "$BACKUP" ] || { echo "FAIL: no backup in the store"; ls -R "$SHARED"; exit 1; }
 [ -f "${BACKUP%.db}.json" ] || { echo "FAIL: backup without its sidecar"; exit 1; }
 cmp -s "$BACKUP" "$TMP/machine-a/.barca/backups/$(basename "$BACKUP")" \
@@ -238,13 +238,11 @@ fi
 
 echo "── a wiped machine: nothing comes back by itself; barca state restore brings the history"
 # Every directory here backs up to the same prefix, so name A's newest backup (the other
-# machines' interleave with it: one store per machine is the supported setup). Backups are named
-# by the second, so A runs once more first: a machine that backed up in the same second as A's
-# last run would otherwise have replaced A's copy in the store.
-sleep 1
+# machines' interleave with it: one store per machine is the supported setup). The store keeps
+# the five newest across all of them, so A runs once more first and its copy is the newest.
 (cd "$TMP/machine-a" && $BARCA get pipeline.py --agent -o value --json > /dev/null 2> last-a.log) \
     || { cat "$TMP/machine-a/last-a.log"; exit 1; }
-A_BACKUP=$(basename "$(ls "$TMP"/machine-a/.barca/backups/*Z.db | tail -1)")
+A_BACKUP=$(basename "$(ls "$TMP"/machine-a/.barca/backups/*.db | tail -1)")
 rm -rf "$TMP/machine-a/.barca"
 (cd "$TMP/machine-a" && $BARCA state backups --json > backups-a.json 2> backups-a.log) \
     || { cat "$TMP/machine-a/backups-a.log"; exit 1; }

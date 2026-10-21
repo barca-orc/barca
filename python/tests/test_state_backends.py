@@ -133,7 +133,7 @@ class GcsBackend:
         import json
 
         return {
-            # SDK push path (google-cloud-storage) routes via these:
+            # google-cloud-storage (bucket setup, signing) routes via these:
             "STORAGE_EMULATOR_HOST": GCS_ENDPOINT,
             "GOOGLE_CLOUD_PROJECT": "test",
             # token read (gcsfs) routes via storage_options:
@@ -264,3 +264,22 @@ def test_only_the_newest_backups_are_kept(backend, tmp_path):
         ]
     )["objects"]
     assert not gone["exists"] and kept["exists"] and other["exists"]
+
+
+def test_millisecond_names_sort_among_to_the_second_ones(backend, tmp_path):
+    # #487: names carry milliseconds and a suffix; 0.26.0's to-the-second names still count.
+    prefix = backend.make_uri(tmp_path)
+    names = [
+        "2026-10-14T18-02-10.999Z-0a0b0c0d.db",
+        "2026-10-14T18-02-11Z.db",
+        "2026-10-14T18-02-11.123Z-1a2b3c4d.db",
+        "2026-10-14T18-02-11.123Z-9f8e7d6c.db",
+        "2026-10-14T18-02-12Z.db",
+    ]
+    for name in names:
+        db, sidecar = _backup_files(tmp_path, name, name.encode())
+        _state.backup(db, sidecar, prefix, 5)
+    listed = [b["name"] for b in _state.list_backups(prefix)["backups"]]
+    assert listed == list(reversed(names))
+    db, sidecar = _backup_files(tmp_path, "2026-10-14T18-02-13.000Z-00000000.db", b"x")
+    assert _state.backup(db, sidecar, prefix, 5)["removed"] == [names[0]]

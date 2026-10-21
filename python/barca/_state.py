@@ -6,7 +6,7 @@ database: it moves and lists opaque files. Every verb prints one JSON object on 
 failure is one ``error: ...`` line on stderr and exit 1.
 
   backup <db> <sidecar> <dir> <keep>
-      Upload the backup ``<db>`` (named ``<UTC>.db``) and its ``<sidecar>`` (``<UTC>.json``)
+      Upload the backup ``<db>`` (named ``<name>.db``) and its ``<sidecar>`` (``<name>.json``)
       into the store directory ``<dir>``, then remove every backup in ``<dir>`` but the
       ``<keep>`` newest, with their sidecars. The database goes first: a sidecar is never
       ahead of its database. -> {"uploaded": name, "removed": [names]}
@@ -20,8 +20,8 @@ failure is one ``error: ...`` line on stderr and exit 1.
       and, for a store that is a plain directory, its SHA-256 (an object store has no content
       checksum this can compare). -> {"objects": [{"exists", "size_bytes", "sha256"}]}
 
-Only names of the backup form (``YYYY-MM-DDTHH-MM-SSZ.db``) are ever listed or removed; the
-shared-history object of releases before 0.26.0 (``state/metadata.db``) is ignored.
+Only names of the backup form (``YYYY-MM-DDTHH-MM-SS.mmmZ-<8 hex>.db``, or 0.26.0's
+``YYYY-MM-DDTHH-MM-SSZ.db``) are ever listed or removed, newest first; the shared-history object of releases before 0.26.0 (``state/metadata.db``) is ignored.
 """
 
 import hashlib
@@ -33,7 +33,16 @@ from pathlib import Path
 
 from barca import _storage
 
-BACKUP_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.db$")
+BACKUP_NAME = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(Z|\.\d{3}Z-[0-9a-f]{8})\.db$"
+)
+
+
+def _order_key(name: str) -> str:
+    """What backups sort by, oldest first: a to-the-second name counts as millisecond .000."""
+    if len(name) == 23 and name.endswith("Z.db"):
+        return name[:19] + ".000Z"
+    return name
 
 
 def _sha256(path: "Path | str") -> str:
@@ -72,7 +81,7 @@ def _names(dir_uri: str) -> "list[tuple[str, int]]":
             name = str(info.get("name", "")).rstrip("/").rsplit("/", 1)[-1]
             if BACKUP_NAME.match(name) and info.get("type", "file") != "directory":
                 found.append((name, int(info.get("size") or 0)))
-    found.sort(reverse=True)
+    found.sort(key=lambda f: _order_key(f[0]), reverse=True)
     return found
 
 

@@ -420,7 +420,7 @@ Examples:
   barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, ...}], local_dir, store}
   barca state restore                  # put the newest backup back in place of .barca/metadata.db
   barca state restore --from 3         # the third newest (the index in barca state backups)
-  barca state restore --from 2026-10-14T18-02-11Z.db   # one backup, by name
+  barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e.db  # one backup, by name
   barca state backups --env dev        # another environment's backups
 
 With a remote store ([remote] uri), the metadata DB is backed up every minute of a run, when the
@@ -447,7 +447,7 @@ const STATE_RESTORE_HELP: &str = "\
 Examples:
   barca state restore                  # the newest backup
   barca state restore --from 2         # the second newest
-  barca state restore --from 2026-10-14T18-02-11Z     # by name, .db optional
+  barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
   barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
 
 The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca

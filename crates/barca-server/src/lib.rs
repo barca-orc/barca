@@ -232,7 +232,7 @@ async fn backup_every_minute(
             _ = tick.tick() => false,
             _ = stopping.cancelled() => true,
         };
-        let until = barca_core::state_sync::Until {
+        let until = barca_core::helper_proc::Until {
             cancel: None,
             deadline: Some(std::time::Instant::now() + BACKUP_BUDGET),
         };

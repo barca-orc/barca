@@ -11,7 +11,7 @@ export type UploadsReport = {
  */
 pending: number,
 /**
- * Why: the last upload (or shared-history push) error, `null` when there is none.
+ * Why: the last upload error, `null` when there is none.
  */
 error: string | null,
 /**

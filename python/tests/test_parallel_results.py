@@ -286,9 +286,9 @@ def test_branch_results_arrive_with_a_remote_store_configured(root, target):
     assert "null" not in err and "warning" not in err.lower(), err
     # Branch results are not uploaded: the store has the caller's result and the history's
     # backup, however many branches ran.
-    stored = sorted(p.name for p in (root / "store").rglob("*") if p.is_file())
-    results = [name for name in stored if not name.endswith(("Z.db", "Z.json"))]
-    assert len(results) == 1 and any(n.endswith("Z.db") for n in stored), stored
+    stored = sorted(p for p in (root / "store").rglob("*") if p.is_file())
+    results = [p for p in stored if p.parent.name != "backups"]
+    assert len(results) == 1 and any(p.parent.name == "backups" for p in stored), stored
     assert not [p for p in (root / "store").rglob("*") if "branch" in p.name]
 
 

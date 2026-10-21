@@ -626,15 +626,15 @@ See [barca sql](/reference/sql/) for views, errors and limits.
 
 With a remote store (`[remote] uri` or `BARCA_REMOTE_URI`), `get` and `run` back the metadata
 DB up on a one-minute checkpoint and when they end, and `serve` every minute it changed: to
-`.barca/backups/<UTC>.db` and `<uri>/<env>/state/backups/<UTC>.db`, five copies kept in each,
-each with a `<UTC>.json` sidecar (`run_id`, `rows`, `digest`, `barca_version`, `db_format`).
+`.barca/backups/<name>.db` and `<uri>/<env>/state/backups/<name>.db`, five copies kept in each,
+each with a `<name>.json` sidecar (`run_id`, `rows`, `digest`, `barca_version`, `db_format`).
 Nothing is downloaded before a run.
 
 ```bash
 barca state backups                  # newest first: # NAME WHERE SIZE ROWS RUN
 barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, digest, agree, barca_version, db_format}], local_dir, store}
 barca state restore                  # put the newest backup back
-barca state restore --from 2         # by index; or --from 2026-10-14T18-02-11Z
+barca state restore --from 2         # by index; or --from 2026-10-14T18-02-11.482Z-3f9a1c2e
 ```
 
 `restore` checks the copy first (a whole SQLite file, integrity, barca's tables, a usable

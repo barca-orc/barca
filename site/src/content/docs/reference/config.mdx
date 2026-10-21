@@ -45,7 +45,7 @@ backups of the metadata database.
 | `.barca/metadata.db.lock` | A lock file held briefly while a barca process reads or writes the database. | Yes, when no barca command is running. |
 | `.barca/artifacts/<node>/<run_hash>.<ext>` | One file per cached result: `.json`, `.pkl` or `.parquet`. A partitioned asset has one directory per key (`pipeline.py--sales_region_emea/`). | Yes. A result whose file is gone is computed again when a run needs to read it, or downloaded again if it is in a remote store. Prefer `--refresh <asset>` to force a recompute. |
 | `.barca/envs/<name>/` | The same `metadata.db` and `artifacts/` for a named environment (`--env <name>`). | As above, per environment. |
-| `.barca/backups/<UTC>.db`, `<UTC>.json`, `<UTC>.unsent` | With a store (`[remote] uri`): the five newest backups of `metadata.db`, each with its sidecar, and a marker on one the store has not confirmed yet. Under `.barca/envs/<name>/backups/` for a named environment. | Yes; then only the store's copies are left to restore from. |
+| `.barca/backups/<name>.db`, `<name>.json`, `<name>.unsent` | With a store (`[remote] uri`): the five newest backups of `metadata.db`, each with its sidecar, and a marker on one the store has not confirmed yet. Under `.barca/envs/<name>/backups/` for a named environment. | Yes; then only the store's copies are left to restore from. |
 | `.barca/metadata.db.pre-restore` | The database `barca state restore` replaced. barca never reads it. | Yes. |
 | `.barca/serve.lock` | Held by a running `barca serve`, so `barca state restore` refuses to run under it. | Yes, when no server is running. |
 | `.barca/metadata.db.base`, `.prev`, `.pull-*`, `.push-*` | Left by barca 0.25 and earlier, which shared history through the store. Not used. | Yes. |
