@@ -12,6 +12,13 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Polish
+
+- A syntax error in a pipeline file names its line and column (`syntax error in pipeline.py: line
+  5, column 18: Expected ':', found newline`) instead of a byte range (`at byte range 112..113`).
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes
