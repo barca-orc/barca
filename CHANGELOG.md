@@ -25,6 +25,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   run hash; it was labelled "Cache hit rate" though cache hits are never recorded per asset. The
   JSON key is still `cache_hit_rate`.
 
+- A run whose upload failed is posted to the server's ledger once a later command uploads it
+  (#507). The run's post is kept `unsynced` (`barca status`: `not_in_ledger`) while its upload
+  is pending, and the command whose retry uploads the results posts it before deciding its own
+  steps, so that command and other machines get hits instead of computing it again. Before, such
+  a run was never posted. A pending result dropped because its local file is gone is taken out
+  of the post.
+
 ### Removed
 
 - Committed junk and two broken examples (#497): the three `benchmarks/*/airflow/.venv`
