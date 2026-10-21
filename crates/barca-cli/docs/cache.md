@@ -688,7 +688,7 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
 - `KB`, `MB`, `GB`, `TB` are decimal (`GB` = 10^9 bytes); `KiB`, `MiB`, `GiB`, `TiB` are binary;
   a bare number is bytes. A percentage is of the filesystem's size, read at each check.
 - The size is everything under `.barca/`, every environment included: artifacts, the metadata
-  DBs, staging, `sql-cache/`. The DBs are counted and never deleted.
+  DBs, staging, `sql-cache/`, `range-cache/`. The DBs are counted and never deleted.
 
 **When.** At the end of `barca get` and `barca run` (after results are recorded and uploads have
 finished), after every run under `barca serve`, and once a minute under `barca serve`. When
@@ -697,7 +697,7 @@ the limit:
 
 | Order | What | Which first | Costs when needed again |
 |---|---|---|---|
-| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, files in an artifact directory that no metadata row of any environment names, `sql-cache/` copies not used in the last 5 minutes | dead staging, then moved-aside, then unnamed files (oldest first), then the least recently used copies | nothing (nothing reads them) |
+| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, files in an artifact directory that no metadata row of any environment names, `sql-cache/` copies and `range-cache/` directories not used in the last 5 minutes | dead staging, then moved-aside, then unnamed files (oldest first), then the least recently used copies, then the least recently used range directories | nothing for most; a ranged read of a lazy input fetches its ranges again |
 | 2 | Superseded results: a node (a partition key, for a partitioned asset) whose newest successful result is another one | oldest first | a recompute, only if the code and inputs return to that exact state |
 | 3 | Local copies the artifact store holds (its upload was confirmed with a digest) | least recently read first | a download |
 | 4 | Current results | least recently read first | a recompute |
@@ -943,6 +943,7 @@ The change is local to the selected environment's metadata database.
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 .barca/staging/<pid>/                       a process's files in transit (uploads, downloads, result batches)
 .barca/sql-cache/                           copies of store artifacts `barca sql` downloaded (`barca docs sql`)
+.barca/range-cache/<run_hash>-<version>/    byte ranges lazy inputs read from a store object (`barca docs remote`)
 .barca/gc-state.json                        what the last measurement of `.barca/` found ("Disk use")
 .barca/envs/<env>/                          the same layout for a named environment ("Environments")
 ```

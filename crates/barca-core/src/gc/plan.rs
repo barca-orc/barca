@@ -9,7 +9,8 @@
 //!
 //! 1. **Leftovers**: staging directories of dead processes, `*.moved-aside*` directories,
 //!    artifact files no metadata row names (left by `barca state reset` or `restore`),
-//!    `sql-cache/` copies (least recently used first). Nothing reads them.
+//!    `sql-cache/` copies and `range-cache/` directories (least recently used first). Nothing
+//!    needs them: a read fetches again what is gone.
 //! 2. **Superseded results**: a file none of whose rows is the newest successful result of
 //!    its node (node id including the partition key). Oldest first.
 //! 3. **Local copies the store holds**: a current result whose upload to the store was
@@ -72,6 +73,9 @@ pub enum LeftoverKind {
     Unreferenced,
     /// A downloaded copy in `.barca/sql-cache/`, with its `.version` stamp.
     SqlCache,
+    /// The byte ranges lazy inputs fetched from one store object, a directory in
+    /// `.barca/range-cache/` (#577).
+    RangeCache,
 }
 
 /// One successful materialization row whose artifact has a file on this machine.

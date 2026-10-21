@@ -8,7 +8,7 @@
 //!
 //! **Measuring.** The check after a command must be cheap: it adds the recorded sizes of the
 //! results the metadata DBs say are on disk, a walk of everything outside the artifact
-//! directories (staging, `sql-cache`, the DB files), and a correction for the artifact
+//! directories (staging, `sql-cache`, `range-cache`, the DB files), and a correction for the artifact
 //! directories measured by the last full walk (files the DBs do not know about, moved-aside
 //! directories, results fetched back after an eviction). A full walk ([`survey`]) runs when
 //! that estimate is over the limit, at most a day after the last one, and under `barca gc`.
@@ -54,7 +54,11 @@ const AFTER_COMMAND_BUDGET: Duration = Duration::from_secs(5);
 /// A full walk at least this often, even when the estimate is under the limit.
 const SURVEY_EVERY: Duration = Duration::from_secs(24 * 3600);
 
-/// A `sql-cache` copy used this recently may be in use by a query: it is not evicted.
+/// Where lazy inputs keep the byte ranges they fetched (`barca._storage.RANGE_CACHE_DIR`).
+pub const RANGE_CACHE_DIR: &str = "range-cache";
+
+/// A `sql-cache` copy or a `range-cache` directory used this recently may be in use by a query:
+/// it is not evicted.
 const SQL_CACHE_GRACE: Duration = Duration::from_secs(300);
 
 /// An artifact file no row names that was written this recently may belong to a step whose
@@ -421,7 +425,7 @@ pub enum Held {
     DbCopies,
     /// Metadata backups (`backups/`), five per environment: never evicted.
     Backups,
-    /// Everything else: staging, `sql-cache`, moved-aside artifact directories.
+    /// Everything else: staging, `sql-cache`, `range-cache`, moved-aside artifact directories.
     Other,
 }
 
@@ -631,6 +635,43 @@ fn sql_cache_leftovers(project: &Project) -> Vec<plan::Leftover> {
             path: data,
             bytes: meta.len() + stamp_meta.map(|m| m.len()).unwrap_or(0),
             with: stamp.into_iter().collect(),
+            modified,
+        });
+    }
+    out
+}
+
+/// `.barca/range-cache/` directories (the ranges kept of one store object each, #577), not
+/// used in the last few minutes: a lazy input may be reading one.
+fn range_cache_leftovers(project: &Project) -> Vec<plan::Leftover> {
+    let Ok(entries) = std::fs::read_dir(project.barca.join(RANGE_CACHE_DIR)) else {
+        return Vec::new();
+    };
+    let fresh_after = now_secs().saturating_sub(SQL_CACHE_GRACE.as_secs());
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let (mut bytes, mut modified) = (0, modified_secs(&meta));
+        for file in std::fs::read_dir(&path).into_iter().flatten().flatten() {
+            if let Ok(m) = file.metadata() {
+                bytes += m.len();
+                modified = modified.max(modified_secs(&m));
+            }
+        }
+        if modified > fresh_after {
+            continue;
+        }
+        out.push(plan::Leftover {
+            kind: LeftoverKind::RangeCache,
+            path,
+            bytes,
+            with: Vec::new(),
             modified,
         });
     }
@@ -907,6 +948,7 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
     leftovers.extend(walked.moved_aside);
     leftovers.extend(unnamed);
     leftovers.extend(sql_cache_leftovers(project));
+    leftovers.extend(range_cache_leftovers(project));
     held.retain(|_, bytes| *bytes > 0);
     Ok(Survey {
         total: walked.other + walked.artifacts,

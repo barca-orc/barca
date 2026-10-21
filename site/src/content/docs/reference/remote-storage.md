@@ -432,6 +432,13 @@ whose file is only in the store, the input's annotation decides how many bytes m
   only the byte ranges the step's query touches are fetched, and nothing is downloaded. A query
   over one column of eight fetches about that column's share of the object; a selective filter
   skips row groups. This applies when every step in the phase that reads the result is lazy.
+  The ranges fetched are kept in `.barca/range-cache/<run_hash>-<version>/`, so a later run on
+  this machine that reads the same ranges fetches nothing, and one that reads more fetches only
+  the ranges no earlier read fetched. The directory is keyed by the result's run hash and the
+  store object's version (its ETag or generation, size and modified time), so a rewritten
+  object is never served from the old one's ranges. The cache size limit counts these
+  directories and evicts them first, least recently used first (`barca docs cache`, "Disk
+  use"); a range that is gone is fetched again.
 - Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
   pickle) is downloaded once into `.barca/artifacts/` and read from there by this run and
   later ones.

@@ -122,6 +122,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Performance
 
+- A lazy input read from the store (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`) fetches its
+  byte ranges once per machine (#577). The ranges are kept in
+  `.barca/range-cache/<run_hash>-<version>/`, keyed by the result's run hash and the store
+  object's version, so a later run that reads the same ranges fetches nothing and a rewritten
+  object is never served from stale bytes. The cache size limit counts the directories and
+  evicts them with the leftovers, least recently used first.
+
 - A step that raises an exception no longer stops its worker (#523). The worker reports the
   failure with its traceback and takes its next step, so a failed partition key no longer costs
   a worker start (about 45 ms) and the rest of its batch is not sent again. With half of 10,000

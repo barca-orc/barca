@@ -433,6 +433,44 @@ async fn staging_of_a_running_process_and_fresh_sql_copies_stay() {
     assert!(sql.join("fresh.parquet").exists());
 }
 
+/// #577: the ranges lazy inputs kept are counted and evicted as leftovers, a directory per store
+/// object, least recently used first; one used in the last few minutes stays.
+#[tokio::test]
+async fn range_cache_directories_are_leftovers_and_fresh_ones_stay() {
+    let f = Fixture::new().await;
+    let cache = f.root().join(".barca/range-cache");
+    let set_modified = |path: &std::path::Path, ago: u64| {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(ago))
+            .unwrap();
+    };
+    for (name, ago) in [("h1-old", 7200), ("h2-older", 9000), ("h3-fresh", 0)] {
+        let dir = cache.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let range = dir.join("0000000000000000-0000000000000004");
+        std::fs::write(&range, b"data").unwrap();
+        set_modified(&range, ago);
+        set_modified(&dir, ago);
+    }
+    let dry = f.gc(MaxSize::Off, true).await;
+    let leftovers: Vec<(&str, u64)> = dry
+        .evicted
+        .iter()
+        .map(|e| (e.path.as_str(), e.bytes))
+        .collect();
+    assert_eq!(
+        leftovers,
+        [
+            (".barca/range-cache/h2-older", 4),
+            (".barca/range-cache/h1-old", 4)
+        ]
+    );
+    f.gc(MaxSize::Off, false).await;
+    assert!(!cache.join("h1-old").exists() && !cache.join("h2-older").exists());
+    assert!(cache.join("h3-fresh").exists());
+}
+
 #[tokio::test]
 async fn read_results_are_no_longer_evicted_and_move_their_last_read_time() {
     let f = Fixture::new().await;
