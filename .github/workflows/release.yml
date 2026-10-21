@@ -6,7 +6,7 @@ on:
   # Dry-run the build jobs (no release/publish: those are gated to tags below)
   # when this workflow changes, or on demand to pre-warm the build cache.
   pull_request:
-    paths: [".github/workflows/release.yml", "scripts/smoke-release-package.py", "scripts/wait-pypi-wheel.py"]
+    paths: [".github/workflows/release.yml", "scripts/smoke-release-package.py", "scripts/wait-pypi-wheel.py", "scripts/changelog-section.py"]
   workflow_dispatch:
 
 permissions:
@@ -40,6 +40,25 @@ jobs:
         with:
           name: ui-dist
           path: ui/dist/
+
+  # CHANGELOG.md is the source of release notes: the release body is the version's
+  # `## <version> (<date>)` section plus an install line. This runs first and the GitHub
+  # release and the PyPI upload both need it, so a version without notes publishes nothing.
+  # On a pull request or manual run it checks the version in pyproject.toml.
+  release-notes:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release notes from CHANGELOG.md
+        run: |
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then test "$GITHUB_REF_NAME" = "v$VERSION"; fi
+          python3 scripts/changelog-section.py "$VERSION" --install > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
 
   build-wheels:
     needs: build-ui
@@ -179,29 +198,13 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-wheels, build-sdist]
+    needs: [release-notes, build-wheels, build-sdist]
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
 
-      - name: Install git-cliff
-        run: pip install git-cliff
-
-      - name: Generate release notes
-        run: |
-          git cliff --config cliff.toml --latest --strip header > RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "## Install" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo '```bash' >> RELEASE_NOTES.md
-          echo "uv add barca" >> RELEASE_NOTES.md
-          echo '```' >> RELEASE_NOTES.md
 
       - name: Collect release assets
         run: |
@@ -215,11 +218,11 @@ jobs:
         with:
           files: release/*
           prerelease: ${{ contains(github.ref, 'rc') || contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'dev') }}
-          body_path: RELEASE_NOTES.md
+          body_path: artifacts/release-notes/RELEASE_NOTES.md
 
   publish-pypi:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-wheels, build-sdist]
+    needs: [release-notes, build-wheels, build-sdist]
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
