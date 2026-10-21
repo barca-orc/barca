@@ -42,7 +42,7 @@ pub(crate) async fn state_backups_cmd(
                     Some(false) => format!("{} (differ)", b.location),
                     _ => b.location.clone(),
                 },
-                barca_core::report::fmt_bytes(b.size_bytes),
+                barca_core::gc::size::human(b.size_bytes),
                 b.rows.map_or_else(|| "-".to_string(), |r| r.to_string()),
                 b.run_id.clone().unwrap_or_else(|| "-".to_string()),
             ]

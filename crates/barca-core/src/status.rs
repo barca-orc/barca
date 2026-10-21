@@ -586,37 +586,23 @@ pub(crate) async fn stat_objects(
     cfg: &crate::config::ResolvedConfig,
     paths: &[&str],
 ) -> Result<Vec<StoreObject>, String> {
-    use tokio::io::AsyncWriteExt;
+    use crate::helper_proc::JsonFailed;
     #[derive(Deserialize)]
     struct Reply {
         objects: Vec<StoreObject>,
     }
     let mut cmd = crate::backup::state_helper(python, cfg);
-    cmd.arg("stat")
-        .kill_on_drop(true)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child =
-        crate::helper_proc::spawn(&mut cmd).map_err(|e| format!("{}: {e}", python.display()))?;
-    let mut stdin = child.stdin.take().ok_or("no stdin")?;
-    let request = serde_json::json!({ "paths": paths }).to_string();
-    stdin
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|e| e.to_string())?;
-    drop(stdin);
+    cmd.arg("stat").kill_on_drop(true);
+    let request = serde_json::json!({ "paths": paths });
     let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(60));
-    let out = tokio::time::timeout(limit, child.wait_with_output())
-        .await
-        .map_err(|_| format!("no answer within {}s", limit.as_secs()))?
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(crate::helper_proc::helper_cause(&out.stderr));
+    match crate::helper_proc::run_json::<Reply>(cmd, &request, Some(limit)).await {
+        Ok(reply) => Ok(reply.objects),
+        Err(JsonFailed::Spawn(e)) => Err(format!("{}: {e}", python.display())),
+        Err(JsonFailed::Io(e)) => Err(e.to_string()),
+        Err(JsonFailed::TimedOut(limit)) => Err(format!("no answer within {}s", limit.as_secs())),
+        Err(JsonFailed::Exited(stderr)) => Err(crate::helper_proc::helper_cause(&stderr)),
+        Err(JsonFailed::Invalid(e)) => Err(e.to_string()),
     }
-    serde_json::from_slice::<Reply>(&out.stdout)
-        .map(|r| r.objects)
-        .map_err(|e| e.to_string())
 }
 
 fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
@@ -875,32 +861,20 @@ fn note(msg: &str) -> serde_json::Value {
 /// on stdout (`barca._inspect`, `barca._value`). Its last stderr line is the error. `cmd` is
 /// built by `helper_proc::python_module`, so it carries the resolved storage options.
 pub(crate) async fn run_json_helper(
-    mut cmd: tokio::process::Command,
+    cmd: tokio::process::Command,
     python: &Path,
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
-    use tokio::io::AsyncWriteExt;
-    cmd.stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child =
-        crate::helper_proc::spawn(&mut cmd).map_err(|e| format!("{}: {e}", python.display()))?;
-    let mut stdin = child.stdin.take().ok_or("no stdin")?;
-    stdin
-        .write_all(request.to_string().as_bytes())
+    use crate::helper_proc::JsonFailed;
+    crate::helper_proc::run_json(cmd, request, None)
         .await
-        .map_err(|e| e.to_string())?;
-    drop(stdin);
-    let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(err
-            .lines()
-            .last()
-            .unwrap_or("exited with an error")
-            .to_string());
-    }
-    serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())
+        .map_err(|failed| match failed {
+            JsonFailed::Spawn(e) => format!("{}: {e}", python.display()),
+            JsonFailed::Io(e) => e.to_string(),
+            JsonFailed::TimedOut(limit) => format!("no answer within {}s", limit.as_secs()),
+            JsonFailed::Exited(stderr) => crate::helper_proc::last_line(&stderr),
+            JsonFailed::Invalid(e) => e.to_string(),
+        })
 }
 
 #[cfg(test)]

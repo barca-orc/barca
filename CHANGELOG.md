@@ -6,6 +6,20 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Bug Fixes
+
+- One byte formatter (#506): every size barca prints is in decimal units, as `[cache] max_size`
+  is written (`KB` = 1000 bytes). The upload, fetch and backup lines, `barca state backups` and
+  `barca sql`'s "fetched" note used binary units labelled `KB`/`MB` (`48.0 KB` for 49,152 bytes is
+  now `49.2 KB`; `barca sql` printed `40 bytes`, now `40 B`). `barca status` shape samples now
+  encode values as `barca sql` does: a NaN or infinite float is `null` (it made the shape reader
+  fail), a datetime is ISO 8601 with `T`, a decimal a number, bytes hex, a duration seconds. One
+  helper runs barca's JSON-in/JSON-out Python helpers, one runs a database transaction, and the
+  Python file hash, identifier quoting and JSON conversion each have one copy; five unused
+  functions are gone.
+
 ## 0.28.3 (2026-10-21)
 
 ### Features

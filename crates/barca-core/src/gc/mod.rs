@@ -874,26 +874,19 @@ async fn mark_evicted(db_path: &str, paths: &[&str]) {
     let Ok((_db, conn)) = crate::db::open_conn(db_path).await else {
         return;
     };
-    if conn.execute("BEGIN IMMEDIATE", ()).await.is_err() {
-        return;
-    }
-    let mut ok = true;
-    for path in paths {
-        ok = conn
-            .execute(
+    let _ = crate::db::with_tx(&conn, "BEGIN IMMEDIATE", "eviction marks", async {
+        for path in paths {
+            conn.execute(
                 "UPDATE materializations SET evicted_at = datetime('now') \
                  WHERE artifact_path = ?1 AND status = 'success'",
                 [*path],
             )
             .await
-            .is_ok();
-        if !ok {
-            break;
+            .map_err(|e| BarcaError::Db(format!("failed to mark an eviction: {e}")))?;
         }
-    }
-    let _ = conn
-        .execute(if ok { "COMMIT" } else { "ROLLBACK" }, ())
-        .await;
+        Ok(())
+    })
+    .await;
 }
 
 /// Files and bytes per tier.

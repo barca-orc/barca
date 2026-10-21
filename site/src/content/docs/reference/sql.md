@@ -61,7 +61,7 @@ any other. When a query names such a view, barca downloads its artifact (for a p
 the current keys' artifacts) into `.barca/sql-cache/` and queries the copy. stderr says what was downloaded:
 
 ```
-barca: fetched 1 remote artifact (2.1 KB) into .barca/sql-cache/
+barca: fetched 1 remote artifact (2.2 KB) into .barca/sql-cache/
 ```
 
 - Only the views a query names are downloaded, and whole: DuckDB then reads the local copy, so

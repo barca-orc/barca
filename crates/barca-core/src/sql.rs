@@ -89,17 +89,6 @@ struct HelperOutput {
     error: Option<HelperError>,
 }
 
-fn human_size(bytes: u64) -> String {
-    let kb = bytes as f64 / 1024.0;
-    if bytes < 1024 {
-        format!("{bytes} bytes")
-    } else if kb < 1024.0 {
-        format!("{kb:.1} KB")
-    } else {
-        format!("{:.1} MB", kb / 1024.0)
-    }
-}
-
 fn format_of(path: &str) -> String {
     match Path::new(path).extension().and_then(|e| e.to_str()) {
         Some("parquet") => "parquet",
@@ -258,7 +247,7 @@ pub async fn sql(
         notes.push(format!(
             "fetched {n} remote artifact{} ({}) into {CACHE_DIR}/",
             if n == 1 { "" } else { "s" },
-            human_size(out.fetched.bytes)
+            crate::gc::size::human(out.fetched.bytes)
         ));
     }
     let Some(err) = out.error else {
@@ -366,39 +355,28 @@ async fn run_helper(
     cfg: &ResolvedConfig,
     request: &serde_json::Value,
 ) -> Result<HelperOutput, BarcaError> {
-    use tokio::io::AsyncWriteExt;
-    let mut cmd = crate::helper_proc::python_module(
+    use crate::helper_proc::JsonFailed;
+    let cmd = crate::helper_proc::python_module(
         python,
         "barca._sql",
         cfg.storage_options_json.as_deref(),
     );
-    cmd.stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = crate::helper_proc::spawn(&mut cmd)
-        .map_err(|e| BarcaError::Other(format!("cannot run {}: {e}", python.display())))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| BarcaError::Other("no stdin for the sql helper".into()))?;
-    stdin
-        .write_all(request.to_string().as_bytes())
+    crate::helper_proc::run_json(cmd, request, None)
         .await
-        .map_err(|e| BarcaError::Other(format!("sql helper: {e}")))?;
-    drop(stdin);
-    let out = child
-        .wait_with_output()
-        .await
-        .map_err(|e| BarcaError::Other(format!("sql helper: {e}")))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(BarcaError::Other(format!(
-            "the sql helper failed: {}",
-            err.lines().last().unwrap_or("exited with an error")
-        )));
-    }
-    serde_json::from_slice(&out.stdout)
-        .map_err(|e| BarcaError::Other(format!("the sql helper returned invalid JSON: {e}")))
+        .map_err(|failed| {
+            BarcaError::Other(match failed {
+                JsonFailed::Spawn(e) => format!("cannot run {}: {e}", python.display()),
+                JsonFailed::Io(e) => format!("sql helper: {e}"),
+                JsonFailed::TimedOut(limit) => {
+                    format!("sql helper: no answer within {}s", limit.as_secs())
+                }
+                JsonFailed::Exited(stderr) => format!(
+                    "the sql helper failed: {}",
+                    crate::helper_proc::last_line(&stderr)
+                ),
+                JsonFailed::Invalid(e) => format!("the sql helper returned invalid JSON: {e}"),
+            })
+        })
 }
 
 #[cfg(test)]
@@ -412,13 +390,6 @@ mod tests {
         assert_eq!(format_of("x.pkl"), "pickle");
         assert_eq!(format_of("x.csv"), "csv");
         assert_eq!(format_of("x"), "unknown");
-    }
-
-    #[test]
-    fn fetched_sizes_are_readable() {
-        assert_eq!(human_size(40), "40 bytes");
-        assert_eq!(human_size(2048), "2.0 KB");
-        assert_eq!(human_size(3 * 1024 * 1024), "3.0 MB");
     }
 }
 
