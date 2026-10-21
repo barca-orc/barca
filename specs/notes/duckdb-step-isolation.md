@@ -1,5 +1,7 @@
 # DuckDB connection lifetime (#302 / roadmap P02)
 
+> Note from #346 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 Status: **accepted product decision, 2026-10-09**.
 The user chose one connection per process because a process executes steps sequentially.
 Per-step connection isolation and a new setup API are not planned. Related: #299, #84.

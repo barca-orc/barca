@@ -1,5 +1,7 @@
 # S07: Linux arm64 and Alpine package support
 
+> Note from #372 (merged 2026-10-10). Status 2026-10-20: partly stale: written as a plan; the musl targets and published-artifact checks it defers shipped in #375 and #379.
+
 Status: technical plan before implementation. Refs #107, #344 S07.
 Baseline: published v0.21.0 at 52e286c has Linux x86_64 manylinux and macOS arm64.
 No additional target is advertised as shipped until its release artifacts and

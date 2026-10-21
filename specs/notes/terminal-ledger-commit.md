@@ -1,5 +1,7 @@
 # Atomic terminal ledger persistence (#319, #214)
 
+> Note from #362 (merged 2026-10-09). Status 2026-10-20: partly stale: the state-carry and minute-publisher references describe the shared history removed in 0.26.0.
+
 A failed backend recovery check exposed a possible missing durable row despite
 successful execution. Reader/WAL reproduction remains separate. Independently,
 terminal persistence currently ignores successful/failed materialization insertion

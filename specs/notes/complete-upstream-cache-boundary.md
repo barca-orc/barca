@@ -1,5 +1,7 @@
 # P09 second slice: complete upstream cache decisions
 
+> Note from #365 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 Status: implemented second slice, specification version 1. First slice PR #354 is merged.
 Plan recorded before implementation on main 748479ff; integrated onto ff911226. Refs #337, specs/notes/partition-planning-correctness.md.
 Conformance: cache boundary Rust regressions and existing actual CLI partition suites.

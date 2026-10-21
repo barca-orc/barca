@@ -1,5 +1,7 @@
 # Per-process storage overrides (#309, #310, P05)
 
+> Note from #353 (merged 2026-10-09). Status 2026-10-20: partly stale: `BARCA_STATE=off` and the optimistic-serve refusal were removed in 0.26.0; `BARCA_REMOTE=off` is current.
+
 ## Contract and precedence
 
 `BARCA_REMOTE=off` disables Barca-managed remote artifact and metadata access for

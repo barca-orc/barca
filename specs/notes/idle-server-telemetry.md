@@ -1,5 +1,7 @@
 # Idle server telemetry (#313 / roadmap P14)
 
+> Note from #356 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 ## Contract
 
 When existing `BARCA_TELEMETRY` configuration enables an integration, a successfully

@@ -1,5 +1,7 @@
 # Lexical rebinding and unused-input warnings (#300 / P06)
 
+> Note from #349 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 ## Boundary
 
 Fix the rebind collector used by the existing conservative unused-input warning.

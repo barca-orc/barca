@@ -1,5 +1,7 @@
 # SQL views use current partition membership (#288)
 
+> Note from #378 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 ## Problem and accepted scope
 
 SQL currently queries the latest successful artifact for every historical partition

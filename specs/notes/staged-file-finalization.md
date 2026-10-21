@@ -1,5 +1,7 @@
 # Cancellation-safe staged-file finalization
 
+> Note from #380 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 ## Evidence and scope
 
 Backend job v5dk2px0rp left one local artifact `.tmp` after a cancelled run;
