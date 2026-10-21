@@ -18,40 +18,53 @@ pub fn compute_run_hash(
     outputs: &HashMap<String, String>,
     env: Option<&str>,
 ) -> String {
+    let mut upstream_hashes: Vec<String> = Vec::new();
+    for uid in upstream_ids {
+        upstream_hashes.extend(upstream_tokens(
+            uid.as_ref(),
+            partition_key,
+            cached_run_hashes,
+            outputs,
+        ));
+    }
+    let hash_refs: Vec<&str> = upstream_hashes.iter().map(|s| s.as_str()).collect();
+    crate::hash::run_hash(def_hash, partition_key, &hash_refs, None, env)
+}
+
+/// What upstream `uid` contributes to the run hash of a step with `partition_key`: its run hash
+/// (with the output folded in, see [`compute_run_hash`]), the partition-aligned one, or every
+/// partition's for a fan-in. Empty when nothing is known for it.
+pub(crate) fn upstream_tokens(
+    uid: &str,
+    partition_key: Option<&str>,
+    cached_run_hashes: &HashMap<String, String>,
+    outputs: &HashMap<String, String>,
+) -> Vec<String> {
     let token = |key: &str, h: &String| match outputs.get(key) {
         Some(out) => format!("{h}+output:{out}"),
         None => h.clone(),
     };
-    let mut upstream_hashes: Vec<String> = Vec::new();
-    for uid in upstream_ids {
-        let uid = uid.as_ref();
-        if let Some(h) = cached_run_hashes.get(uid) {
-            upstream_hashes.push(token(uid, h));
-            continue;
-        }
-        // Try partition-aligned lookup (same partition as current step).
-        if let Some(pk) = partition_key {
-            let aligned = format!("{uid}[{pk}]");
-            if let Some(h) = cached_run_hashes.get(&aligned) {
-                upstream_hashes.push(token(&aligned, h));
-                continue;
-            }
-        }
-        // Fan-in: collect ALL partition hashes for this base ID (sorted for determinism).
-        let prefix = format!("{uid}[");
-        let mut partition_hashes: Vec<(&String, &String)> = cached_run_hashes
-            .iter()
-            .filter(|(k, _)| k.starts_with(&prefix))
-            .collect();
-        if !partition_hashes.is_empty() {
-            partition_hashes.sort_by_key(|(k, _)| (*k).clone());
-            for (k, h) in partition_hashes {
-                upstream_hashes.push(token(k, h));
-            }
+    if let Some(h) = cached_run_hashes.get(uid) {
+        return vec![token(uid, h)];
+    }
+    // Try partition-aligned lookup (same partition as current step).
+    if let Some(pk) = partition_key {
+        let aligned = format!("{uid}[{pk}]");
+        if let Some(h) = cached_run_hashes.get(&aligned) {
+            return vec![token(&aligned, h)];
         }
     }
-    let hash_refs: Vec<&str> = upstream_hashes.iter().map(|s| s.as_str()).collect();
-    crate::hash::run_hash(def_hash, partition_key, &hash_refs, None, env)
+    // Fan-in: collect ALL partition hashes for this base ID (sorted for determinism).
+    let prefix = format!("{uid}[");
+    let mut partition_hashes: Vec<(&String, &String)> = cached_run_hashes
+        .iter()
+        .filter(|(k, _)| k.starts_with(&prefix))
+        .collect();
+    partition_hashes.sort_by_key(|(k, _)| (*k).clone());
+    partition_hashes
+        .into_iter()
+        .map(|(k, h)| token(k, h))
+        .collect()
 }
 
 use crate::store_sync::StoreSync;

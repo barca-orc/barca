@@ -423,6 +423,11 @@ pub struct ExtractedNode {
     /// and imports that this function references (transitively).
     /// Includes same-file definitions. Cross-file deps tracked by source_file content.
     pub cone_hash: String,
+    /// A short digest of each definition in the cone, by label
+    /// ([`crate::cone::cone_hash_and_parts`]). Recorded with each materialization to say which
+    /// helper changed (#558); not part of any hash, and not serialized.
+    #[serde(skip)]
+    pub cone_parts: Vec<(String, String)>,
     /// Explicit artifact serializer override from `@asset(serializer="parquet")`.
     pub artifact_serializer: Option<SerializerKind>,
     /// Parameter types from function annotations (param → frame loader).
@@ -470,6 +475,10 @@ pub struct DagNode {
     /// Content hash of this node's definition (source + metadata).
     /// Changes when the function body, helpers, constants, or decorator args change.
     pub definition_hash: String,
+    /// The definition hash's components and a short digest of each (`code`, `decorator ...`,
+    /// `helper ...`, `kind`; see [`crate::changes`]). Not serialized.
+    #[serde(skip)]
+    pub components: Vec<(String, String)>,
 }
 
 impl DagNode {

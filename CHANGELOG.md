@@ -6,6 +6,19 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Features
+
+- `barca status` and `--dry-run` say what changed in a stale node's run hash, not only that it
+  changed (#558): `cache.changed` (status) and `steps[].changed` (dry run) list the parts that
+  differ from the node's last successful materialization, `code`, `decorator argument NAME`,
+  `decorator NAME`, `helper FILE:NAME`, `input ID`, `sensor ID`, `env NAME` or `kind`, and the
+  WHY column and `detail` read `changed: helper pipelines/common.py:bucket_ltv (+1 more)`. Each
+  successful materialization records a short digest per part in a new nullable
+  `materializations.components` column (format 1, additive); a result recorded before keeps the
+  plain `changed`.
+
 ## 0.28.3 (2026-10-21)
 
 ### Features

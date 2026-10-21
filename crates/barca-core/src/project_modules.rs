@@ -258,6 +258,14 @@ impl ModuleSource for ImportPath {
             Found::Namespace(_) | Found::Missing => None,
         }
     }
+
+    fn file_label(&self, name: &str) -> Option<String> {
+        let Found::Module(_, _, path) = self.find(name) else {
+            return None;
+        };
+        let relative = path.strip_prefix(&self.root).ok()?;
+        Some(relative.to_string_lossy().replace('\\', "/"))
+    }
 }
 
 // ─── Cones of a plan ─────────────────────────────────────────────────────────
@@ -543,6 +551,12 @@ impl PipelineCones<'_> {
     /// The cone hash of a top-level function of the file ([`cone::cone_hash`]).
     pub fn hash(&self, function_name: &str) -> String {
         cone::cone_hash(&self.module, function_name, self.modules)
+    }
+
+    /// [`Self::hash`] and the digest of each definition in the cone
+    /// ([`cone::cone_hash_and_parts`]).
+    pub fn hash_and_parts(&self, function_name: &str) -> (String, Vec<(String, String)>) {
+        cone::cone_hash_and_parts(&self.module, function_name, self.modules)
     }
 }
 

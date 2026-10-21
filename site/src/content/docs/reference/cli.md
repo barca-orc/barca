@@ -591,8 +591,13 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
 | `always_runs` | tasks and sensors | `task`, `sensor` |
 
-`changed` means the run hash differs from the last materialization: this function's code or its
-upstream outputs changed. barca stores only the combined hash, so it cannot say which.
+`changed` means the run hash differs from the last successful materialization, and
+`cache.changed` says what differs: `code`, `decorator argument NAME`, `decorator NAME`,
+`helper FILE:NAME` (a function or constant the code uses, in its own file or a project module),
+`input ID`, `sensor ID`, `env NAME` or `kind`. `detail` and the table's WHY column name the first
+and count the rest (`changed: helper pipelines/common.py:bucket_ltv (+1 more)`), and a dry run's
+step carries the same `changed` list. A result recorded before 0.29.0 has no record of the parts,
+and its node stays a plain `changed`.
 `artifact_missing` means the result is recorded but its artifact file is gone and a run would
 have to read it, so it would be computed again; a missing artifact that nothing reads leaves the
 node `cached` (`barca docs cache`, "A cached result whose artifact is missing").

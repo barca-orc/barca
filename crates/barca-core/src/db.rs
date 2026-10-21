@@ -1504,6 +1504,22 @@ pub(crate) async fn latest_success(cache: &CacheReader, node_id: &str) -> Option
     None
 }
 
+/// The run-hash components the latest successful materialization of `node_id` (a display id)
+/// recorded ([`crate::changes`]); `None` when it recorded none (before 0.29) or never succeeded.
+pub(crate) async fn last_success_components(cache: &CacheReader, node_id: &str) -> Option<String> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT components FROM materializations WHERE node_id = ?1 AND status = 'success' \
+             ORDER BY id DESC LIMIT 1",
+            [node_id.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    row.get::<String>(0).ok().filter(|c| !c.is_empty())
+}
+
 /// The id of the latest successful materialization of `node_id` (a display id), artifact or
 /// not; `None` when it never succeeded.
 pub(crate) async fn latest_success_id(cache: &CacheReader, node_id: &str) -> Option<i64> {

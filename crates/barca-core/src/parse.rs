@@ -336,6 +336,7 @@ fn try_extract_function(
         byte_offset: start,
         source_text,
         cone_hash: String::new(), // computed after extraction in extract_nodes()
+        cone_parts: Vec::new(),
         artifact_serializer,
         param_types,
         return_type,

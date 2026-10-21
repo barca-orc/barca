@@ -195,6 +195,12 @@ pub trait ModuleSource {
     fn alternatives(&self, _name: &str) -> Vec<Rc<Module>> {
         Vec::new()
     }
+
+    /// The project-relative path of the file `name` is read from (`pipelines/common.py`), for
+    /// labels people read. `None` when it is not known; the dotted name is shown instead.
+    fn file_label(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// A fixed set of modules held in memory (tests, and callers with no project around them).
@@ -258,8 +264,33 @@ struct LocalUse {
 /// The dependency cone hash of `function_name` in `pipeline`. Empty when the function reaches
 /// nothing (or is not a top-level function of the file).
 pub fn cone_hash(pipeline: &Module, function_name: &str, modules: &dyn ModuleSource) -> String {
+    collect(pipeline, function_name, modules).map_or_else(String::new, Cone::hash)
+}
+
+/// [`cone_hash`], and a short digest of each definition in the cone by label: `name` for a
+/// definition of the pipeline file itself, `path/to/module.py:name` for one of a project module
+/// ([`ModuleSource::file_label`]; `module.name:name` when the module has no file label), and
+/// `path/to/module.py` for a module added whole (rule 5; `module.name:*` without a file label). Recorded with each materialization so
+/// `barca status` can say which helper changed (#558); they are not part of any hash.
+pub fn cone_hash_and_parts(
+    pipeline: &Module,
+    function_name: &str,
+    modules: &dyn ModuleSource,
+) -> (String, Vec<(String, String)>) {
+    let Some(cone) = collect(pipeline, function_name, modules) else {
+        return (String::new(), Vec::new());
+    };
+    let parts = cone.digests();
+    (cone.hash(), parts)
+}
+
+fn collect<'a>(
+    pipeline: &Module,
+    function_name: &str,
+    modules: &'a dyn ModuleSource,
+) -> Option<Cone<'a>> {
     let Some(ModuleDef::Function(code)) = pipeline.definitions().get(function_name) else {
-        return String::new();
+        return None;
     };
     let mut cone = Cone {
         modules,
@@ -271,7 +302,7 @@ pub fn cone_hash(pipeline: &Module, function_name: &str, modules: &dyn ModuleSou
         is_pipeline: true,
     };
     cone.follow(site, &code.uses);
-    cone.hash()
+    Some(cone)
 }
 
 /// The module whose definitions a use is resolved against.
@@ -310,6 +341,33 @@ struct Cone<'a> {
 }
 
 impl Cone<'_> {
+    /// A short digest of each part by its label, sorted; parts that share a label (a
+    /// definition added twice) share one entry.
+    fn digests(&self) -> Vec<(String, String)> {
+        let mut by_label: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for (label, text) in &self.parts {
+            let shown = match label.split_once(':') {
+                Some((module, name)) => match self.modules.file_label(module) {
+                    Some(file) if name == "*" => file,
+                    Some(file) => format!("{file}:{name}"),
+                    None => label.clone(),
+                },
+                None => label.clone(),
+            };
+            by_label
+                .entry(shown)
+                .or_default()
+                .push(crate::hash::short_digest(text.as_bytes()));
+        }
+        by_label
+            .into_iter()
+            .map(|(label, mut digests)| {
+                digests.sort();
+                (label, digests.join(","))
+            })
+            .collect()
+    }
+
     fn hash(mut self) -> String {
         if self.parts.is_empty() {
             return String::new();

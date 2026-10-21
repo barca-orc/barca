@@ -175,6 +175,12 @@ pub struct StepReport {
     /// The reason in words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Dry run, a step with no cached result: what changed in its run hash since its last
+    /// successful materialization (`code`, `decorator argument NAME`, `decorator NAME`,
+    /// `helper FILE:NAME`, `input ID`, `sensor ID`, `env NAME`, `kind`). Absent when that
+    /// materialization recorded no components (before 0.29.0) or there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_hash: Option<String>,
     /// The cached artifact, when the step is served from cache.

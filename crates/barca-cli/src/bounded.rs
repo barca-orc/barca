@@ -67,6 +67,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "status",
     "reason",
     "detail",
+    "changed",
     "run_hash",
     "artifact",
     "warning",
@@ -245,6 +246,7 @@ mod tests {
                 detail: String::new(),
                 run_hash: None,
                 artifact: None,
+                changed: None,
             },
             partitions: Some(PartitionState {
                 total: 0,
