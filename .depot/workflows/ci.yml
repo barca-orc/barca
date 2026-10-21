@@ -3,6 +3,9 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Also on main, so the README's CI badge reports the integration branch.
+  push:
+    branches: [main]
 
 # One run per PR at a time; a newer push cancels the older run.
 concurrency:
