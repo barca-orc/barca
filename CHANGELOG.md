@@ -140,6 +140,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - The README is the pitch, install, one example, the commands table and a "More" table that
   points at `barca docs <topic>` and the site; reference detail lives in the manual (#499).
 
+- The guide's multi-file example imports `rows` as `from pipelines.sources import rows`; the
+  bare `from sources import rows` it showed is refused (exit 2). The guide's sensor section no
+  longer ends with a dozen paragraphs of dependency-tracking release notes, and the scheduling
+  tables say that sensors are polled by every run that needs them, whatever their freshness
+  (`Manual`, their default, does not pin a sensor).
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

@@ -74,7 +74,7 @@ node follows the schedules above it.
 |---|---|
 | `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
 | `Always` | Brought up to date at each tick of a scheduled node above it, in that tick's run. |
-| `Manual` | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. |
+| `Manual` | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. A sensor is the exception: every run that needs its value polls it, whatever its freshness. |
 
 ```python
 # pipeline.py
