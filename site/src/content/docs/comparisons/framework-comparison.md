@@ -3,7 +3,11 @@ title: "Framework Comparison: Code, Features and Overhead"
 description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured on 2026-06-05 with barca 0.1.5.
 ---
 
-Last measured: 2026-06-05, with barca 0.1.5 and Dagster (version not recorded), Prefect (version not recorded) and Airflow 3.2.2, on an Apple Silicon (M-series) Mac. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
+:::caution[Numbers from 2026-06]
+The run times on this page were measured on 2026-06-05 with barca 0.1.5, and the other tools' columns were recorded on that date. They have not been re-run against the current release, and barca has changed a great deal since (artifact paths by default, the store as a backup, server mode). A re-run is tracked in [#65](https://github.com/barca-orc/barca/issues/65). Read them as a record of those versions, not as a comparison with today's barca.
+:::
+
+Last measured: 2026-06-05, with barca 0.1.5 and Dagster (version not recorded), Prefect (version not recorded) and Airflow 3.2.2, on an Apple Silicon (M-series) Mac. Not re-run since. Re-run tracked in [#65](https://github.com/barca-orc/barca/issues/65).
 
 The Dagster and Prefect versions were whatever PyPI served as latest on that date, under Python
 3.12; barca ran under Python 3.14. The code samples for the other tools are the benchmark sources
@@ -213,25 +217,25 @@ were written from memory and could not be verified, so they have been removed. O
 
 ## Features
 
-The barca column was updated on 2026-10-07 for barca 0.18.0. The other three columns are as
+The barca column describes barca 0.27.0 (updated 2026-10-20). The other three columns are as
 recorded on 2026-06-05 and have not been re-checked; treat them as a starting point and read
 each project's documentation.
 
-| Feature | Dagster (2026-06-05) | Prefect (2026-06-05) | Airflow (2026-06-05) | Barca 0.18.0 |
+| Feature | Dagster (2026-06-05) | Prefect (2026-06-05) | Airflow (2026-06-05) | Barca 0.27.0 |
 |---------|---------|---------|---------|-------|
 | Web UI | Yes (`dagster dev`) | Yes (Prefect Cloud or server) | Yes (webserver) | Yes, served by `barca serve` at `/ui/` ([Server API](/reference/server-api/)) |
 | Run history | Event log, asset catalog | Flow run and task run tracking | DagRun and TaskInstance records | Rows in a local database: `barca history`, `barca stats`, `barca status` ([#50]) |
 | Retry on failure | Per-op retries | Per-task retries | Retries | `retries=N, retry_backoff=...` on the decorator, linear backoff ([#51]) |
-| Alerting | Sensors and hooks | Automations | Email and other notifiers | No ([#52] is open) |
+| Alerting | Sensors and hooks | Automations | Email and other notifiers | Slack: a post when a job starts failing, recovers, or is still failing a day later ([Telemetry](/reference/telemetry/), [#52]) |
 | Scheduling | Cron schedules and sensors | Deployments | Scheduler | Cron in `barca serve`, 5 or 6 fields, 1-second resolution, one catch-up fire after downtime ([Scheduling](/scheduling/), [#54]) |
-| Server mode | `dagster dev` | `prefect server` | Webserver and scheduler | `barca serve`: HTTP API, scheduler and web UI; binds 127.0.0.1 by default (`--host` to change), no authentication ([#53]) |
+| Server mode | `dagster dev` | `prefect server` | Webserver and scheduler | `barca serve`: HTTP API, scheduler and web UI; binds 127.0.0.1 by default (`--host` to change), no authentication. Other machines point at it as the team's ledger ([Deploying](/deploying/), [#53]) |
 | Remote storage | I/O managers | Result storage | XCom backends | Artifacts on S3, S3-compatible stores, GCS or Azure through fsspec, and backups of the run history database ([Remote storage](/reference/remote-storage/), [#55]) |
 | Containers | Kubernetes executor | Docker infrastructure | Celery and Kubernetes executors | No executor of its own; `barca serve` can run as a container's foreground process ([Scheduling](/scheduling/#keeping-it-running)) |
 | Multi-user access control | Yes | Yes | Yes | No |
-| Backfills | Partitioned backfills | Via deployments | `dags backfill` | `barca get` runs the partition keys that have no cached result. There is no flag to select keys ([#57] is open) |
+| Backfills | Partitioned backfills | Via deployments | `dags backfill` | `barca get` runs the partition keys that have no cached result; `--partition region=emea` selects keys ([#57]) |
 | Dynamic fan-out | Dynamic partitions | `.map()` | Dynamic task mapping | `partitions([...])`, an expression evaluated at plan time, or `partitions_from(asset)` |
 | Task workflows | Jobs and ops | `@task` and `@flow` | `@task` | `@task`, which always runs and may sit anywhere in the graph except upstream of an asset |
-| Tracing | OpenTelemetry | OpenTelemetry | StatsD | Datadog traces, one per run with a span per step ([Telemetry](/reference/telemetry/)); OTLP in [#59] is open |
+| Tracing | OpenTelemetry | OpenTelemetry | StatsD | Datadog traces, one per run with a span per step ([Telemetry](/reference/telemetry/)); OTLP is parked ([#59]) |
 | Data quality checks | Asset checks | Not built in | Not built in | Not built in. A step that raises fails the run and nothing downstream of it runs |
 | Integrations | Yes | Yes | Yes (providers) | None |
 

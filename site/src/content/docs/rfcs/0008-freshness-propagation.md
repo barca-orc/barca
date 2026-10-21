@@ -3,7 +3,7 @@ title: 'RFC-0008: Freshness Propagation in barca serve'
 description: 'What Always and Manual do at run time: a scheduled tick brings the Always nodes below it up to date in one run; Manual is refreshed by hand only and pins itself.'
 ---
 
-- **Status:** Accepted
+- **Status:** Accepted, implementation in 0.28.0. Nothing of it has shipped in 0.27.0: `Always` and `Manual` are still parsed and shown only, and `max_failures=` does not exist yet.
 - **Date:** 2026-10-07 (accepted 2026-10-14)
 - **Touches:** HTTP server | barca-core
 - **Supersedes / Related:** [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) (defines `Always`/`Manual`/`Schedule`; this RFC gives the first two their run-time meaning), [RFC-0004](/rfcs/0004-http-server-api/) (the scheduler and its per-job rules). Issues #253 and #80; closed attempt #261. Decisions recorded in [DIRECTION.md](https://github.com/barca-orc/barca/blob/main/DIRECTION.md#decided-october-2026).

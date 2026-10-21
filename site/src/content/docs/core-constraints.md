@@ -1,17 +1,17 @@
 ---
 title: Core Constraints
-description: The rules barca was designed around, which of them 0.18.0 implements, and what happens where it does not.
+description: The rules barca was designed around, which of them 0.27.0 implements, and what happens where it does not.
 ---
 
 These are the rules barca was designed around. Some were written before the code existed. Each
-section gives the rule, whether 0.18.0 implements it, and what happens where it does not.
+section gives the rule, whether 0.27.0 implements it, and what happens where it does not.
 
-| Constraint | In 0.18.0 |
+| Constraint | In 0.27.0 |
 |---|---|
 | [Graphs are acyclic](#directed-acyclic-graphs-only) | Implemented |
 | [Python interpreter resolution](#python-interpreter-resolution) | Implemented (no `uv` requirement) |
 | [Preflight consistency](#preflight-consistency) | Not needed between commands; not checked during a run |
-| [History is append-only](#history-is-append-only) | Rows are kept; no status flags, no pruning command |
+| [History is append-only](#history-is-append-only) | Rows are kept; no status flags. `barca gc` evicts result files, never rows |
 | [Freshness declarations](#freshness-declarations) | Only `Schedule` has an effect |
 | [Caching follows provenance, not recency](#caching-follows-provenance-not-recency) | Implemented |
 | [Asset identity](#asset-identity) | Implemented; no rename detection |
@@ -77,8 +77,10 @@ edit pipeline files during a run; if you did, run the affected assets again with
 
 ### Pruning
 
-There is no `prune` or `gc` command in 0.18.0, and `.barca/artifacts/` has no size cap. To
-reclaim space, delete files under `.barca/artifacts/` yourself. Barca handles a missing file:
+History rows are never pruned. Result files are: `.barca/` has a size limit (`[cache].max_size`,
+default 10% of the filesystem), and past it barca evicts files after every `get` and `run`, or
+when you run `barca gc` (`barca docs cache`). An evicted result keeps its row, marked evicted.
+You can also delete files under `.barca/artifacts/` yourself. Barca handles a missing file:
 when a step needs to read a cached result whose file is gone, the step that produced it runs
 again (the JSON output gives the reason `artifact_missing`). A missing file that nothing needs
 to read costs nothing. Deleting all of `.barca/` removes the cache and the history.
@@ -98,9 +100,9 @@ to read costs nothing. Deleting all of `.barca/` removes the cache and the histo
   `Manual` upstream does not hold back anything downstream, and `barca serve` does not run an
   `Always` node on its own. Barca accepts `Always` on a sensor.
 
-What `Always` and `Manual` should do in `barca serve` is proposed in RFC-0008
-([PR #276](https://github.com/barca-orc/barca/pull/276)). Until then, whether a function runs
-is decided by the cache alone (next section), and by `--refresh`.
+What `Always` and `Manual` do in `barca serve` is decided in
+[RFC-0008](/rfcs/0008-freshness-propagation/) (accepted; implementation in 0.28.0). Until then,
+whether a function runs is decided by the cache alone (next section), and by `--refresh`.
 
 ## Caching follows provenance, not recency
 
@@ -122,7 +124,8 @@ $ barca get b prov.py -o value --json
 ... "final_output":2 ... "id":"prov.py:a" ... "status":"cached" ... "id":"prov.py:b" ... "status":"cached" ... "steps_executed":0
 ```
 
-This is why old artifact files are kept. What the hash does not see is listed in
+This is why old artifact files are kept, until the cache size limit evicts them (see
+[Pruning](#pruning)). What the hash does not see is listed in
 `barca docs cache`.
 
 ## Asset identity
