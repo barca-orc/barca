@@ -12,6 +12,17 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Polish
+
+- Refusals that are not barca failures no longer end with "Not a problem in your code: barca or its
+  environment failed. Retrying may succeed.": an unreachable or missing artifact store says what to
+  check (URI, that the bucket exists, endpoint, credentials, `BARCA_REMOTE=off`), and
+  `barca state reset` / `restore` refused under `barca serve` or a running run say what to do
+  instead (the UI's Reset database button or `POST /state/reset`; stop the server; wait or
+  cancel).
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

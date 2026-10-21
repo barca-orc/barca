@@ -122,8 +122,9 @@ pub(crate) async fn state_reset_cmd(
     let cfg = barca_core::config::resolve(env)?;
     if let Some(holder) = barca_core::backup::ServeLock::holder(&cfg) {
         return Err(BarcaError::Other(format!(
-            "cannot reset while barca serve is using this environment ({holder}): use the \
-             Reset database button in its UI, or POST /state/reset. Nothing was changed."
+            "cannot reset while barca serve is using this environment ({holder}). Nothing was \
+             changed.\nUse the Reset database button in its web UI, or POST /state/reset to it; \
+             or stop the server and run this command again."
         )));
     }
     if !yes {
@@ -154,8 +155,8 @@ pub(crate) async fn state_reset_cmd(
             return Ok(());
         }
         Err(BarcaError::Other(format!(
-            "cannot reset while a run is in progress ({}): wait for it to finish or cancel it. \
-             Nothing was changed.",
+            "cannot reset while a run is in progress ({}). Nothing was changed.\nWait for it \
+             to finish, or cancel it (Ctrl-C in its terminal), then run this command again.",
             running.join(", ")
         )))
     })

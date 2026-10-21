@@ -558,8 +558,8 @@ pub async fn restore(
 ) -> Result<Restored, BarcaError> {
     if let Some(holder) = ServeLock::holder(cfg) {
         return Err(BarcaError::Other(format!(
-            "cannot restore while barca serve is using this environment ({holder}): stop the \
-             server first. Nothing was changed."
+            "cannot restore while barca serve is using this environment ({holder}). Nothing was \
+             changed.\nStop the server, run barca state restore again, then start the server."
         )));
     }
     if let Some(sel) = from
