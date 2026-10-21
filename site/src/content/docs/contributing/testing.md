@@ -134,8 +134,9 @@ These keep the documentation and the command line in agreement.
   examples on every documented command.
 - `cargo test -p barca contract::` compares each command's `--help` with
   `crates/barca-cli/snapshots/help/`, checks the generated tables in
-  `crates/barca-cli/docs/contract.md`, and checks that
-  `site/src/content/docs/reference/cli-contract.md` is that topic with site front matter.
+  `crates/barca-cli/docs/contract.md`, and checks that each site reference page generated from a
+  manual topic (`SITE_PAGES` in `crates/barca-cli/src/contract.rs`: `reference/cli-contract`,
+  `sql`, `remote-storage`, ...) is what its topic produces and is in the sidebar.
 - `python/tests/test_cli_contract.py` compares the JSON output schemas and the error envelope
   with `python/tests/snapshots/cli_contract/`.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
@@ -148,8 +149,7 @@ These keep the documentation and the command line in agreement.
 When one fails after a deliberate change, run `scripts/update-cli-snapshots.sh` and review the
 diff. The script builds barca, so it takes as long as a release build.
 
-No test compares the other site pages with the manual. `reference/sql.md`,
-`reference/telemetry.md` and `reference/discovery.md` are hand-kept copies of manual topics.
+The other site pages are written by hand, and no test compares them with the manual.
 
 ## What CI runs
 

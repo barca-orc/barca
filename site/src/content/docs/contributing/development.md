@@ -104,10 +104,12 @@ npm run dev      # local preview
 npm run build
 ```
 
-`reference/cli-contract.md` is generated; edit `crates/barca-cli/docs/contract.md` instead.
-`reference/sql.md`, `reference/telemetry.md` and `reference/discovery.md` are copies of the
-manual topics of the same name with site front matter, kept in step by hand: a change to one
-must be made in both.
+The reference pages that are manual topics (`reference/cli-contract.md`, `discovery.md`,
+`doctor.md`, `groups.md`, `remote-storage.md`, `server-mode.md`, `sql.md`, `telemetry.md`) are
+generated from `crates/barca-cli/docs/` (`SITE_PAGES` in `crates/barca-cli/src/contract.rs`).
+Edit the manual topic, then regenerate them with
+`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract::` (`scripts/update-cli-snapshots.sh`
+does it too). Every other page is written by hand.
 
 ## Git workflow
 

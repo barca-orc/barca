@@ -1,9 +1,14 @@
 ---
-title: Organizational groups
-description: Organize pipeline nodes without changing execution or caching.
+title: "Groups"
+description: "Organize pipeline nodes in the UI and CLI without changing execution or caching."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/groups.md
 ---
 
-# Organizational groups
+<!-- Generated from crates/barca-cli/docs/groups.md (barca docs groups). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs groups`: the CLI prints the same text.
+:::
 
 `group()` organizes assets, tasks and sensors in the UI and CLI. It never adds a
 step, dependency, execution boundary or cache key. A group's output identifies

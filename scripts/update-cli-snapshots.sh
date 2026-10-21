@@ -5,7 +5,9 @@
 #   - crates/barca-cli/docs/contract.md                generated tables (commands, flags, exit
 #                                                      codes, JSON schemas, --agent lines)
 #   - python/tests/snapshots/cli_contract/*.txt        JSON output schemas and the error envelope
-#   - site/src/content/docs/reference/cli-contract.md  the site copy of contract.md
+#   - site/src/content/docs/reference/*.md             the site pages generated from manual
+#                                                      topics (SITE_PAGES in contract.rs);
+#                                                      alone: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract::
 #
 # Run from anywhere in the repository; review the diff afterwards, it is the contract change.
 # Uses .venv (maturin develop) when present, otherwise the python/maturin on PATH.
@@ -33,7 +35,7 @@ echo "==> rebuilding barca so the JSON snapshots see this source"
 echo "==> JSON schema snapshots and tables (pytest)"
 BARCA_UPDATE_SNAPSHOTS=1 "$PY" -m pytest -q python/tests/test_cli_contract.py
 
-echo "==> copying contract.md, now complete, to the site"
+echo "==> copying contract.md, now complete, and the other manual topics to the site"
 BARCA_UPDATE_SNAPSHOTS=1 cargo test -q -p barca contract::
 
 echo "==> checking that the snapshots are stable"
@@ -43,4 +45,4 @@ cargo test -q -p barca contract::
 echo
 echo "Updated. Review the change to the contract:"
 echo "  git diff -- crates/barca-cli/snapshots crates/barca-cli/docs/contract.md \\"
-echo "    python/tests/snapshots site/src/content/docs/reference/cli-contract.md"
+echo "    python/tests/snapshots site/src/content/docs/reference"
