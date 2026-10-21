@@ -821,8 +821,6 @@ mod tests {
             std::env::set_var("BARCA_REMOTE", "");
             std::env::set_var("BARCA_REMOTE_URI", "");
             std::env::set_var("BARCA_ARTIFACT_URI", "");
-            std::env::set_var("BARCA_STATE_URI", "");
-            std::env::set_var("BARCA_STATE", "");
         }
         let cfg = resolve_in(None, dir.path()).unwrap();
         assert!(!cfg.remote_off);

@@ -38,7 +38,6 @@ Transfers go through barca._storage, so credentials and BARCA_STORAGE_OPTIONS
 behave exactly as they do for workers and the state helper.
 """
 
-import hashlib
 import os
 import signal
 import socket
@@ -90,21 +89,13 @@ def _is_permanent(exc: BaseException) -> bool:
     return status is not None and 400 <= status < 500 and status not in (408, 429)
 
 
-def _sha256(path: "str | Path") -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def _local_sha256(path: "str | Path") -> str | None:
     """The hash of a local copy, or None when there is no readable file to hash.
 
     An unreadable copy is then replaced like any other that does not match.
     """
     try:
-        return _sha256(path)
+        return _storage.sha256_file(path)
     except OSError:
         return None
 
@@ -123,7 +114,7 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
     _storage.make_way(dest)
     with _storage.staged_beside(dest) as tmp:
         _storage.get_file(remote, tmp)
-        digest = _sha256(tmp)
+        digest = _storage.sha256_file(tmp)
         mismatch = expected is not None and digest != expected
         fetched = not (mismatch and _local_sha256(dest) == digest)
         if fetched:
@@ -158,7 +149,7 @@ def _transfer(msg: dict) -> dict:
             _storage.put_file(str(snapshot), msg["remote"])
             return {
                 "size_bytes": snapshot.stat().st_size,
-                "sha256": _sha256(snapshot),
+                "sha256": _storage.sha256_file(snapshot),
                 "fetched": True,
                 "mismatch": False,
             }

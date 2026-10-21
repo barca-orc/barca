@@ -12,6 +12,18 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Three tests no longer fail by chance or by environment: the `barca state restore` refusal test waits for the server's lock to be released instead of assuming it is immediate (a child process started by another test briefly holds it) (#524); the Datadog parallel-span test counts each span once and only its own run's (ddtrace resends a payload it timed out on, and the fake Agent now serves requests concurrently) (#530); the coordination-socket tests build their fixtures under `/tmp`, so they pass when the runner's `TMPDIR` is long (#571).
 
+### Bug Fixes
+
+- One byte formatter (#506): every size barca prints is in decimal units, as `[cache] max_size`
+  is written (`KB` = 1000 bytes). The upload, fetch and backup lines, `barca state backups` and
+  `barca sql`'s "fetched" note used binary units labelled `KB`/`MB` (`48.0 KB` for 49,152 bytes is
+  now `49.2 KB`; `barca sql` printed `40 bytes`, now `40 B`). `barca status` shape samples now
+  encode values as `barca sql` does: a NaN or infinite float is `null` (it made the shape reader
+  fail), a datetime is ISO 8601 with `T`, a decimal a number, bytes hex, a duration seconds. One
+  helper runs barca's JSON-in/JSON-out Python helpers, one runs a database transaction, and the
+  Python file hash, identifier quoting and JSON conversion each have one copy; five unused
+  functions are gone.
+
 ## 0.28.3 (2026-10-21)
 
 ### Features

@@ -24,7 +24,6 @@ Only names of the backup form (``YYYY-MM-DDTHH-MM-SS.mmmZ-<8 hex>.db``, or 0.26.
 ``YYYY-MM-DDTHH-MM-SSZ.db``) are ever listed or removed, newest first; the shared-history object of releases before 0.26.0 (``state/metadata.db``) is ignored.
 """
 
-import hashlib
 import json
 import os
 import re
@@ -43,14 +42,6 @@ def _order_key(name: str) -> str:
     if len(name) == 23 and name.endswith("Z.db"):
         return name[:19] + ".000Z"
     return name
-
-
-def _sha256(path: "Path | str") -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _sidecar_name(name: str) -> str:
@@ -149,7 +140,11 @@ def stat(paths: "list[str]") -> dict:
         if local is not None:
             if local.is_file():
                 objects.append(
-                    {"exists": True, "size_bytes": local.stat().st_size, "sha256": _sha256(local)}
+                    {
+                        "exists": True,
+                        "size_bytes": local.stat().st_size,
+                        "sha256": _storage.sha256_file(local),
+                    }
                 )
             else:
                 objects.append({"exists": False, "size_bytes": None, "sha256": None})

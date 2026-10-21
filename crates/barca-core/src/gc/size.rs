@@ -118,7 +118,8 @@ pub fn filesystem(_dir: &Path) -> Option<Filesystem> {
     None
 }
 
-/// Bytes in decimal units, as limits are written: `512 B`, `1.2 MB`, `21.4 GB`.
+/// Bytes in decimal units, as limits are written: `512 B`, `1.2 MB`, `21.4 GB`. barca's one byte
+/// formatter: every size it prints (cache, transfers, backups, `barca sql`) goes through it.
 pub fn human(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;

@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import IO, Any
 
 from barca import _storage
+from barca._sql import _jsonable
 
 MAX_KEYS = 100
 # A remote json or pickle artifact larger than this is not downloaded to describe it.
@@ -176,11 +177,6 @@ def _parquet_shape(source: "str | IO[bytes]", sample: int) -> dict:
                 break
         out["sample"] = _jsonable(rows[:sample])
     return out
-
-
-def _jsonable(value: Any) -> Any:
-    """Round-trip through json so dates, decimals and bytes print as strings."""
-    return json.loads(json.dumps(value, default=str))
 
 
 # ─── json ─────────────────────────────────────────────────────────────────────

@@ -12,8 +12,8 @@ use crate::helper_proc;
 use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
 use crate::recover::{self, Work};
 use crate::report::{
-    RunOutcome, cached_step_line, end_of_run_line, env_suffix, failed_step_line, fmt_bytes,
-    fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning,
+    RunOutcome, cached_step_line, end_of_run_line, env_suffix, failed_step_line, fmt_eta, kind_str,
+    merge_partition_reports, reconcile_total, report_for, stale_warning,
 };
 use crate::targets::{
     blocking_failure, final_output_of, plan_for_targets, resolve_targets, short_name,
@@ -3559,7 +3559,7 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
                 "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
-                fmt_bytes(report.bytes),
+                crate::gc::size::human(report.bytes),
                 t_drain.elapsed().as_secs_f64()
             );
         }
@@ -3668,7 +3668,7 @@ async fn final_backup(
             crate::run_line!(
                 Always,
                 "[barca] backed up the metadata DB ({}) to {at} in {:.2}s",
-                fmt_bytes(taken.size_bytes),
+                crate::gc::size::human(taken.size_bytes),
                 started.elapsed().as_secs_f64()
             );
             Ok(None)

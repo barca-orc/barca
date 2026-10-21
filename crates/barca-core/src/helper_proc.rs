@@ -302,6 +302,67 @@ impl<'a> Until<'a> {
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
 /// prints), else its last non-empty line. Library warnings printed before it (google-auth's
 /// quota-project notice, deprecation warnings) are dropped so they never reach the error.
+/// Why [`run_json`] failed. Each caller words it: the helpers' callers report failures
+/// differently (a note on a shape, an infra error, a store that could not be asked).
+pub(crate) enum JsonFailed {
+    /// The helper could not be started.
+    Spawn(std::io::Error),
+    /// Writing the request or reading the answer failed.
+    Io(std::io::Error),
+    /// No answer within the limit; the helper was killed.
+    TimedOut(Duration),
+    /// The helper exited with an error; its stderr.
+    Exited(Vec<u8>),
+    /// The answer was not the JSON expected.
+    Invalid(serde_json::Error),
+}
+
+/// Run a Python helper that reads one JSON document (`request`) on stdin and answers with one
+/// JSON document on stdout (`barca._inspect`, `barca._value`, `barca._sql`, `barca._state stat`).
+/// With a `limit`, a helper still running after it fails the call, and `cmd` should be
+/// `kill_on_drop` so that it is killed. Started through [`spawn`].
+pub(crate) async fn run_json<T: serde::de::DeserializeOwned>(
+    mut cmd: Command,
+    request: &serde_json::Value,
+    limit: Option<Duration>,
+) -> Result<T, JsonFailed> {
+    use tokio::io::AsyncWriteExt;
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = spawn(&mut cmd).map_err(JsonFailed::Spawn)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| JsonFailed::Io(std::io::Error::other("no stdin")))?;
+    stdin
+        .write_all(request.to_string().as_bytes())
+        .await
+        .map_err(JsonFailed::Io)?;
+    drop(stdin);
+    let out = match limit {
+        Some(limit) => tokio::time::timeout(limit, child.wait_with_output())
+            .await
+            .map_err(|_| JsonFailed::TimedOut(limit))?,
+        None => child.wait_with_output().await,
+    }
+    .map_err(JsonFailed::Io)?;
+    if !out.status.success() {
+        return Err(JsonFailed::Exited(out.stderr));
+    }
+    serde_json::from_slice(&out.stdout).map_err(JsonFailed::Invalid)
+}
+
+/// The last line of a helper's stderr, as `barca._inspect`, `barca._value` and `barca._sql`
+/// report an error.
+pub(crate) fn last_line(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .last()
+        .unwrap_or("exited with an error")
+        .to_string()
+}
+
 pub(crate) fn helper_cause(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = text

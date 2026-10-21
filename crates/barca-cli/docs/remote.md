@@ -175,7 +175,7 @@ materialization rows in the copy, `db_format` its metadata format. Then both fil
 uploaded to `<uri>/<env>/state/backups/` (one `python -m barca._state backup` per backup). Each
 place keeps the five newest backups, pruned after a successful write; only files named like a
 backup are ever removed. At the end of a run stderr says
-`[barca] backed up the metadata DB (48.0 KB) to <uri>/<env>/state/backups/<name> in 0.31s`.
+`[barca] backed up the metadata DB (49.2 KB) to <uri>/<env>/state/backups/<name> in 0.31s`.
 
 A backup that does not reach the store never fails the run. At the end of a run it is a warning,
 `[barca] warning: the metadata backup was not uploaded: backup to <store> failed: <why>; the run
@@ -194,8 +194,8 @@ barca state backups --json
 
 ```
 #  NAME                                  WHERE  SIZE     ROWS  RUN
-1  2026-10-14T18-02-11.482Z-3f9a1c2e.db  both   48.0 KB  412   7f30b3e9
-2  2026-10-14T18-01-10.907Z-3f9a1c2e.db  both   47.5 KB  401   7f30b3e9
+1  2026-10-14T18-02-11.482Z-3f9a1c2e.db  both   49.2 KB  412   7f30b3e9
+2  2026-10-14T18-01-10.907Z-3f9a1c2e.db  both   48.6 KB  401   7f30b3e9
 ```
 
 `where` is `local`, `store` or `both`; `agree` (JSON) says whether both copies have the same
@@ -307,9 +307,9 @@ configured (`barca docs cache`, "Environments"):
 
 ```
 [barca] env default (built-in default); artifact store s3://bucket/proj/default/artifacts
-[barca] fetched 1 cached artifact (672.8 KB) in 0.1s
-[barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
-[barca] backed up the metadata DB (48.0 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11.482Z-3f9a1c2e.db in 0.31s
+[barca] fetched 1 cached artifact (688.9 KB) in 0.1s
+[barca] uploaded 2 artifacts (688.9 KB); waited 0.0s at end of run
+[barca] backed up the metadata DB (49.2 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11.482Z-3f9a1c2e.db in 0.31s
 ```
 
 ## When an upload fails after the steps succeeded

@@ -1177,8 +1177,7 @@ async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, Ba
     let run = &post.run;
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
-    conn.execute("BEGIN IMMEDIATE", ()).await.map_err(failed)?;
-    let written = async {
+    let bytes_changed = db::with_tx(&conn, "BEGIN IMMEDIATE", "ledger post", async {
         conn.execute(
             "INSERT INTO runs (run_id, command, files, target, status, steps_total, \
              steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, host, \
@@ -1262,19 +1261,10 @@ async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, Ba
             .map_err(failed)?;
         }
         Ok::<_, BarcaError>(bytes_changed)
-    }
-    .await;
-    match written {
-        Ok(bytes_changed) => {
-            conn.execute("COMMIT", ()).await.map_err(failed)?;
-            Ok(PostAccepted {
-                run_id,
-                bytes_changed,
-            })
-        }
-        Err(e) => {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            Err(e)
-        }
-    }
+    })
+    .await?;
+    Ok(PostAccepted {
+        run_id,
+        bytes_changed,
+    })
 }

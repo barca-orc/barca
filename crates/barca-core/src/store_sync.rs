@@ -3,8 +3,8 @@
 
 use crate::cache::BLOCKED_ARTIFACT_PATH;
 use crate::dispatch;
+use crate::gc::size::human;
 use crate::recover;
-use crate::report::fmt_bytes;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -173,7 +173,7 @@ impl StoreSync {
                 "[barca] fetched {} cached artifact{} ({}) in {:.1}s",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
-                fmt_bytes(report.bytes),
+                human(report.bytes),
                 started.elapsed().as_secs_f64()
             );
             crate::lines::Lines::current().note(pb, &msg);
