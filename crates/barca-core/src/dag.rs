@@ -322,6 +322,26 @@ fn norm_path(p: &std::path::Path) -> String {
         .replace('\\', "/")
 }
 
+/// Whether `dir` (root-relative; the root is the working directory) is a package: every
+/// directory from the root down to it has an `__init__.py`. The root itself is not.
+fn in_package(dir: &std::path::Path) -> bool {
+    use std::path::Component;
+    let mut current = std::path::PathBuf::new();
+    let mut any = false;
+    for component in dir.components() {
+        match component {
+            Component::CurDir => continue,
+            Component::Normal(part) => current.push(part),
+            _ => return false,
+        }
+        if !current.join("__init__.py").is_file() {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 fn file_dir(file: &str) -> std::path::PathBuf {
     std::path::Path::new(file)
         .parent()
@@ -383,7 +403,7 @@ impl Resolver {
     }
 
     /// Candidate files for `module` imported from `from_file`, most specific first.
-    fn module_files(from_file: &str, module: &str) -> Vec<std::path::PathBuf> {
+    pub(crate) fn module_files(from_file: &str, module: &str) -> Vec<std::path::PathBuf> {
         let level = module.chars().take_while(|c| *c == '.').count();
         let rest = module[level..].replace('.', "/");
         let mut bases = Vec::new();
@@ -393,6 +413,11 @@ impl Resolver {
                 base = base.join("..");
             }
             bases.push(base);
+        } else if in_package(&file_dir(from_file)) {
+            // A file inside a package is imported by its dotted name with only the root on
+            // the import path (`project_modules::PipelineLayout`), so `from pkg.mod import x`
+            // in `pkg/a.py` is `pkg/mod.py`, never `pkg/pkg/mod.py`.
+            bases.push(std::path::PathBuf::new());
         } else {
             bases.push(file_dir(from_file));
             bases.push(std::path::PathBuf::new());
@@ -433,9 +458,10 @@ impl Resolver {
                     return Ok(i);
                 }
                 match self.unique(name) {
+                    // Name the file the import reaches, not the first path tried (#551).
                     Err(Miss::NotFound) => Err(Miss::NotInModule {
                         module: module.clone(),
-                        file: norm_path(&files[0]),
+                        file: norm_path(files.iter().find(|f| f.is_file()).unwrap_or(&files[0])),
                     }),
                     other => other,
                 }
