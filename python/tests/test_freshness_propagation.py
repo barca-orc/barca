@@ -114,7 +114,8 @@ def _write(root: Path, name: str, value: str) -> None:
 def _rows(root: Path, status: str = "success") -> dict[str, int]:
     """Materializations per node with `status`; empty while the database is not there yet."""
     try:
-        db = sqlite3.connect(root / ".barca" / "metadata.db")
+        # Read-only: a plain connect would create an empty file before the server does.
+        db = sqlite3.connect(f"file:{root / '.barca' / 'metadata.db'}?mode=ro", uri=True)
         try:
             return {
                 node.rsplit(":", 1)[1]: count
@@ -243,7 +244,11 @@ def test_a_tick_brings_the_always_nodes_below_a_sensor_up_to_date_in_one_run(tmp
         jobs = serve.schedule()
         assert set(jobs) == {"inbox"}, jobs
         assert jobs["inbox"]["failures"] == 0 and jobs["inbox"]["failing"] is False
-        run = serve.get(f"/runs/{jobs['inbox']['last_run']}")
+        # The latest tick may still be going (one fires every second): wait for its outcome.
+        last = jobs["inbox"]["last_run"]
+        run = _wait(
+            "the last tick's outcome", lambda: (r := serve.get(f"/runs/{last}"))["outcome"] and r
+        )
         ids = {step["id"].rsplit(":", 1)[1] for step in run["outcome"]["steps"]}
         assert ids == {"inbox", "orders", "summary", "send_report"}, run
         # One run with several targets, recorded as the schedule's tick (#469).
@@ -264,7 +269,13 @@ def test_manual_pins_itself_and_a_refresh_lets_the_next_tick_through(tmp_path):
         _wait("a few sensor polls", lambda: _rows(tmp_path).get("prices", 0) >= 2)
         rows = _rows(tmp_path)
         assert "baseline" not in rows and "report" not in rows, rows
-        jobs = serve.schedule()
+        # The latest tick may still be going (one fires every second).
+        jobs = _wait(
+            "a finished tick",
+            lambda: (
+                (j := serve.schedule())["prices"]["last_status"] not in ("pending", "running") and j
+            ),
+        )
         assert jobs["prices"]["last_status"] == "complete", jobs
         run = serve.get(f"/runs/{jobs['prices']['last_run']}")
         assert run["status"] == "success", run

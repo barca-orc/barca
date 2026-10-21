@@ -325,6 +325,27 @@ pub(crate) fn judge_json(pid: Option<i64>, owner_json: &str, on: &dyn Observer) 
     }
 }
 
+/// Whether the run recorded with `pid`, `host` and `owner_json` (the `runs.owner` column) was
+/// started by this process: its pid, and the same kernel, pid namespace and start time (or,
+/// for a row that recorded no owner, the same host).
+pub(crate) fn is_this_process(pid: Option<i64>, host: &str, owner_json: &str) -> bool {
+    let me = i64::from(std::process::id());
+    if pid != Some(me) {
+        return false;
+    }
+    if owner_json.is_empty() {
+        return host == crate::db::local_host();
+    }
+    match serde_json::from_str::<Identity>(owner_json) {
+        Ok(id) => {
+            id.boot == sys::boot_id()
+                && id.pidns == sys::namespace("pid")
+                && id.start == sys::start_time(me)
+        }
+        Err(_) => false,
+    }
+}
+
 /// The marker token named by a `runs.owner` value, if any.
 pub(crate) fn token_of(owner_json: &str) -> Option<String> {
     serde_json::from_str::<Identity>(owner_json)

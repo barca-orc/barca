@@ -526,8 +526,9 @@ gets `last_fired` set to the time the server first started with it, so it is not
 though nothing has run. `last_run` is the most recent scheduled `run_id` and `last_status` its state
 (`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet).
 
-A tick is skipped while a run of the same node is pending or running, whether the scheduler or
-an HTTP request started it (a run of every asset and sensor counts for scheduled assets and
+A tick is skipped while a run of the same node is pending or running, whether the scheduler, an
+HTTP request or a `barca get` / `barca run` on the same project (`.barca/`, its process alive)
+started it (a run of every asset and sensor counts for scheduled assets and
 sensors, not tasks), and while the job is paused. `last_skipped` is the time of the last skipped
 tick (unix epoch seconds), `skip_reason` why (`in_flight` or `paused`) and `skipped_for` the
 `run_id` of the run that was in flight (`null` for a pause); they are `null` until a tick is

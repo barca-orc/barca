@@ -62,6 +62,14 @@ and these tags are available on the same releases page.
   `barca state restore --from <the moved file>`: `--from` now also takes a database file's path.
   Experimental.
 
+### Bug Fixes
+
+- `barca serve` skips a cron tick while a `barca get` or `barca run` started from a shell on the
+  same project (the same `.barca/`) is running the same node, as it does for a run started over
+  HTTP (#479): the skip names the CLI run's id on stderr, in `GET /schedule` (`skipped_for`) and
+  on the skipped `barca.run` span. A `running` row whose process is gone (a killed run) does not
+  block. A run now records its job (`runs.job`) when it starts, not only when it ends.
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking

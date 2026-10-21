@@ -287,8 +287,10 @@ last run id, last status and consecutive failed ticks
   (`[barca] catch-up run job.py:refresh → ...`). Ticks missed during a long outage are not
   replayed one for one. A job seen for the first time waits for its next tick.
 - **No overlap.** If a run of the job's node is pending or running when a tick arrives, that
-  tick is skipped, not queued, whoever started the run: an earlier tick, or `POST /runs` naming
-  the node or getting every asset and sensor (so not a scheduled task). The server logs
+  tick is skipped, not queued, whoever started the run: an earlier tick, `POST /runs` naming
+  the node or getting every asset and sensor (so not a scheduled task), or a `barca get` /
+  `barca run` of the node from a shell on the same project (the same `.barca/`) whose process
+  is still alive. A `running` row left by a killed CLI run does not block. The server logs
   `[barca] scheduled run job.py:refresh skipped — run 1b942bb33182 of the same node still in
   flight`, `GET /schedule` reports it as `last_skipped`, `skip_reason: "in_flight"` and
   `skipped_for` (in memory only), and telemetry sends a `barca.run` span with status `skipped`.
