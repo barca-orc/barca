@@ -192,7 +192,7 @@ worker count is read once, at server startup, from the environment.
 | `partitioned_fan_in` | 100 | 50 partitions × 2 assets, 1:1 partition-aligned chain | Parallel partitions |
 | `collect_fan_in` | 51 | 50 partitions → 1 (`collect()`, many-to-one gather) | Parallel partitions |
 | `partitioned_10k` | ~10k | Docker-based cross-framework | Parallel partitions |
-| `partition_scaling` | 3 × N keys (2k, 20k) | 3 assets × N partitions, cold and warm, barca only (#345) | Parallel partitions |
+| `partition_scaling` | 3 × N keys (2k, 20k) | 3 assets × N partitions, cold and warm, barca only (#345); `FAIL_HALF=1` fails every odd key (#461) | Parallel partitions |
 
 ### Dynamic dispatch & resilience (v0.2.0)
 

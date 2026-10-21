@@ -130,6 +130,73 @@ pub struct ParallelGroup {
     pub result_dir: Option<std::path::PathBuf>,
 }
 
+// ─── Ready queue ──────────────────────────────────────────────────────────────
+
+/// The global ready queue: FIFO order plus a membership set, so taking an item out (a
+/// skipped dependent, an abandoned branch) costs O(1) instead of a scan of the queue (#461).
+/// A removed item leaves a stale entry in `order`, dropped when it reaches the front.
+#[derive(Debug, Default)]
+struct ReadyQueue {
+    order: VecDeque<ItemId>,
+    /// The items actually queued. `order` holds each of them once, plus stale entries.
+    queued: HashSet<ItemId>,
+    /// Queue elements touched (pushed, popped, looked up or removed), so a test can hold the
+    /// cost of skipping many failed keys to linear (#461).
+    #[cfg(test)]
+    ops: usize,
+}
+
+impl ReadyQueue {
+    fn touch(&mut self) {
+        #[cfg(test)]
+        {
+            self.ops += 1;
+        }
+    }
+
+    /// Queue `id` at the back. An item already queued keeps its place.
+    fn push_back(&mut self, id: ItemId) {
+        self.touch();
+        if self.queued.insert(id) {
+            self.order.push_back(id);
+        }
+    }
+
+    /// Queue `id` at the front. An item already queued keeps its place.
+    fn push_front(&mut self, id: ItemId) {
+        self.touch();
+        if self.queued.insert(id) {
+            self.order.push_front(id);
+        }
+    }
+
+    /// The first queued item, dropping stale entries of removed items on the way.
+    fn pop_front(&mut self) -> Option<ItemId> {
+        loop {
+            self.touch();
+            let id = self.order.pop_front()?;
+            if self.queued.remove(&id) {
+                return Some(id);
+            }
+        }
+    }
+
+    fn contains(&mut self, id: ItemId) -> bool {
+        self.touch();
+        self.queued.contains(&id)
+    }
+
+    /// Take `id` out of the queue if it is there.
+    fn remove(&mut self, id: ItemId) {
+        self.touch();
+        self.queued.remove(&id);
+    }
+
+    fn len(&self) -> usize {
+        self.queued.len()
+    }
+}
+
 // ─── Coordinator ──────────────────────────────────────────────────────────────
 
 pub struct Coordinator {
@@ -140,7 +207,7 @@ pub struct Coordinator {
     /// Items waiting for deps: item → set of unsatisfied upstream ids.
     pending: HashMap<ItemId, HashSet<ItemId>>,
     /// Global ready queue — items ready to execute, not yet assigned.
-    ready: VecDeque<ItemId>,
+    ready: ReadyQueue,
     /// Items currently being executed (by some worker — we don't track which).
     executing: HashSet<ItemId>,
     /// Completed items.
@@ -190,7 +257,7 @@ impl Coordinator {
             items: HashMap::new(),
             dependents: HashMap::new(),
             pending: HashMap::new(),
-            ready: VecDeque::new(),
+            ready: ReadyQueue::default(),
             executing: HashSet::new(),
             done: HashSet::new(),
             failed: HashMap::new(),
@@ -456,14 +523,13 @@ impl Coordinator {
         let Some(group) = self.groups.get(&group_id) else {
             return;
         };
-        let waiting: Vec<ItemId> = group
-            .items
-            .iter()
-            .copied()
-            .filter(|id| self.ready.contains(id))
+        let branches = group.items.clone();
+        let waiting: Vec<ItemId> = branches
+            .into_iter()
+            .filter(|id| self.ready.contains(*id))
             .collect();
-        self.ready.retain(|id| !waiting.contains(id));
         for id in &waiting {
+            self.ready.remove(*id);
             self.skipped.insert(*id);
         }
         if let Some(group) = self.groups.get_mut(&group_id) {
@@ -896,7 +962,7 @@ impl Coordinator {
                 Some(DepKind::Data) => {
                     self.skipped.insert(dep_id);
                     self.pending.remove(&dep_id);
-                    self.ready.retain(|id| *id != dep_id);
+                    self.ready.remove(dep_id);
                     self.cascade_failure(dep_id);
                 }
                 Some(DepKind::Ordering) => {
@@ -1591,6 +1657,56 @@ mod tests {
             c.on_item_completed(id);
         }
         assert!(c.is_finished());
+    }
+
+    /// #461: skipping a failed key's dependent used to scan the whole ready queue, so half of
+    /// N keys failing while the other half waited cost about N²/4 queue touches. Counts queue
+    /// operations, not wall time, and checks the skipped set: exactly the keys that read a
+    /// failed key.
+    #[test]
+    fn skipping_dependents_of_many_failed_keys_is_linear_in_the_keys() {
+        let ops = |n: usize| {
+            let phase = partition_stream(&keys(n), &[("f:a", None), ("f:b", Some("f:a"))]);
+            let mut c = Coordinator::new();
+            assert_eq!(c.load_phase(&phase, &HashMap::new()), 2 * n);
+            // Lease the first half of a's keys and fail them while the second half is queued.
+            let leased: Vec<ItemId> = (0..n / 2).map(|_| c.next_ready().unwrap()).collect();
+            assert_eq!(c.ready_count(), n - n / 2);
+            for &id in &leased {
+                assert_eq!(
+                    c.on_item_failed(id, "boom".into(), std::time::Duration::ZERO),
+                    FailureAction::Failed
+                );
+            }
+            assert_eq!(c.ready_count(), n - n / 2, "only b's keys are skipped");
+            while let Some(id) = c.next_ready() {
+                c.on_item_completed(id);
+            }
+            assert!(c.is_finished());
+
+            let display = |id: &ItemId| c.item(*id).step_id.display();
+            let mut failed: Vec<String> = leased.iter().map(display).collect();
+            failed.sort();
+            let mut skipped: Vec<String> = c.skipped_items().iter().map(display).collect();
+            skipped.sort();
+            let expected: Vec<String> =
+                failed.iter().map(|a| a.replacen("f:a", "f:b", 1)).collect();
+            assert_eq!(
+                skipped, expected,
+                "a failed key skips only the key that reads it"
+            );
+            assert_eq!(c.done_count(), 2 * (n - n / 2));
+            c.ready.ops
+        };
+        let (small, large) = (ops(1_000), ops(10_000));
+        assert!(
+            large <= 5 * 10_000,
+            "{large} queue operations for 10,000 keys"
+        );
+        assert!(
+            large <= 11 * small,
+            "queue operations grew from {small} to {large} for ten times the keys"
+        );
     }
 
     #[test]

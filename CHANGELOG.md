@@ -159,6 +159,15 @@ and these tags are available on the same releases page.
   instead of one per partition key. A cold three-level partition chain at 20,000 keys goes from
   12.0 s to 7.1 s, and the warm run from 3.3 s to 2.5 s. The rows written are unchanged.
 
+
+### Performance
+
+- Skipping the dependents of failed partition keys no longer scans the ready queue once per
+  skipped key (#461). When half of N keys failed while the rest waited, the coordinator touched
+  the queue about N²/4 times (25 million at 10,000 keys); it now touches it about 3.5 N times.
+  The ready queue keeps a membership set, so a skipped item is taken out in O(1) and its stale
+  entry is dropped when it reaches the front. The skipped set is unchanged.
+
 ## 0.26.1 (2026-10-20)
 
 ### Removed
