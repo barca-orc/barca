@@ -527,9 +527,9 @@ impl WorkerPool {
                 // A worker that is starting fails when its process exits or its deadline
                 // passes, whichever comes first.
                 _ = start_watch.tick(), if !self.pending.is_empty() => {
-                    if !self.fail_dead_starts().is_empty() {
-                        self.assign_ready(coord, cost, cancel).await;
-                    }
+                    // Not started again here: a worker that cannot start would be started
+                    // over and over. With no worker left, the check above ends the phase.
+                    self.fail_dead_starts();
                     continue;
                 }
                 _ = async {

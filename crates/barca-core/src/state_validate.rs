@@ -31,6 +31,7 @@
 //! is an error of this machine, not a verdict on the object, and is reported as such.
 
 use crate::BarcaError;
+use std::collections::HashMap;
 use std::fs;
 use turso::{Connection, Database, Value};
 
@@ -294,61 +295,112 @@ pub(crate) async fn legacy_schema(conn: &Connection) -> Result<Result<(), String
 }
 
 async fn schema_columns(conn: &Connection, legacy: bool) -> Result<Result<(), String>, BarcaError> {
-    let failed = |e| BarcaError::Db(format!("failed to read the schema of the copy: {e}"));
-    for (table, columns) in TABLES {
-        // (name, must be given a value by every insert)
-        let mut found: Vec<(String, bool)> = Vec::new();
+    Ok(Schema::read(conn).await?.columns_fit(legacy))
+}
+
+/// What a database has: the columns of each of barca's [`TABLES`] and every table and index.
+/// Read once, with one statement per table and one for the rest, and judged without reading
+/// it again (#560: opening the metadata DB read each table's columns twice).
+pub(crate) struct Schema {
+    /// Each table's (column, must be given a value by every insert); empty for a missing table.
+    columns: HashMap<&'static str, Vec<(String, bool)>>,
+    /// (type, name) of every table and index.
+    objects: std::collections::HashSet<(String, String)>,
+}
+
+impl Schema {
+    pub(crate) async fn read(conn: &Connection) -> Result<Self, BarcaError> {
+        let failed = |e| BarcaError::Db(format!("failed to read the metadata schema: {e}"));
+        let mut columns = HashMap::new();
+        for (table, _) in TABLES {
+            let mut found: Vec<(String, bool)> = Vec::new();
+            let mut rows = conn
+                .query(&format!("PRAGMA table_info({table})"), ())
+                .await
+                .map_err(failed)?;
+            while let Some(row) = rows.next().await.map_err(failed)? {
+                let name = row.get::<String>(1).map_err(failed)?;
+                let not_null = row.get::<i64>(3).unwrap_or(0) != 0;
+                let no_default = matches!(row.get_value(4), Ok(Value::Null) | Err(_));
+                let primary_key = row.get::<i64>(5).unwrap_or(0) != 0;
+                found.push((name, not_null && no_default && !primary_key));
+            }
+            drop(rows);
+            columns.insert(*table, found);
+        }
+        let mut objects = std::collections::HashSet::new();
         let mut rows = conn
-            .query(&format!("PRAGMA table_info({table})"), ())
+            .query("SELECT type, name FROM sqlite_schema", ())
             .await
             .map_err(failed)?;
         while let Some(row) = rows.next().await.map_err(failed)? {
-            let name = row.get::<String>(1).map_err(failed)?;
-            let not_null = row.get::<i64>(3).unwrap_or(0) != 0;
-            let no_default = matches!(row.get_value(4), Ok(Value::Null) | Err(_));
-            let primary_key = row.get::<i64>(5).unwrap_or(0) != 0;
-            found.push((name, not_null && no_default && !primary_key));
+            objects.insert((
+                row.get::<String>(0).map_err(failed)?,
+                row.get::<String>(1).map_err(failed)?,
+            ));
         }
-        drop(rows);
-        // Older versions did not yet have logs/cost/schedule tables. Missing tables
-        // are created by the additive migration; existing malformed tables are not.
-        if legacy && found.is_empty() {
-            continue;
-        }
-        // The additive migration adds these, so a database may lack them before it runs.
-        let additions = if legacy {
-            match *table {
-                "runs" => crate::db_schema::RUN_COLUMNS,
-                "materializations" => crate::db_schema::MATERIALIZATION_COLUMNS,
-                "schedule_state" => crate::db_schema::SCHEDULE_STATE_COLUMNS,
-                _ => &[],
-            }
-        } else {
-            &[]
-        };
-        let row_id = WITH_ROW_ID.contains(table).then_some("id");
-        if let Some(missing) = row_id.iter().chain(columns.iter()).find(|c| {
-            !found.iter().any(|(name, _)| name == *c)
-                && !additions
-                    .iter()
-                    .any(|definition| definition.split_whitespace().next() == Some(**c))
-        }) {
-            return Ok(Err(format!(
-                "its `{table}` table has no `{missing}` column, which this version of barca needs"
-            )));
-        }
-        if let Some((unknown, _)) = found
-            .iter()
-            .find(|(name, required)| *required && !columns.contains(&name.as_str()))
-        {
-            return Ok(Err(format!(
-                "its `{table}` table has a column `{unknown}` that must be filled and that this \
-                 version of barca ({}) does not know: it was written by a newer barca",
-                env!("CARGO_PKG_VERSION")
-            )));
-        }
+        Ok(Self { columns, objects })
     }
-    Ok(Ok(()))
+
+    /// The columns of `table` (empty when there is no such table).
+    pub(crate) fn columns(&self, table: &str) -> impl Iterator<Item = &str> {
+        self.columns
+            .get(table)
+            .into_iter()
+            .flatten()
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Whether there is a `kind` (`table`, `index`) named `name`.
+    pub(crate) fn has(&self, kind: &str, name: &str) -> bool {
+        self.objects.contains(&(kind.to_string(), name.to_string()))
+    }
+
+    /// Rule 4 ([`usable_schema`]), or with `legacy`, before the additive migration
+    /// ([`legacy_schema`]).
+    pub(crate) fn columns_fit(&self, legacy: bool) -> Result<(), String> {
+        for (table, columns) in TABLES {
+            let found = &self.columns[table];
+            // Older versions did not yet have logs/cost/schedule tables. Missing tables
+            // are created by the additive migration; existing malformed tables are not.
+            if legacy && found.is_empty() {
+                continue;
+            }
+            // The additive migration adds these, so a database may lack them before it runs.
+            let additions = if legacy {
+                match *table {
+                    "runs" => crate::db_schema::RUN_COLUMNS,
+                    "materializations" => crate::db_schema::MATERIALIZATION_COLUMNS,
+                    "schedule_state" => crate::db_schema::SCHEDULE_STATE_COLUMNS,
+                    _ => &[],
+                }
+            } else {
+                &[]
+            };
+            let row_id = WITH_ROW_ID.contains(table).then_some("id");
+            if let Some(missing) = row_id.iter().chain(columns.iter()).find(|c| {
+                !found.iter().any(|(name, _)| name == *c)
+                    && !additions
+                        .iter()
+                        .any(|definition| definition.split_whitespace().next() == Some(**c))
+            }) {
+                return Err(format!(
+                    "its `{table}` table has no `{missing}` column, which this version of barca needs"
+                ));
+            }
+            if let Some((unknown, _)) = found
+                .iter()
+                .find(|(name, required)| *required && !columns.contains(&name.as_str()))
+            {
+                return Err(format!(
+                    "its `{table}` table has a column `{unknown}` that must be filled and that this \
+                     version of barca ({}) does not know: it was written by a newer barca",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

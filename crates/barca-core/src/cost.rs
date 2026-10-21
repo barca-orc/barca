@@ -79,6 +79,8 @@ pub struct CostModel {
     /// partition key inherit the typical cost of its siblings.
     per_base: HashMap<String, NodeEstimate>,
     comm_cost_seconds: f64,
+    /// Nodes observed this run: the only estimates that can differ from what was seeded.
+    observed: std::collections::HashSet<String>,
 }
 
 impl CostModel {
@@ -92,6 +94,7 @@ impl CostModel {
             per_node: HashMap::new(),
             per_base: HashMap::new(),
             comm_cost_seconds,
+            observed: Default::default(),
         }
     }
 
@@ -139,6 +142,7 @@ impl CostModel {
     pub fn observe(&mut self, node_id: &str, wall_seconds: f64, cpu_seconds: f64, rss_bytes: u64) {
         let wall = wall_seconds.max(0.0);
         let base = crate::StepId::parse(node_id).base_id().to_string();
+        self.observed.insert(node_id.to_string());
         Self::fold(
             self.per_node.entry(node_id.to_string()),
             wall,
@@ -222,9 +226,13 @@ impl CostModel {
         k.min(remaining_tasks)
     }
 
-    /// Snapshot every exact-node estimate, for run-end persistence.
+    /// Snapshot the exact-node estimates this run changed, for run-end persistence. A seeded
+    /// estimate no step updated is already in the database as it is: writing it again was one
+    /// upsert per node on every run, cached ones included (#560).
     pub fn snapshot(&self) -> impl Iterator<Item = (&String, &NodeEstimate)> {
-        self.per_node.iter()
+        self.per_node
+            .iter()
+            .filter(|(node_id, _)| self.observed.contains(*node_id))
     }
 }
 
@@ -245,6 +253,7 @@ mod tests {
             per_node: HashMap::new(),
             per_base: HashMap::new(),
             comm_cost_seconds: DEFAULT_COMM_COST_SECONDS,
+            observed: Default::default(),
         }
     }
 
@@ -398,5 +407,25 @@ mod tests {
         let (_, e) = m.snapshot().next().unwrap();
         assert_eq!(e.max_rss_bytes, 500);
         assert_eq!(e.samples, 2);
+    }
+
+    /// #560: a seeded estimate that no step of the run updated is not written back.
+    #[test]
+    fn the_snapshot_holds_only_what_this_run_observed() {
+        let mut m = model();
+        let seeded = NodeEstimate {
+            estimate_seconds: 1.0,
+            cpu_seconds: 1.0,
+            max_rss_bytes: 0,
+            samples: 3,
+        };
+        m.seed([
+            ("f.py:a".to_string(), seeded),
+            ("f.py:b".to_string(), seeded),
+        ]);
+        assert_eq!(m.snapshot().count(), 0);
+        m.observe("f.py:b", 2.0, 2.0, 0);
+        let ids: Vec<&String> = m.snapshot().map(|(id, _)| id).collect();
+        assert_eq!(ids, ["f.py:b"]);
     }
 }

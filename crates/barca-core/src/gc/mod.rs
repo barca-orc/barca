@@ -297,6 +297,13 @@ struct State {
     short_at: u64,
     #[serde(default)]
     short_size: u64,
+    /// The size the last check after a command found under the limit, and that limit: a
+    /// command that wrote nothing ([`Own::wrote_nothing`]) under the same limit is not checked
+    /// again (#560). 0 when unknown.
+    #[serde(default)]
+    checked_size: u64,
+    #[serde(default)]
+    checked_limit: u64,
 }
 
 /// How long a check that could not get under the limit is not repeated (unless the size grows
@@ -309,6 +316,17 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Record that a check found `size` under `limit` ([`State::checked_size`]).
+fn checked(project: &Project, size: u64, limit: u64) {
+    if let Some(mut state) = read_state(project)
+        && (state.checked_size, state.checked_limit) != (size, limit)
+    {
+        state.checked_size = size;
+        state.checked_limit = limit;
+        write_state(project, &state);
+    }
 }
 
 fn read_state(project: &Project) -> Option<State> {
@@ -672,6 +690,10 @@ pub(crate) struct Own {
     pub recorded: HashSet<String>,
     pub run_hashes: HashSet<String>,
     pub manual: HashSet<String>,
+    /// The command added nothing to `.barca/`: no step ran and nothing was fetched from a
+    /// store. Its check is skipped when the last check, under the same limit, found the cache
+    /// under it (`State::checked_size`).
+    pub wrote_nothing: bool,
 }
 
 /// The `freshness=Manual` nodes of the project, read statically (no import) from the files a
@@ -1004,9 +1026,18 @@ async fn check_in(
         .as_ref()
         .is_some_and(|s| now_secs().saturating_sub(s.surveyed_at) < SURVEY_EVERY.as_secs());
     if let (true, Some(state)) = (fresh, &state) {
+        if own.wrote_nothing
+            && state.checked_limit == limit
+            && state.checked_size > 0
+            && state.checked_size <= limit
+        {
+            remember(state.checked_size, limit);
+            return Ok(None);
+        }
         let size = estimate(project, &envs, state).await?;
         remember(size, limit);
         if size <= limit {
+            checked(project, size, limit);
             return Ok(None);
         }
         // Eviction could not get under the limit a moment ago and nothing has grown since:
@@ -1028,6 +1059,7 @@ async fn check_in(
     let survey = survey(project, &envs).await?;
     remember(survey.total, limit);
     if survey.total <= limit {
+        checked(project, survey.total, limit);
         return Ok(None);
     }
     let pinned = pinned_except(&project.root, pin.map(|p| p.id));
