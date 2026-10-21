@@ -1,24 +1,48 @@
 <h1 align="center">barca</h1>
 
-<p align="center">Runs Python functions as a dependency graph and caches their results.</p>
+<p align="center"><strong>An embedded orchestrator for Python: a binary and a directory, like DuckDB or SQLite.<br />
+No server, no config; it runs what changed and caches the rest.</strong></p>
+
+<p align="center">
+  <a href="https://barca.sh">Docs</a> ·
+  <a href="https://barca.sh/guide/">Guide</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://barca.sh/contributing/development/">Contributing</a>
+</p>
 
 <p align="center">
   <a href="https://pypi.org/project/barca/"><img alt="PyPI" src="https://img.shields.io/pypi/v/barca?style=flat-square&color=3572A5" /></a>
-  <img alt="Python" src="https://img.shields.io/badge/python-%E2%89%A53.12-3572A5?style=flat-square" />
-  <img alt="Rust" src="https://img.shields.io/badge/rust-2024_edition-dea584?style=flat-square" />
-  <a href="https://github.com/barca-orc/barca/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/barca-orc/barca?style=flat-square" /></a>
+  <a href="https://pypi.org/project/barca/"><img alt="Python" src="https://img.shields.io/badge/python-%E2%89%A53.12-3572A5?style=flat-square" /></a>
+  <a href="https://github.com/barca-orc/barca/commits/main"><img alt="CI" src="https://img.shields.io/github/check-runs/barca-orc/barca/main?nameFilter=CI%20%2F%20test&label=CI&style=flat-square" /></a>
+  <a href="https://barca.sh"><img alt="Docs" src="https://img.shields.io/badge/docs-barca.sh-3572A5?style=flat-square" /></a>
+  <a href="CHANGELOG.md"><img alt="Status: pre-1.0" src="https://img.shields.io/badge/status-pre--1.0-orange?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/barca-orc/barca?style=flat-square" /></a>
 </p>
 
----
+> **Status: pre-1.0.** A breaking change to the CLI ships in a minor release with a "Breaking"
+> line in the [changelog](CHANGELOG.md).
 
-Barca runs Python functions as a dependency graph and caches their results.
+You mark Python functions with `@asset`, `@sensor` or `@task` and declare their inputs. The
+`barca` binary, written in Rust, reads your source without importing it, works out what is
+stale, and runs it in Python worker processes. Every result is a file under `.barca/`.
+`barca serve` adds cron schedules, an HTTP API and a web UI when you want them.
 
-You mark functions with `@asset`, `@sensor` or `@task` and declare their inputs. The `barca`
-binary, written in Rust, reads your source without importing it, works out what needs to run,
-and runs it in Python worker processes. Every result is a file under `.barca/`, and an asset
-runs again only when its code, the project code it calls, or its inputs change; sensors and
-tasks run every time. There is no server to run and no configuration file to write;
-`barca serve` adds schedules, an HTTP API and a web UI when you want them.
+<p align="center">
+  <img alt="A terminal: barca get runs two steps, a second barca get runs none, and after an edit barca status marks summary stale with the reason changed: code" src="site/public/readme/terminal.svg" width="820" />
+</p>
+
+## Why barca
+
+- **Reads your code without importing it.** The graph comes from parsing the source, so `list`,
+  `status` and `--dry-run` do not run your modules.
+- **One install, no server.** `uv add barca` brings the binary, the decorators and a Python API;
+  the state is one directory, `.barca/`.
+- **Recomputes only what changed.** An asset runs again when its code, the project code it
+  calls, or its inputs change; everything else comes from the cache.
+- **Milliseconds of overhead.** A one-asset pipeline runs in 64 ms from process start to exit,
+  against 1.07 s for Dagster and about 5 s for Prefect and Airflow on the same machine
+  ([comparison](https://barca.sh/comparisons/framework-comparison/#run-times-nothing-cached));
+  0.28.3 then cut barca's time for it from 86 to 47 ms.
 
 ## Install
 
@@ -54,8 +78,8 @@ def summary(data: list[dict]) -> dict:
 
 ```
 $ barca get pipeline.py
-[barca] 2/2 steps | done in 0.0s
-Run 14d44f778fda | all assets in 0.073s (2 steps, 1 phase)
+[barca] 2/2 steps | done in 0.1s
+Run dc8e11f9d49e | all assets in 0.064s (2 steps, 1 phase)
 
 .barca/artifacts/pipeline.py--summary/2d10c4c5ef45...json
   {
@@ -64,7 +88,7 @@ Run 14d44f778fda | all assets in 0.073s (2 steps, 1 phase)
   }
 
 $ barca get pipeline.py
-Run 14d7f1ead5ae | all assets in 0.019s (0 steps, 1 phase)
+Run dc8f6d863e28 | all assets in 0.003s (0 steps, 1 phase)
 ...
 ```
 
@@ -76,19 +100,20 @@ Change `summary` (say, `"total"` becomes `"sum"`) and ask what is stale. `status
 ```
 $ barca status
 NAME      KIND   STATE   WHY            LAST RUN                               SHAPE           DEPS
-raw_data  asset  cached  materialized   success 2026-10-21 02:41:21 UTC 0.00s  3 rows x 1 col  -
-summary   asset  stale   changed: code  success 2026-10-21 02:41:21 UTC 0.00s  dict (2 keys)   raw_data
+raw_data  asset  cached  materialized   success 2026-10-21 19:52:47 UTC 0.00s  3 rows x 1 col  -
+summary   asset  stale   changed: code  success 2026-10-21 19:52:47 UTC 0.00s  dict (2 keys)   raw_data
 
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 
 $ barca get summary
 [barca] 1/2 steps | done in 0.0s
-Run 14d473c6a264 | got 'summary' in 0.076s (1 step, 1 phase)
+Run dc8c75a5f03a | got 'summary' in 0.034s (1 step, 1 phase)
 ...
 ```
 
-Only `summary` runs again; `raw_data` comes from the cache. To recompute by hand, name the assets: `barca get summary --refresh raw_data` (and everything downstream of
-it), or `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
+Only `summary` runs again; `raw_data` comes from the cache. To recompute by hand, name the
+assets: `barca get summary --refresh raw_data` (and everything downstream of it), or
+`--refresh-all`. Do not delete files under `.barca/` to force a recompute.
 
 An asset that reads a file, a bucket or a table in its own body has the same code and inputs
 on every run, so it is served from cache even after the data changes. Data from outside comes
@@ -114,6 +139,13 @@ def orders(version: str) -> list:
 
 More: `barca docs cache` ("External data that changes in place"), which also lists what the
 run hash does not see.
+
+`barca serve` runs the same files on cron schedules, with an HTTP API and a web UI that shows
+what is cached, running and queued:
+
+<p align="center">
+  <img alt="The barca web UI listing a pipeline's six nodes: two cached, two running, one queued and a task that always runs" src="site/public/readme/ui-pipeline.png" width="820" />
+</p>
 
 From Python, `barca.get("summary")` returns the value, and the decorators return the function
 unchanged, so steps can be called and unit tested as ordinary Python.
@@ -187,9 +219,9 @@ cargo test
 
 See [Architecture](https://barca.sh/architecture/) and
 [Contributing](https://barca.sh/contributing/development/). `benchmarks/` holds the same
-pipelines written for barca, Dagster and Prefect; [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md)
-records measurements with their date and machine. Barca is pre-1.0: a breaking change to
-the CLI ships in a minor release with a "Breaking" line in the release notes.
+pipelines written for barca, Dagster, Prefect and Airflow;
+[`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) records measurements with their date and
+machine.
 
 ## License
 

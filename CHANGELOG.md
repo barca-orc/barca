@@ -62,6 +62,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   same /proc snapshots, so under load the largest process can no longer read above the tree
   (#595).
 
+### Documentation
+
+- The README opens with one headline, links to the docs, guide, changelog and contributing
+  guide, a CI badge for `main`, a docs badge and a pre-1.0 status note; a terminal image of a
+  cold run, a cached run and `barca status` after an edit; a "Why barca" list with the
+  benchmark numbers from `benchmarks/RESULTS.md`; and a screenshot of the web UI with runs in
+  progress. The images are in `site/public/readme/`. CI now also runs on pushes to `main`, so
+  the badge has a result to show.
+
 ## 0.29.0 (2026-10-21)
 
 ### Breaking
