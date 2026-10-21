@@ -660,7 +660,10 @@ def write_data(root: Path, sizes: Sizes, seed: int) -> None:
     data = root / "data"
     accounts = list(range(1, sizes.accounts + 1))
     groups = list(range(1, sizes.groups + 1))
-    items = [(g * 100 + i, g) for g in groups for i in range(1, sizes.items_per_group + 1)]
+    # Item ids are <group><index>: 101, 102, ... for group 1. From 100 items a group on (scale
+    # 34 and up) the index takes more digits, so ids stay unique across groups.
+    width = 100 if sizes.items_per_group < 100 else 10 ** len(str(sizes.items_per_group))
+    items = [(g * width + i, g) for g in groups for i in range(1, sizes.items_per_group + 1)]
     weeks = list(range(1, sizes.weeks + 1))
     B, D, V = "BIGINT", "DOUBLE", "VARCHAR"
 
