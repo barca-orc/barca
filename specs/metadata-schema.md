@@ -116,7 +116,10 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
 - `ledger_posts` (0.27.0, RFC-0007): on a machine that runs against a server's ledger, one row per
   run it posted or has yet to post (`client_run_id` primary key, `server`, the post `body` as
   JSON, `state` `unsynced` or `shared`, `server_run_id`, the last `error`, `attempts`,
-  `created_at`, `updated_at`). Unlike the tables above it is created the first time a run is
+  `created_at`, `updated_at`). Since 0.29.0 (#570) the body also carries `bytes_unchecked`, the
+  post's base node ids whose changed bytes are not a warning (a `Manual` asset), so a post sent
+  later warns as one sent at the end of its run; it is absent when empty and in older rows, and
+  never sent to the server. Unlike the tables above it is created the first time a run is
   posted, never by a reader or by `init_db`; a database without it has posted nothing, and
   readers treat that as empty.
 - `schedule_state.paused_at` and `schedule_state.paused_until` (INTEGER unix seconds, nullable,

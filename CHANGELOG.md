@@ -63,6 +63,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   aside, backups, other), and when it cannot reach its target it prints `held by:` instead of
   only "nothing to evict". The next check after a reset or restore measures `.barca/` again
   instead of trusting the last walk.
+- A run held for its uploads and posted to the server later (#507) no longer prints "the
+  function is not deterministic" for a hand-refreshed `Manual` asset when the server answers that
+  it held other bytes: the held post keeps which of its steps barca checks for changed bytes, so
+  the later post warns for the same steps as one sent at the end of its run. A post kept by 0.28
+  or earlier still warns for every step it carries (#570).
 
 ### Performance
 
