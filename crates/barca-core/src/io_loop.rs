@@ -2225,6 +2225,7 @@ mod tests {
             datadog: None,
             artifact_root: ".".to_string(),
             storage_options_json: None,
+            agent_mode: false,
         }
     }
 
