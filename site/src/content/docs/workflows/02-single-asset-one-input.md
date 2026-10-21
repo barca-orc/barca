@@ -108,7 +108,7 @@ barca status pipeline.py
 
 ```
 NAME  KIND   STATE  WHY             LAST RUN                           SHAPE  DEPS
-a     asset  stale  changed         success 2026-10-07 18:23:36 0.00s  str    -
+a     asset  stale  changed: code   success 2026-10-07 18:23:36 0.00s  str    -
 b     asset  stale  upstream_stale  success 2026-10-07 18:23:36 0.00s  str    a
 
 0 cached, 2 stale, 0 never run, 0 partial, 0 unknown, 0 always run
@@ -123,9 +123,9 @@ barca get b pipeline.py --dry-run
 ```
 Dry run: barca get b (nothing executed, nothing written)
 
-STATUS    WHY                                              STEP
-cached    -                                                pipeline.py:a
-will run  no cached result for this code and these inputs  pipeline.py:b
+STATUS    WHY            STEP
+cached    -              pipeline.py:a
+will run  changed: code  pipeline.py:b
 
 1 will run, 1 cached, 0 unknown
 ```

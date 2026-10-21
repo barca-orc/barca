@@ -251,7 +251,7 @@ fn load_files(
         }
         let pipeline = cones.pipeline(index);
         for mut node in nodes {
-            node.cone_hash = pipeline.hash(&node.function_name);
+            (node.cone_hash, node.cone_parts) = pipeline.hash_and_parts(&node.function_name);
             all_nodes.push(node);
         }
     }

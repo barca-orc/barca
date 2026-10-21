@@ -2442,6 +2442,10 @@ components:
         status: *id003
         reason: *id003
         detail: *id003
+        changed:
+          description: Dry run, a step with no cached result that succeeded before; what changed in its run hash since then (0.29.0).
+          type: array
+          items: *id003
         run_hash: *id003
         artifact: *id003
         warning: *id003
@@ -2636,6 +2640,10 @@ components:
         detail: *id003
         run_hash: *id003
         artifact: *id003
+        changed:
+          description: What changed in a stale node's run hash since its last successful materialization (0.29.0).
+          type: array
+          items: *id003
     PartitionState:
       type: object
       additionalProperties: false

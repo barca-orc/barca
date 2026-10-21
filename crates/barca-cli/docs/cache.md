@@ -15,6 +15,11 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 
 - Tasks and sensors are never served from cache. Partitioned assets are cached per key (see
   `barca docs partitions`).
+- Each successful materialization also records a short digest of each part of its hash (the
+  function, each decorator argument that counts, each helper, each input, each declared env
+  var), so `barca status` and `--dry-run` can say which part changed since then
+  (`changed: helper pipelines/common.py:bucket_ltv`; `barca docs status`). The digests explain
+  a miss; they never decide one.
 - Environment variables a function reads **without** declaring them are not part of the hash:
   changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
   (`barca docs assets`). Nodes that declare no env hash exactly as if `env=` did not exist.
@@ -366,7 +371,7 @@ file. `barca status` (`barca docs status`) names the state each node is in:
 | State | Meaning | What the next `get` does |
 |---|---|---|
 | `cached` | a result for the current run hash is recorded and its file is usable | serves it |
-| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's or `Manual` asset's output, a declared env var) or the last attempt failed | runs it |
+| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's or `Manual` asset's output, a declared env var; `cache.changed` says which) or the last attempt failed | runs it |
 | `stale`, reason `artifact_missing` | the result is recorded but its file is gone, and something needs to read it | computes it again under the same run hash ("A cached result whose artifact is missing") |
 | `stale`, reason `evicted` | the same, because the cache size limit deleted the file | computes it again ("Disk use"); a copy the artifact store holds is downloaded instead, and is not stale |
 | `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree; with a configured server, its ledger has not received the result yet | repairs that (an upload, a download) without running a step (`barca docs remote`, `barca docs server-mode`) |
@@ -489,7 +494,10 @@ Each step has an `action`:
 `reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
 `refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),
 `not_materialized` (no cached result for this code and these inputs: never run, or the code, an
-upstream or a sensor's output changed), `artifact_missing` (the result is cached, but its
+upstream or a sensor's output changed; when the step succeeded before, `changed` lists what
+differs from that success and `detail` reads `changed: code (+1 more)`, with the entries
+`barca docs status` describes; for a partitioned step, those of its first key that runs),
+`artifact_missing` (the result is cached, but its
 artifact is gone and something needs to read it) or `evicted` (the same, because the cache size
 limit deleted it). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
 `warning`. A step that reads a sensor is predicted from the sensor's last recorded output, and

@@ -2648,6 +2648,23 @@ async fn predict_steps(
         }
 
         let mut report = report_for(ctx.dag, &step, &decision, true);
+        // What changed since the last success (#558): the step, or its first key that runs.
+        let missed = match &decision {
+            Decision::Run(RunReason::NotMaterialized) if step.partition_keys.is_empty() => {
+                Some(step.step_id.display())
+            }
+            Decision::Partitioned { missing, .. } => {
+                missing.first().map(|k| k.display_id(&step.step_id.base))
+            }
+            _ => None,
+        };
+        if let Some(id) = missed
+            && let Some(changed) =
+                crate::changes::since_last_success(ctx.cache, ctx.dag, ctx.state, &id).await
+        {
+            report.detail = Some(format!("changed: {}", crate::changes::summary(&changed)));
+            report.changed = Some(changed);
+        }
         if !forced && !read_sensors.is_empty() {
             let note = read_sensors
                 .iter()
@@ -2941,9 +2958,11 @@ async fn dispatch_phase(
             if store.is_none()
                 && let Some(run_hash) = run_hashes.get(node_id)
             {
-                recorder.record(StepRow::from_artifact(
-                    node_id, run_hash, artifact, attempts,
-                ));
+                recorder.record(
+                    StepRow::from_artifact(node_id, run_hash, artifact, attempts).with_components(
+                        crate::changes::step_components_json(dag, decide_state, node_id),
+                    ),
+                );
             }
             // Sink failures never fail the asset — surface them prominently.
             if let Some(sinks) = artifact.get("sinks").and_then(|v| v.as_array()) {
@@ -2970,7 +2989,9 @@ async fn dispatch_phase(
                 && let Some(at) = s.layout.store_for(path)
             {
                 let record = recorder.after_upload(
-                    StepRow::from_artifact(node_id, run_hash, artifact, attempts),
+                    StepRow::from_artifact(node_id, run_hash, artifact, attempts).with_components(
+                        crate::changes::step_components_json(dag, decide_state, node_id),
+                    ),
                     at.clone(),
                 );
                 let snapshot = artifact
@@ -3273,6 +3294,14 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         .snapshot()
         .map(|(node_id, est)| (node_id.clone(), *est))
         .collect();
+    // What each executed step's run hash was made of, so a later status can say what changed.
+    let components: HashMap<String, String> = all_outputs
+        .keys()
+        .filter(|id| !cached_node_ids.contains(*id))
+        .filter_map(|id| {
+            crate::changes::step_components_json(dag, decide_state, id).map(|c| (id.clone(), c))
+        })
+        .collect();
     let mut ledger = RunLedger {
         run_id,
         status: if was_cancelled {
@@ -3297,6 +3326,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         all_timings,
         cached_node_ids,
         run_hashes: decide_state.run_hashes(),
+        components: &components,
         output_hashes: &decide_state.sensor_outputs,
         store_paths,
         cost_snapshot: &cost_snapshot,
@@ -3928,6 +3958,7 @@ mod store_tests {
             all_timings: &HashMap::new(),
             cached_node_ids: &std::collections::HashSet::new(),
             run_hashes: &run_hashes,
+            components: &HashMap::new(),
             output_hashes: &HashMap::new(),
             store_paths: &HashMap::new(),
             cost_snapshot: &[],
@@ -3985,6 +4016,7 @@ mod store_tests {
             all_timings: &HashMap::new(),
             cached_node_ids: &std::collections::HashSet::new(),
             run_hashes: &run_hashes,
+            components: &HashMap::new(),
             output_hashes: &HashMap::new(),
             store_paths: &store_paths,
             cost_snapshot: &[],

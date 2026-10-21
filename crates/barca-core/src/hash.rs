@@ -90,6 +90,15 @@ pub fn run_hash(
     format!("{:x}", hasher.finalize())
 }
 
+/// A short digest of `bytes` (the first 16 hex digits of its SHA-256): what a materialization
+/// records per component of its run hash, to say later which one changed (#558). Never part of
+/// a cache key.
+pub fn short_digest(bytes: &[u8]) -> String {
+    let mut hex = format!("{:x}", Sha256::digest(bytes));
+    hex.truncate(16);
+    hex
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -68,6 +68,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "status",
     "reason",
     "detail",
+    "changed",
     "run_hash",
     "artifact",
     "warning",
@@ -207,6 +208,7 @@ mod tests {
             status: s(),
             reason: s(),
             detail: s(),
+            changed: Some(Vec::new()),
             run_hash: s(),
             artifact: s(),
             artifact_mismatch: Some(true),
@@ -249,6 +251,7 @@ mod tests {
                 detail: String::new(),
                 run_hash: None,
                 artifact: None,
+                changed: None,
             },
             partitions: Some(PartitionState {
                 total: 0,

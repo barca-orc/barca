@@ -26,7 +26,14 @@ reason?: string | null,
 /**
  * The reason in words.
  */
-detail?: string | null, run_hash?: string | null,
+detail?: string | null,
+/**
+ * Dry run, a step with no cached result: what changed in its run hash since its last
+ * successful materialization (`code`, `decorator argument NAME`, `decorator NAME`,
+ * `helper FILE:NAME`, `input ID`, `sensor ID`, `env NAME`, `kind`). Absent when that
+ * materialization recorded no components (before 0.29.0) or there is none.
+ */
+changed?: Array<string> | null, run_hash?: string | null,
 /**
  * The cached artifact, when the step is served from cache.
  */

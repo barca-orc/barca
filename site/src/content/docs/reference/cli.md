@@ -200,7 +200,7 @@ exit code is still 2 and nothing runs.
 | `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
 | `--partition KEY=V[,V]` | Select keys of a partitioned target (a JSON object for compound keys); only they run, are returned and are refreshed. |
 | `--agent` | Plain progress lines on stderr in place of the progress bar. |
-| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
+| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
 | `--env <name>` | Use a named environment's cache and history. |
 
 `--no-cache` was removed in 0.24.0; use `--refresh-all`.
@@ -594,8 +594,13 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
 | `always_runs` | tasks and sensors | `task`, `sensor` |
 
-`changed` means the run hash differs from the last materialization: this function's code or its
-upstream outputs changed. barca stores only the combined hash, so it cannot say which.
+`changed` means the run hash differs from the last successful materialization, and
+`cache.changed` says what differs: `code`, `decorator argument NAME`, `decorator NAME`,
+`helper FILE:NAME` (a function or constant the code uses, in its own file or a project module),
+`input ID`, `sensor ID`, `env NAME` or `kind`. `detail` and the table's WHY column name the first
+and count the rest (`changed: helper pipelines/common.py:bucket_ltv (+1 more)`), and a dry run's
+step carries the same `changed` list. A result recorded before 0.29.0 has no record of the parts,
+and its node stays a plain `changed`.
 `artifact_missing` means the result is recorded but its artifact file is gone and a run would
 have to read it, so it would be computed again; a missing artifact that nothing reads leaves the
 node `cached` (`barca docs cache`, "A cached result whose artifact is missing").

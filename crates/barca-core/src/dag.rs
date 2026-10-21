@@ -692,6 +692,7 @@ impl Dag {
                 resolved_inputs: HashMap::new(),
                 resolved_collected: HashMap::new(),
                 definition_hash: def_hash,
+                components: crate::changes::definition_components(node),
             };
 
             let idx = graph.add_node(dag_node);
@@ -981,6 +982,7 @@ mod tests {
             byte_offset: 0,
             source_text: "def a(): return 1".to_string(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,

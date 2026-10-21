@@ -63,6 +63,10 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // and no other machine's history is required to have them (not in `state_validate::STEP_COLUMNS`).
     "evicted_at TEXT",
     "last_read_at TEXT",
+    // A short digest of each component of the run hash, as a JSON object (#558, 0.29.0): what
+    // `barca status` and `--dry-run` compare to say what changed. NULL on older rows, failed
+    // rows and rows a server's ledger received from a client.
+    "components TEXT",
 ];
 
 /// Columns of `materializations` that describe this machine's disk, not the result: shared

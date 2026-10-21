@@ -186,6 +186,10 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                 }
                 // Human form of an `unsynced` reason: `local only`, `not in ledger`.
                 _ if n.cache.state == "unsynced" => n.cache.reason.replace('_', " "),
+                // `changed: helper pipelines/common.py:bucket_ltv (+1 more)` (#558).
+                _ if n.cache.reason == "changed" && n.cache.changed.is_some() => {
+                    n.cache.detail.clone()
+                }
                 _ => n.cache.reason.clone(),
             };
             let last = n

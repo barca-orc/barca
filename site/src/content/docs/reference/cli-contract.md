@@ -160,7 +160,7 @@ default, and any aliases.
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -178,7 +178,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -1470,6 +1470,13 @@ counts every node even when `nodes` is truncated.
   `cache.reason` is `materialized`, `local_only`, `store_only`, `mismatch`, `not_in_ledger`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
   `evicted` (experimental), `no_record`, `partitions_missing`, `partitions_unknown`,
   `sensor_output_unknown`, `task` or `sensor`.
+- `cache.changed` (experimental, 0.29.0) appears on a `stale` node (reason `changed` or
+  `upstream_stale`) whose last successful materialization recorded its run-hash components: an
+  array of strings naming what differs, `code`, `decorator argument NAME`, `decorator NAME`,
+  `helper FILE:NAME` (or `helper FILE`), `input ID`, `sensor ID`, `env NAME` or `kind`, in that
+  order. With reason `changed`, `detail` is then `changed: <first>` plus ` (+N more)`. Absent for
+  a result recorded before 0.29.0. A dry run's step (`steps[].changed`) carries the same list
+  when its `reason` is `not_materialized` and the step succeeded before.
 - With a configured server (experimental, [`barca docs server-mode`](/reference/server-mode/)), `barca status` without
   `--server` or `--local` is answered by the server and each node gets `local` (boolean: this
   machine has a copy of the result). A node the server has no result for whose result this
@@ -1481,6 +1488,83 @@ counts every node even when `nodes` is truncated.
 - `shape` is `null` unless the last materialization succeeded, and is experimental: `type`, and
   by format `rows`, `columns[]`, `keys`, `key_count`, `sample` (with `--sample`), or only `note`
   when it cannot be read.
+
+#### What changed
+
+After `total`'s input `numbers` changed its code, `barca status pipeline.py --json`:
+
+<!-- BEGIN GENERATED schema status_changed -->
+| Key | Type | Present |
+|---|---|---|
+| `nodes` | array | always |
+| `nodes[]` | object | always |
+| `nodes[].cache` | object | always |
+| `nodes[].cache.changed` | array | sometimes |
+| `nodes[].cache.changed[]` | string | always |
+| `nodes[].cache.detail` | string | always |
+| `nodes[].cache.reason` | string | always |
+| `nodes[].cache.run_hash` | string | always |
+| `nodes[].cache.state` | string | always |
+| `nodes[].env` | array | always |
+| `nodes[].id` | string | always |
+| `nodes[].inputs` | array | always |
+| `nodes[].inputs[]` | string | always |
+| `nodes[].kind` | string | always |
+| `nodes[].last_materialization` | null \| object | always |
+| `nodes[].last_materialization.artifact` | string | always |
+| `nodes[].last_materialization.content_hash` | string | always |
+| `nodes[].last_materialization.created_at` | string | always |
+| `nodes[].last_materialization.elapsed_seconds` | number | always |
+| `nodes[].last_materialization.format` | string | always |
+| `nodes[].last_materialization.run_hash` | string | always |
+| `nodes[].last_materialization.size_bytes` | integer | always |
+| `nodes[].last_materialization.status` | string | always |
+| `nodes[].name` | string | always |
+| `nodes[].partitioned` | boolean | always |
+| `nodes[].shape` | null \| object | always |
+| `nodes[].shape.keys` | array | sometimes |
+| `nodes[].shape.keys[]` | string | always |
+| `nodes[].shape.rows` | integer | sometimes |
+| `nodes[].shape.type` | string | always |
+| `root` | string | always |
+| `summary` | object | always |
+| `summary.always_runs` | integer | always |
+| `summary.cached` | integer | always |
+| `summary.never_run` | integer | always |
+| `summary.partial` | integer | always |
+| `summary.stale` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
+| `target` | null | always |
+| `targets` | array | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_changed -->
+
+and `barca get total pipeline.py --dry-run --json`:
+
+<!-- BEGIN GENERATED schema get_dry_run_changed -->
+| Key | Type | Present |
+|---|---|---|
+| `command` | string | always |
+| `dry_run` | boolean | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].action` | string | always |
+| `steps[].changed` | array | always |
+| `steps[].changed[]` | string | always |
+| `steps[].detail` | string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `summary` | object | always |
+| `summary.cached` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.will_run` | integer | always |
+| `target` | string | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_dry_run_changed -->
 
 ### state backups, state restore and state reset
 

@@ -122,6 +122,12 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
 - `schedule_state.paused_at` and `schedule_state.paused_until` (INTEGER unix seconds, nullable,
   0.27.0, #435): a schedule paused with `POST /schedule/{id}/pause`; `paused_until` NULL means
   until it is resumed.
+- `materializations.components` (TEXT, nullable, 0.29.0, #558): a JSON object with a short digest
+  (16 hex digits of SHA-256) of each component of a successful row's run hash (`code`,
+  `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`, `sensor ID`,
+  `env NAME`, `kind`), which `barca status` and `--dry-run` compare to say what changed. Never
+  part of a cache key. Older rows, failed rows and rows a server's ledger receives from a client
+  keep `NULL`, and their nodes report a plain `changed`.
 - `schedule_failures (node_id, failures, failed_nodes, mark)` (0.28.0, RFC-0008 rule 9), primary
   key `node_id`: the consecutive failed ticks of one scheduled node, the nodes that failed in the
   last counted tick (a JSON array), and the highest `materializations.id` when it was counted. A

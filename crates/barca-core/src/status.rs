@@ -95,6 +95,12 @@ pub struct CacheStatus {
     /// The artifact a `get` would serve from cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
+    /// A `stale` node: what changed in its run hash since its last successful materialization
+    /// (`code`, `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`,
+    /// `sensor ID`, `env NAME`, `kind`). Absent when that materialization recorded no components
+    /// (before 0.29.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -612,6 +618,7 @@ fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
         detail: detail.into(),
         run_hash: None,
         artifact: None,
+        changed: None,
     }
 }
 
@@ -711,7 +718,7 @@ fn not_cached(
         return cache(state, "no_record", "no successful materialization recorded");
     }
     if let Some(up) = upstream_stale {
-        return cache(
+        let mut c = cache(
             state,
             "upstream_stale",
             format!(
@@ -719,12 +726,23 @@ fn not_cached(
                 short_name(up)
             ),
         );
+        c.changed = r.changed.clone();
+        return c;
     }
-    cache(
-        state,
-        "changed",
-        "code or upstream outputs changed since the last materialization (the run hash differs)",
-    )
+    let mut c = match &r.changed {
+        Some(changed) => cache(
+            state,
+            "changed",
+            format!("changed: {}", crate::changes::summary(changed)),
+        ),
+        None => cache(
+            state,
+            "changed",
+            "code or upstream outputs changed since the last materialization (the run hash differs)",
+        ),
+    };
+    c.changed = r.changed.clone();
+    c
 }
 
 /// `pipeline.py:p[k=a]` -> `k=a`.
@@ -894,6 +912,7 @@ mod tests {
                 detail: String::new(),
                 run_hash: run_hash.map(String::from),
                 artifact: None,
+                changed: None,
             },
             partitions: None,
             last_materialization: None,

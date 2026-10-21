@@ -4,6 +4,7 @@
 #[doc(hidden)]
 pub mod backup;
 pub mod cache;
+pub mod changes;
 pub mod commands;
 pub mod cone;
 pub mod config;
