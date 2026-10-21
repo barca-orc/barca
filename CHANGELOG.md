@@ -6,6 +6,12 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Testing
+
+- Three tests no longer fail by chance or by environment: the `barca state restore` refusal test waits for the server's lock to be released instead of assuming it is immediate (a child process started by another test briefly holds it) (#524); the Datadog parallel-span test counts each span once and only its own run's (ddtrace resends a payload it timed out on, and the fake Agent now serves requests concurrently) (#530); the coordination-socket tests build their fixtures under `/tmp`, so they pass when the runner's `TMPDIR` is long (#571).
+
 ## 0.28.3 (2026-10-21)
 
 ### Features
