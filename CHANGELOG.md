@@ -12,6 +12,21 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Bug Fixes
+
+- A `Manual` node refreshed by hand now reaches what reads it (#548). Affects 0.28.0 and
+  0.28.1: after `barca get fx --refresh fx` gave `fx` a new result for the same code and inputs
+  (a reference table that reads external data, the documented use of `Manual`), an asset that
+  reads it kept serving its old cached result, `barca status` said `cached`, and `barca serve`
+  ticks did the same; only a `--refresh fx` with a target below it updated it. What reads a
+  `Manual` asset now hashes its bytes as well as its run hash, as a sensor's consumers do, so
+  it is `stale` after such a refresh and the next `barca get` or tick recomputes it; a refresh
+  that gives the same bytes changes nothing below it. This holds for `--partition` and for a
+  key of a partitioned `Manual` asset too. The run hash of every asset that reads a `Manual`
+  asset changes once: each recomputes once after upgrading.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

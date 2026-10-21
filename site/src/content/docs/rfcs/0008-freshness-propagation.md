@@ -173,7 +173,10 @@ ticks.
 4. **`Manual` pins itself.** A `Manual` asset or task is never run by a tick, whether the
    tick is its own ancestor's or any other. It is not a wall: an `Always` node below it is
    still reached through it when some other input of that node changed, and reads the
-   `Manual` node's current result. A `Manual` node that has never been computed blocks what
+   `Manual` node's current result. What is below it is hashed against that result, its run
+   hash and its bytes, so once it has a new result (also a refresh by hand that gives new
+   bytes for unchanged code and inputs) everything below it is stale relative to it, exactly
+   as for any upstream (#548). A `Manual` node that has never been computed blocks what
    reads it (section 4.5).
 5. **`Schedule` stops propagation too.** A node with its own schedule is updated on its own
    ticks, not by a tick above it. Freshness answers one question, "when is this node
@@ -262,6 +265,11 @@ Implemented in #253 (PR #470). Decisions taken there, on 2026-10-20:
   included, so neither does `max_failures` (section 4.2 assumed the cron did).
 - A partitioned `Manual` node is not pinned yet, and a partitioned task below a tick always
   fires.
+- **A `Manual` asset's bytes count below it** (#548). Pinned, a `Manual` asset
+  is refreshed by hand with the same code and inputs, so its run hash does not change when a
+  refresh gives new bytes. Its consumers fold the SHA-256 of its output into their run hashes,
+  as a sensor's consumers do, and it runs in a phase before them. In 0.28.0 and 0.28.1 only
+  the run hash counted, so what read a refreshed reference table kept its old result.
 
 ## 5. Determinism, Caching & Testing
 

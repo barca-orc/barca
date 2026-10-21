@@ -1400,13 +1400,9 @@ fn collect_outputs(
                 .step_clocks
                 .insert(node_id.clone(), (finished, wall));
         }
-        // A sensor's output hash: its consumers, decided in a later phase, fold it into
-        // their run hashes (#183).
-        if session
-            .prepared
-            .dag
-            .get_node(item.step_id.base_id())
-            .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+        // A sensor's or `Manual` asset's output hash: its consumers, decided in a later
+        // phase, fold it into their run hashes (#183, #548).
+        if crate::cache::folds_output(&session.prepared.dag, item.step_id.base_id())
             && session
                 .state
                 .decide_state
@@ -2263,14 +2259,15 @@ pub(crate) async fn explain_dag_with_membership(
     state.pinned = pinned;
     // A dry run executes nothing, so it cannot know what a sensor will return. It predicts with
     // each sensor's last recorded output (#183); a consumer of a sensor with none is unknown.
+    // A `Manual` asset it would refresh is predicted the same way (#548).
     if let Some(cache) = &cache {
         let sensors: Vec<&str> = exec_plan
             .phases
             .iter()
             .flat_map(|p| &p.streams)
             .flat_map(|s| &s.steps)
-            .filter(|st| st.kind == crate::NodeKind::Sensor)
             .map(|st| st.step_id.base_id())
+            .filter(|id| crate::cache::folds_output(dag, id))
             .collect();
         state.sensor_outputs = db::last_output_hashes(cache, &sensors).await?;
     }

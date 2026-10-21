@@ -7,11 +7,11 @@ can be in, how to force a recompute, the cache size limit, and where everything 
 ## What is cached
 
 Each asset step has a **run hash**: a hash of the function's definition, its inputs' run hashes,
-the output of any sensor it reads, for partitioned assets the partition key, and the values of
-any environment variables it declares with `env=[...]`. If the hash matches a previous successful
-materialization, the artifact is reused and the function does not run. Change the function's
-code, any upstream, a sensor's output or a declared environment variable and the hash changes, so
-only the affected subgraph re-runs.
+the output of any sensor or `Manual` asset it reads, for partitioned assets the partition key,
+and the values of any environment variables it declares with `env=[...]`. If the hash matches a
+previous successful materialization, the artifact is reused and the function does not run.
+Change the function's code, any upstream, a sensor's or `Manual` asset's output or a declared
+environment variable and the hash changes, so only the affected subgraph re-runs.
 
 - Tasks and sensors are never served from cache. Partitioned assets are cached per key (see
   `barca docs partitions`).
@@ -347,7 +347,7 @@ file. `barca status` (`barca docs status`) names the state each node is in:
 | State | Meaning | What the next `get` does |
 |---|---|---|
 | `cached` | a result for the current run hash is recorded and its file is usable | serves it |
-| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's output, a declared env var) or the last attempt failed | runs it |
+| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's or `Manual` asset's output, a declared env var) or the last attempt failed | runs it |
 | `stale`, reason `artifact_missing` | the result is recorded but its file is gone, and something needs to read it | computes it again under the same run hash ("A cached result whose artifact is missing") |
 | `stale`, reason `evicted` | the same, because the cache size limit deleted the file | computes it again ("Disk use"); a copy the artifact store holds is downloaded instead, and is not stale |
 | `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree; with a configured server, its ledger has not received the result yet | repairs that (an upload, a download) without running a step (`barca docs remote`, `barca docs server-mode`) |
@@ -405,8 +405,14 @@ A `Manual` asset or task (`@asset(freshness=Manual)`) is refreshed by hand only.
 `barca get` or `barca run` reads one on the way to the target, it is not recomputed, even when
 its inputs or code changed: the run reads its latest successful result, and does not plan
 anything above it. Its step is `cached` with a `detail` saying so (`Manual: its last result is
-read as it is`, or `Manual and stale: ...`). Nodes below it are hashed against that result, so
-they are served from cache until it changes. When it is stale, stderr says how to recompute it:
+read as it is`, or `Manual and stale: ...`). Nodes below it are hashed against that result:
+its run hash and, as for a sensor, the SHA-256 of its bytes. They are served from cache until it
+changes, and once it has a new result they are stale relative to it, also when a refresh by hand
+gives new bytes for the same code and inputs (a reference table that reads external data):
+`barca status` reports them `stale` (reason `changed`), `--dry-run` predicts that they run, and
+the next `barca get` of one of them, or the next tick that reaches them, recomputes them. A
+refresh that gives the same bytes changes nothing below it. When it is stale, stderr says how to
+recompute it:
 
 ```text
 [barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
@@ -422,7 +428,10 @@ they are served from cache until it changes. When it is stale, stderr says how t
 - A `Manual` node that has never been computed cannot be read: the command exits 2 and the
   remediation is the command that computes it. `--dry-run` predicts the same.
 - Sensors are polled whenever a run needs them, whatever their freshness. A partitioned `Manual`
-  node is not pinned yet: it is checked like any other asset.
+  node is not pinned yet: it is checked like any other asset. Its keys' bytes count below it as
+  an unpartitioned one's do, so refreshing one key with new bytes
+  (`--partition region=emea --refresh sales`) makes that key of what reads it stale.
+- A `Manual` asset runs in a phase of its own, before what reads it, as a sensor does.
 - On `barca serve`, `POST /runs` (what `--server` sends) and ticks read them as they are, as
   `barca get` does (`barca docs scheduling`); the older aliases `POST /get/{target}`,
   `POST /run/{target}` and `POST /run` compute `Manual` upstreams as before.

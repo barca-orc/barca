@@ -467,7 +467,7 @@ def test_a_refreshed_manual_node_reaches_what_reads_it(tmp_path):
 
     # What reads it is stale relative to the new result: status and the dry run say so.
     cache = _status(tmp_path)["price_eur"]
-    assert cache["state"] == "stale", cache
+    assert cache["state"] == "stale" and cache["reason"] == "changed", cache
     assert _dry_run(tmp_path, "price_eur") == {"fx": "cached", "price_eur": "run"}
 
     # The next get recomputes it from the new result; fx itself is read as it is.
@@ -512,7 +512,9 @@ def test_a_refreshed_key_of_a_partitioned_manual_node_reaches_what_reads_it(tmp_
     _value(tmp_path, "table", "pipeline.py", "--partition", "r=a", "--refresh", "table")
     assert _dry_run(tmp_path, "mapped")["mapped"] == "partial"
     assert _value(tmp_path, "mapped", "pipeline.py") == {"r=a": "A2", "r=b": "B1"}
-    assert _rows(tmp_path).get("mapped") == 3
+    # Only the refreshed key below it was recomputed.
+    rows = _rows(tmp_path)
+    assert rows.get("mapped[r=a]") == 2 and rows.get("mapped[r=b]") == 1, rows
 
 
 def test_a_tick_below_a_refreshed_manual_node_reads_its_new_result(tmp_path):
