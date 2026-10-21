@@ -131,6 +131,7 @@ and these tags are available on the same releases page.
   `barca.serve.schedules`, `barca.serve.files` and `barca.serve.nodes` as DogStatsD gauges
   (`DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, or `DD_AGENT_HOST`:`DD_DOGSTATSD_PORT`), with a
   Datadog event on start and stop.
+
 ### Documentation
 
 - The site's reference pages that are manual topics (CLI Contract, Discovery, Doctor, Groups,
@@ -139,6 +140,8 @@ and these tags are available on the same releases page.
   differs from its topic (#501). This brings back in step the pages that had drifted (`barca sql`
   reads CSV and evicts its `.barca/sql-cache/` copies; `get --json` always returns a pointer), adds
   Server Mode and Groups to the sidebar, and lists the Reference pages alphabetically.
+- The README is the pitch, install, one example, the commands table and a "More" table that
+  points at `barca docs <topic>` and the site; reference detail lives in the manual (#499).
 
 
 ### Documentation
