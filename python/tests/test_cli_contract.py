@@ -79,8 +79,8 @@ def flaky(k: str) -> dict:
 # show a filled `warnings` array and the others an empty one.
 @task(inputs={"t": total, "rows": numbers})
 def report(t: dict, rows: list) -> dict:
-    print("task output")
-    return {"reported": t["total"], "title": os.environ.get("CONTRACT_REPORT_TITLE")}
+    print("task output" + os.environ.get("CONTRACT_REPORT_TITLE", ""))
+    return {"reported": t["total"]}
 
 
 @task(inputs={"t": total})

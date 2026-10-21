@@ -42,4 +42,10 @@ shape: unknown,
  * Environment variables the node declares with `env=[...]` (empty when none); their values
  * are part of its run hash.
  */
-env: Array<string>, };
+env: Array<string>,
+/**
+ * Environment variables the node's code reads without declaring them in `env=[...]`
+ * (`barca docs cache`, "Environment variables"), sorted; not part of its run hash. Absent
+ * when there are none. Experimental (#574).
+ */
+undeclared_env?: Array<string>, };

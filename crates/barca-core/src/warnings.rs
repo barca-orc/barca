@@ -177,10 +177,14 @@ fn undeclared_env_message(id: &str, names: &[String]) -> String {
     )
 }
 
-/// Print each warning on stderr as `[barca] warning: <message>`, once per process.
+/// Print each warning on stderr as `[barca] warning: <message>`, once per process. Items that
+/// share a message (the variables of one `undeclared_env` step) print one line.
 pub fn print(warnings: &[PlanWarning]) {
+    let mut printed = HashSet::new();
     for w in warnings {
-        warn_once(&w.message);
+        if printed.insert(w.message.as_str()) {
+            warn_once(&w.message);
+        }
     }
 }
 

@@ -107,7 +107,13 @@ def test_plan_and_list_read_the_whole_graph(planning_pipeline):
     plan = barca(root, "plan", "assets.py")
     steps = [s for p in plan["phases"] for st in p["streams"] for s in st["steps"]]
     assert plan["total_steps"] == len(steps) == NODES
-    assert plan["warnings"] == []
+    # No unused input; the pipeline's undeclared environment reads (settings, registries) are
+    # reported, as in the original pipeline none of them is declared (#574).
+    assert {w["kind"] for w in plan["warnings"]} == {"undeclared_env"}
+    by_node = collections.defaultdict(set)
+    for w in plan["warnings"]:
+        by_node[short(w["node"])].add(w["param"])
+    assert {"*_REGISTRY_CSV", "PLANNING_SOURCE_MODE"} <= by_node["account_exit_registry"]
 
     listed = barca(root, "list", "assets.py", "--json")
     nodes = listed["nodes"]
