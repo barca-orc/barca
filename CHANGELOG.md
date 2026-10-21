@@ -61,6 +61,15 @@ and these tags are available on the same releases page.
   terminal (`--yes` otherwise) and refuses while `barca serve` holds the environment. Undo with
   `barca state restore --from <the moved file>`: `--from` now also takes a database file's path.
   Experimental.
+- The web UI shows which pipelines and assets are running now, whoever started the run (the
+  scheduler, `POST /runs` from another client, `barca get --server`, or a `barca get` / `barca run`
+  in a shell on the same `.barca/`): a running node pulses on the graph and the pipeline page,
+  the assets list shows a Running badge with the elapsed time (keys done/total for a partitioned
+  node) linking to the run, pipelines and groups count their running nodes, and the header shows
+  "N runs in progress". `GET /state` and `GET /assets/{name}` gain a `running` field
+  (`run_id`, `triggered_by`, `started_at`, `step`, `partitions`), and `GET /runs?status=running`
+  lists the runs in flight with their `active_steps`. The UI polls `/state` every 2 s while
+  anything runs (#534).
 
 ### Bug Fixes
 

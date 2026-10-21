@@ -299,6 +299,14 @@ JSON, while malformed request parameters can produce plain-text extractor errors
 nginx or Traefik (any path prefix, live logs included): https://barca.sh/deploying/.
 Full model: https://barca.sh/scheduling/.
 
+The UI shows what is running now on every page, whoever started it (the scheduler, another
+client, a `barca get` in a shell on the same `.barca/`): a running node pulses on the graph and
+the pipeline page, the assets list shows a Running badge with the elapsed time (and keys
+done/total for a partitioned node) linking to the run, each pipeline and group counts its
+running nodes, and the header shows how many runs are in progress. It reads `GET /state`,
+whose `running` field names the run working on each node, every 2 s while anything runs.
+`GET /runs?status=running` lists the runs in flight with the nodes each is working on.
+
 The UI's Runs view shows persisted CLI, scheduled and HTTP runs, plus queued/live server
 runs, with what started each. Select a run to inspect its status, timing, steps, errors and
 logs. After triggering a node in the graph, use View run to open its details; even a cache hit
