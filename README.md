@@ -54,7 +54,6 @@ def summary(data: list[dict]) -> dict:
 
 ```
 $ barca get pipeline.py
-[barca] importing /home/me/project/pipeline.py
 [barca] 2/2 steps | done in 0.0s
 Run 14d44f778fda | all assets in 0.073s (2 steps, 1 phase)
 
@@ -70,8 +69,7 @@ Run 14d7f1ead5ae | all assets in 0.019s (0 steps, 1 phase)
 ```
 
 `get` prints the path of each result, with a preview of a small json value in a terminal. The
-second run executes 0 steps: both results come from the cache. The `importing` line is a
-worker loading your module to run its steps.
+second run executes 0 steps: both results come from the cache.
 
 Change `summary` (say, `"total"` becomes `"sum"`) and ask what is stale. `status` runs nothing:
 
@@ -84,7 +82,6 @@ summary   asset  stale   changed       success 2026-10-21 02:41:21 0.00s  dict (
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 
 $ barca get summary
-[barca] importing /home/me/project/pipeline.py
 [barca] 1/2 steps | done in 0.0s
 Run 14d473c6a264 | got 'summary' in 0.076s (1 step, 1 phase)
 ...
