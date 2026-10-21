@@ -369,15 +369,26 @@ def _user_traceback(exc) -> str:
     """
     import traceback  # only on failure: it costs ~10 ms at start-up on Python 3.14
 
+    import importlib
+
     barca_dir = str(Path(__file__).resolve().parent)
-    frames = [
-        f
-        for f in traceback.extract_tb(exc.__traceback__)
-        if not str(Path(f.filename).resolve()).startswith(barca_dir)
-    ]
-    if not frames:
-        return ""
-    return "".join(traceback.format_list(frames)).rstrip("\n")
+    importlib_dir = str(Path(importlib.__file__).resolve().parent)
+
+    def internal(filename: str) -> bool:
+        # importlib's own frames (`<frozen importlib._bootstrap>`, importlib/__init__.py) say
+        # nothing about the user's code: an import that fails shows them and nothing else.
+        if filename.startswith("<frozen importlib"):
+            return True
+        path = str(Path(filename).resolve())
+        return path.startswith(barca_dir) or path.startswith(importlib_dir)
+
+    frames = [f for f in traceback.extract_tb(exc.__traceback__) if not internal(f.filename)]
+    text = "".join(traceback.format_list(frames))
+    if isinstance(exc, SyntaxError) and exc.filename:
+        # Where the syntax error is (file, line, the source line and a caret), which no frame
+        # shows; the caller leads with "SyntaxError: message", so that last line is left out.
+        text += "".join(traceback.format_exception_only(exc)[:-1])
+    return text.rstrip("\n")
 
 
 def _emit_error(node_id, exc, elapsed=0.0):

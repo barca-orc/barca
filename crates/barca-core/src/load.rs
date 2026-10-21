@@ -117,6 +117,16 @@ fn load_blocking(
         }
     }
     let import_errors = cones.validate_imports(&nodes_by_file);
+    // Project modules that do not parse, by the pipeline file that imports them (#550). The
+    // file's steps are refused when a command plans one of them (`Dag::check_imports`).
+    let broken_imports: std::collections::HashMap<String, _> = sources
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (path, _))| {
+            let broken = cones.broken_import(index)?.clone();
+            Some((path.to_string_lossy().into_owned(), broken))
+        })
+        .collect();
     if !partial && let Some(error) = import_errors.values().next() {
         return Err(BarcaError::Usage(error.clone()));
     }
@@ -148,6 +158,7 @@ fn load_blocking(
         let groups = crate::groups::resolve(group_declarations, &all_nodes)?;
         let mut dag = Dag::build(&all_nodes)?;
         dag.groups = groups;
+        dag.broken_imports = broken_imports;
         return Ok((dag, errors));
     }
     let failed_files = errors.iter().map(|e| e.file.clone()).collect::<Vec<_>>();
@@ -161,6 +172,7 @@ fn load_blocking(
         .collect();
     resolve_dynamic_partitions(&mut healthy, python);
     let (mut dag, additional) = Dag::isolate(&healthy, &failed_files);
+    dag.broken_imports = broken_imports;
     failures.extend(additional);
     for (id, error) in failures {
         let file = all_nodes

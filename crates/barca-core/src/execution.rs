@@ -2070,6 +2070,8 @@ async fn prepare_run(
             planned.as_deref(),
         )?;
     }
+    // A planned step whose file imports a helper that does not parse cannot run (#550).
+    dag.check_imports(exec_plan.step_ids())?;
     // Plan-time warnings for the steps this command planned, before anything runs.
     let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
     crate::warnings::print(&plan_warnings);
@@ -2292,6 +2294,7 @@ pub(crate) async fn explain_dag_with_membership(
             cone.as_deref(),
         )?;
     }
+    dag.check_imports(exec_plan.step_ids())?;
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
 
     // With a server, the dry run is decided against its ledger: check the server (a dry run

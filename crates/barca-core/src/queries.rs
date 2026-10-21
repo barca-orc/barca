@@ -18,6 +18,8 @@ pub async fn plan(
     python: &std::path::Path,
 ) -> Result<PlanResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
+    // `barca plan` plans every step of the files it reads (#550).
+    dag.check_imports(dag.graph.node_weights().map(|n| n.id.as_str()))?;
     let result = plan_from_dag(&dag);
     crate::warnings::print(&result.warnings);
     Ok(result)

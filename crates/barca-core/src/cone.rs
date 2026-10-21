@@ -56,6 +56,8 @@ pub struct Module {
     definitions: OnceCell<HashMap<String, ModuleDef>>,
     star_exports: OnceCell<Option<Vec<String>>>,
     imported_stars: OnceCell<Vec<String>>,
+    /// Where the source stops parsing, if it does; known once it has been parsed.
+    syntax_error: OnceCell<Option<crate::parse::SyntaxProblem>>,
 }
 
 impl Module {
@@ -73,6 +75,7 @@ impl Module {
             definitions: OnceCell::new(),
             star_exports: OnceCell::new(),
             imported_stars: OnceCell::new(),
+            syntax_error: OnceCell::new(),
         }
     }
 
@@ -112,10 +115,33 @@ impl Module {
             package: self.package.as_deref(),
             names: BTreeSet::new(),
         };
-        if let Ok(parsed) = parse_module(&self.source) {
-            visitor::walk_body(&mut imports, &parsed.syntax().body);
+        if self.syntax_error.get().is_some_and(Option::is_some) {
+            return imports.names;
+        }
+        match parse_module(&self.source) {
+            Ok(parsed) => {
+                let _ = self.syntax_error.set(None);
+                visitor::walk_body(&mut imports, &parsed.syntax().body);
+            }
+            Err(e) => {
+                let _ = self
+                    .syntax_error
+                    .set(Some(crate::parse::SyntaxProblem::of(&self.source, &e)));
+            }
         }
         imports.names
+    }
+
+    /// Where the module's source stops parsing; `None` when it parses. Parsed at most once,
+    /// shared with [`Module::import_modules`].
+    pub(crate) fn syntax_error(&self) -> Option<&crate::parse::SyntaxProblem> {
+        self.syntax_error
+            .get_or_init(|| {
+                parse_module(&self.source)
+                    .err()
+                    .map(|e| crate::parse::SyntaxProblem::of(&self.source, &e))
+            })
+            .as_ref()
     }
 
     /// A finite literal export set, parsed once per imported project module.
