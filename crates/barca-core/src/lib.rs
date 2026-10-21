@@ -18,6 +18,7 @@ pub mod definition;
 pub mod diagnostics;
 pub mod discover;
 pub mod dispatch;
+pub mod env_reads;
 pub mod envdeps;
 pub mod envelope;
 pub mod events;

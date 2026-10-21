@@ -6,6 +6,62 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Features
+
+- Barca reports the environment variables a step reads without declaring them in `env=[...]`
+  (#574). They are found statically, in the function and in the project helpers it reaches
+  (`os.environ[...]`, `os.environ.get(...)`, `os.getenv(...)`, pydantic settings fields), and
+  reported as one `[barca] warning:` summary line per command, an `undeclared_env` item per
+  variable in the `warnings` array, and `undeclared_env` on each `get`/`run`/`--dry-run` step and
+  `status` node (experimental). Run hashes do not change: switching such a variable still serves
+  the cached result, and the warning names the `env=` fix.
+
+### Bug Fixes
+
+- With an artifact store, a `--refresh` killed after its upload and before its result was
+  recorded no longer leaves the result `unsynced` (`mismatch`) with a warning on every `get`
+  until another `--refresh` (#576). When a run fetches a store copy that is not the recorded one,
+  the store's copy wins as before, and the run now also records its digest: the warning is
+  printed once, and the next `get` and `barca status` find the result `cached`. With a server,
+  its ledger keeps its record as before.
+
+- A variable declared with `env=[...]` that is not set in barca's environment is now read from
+  the project's `.env` (#575). A pipeline that loads `.env` at import (`load_dotenv()`) was
+  hashed with the variable unset, so editing the value in `.env` served the old result; now the
+  edit re-runs the asset, and `steps[].env` and the `--agent` line report the value from `.env`.
+  The environment still wins over the file. Barca reads the file statically and does not set its
+  values for the step.
+
+### Performance
+
+- A warm run with a store checks the store at most every 5 minutes (#593). A successful startup
+  check is remembered in `.barca/gc-state.json`, per environment, store URI and storage
+  options, and a `get` or `run` within 5 minutes of it starts no transfer helper unless it
+  uploads or fetches something: no startup check and no check of its cached targets against
+  the store. A run that does transfer starts the helper when it first needs it, and checks the
+  store before its first fetch. A run after the window, another store or environment, pending
+  uploads, `--refresh`, `--refresh-all` and `get -o url` check at startup as before, and a failed
+  transfer ends the window. So a store object deleted behind barca's back is noticed within 5
+  minutes rather than by the next run (`barca docs remote`, "How often the store is checked").
+  On a 9-node project with two file sensors and a MinIO store on localhost (under `taskset`), a
+  warm `barca get` took 216 ms with the store and 54 ms without before this change, and 43 ms
+  and 42 ms after it: the store adds about 1 ms instead of 160 ms, with no helper started.
+
+- A lazy input read from the store (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`) fetches its
+  byte ranges once per machine (#577). The ranges are kept in
+  `.barca/range-cache/<run_hash>-<version>/`, keyed by the result's run hash and the store
+  object's version, so a later run that reads the same ranges fetches nothing and a rewritten
+  object is never served from stale bytes. The cache size limit counts the directories and
+  evicts them with the leftovers, least recently used first.
+
+### Testing
+
+- The remote planning-pipeline test reads the whole-tree and largest-process peak RSS from the
+  same /proc snapshots, so under load the largest process can no longer read above the tree
+  (#595).
+
 ## 0.29.0 (2026-10-21)
 
 ### Breaking

@@ -23,6 +23,10 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 - Environment variables a function reads **without** declaring them are not part of the hash:
   changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
   (`barca docs assets`). Nodes that declare no env hash exactly as if `env=` did not exist.
+  A declared variable is read from barca's environment, and when it is not set there, from the
+  project's `.env`, so a value a pipeline loads from `.env` at import is the one hashed:
+  editing it in `.env` re-runs the asset. Barca warns about the undeclared reads it can see
+  ("Environment variables" below).
 - Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files
   or the project modules they import: their `__pycache__` .pyc files are checked against a hash
   of the source, not its mtime and size, so an edit that keeps both (a same-size edit within one
@@ -31,6 +35,46 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 
 How the coordinator assembles a step's hash from its upstreams, and the guarantees that come
 with it, are specified in `specs/cache-decisions.md`.
+
+### Environment variables
+
+A declared variable (`env=["NAME"]`) is part of the run hash. A variable the code reads without
+declaring it is not, so switching it, for example pointing a registry at another CSV, leaves
+the step `cached` with the result computed from the old value. To make that visible, barca looks
+for environment reads in the step's function and in every project definition its hash follows
+(the same helpers as "What the definition covers"), without importing anything. A read counts
+when the name is a string literal:
+
+- `os.environ["NAME"]`, `os.environ.get("NAME")`, `.setdefault("NAME", ...)`, `.pop("NAME")`
+  and `"NAME" in os.environ`, also through `from os import environ`;
+- `os.getenv("NAME")`, or `getenv("NAME")` imported from `os`;
+- a pydantic settings class (`class Settings(BaseSettings)`): each field reads its name in upper
+  case after the class's `env_prefix`, or the name given by `Field(env=...)`,
+  `Field(validation_alias=...)` or `Field(alias=...)`.
+
+A name built in an f-string with a literal part (`os.environ.get(f"{name.upper()}_CSV")`) is
+reported as a pattern with `*` for the interpolated parts (`*_CSV`); declaring any name that
+matches the pattern covers it. Names that are not literal at all (`os.environ[key]`), reads in
+installed packages, and reads of variables starting with `BARCA_` are not reported.
+A variable set in the project's `.env` is reported like any other until it is declared: only a
+declared variable's `.env` value is part of the hash.
+
+The reads not declared in `env=` are reported, and nothing about caching changes:
+
+- `get`, `run`, their `--dry-run` and `plan` print one line on stderr before anything runs,
+  for the whole command, when any planned step has an undeclared read (whether it runs or is
+  served from cache): `[barca] warning: 3 steps read environment variables not declared in
+  env=: *_REGISTRY_CSV, PLANNING_SOURCE_MODE, REGION (+2 more); barca status lists them`. It
+  names at most five variables or patterns, sorted. `--agent` prints the same line.
+- The JSON `warnings` array has one item per step and variable: `kind: "undeclared_env"`, the
+  variable in `param` (`barca docs contract`, "Plan warnings").
+- Each JSON `steps[]` entry of `get`, `run` and `--dry-run`, and each `nodes[]` entry of
+  `barca status --json`, carries `undeclared_env`, the sorted list, when it is not empty.
+  Experimental.
+
+Declare a variable the result depends on; leave the rest (a log level, a credential that does
+not change the data). To recompute once after switching an undeclared variable, use
+`--refresh <step>`.
 
 ### What the definition covers
 
@@ -688,7 +732,7 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
 - `KB`, `MB`, `GB`, `TB` are decimal (`GB` = 10^9 bytes); `KiB`, `MiB`, `GiB`, `TiB` are binary;
   a bare number is bytes. A percentage is of the filesystem's size, read at each check.
 - The size is everything under `.barca/`, every environment included: artifacts, the metadata
-  DBs, staging, `sql-cache/`. The DBs are counted and never deleted.
+  DBs, staging, `sql-cache/`, `range-cache/`. The DBs are counted and never deleted.
 
 **When.** At the end of `barca get` and `barca run` (after results are recorded and uploads have
 finished), after every run under `barca serve`, and once a minute under `barca serve`. When
@@ -697,7 +741,7 @@ the limit:
 
 | Order | What | Which first | Costs when needed again |
 |---|---|---|---|
-| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, files in an artifact directory that no metadata row of any environment names, `sql-cache/` copies not used in the last 5 minutes | dead staging, then moved-aside, then unnamed files (oldest first), then the least recently used copies | nothing (nothing reads them) |
+| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, files in an artifact directory that no metadata row of any environment names, `sql-cache/` copies and `range-cache/` directories not used in the last 5 minutes | dead staging, then moved-aside, then unnamed files (oldest first), then the least recently used copies, then the least recently used range directories | nothing for most; a ranged read of a lazy input fetches its ranges again |
 | 2 | Superseded results: a node (a partition key, for a partitioned asset) whose newest successful result is another one | oldest first | a recompute, only if the code and inputs return to that exact state |
 | 3 | Local copies the artifact store holds (its upload was confirmed with a digest) | least recently read first | a download |
 | 4 | Current results | least recently read first | a recompute |
@@ -943,6 +987,7 @@ The change is local to the selected environment's metadata database.
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 .barca/staging/<pid>/                       a process's files in transit (uploads, downloads, result batches)
 .barca/sql-cache/                           copies of store artifacts `barca sql` downloaded (`barca docs sql`)
+.barca/range-cache/<run_hash>-<version>/    byte ranges lazy inputs read from a store object (`barca docs remote`)
 .barca/gc-state.json                        what the last measurement of `.barca/` found ("Disk use")
 .barca/envs/<env>/                          the same layout for a named environment ("Environments")
 ```

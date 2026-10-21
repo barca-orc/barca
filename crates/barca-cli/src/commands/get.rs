@@ -32,6 +32,9 @@ pub(crate) async fn get_cmd(
     cfg.ledger = ledger;
     if mode.url_expires.is_some() {
         signable_store(&cfg)?;
+        // A link is signed only for an object the store holds: the run checks the store and
+        // repairs the targets in it, however recently it was checked (#593).
+        cfg.check_store = true;
     }
     if let Some(line) = cfg.startup_line() {
         barca_core::errln!("{line}");

@@ -17,8 +17,9 @@ import time
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
+
+from .store_window import age_store_checks
 
 PIPELINE = """
 from barca import asset
@@ -95,8 +96,10 @@ def test_each_unsynced_reason_is_repaired_by_get_without_a_step(project):
     stored = artifact(store / "default" / "artifacts", "total")
     original = local.read_bytes()
 
-    # local_only: the store lost its object.
+    # local_only: the store lost its object. A get notices once the store check window (#593)
+    # has passed.
     stored.unlink()
+    age_store_checks(root)
     assert cache(root, store)["total"] == ("unsynced", "local_only")
     proc = cli(root, store, "get", "total", "-o", "value", "--json")
     doc = ok(proc)
@@ -117,6 +120,7 @@ def test_each_unsynced_reason_is_repaired_by_get_without_a_step(project):
 
     # mismatch: the store's object has other bytes for the same code and inputs.
     stored.write_bytes(b'{"sum": 70000}')
+    age_store_checks(root)
     assert cache(root, store)["total"] == ("unsynced", "mismatch")
     proc = cli(root, store, "get", "total", "-o", "value", "--json")
     doc = ok(proc)

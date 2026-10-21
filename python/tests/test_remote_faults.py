@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from . import emulators
+from .store_window import forget_store_checks
 
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
 S3_KEY = os.environ.get("BARCA_TEST_S3_KEY", "minioadmin")
@@ -595,6 +596,7 @@ def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, con
 
     # The same machine, its local copies gone (a new container with its history restored).
     shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    forget_store_checks(a.dir)  # a new container has not checked the store (#593)
     (a.dir / "user.imported").unlink(missing_ok=True)
     b = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, took = b.get()
@@ -614,6 +616,7 @@ def test_a_wrong_bucket_name_is_a_failed_run_not_a_recompute(tmp_path, backend, 
     wrong = f"{container}-typo"
     # The same machine, its local copies gone (a new container with its history restored).
     shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    forget_store_checks(a.dir)  # a new container has not checked the store (#593)
     (a.dir / "user.imported").unlink(missing_ok=True)
     b = Project(tmp_path / "a", backend, wrong, proxy.endpoint)
     proc, took = b.get()
@@ -636,6 +639,7 @@ def test_an_unreachable_store_fails_a_fetch_in_bounded_time(tmp_path, backend, c
         dead = f"http://127.0.0.1:{unused.getsockname()[1]}"
     # The same machine, its local copies gone (a new container with its history restored).
     shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    forget_store_checks(a.dir)  # a new container has not checked the store (#593)
     (a.dir / "user.imported").unlink(missing_ok=True)
     b = Project(tmp_path / "a", backend, container, dead, transfer_timeout=5)
     proc, took = b.get(timeout=110)
@@ -653,6 +657,7 @@ def test_a_stalled_store_fails_a_fetch_instead_of_hanging(tmp_path, backend, con
     proxy.stall = True
     # The same machine, its local copies gone (a new container with its history restored).
     shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    forget_store_checks(a.dir)  # a new container has not checked the store (#593)
     (a.dir / "user.imported").unlink(missing_ok=True)
     b = Project(tmp_path / "a", backend, container, proxy.endpoint, transfer_timeout=3)
     proc, took = b.get(timeout=90)
@@ -695,6 +700,7 @@ def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_pat
 
         # The same machine, its local copies gone (a new container with its history restored).
         shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+        forget_store_checks(a.dir)  # a new container has not checked the store (#593)
         (a.dir / "user.imported").unlink(missing_ok=True)
         b = Project(tmp_path / "a", backend, container, backend.endpoint)
         toml = (b.dir / "barca.toml").read_text().split("[remote.storage_options.s3]")[0]

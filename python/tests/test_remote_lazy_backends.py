@@ -50,7 +50,7 @@ def remote(request, tmp_path, monkeypatch):
 
 
 def _count_reads(monkeypatch, uri) -> list[int]:
-    """Count the bytes the store's read handles return (exact ranges: what crossed the wire)."""
+    """Count the bytes the store's read handles and ranged reads return (what crossed the wire)."""
     inner = _storage.get_fs(uri)
     fetched = [0]
     real_open = inner.open
@@ -67,7 +67,16 @@ def _count_reads(monkeypatch, uri) -> list[int]:
         f.read = read
         return f
 
+    real_cat_file = inner.cat_file
+
+    def counting_cat_file(path, start=None, end=None, **kwargs):
+        # The ranges barca's range cache (#577) does not hold are fetched with ranged GETs.
+        data = real_cat_file(path, start=start, end=end, **kwargs)
+        fetched[0] += len(data)
+        return data
+
     monkeypatch.setattr(inner, "open", counting_open)
+    monkeypatch.setattr(inner, "cat_file", counting_cat_file)
     return fetched
 
 

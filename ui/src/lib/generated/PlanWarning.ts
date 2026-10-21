@@ -8,7 +8,7 @@
  */
 export type PlanWarning = {
 /**
- * What was found. `unused_input` is the only kind so far.
+ * What was found: `unused_input` or `undeclared_env`.
  */
 kind: string,
 /**
@@ -16,7 +16,7 @@ kind: string,
  */
 node: string,
 /**
- * The parameter concerned.
+ * The parameter concerned (`unused_input`), or the environment variable (`undeclared_env`).
  */
 param: string,
 /**

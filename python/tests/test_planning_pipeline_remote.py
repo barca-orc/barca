@@ -9,8 +9,9 @@
   container"), and sharing between people means a server. After the restore B executes nothing
   and fetches only what it reads.
 - Bytes fetched for `forecast_reconciled`, the upstream with 34 consumers: a lazy
-  (`DuckDBPyRelation`) consumer fetches a fraction of the object, a pandas consumer fetches it
-  whole once per machine, and once it is on the machine no later run fetches it.
+  (`DuckDBPyRelation`) consumer fetches a fraction of the object once per machine (the ranges
+  are kept in `.barca/range-cache/`, #577), a pandas consumer fetches it whole once per machine,
+  and once it is on the machine no later run fetches it.
 
 The remote world runs at scale 8 (about 46k forecast rows): at scale 1 the central object is
 3 KB, smaller than one ranged read, so "a fraction of the object" cannot be measured there. The
@@ -169,15 +170,20 @@ def test_bytes_fetched_for_the_34_consumer_upstream(machine_a, tmp_path, proxy):
     path, size = central(b)
     local = b.local_copy(b.status()[CENTRAL])
 
-    # A lazy consumer reads the object in place: a fraction of it, and no local copy. Nothing
-    # keeps a ranged read, so running it again on the same machine reads the ranges again
-    # (today's behaviour, #577).
-    for _ in range(2):
-        proxy.reset()
-        b.ok("run", LAZY_CONSUMER, "assets.py", "--json")
-        fetched = proxy.served(path).get(path, 0)
-        assert 0 < fetched < size / 4, f"lazy consumer fetched {fetched} of {size} bytes"
-        assert not local.exists()
+    # A lazy consumer reads the object in place: a fraction of it, and no local copy. The
+    # ranges it read are kept in `.barca/range-cache/`, so running it again on the same machine
+    # fetches nothing (#577).
+    proxy.reset()
+    b.ok("run", LAZY_CONSUMER, "assets.py", "--json")
+    fetched = proxy.served(path).get(path, 0)
+    assert 0 < fetched < size / 4, f"lazy consumer fetched {fetched} of {size} bytes"
+    assert not local.exists()
+    kept = list((b.root / ".barca" / "range-cache").glob(f"{local.stem}-*"))
+    assert len(kept) == 1 and sum(f.stat().st_size for f in kept[0].iterdir()) == fetched
+    proxy.reset()
+    b.ok("run", LAZY_CONSUMER, "assets.py", "--json")
+    assert proxy.served(path) == {}
+    assert not local.exists()
 
     # A pandas consumer downloads it whole, once.
     proxy.reset()

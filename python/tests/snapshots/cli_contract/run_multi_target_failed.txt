@@ -16,6 +16,8 @@ steps[].kind : string
 steps[].reason : string  (optional)
 steps[].run_hash : string
 steps[].status : string
+steps[].undeclared_env : array  (optional)
+steps[].undeclared_env[] : string
 steps_executed : integer
 targets : object
 targets.<name> : object

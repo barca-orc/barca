@@ -71,6 +71,12 @@ bytes_changed?: boolean | null, partitions?: PartitionSummary | null,
  */
 env?: { [key in string]: string | null } | null,
 /**
+ * Environment variables the step's code reads without declaring them in `env=[...]`
+ * (`barca docs cache`, "Environment variables"), sorted; a name built at run time is a `*`
+ * pattern. Not part of the run hash. Absent when there are none. Experimental (#574).
+ */
+undeclared_env?: Array<string> | null,
+/**
  * Dry run only: the node's `weight=` when it is above 1 (#436). Absent otherwise.
  */
 weight?: number | null, };
