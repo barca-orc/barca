@@ -266,7 +266,6 @@ def notify(report: dict) -> None:
 
 ```
 $ barca run notify pipeline.py
-[barca] importing /home/you/project/pipeline.py
 [pipeline.py:notify] Daily revenue: 42000
 [barca] 1/2 steps | done in 0.0s
 Run 14d08771a6ca | ran 'notify' in 0.167s (1 step, 1 phase)
