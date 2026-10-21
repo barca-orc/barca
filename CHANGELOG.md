@@ -10,6 +10,17 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Backups say which machine took them (#553). Each sidecar records `host` and `project` (the
+  project directory); `barca state backups` shows a HOST column and gains `host`, `project` and
+  `mine` in JSON (`null` for a backup an older barca took, which is still listed and restored).
+  Two machines backing up to one store, which is not supported without a server, now get one
+  warning per command, on a backup or `barca state backups`, when another machine took a backup
+  after this one's own, naming it and pointing at server mode. Pruning the store keeps the
+  newest backup of every other machine taken in the last week (at most five), so one machine
+  can no longer rotate out the other's last backup, and `barca state restore` without `--from`
+  restores this machine's newest backup, saying so when newer ones came from elsewhere
+  (`--from 1` is the newest). `barca state restore --json` gains `host` and `project`.
+
 - The web UI shows which pipelines and assets are running now, whoever started the run (the
   scheduler, `POST /runs` from another client, `barca get --server`, or a `barca get` / `barca run`
   in a shell on the same `.barca/`): a running node pulses on the graph and the pipeline page,

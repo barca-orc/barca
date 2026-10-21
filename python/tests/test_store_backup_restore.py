@@ -234,3 +234,51 @@ def test_restore_is_refused_while_serve_runs(project):
         server.wait(timeout=30)
     # Once it has stopped, the restore goes ahead.
     assert ok(cli(root, store, "state", "restore", "--json"))["from"] == "local"
+
+
+def test_two_project_copies_on_one_store_are_told_apart(tmp_path):
+    """#553: two copies of a project with one store. Each backup names the host and project
+    directory that took it; once both write, each is warned; pruning keeps the other's newest;
+    restore without --from takes this copy's own newest."""
+    store = tmp_path / "store"
+    a, b = tmp_path / "a", tmp_path / "b"
+    for root in (a, b):
+        root.mkdir()
+        (root / "pipeline.py").write_text(PIPELINE)
+    ok(cli(a, store, "get", "numbers", "--json"))
+    (first_a,) = ok(cli(a, store, "state", "backups", "--json"))["backups"]
+    assert first_a["mine"] is True
+    assert first_a["project"] == str(a.resolve())
+    assert first_a["host"] == socket.gethostname()
+    # B takes over A's history: no backup of its own yet, so no warning.
+    proc = cli(b, store, "state", "restore", "--json")
+    assert ok(proc)["project"] == str(a.resolve())
+    assert "restoring the newest backup" in proc.stderr and f":{a.resolve()} took" in proc.stderr
+    proc = cli(b, store, "get", "total", "--json")
+    ok(proc)
+    assert "warning" not in proc.stderr, proc.stderr
+    # A runs again: B took a backup after A's own.
+    proc = cli(a, store, "get", "total", "--json")
+    ok(proc)
+    assert "also holds backups from" in proc.stderr and str(b.resolve()) in proc.stderr
+    assert "barca docs server-mode" in proc.stderr
+    assert proc.stderr.count("also holds backups from") == 1
+    # B runs often: A's newest backup is still in the store.
+    for i in range(6):
+        (b / "pipeline.py").write_text(PIPELINE + f"\n# {i}\n")
+        ok(cli(b, store, "get", "total", "--json"))
+    proc = cli(a, store, "state", "backups", "--json")
+    listed = ok(proc)["backups"]
+    mine = [x for x in listed if x["mine"]]
+    assert mine and mine[0]["index"] > 1, listed
+    assert mine[0]["where"] == "both", "the store kept A's newest backup"
+    assert "also holds backups from" in proc.stderr
+    human = cli(a, store, "state", "backups", "--pretty")
+    assert "HOST" in human.stdout and "(this machine)" in human.stdout, human.stdout
+    # Restore without --from takes A's own newest, and says why it is not the newest.
+    proc = cli(a, store, "state", "restore", "--json")
+    restored = ok(proc)
+    assert restored["restored"] == mine[0]["name"]
+    assert restored["project"] == str(a.resolve())
+    assert "restoring this machine's newest backup" in proc.stderr
+    assert "--from 1 restores the newest" in proc.stderr

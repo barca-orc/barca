@@ -16,6 +16,12 @@
 //! write-ahead log was folded in ([`crate::db::copy_for_backup`]), so a write in progress never
 //! produces a torn copy. The store side is `python -m barca._state` (one process per backup),
 //! so the fsspec extras stay the only cloud-auth surface.
+//!
+//! **Which machine.** A store without a server is one machine's backup (DIRECTION.md). Each
+//! sidecar names the host and the project directory that wrote it ([`Writer`]). Pruning the
+//! store keeps the newest backup of every other writer, a backup that finds another writer's
+//! backup newer than its own previous one warns once per process ([`warn_interleaved`]), and
+//! `barca state restore` without `--from` prefers this machine's newest backup.
 
 use crate::BarcaError;
 use crate::config::{BACKUPS_KEPT, ResolvedConfig};
@@ -38,6 +44,78 @@ pub struct Sidecar {
     pub barca_version: String,
     /// The metadata format of the copy (`PRAGMA user_version`; `specs/metadata-schema.md`).
     pub db_format: i64,
+    /// The host that wrote it (`null` in a sidecar from before 0.29).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The project directory that wrote it, absolute (`null` before 0.29).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// Who writes backups: this host and this project directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Writer {
+    pub host: String,
+    pub project: String,
+}
+
+impl Writer {
+    /// This host, and the project directory whose metadata database is `db_path` (the
+    /// directory holding its `.barca/`), absolute.
+    pub fn of(db_path: &str) -> Self {
+        let db = Path::new(db_path);
+        let abs = if db.is_absolute() {
+            db.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(db)
+        };
+        let dir = abs
+            .ancestors()
+            .find(|a| a.file_name().is_some_and(|n| n == ".barca"))
+            .and_then(Path::parent)
+            .or_else(|| abs.parent())
+            .unwrap_or(&abs)
+            .to_path_buf();
+        let project = std::fs::canonicalize(&dir).unwrap_or(dir);
+        Self {
+            host: crate::db::local_host(),
+            project: project.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Whether `host` and `project` (from a sidecar) are this writer. `None` when the sidecar
+    /// does not say (written before 0.29).
+    fn is(&self, host: Option<&str>, project: Option<&str>) -> Option<bool> {
+        let host = host?;
+        Some(host == self.host && project.is_none_or(|p| p == self.project))
+    }
+
+    /// `host` for another host, `host:/path` for another directory on this one.
+    pub fn describe(&self, host: &str, project: Option<&str>) -> String {
+        match project {
+            Some(p) if host == self.host => format!("{host}:{p}"),
+            _ => host.to_string(),
+        }
+    }
+}
+
+static INTERLEAVED_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The warning when `store` also holds `name`, taken by `other` after this writer's own newest
+/// backup. Once per process.
+pub fn warn_interleaved(store: &str, other: &str, name: &str) {
+    use std::sync::atomic::Ordering;
+    if INTERLEAVED_WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    crate::errln!(
+        "[barca] warning: {store} also holds backups from {other} (the newest {name}), taken \
+         after this machine's own: two machines are backing up to one store, and nothing \
+         coordinates them. barca state restore picks this machine's newest backup unless given \
+         --from. To share state between machines, use a server (barca docs server-mode); \
+         otherwise give each machine its own [remote] uri"
+    );
 }
 
 /// `2026-10-14T18-02-11.123Z-1a2b3c4d.db`: the UTC time to the millisecond, then the first eight
@@ -213,12 +291,15 @@ async fn write_local(
     };
     let (rows, db_format) = count_rows(staged).await?;
     let name = name_at(chrono::Utc::now(), db_path, &digest);
+    let writer = Writer::of(db_path);
     let sidecar = Sidecar {
         run_id: run_id.map(str::to_string),
         rows,
         digest,
         barca_version: env!("CARGO_PKG_VERSION").to_string(),
         db_format,
+        host: Some(writer.host),
+        project: Some(writer.project),
     };
     let json = serde_json::to_vec(&sidecar).map_err(|e| failed("write a backup sidecar", &e))?;
     let size = std::fs::metadata(staged)
@@ -299,12 +380,37 @@ async fn upload(
     let out = helper(cmd, until)
         .await
         .map_err(|e| format!("backup to {display} failed: {e}"))?;
-    drop(out);
+    // Backups another writer took after this one's previous backup: two machines on one store.
+    if let Ok(done) = serde_json::from_slice::<Uploaded>(&out)
+        && let Some(newest) = done.others.first()
+    {
+        let here = Writer::of(&cfg.db_path);
+        warn_interleaved(
+            &display,
+            &here.describe(&newest.host, newest.project.as_deref()),
+            &newest.name,
+        );
+    }
     // Confirmed: no copy here is waiting for the store any more.
     for old in local_names(dir) {
         let _ = std::fs::remove_file(unsent_path(dir, &old));
     }
     Ok(format!("{}/{name}", display.trim_end_matches('/')))
+}
+
+/// What `barca._state backup` reports.
+#[derive(Debug, Deserialize)]
+struct Uploaded {
+    /// Backups another writer took after this writer's previous one, newest first.
+    #[serde(default)]
+    others: Vec<OtherBackup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OtherBackup {
+    name: String,
+    host: String,
+    project: Option<String>,
 }
 
 /// For a store that is a plain directory, its root (`[remote] uri`): the backup prefix less
@@ -365,6 +471,21 @@ pub struct BackupEntry {
     pub agree: Option<bool>,
     pub barca_version: Option<String>,
     pub db_format: Option<i64>,
+    /// The host that took it, from its sidecar (`null` for a backup from before 0.29).
+    pub host: Option<String>,
+    /// The project directory that took it, absolute (`null` before 0.29).
+    pub project: Option<String>,
+    /// Whether this host and project directory took it (`null` when the sidecar does not say).
+    pub mine: Option<bool>,
+}
+
+/// The newest backup another writer took after this writer's newest one, when there is one
+/// (and this writer has one: a machine with none of its own may be taking over from another).
+pub fn interleaved(backups: &[BackupEntry]) -> Option<&BackupEntry> {
+    let own = backups.iter().position(|b| b.mine == Some(true))?;
+    backups[..own]
+        .iter()
+        .find(|b| b.mine == Some(false) && b.host.is_some())
 }
 
 /// What `barca state backups` prints.
@@ -471,6 +592,7 @@ fn entries(
     found: &BTreeMap<String, Found>,
     store_error: Option<String>,
 ) -> Backups {
+    let here = Writer::of(&cfg.db_path);
     let mut newest_first: Vec<(&String, &Found)> = found.iter().collect();
     newest_first.sort_unstable_by_key(|(name, _)| std::cmp::Reverse(order_key(name)));
     let backups = newest_first
@@ -508,6 +630,11 @@ fn entries(
                 agree,
                 barca_version: sidecar.as_ref().map(|s| s.barca_version.clone()),
                 db_format: sidecar.as_ref().map(|s| s.db_format),
+                host: sidecar.as_ref().and_then(|s| s.host.clone()),
+                project: sidecar.as_ref().and_then(|s| s.project.clone()),
+                mine: sidecar
+                    .as_ref()
+                    .and_then(|s| here.is(s.host.as_deref(), s.project.as_deref())),
             }
         })
         .collect();
@@ -537,6 +664,10 @@ pub struct Restored {
     pub pre_restore: Option<String>,
     pub rows: Option<u64>,
     pub run_id: Option<String>,
+    /// The host that took the backup (`null` for `--from <path>` or a backup from before 0.29).
+    pub host: Option<String>,
+    /// The project directory that took it (`null` likewise).
+    pub project: Option<String>,
 }
 
 /// Put a backup in place of the local database, only when asked. `from` is a path to a
@@ -589,7 +720,7 @@ pub async fn restore(
         return Err(BarcaError::Usage(msg));
     }
     let index = match from {
-        None => 0,
+        None => newest_mine(cfg, &listing.backups),
         Some(sel) => select(&listing.backups, sel)?,
     };
     let chosen = &listing.backups[index];
@@ -638,6 +769,8 @@ pub async fn restore(
                     pre_restore,
                     rows: chosen.rows,
                     run_id: chosen.run_id.clone(),
+                    host: chosen.host.clone(),
+                    project: chosen.project.clone(),
                 });
             }
             Err(Invalid::Machine(e)) => {
@@ -671,6 +804,49 @@ pub async fn restore(
         chosen.name,
         refusals.join("; ")
     )))
+}
+
+/// The backup `restore` takes without `--from`: this writer's newest, when it has one, saying
+/// so when other writers' backups are newer; otherwise the newest.
+fn newest_mine(cfg: &ResolvedConfig, backups: &[BackupEntry]) -> usize {
+    let here = Writer::of(&cfg.db_path);
+    match backups.iter().position(|b| b.mine == Some(true)) {
+        Some(0) | None => {
+            if let Some(b) = backups.first()
+                && b.mine == Some(false)
+                && let Some(host) = &b.host
+            {
+                crate::errln!(
+                    "[barca] restoring the newest backup, {}, which {} took (this machine has \
+                     none of its own)",
+                    b.name,
+                    here.describe(host, b.project.as_deref())
+                );
+            }
+            0
+        }
+        Some(i) => {
+            let mut others: Vec<String> = backups[..i]
+                .iter()
+                .map(|b| match &b.host {
+                    Some(host) => here.describe(host, b.project.as_deref()),
+                    None => "an older barca".to_string(),
+                })
+                .collect();
+            others.sort();
+            others.dedup();
+            crate::errln!(
+                "[barca] restoring this machine's newest backup, {} (#{}); the {} newer {} \
+                 taken by {}. barca state restore --from 1 restores the newest",
+                backups[i].name,
+                backups[i].index,
+                i,
+                if i == 1 { "one was" } else { "ones were" },
+                others.join(", ")
+            );
+            i
+        }
+    }
 }
 
 /// The index of the backup `sel` names: a 1-based position in the listing, or a name with or
@@ -945,6 +1121,8 @@ async fn restore_file(cfg: &ResolvedConfig, file: &Path) -> Result<Restored, Bar
                 pre_restore: pre_restore?,
                 rows: None,
                 run_id: None,
+                host: None,
+                project: None,
             })
         }
         Err(Invalid::Machine(e)) => {
@@ -1241,6 +1419,91 @@ mod tests {
         let names: Vec<&str> = listed.backups.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names.len(), 2, "{names:?}");
         assert!(names.contains(&a.as_str()) && names.contains(&b.as_str()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn two_projects_on_one_store_name_their_backups_and_restore_prefers_its_own() {
+        // #553: each sidecar names the host and project directory that took it; a listing
+        // marks this one's, finds the other's newer one, and restore without --from takes
+        // this one's newest.
+        let root = tempfile::tempdir().unwrap();
+        let root_path = std::fs::canonicalize(root.path()).unwrap();
+        let store = root_path.join("store/default/state/backups");
+        let python = python(&root_path);
+        let mut cfgs = Vec::new();
+        for project in ["a", "b"] {
+            let dir = root_path.join(project);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut cfg = cfg(&dir);
+            cfg.backup_uri = Some(store.to_string_lossy().into_owned());
+            with_runs(&cfg, 1).await;
+            cfgs.push(cfg);
+        }
+        std::fs::create_dir_all(root_path.join("store")).unwrap();
+        let (a, b) = (&cfgs[0], &cfgs[1]);
+        let first_a = take(&python, a, Some("a1"), Until::done())
+            .await
+            .unwrap()
+            .name
+            .unwrap();
+        let side = read_sidecar(&sidecar_path(&store, &first_a)).unwrap();
+        assert_eq!(side.host.as_deref(), Some(crate::db::local_host().as_str()));
+        assert_eq!(
+            side.project.as_deref(),
+            Some(root_path.join("a").to_str().unwrap())
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        with_runs(b, 1).await;
+        let from_b = take(&python, b, Some("b1"), Until::done())
+            .await
+            .unwrap()
+            .name
+            .unwrap();
+        let listed = list(&python, a).await.unwrap();
+        let by_name = |n: &str| listed.backups.iter().find(|e| e.name == n).unwrap();
+        assert_eq!(by_name(&first_a).mine, Some(true));
+        assert_eq!(by_name(&from_b).mine, Some(false));
+        assert_eq!(
+            by_name(&from_b).project.as_deref(),
+            Some(root_path.join("b").to_str().unwrap())
+        );
+        assert_eq!(
+            interleaved(&listed.backups).map(|e| e.name.as_str()),
+            Some(from_b.as_str())
+        );
+        // B has a backup of its own now, but A's is older than it: nothing interleaved for B.
+        assert!(interleaved(&list(&python, b).await.unwrap().backups).is_none());
+        let restored = restore(&python, a, None).await.unwrap();
+        assert_eq!(restored.restored, first_a);
+        assert_eq!(restored.run_id.as_deref(), Some("a1"));
+        assert_eq!(
+            restored.project.as_deref(),
+            Some(root_path.join("a").to_str().unwrap())
+        );
+        // --from 1 is still the newest, whoever took it.
+        let restored = restore(&python, a, Some("1")).await.unwrap();
+        assert_eq!(restored.restored, from_b);
+    }
+
+    #[test]
+    fn a_sidecar_from_before_hosts_were_recorded_still_reads() {
+        let old: Sidecar = serde_json::from_str(
+            r#"{"run_id":"r1","rows":2,"digest":"d","barca_version":"0.28.3","db_format":3}"#,
+        )
+        .unwrap();
+        assert_eq!((old.host, old.project), (None, None));
+        let here = Writer::of("/p/.barca/envs/dev/metadata.db");
+        assert_eq!(here.project, "/p");
+        assert_eq!(here.is(None, None), None);
+        assert_eq!(here.is(Some(&here.host.clone()), Some("/p")), Some(true));
+        assert_eq!(here.is(Some(&here.host.clone()), Some("/q")), Some(false));
+        assert_eq!(here.is(Some("elsewhere"), Some("/p")), Some(false));
+        assert_eq!(here.describe("elsewhere", Some("/p")), "elsewhere");
+        assert_eq!(
+            here.describe(&here.host.clone(), Some("/q")),
+            format!("{}:/q", here.host)
+        );
     }
 
     #[cfg(unix)]

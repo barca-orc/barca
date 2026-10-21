@@ -359,7 +359,8 @@ server uploads artifacts to it and backs its metadata DB up there every minute i
 The run history stays in the `.barca` volume. If that volume is lost, start a container with an
 empty one, run `barca state restore` in it before `barca serve`, and the newest backup comes
 back from the store (`barca state restore` refuses to run while a server is using the
-environment). Barca 0.25 and earlier needed `BARCA_STATE=off` here; 0.26.0 removed that
+environment). It takes the newest backup this host and project directory took; a container
+with a new host name has none, so it takes the newest and names the host that took it. Barca 0.25 and earlier needed `BARCA_STATE=off` here; 0.26.0 removed that
 variable, and setting it is now a usage error.
 
 Other machines that use the same store do not see this server's runs in

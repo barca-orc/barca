@@ -167,14 +167,19 @@ Its sidecar is `2026-10-14T18-02-11.482Z-3f9a1c2e.json`. Names barca 0.26.0 wrot
 (`2026-10-14T18-02-11Z.db`), are still listed, restored and pruned. The sidecar:
 
 ```json
-{"run_id": "7f30b3e9", "rows": 412, "digest": "<sha256>", "barca_version": "0.26.0", "db_format": 1}
+{"run_id": "7f30b3e9", "rows": 412, "digest": "<sha256>", "barca_version": "0.29.0", "db_format": 1,
+ "host": "laptop", "project": "/home/me/analytics"}
 ```
 
 `run_id` is the run that took it (`null` for `barca serve`), `rows` the run and
-materialization rows in the copy, `db_format` its metadata format. Then both files are
+materialization rows in the copy, `db_format` its metadata format, `host` and `project` the
+machine and the project directory that took it (absent in a sidecar barca 0.28 or earlier
+wrote; such a backup is still listed and restored, with no host). Then both files are
 uploaded to `<uri>/<env>/state/backups/` (one `python -m barca._state backup` per backup). Each
 place keeps the five newest backups, pruned after a successful write; only files named like a
-backup are ever removed. At the end of a run stderr says
+backup are ever removed. In the store, the newest backup of every *other* host and project
+directory taken in the last week is kept as well (at most five of those), so a second machine
+writing to the prefix cannot rotate out the first one's last backup. At the end of a run stderr says
 `[barca] backed up the metadata DB (48.0 KB) to <uri>/<env>/state/backups/<name> in 0.31s`.
 
 A backup that does not reach the store never fails the run. At the end of a run it is a warning,
@@ -193,19 +198,22 @@ barca state backups --json
 ```
 
 ```
-#  NAME                                  WHERE  SIZE     ROWS  RUN
-1  2026-10-14T18-02-11.482Z-3f9a1c2e.db  both   48.0 KB  412   7f30b3e9
-2  2026-10-14T18-01-10.907Z-3f9a1c2e.db  both   47.5 KB  401   7f30b3e9
+#  NAME                                  WHERE  SIZE     ROWS  RUN       HOST
+1  2026-10-14T18-02-11.482Z-3f9a1c2e.db  both   48.0 KB  412   7f30b3e9  laptop (this machine)
+2  2026-10-14T18-01-10.907Z-3f9a1c2e.db  both   47.5 KB  401   7f30b3e9  laptop (this machine)
 ```
 
 `where` is `local`, `store` or `both`; `agree` (JSON) says whether both copies have the same
-size and digest (`null` with one copy). A store that cannot be listed is a warning on stderr and
+size and digest (`null` with one copy). `host` and `project` (JSON) say who took it, and
+`mine` whether it was this host and project directory (`null` for a backup from barca 0.28 or
+earlier). The `HOST` column shows another project directory on this host as `host:/path`. A store that cannot be listed is a warning on stderr and
 `store_error` in JSON; the local copies are still listed.
 
 Put one back, only when you ask:
 
 ```bash
-barca state restore                  # the newest
+barca state restore                  # this machine's newest (the newest, if it has none)
+barca state restore --from 1         # the newest, whichever machine took it
 barca state restore --from 2         # by index in barca state backups
 barca state restore --from 2026-10-14T18-01-10.907Z-3f9a1c2e
 ```
@@ -219,7 +227,14 @@ migrated). Then the current database, its write-ahead log folded in, moves to
 on stderr says what happened:
 `[barca] restored 2026-10-14T18-01-10.907Z-3f9a1c2e.db from the local copy (.barca/backups/...), 401 rows,
 taken by run 7f30b3e9; the database it replaced is .barca/metadata.db.pre-restore`.
-With `--json`, stdout also gets `{restored, from, source, pre_restore, rows, run_id}`.
+With `--json`, stdout also gets `{restored, from, source, pre_restore, rows, run_id, host,
+project}`.
+
+Without `--from`, `restore` takes this machine's newest backup (same host and project
+directory), and says so when newer ones came from elsewhere:
+`[barca] restoring this machine's newest backup, 2026-10-14T18-01-10.907Z-3f9a1c2e.db (#3); the
+2 newer ones were taken by desktop. barca state restore --from 1 restores the newest`. With
+none of its own (a fresh machine taking over), it takes the newest and names who took it.
 
 - No backup at all, an unknown `--from`, or a copy that fails the check: exit 2, nothing changed.
   A copy that fails names the next newest (`barca state restore --from 3`).
@@ -271,7 +286,14 @@ it, `barca get` serves cached results from the bucket.
 
 **Two machines on one store with no server** is not supported. Each backs up to the same prefix
 and the five-copy retention interleaves their histories; nothing coordinates them. Use a server
-(RFC-0007) to share state.
+(RFC-0007) to share state, or give each machine its own `[remote] uri`. barca notices: when a
+backup finds that another host (or another project directory) took a backup after this one's
+previous backup, or `barca state backups` lists one newer than this machine's newest, stderr
+gets one warning per command:
+`[barca] warning: <store> also holds backups from desktop (the newest 2026-10-14T18-05-00.120Z-9c1d2e3f.db), taken after this machine's own: two machines are backing up to one store, and nothing coordinates them. barca state restore picks this machine's newest backup unless given --from. To share state between machines, use a server (barca docs server-mode); otherwise give each machine its own [remote] uri`.
+A machine with no backup of its own yet (one restoring another's) is not warned; once both
+write, both are. Pruning keeps each machine's newest backup, and `restore` without `--from`
+picks this machine's, so neither loses its last copy to the other.
 
 **Upgrading from the shared history.** barca 0.26.0 removed `optimistic` mode: `[remote] state`,
 `[remote] state_uri`, `[remote] push_retries`, `BARCA_STATE`, `BARCA_STATE_URI`,
@@ -656,8 +678,10 @@ Know before sharing:
 
 ## Limitations
 
-- Backups are this machine's: two machines on one store without a server interleave them
-  (see "Backups and restore"). Sharing state means a server (RFC-0007).
+- Backups are this machine's: two machines on one store without a server interleave them, with
+  a warning (see "Backups and restore"). Sharing state means a server (RFC-0007). A machine is
+  its host name and project directory: a container whose host name changes at every start is a
+  new machine each time.
 - Retention is fixed at five backups in each place. A backup is a whole copy of the database,
   so the store holds up to five times its size.
 - With `BARCA_ARTIFACT_URI` or `[remote] artifacts_uri` alone (no `[remote] uri`), results go to

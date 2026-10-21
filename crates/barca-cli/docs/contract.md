@@ -1467,15 +1467,22 @@ Each entry of `backups`, newest first: `index` (integer, 1 = newest), `name`
 (`2026-10-14T18-02-11.482Z-3f9a1c2e.db`; `2026-10-14T18-02-11Z.db` from 0.26.0), `where`
 (`local`, `store` or `both`), `size_bytes` (integer),
 `run_id` (string or `null`), `rows` and `db_format` (integers or `null`), `digest` and
-`barca_version` (strings or `null`; from the backup's sidecar), and `agree` (boolean when the
-backup is in both places, else `null`). No backups is an empty array, exit 0.
+`barca_version` (strings or `null`; from the backup's sidecar), `agree` (boolean when the
+backup is in both places, else `null`), and, additive in 0.29, `host` and `project` (strings,
+the host and absolute project directory that took it) and `mine` (boolean: this host and
+project directory), all `null` for a backup whose sidecar predates them. No backups is an empty
+array, exit 0. A backup another host or project directory took after this one's newest adds a
+`[barca] warning: ...` line on stderr (not contract); the exit code is unchanged.
 
 `barca state restore [--from N|NAME|PATH]` puts a backup (or, with a path, any barca database
 file, such as one `barca state reset` moved aside) in place of the metadata DB and moves the
-current one to `metadata.db.pre-restore`. One `[barca] restored ...` line on stderr (not
-contract); with `--json` (or piped), stdout has `{restored, from, source, pre_restore, rows,
-run_id}`: `from` is `local`, `store` or `file` (`--from PATH`; `rows` and `run_id` are then
-`null`), `source` the copy's path or redacted URI,
+current one to `metadata.db.pre-restore`. Without `--from` it takes this host and project
+directory's newest backup (`mine`), or the newest when there is none (from 0.29; before, always
+the newest), with a `[barca] restoring ...` line on stderr when that is not the newest. One
+`[barca] restored ...` line on stderr (not contract); with `--json` (or piped), stdout has
+`{restored, from, source, pre_restore, rows, run_id, host, project}`: `from` is `local`,
+`store` or `file` (`--from PATH`; `rows`, `run_id`, `host` and `project` are then `null`),
+`source` the copy's path or redacted URI,
 `pre_restore` the path of the replaced database or `null`. Exit 2 (`usage`): no backup, an
 unknown `--from`, a copy that fails validation (the message names the next newest), a copy in a
 format this barca cannot use. Exit 3 (`infra`): a `barca serve` holds the environment, or no

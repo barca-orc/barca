@@ -12,6 +12,16 @@ pub(crate) async fn state_backups_cmd(
     if let Some(why) = &listed.store_error {
         barca_core::errln!("[barca] warning: {why}; listing the local backups only");
     }
+    let here = barca_core::backup::Writer::of(&cfg.db_path);
+    if let Some(other) = barca_core::backup::interleaved(&listed.backups)
+        && let Some(host) = &other.host
+    {
+        barca_core::backup::warn_interleaved(
+            listed.store.as_deref().unwrap_or(&listed.local_dir),
+            &here.describe(host, other.project.as_deref()),
+            &other.name,
+        );
+    }
     if json {
         barca_core::outln!(
             "{}",
@@ -31,7 +41,7 @@ pub(crate) async fn state_backups_cmd(
         );
         return Ok(());
     }
-    let rows: Vec<[String; 6]> = listed
+    let rows: Vec<[String; 7]> = listed
         .backups
         .iter()
         .map(|b| {
@@ -45,10 +55,15 @@ pub(crate) async fn state_backups_cmd(
                 barca_core::report::fmt_bytes(b.size_bytes),
                 b.rows.map_or_else(|| "-".to_string(), |r| r.to_string()),
                 b.run_id.clone().unwrap_or_else(|| "-".to_string()),
+                match (&b.host, b.mine) {
+                    (Some(host), Some(true)) => format!("{host} (this machine)"),
+                    (Some(host), _) => here.describe(host, b.project.as_deref()),
+                    (None, _) => "-".to_string(),
+                },
             ]
         })
         .collect();
-    let header = ["#", "NAME", "WHERE", "SIZE", "ROWS", "RUN"];
+    let header = ["#", "NAME", "WHERE", "SIZE", "ROWS", "RUN", "HOST"];
     let widths: Vec<usize> = (0..header.len())
         .map(|i| {
             rows.iter()
@@ -98,7 +113,15 @@ pub(crate) async fn state_restore_cmd(
             (Some(rows), Some(run)) => format!(", {rows} rows, taken by run {run}"),
             (Some(rows), None) => format!(", {rows} rows"),
             _ => String::new(),
-        },
+        } + &restored
+            .host
+            .as_deref()
+            .map(|host| format!(
+                " on {}",
+                barca_core::backup::Writer::of(&cfg.db_path)
+                    .describe(host, restored.project.as_deref())
+            ))
+            .unwrap_or_default(),
         match &restored.pre_restore {
             Some(pre) => format!("the database it replaced is {pre}"),
             None => "there was no database to replace".to_string(),
