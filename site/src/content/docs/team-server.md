@@ -73,8 +73,9 @@ from the server's record, and the one they asked for is downloaded from the buck
 ```
 $ barca get revenue
 [barca] server http://barca.internal:8274 ([server] url in barca.toml)
-...
-Run 90acd8d13dbc | got 'revenue' in 0.045s (0 steps, 1 phase)
+[barca] checking artifact store s3://team-bucket/barca/default/artifacts (timeout 10s)
+[barca] fetched 1 cached artifact (13 B) in 0.0s
+Run 9025447e887c | got 'revenue' in 0.048s (0 steps, 1 phase)
 
 .barca/artifacts/pipeline.py--revenue/43fbf60a1f6e...json
   {
@@ -88,7 +89,7 @@ the cache, because a result is shared whenever the code and inputs match.
 ## What else you can do
 
 ```bash
-barca status                 # what the team has
+barca status                 # what the team has, and each result's shape
 barca history                # everyone's runs
 barca get revenue --server   # run it on the server
 barca get revenue --local    # skip the server once
