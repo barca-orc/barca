@@ -416,7 +416,11 @@ machine's own records, or `--server <url>` for another server.
    failing. A failed node's error is `last_materialization.error` in JSON and its first line
    is in the WHY column; a scheduled node has `schedule` (`failures`, `max_failures`,
    `failing`, `paused`, `next_fire`). The summary still counts every node (`barca docs status`).
-3. **The failed run**: `barca history` lists runs newest first, with `run_id` and `status`.
+3. **`barca history --status failed`**: the failed runs, newest first, each with its first
+   failed step and error; `--target NODE`, `--since 24h` and `--triggered-by schedule` narrow
+   it. **`barca history RUN_ID`** shows one run: every step it recorded, each failed step's
+   error and traceback, and how a dead worker ended (`barca docs status`, "Finding and reading a
+   failed run").
 4. **`barca logs RUN_ID --step NODE --stream stderr`**: the step's traceback, warnings and
    logging, as recorded (`barca docs logs`).
 5. **Fix, then re-run the same command.** Steps that succeeded stay cached. For a schedule that
@@ -428,8 +432,9 @@ barca doctor --json                                 # {ok, checks: [{name, ok, d
 barca status --problems --json                      # only what needs attention; summary counts every node
 barca status --state stale,never_run --json         # only these cache states
 barca status --problems --json --fields id,cache,last_materialization,schedule
-barca history --json --fields run_id,target,status,started_at
-barca logs 843a9c91af56 --step ratio --stream stderr   # the traceback of one step
+barca history --status failed --since 24h --json --fields run_id,target,started_at,failure
+barca history 81c89c44f469 --json                   # one run: {run, steps, hint}
+barca logs 81c89c44f469 --step ratio --stream stderr   # the traceback of one step
 barca status --problems --local                     # this machine's own state, with a server configured
 ```
 
@@ -450,7 +455,17 @@ ratio         asset  never-run    failed: ZeroDivisionError: division by zero   
 ```
 
 ```text
-$ barca logs 843a9c91af56 --step ratio --stream stderr --pretty
+$ barca history --status failed
+[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
+RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
+------------------------------------------------------------------------------------------------------
+81a922c0d954   run     nightly_sync             failed          1      0   0.1s 2026-10-22 23:36:08 UTC  nightly_sync: RuntimeError: upstream API returned 503
+81a9a8f1453f   run     nightly_sync             failed          1      0   0.1s 2026-10-22 23:36:06 UTC  nightly_sync: RuntimeError: upstream API returned 503
+81c89c44f469   get     ratio                    failed          2      0   0.1s 2026-10-22 23:36:05 UTC  ratio: ZeroDivisionError: division by zero
+```
+
+```text
+$ barca logs 81c89c44f469 --step ratio --stream stderr --pretty
 [barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
 Traceback (most recent call last):
   File "/srv/project/pipeline.py", line 11, in ratio
@@ -475,13 +490,11 @@ $ barca doctor
 [ok] server_posts: every run this machine computed against the server is recorded there
 ```
 
-Coming in 0.29.3 (not in this build yet): filters and a detail view on `barca history`, and
-`barca sql` over the run history, against a server too. Until then, filter `barca history
---json` with `jq`:
+Coming in 0.29.3 (not in this build yet): `barca sql` over the run history (`barca.runs`),
+against a server too. Until then, `barca history --json` with its filters answers the same
+questions:
 
 ```text
-barca history --status failed                       # only failed runs
-barca history RUN_ID                                # one run: its steps, errors and timings
 barca sql "select run_id, target, status, started_at from barca.runs where status = 'failed'"
 ```
 

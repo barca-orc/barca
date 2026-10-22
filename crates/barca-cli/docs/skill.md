@@ -124,7 +124,8 @@ barca run report pipeline.py | jq '.status'
 ```bash
 barca doctor                             # setup, and a configured server: version, store, load errors, schedules, unposted runs
 barca status --problems                  # nodes that need attention: not cached, a failed run, a paused or failing schedule
-barca history --json                     # runs, newest first: run_id, target, status
+barca history --status failed            # failed runs, newest first, each with its first failed step and error
+barca history RUN_ID                     # one run: its steps, errors and tracebacks
 barca logs RUN_ID --step NODE --stream stderr   # that step's traceback and logging
 ```
 

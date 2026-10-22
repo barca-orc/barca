@@ -101,8 +101,12 @@ class Deployment:
             stderr=self.log.open("a"),
             env=_env(),
         )
-        wait_for(self._up, "the server to answer /health")
-        wait_for(self._failing, "nightly_sync to fail max_failures ticks")
+        try:
+            wait_for(self._up, "the server to answer /health")
+            wait_for(self._failing, "nightly_sync to fail max_failures ticks")
+        except BaseException:
+            self.stop()
+            raise
 
     def _up(self) -> bool:
         assert self.proc.poll() is None, f"the server exited early:\n{self.log.read_text()}"
