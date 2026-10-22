@@ -27,6 +27,12 @@ const CSS = `
     background: var(--bg-inset);
   }
   .barca-log-text { flex: 1; min-width: 0; color: var(--text-default); white-space: pre-wrap; word-break: break-word; }
+  .barca-log-line[data-stream="stderr"] .barca-log-text { color: var(--text-muted); }
+  .barca-log-line[data-stream="stderr"] { box-shadow: inset 2px 0 0 var(--border-strong); }
+  .barca-log-ts {
+    flex: none; color: var(--text-disabled); user-select: none;
+    font-size: var(--text-2xs); font-variant-numeric: tabular-nums;
+  }
   .barca-log-cursor {
     display: inline-block; width: 7px; height: 1.05em; margin-left: 3px;
     background: var(--signal); vertical-align: text-bottom;
@@ -38,11 +44,21 @@ const CSS = `
   }
 `
 
+/** `HH:MM:SS.mmm` of an RFC 3339 time in local time, as the rest of the UI shows times; the
+ * line's title is the recorded UTC time. */
+function clock(ts: string): string {
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ts
+  const pad = (n: number, width = 2) => String(n).padStart(width, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
+}
+
 /**
  * barca · LogViewer
  * Monospace log stream — the core barca surface. Renders captured lines with
- * line numbers and a blinking signal-green cursor while live; auto-scrolls to
- * the bottom while the user is pinned there.
+ * line numbers, each line's time (local; UTC on hover) and a blinking signal-green cursor while
+ * live; stderr lines are muted, with a rule at their left. Auto-scrolls to the
+ * bottom while the user is pinned there.
  */
 export function LogViewer({
   lines,
@@ -88,8 +104,13 @@ export function LogViewer({
         ) : (
           <div style={{ padding: '8px 0' }}>
             {lines.map((ln, i) => (
-              <div key={i} className="barca-log-line">
+              <div key={i} className="barca-log-line" data-stream={ln.stream ?? 'stdout'}>
                 {showLineNumbers && <span className="barca-log-gutter">{i + 1}</span>}
+                {ln.ts && (
+                  <span className="barca-log-ts" title={ln.ts}>
+                    {clock(ln.ts)}
+                  </span>
+                )}
                 <span className="barca-log-text">
                   {ln.text}
                   {live && i === lines.length - 1 && <span className="barca-log-cursor" />}

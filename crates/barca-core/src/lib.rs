@@ -50,6 +50,7 @@ mod recover;
 pub mod report;
 mod result_journal;
 pub mod results;
+pub mod run_logs;
 mod run_owner;
 pub mod schedule;
 pub mod selection;
@@ -68,7 +69,7 @@ pub mod values;
 pub mod warnings;
 
 pub use dag::Dag;
-pub use events::RunEvent;
+pub use events::{LogStream, RunEvent};
 pub use model::*;
 pub use planner::{ExecutionPlan, ResourceConfig, expand_partition_combos};
 /// Re-exported so callers (CLI, server) share one token type without depending

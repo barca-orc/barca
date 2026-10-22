@@ -336,7 +336,7 @@ struct RunState {
     failed_bases: std::collections::HashSet<String>,
     skipped_bases: std::collections::HashSet<String>,
     all_outputs: HashMap<String, OutputRef>,
-    logs_buffer: Vec<(String, String)>,
+    logs_buffer: crate::run_logs::Recorder,
     all_sinks: HashMap<String, String>,
     all_timings: HashMap<String, (Option<f64>, Option<u64>)>,
     step_clocks: HashMap<String, (f64, f64)>,
@@ -1041,7 +1041,7 @@ async fn open_run<'a, 'r>(
             db::insert_logs(
                 &request.cfg.db_path,
                 &started.run_id,
-                &[(String::new(), line)],
+                &[crate::run_logs::RecordedLine::barca(line)],
             )
             .await?;
             db::finish_run(
@@ -1061,6 +1061,11 @@ async fn open_run<'a, 'r>(
         total_estimated,
         ..Default::default()
     };
+    // Lines are spooled as they arrive, so `barca logs -f` can read a run still in progress.
+    state.logs_buffer.spool_to(crate::run_logs::spool_path(
+        &request.cfg.db_path,
+        &started.run_id,
+    ));
     state.decide_state.pinned = prepared.pinned.clone();
     state.decide_state.tick = request.rules.tick.clone();
     Ok(RunSession {
@@ -1778,7 +1783,7 @@ async fn record_and_publish(
             all_timings: &session.state.all_timings,
             decide_state: &session.state.decide_state,
             db_path: &session.request.cfg.db_path,
-            logs_buffer: &session.state.logs_buffer,
+            logs_buffer: &mut session.state.logs_buffer,
             telemetry: &session.started.telemetry,
             dag: &session.prepared.dag,
             run_started: session.started.run_started,
@@ -2961,7 +2966,7 @@ struct DispatchPhase<'a> {
     completed_steps: usize,
     total_steps: usize,
     event_tx: &'a Option<UnboundedSender<crate::RunEvent>>,
-    logs_buffer: &'a mut Vec<(String, String)>,
+    logs_buffer: &'a mut crate::run_logs::Recorder,
     step_durations: &'a mut HashMap<String, (f64, f64)>,
     cancel: &'a CancellationToken,
 }
@@ -3153,10 +3158,21 @@ async fn dispatch_phase(
         if let crate::RunEvent::Log {
             ref node_id,
             ref line,
+            stream,
+            ref ts,
         } = ev
         {
-            crate::jsonlog::step_output(node_id, line);
-            logs_sink.push((node_id.clone(), line.clone()));
+            // Under `BARCA_LOG=json`, stdout becomes a JSON line; stderr was already written
+            // to the worker's own stderr as it is.
+            if stream == crate::LogStream::Stdout {
+                crate::jsonlog::step_output(node_id, line);
+            }
+            logs_sink.push(crate::run_logs::RecordedLine {
+                node_id: node_id.clone(),
+                line: line.clone(),
+                stream,
+                ts: ts.clone(),
+            });
         }
         if let crate::RunEvent::StepFinished {
             ref node_id,
@@ -3229,7 +3245,7 @@ struct FinalizeRun<'a> {
     all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
     decide_state: &'a DecideState,
     db_path: &'a str,
-    logs_buffer: &'a [(String, String)],
+    logs_buffer: &'a mut crate::run_logs::Recorder,
     telemetry: &'a [(String, Box<dyn crate::telemetry::Integration>)],
     dag: &'a Dag,
     run_started: std::time::SystemTime,
@@ -3433,18 +3449,17 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     let cancel_reason = was_cancelled
         .then(crate::interrupt::cancel_reason)
         .flatten();
-    let logs_buffer: std::borrow::Cow<'_, [(String, String)]> = match &cancel_reason {
-        Some(reason) => {
-            let mut logs = logs_buffer.to_vec();
-            logs.push((String::new(), format!("[barca] run cancelled: {reason}")));
-            logs.into()
-        }
-        None => logs_buffer.into(),
-    };
-    let logs_buffer = &*logs_buffer;
+    if let Some(reason) = &cancel_reason {
+        logs_buffer.push_note(format!("[barca] run cancelled: {reason}"));
+    }
     // Persist captured output. Rust owns persistence — logs land in the DB
-    // regardless of how the run was triggered (CLI or server).
-    db::insert_logs(db_path, run_id, logs_buffer).await?;
+    // regardless of how the run was triggered (CLI or server). The spool, which readers of a
+    // run in progress used, goes once the lines are in.
+    let spool = logs_buffer.close_spool();
+    db::insert_logs(db_path, run_id, logs_buffer.lines()).await?;
+    if let Some(spool) = spool {
+        let _ = std::fs::remove_file(spool);
+    }
     trace_point!("persist_run_done");
 
     if !telemetry.is_empty() {

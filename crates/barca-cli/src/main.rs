@@ -137,7 +137,7 @@ fn main() {
     let mut ledger = None;
     match (configured, &cli) {
         (Some(server), Cli::Get { .. } | Cli::Run { .. }) => ledger = Some(server.into_ledger()),
-        (Some(server), Cli::Status { .. } | Cli::Stats { .. })
+        (Some(server), Cli::Status { .. } | Cli::Stats { .. } | Cli::Logs { .. })
         | (
             Some(server),
             Cli::History {
@@ -186,7 +186,8 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
         | Cli::Status { server, .. }
         | Cli::List { server, .. }
         | Cli::History { server, .. }
-        | Cli::Stats { server, .. } => Some(server),
+        | Cli::Stats { server, .. }
+        | Cli::Logs { server, .. } => Some(server),
         _ => None,
     }
 }
@@ -354,6 +355,30 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             server_files("list", &files, None)?;
             let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             client::list(server, &files, groups, json, limit, fields.as_deref()).await
+        }
+        Cli::Logs {
+            run_id,
+            step,
+            stream,
+            follow,
+            timestamps,
+            format,
+            env,
+            ..
+        } => {
+            client::logs(
+                server,
+                run_id.as_deref(),
+                env.as_deref(),
+                crate::commands::logs::LogsArgs {
+                    step: step.as_deref(),
+                    stream: stream.map(Into::into),
+                    follow,
+                    timestamps,
+                    json: is_json(format),
+                },
+            )
+            .await
         }
         Cli::History {
             reconcile,
@@ -532,13 +557,22 @@ async fn run_cli(
         Cli::Logs {
             run_id,
             step,
+            stream,
+            follow,
+            timestamps,
             format,
             env,
+            ..
         } => logs_cmd(
             env.as_deref(),
             run_id.as_deref(),
-            step.as_deref(),
-            is_json(format),
+            crate::commands::logs::LogsArgs {
+                step: step.as_deref(),
+                stream: stream.map(Into::into),
+                follow,
+                timestamps,
+                json: is_json(format),
+            },
         )
         .await
         .map_err(engine),

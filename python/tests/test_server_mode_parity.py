@@ -43,7 +43,7 @@ from .test_serve_robustness import _env, _free_port, wait_for
 TIMEOUT = 300
 
 # The commands that take `--server`.
-SERVER_COMMANDS = {"get", "run", "status", "list", "history", "stats"}
+SERVER_COMMANDS = {"get", "run", "status", "list", "history", "stats", "logs"}
 # Contract cases that only exist on this machine: `--reconcile` writes local history.
 LOCAL_ONLY = {"history_reconciled"}
 
@@ -61,7 +61,12 @@ CONTRACT_TABLE += [
     ("pretty_multi", ["get", "total,frame", "pipeline.py", "--pretty"]),
     ("pretty_dry_run", ["get", "total", "pipeline.py", "--dry-run", "--pretty"]),
     ("pretty_run_logs", ["run", "report", "pipeline.py", "--pretty"]),
+    ("logs_latest", ["logs", "--json"]),
+    ("logs_step_text", ["logs", "--step", "report", "--timestamps", "--pretty"]),
     ("pretty_run_failed", ["run", "broken", "pipeline.py", "--pretty"]),
+    ("logs_stderr", ["logs", "--stream", "stderr", "--json"]),
+    ("logs_follow_ended", ["logs", "-f", "--pretty"]),
+    ("logs_unknown_step", ["logs", "--step", "nope", "--json"]),
     ("pretty_unknown", ["get", "nope", "pipeline.py", "--pretty"]),
     ("pretty_list", ["list", "pipeline.py", "--pretty"]),
     ("pretty_groups", ["list", "pipeline.py", "--groups", "--pretty"]),

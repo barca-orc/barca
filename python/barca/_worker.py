@@ -51,29 +51,88 @@ class _LineEmitter(io.TextIOBase):
     to the worker's inherited descriptors. Partial lines flush on return or failure.
     """
 
+    stream = "stdout"
+
     def __init__(self, node_id):
         self.node_id = node_id
         self._buf = ""
         # The coordinator renders this metadata event; user stdout never bypasses it.
 
     def write(self, s):
-        from barca import _runtime
-
         self._buf += s
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
-            _runtime.emit_log(self.node_id, line)
+            self._record(line)
         return len(s)
 
     def flush(self):
         if self._buf and not sys.is_finalizing():
-            from barca import _runtime
+            line, self._buf = self._buf, ""
+            self._record(line)
 
-            _runtime.emit_log(self.node_id, self._buf)
-            self._buf = ""
+    def _record(self, line):
+        from barca import _runtime
+
+        _runtime.emit_log(self.node_id, line, self.stream)
+
+
+class _StderrTee(_LineEmitter):
+    """Python-level stderr of a step: written through to the worker's own stderr as it comes
+    (what the terminal, or `barca serve`'s stderr, showed before), and recorded line by line
+    as the step's `stderr` stream. That covers `logging`'s default handler, `warnings` and
+    anything printed to `sys.stderr`; writes to file descriptor 2 (native code, subprocesses)
+    do not pass through here. barca's own `[barca]` lines are written but not recorded."""
+
+    stream = "stderr"
+
+    def __init__(self, node_id, out):
+        super().__init__(node_id)
+        self._out = out
+
+    @property
+    def encoding(self):  # ty: ignore[invalid-property-type-override]
+        return getattr(self._out, "encoding", "utf-8")
+
+    @property
+    def errors(self):  # ty: ignore[invalid-property-type-override]
+        return getattr(self._out, "errors", "strict")
+
+    def fileno(self):
+        # Code that needs a descriptor (faulthandler, subprocess) gets the real one, and its
+        # writes go there uncaptured.
+        return self._out.fileno()
+
+    def isatty(self):
+        try:
+            return self._out.isatty()
+        except (AttributeError, ValueError, OSError):
+            return False
+
+    def write(self, s):
+        try:
+            self._out.write(s)
+        except (AttributeError, ValueError, OSError):
+            pass
+        return super().write(s)
+
+    def flush(self):
+        super().flush()
+        try:
+            self._out.flush()
+        except (AttributeError, ValueError, OSError):
+            pass
+
+    def _record(self, line):
+        # A progress bar redraws its line with \r: record what the terminal ended up showing.
+        if "\r" in line:
+            line = line.rstrip("\r").rsplit("\r", 1)[-1]
+        if line.startswith(("[barca]", "BARCA:")):
+            return
+        super()._record(line)
 
 
 _step_stdout = None
+_step_stderr = None
 
 
 def _stdout_for_step(node_id):
@@ -86,6 +145,29 @@ def _stdout_for_step(node_id):
         _step_stdout.flush()
         _step_stdout.node_id = node_id
     return _step_stdout
+
+
+def _stderr_for_step(node_id):
+    # As _stdout_for_step: a logging handler made at import time (logging.basicConfig())
+    # keeps this stream, so it is one stream that follows the current step.
+    global _step_stderr
+    if _step_stderr is None:
+        _step_stderr = _StderrTee(node_id, sys.stderr)
+    else:
+        _step_stderr.flush()
+        _step_stderr.node_id = node_id
+    return _step_stderr
+
+
+@contextlib.contextmanager
+def _captured(out, err):
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            yield
+        finally:
+            # Emit any trailing partial line, even if the step raised.
+            out.flush()
+            err.flush()
 
 
 def _peak_rss_bytes() -> int:
@@ -998,6 +1080,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
         source = str(Path(step["source_file"]).resolve())
         activate_source_path(source)
         emitter = _stdout_for_step(node_id)
+        err_emitter = _stderr_for_step(node_id)
         if source not in modules:
             # Only under `--agent` (and in `barca serve`): a person's terminal shows the progress
             # bar, and the import time is in the run JSON as `import_seconds` (#496).
@@ -1005,11 +1088,10 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 print(f"[barca] importing {source}", file=sys.stderr, flush=True)
             import_start = time.perf_counter()
             try:
-                with contextlib.redirect_stdout(emitter):
+                with _captured(emitter, err_emitter):
                     modules[source] = load_module(source)
             finally:
                 import_seconds = time.perf_counter() - import_start
-                emitter.flush()
         fn = getattr(modules[source], step["function_name"])
         imported = True
 
@@ -1055,24 +1137,20 @@ def _run_daemon_step(step, modules, art_dir, lru):
         activate_source_path(source)
 
         timeout = step.get("timeout_seconds", 0)
-        # Capture user stdout and stream it live, line by line.
-        with contextlib.redirect_stdout(emitter):
-            try:
-                if d_args:
-                    if timeout and timeout > 0:
-                        result = _run_with_timeout(
-                            lambda: fn(*d_args, **kwargs), {}, timeout, label=node_id
-                        )
-                    else:
-                        result = fn(*d_args, **kwargs)
+        # Capture user stdout and stderr and stream them live, line by line.
+        with _captured(emitter, err_emitter):
+            if d_args:
+                if timeout and timeout > 0:
+                    result = _run_with_timeout(
+                        lambda: fn(*d_args, **kwargs), {}, timeout, label=node_id
+                    )
                 else:
-                    if timeout and timeout > 0:
-                        result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=node_id)
-                    else:
-                        result = fn(**kwargs)
-            finally:
-                # Emit any trailing partial line, even if the step raised.
-                emitter.flush()
+                    result = fn(*d_args, **kwargs)
+            else:
+                if timeout and timeout > 0:
+                    result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=node_id)
+                else:
+                    result = fn(**kwargs)
 
         wall = time.perf_counter() - t0
         cpu = time.process_time() - c0

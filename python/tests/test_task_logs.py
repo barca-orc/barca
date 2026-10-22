@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -53,6 +54,15 @@ def cli(project, *args, code=0):
     return proc
 
 
+TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+
+
+def plain(rows):
+    """Recorded rows without their arrival times, which every row has."""
+    assert all(TS.fullmatch(row["ts"]) for row in rows), rows
+    return [{k: v for k, v in row.items() if k != "ts"} for row in rows]
+
+
 def test_task_result_json_value_and_python_api(project, monkeypatch):
     run = cli(project, "run", "report", "pipeline.py", "--json")
     doc = json.loads(run.stdout)
@@ -73,11 +83,12 @@ def test_logs_exact_lines_filters_and_source_free_reads(project):
     run = json.loads(cli(project, "run", "report", "pipeline.py", "--json").stdout)
     (project / "pipeline.py").unlink()
     records = json.loads(cli(project, "logs", run["run_id"], "--json").stdout)
-    assert records == [
-        {"node_id": "pipeline.py:source", "line": "source line"},
-        {"node_id": "pipeline.py:report", "line": "loading 3 files"},
-        {"node_id": "pipeline.py:report", "line": ""},
-        {"node_id": "pipeline.py:report", "line": "tail"},
+    assert [list(row) for row in records] == [["node_id", "stream", "ts", "line"]] * 4
+    assert plain(records) == [
+        {"node_id": "pipeline.py:source", "stream": "stdout", "line": "source line"},
+        {"node_id": "pipeline.py:report", "stream": "stdout", "line": "loading 3 files"},
+        {"node_id": "pipeline.py:report", "stream": "stdout", "line": ""},
+        {"node_id": "pipeline.py:report", "stream": "stdout", "line": "tail"},
     ]
     assert (
         cli(project, "logs", run["run_id"], "--step", "report", "--pretty").stdout
@@ -96,7 +107,14 @@ def test_failed_and_silent_steps_have_accessible_logs(project):
     doc = json.loads(failed.stdout)
     assert "before failure" not in failed.stderr and "partial failure" not in failed.stderr
     logs = json.loads(cli(project, "logs", doc["run_id"], "--json").stdout)
-    assert [row["line"] for row in logs] == ["before failure", "partial failure"]
+    stdout = [row["line"] for row in logs if row["stream"] == "stdout"]
+    assert stdout == ["before failure", "partial failure"]
+    # The failed attempt's traceback is the step's stderr, as Python prints it.
+    stderr = [row["line"] for row in logs if row["stream"] == "stderr"]
+    assert stderr[0] == "Traceback (most recent call last):"
+    assert stderr[-1] == "ValueError: boom"
+    assert any('raise ValueError("boom")' in line for line in stderr)
+    assert all(row["node_id"] == "pipeline.py:broken" for row in logs)
     quiet = json.loads(cli(project, "run", "quiet", "pipeline.py", "--json").stdout)
     assert (
         json.loads(cli(project, "logs", quiet["run_id"], "--step", "quiet", "--json").stdout) == []
@@ -123,9 +141,9 @@ def report(count):
     assert "import line" not in run.stderr and "handler line" not in run.stderr
     doc = json.loads(run.stdout)
     rows = json.loads(cli(project, "logs", doc["run_id"], "--json").stdout)
-    assert rows == [
-        {"node_id": "pipeline.py:source", "line": "import line"},
-        {"node_id": "pipeline.py:report", "line": "handler line"},
+    assert plain(rows) == [
+        {"node_id": "pipeline.py:source", "stream": "stdout", "line": "import line"},
+        {"node_id": "pipeline.py:report", "stream": "stdout", "line": "handler line"},
     ]
 
 
@@ -151,7 +169,7 @@ def test_ambiguous_function_names_require_exact_identity(project):
     rows = json.loads(
         cli(project, "logs", doc["run_id"], "--step", "left.py:work", "--json").stdout
     )
-    assert rows == [{"node_id": "left.py:work", "line": "left"}]
+    assert plain(rows) == [{"node_id": "left.py:work", "stream": "stdout", "line": "left"}]
 
 
 def test_partition_filters_keep_exact_key_identity(project):
@@ -168,7 +186,9 @@ def split(k):
     selected = json.loads(
         cli(project, "logs", doc["run_id"], "--step", "pipeline.py:split[k=a]", "--json").stdout
     )
-    assert selected == [{"node_id": "pipeline.py:split[k=a]", "line": "a"}]
+    assert plain(selected) == [
+        {"node_id": "pipeline.py:split[k=a]", "stream": "stdout", "line": "a"}
+    ]
 
 
 def test_logs_does_not_need_the_configured_store(project, monkeypatch):

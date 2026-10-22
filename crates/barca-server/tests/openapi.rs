@@ -291,10 +291,11 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(!load_error.is_valid(&json!({"file":"p.py","error":"broken","affected_nodes":[1]})));
     for event in [
         barca_core::RunEvent::RunStarted { run_id: "r".into() },
-        barca_core::RunEvent::Log {
-            node_id: "p.py:a".into(),
-            line: "hello".into(),
-        },
+        barca_core::RunEvent::log(
+            "p.py:a".into(),
+            "hello".into(),
+            barca_core::LogStream::Stderr,
+        ),
         barca_core::RunEvent::StepFinished {
             node_id: "p.py:a".into(),
             ok: false,
@@ -572,6 +573,50 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     )
     .await;
     assert!(!logs["logs"].as_array().unwrap().is_empty());
+    // The route `barca logs` reads: the run's status and lines, filtered by step and stream.
+    let run_logs = checked(
+        &router,
+        "GET",
+        &format!("/runs/{task}/logs"),
+        "/runs/{run_id}/logs",
+        200,
+    )
+    .await;
+    assert_eq!(run_logs["status"], "success");
+    assert_eq!(run_logs["logs"], logs["logs"]);
+    let stdout = checked(
+        &router,
+        "GET",
+        &format!("/runs/{task}/logs?step=publish&stream=stdout"),
+        "/runs/{run_id}/logs",
+        200,
+    )
+    .await;
+    assert!(
+        stdout["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|l| l["stream"] == "stdout" && l["ts"].is_string())
+    );
+    for (query, status) in [("?stream=both", 400), ("?step=invented", 400)] {
+        checked(
+            &router,
+            "GET",
+            &format!("/runs/{task}/logs{query}"),
+            "/runs/{run_id}/logs",
+            status,
+        )
+        .await;
+    }
+    checked(
+        &router,
+        "GET",
+        "/runs/unknown/logs",
+        "/runs/{run_id}/logs",
+        404,
+    )
+    .await;
     let broken = checked(&router, "POST", "/get/broken", "/get/{target}", 200).await["run_id"]
         .as_str()
         .unwrap()

@@ -84,7 +84,15 @@ pub(crate) const STEP_COLUMNS: &[&str] = &[
 ];
 
 /// Every column of `logs` except its row id.
-pub(crate) const LOG_COLUMNS: &[&str] = &["run_id", "node_id", "seq", "line", "created_at"];
+pub(crate) const LOG_COLUMNS: &[&str] = &[
+    "run_id",
+    "node_id",
+    "seq",
+    "line",
+    "created_at",
+    "stream",
+    "ts",
+];
 
 /// barca's tables and the columns this version reads or writes, besides the `id` row id of
 /// the first three. [`crate::db::init_db`] creates exactly these (a test holds the two together).

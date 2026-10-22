@@ -13,8 +13,8 @@ describe('reduceRunEvent', () => {
   it('streams logs and settles a node to success (happy path)', () => {
     const state = play([
       { type: 'run_started', run_id: 'r1' },
-      { type: 'log', node_id: NODE, line: 'loading…' },
-      { type: 'log', node_id: NODE, line: 'done' },
+      { type: 'log', node_id: NODE, line: 'loading…', stream: 'stdout' },
+      { type: 'log', node_id: NODE, line: 'done', stream: 'stdout' },
       { type: 'step_finished', node_id: NODE, ok: true, elapsed_seconds: 1.2 },
       { type: 'run_finished', run_id: 'r1', ok: true },
     ])
@@ -45,7 +45,7 @@ describe('reduceRunEvent', () => {
   it('marks a node running on its first log line', () => {
     const state = play([
       { type: 'run_started', run_id: 'r3' },
-      { type: 'log', node_id: NODE, line: 'working' },
+      { type: 'log', node_id: NODE, line: 'working', stream: 'stdout' },
     ])
     expect(state.statuses[NODE]).toBe('running')
     expect(state.running).toBe(true)
@@ -64,7 +64,7 @@ describe('reduceRunEvent', () => {
 
   it('is pure — does not mutate the input state', () => {
     const before = EMPTY_RUN_STATE
-    const after = reduceRunEvent(before, { type: 'log', node_id: NODE, line: 'x' })
+    const after = reduceRunEvent(before, { type: 'log', node_id: NODE, line: 'x', stream: 'stdout' })
     expect(before.logs).toEqual([])
     expect(after).not.toBe(before)
   })
@@ -74,13 +74,20 @@ describe('reduceRunEvent', () => {
       { type: 'run_started', run_id: 'r5' },
       { type: 'line', line: 'barca get: 3 steps', when: 'always' },
       { type: 'line', line: 'step raw_data started', when: 'agent' },
-      { type: 'log', node_id: NODE, line: 'hello' },
+      { type: 'log', node_id: NODE, line: 'hello', stream: 'stdout' },
+      { type: 'log', node_id: NODE, line: 'WARNING slow', stream: 'stderr', ts: '2026-10-22T10:00:00.123Z' },
     ])
+    expect(state.logs[1]).toEqual({
+      nodeId: NODE,
+      text: 'WARNING slow',
+      stream: 'stderr',
+      ts: '2026-10-22T10:00:00.123Z',
+    })
     expect(state.lines).toEqual([
       { line: 'barca get: 3 steps', when: 'always' },
       { line: 'step raw_data started', when: 'agent' },
     ])
-    expect(state.logs.map((l) => l.text)).toEqual(['hello'])
+    expect(state.logs.map((l) => l.text)).toEqual(['hello', 'WARNING slow'])
     expect(state.statuses[NODE]).toBe('running')
   })
 
@@ -146,7 +153,7 @@ describe('reduceRunEvent', () => {
 
 describe('endRunStream', () => {
   it('stops a running stream and keeps what it saw', () => {
-    const running = play([{ type: 'run_started', run_id: 'r' }, { type: 'log', node_id: NODE, line: 'x' }])
+    const running = play([{ type: 'run_started', run_id: 'r' }, { type: 'log', node_id: NODE, line: 'x', stream: 'stdout' }])
     const ended = endRunStream(running)
     expect(ended.running).toBe(false)
     expect(ended.ok).toBeNull()

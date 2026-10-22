@@ -48,7 +48,8 @@ outside the `GENERATED` blocks is written by hand.
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
-| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences `barca docs server-mode` lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history` and `stats`; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences `barca docs server-mode` lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `logs -f/--follow` | new in 0.29.2: the end-of-run line on stderr (`barca: run <run_id> ended: <status>`) and the choice of the run to follow without a run id may change after field use; the exit codes (0 succeeded, 130 cancelled, 1 otherwise) and the JSON Lines on stdout are stable |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
@@ -80,7 +81,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
 | `barca doctor` | `[<FILES>...]` | experimental: new prerequisite report; check names and provider-specific data may evolve | Diagnose project prerequisites without running pipeline steps |
-| `barca logs` | `[<RUN_ID>]` | stable | Read a run's captured step stdout, without progress messages |
+| `barca logs` | `[<RUN_ID>]` | stable | Read a run's recorded step output (stdout and stderr), without progress messages |
 | `barca history` | - | stable | Show recent run history |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
@@ -153,8 +154,8 @@ default, and any aliases.
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca run
 
@@ -171,8 +172,8 @@ default, and any aliases.
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca plan
 
@@ -193,11 +194,16 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<RUN_ID>` | - | - | stable | Exact run id from get/run JSON or history (default: the most recent run) |
+| `<RUN_ID>` | - | - | stable | Exact run id from get/run JSON or history (default: the most recent run; with --follow, the newest running run) |
 | `--step` | `STEP` | - | stable | Function name or exact node id (including a partition key when desired) |
+| `--stream` | `stdout\|stderr` | - | stable | Only the lines of this stream (default: both) |
+| `-f, --follow` | - | default `false` | experimental: new in 0.29.2: how the end of a followed run is reported may change after field use | Print a running run's lines as they arrive and exit when it ends (exit 0 when it succeeded, 130 when it was cancelled, 1 otherwise). With --json, one JSON object per line |
+| `--timestamps` | - | default `false` | stable | Text output: put each line's arrival time (UTC, milliseconds) before it. JSON always has it as `ts` |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | stable | Environment whose local history to read |
+| `--env` | `ENV` | - | stable | Environment whose history to read |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca history
 
@@ -210,8 +216,8 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca gc
 
@@ -233,8 +239,8 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca serve
 
@@ -261,8 +267,8 @@ default, and any aliases.
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca status
 
@@ -276,8 +282,8 @@ default, and any aliases.
 | `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca sql
 
@@ -408,7 +414,7 @@ value of its first key only.
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
 | `BARCA_CAPACITY` | the most the `weight=` of the steps running at once may add up to (beats `[execution] capacity` in `barca.toml`; default: the pool size); a whole number of at least 1, anything else is a usage error (exit 2) | experimental |
-| `BARCA_SERVER` | the configured barca server (beats `[server] url` in `barca.toml`): the ledger of a local `get`/`run`, what `status`/`history`/`stats` answer from, and what a bare `--server` uses; empty is unset; an invalid URL is a usage error (`barca docs server-mode`) | experimental |
+| `BARCA_SERVER` | the configured barca server (beats `[server] url` in `barca.toml`): the ledger of a local `get`/`run`, what `status`/`history`/`stats`/`logs` answer from, and what a bare `--server` uses; empty is unset; an invalid URL is a usage error (`barca docs server-mode`) | experimental |
 | `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`). Its settings are Datadog's own variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_TAGS`, `DD_TRACE_AGENT_URL`, `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT`, `DD_TRACE_ENABLED`, and for `barca serve` metrics `DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, `DD_DOGSTATSD_PORT`) | experimental |
 | `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later (`barca docs telemetry`). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
@@ -418,7 +424,7 @@ value of its first key only.
 
 `[server] url` in `barca.toml` or `BARCA_SERVER` (experimental) points `get` and `run` at a
 server's ledger (`barca docs server-mode`): they still run here, read cache hits from the server
-and post what they compute, over `http://` or `https://`. `status`, `history` and `stats` answer
+and post what they compute, over `http://` or `https://`. `status`, `history`, `stats` and `logs` answer
 from the server. `--local` ignores it for one command. A server that cannot be reached, answers
 unexpectedly or speaks another API version is exit 3 naming its URL, with `--local` as the
 remediation; a server whose store is not this project's `[remote]` (or a project with no
@@ -2162,18 +2168,33 @@ See `barca docs types` and `specs/artifact-formats.md`.
 
 ### Task stdout and logs
 
-`logs RUN_ID` is stable. JSON returns an array of `{node_id: string, line: string}` objects
-in recorded order; text returns only the lines. `--step` selects an exact id/base id/function
-name; ambiguous or absent steps and missing runs exit 2. Silent recorded steps return no
-lines. `--env` selects local history; logs does not import source or contact a remote store.
+`logs RUN_ID` is stable. JSON returns an array of `{node_id: string, stream: "stdout" |
+"stderr", ts: string | null, line: string}` objects in recorded order; text returns only the
+lines (`--timestamps` puts each line's `ts` before it). `stream` (additive, 0.29.2) is
+`stderr` for what a step wrote to Python's `sys.stderr` (`logging`, `warnings`) and for the
+traceback of each failed attempt; `ts` (additive, 0.29.2) is when the worker wrote the line,
+RFC 3339 UTC with milliseconds, and `null` on lines recorded by an older barca. `--stream
+stdout|stderr` keeps one stream. `--step` selects an exact id/base id/function name; ambiguous
+or absent steps and missing runs exit 2. Silent recorded steps return no lines. `--env` selects
+the environment's history; logs does not import source or contact a store.
 Without `RUN_ID` (additive, 0.29.0), logs reads the newest run in history, running or
 finished, and names it on stderr (`barca: logs of the most recent run: <run_id> (<command>
 <target>, <status>, started <time>)`; the wording is not stable); stdout is unchanged. With no
-run recorded it exits 2.
+run recorded it exits 2. A run in progress returns its lines so far.
+`-f`/`--follow` (experimental, 0.29.2) prints lines as they arrive, as JSON Lines with
+`--json` (one object per line, the array's objects), and exits when the run ends: 0 when it
+succeeded, 130 when it was cancelled, 1 otherwise. Without `RUN_ID` it follows the newest
+running run, else reads the most recent one.
+With a configured server (experimental), logs reads the server's runs (`GET
+/runs/{run_id}/logs`; `-f` streams `GET /runs/{run_id}/events`); `--local` reads this
+machine's.
+A run records at most 16 MiB of line text; the line that reaches it is followed by `[barca]
+log cap reached: ...` (stream `stderr`), and nothing after it is recorded.
 Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
-stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. Agent framework lines
-remain `[barca]`-prefixed. Retrieve captured output with `barca logs`. See `barca docs logs`
-and `specs/task-output.md` for flush, failure and ordering boundaries.
+stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. A step's stderr is written
+to stderr as it comes, in every mode, as before. Agent framework lines
+remain `[barca]`-prefixed and are not recorded. Retrieve captured output with `barca logs`.
+See `barca docs logs` and `specs/task-output.md` for flush, failure and ordering boundaries.
 
 <!-- BEGIN GENERATED schema logs -->
 | Key | Type | Present |
@@ -2181,6 +2202,8 @@ and `specs/task-output.md` for flush, failure and ordering boundaries.
 | `[]` | object | always |
 | `[].line` | string | always |
 | `[].node_id` | string | always |
+| `[].stream` | string | always |
+| `[].ts` | string | always |
 <!-- END GENERATED schema logs -->
 
 ### Execution timing and imports

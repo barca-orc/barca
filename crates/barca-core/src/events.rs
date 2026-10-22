@@ -22,8 +22,19 @@ pub enum RunEvent {
     /// A progress line exactly as a local run prints it on stderr: `--agent` step lines
     /// (`when: agent`), warnings, `[barca]` notes and the end-of-run line (`when: always`).
     Line { line: String, when: LineWhen },
-    /// A line of user stdout captured while `node_id` was executing.
-    Log { node_id: String, line: String },
+    /// A line a step wrote while `node_id` was executing: its stdout, or its stderr
+    /// (Python `logging`, `warnings`, `sys.stderr` and the traceback of a failed attempt).
+    /// `ts` is when the coordinator received it (RFC 3339, UTC, milliseconds); absent only
+    /// from events recorded by an older server.
+    Log {
+        node_id: String,
+        line: String,
+        #[serde(default)]
+        stream: LogStream,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        ts: Option<String>,
+    },
     /// A step finished: it succeeded, failed, or was served from cache (`cached: true`).
     StepFinished {
         node_id: String,
@@ -53,7 +64,61 @@ pub enum RunEvent {
     },
 }
 
+/// Which of a step's streams a recorded line came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum LogStream {
+    #[default]
+    Stdout,
+    Stderr,
+}
+
+impl LogStream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogStream::Stdout => "stdout",
+            LogStream::Stderr => "stderr",
+        }
+    }
+
+    /// The stream named `text` (`stdout` / `stderr`); `None` for anything else.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "stdout" => Some(LogStream::Stdout),
+            "stderr" => Some(LogStream::Stderr),
+            _ => None,
+        }
+    }
+}
+
+/// Now, as a log line's `ts`: RFC 3339, UTC, with milliseconds.
+pub fn log_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// A time in seconds since the epoch (as Python's `time.time()`), as a log line's `ts`.
+/// One that cannot be a time reads as now.
+pub fn epoch_timestamp(seconds: f64) -> String {
+    match chrono::DateTime::from_timestamp_micros((seconds * 1e6) as i64) {
+        Some(at) if seconds.is_finite() && seconds > 0.0 => {
+            at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        }
+        _ => log_timestamp(),
+    }
+}
+
 impl RunEvent {
+    /// A line of a step's output, stamped now.
+    pub fn log(node_id: String, line: String, stream: LogStream) -> Self {
+        RunEvent::Log {
+            node_id,
+            line,
+            stream,
+            ts: Some(log_timestamp()),
+        }
+    }
+
     /// Read an event back from its JSON (the `data:` of a server-sent event). The outcome of
     /// `run_finished` is kept as the exact text the server sent, so the order of its keys
     /// (the targets of a multi-target run) survives.
@@ -76,6 +141,10 @@ impl RunEvent {
         struct Log {
             node_id: String,
             line: String,
+            #[serde(default)]
+            stream: LogStream,
+            #[serde(default)]
+            ts: Option<String>,
         }
         #[derive(Deserialize)]
         struct Step {
@@ -104,8 +173,18 @@ impl RunEvent {
                 RunEvent::Line { line, when }
             }
             "log" => {
-                let Log { node_id, line } = serde_json::from_str(data)?;
-                RunEvent::Log { node_id, line }
+                let Log {
+                    node_id,
+                    line,
+                    stream,
+                    ts,
+                } = serde_json::from_str(data)?;
+                RunEvent::Log {
+                    node_id,
+                    line,
+                    stream,
+                    ts,
+                }
             }
             "step_finished" => {
                 let s: Step = serde_json::from_str(data)?;
@@ -168,11 +247,27 @@ mod tests {
         let ev = RunEvent::Log {
             node_id: "a.py:load".into(),
             line: "hi".into(),
+            stream: LogStream::Stderr,
+            ts: Some("2026-10-22T10:00:00.123Z".into()),
         };
         assert_eq!(
             serde_json::to_value(&ev).unwrap(),
-            json!({"type": "log", "node_id": "a.py:load", "line": "hi"})
+            json!({"type": "log", "node_id": "a.py:load", "line": "hi", "stream": "stderr", "ts": "2026-10-22T10:00:00.123Z"})
         );
+        assert_eq!(
+            epoch_timestamp(1_792_400_401.25),
+            "2026-10-19T09:00:01.250Z"
+        );
+        // An older server's event: no stream (stdout) and no ts.
+        let old = RunEvent::parse(r#"{"type":"log","node_id":"a.py:load","line":"hi"}"#).unwrap();
+        assert!(matches!(
+            old,
+            RunEvent::Log {
+                stream: LogStream::Stdout,
+                ts: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -251,10 +346,7 @@ mod tests {
                 line: "[barca] 1/1 steps | done in 0.1s".into(),
                 when: LineWhen::Always,
             },
-            RunEvent::Log {
-                node_id: "a.py:x".into(),
-                line: "hi".into(),
-            },
+            RunEvent::log("a.py:x".into(), "hi".into(), LogStream::Stdout),
             RunEvent::StepFinished {
                 node_id: "a.py:x".into(),
                 ok: true,

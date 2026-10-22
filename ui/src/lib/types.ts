@@ -149,6 +149,10 @@ export interface AssetDetail {
 export interface LogLine {
   nodeId: string
   text: string
+  /** The step's stream; absent means stdout. */
+  stream?: 'stdout' | 'stderr'
+  /** When the line was written (RFC 3339, UTC); absent on older lines. */
+  ts?: string | null
 }
 
 /**

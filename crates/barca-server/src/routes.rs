@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
         .route("/runs/{run_id}/events", get(runs::events))
         .route("/runs/{run_id}/output", get(runs::output))
+        .route("/runs/{run_id}/logs", get(runs::logs))
         .route("/logs/{run_id}", get(handlers::logs))
         .route("/state", get(handlers::state))
         // Start the metadata database over (the old one is moved aside, never deleted).

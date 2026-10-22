@@ -36,6 +36,10 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
 /// (unix seconds; `paused_until` NULL means until it is resumed). NULL when not paused.
 pub(crate) const SCHEDULE_STATE_COLUMNS: &[&str] = &["paused_at INTEGER", "paused_until INTEGER"];
 
+/// Which stream a recorded line came from (`stdout` / `stderr`) and when it arrived (RFC 3339,
+/// UTC, milliseconds). NULL on lines recorded by older versions: stdout, time unknown.
+pub(crate) const LOG_COLUMNS: &[&str] = &["stream TEXT", "ts TEXT"];
+
 pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     "artifact_path TEXT",
     "artifact_format TEXT",
@@ -179,6 +183,7 @@ pub(crate) fn additions_missing_in(schema: &crate::state_validate::Schema) -> bo
         ("materializations", MATERIALIZATION_COLUMNS),
         ("runs", RUN_COLUMNS),
         ("schedule_state", SCHEDULE_STATE_COLUMNS),
+        ("logs", LOG_COLUMNS),
     ] {
         let missing = definitions.iter().any(|definition| {
             let name = definition.split_whitespace().next().unwrap_or_default();

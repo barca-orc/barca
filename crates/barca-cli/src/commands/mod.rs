@@ -9,7 +9,7 @@ mod list;
 pub(crate) use list::*;
 mod status;
 pub(crate) use status::*;
-mod logs;
+pub(crate) mod logs;
 pub(crate) use logs::*;
 mod history;
 pub(crate) use history::*;

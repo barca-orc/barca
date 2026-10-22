@@ -113,24 +113,42 @@ pub async fn latest_run(cfg: &crate::config::ResolvedConfig) -> Result<db::RunRe
         })
 }
 
-/// Read recorded stdout without loading user source or contacting remote state.
-pub async fn logs(
-    cfg: &crate::config::ResolvedConfig,
+/// A run's recorded lines: the `logs` rows of the database at `read_path` (the metadata DB at
+/// `db_path`, or a snapshot of it), else its spool beside `db_path`: a run still in progress,
+/// or one whose process died before recording them.
+pub async fn run_log_lines(
+    db_path: &str,
+    read_path: &str,
     run_id: &str,
-    step: Option<&str>,
 ) -> Result<Vec<db::LogEntry>, BarcaError> {
-    db::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
-    if db::get_run(&cfg.db_path, run_id).await?.is_none() {
-        return Err(BarcaError::Usage(format!(
-            "run '{run_id}' was not found; use barca history --json to find a run id"
-        )));
-    }
-    let logs = db::get_logs(&cfg.db_path, run_id).await?;
-    let Some(step) = step else {
+    let logs = db::get_logs(read_path, run_id).await?;
+    if !logs.is_empty() {
         return Ok(logs);
-    };
-    let recorded = db::get_run_steps(&cfg.db_path, run_id).await?;
+    }
+    let spool = crate::run_logs::spool_path(db_path, run_id);
+    let (lines, _) = crate::run_logs::read_spool(&spool, 0)?;
+    Ok(lines
+        .into_iter()
+        .enumerate()
+        .map(|(seq, line)| db::LogEntry::at(seq, line))
+        .collect())
+}
+
+/// Whether `--step <step>` selects the line of node `id`: its exact id, its base id (every
+/// partition key), or its function name.
+pub fn step_matches(id: &str, step: &str) -> bool {
+    let parsed = crate::StepId::parse(id);
+    id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step)
+}
+
+/// The node ids `--step <step>` selects among a run's recorded lines and steps. A usage error
+/// when it selects none, or two different definitions.
+fn select_step(
+    logs: &[db::LogEntry],
+    recorded: &[db::RunStep],
+    run_id: &str,
+    step: &str,
+) -> Result<std::collections::HashSet<String>, BarcaError> {
     let all: std::collections::BTreeSet<&str> = logs
         .iter()
         .map(|line| line.node_id.as_str())
@@ -138,16 +156,11 @@ pub async fn logs(
         .collect();
     let matches: Vec<_> = all
         .into_iter()
-        .filter(|id| {
-            let parsed = crate::StepId::parse(id);
-            *id == step
-                || parsed.base_id() == step
-                || parsed.base_id().rsplit(':').next() == Some(step)
-        })
+        .filter(|id| step_matches(id, step))
         .collect();
     if matches.is_empty() {
         return Err(BarcaError::Usage(format!(
-            "step '{step}' has no recorded execution or stdout in run '{run_id}'"
+            "step '{step}' has no recorded execution or output in run '{run_id}'"
         )));
     }
     // A base name may select all of its partitions, but never two different definitions.
@@ -161,13 +174,85 @@ pub async fn logs(
             bases.into_iter().collect::<Vec<_>>().join(", ")
         )));
     }
-    let matches: std::collections::HashSet<String> =
-        matches.into_iter().map(String::from).collect();
-    Ok(logs
-        .into_iter()
-        .filter(|line| matches.contains(&line.node_id))
-        .collect())
+    Ok(matches.into_iter().map(String::from).collect())
 }
+
+/// Read recorded output without loading user source or contacting remote state.
+pub async fn logs(
+    cfg: &crate::config::ResolvedConfig,
+    run_id: &str,
+    step: Option<&str>,
+    stream: Option<crate::LogStream>,
+) -> Result<Vec<db::LogEntry>, BarcaError> {
+    db::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await?;
+    logs_at(&cfg.db_path, &cfg.db_path, run_id, step, stream).await
+}
+
+/// [`logs`] of the metadata DB at `db_path`, read from `read_path` (it or a snapshot of it).
+/// An unknown run is a usage error.
+pub async fn logs_at(
+    db_path: &str,
+    read_path: &str,
+    run_id: &str,
+    step: Option<&str>,
+    stream: Option<crate::LogStream>,
+) -> Result<Vec<db::LogEntry>, BarcaError> {
+    if db::get_run(read_path, run_id).await?.is_none() {
+        return Err(BarcaError::Usage(format!(
+            "run '{run_id}' was not found; use barca history --json to find a run id"
+        )));
+    }
+    let mut logs = run_log_lines(db_path, read_path, run_id).await?;
+    if let Some(step) = step {
+        let recorded = db::get_run_steps(read_path, run_id).await?;
+        let matches = select_step(&logs, &recorded, run_id, step)?;
+        logs.retain(|line| matches.contains(&line.node_id));
+    }
+    if let Some(stream) = stream {
+        logs.retain(|line| line.stream == stream);
+    }
+    Ok(logs)
+}
+
+/// The run `barca logs` reads without a run id: the most recent; with `running`, the newest
+/// run still in progress when there is one.
+pub fn pick_run(runs: Vec<db::RunRecord>, running: bool) -> Option<db::RunRecord> {
+    if running && let Some(run) = runs.iter().find(|r| r.status == "running") {
+        return Some(run.clone());
+    }
+    runs.into_iter().next()
+}
+
+/// [`latest_run`], or with `running` the newest run in progress (else the most recent).
+pub async fn run_to_read(
+    cfg: &crate::config::ResolvedConfig,
+    running: bool,
+) -> Result<db::RunRecord, BarcaError> {
+    if !running {
+        return latest_run(cfg).await;
+    }
+    db::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await?;
+    let recent = db::get_recent_runs(&cfg.db_path, RUNNING_LOOKBACK).await?;
+    match pick_run(recent, true) {
+        Some(run) => Ok(run),
+        None => latest_run(cfg).await,
+    }
+}
+
+/// The run's record, or `None` for an unknown run.
+pub async fn run_record(
+    cfg: &crate::config::ResolvedConfig,
+    run_id: &str,
+) -> Result<Option<db::RunRecord>, BarcaError> {
+    db::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await?;
+    db::get_run(&cfg.db_path, run_id).await
+}
+
+/// How many recent runs `barca logs -f` looks through for one in progress.
+pub const RUNNING_LOOKBACK: usize = 50;
 
 // ─── stats ────────────────────────────────────────────────────────────────────
 

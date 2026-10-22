@@ -215,8 +215,10 @@ is a cache hit and only the sensor and the task run:
 [barca] 2/3 steps | done in 0.0s
 ```
 
-What the steps print is recorded with the run, not written to the server's stderr. `barca logs`
-reads it back by run id:
+What the steps print is recorded with the run, not written to the server's stderr; what they
+write to Python's stderr (`logging`, warnings, tracebacks) goes to the server's stderr and is
+recorded too. `barca logs` reads it back by run id, from the server's machine or, with the
+server configured, from a laptop (`barca logs -f` follows a run as it goes):
 
 ```
 $ barca logs 14ca5c7b3768 --pretty

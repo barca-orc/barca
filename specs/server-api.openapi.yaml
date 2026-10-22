@@ -2,11 +2,11 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '7'
-  description: 'Normative current wire contract; specification version 7 is independent of package versions.
+  version: '8'
+  description: 'Normative current wire contract; specification version 8 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
-    3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
+    3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
     /stats/{name}, /project), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
@@ -1769,6 +1769,97 @@ paths:
         '400':
           description: Invalid request
       parameters: *id032
+  /runs/{run_id}/logs:
+    get:
+      summary: A run's recorded output lines
+      operationId: get_runs_run_id_logs
+      responses:
+        '200':
+          description: The run's status and its recorded lines in order, filtered by step and stream
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunLogs'
+        '404':
+          description: Unknown run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: A step that selects no recorded execution or output, or two definitions; a
+            stream that is not stdout or stderr
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema:
+                type: string
+      description: 'What `barca logs` reads: the lines a run''s steps wrote to stdout and stderr, in the
+        order they arrived. A run in progress answers with its lines so far (GET /runs/{run_id}/events
+        streams them as they arrive). A run records at most 16 MiB of line text; past that a marker line
+        says so. Accepts a durable run id or a retained live handle.'
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: step
+        in: query
+        required: false
+        description: A function name, base node id (every partition key) or exact node id, as barca logs --step
+        schema:
+          type: string
+      - name: stream
+        in: query
+        required: false
+        description: Only the lines of this stream
+        schema:
+          $ref: '#/components/schemas/LogStream'
+    head:
+      summary: A run's recorded output lines (headers only)
+      operationId: head_runs_run_id_logs
+      responses:
+        '200':
+          description: Response
+        '404':
+          description: Unknown run
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
   /logs/{run_id}:
     get:
       summary: Read persisted output lines
@@ -1805,7 +1896,8 @@ paths:
             text/plain:
               schema: *id003
       description: Accepts a retained live handle or a durable DB ID. Unknown IDs return an empty logs
-        array with HTTP 200. Live lines not yet persisted are available through events or run details.
+        array with HTTP 200. Live lines not yet persisted are available through events, run details or
+        GET /runs/{run_id}/logs.
       parameters: &id034
       - name: run_id
         in: path
@@ -3019,6 +3111,13 @@ components:
           description: failures >= max_failures; ticks are skipped until an explicit request
             or an input change
           type: boolean
+    LogStream:
+      description: Which of a step's streams a recorded line came from. stderr holds Python logging, warnings,
+        writes to sys.stderr and the traceback of each failed attempt
+      type: string
+      enum:
+      - stdout
+      - stderr
     Log:
       type: object
       additionalProperties: false
@@ -3026,10 +3125,36 @@ components:
       - node_id
       - seq
       - line
+      - stream
+      - ts
       properties:
         node_id: *id003
         seq: *id054
         line: *id003
+        stream:
+          $ref: '#/components/schemas/LogStream'
+        ts:
+          description: When the line was written (RFC 3339, UTC, milliseconds); null on lines recorded
+            before barca stamped them
+          type:
+          - string
+          - 'null'
+    RunLogs:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - status
+      - logs
+      properties:
+        run_id: *id003
+        status:
+          description: The run's status as GET /runs/{run_id} reports it (running while it runs)
+          type: string
+        logs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Log'
     Logs:
       type: object
       additionalProperties: false
@@ -3183,6 +3308,12 @@ components:
             const: log
           node_id: *id003
           line: *id003
+          stream:
+            $ref: '#/components/schemas/LogStream'
+          ts:
+            description: When the worker wrote the line (RFC 3339, UTC, milliseconds). Absent only
+              from events recorded by an older server
+            type: string
       - type: object
         additionalProperties: false
         required:

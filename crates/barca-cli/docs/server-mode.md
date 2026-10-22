@@ -59,8 +59,8 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
   with `http://` or `https://`.
 - `--local` ignores the configured server for one command; `--local` with `--server` is a usage
   error.
-- `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history` and `stats`.
-  `serve`, `plan`, `sql`, `doctor`, `logs`, `docs` and `version` always run on this machine;
+- `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history`, `stats` and
+  `logs`. `serve`, `plan`, `sql`, `doctor`, `docs` and `version` always run on this machine;
   `--server` or `--local` on them is a usage error. `barca list` without `--server` reads this
   machine's files, and `barca sql` reads this machine's database and artifacts.
 
@@ -149,11 +149,13 @@ once, and marks the step `bytes_changed: true` in its `--json` output. Artifacts
 by run hash, so the second machine's upload has replaced the object in the store; a later fetch
 of that result notes the mismatch and uses the store's copy.
 
-## status, history and stats with a server
+## status, history, stats and logs with a server
 
-With a server configured, `barca status`, `barca history` and `barca stats` answer from the
-server, as `--server` does, after printing `[barca] server <url> (<source>)`. The server answers
-for its deployed code.
+With a server configured, `barca status`, `barca history`, `barca stats` and `barca logs` answer
+from the server, as `--server` does, after printing `[barca] server <url> (<source>)`. The server
+answers for its deployed code. `barca logs` reads the server's runs (`GET /runs/{run_id}/logs`,
+and `-f` its event stream); the lines of a run this machine ran against the ledger stay here,
+with `--local` (`barca docs logs`, "Debugging a live pipeline").
 
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`
 gets `local`: `true` when this machine has a copy of the result the server would serve (its

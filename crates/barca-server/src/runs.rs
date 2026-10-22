@@ -813,10 +813,17 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
         let live_logs = view.logs.is_empty();
         for event in channel.snapshot() {
             match event {
-                RunEvent::Log { node_id, line } if live_logs => view.logs.push(db::LogEntry {
+                RunEvent::Log {
+                    node_id,
+                    line,
+                    stream,
+                    ts,
+                } if live_logs => view.logs.push(db::LogEntry {
                     node_id,
                     seq: view.logs.len() as i64,
                     line,
+                    stream,
+                    ts,
                 }),
                 RunEvent::StepFinished {
                     node_id,
@@ -856,6 +863,77 @@ fn live_status(status: RunStatus) -> &'static str {
         RunStatus::Failed => "failed",
         RunStatus::Cancelled => "cancelled",
     }
+}
+
+/// `?step=` and `?stream=` of `GET /runs/{run_id}/logs`.
+#[derive(Debug, Deserialize)]
+pub struct LogsQuery {
+    step: Option<String>,
+    stream: Option<String>,
+}
+
+/// `GET /runs/{run_id}/logs` — `{run_id, status, logs}`: the run's recorded lines as
+/// `barca logs` reads them (those of a run in progress so far), filtered as `--step` and
+/// `--stream` filter them. An unknown run is a 404; an unknown or ambiguous step, or a stream
+/// that is neither `stdout` nor `stderr`, a 400.
+pub async fn logs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<LogsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let stream = match query.stream.as_deref() {
+        None | Some("") => None,
+        Some(text) => Some(barca_core::LogStream::parse(text).ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "stream '{text}' is not a stream: use stdout or stderr"
+            ))
+        })?),
+    };
+    let snapshot = snapshot_db(&state).await?;
+    let live = state.runs.get(&id).map(|r| r.status);
+    let record = db::get_run(&snapshot.path, &id).await?;
+    let mut status = match (&record, live) {
+        (Some(record), _) => record.status.clone(),
+        (None, Some(live)) => live_status(live).to_string(),
+        (None, None) => {
+            return Err(ApiError::NotFound(format!(
+                "run '{id}' was not found on this server
+A run recorded on another machine is \
+                 read there (`barca logs RUN_ID --local` where a server is configured)."
+            )));
+        }
+    };
+    if let Some(live) = live
+        && matches!(live, RunStatus::Pending | RunStatus::Running)
+    {
+        status = live_status(live).to_string();
+    }
+    let step = query.step.as_deref().filter(|s| !s.is_empty());
+    let lines = if record.is_some() {
+        // Errors read as `barca logs` reports them here.
+        barca_core::queries::logs_at(
+            &state.config.resolved.db_path,
+            &snapshot.path,
+            &id,
+            step,
+            stream,
+        )
+        .await
+        .map_err(|e| {
+            ApiError::run(
+                e,
+                Context {
+                    command: "logs",
+                    files: Vec::new(),
+                },
+            )
+        })?
+    } else {
+        Vec::new()
+    };
+    Ok(Json(
+        json!({ "run_id": id, "status": status, "logs": lines }),
+    ))
 }
 
 /// `GET /runs/{run_id}/events` (and the alias `GET /events/{run_id}`) — the run's events as
@@ -1341,10 +1419,11 @@ mod tests {
         let total = 5_000;
         let mut slow = Box::pin(channel.subscribe(0));
         for i in 0..total {
-            channel.emit(RunEvent::Log {
-                node_id: "p.py:a".into(),
-                line: i.to_string(),
-            });
+            channel.emit(RunEvent::log(
+                "p.py:a".into(),
+                i.to_string(),
+                barca_core::LogStream::Stdout,
+            ));
         }
         // The first reader takes a few events and goes away, as a dropped connection does.
         let mut first = Box::pin(channel.subscribe(0));

@@ -225,8 +225,9 @@ those references. Captured stdout is stored
 separately. Human/value modes show each print on stderr as `[pipeline.py:report] text`;
 `--agent` progress keeps its `[barca]` prefix. JSON output suppresses captured prints.
 Use `barca logs RUN_ID --pretty` for only the recorded lines, or `--json` for
-`[{node_id, line}]`. Complete lines and trailing partial lines flushed on return/failure
-are recorded. `--step report` selects a function name; exact node ids disambiguate.
+`[{node_id, stream, ts, line}]`. What a task writes to `sys.stderr` (`logging`, warnings) is
+recorded too, as `stream: "stderr"`, and so is the traceback of a failed attempt. Complete
+lines and trailing partial lines flushed on return/failure are recorded. `--step report` selects a function name; exact node ids disambiguate.
 See `barca docs logs` for the full contract.
 
 See also: `barca docs cache`, `barca docs examples/deploy-task`, `barca docs logs`.

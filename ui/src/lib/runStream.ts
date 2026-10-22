@@ -62,7 +62,7 @@ export function reduceRunEvent(state: RunStreamState, event: RunEvent): RunStrea
     }))
     .with({ type: 'log' }, (ev) => ({
       ...state,
-      logs: [...state.logs, { nodeId: ev.node_id, text: ev.line }],
+      logs: [...state.logs, { nodeId: ev.node_id, text: ev.line, stream: ev.stream, ts: ev.ts }],
       statuses: { ...state.statuses, [ev.node_id]: 'running' as StatusKind },
     }))
     .with({ type: 'step_finished' }, (ev) => {

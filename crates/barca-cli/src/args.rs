@@ -55,14 +55,32 @@ pub(crate) enum GetOutput {
     Pretty,
 }
 
+/// `--stream` on logs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum LogStreamArg {
+    /// What the steps printed to stdout
+    Stdout,
+    /// What the steps wrote to stderr: logging, warnings, tracebacks of failed attempts
+    Stderr,
+}
+
+impl From<LogStreamArg> for barca_core::LogStream {
+    fn from(arg: LogStreamArg) -> Self {
+        match arg {
+            LogStreamArg::Stdout => Self::Stdout,
+            LogStreamArg::Stderr => Self::Stderr,
+        }
+    }
+}
+
 /// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1). On `get`, `run`,
-/// `status`, `list`, `history` and `stats` only; the other commands always run here.
+/// `status`, `list`, `history`, `stats` and `logs` only; the other commands always run here.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct ServerFlags {
     /// Run this command on a barca server (`barca serve`) and print its result here: the URL
     /// given, or with no URL the configured one (BARCA_SERVER, else [server] url in
     /// barca.toml). Without it, get and run run on this machine (against a configured server's
-    /// ledger) and status, history and stats are answered by a configured server
+    /// ledger) and status, history, stats and logs are answered by a configured server
     #[arg(
         long,
         value_name = "URL",
@@ -276,18 +294,28 @@ More: barca docs doctor";
 const LOGS_HELP: &str = "\
 Examples:
   barca logs                            # the most recent run; stderr names which one
+  barca logs -f                         # follow the newest running run until it ends
+  barca logs 7f30b3e9 --follow --step report   # follow one step of a run
   barca logs --step report              # one step of the most recent run
-  barca logs 7f30b3e9 --pretty          # captured stdout lines, without progress messages
+  barca logs 7f30b3e9 --stream stderr   # only stderr: logging, warnings, tracebacks
+  barca logs 7f30b3e9 --timestamps      # each line after its UTC arrival time
+  barca logs 7f30b3e9 --pretty          # recorded lines, without progress messages
   barca logs 7f30b3e9 --step report --pretty   # one function name or exact node id
-  barca logs 7f30b3e9 --json            # [{node_id, line}] in recorded order
+  barca logs 7f30b3e9 --json            # [{node_id, stream, ts, line}] in recorded order
   barca logs 7f30b3e9 --env dev         # read another environment's local history
+  barca logs --server -f                # follow the newest running run on the server
+  barca logs 7f30b3e9 --local           # this machine's records, despite a configured server
 
 Replace the example id with run_id from barca run/get --json or barca history. Without a run
 id, barca reads the newest run in barca history (running or finished) and names it on stderr:
 barca: logs of the most recent run: <run_id> (<command> <target>, <status>, started <time>).
-Reads the local recorded stdout lines; does not execute or import pipeline code. Unknown runs
-and ambiguous step names are usage errors. Missing/unknown steps are usage errors; a recorded
-step that printed nothing returns no lines. Prints emitted before a failed step are retained.
+With -f and no run id it follows the newest running run (else the most recent run).
+Records what steps write to stdout and to stderr (Python logging, warnings, tracebacks of
+failed attempts); not native writes to the descriptors or subprocess output. Reads the
+recorded lines; does not execute or import pipeline code. With a configured server it reads
+the server's runs; --local reads this machine's. -f exits when the run ends: 0 when it
+succeeded, 130 when it was cancelled, 1 otherwise. Unknown runs and ambiguous or unrecorded
+step names are usage errors; a recorded step that printed nothing returns no lines.
 More: barca docs logs";
 
 const HISTORY_HELP: &str = "\
@@ -368,8 +396,8 @@ can reach the port can trigger runs, so keep it on a private network or behind a
 Invalid sources and their graph dependents are excluded; healthy definitions and schedules
 continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
 --watch restores repaired configured sources; one-shot commands remain strict.
-From another machine, `--server <url>` on get, run, status, list, history and stats runs the
-command on this server and prints it there as a local run would (barca docs server-mode).
+From another machine, `--server <url>` on get, run, status, list, history, stats and logs runs
+the command on this server and prints it there as a local run would (barca docs server-mode).
 `serve` itself always runs here: --server on it is a usage error.
 The first line names the env, the artifact store and the metadata DB with its format:
 [barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>).
@@ -703,19 +731,34 @@ pub(crate) enum Cli {
         #[arg(long)]
         env: Option<String>,
     },
-    /// Read a run's captured step stdout, without progress messages
+    /// Read a run's recorded step output (stdout and stderr), without progress messages
     #[command(after_help = LOGS_HELP)]
     Logs {
-        /// Exact run id from get/run JSON or history (default: the most recent run)
+        /// Exact run id from get/run JSON or history (default: the most recent run; with
+        /// --follow, the newest running run)
         run_id: Option<String>,
         /// Function name or exact node id (including a partition key when desired)
         #[arg(long)]
         step: Option<String>,
+        /// Only the lines of this stream (default: both)
+        #[arg(long, value_enum)]
+        stream: Option<LogStreamArg>,
+        /// Print a running run's lines as they arrive and exit when it ends (exit 0 when it
+        /// succeeded, 130 when it was cancelled, 1 otherwise). With --json, one JSON object per
+        /// line
+        #[arg(short, long)]
+        follow: bool,
+        /// Text output: put each line's arrival time (UTC, milliseconds) before it. JSON always
+        /// has it as `ts`
+        #[arg(long)]
+        timestamps: bool,
         #[command(flatten)]
         format: FormatFlags,
-        /// Environment whose local history to read
+        /// Environment whose history to read
         #[arg(long)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Show recent run history
     #[command(after_help = HISTORY_HELP)]

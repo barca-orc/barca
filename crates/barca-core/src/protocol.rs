@@ -79,8 +79,17 @@ pub enum WorkerMessage {
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
-    /// A line of user stdout captured while a step was executing.
-    Log { node_id: String, line: String },
+    /// A line of user stdout or stderr captured while a step was executing, and when the
+    /// worker wrote it (`t`, seconds since the epoch). `stream` and `t` are absent from a
+    /// worker older than stderr capture: stdout, received now.
+    Log {
+        node_id: String,
+        line: String,
+        #[serde(default)]
+        stream: crate::LogStream,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        t: Option<f64>,
+    },
     /// Worker is requesting parallel dispatch of sub-tasks.
     /// Worker blocks on socket read until it receives ParallelResponse.
     Submit {
@@ -870,9 +879,16 @@ mod tests {
         let mut cursor = Cursor::new(framed);
         let decoded: WorkerMessage = read_message(&mut cursor).unwrap().unwrap();
         match decoded {
-            WorkerMessage::Log { node_id, line } => {
+            WorkerMessage::Log {
+                node_id,
+                line,
+                stream,
+                t,
+            } => {
+                assert_eq!(t, None);
                 assert_eq!(node_id, "a.py:load");
                 assert_eq!(line, "loading…");
+                assert_eq!(stream, crate::LogStream::Stdout);
             }
             _ => panic!("expected Log"),
         }
@@ -881,10 +897,13 @@ mod tests {
         let msg = WorkerMessage::Log {
             node_id: "a.py:load".to_string(),
             line: "loading…".to_string(),
+            stream: crate::LogStream::Stderr,
+            t: Some(1.5),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"log""#));
         assert!(json.contains(r#""line":"loading…""#));
+        assert!(json.contains(r#""stream":"stderr""#));
     }
 
     #[test]

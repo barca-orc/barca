@@ -654,6 +654,16 @@ impl WorkerPool {
                             error.push_str(&traceback);
                         }
                         if let Some(ref mut ev) = on_event {
+                            // The attempt's traceback is part of the step's stderr, as Python
+                            // would have printed it. Recorded, not echoed: the failure line
+                            // says it already.
+                            for line in traceback_lines(&error_type, &message, &traceback) {
+                                ev(RunEvent::log(
+                                    node_id.clone(),
+                                    line,
+                                    crate::LogStream::Stderr,
+                                ));
+                            }
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: false,
@@ -814,11 +824,25 @@ impl WorkerPool {
                         self.assign_ready(coord, cost, cancel).await;
                     }
                     WorkerMessage::Heartbeat => {}
-                    WorkerMessage::Log { node_id, line } => {
-                        // A line of user stdout — forward live; the caller persists
-                        // it to the DB. Does not change worker/coordinator state.
+                    WorkerMessage::Log {
+                        node_id,
+                        line,
+                        stream,
+                        t,
+                    } => {
+                        // A line of user stdout or stderr — forward live, stamped with when
+                        // the worker wrote it; the caller persists it. Does not change
+                        // worker/coordinator state.
                         if let Some(ref mut ev) = on_event {
-                            ev(RunEvent::Log { node_id, line });
+                            ev(RunEvent::Log {
+                                node_id,
+                                line,
+                                stream,
+                                ts: Some(t.map_or_else(
+                                    crate::events::log_timestamp,
+                                    crate::events::epoch_timestamp,
+                                )),
+                            });
                         }
                     }
                     WorkerMessage::RepeatedWarnings { counts } => {
@@ -1605,6 +1629,22 @@ fn signal_name(signal: i32) -> String {
 /// The step error for a worker that disconnected while running `node` (or, `frozen`, while
 /// it waited for its `parallel()` branches): the exit status when there is one, so a worker
 /// killed by the kernel reads as such and not as a bare disconnect (#433).
+/// A failed attempt as Python prints an uncaught exception: the traceback (barca's frames left
+/// out) under its header, then `ErrorType: message`. Recorded as the step's stderr lines.
+fn traceback_lines(error_type: &str, message: &str, traceback: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !traceback.trim().is_empty() {
+        lines.push("Traceback (most recent call last):".to_string());
+        lines.extend(traceback.lines().map(str::to_string));
+    }
+    let mut last = format!("{error_type}: {message}");
+    if message.is_empty() {
+        last = error_type.to_string();
+    }
+    lines.extend(last.lines().map(str::to_string));
+    lines
+}
+
 fn disconnect_message(
     node: &str,
     status: Option<std::process::ExitStatus>,
@@ -1788,6 +1828,24 @@ mod tests {
     use super::*;
     use crate::coordinator::ItemSpec;
     use std::collections::HashMap;
+
+    #[test]
+    fn a_failed_attempt_reads_as_python_prints_it() {
+        assert_eq!(
+            traceback_lines(
+                "ValueError",
+                "bad input",
+                "  File \"p.py\", line 3, in a\n    raise ValueError(\"bad input\")"
+            ),
+            [
+                "Traceback (most recent call last):",
+                "  File \"p.py\", line 3, in a",
+                "    raise ValueError(\"bad input\")",
+                "ValueError: bad input",
+            ]
+        );
+        assert_eq!(traceback_lines("KeyError", "", ""), ["KeyError"]);
+    }
 
     #[test]
     fn a_dead_workers_exit_status_names_the_signal_or_code() {

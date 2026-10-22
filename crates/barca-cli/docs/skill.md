@@ -79,8 +79,9 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   `warnings`: always an
   array, `[]` or plan-time warnings such as an input a step never uses (also one
   `[barca] warning: ...` line each on stderr; fix them, they cost load time).
-- Retrieve captured step stdout with `barca logs RUN_ID --json` (`barca logs --json` reads the
-  most recent run and names it on stderr). JSON runs suppress captured
+- Retrieve a run's recorded step output (stdout, and stderr: `logging`, warnings, tracebacks)
+  with `barca logs RUN_ID --json` (`barca logs --json` reads the most recent run and names it on
+  stderr; `barca logs -f` follows a running run). JSON runs suppress captured
   prints; other modes show them on stderr with `[node_id]` prefixes.
 - **stderr** has progress and errors. In JSON mode find the error-envelope JSON line
   `{"error", "code", "kind", "remediation"}`, plus `node`, `traceback`, `artifact_dir` for a

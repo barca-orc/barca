@@ -74,6 +74,7 @@ return the corresponding headers without a body.
 | `GET`  | `/runs/{run_id}/events` | Server-sent events, each with an `id:`: `run_started`, `line`, `log`, `step_finished`, `run_finished`. |
 | `DELETE` | `/runs/{run_id}` | Cancel a pending or running run. |
 | `GET`  | `/runs/{run_id}/output` | The final artifact's bytes of a successful single-target run. |
+| `GET`  | `/runs/{run_id}/logs` | What the run's steps wrote (stdout and stderr), so far while it runs: `{run_id, status, logs}`. `?step=` and `?stream=stdout\|stderr` filter as `barca logs` does. |
 | `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
 
@@ -219,7 +220,7 @@ GET /runs/{run_id}
   "outcome": { "status": "success", "run_id": "1b942bb33182", "final_output": {"_barca_artifact": {"path": ".barca/default/artifacts/pipeline.py:daily_report/9f2c.json", "format": "json", "size_bytes": 8}}, "steps": [], "...": "..." },
   "error": null,
   "steps": [{ "node_id": "pipeline.py:daily_report", "status": "success", "elapsed_seconds": 0.4, "error": null }],
-  "logs": [{ "node_id": "pipeline.py:daily_report", "seq": 0, "line": "wrote 3 rows" }]
+  "logs": [{ "node_id": "pipeline.py:daily_report", "seq": 0, "line": "wrote 3 rows", "stream": "stdout", "ts": "2026-10-20T05:00:00.512Z" }]
 }
 ```
 
@@ -425,11 +426,19 @@ can reset.
 ### Logs
 
 ```
-GET /logs/{run_id}     → { "logs": [{ node_id, seq, line }, ...] }
+GET /runs/{run_id}/logs?step=report&stream=stderr
+  → { "run_id": "...", "status": "running", "logs": [{ node_id, seq, line, stream, ts }, ...] }
+GET /logs/{run_id}     → { "logs": [{ node_id, seq, line, stream, ts }, ...] }
 ```
 
-The lines a run's steps printed, from the database once the run finished; an unknown id is an
-empty list. A run in progress streams them as `log` events.
+The lines a run's steps wrote: `stream` is `stdout` or `stderr` (Python `logging`, warnings,
+`sys.stderr`, and the traceback of each failed attempt), `ts` when the line was written (RFC
+3339 UTC with milliseconds; `null` on lines recorded before 0.29.2). `GET /runs/{run_id}/logs`
+is what `barca logs` reads: a run in progress answers with its lines so far, an unknown run is
+`404`, and a `step` that matches nothing (or two definitions) or a `stream` that is neither is
+`400`. The older `GET /logs/{run_id}` answers from the database once the run finished; an
+unknown id is an empty list. A run in progress streams its lines as `log` events, each with its
+`stream` and `ts`.
 
 ### Stopping: the drain
 
