@@ -141,8 +141,9 @@ client's copies in the server's backup set would rotate the server's own out of 
 candidates for a restore of the server. Backups barca 0.29.1 and older took on a client stay
 in the store (pruning keeps every machine's newest; `barca state backups` lists them with their
 `host` and `project`), and you can delete them there. `barca state restore` without `--from`
-takes the server's own newest; on a machine with none of its own and several other machines'
-backups listed, it refuses to choose (exit 2, nothing changed) and asks for `--from`.
+on the server takes the server's own newest and names any newer ones a client took; on a server
+with no backup of its own (a new host) it takes the newest and names who took it, so check
+`barca state backups` and pass `--from` with the server's.
 
 ### Two machines, same run hash, different bytes
 

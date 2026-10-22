@@ -17,9 +17,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   longer back up this machine's metadata database, with or without `--local`: the server is
   the ledger and backs up its own. A client's backups went into the server's backup set
   (`<store>/<env>/state/backups`), rotated the server's own copies out and could be restored in
-  place of the server's. `barca state restore` without `--from` on a machine with no backup of
-  its own now refuses (exit 2, nothing changed) when the backups listed come from more than one
-  other machine, naming each one's newest, instead of taking the newest of them.
+  place of the server's.
 - `barca status` shows the shape of a result held in a store that is a directory (`file://`),
   as every result is in server mode with such a store, instead of `? (artifact file not found)`;
   `--json` `shape` is the shape instead of `{"note": "artifact file not found"}`.
