@@ -1072,6 +1072,21 @@ pub(crate) async fn logs(
                 ));
             };
             name_run(&run, args.follow);
+            // A configured server answers, but a newer run of this machine's is said once.
+            if server.implicit
+                && let Some(here) = local_run(env, None).await
+                && here.run_id != run.run_id
+                && started_key(&here.started_at) > started_key(&run.started_at)
+            {
+                barca_core::errln!(
+                    "[barca] note: this machine has a newer run {} ({} {}, {}); barca logs \
+                     --local reads it",
+                    here.run_id,
+                    here.command,
+                    barca_core::report::history_target(&here),
+                    here.status
+                );
+            }
             run.run_id
         }
     };
@@ -1094,13 +1109,57 @@ pub(crate) async fn logs(
             barca_core::term::exit(follow_exit_code(&status));
         }
     }
-    let (status, lines) = recorded_logs(server, &run_id, args).await?;
+    let (status, lines) = match recorded_logs(server, &run_id, args).await {
+        Ok(found) => found,
+        Err(e) => return Err(here_instead(e, &run_id, env).await),
+    };
     args.print_all(&lines).map_err(engine)?;
     if args.follow {
         follow_ended(&run_id, &status);
         barca_core::term::exit(follow_exit_code(&status));
     }
     Ok(())
+}
+
+/// This machine's record of `run_id` (with `None`, its newest run), read from a private copy
+/// of its metadata DB; `None` when there is none or it cannot be read. Used only for hints.
+async fn local_run(env: Option<&str>, run_id: Option<&str>) -> Option<barca_core::db::RunRecord> {
+    let cfg = barca_core::config::resolve(env).ok()?;
+    let snapshot = barca_core::db::DbSnapshot::take(&cfg.db_path)
+        .await
+        .ok()??;
+    match run_id {
+        Some(id) => barca_core::db::get_run(snapshot.path(), id).await.ok()?,
+        None => barca_core::db::get_recent_runs(snapshot.path(), 1)
+            .await
+            .ok()?
+            .into_iter()
+            .next(),
+    }
+}
+
+/// A stored start time as a sortable key (`datetime('now')` or RFC 3339, both UTC).
+fn started_key(ts: &str) -> String {
+    let ts = ts.trim();
+    ts.strip_suffix('Z').unwrap_or(ts).replacen('T', " ", 1)
+}
+
+/// A server that does not know `run_id`, when this machine does: the same error, with the
+/// command that reads it here as its remediation.
+async fn here_instead(e: CliError, run_id: &str, env: Option<&str>) -> CliError {
+    if e.kind != ErrorKind::Usage
+        || !e.error.contains("was not found")
+        || local_run(env, Some(run_id)).await.is_none()
+    {
+        return e;
+    }
+    CliError::from_prose(
+        ErrorKind::Usage,
+        format!(
+            "error: {}\nthis run is on this machine: barca logs {run_id} --local",
+            e.error
+        ),
+    )
 }
 
 /// `GET /runs/{run_id}/logs`: the run's status and its recorded lines, filtered as asked.

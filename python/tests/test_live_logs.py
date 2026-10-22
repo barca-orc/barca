@@ -7,6 +7,7 @@ import queue
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -271,4 +272,66 @@ def test_logs_of_a_server_run_and_following_it(project):
         assert started.finish()[0] == 0
     finally:
         (project / "release").touch()
+        server.stop()
+
+
+HELLO = """
+from barca import task
+
+
+@task()
+def hello():
+    print("hi from {where}")
+    return 1
+"""
+
+
+def test_a_configured_server_points_at_runs_of_this_machine(tmp_path):
+    """The server answers, with no fallback; a run only this machine has is named, with the
+    command that reads it."""
+    roots = {}
+    for where in ("server", "laptop"):
+        roots[where] = tmp_path / where
+        roots[where].mkdir()
+        (roots[where] / "pipeline.py").write_text(HELLO.format(where=where))
+        (roots[where] / "barca.toml").write_text("")
+    cli(roots["server"], "run", "hello", "pipeline.py", "--json")
+    server = Server(roots["server"], "--no-schedule")
+    url = f"http://127.0.0.1:{server.port}"
+    laptop = roots["laptop"]
+    try:
+        time.sleep(1.1)  # start times are recorded to the second
+        mine = json.loads(cli(laptop, "run", "hello", "pipeline.py", "--json", "--local").stdout)
+        run_id = mine["run_id"]
+        hint = f"this run is on this machine: barca logs {run_id} --local"
+        # 1. A run id the server does not have, but this machine does: the same exit code,
+        # with the command as the remediation, with or without --step and -f.
+        for extra in ([], ["--step", "hello"], ["-f"]):
+            failed = cli(laptop, "logs", run_id, "--json", *extra, code=2, BARCA_SERVER=url)
+            envelope = json.loads(failed.stderr.splitlines()[-1])
+            assert envelope["remediation"] == hint, failed.stderr
+        text = cli(laptop, "logs", run_id, "--pretty", code=2, BARCA_SERVER=url)
+        assert hint in text.stderr
+        # A run neither has: the server's error as it is.
+        unknown = cli(laptop, "logs", "feedfacecafe", "--json", code=2, BARCA_SERVER=url)
+        assert "this machine" not in unknown.stderr
+        assert cli(laptop, "logs", run_id, "--local", "--pretty").stdout == "hi from laptop\n"
+
+        # 2. No run id: the server's newest run, and one note naming this machine's newer one.
+        note = (
+            f"[barca] note: this machine has a newer run {run_id} (run hello, success); "
+            "barca logs --local reads it"
+        )
+        for extra in ([], ["-f"]):
+            read = cli(laptop, "logs", "--json", *extra, BARCA_SERVER=url)
+            assert read.stderr.splitlines().count(note) == 1, read.stderr
+            assert "hi from server" in read.stdout
+        plain = cli(laptop, "logs", "--json", BARCA_SERVER=url)
+        assert json.loads(plain.stdout)[0]["line"] == "hi from server"
+        # Not with --server <url>, and not when the server's run is the newer one.
+        assert note not in cli(laptop, "logs", "--server", url, "--json").stderr
+        time.sleep(1.1)
+        cli(laptop, "run", "hello", "pipeline.py", "--server", url, "--json")
+        assert "[barca] note" not in cli(laptop, "logs", "--json", BARCA_SERVER=url).stderr
+    finally:
         server.stop()

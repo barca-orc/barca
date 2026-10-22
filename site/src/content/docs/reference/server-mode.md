@@ -165,7 +165,11 @@ With a server configured, `barca status`, `barca history`, `barca stats` and `ba
 from the server, as `--server` does, after printing `[barca] server <url> (<source>)`. The server
 answers for its deployed code. `barca logs` reads the server's runs (`GET /runs/{run_id}/logs`,
 and `-f` its event stream); the lines of a run this machine ran against the ledger stay here,
-with `--local` (`barca docs logs`, "Debugging a live pipeline").
+with `--local` (`barca docs logs`, "Debugging a live pipeline"). Nothing falls back to this
+machine, but `barca logs RUN_ID` for a run only this machine has fails (exit 2) with the
+remediation `this run is on this machine: barca logs RUN_ID --local`, and `barca logs` without a
+run id adds `[barca] note: this machine has a newer run <id> (...); barca logs --local reads it`
+on stderr when this machine's newest run is newer than the server's.
 
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`
 gets `local`: `true` when this machine has a copy of the result the server would serve (its

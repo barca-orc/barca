@@ -119,8 +119,26 @@ Against a server (`barca docs server-mode`), the same commands read the server's
 scheduled runs, and runs started with `--server`. With a server configured (`BARCA_SERVER` or
 `[server] url`), `barca logs` asks it, after the usual `[barca] server <url> (<source>)` line;
 `--server <url>` names one for a single command, and `--local` reads this machine's runs
-instead. There is no fallback from one to the other: a run id the server does not have is
-exit 2.
+instead. There is no fallback from one to the other, but barca points at this machine's runs:
+
+- A run id the server does not have is exit 2. When this machine has that run, the error's
+  remediation says so (with `--step` and `-f` too):
+
+  ```text
+  error: run '89a8d6599fa5' was not found on this server
+  this run is on this machine: barca logs 89a8d6599fa5 --local
+  ```
+
+- Without a run id, from a configured server (not `--server <url>`), when this machine's newest
+  run started after the run the server picked, one more stderr line names it; stdout (the
+  lines, or the JSON) is unchanged:
+
+  ```text
+  [barca] note: this machine has a newer run 89a8d6599fa5 (run hello, success); barca logs --local reads it
+  ```
+
+  Start times are recorded to the second, so two runs started in the same second are not
+  told apart.
 
 ```bash
 barca logs --server -f

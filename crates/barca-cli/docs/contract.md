@@ -2187,7 +2187,11 @@ succeeded, 130 when it was cancelled, 1 otherwise. Without `RUN_ID` it follows t
 running run, else reads the most recent one.
 With a configured server (experimental), logs reads the server's runs (`GET
 /runs/{run_id}/logs`; `-f` streams `GET /runs/{run_id}/events`); `--local` reads this
-machine's.
+machine's, and nothing falls back. A run id the server does not have but this machine does is
+exit 2 with the remediation `this run is on this machine: barca logs <run_id> --local`. Without
+a run id, a configured server's answer is followed on stderr by `[barca] note: this machine has
+a newer run <run_id> (<command> <target>, <status>); barca logs --local reads it` when this
+machine's newest run started later; stdout is unchanged. The wording of both is not stable.
 A run records at most 16 MiB of line text; the line that reaches it is followed by `[barca]
 log cap reached: ...` (stream `stderr`), and nothing after it is recorded.
 Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
