@@ -2,3 +2,5 @@
 [] : object
 [].line : string
 [].node_id : string
+[].stream : string
+[].ts : string

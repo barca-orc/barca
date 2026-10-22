@@ -371,7 +371,8 @@ barca status total,orders pipeline.py --json    # several targets: the union of 
 barca list pipeline.py --json       # {nodes: [{id, kind, freshness, inputs, env}], total, truncated}; freshness: always|manual|schedule
 barca plan pipeline.py              # phases and steps that would run, nothing executes
 barca history --json                # {runs: [...], total, truncated}: every recorded run unless --limit is given
-barca logs --json                   # the most recent run's recorded stdout; stderr names the run
+barca logs --json                   # the most recent run's recorded stdout and stderr; stderr names the run
+barca logs -f --json                # follow the newest running run, one JSON object per line
 barca stats total pipeline.py --json  # timings and re-executions for one asset
 ```
 

@@ -11,6 +11,7 @@ import os
 import socket
 import struct
 import threading
+import time
 
 try:
     import orjson  # ty: ignore[unresolved-import]
@@ -273,9 +274,13 @@ def emit_heartbeat() -> None:
     send_message({"type": "heartbeat"})
 
 
-def emit_log(node_id: str, line: str) -> None:
-    """Stream a line of user stdout captured during a step."""
-    send_message({"type": "log", "node_id": node_id, "line": line})
+def emit_log(node_id: str, line: str, stream: str = "stdout") -> None:
+    """Stream a line of user stdout or stderr captured during a step, with the time it was
+    written (seconds since the epoch). Sent at once, one frame per line: a line written just
+    before the process dies (a crash, os._exit) still reaches the coordinator."""
+    send_message(
+        {"type": "log", "node_id": node_id, "line": line, "stream": stream, "t": time.time()}
+    )
 
 
 # Set when a parallel() exchange with the coordinator did not complete (the request was sent

@@ -63,8 +63,8 @@ can reach the port can trigger runs, so keep it on a private network or behind a
 Invalid sources and their graph dependents are excluded; healthy definitions and schedules
 continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
 --watch restores repaired configured sources; one-shot commands remain strict.
-From another machine, `--server <url>` on get, run, status, list, history and stats runs the
-command on this server and prints it there as a local run would (barca docs server-mode).
+From another machine, `--server <url>` on get, run, status, list, history, stats and logs runs
+the command on this server and prints it there as a local run would (barca docs server-mode).
 `serve` itself always runs here: --server on it is a usage error.
 The first line names the env, the artifact store and the metadata DB with its format:
 [barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>).

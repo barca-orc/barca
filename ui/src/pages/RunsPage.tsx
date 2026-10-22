@@ -61,7 +61,7 @@ function RunPanel({ id, onClose, onResolved }: { id: string; onClose: () => void
             )}
           </Section>
           <Section title="Logs">
-            <LogViewer lines={data.logs.map(log => ({ nodeId: log.node_id, text: log.line }))} live={runIsLive(data.status)} height={280} />
+            <LogViewer lines={data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts }))} live={runIsLive(data.status)} height={280} />
           </Section>
           {result !== null && result !== undefined && (
             <Section title="Result"><pre className="barca-run-result">{JSON.stringify(result, null, 2)}</pre></Section>

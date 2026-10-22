@@ -44,7 +44,7 @@ barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] 
 barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca doctor [file.py|dir/ ...] [--json]      Diagnose project prerequisites without running steps
-barca logs [run_id] [--step NAME] [--json]    A run's captured step stdout (default: the most recent run)
+barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]  A run's recorded step stdout and stderr (default: the most recent run)
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
@@ -845,17 +845,35 @@ on stderr when `default_env` or an artifact store is in effect. See
   `--drain-timeout` seconds, before it exits; it used to cancel them at once
   ([serve](#serve)).
 
-## Recorded stdout
+## Recorded output
 
-`barca logs RUN_ID --pretty` prints recorded step stdout, without progress or prefixes.
+`barca logs RUN_ID --pretty` prints what a run's steps wrote, without progress or prefixes:
+their stdout, and their Python stderr (`logging`, `warnings`, `sys.stderr`) with the traceback
+of each failed attempt. Writes straight to file descriptors 1 and 2 (native code, subprocesses)
+are not recorded.
 Without a run id, `barca logs` reads the most recent run (running or finished) and names it in a
 line on stderr: `barca: logs of the most recent run: 07c4a64d0540 (run notify, success, started
 2026-10-21 06:40:36 UTC)`.
-`--json` returns `[{node_id, line}]` in recorded order. `--step report` selects a function
-name; use an exact node id if names collide, or a partitioned id to select one key.
-`--env dev` reads that environment's local history. It reads no pipeline source and makes
-no remote requests. Unknown runs/steps and ambiguous names exit 2; silent executed steps
-return no lines. Logs emitted before a failed step are retained.
+`--json` returns `[{node_id, stream, ts, line}]` in recorded order: `stream` is `stdout` or
+`stderr`, `ts` when the line was written (RFC 3339 UTC, milliseconds). `--stream stderr` keeps
+one stream, `--timestamps` puts the time before each text line. `--step report` selects a
+function name; use an exact node id if names collide, or a partitioned id to select one key.
+`--env dev` reads that environment's history. It reads no pipeline source and contacts no
+store. Unknown runs/steps and ambiguous names exit 2; silent executed steps return no lines.
+Lines written before a failed step are retained. A run records at most 16 MiB of lines.
+
+`barca logs -f` follows a run: it prints lines as they arrive (one JSON object per line with
+`--json`) and exits when the run ends, 0 when it succeeded, 130 when it was cancelled, 1
+otherwise. Without a run id it follows the newest running run.
+
+```bash
+barca run report pipeline.py        # in one terminal
+barca logs -f --step report         # in another
+barca logs --step report --stream stderr --timestamps   # after a failure: its logging and traceback
+```
+
+With a server configured (or `--server`), `barca logs` reads the server's runs, scheduled ones
+included; `--local` reads this machine's (`barca docs logs`, "Debugging a live pipeline").
 
 Task return values remain usable through `barca run --json`, `-o value`, and `barca.run(...)`.
 During get/run, non-JSON modes print stdout lines to stderr with `[node_id]` prefixes;

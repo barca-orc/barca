@@ -105,7 +105,15 @@ pub(crate) fn user_logs(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            if show && let barca_core::RunEvent::Log { node_id, line } = event {
+            // A step's stderr already reached this stderr from the worker, as it was written.
+            if show
+                && let barca_core::RunEvent::Log {
+                    node_id,
+                    line,
+                    stream: barca_core::LogStream::Stdout,
+                    ..
+                } = event
+            {
                 barca_core::errln!("[{node_id}] {line}");
             }
         }

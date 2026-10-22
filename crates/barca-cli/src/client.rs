@@ -56,7 +56,8 @@ const STREAM_LIMIT: Duration = Duration::from_secs(24 * 3600);
 // ─── 1. choosing the server ─────────────────────────────────────────────────
 
 /// The commands that take `--server` and `--local`.
-pub(crate) const SERVER_COMMANDS: &[&str] = &["get", "run", "status", "list", "history", "stats"];
+pub(crate) const SERVER_COMMANDS: &[&str] =
+    &["get", "run", "status", "list", "history", "stats", "logs"];
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the
 /// configured server (`BARCA_SERVER`, then `[server] url`) and is a usage error when none is
@@ -146,7 +147,7 @@ pub(crate) fn refuse_on_local_commands(args: &[String]) -> Option<CliError> {
         ErrorKind::Usage,
         format!(
             "error: `barca {sub}` always runs on this machine; it does not take {flag}\n\
-             --server and --local apply to get, run, status, list, history and stats \
+             --server and --local apply to get, run, status, list, history, stats and logs \
              (barca docs server-mode)."
         ),
     ))
@@ -676,8 +677,17 @@ async fn stream(server: &Server, run_id: &str, args: &RunArgs) -> Result<Outcome
                         barca_core::errln!("{line}");
                     }
                 }
-                RunEvent::Log { node_id, line } => {
-                    if args.mode != barca_core::report::ResultFormat::Json {
+                RunEvent::Log {
+                    node_id,
+                    line,
+                    stream,
+                    ..
+                } => {
+                    // A step's stderr stays on the server's stderr, as a local run's stays on
+                    // this machine's; it is recorded with the run either way (`barca logs`).
+                    if args.mode != barca_core::report::ResultFormat::Json
+                        && stream == barca_core::LogStream::Stdout
+                    {
                         barca_core::errln!("[{node_id}] {line}");
                     }
                 }
@@ -1029,6 +1039,221 @@ pub(crate) async fn history(
         &runs, total, json, fields,
     ));
     Ok(())
+}
+
+/// `barca logs` against a server: the run's recorded lines from `GET /runs/{run_id}/logs`, and
+/// with `--follow` a running run's lines from `GET /runs/{run_id}/events` as they arrive.
+/// Without a run id, the newest run in the server's history (with `--follow`, the newest
+/// running one).
+pub(crate) async fn logs(
+    server: &Server,
+    run_id: Option<&str>,
+    env: Option<&str>,
+    args: crate::commands::logs::LogsArgs<'_>,
+) -> Result<(), CliError> {
+    use crate::commands::logs::{follow_ended, follow_exit_code, name_run};
+    server.health(env).await?;
+    let run_id = match run_id {
+        Some(id) => id.to_string(),
+        None => {
+            let limit = barca_core::queries::RUNNING_LOOKBACK;
+            let body = server.get_json(&format!("/history?limit={limit}")).await?;
+            let runs: Vec<barca_core::db::RunRecord> = serde_json::from_value(body["runs"].clone())
+                .map_err(|e| server.unexpected("GET /history", &e.to_string()))?;
+            let Some(run) = barca_core::queries::pick_run(runs, args.follow) else {
+                return Err(CliError::from_prose(
+                    ErrorKind::Usage,
+                    format!(
+                        "error: no run is recorded on the barca server at {} yet
+                         Start one (`barca run --server ...`), or read this machine's runs \
+                         with --local.",
+                        server.url
+                    ),
+                ));
+            };
+            name_run(&run, args.follow);
+            // A configured server answers, but a newer run of this machine's is said once.
+            if server.implicit
+                && let Some(here) = local_run(env, None).await
+                && here.run_id != run.run_id
+                && started_key(&here.started_at) > started_key(&run.started_at)
+            {
+                barca_core::errln!(
+                    "[barca] note: this machine has a newer run {} ({} {}, {}); barca logs \
+                     --local reads it",
+                    here.run_id,
+                    here.command,
+                    barca_core::report::history_target(&here),
+                    here.status
+                );
+            }
+            run.run_id
+        }
+    };
+    let engine = |e: BarcaError| CliError::from_barca(e, &Context::default());
+    if args.follow {
+        let path = format!("/runs/{}/events", encode(&run_id));
+        let response = server
+            .http
+            .get(server.endpoint(&path))
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .timeout(STREAM_LIMIT)
+            .send()
+            .await
+            .map_err(|e| server.unreachable(&e))?;
+        // 404: the run is not live on the server (it ended, or it is not one the server
+        // started); its recorded lines answer.
+        if response.status() != reqwest::StatusCode::NOT_FOUND {
+            let status = follow_events(server, &run_id, &path, response, args).await?;
+            follow_ended(&run_id, &status);
+            barca_core::term::exit(follow_exit_code(&status));
+        }
+    }
+    let (status, lines) = match recorded_logs(server, &run_id, args).await {
+        Ok(found) => found,
+        Err(e) => return Err(here_instead(e, &run_id, env).await),
+    };
+    args.print_all(&lines).map_err(engine)?;
+    if args.follow {
+        follow_ended(&run_id, &status);
+        barca_core::term::exit(follow_exit_code(&status));
+    }
+    Ok(())
+}
+
+/// This machine's record of `run_id` (with `None`, its newest run), read from a private copy
+/// of its metadata DB; `None` when there is none or it cannot be read. Used only for hints.
+async fn local_run(env: Option<&str>, run_id: Option<&str>) -> Option<barca_core::db::RunRecord> {
+    let cfg = barca_core::config::resolve(env).ok()?;
+    let snapshot = barca_core::db::DbSnapshot::take(&cfg.db_path)
+        .await
+        .ok()??;
+    match run_id {
+        Some(id) => barca_core::db::get_run(snapshot.path(), id).await.ok()?,
+        None => barca_core::db::get_recent_runs(snapshot.path(), 1)
+            .await
+            .ok()?
+            .into_iter()
+            .next(),
+    }
+}
+
+/// A stored start time as a sortable key (`datetime('now')` or RFC 3339, both UTC).
+fn started_key(ts: &str) -> String {
+    let ts = ts.trim();
+    ts.strip_suffix('Z').unwrap_or(ts).replacen('T', " ", 1)
+}
+
+/// A server that does not know `run_id`, when this machine does: the same error, with the
+/// command that reads it here as its remediation.
+async fn here_instead(e: CliError, run_id: &str, env: Option<&str>) -> CliError {
+    if e.kind != ErrorKind::Usage
+        || !e.error.contains("was not found")
+        || local_run(env, Some(run_id)).await.is_none()
+    {
+        return e;
+    }
+    CliError::from_prose(
+        ErrorKind::Usage,
+        format!(
+            "error: {}\nthis run is on this machine: barca logs {run_id} --local",
+            e.error
+        ),
+    )
+}
+
+/// `GET /runs/{run_id}/logs`: the run's status and its recorded lines, filtered as asked.
+async fn recorded_logs(
+    server: &Server,
+    run_id: &str,
+    args: crate::commands::logs::LogsArgs<'_>,
+) -> Result<(String, Vec<barca_core::db::LogEntry>), CliError> {
+    let mut query = Vec::new();
+    if let Some(step) = args.step {
+        query.push(format!("step={}", encode(step)));
+    }
+    if let Some(stream) = args.stream {
+        query.push(format!("stream={}", stream.as_str()));
+    }
+    let mut path = format!("/runs/{}/logs", encode(run_id));
+    if !query.is_empty() {
+        path = format!("{path}?{}", query.join("&"));
+    }
+    let body = server.get_json(&path).await?;
+    let bad = |e: String| server.unexpected(&format!("GET {path}"), &e);
+    let status = body["status"]
+        .as_str()
+        .ok_or_else(|| bad("no status".into()))?
+        .to_string();
+    let lines = serde_json::from_value(body["logs"].clone()).map_err(|e| bad(e.to_string()))?;
+    Ok((status, lines))
+}
+
+/// Read a live run's event stream to its end, printing the lines `args` selects as they arrive.
+/// Returns the run's final status.
+async fn follow_events(
+    server: &Server,
+    run_id: &str,
+    path: &str,
+    response: reqwest::Response,
+    args: crate::commands::logs::LogsArgs<'_>,
+) -> Result<String, CliError> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        return Err(server.refusal(status, &body, &format!("GET {path}")));
+    }
+    let mut response = response;
+    let mut events = SseParser::default();
+    let mut seq = 0usize;
+    loop {
+        let bytes = match tokio::time::timeout(STREAM_IDLE, response.chunk()).await {
+            Err(_) => {
+                return Err(dropped(
+                    server,
+                    run_id,
+                    &format!("nothing received for {}s", STREAM_IDLE.as_secs()),
+                ));
+            }
+            Ok(Err(e)) => return Err(dropped(server, run_id, &transport_reason(&e))),
+            Ok(Ok(None)) => return Err(dropped(server, run_id, "the server closed the stream")),
+            Ok(Ok(Some(bytes))) => bytes,
+        };
+        for data in events.push(&bytes) {
+            let event = RunEvent::parse(&data)
+                .map_err(|e| server.unexpected(&format!("GET {path}"), &e.to_string()))?;
+            match event {
+                RunEvent::Log {
+                    node_id,
+                    line,
+                    stream,
+                    ts,
+                } => {
+                    let entry = barca_core::db::LogEntry {
+                        node_id,
+                        seq: seq as i64,
+                        line,
+                        stream,
+                        ts,
+                    };
+                    seq += 1;
+                    if args.selects(&entry.node_id, entry.stream) {
+                        args.print_one(&entry);
+                    }
+                }
+                RunEvent::RunFinished { ok, outcome, .. } => {
+                    let status = outcome
+                        .and_then(|raw| Outcome::from_text(raw.get().to_string()).ok())
+                        .map(|o| o.status().as_str().to_string())
+                        .unwrap_or_else(|| if ok { "success" } else { "failed" }.to_string());
+                    return Ok(status);
+                }
+                RunEvent::RunStarted { .. }
+                | RunEvent::Line { .. }
+                | RunEvent::StepFinished { .. } => {}
+            }
+        }
+    }
 }
 
 /// `barca stats --server`: `GET /stats/{name}`.

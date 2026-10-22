@@ -873,6 +873,7 @@ async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaErro
             crate::db_schema::SCHEDULE_STATE_COLUMNS,
         )
         .await?;
+        crate::db_schema::add_columns(conn, "logs", crate::db_schema::LOG_COLUMNS).await?;
         crate::db_schema::add_tables(conn).await?;
         for index in crate::db_schema::INDEXES {
             conn.execute(index, ())
@@ -1023,6 +1024,7 @@ async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create logs table: {e}")))?;
+    crate::db_schema::add_columns(conn, "logs", crate::db_schema::LOG_COLUMNS).await?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_logs_run ON logs(run_id, seq)",
         (),
@@ -1124,22 +1126,42 @@ pub async fn materialization_history(db_path: &str) -> Result<Vec<Materializatio
     Ok(out)
 }
 
-/// One captured stdout line for a run.
-#[derive(Debug, Clone, Serialize)]
+/// One recorded output line of a run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct LogEntry {
     pub node_id: String,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub seq: i64,
     pub line: String,
+    /// `stdout` or `stderr`; lines recorded before barca captured stderr are `stdout`.
+    #[serde(default)]
+    pub stream: crate::LogStream,
+    /// When the line arrived (RFC 3339, UTC, milliseconds); null on lines recorded before
+    /// barca stamped them.
+    #[serde(default)]
+    pub ts: Option<String>,
 }
 
-/// Persist captured stdout lines for a run, in order. `lines` is (node_id, line). Idempotent:
-/// a run that already has lines here is left alone.
+impl LogEntry {
+    /// The entry at `seq` of a run's recorded lines.
+    pub fn at(seq: usize, line: crate::run_logs::RecordedLine) -> Self {
+        Self {
+            node_id: line.node_id,
+            seq: seq as i64,
+            line: line.line,
+            stream: line.stream,
+            ts: line.ts,
+        }
+    }
+}
+
+/// Persist a run's recorded lines, in order. Idempotent: a run that already has lines here is
+/// left alone.
 pub async fn insert_logs(
     db_path: &str,
     run_id: &str,
-    lines: &[(String, String)],
+    lines: &[crate::run_logs::RecordedLine],
 ) -> Result<(), BarcaError> {
     if lines.is_empty() {
         return Ok(());
@@ -1162,50 +1184,101 @@ pub async fn insert_logs(
     }
     drop(rows);
     with_tx(&conn, "BEGIN", "log write", async {
-        let mut insert = prepare(
-            &conn,
-            "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to record stdout: {e}")))?;
-        for (seq, (node_id, line)) in lines.iter().enumerate() {
-            insert
-                .execute((
-                    run_id.to_string(),
-                    node_id.clone(),
-                    seq as i64,
-                    line.clone(),
-                ))
-                .await
-                .map_err(|e| BarcaError::Db(format!("failed to record stdout: {e}")))?;
+        // Many rows per statement: one statement per row cost ~9µs a line, which a step that
+        // prints 100k lines felt.
+        for (chunk_no, chunk) in lines.chunks(LOG_INSERT_ROWS).enumerate() {
+            let marks = (0..chunk.len())
+                .map(|i| {
+                    let p = i * 6;
+                    format!(
+                        "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                        p + 1,
+                        p + 2,
+                        p + 3,
+                        p + 4,
+                        p + 5,
+                        p + 6
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut params: Vec<turso::Value> = Vec::with_capacity(chunk.len() * 6);
+            for (i, line) in chunk.iter().enumerate() {
+                let seq = (chunk_no * LOG_INSERT_ROWS + i) as i64;
+                params.push(turso::Value::Text(run_id.to_string()));
+                params.push(turso::Value::Text(line.node_id.clone()));
+                params.push(turso::Value::Integer(seq));
+                params.push(turso::Value::Text(line.line.clone()));
+                params.push(turso::Value::Text(line.stream.as_str().to_string()));
+                params.push(match &line.ts {
+                    Some(ts) => turso::Value::Text(ts.clone()),
+                    None => turso::Value::Null,
+                });
+            }
+            conn.execute(
+                &format!(
+                    "INSERT INTO logs (run_id, node_id, seq, line, stream, ts) VALUES {marks}"
+                ),
+                turso::params_from_iter(params),
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record output: {e}")))?;
         }
-        drop(insert);
         Ok(())
     })
     .await
 }
 
-/// Fetch all persisted log lines for a run, in order.
+/// Rows per `INSERT` of a run's lines (6 parameters each, well under SQLite's limit).
+const LOG_INSERT_ROWS: usize = 500;
+
+/// Fetch all persisted log lines for a run, in order. An older database without the
+/// `stream` and `ts` columns reads them as stdout lines with no time.
 pub async fn get_logs(db_path: &str, run_id: &str) -> Result<Vec<LogEntry>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    let mut rows = conn
+    let full = conn
         .query(
-            "SELECT node_id, seq, line FROM logs WHERE run_id = ?1 ORDER BY seq ASC",
+            "SELECT node_id, seq, line, stream, ts FROM logs WHERE run_id = ?1 ORDER BY seq ASC",
             [run_id.to_string()],
         )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to query logs: {e}")))?;
+        .await;
+    let (mut rows, columns) = match full {
+        Ok(rows) => (rows, 5),
+        Err(_) => (
+            conn.query(
+                "SELECT node_id, seq, line FROM logs WHERE run_id = ?1 ORDER BY seq ASC",
+                [run_id.to_string()],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to query logs: {e}")))?,
+            3,
+        ),
+    };
     let mut out = Vec::new();
     while let Some(row) = rows
         .next()
         .await
         .map_err(|e| BarcaError::Db(format!("failed to read log row: {e}")))?
     {
+        let stream = if columns == 5 {
+            row.get::<String>(3)
+                .ok()
+                .and_then(|s| crate::LogStream::parse(&s))
+                .unwrap_or_default()
+        } else {
+            crate::LogStream::Stdout
+        };
         out.push(LogEntry {
             node_id: row.get::<String>(0).unwrap_or_default(),
             seq: row.get::<i64>(1).unwrap_or_default(),
             line: row.get::<String>(2).unwrap_or_default(),
+            stream,
+            ts: if columns == 5 {
+                row.get::<String>(4).ok()
+            } else {
+                None
+            },
         });
     }
     Ok(out)
@@ -3228,9 +3301,13 @@ mod tests {
         init_db(&db_path).await.unwrap();
 
         let lines = vec![
-            ("a.py:load".to_string(), "loading…".to_string()),
-            ("a.py:load".to_string(), "read 30/150".to_string()),
-            ("a.py:load".to_string(), "done".to_string()),
+            test_line("a.py:load", "loading…"),
+            test_line("a.py:load", "read 30/150"),
+            crate::run_logs::RecordedLine {
+                stream: crate::LogStream::Stderr,
+                ts: Some("2026-10-22T10:00:00.123Z".into()),
+                ..test_line("a.py:load", "done")
+            },
         ];
         insert_logs(&db_path, "run123", &lines).await.unwrap();
 
@@ -3242,6 +3319,19 @@ mod tests {
         assert_eq!(got[1].line, "read 30/150");
         assert_eq!(got[2].line, "done");
         assert_eq!(got[0].node_id, "a.py:load");
+        assert_eq!(got[0].stream, crate::LogStream::Stdout);
+        assert_eq!(got[0].ts, None);
+        assert_eq!(got[2].stream, crate::LogStream::Stderr);
+        assert_eq!(got[2].ts.as_deref(), Some("2026-10-22T10:00:00.123Z"));
+    }
+
+    fn test_line(node: &str, line: &str) -> crate::run_logs::RecordedLine {
+        crate::run_logs::RecordedLine {
+            node_id: node.into(),
+            line: line.into(),
+            stream: crate::LogStream::Stdout,
+            ts: None,
+        }
     }
 
     #[tokio::test]
@@ -3250,10 +3340,10 @@ mod tests {
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
         init_db(&db_path).await.unwrap();
 
-        insert_logs(&db_path, "runA", &[("n".to_string(), "a-line".to_string())])
+        insert_logs(&db_path, "runA", &[test_line("n", "a-line")])
             .await
             .unwrap();
-        insert_logs(&db_path, "runB", &[("n".to_string(), "b-line".to_string())])
+        insert_logs(&db_path, "runB", &[test_line("n", "b-line")])
             .await
             .unwrap();
 
@@ -4469,10 +4559,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let lines = vec![
-            ("p.py:a".into(), "same".into()),
-            ("p.py:a".into(), "same".into()),
-        ];
+        let lines = vec![test_line("p.py:a", "same"), test_line("p.py:a", "same")];
         assert!(insert_logs(&path, "r", &lines).await.is_err());
         assert!(get_logs(&path, "r").await.unwrap().is_empty());
         {

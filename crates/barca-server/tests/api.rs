@@ -1072,9 +1072,18 @@ async fn runs_inspection_survives_server_restart_and_never_mutates_history() {
         barca_core::db::create_run(path, id, command, "[\"old.py\"]", Some(target), Some(2))
             .await
             .unwrap();
-        barca_core::db::insert_logs(path, id, &[("old.py:first".into(), format!("from {id}"))])
-            .await
-            .unwrap();
+        barca_core::db::insert_logs(
+            path,
+            id,
+            &[barca_core::run_logs::RecordedLine {
+                node_id: "old.py:first".into(),
+                line: format!("from {id}"),
+                stream: barca_core::LogStream::Stdout,
+                ts: None,
+            }],
+        )
+        .await
+        .unwrap();
         barca_core::db::finish_run(path, id, status, 1, 1, 0.25)
             .await
             .unwrap();

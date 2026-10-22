@@ -46,7 +46,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca run task [files...]` | Run a task (always re-runs) and its dependency cone. `a,b` runs several in one run. |
 | `barca list [files...]` | List nodes with kind, freshness and dependencies (`--json`, `--limit`/`--all`, `--fields`; `barca docs agents`). |
 | `barca status [target] [files...]` | Per node: cache state and why, last run, artifact rows/columns (`barca docs status`). |
-| `barca logs [RUN_ID]` | A run's recorded step stdout, without progress messages; the most recent run without an id (`barca docs logs`). |
+| `barca logs [RUN_ID]` | A run's recorded step stdout and stderr, without progress messages; the most recent run without an id, `-f` to follow one (`barca docs logs`). |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
 | `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`barca docs doctor`). |
@@ -77,7 +77,7 @@ Getting work done:
 - `barca docs big-inputs` — large inputs: lazy types load only the columns and rows a step needs
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs status` — one view of cache state, last run and artifact shape per node
-- `barca docs logs` — a run's recorded step stdout, apart from progress and results
+- `barca docs logs` — a run's recorded step output (stdout, stderr, tracebacks), following a live run
 - `barca docs sql` — query cached results with DuckDB while debugging, without writing a step
 - `barca docs doctor` — prerequisite checks without running steps, and a copyable local-only debugging profile
 - `barca docs groups` — organizational groups and nesting in the UI and CLI

@@ -332,6 +332,7 @@ From another terminal, trigger a deployed asset or task:
 curl -X POST http://127.0.0.1:8274/runs -d '{"command": "get", "targets": ["daily_report"]}'  # an asset and its dependencies
 curl -X POST http://127.0.0.1:8274/runs -d '{"command": "run", "targets": ["publish"]}'       # a task
 curl -N http://127.0.0.1:8274/runs/RETURNED_RUN_ID/events   # its progress lines and outcome, as they happen
+curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID/logs        # what its steps wrote so far (`barca logs`)
 curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID             # the run and its outcome; also after a restart
 curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID/output      # the final artifact's bytes
 ```
@@ -341,7 +342,8 @@ of `barca get` and `barca run` as JSON (`targets`, `refresh`, `refresh_all`, `ca
 `dry_run`, `agent`) and answers `202` with the run id at once, which is the id
 `barca history` shows. The targets are checked first, in the CLI's words: a request a local
 command would refuse starts nothing. The event stream sends each stderr line a local run
-prints (`line`, tagged `when: agent` or `always`), each line a step prints (`log`), each step's
+prints (`line`, tagged `when: agent` or `always`), each line a step writes (`log`, with its
+`stream`, `stdout` or `stderr`, and `ts`, when it was written), each step's
 result (`step_finished`, with `cached: true` for a cache hit), and `run_finished` with the
 outcome: the exact `barca get --json` body on success, the failed-run body and the error
 envelope on failure. A dropped connection is not resumed; reconnecting replays the run from its

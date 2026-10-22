@@ -8,6 +8,21 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- `barca logs` is a way to debug a live pipeline, here or on a server. Steps' Python stderr is
+  recorded with the run as well as their stdout: `logging`, `warnings`, `print(...,
+  file=sys.stderr)` and the traceback of each failed attempt, still shown live as before.
+  JSON lines gain `stream` (`stdout` | `stderr`) and `ts` (when the line was written, RFC 3339
+  UTC with milliseconds); `--stream stdout|stderr` keeps one stream and `--timestamps` puts the
+  time before each text line. Lines are kept as the run goes, and `barca logs -f` follows a
+  running run (without an id, the newest running one) and exits with its outcome: 0, 130 when
+  cancelled, 1 otherwise. With a configured server (or `--server`), `barca logs` reads the
+  server's runs through the new `GET /runs/{run_id}/logs` and follows them over
+  `/runs/{run_id}/events`; `--local` reads this machine's. A run records at most 16 MiB of
+  lines, then one `[barca] log cap reached` line. The web UI shows stderr lines muted and each
+  line's time. Native writes to file descriptors 1 and 2 and subprocess output are still not
+  recorded (`barca docs logs`, "Debugging a live pipeline").
 ### Bug Fixes
 
 - In a terminal, a line printed while the progress bar is drawn (`checking artifact store`,

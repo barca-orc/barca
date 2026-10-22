@@ -195,7 +195,9 @@ def test_real_client_partial_load_health_and_empty_admission_match_openapi(tmp_p
 def _raw(server, method, path, body=None):
     """One request with an optional JSON body: status, content type and raw bytes."""
     data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(f"http://127.0.0.1:{server.port}{path}", data=data, method=method)
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.port}{path}", data=data, method=method
+    )
     if data is not None:
         request.add_header("Content-Type", "application/json")
     try:
@@ -251,7 +253,9 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
     (tmp_path / "pipeline.py").write_text(CONTRACT_PIPELINE)
     server = Server(tmp_path, "--no-schedule")
     try:
-        accepted, _ = _checked(server, "POST", "/runs", 202, {"command": "get", "targets": ["value"], "agent": True})
+        accepted, _ = _checked(
+            server, "POST", "/runs", 202, {"command": "get", "targets": ["value"], "agent": True}
+        )
         run_id = accepted["run_id"]
         events = _events(server, run_id)
         assert [n for n, _ in events] == list(range(len(events)))
@@ -275,22 +279,35 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
 
         # A task, then a failure: the outcome carries the CLI's failed body and envelope.
         task, _ = _checked(server, "POST", "/runs", 202, {"command": "run", "targets": ["publish"]})
-        logs = [e["line"] for _, e in _events(server, task["run_id"]) if e["type"] == "log"]
-        assert logs == ["published 2"]
-        failed, _ = _checked(server, "POST", "/runs", 202, {"command": "get", "targets": ["broken"]})
+        events = [e for _, e in _events(server, task["run_id"]) if e["type"] == "log"]
+        assert [(e["line"], e["stream"]) for e in events] == [("published 2", "stdout")]
+        recorded, _ = _checked(server, "GET", f"/runs/{task['run_id']}/logs", 200)
+        assert recorded["status"] == "success"
+        assert [(e["line"], e["ts"]) for e in recorded["logs"]] == [
+            ("published 2", events[0]["ts"])
+        ]
+        _checked(server, "GET", f"/runs/{task['run_id']}/logs?stream=stderr", 200)
+        _checked(server, "GET", f"/runs/{task['run_id']}/logs?step=nowhere", 400)
+        failed, _ = _checked(
+            server, "POST", "/runs", 202, {"command": "get", "targets": ["broken"]}
+        )
         outcome = _events(server, failed["run_id"])[-1][1]["outcome"]
         assert outcome["status"] == "failed" and outcome["envelope"]["code"] == 1
         _checked(server, "GET", f"/runs/{failed['run_id']}/output", 404)
         _checked(server, "DELETE", f"/runs/{failed['run_id']}", 409)
         _checked(server, "POST", "/runs", 404, {"command": "get", "targets": ["missing"]})
-        plan, _ = _checked(server, "POST", "/runs", 200, {"command": "get", "targets": ["value"], "dry_run": True})
+        plan, _ = _checked(
+            server, "POST", "/runs", 200, {"command": "get", "targets": ["value"], "dry_run": True}
+        )
         assert plan["summary"]["cached"] == 1
 
         # Inspection bodies are the CLI's --json output, byte for byte.
         env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
 
         def cli(*args):
-            done = subprocess.run([_find_binary(), *args], cwd=tmp_path, env=env, capture_output=True, text=True)
+            done = subprocess.run(
+                [_find_binary(), *args], cwd=tmp_path, env=env, capture_output=True, text=True
+            )
             assert done.returncode == 0, done.stderr
             return done.stdout.rstrip("\n").encode()
 
@@ -301,6 +318,11 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         ]:
             _, raw = _checked(server, "GET", path, 200)
             assert raw == cli(*args), path
+        # `barca logs --json` is the route's lines without their `seq`.
+        recorded, _ = _checked(server, "GET", f"/runs/{task['run_id']}/logs", 200)
+        assert json.loads(cli("logs", task["run_id"], "--json", "--local")) == [
+            {k: line[k] for k in ("node_id", "stream", "ts", "line")} for line in recorded["logs"]
+        ]
         nodes, _ = _checked(server, "GET", "/nodes?targets=value", 200)
         status = json.loads(cli("status", "value", "pipeline.py", "--json", "--all"))
         assert nodes == status
