@@ -49,6 +49,8 @@ def shape(path: str, fmt: str, sample: int = 0, fields: bool = False) -> dict:
     try:
         if _storage.is_remote(path):
             return _remote_shape(path, fmt, sample, fields)
+        # A store that is a directory records its objects as file:// URIs; read the file.
+        path = str(_storage.local_path_of(path) or path)
         if not os.path.exists(path):
             return {"note": "artifact file not found"}
         if fmt == "parquet":

@@ -8,6 +8,22 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- In a terminal, a line printed while the progress bar is drawn (`checking artifact store`,
+  `fetched N cached artifacts`, a warning) is written above the bar instead of onto its line,
+  which left a stray `0/2` bar frame on screen.
+- With a server configured (`[server] url` or `BARCA_SERVER`), `barca get` and `barca run` no
+  longer back up this machine's metadata database, with or without `--local`: the server is
+  the ledger and backs up its own. A client's backups went into the server's backup set
+  (`<store>/<env>/state/backups`), rotated the server's own copies out and could be restored in
+  place of the server's. `barca state restore` without `--from` on a machine with no backup of
+  its own now refuses (exit 2, nothing changed) when the backups listed come from more than one
+  other machine, naming each one's newest, instead of taking the newest of them.
+- `barca status` shows the shape of a result held in a store that is a directory (`file://`),
+  as every result is in server mode with such a store, instead of `? (artifact file not found)`;
+  `--json` `shape` is the shape instead of `{"note": "artifact file not found"}`.
+
 ### Documentation
 
 - Sample output on the site is re-captured on 0.29.1 (#503): the `barca status`, `barca history`

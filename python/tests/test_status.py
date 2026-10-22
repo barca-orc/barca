@@ -8,6 +8,7 @@ imported, and nothing is written.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -309,6 +310,26 @@ def test_a_failed_last_attempt_is_reported(project):
     last = boom["last_materialization"]
     assert last["status"] == "failed" and "kaboom" in last["error"]
     assert boom["shape"] is None
+
+
+def test_a_result_in_a_directory_store_shows_its_shape(project, tmp_path_factory):
+    """A store that is a directory (`file://`) records results by URI. Status read that URI as a
+    local path and printed `? (artifact file not found)` for every result in the store, as in
+    server mode, where the ledger's rows are all store URIs."""
+    store = tmp_path_factory.mktemp("store")
+    env = {"BARCA_REMOTE_URI": store.as_uri()}
+    ok(barca(project, "get", "mid", "pipeline.py", env=env))
+    by = nodes(status(project, "pipeline.py", env=env))
+    src = by["src"]
+    assert src["last_materialization"]["artifact"].startswith("file://"), src
+    assert src["shape"]["rows"] == 3, src["shape"]
+    assert by["mid"]["shape"]["keys"] == ["n"], by["mid"]["shape"]
+    # The same with this machine's copies gone: the store's object is read.
+    shutil.rmtree(project / ".barca" / "artifacts")
+    assert nodes(status(project, "pipeline.py", env=env))["src"]["shape"]["rows"] == 3
+    table = barca(project, "status", "pipeline.py", "--pretty", env=env)
+    assert table.returncode == 0, table.stderr
+    assert "3 rows" in table.stdout and "not found" not in table.stdout, table.stdout
 
 
 def test_human_table(project):
