@@ -149,6 +149,75 @@ pub struct RunRecord {
     /// had on that laptop. `null` for every other run.
     #[serde(default)]
     pub client_run_id: Option<String>,
+    /// For a run with a failed step: the first step that failed and the first line of its
+    /// error. `null` for every other run (also for a run that failed before any step did).
+    #[serde(default)]
+    pub failure: Option<RunFailure>,
+}
+
+/// A recorded step error as (type, message, traceback). A worker reports a Python exception as
+/// the generic `WorkerError` whose text is `Type: message` followed by the traceback frames;
+/// this takes the type and the frames back out of it.
+pub fn split_exception(
+    error_type: &str,
+    message: &str,
+    traceback: &str,
+) -> (String, String, Option<String>) {
+    // The frames are the trailing run of `  File "..."` lines and their indented source lines.
+    // Taking only that run keeps a message that itself quotes a traceback in one piece.
+    let lines: Vec<&str> = message.split('\n').collect();
+    let mut first_frame = lines.len();
+    for (i, line) in lines.iter().enumerate().rev() {
+        if line.starts_with("  File \"") {
+            first_frame = i;
+        } else if !line.starts_with("    ") {
+            break;
+        }
+    }
+    let joined;
+    let (text, frames) = if first_frame > 0 && first_frame < lines.len() {
+        joined = lines[..first_frame].join("\n");
+        (joined.as_str(), Some(lines[first_frame..].join("\n")))
+    } else {
+        (message, None)
+    };
+    let stack = Some(traceback.to_string())
+        .filter(|t| !t.is_empty())
+        .or(frames);
+    if error_type == "WorkerError"
+        && let Some((head, rest)) = text.split_once(": ")
+        && !head.is_empty()
+        && head
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return (head.to_string(), rest.to_string(), stack);
+    }
+    (error_type.to_string(), text.to_string(), stack)
+}
+
+/// Why a run failed, in one line: its first failed step and that step's error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunFailure {
+    /// The node id of the step, with its partition key when it has one.
+    pub node: String,
+    /// `ErrorType: message`, the message's first line only.
+    pub error: String,
+}
+
+impl RunFailure {
+    /// From a failed row's `error_type` and `error_message` (see [`split_exception`]).
+    pub fn new(node: String, error_type: &str, message: &str) -> Self {
+        let (error_type, message, _) = split_exception(error_type, message, "");
+        let first = message.lines().next().unwrap_or_default().trim_end();
+        let error = match (error_type.is_empty(), first.is_empty()) {
+            (true, _) => first.to_string(),
+            (false, true) => error_type.to_string(),
+            (false, false) => format!("{error_type}: {first}"),
+        };
+        Self { node, error }
+    }
 }
 
 /// Aggregated statistics for a single asset node.
@@ -2534,9 +2603,16 @@ async fn read_runs(
     } else {
         "NULL"
     };
+    // The first failed step and its error, joined by the unit separator (a byte no node id,
+    // error type or message line holds).
+    let failure = if names.contains("run_id") && names.contains("error_type") {
+        "(SELECT node_id || char(31) || COALESCE(error_type, '') || char(31) || COALESCE(error_message, '') FROM materializations WHERE run_id = runs.run_id AND status = 'failed' ORDER BY id LIMIT 1)"
+    } else {
+        "NULL"
+    };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -2580,39 +2656,136 @@ async fn read_runs(
             schedule_id: row.get::<String>(14).ok().filter(|t| !t.is_empty()),
             client_run_id: row.get::<String>(15).ok().filter(|t| !t.is_empty()),
             job: row.get::<String>(16).ok().filter(|t| !t.is_empty()),
+            failure: row.get::<String>(17).ok().and_then(|raw| {
+                let mut parts = raw.splitn(3, '\u{1f}');
+                let node = parts.next()?.to_string();
+                let error_type = parts.next().unwrap_or_default();
+                let message = parts.next().unwrap_or_default();
+                Some(RunFailure::new(node, error_type, message))
+            }),
         });
     }
     Ok(records)
 }
 
-/// A step recorded by this run. Cached inputs have no new materialization row.
-#[derive(Debug, Clone, Serialize)]
+/// A step recorded by this run: one it executed (`success`) or one that failed. Cached
+/// steps have no new materialization row, so they are not listed (a live run on a server also
+/// lists the `cached` steps it has reported); nor are steps a failure skipped.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunStep {
     pub node_id: String,
     pub status: String,
     pub elapsed_seconds: Option<f64>,
+    /// A failed step's error as recorded: for a Python exception, `Type: message` and the
+    /// traceback's frames.
     pub error: Option<String>,
+    /// The partition key (`k=v`, pairs joined by `,`) of one key of a partitioned step.
+    #[serde(default)]
+    pub partition_key: Option<String>,
+    /// Attempts made, retries included.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub attempts: Option<i64>,
+    #[serde(default)]
+    pub run_hash: Option<String>,
+    /// Where the result is recorded: this machine's artifact path, or its artifact-store
+    /// location when it was uploaded.
+    #[serde(default)]
+    pub artifact_path: Option<String>,
+    #[serde(default)]
+    pub artifact_format: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub artifact_size_bytes: Option<i64>,
+    /// A failed step's exception type (`ZeroDivisionError`; `WorkerError` when its worker
+    /// died, `UploadError` when its result could not be stored).
+    #[serde(default)]
+    pub error_type: Option<String>,
+    /// A failed step's error message alone (without its type and traceback).
+    #[serde(default)]
+    pub error_message: Option<String>,
+    /// A failed step's Python traceback, barca's own frames left out.
+    #[serde(default)]
+    pub error_traceback: Option<String>,
+    /// How the worker process ended, for a step whose worker died: `SIGKILL (possibly the OOM
+    /// killer)`, another signal, `code N`, or `disconnected`. `null` for a step that raised.
+    #[serde(default)]
+    pub worker_exit: Option<String>,
+}
+
+/// How the worker ended, read from the error barca recorded when a worker died
+/// (`worker for <node> exited with <how>`, or `worker disconnected`).
+pub fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<String> {
+    if error_type != Some("WorkerError") {
+        return None;
+    }
+    let message = message?.lines().next()?;
+    if message.starts_with("worker disconnected") {
+        return Some("disconnected".to_string());
+    }
+    let (_, how) = message.split_once(" exited with ")?;
+    let how = how
+        .split_once(" while it waited")
+        .map_or(how, |(how, _)| how);
+    Some(how.to_string())
 }
 
 pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    // Read-only snapshots of older databases may lack later columns: those read as null.
+    let mut columns = Vec::new();
+    for name in ["attempts", "error_type"] {
+        columns.push(if has_column(&conn, "materializations", name).await? {
+            name
+        } else {
+            "NULL"
+        });
+    }
+    let (attempts, error_type) = (columns[0], columns[1]);
     let mut rows = conn.query(
-        "SELECT node_id, status, elapsed_seconds, error_message FROM materializations WHERE run_id = ?1 ORDER BY id",
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback FROM materializations WHERE run_id = ?1 ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
+    let text = |row: &turso::Row, i: usize| row.get::<String>(i).ok().filter(|t| !t.is_empty());
     let mut steps = Vec::new();
     while let Some(row) = rows
         .next()
         .await
         .map_err(|e| BarcaError::Db(format!("failed to read run step: {e}")))?
     {
+        let node_id = row.get::<String>(0).unwrap_or_default();
+        let partition = crate::StepId::parse(&node_id).partition.suffix();
+        let raw_error = row.get::<String>(3).ok();
+        let raw_type = text(&row, 9);
+        let worker_exit = worker_exit(raw_type.as_deref(), raw_error.as_deref());
+        let (error_type, error_message, error_traceback) = match &raw_error {
+            Some(message) => {
+                let (kind, message, stack) = split_exception(
+                    raw_type.as_deref().unwrap_or_default(),
+                    message,
+                    &text(&row, 10).unwrap_or_default(),
+                );
+                (Some(kind).filter(|k| !k.is_empty()), Some(message), stack)
+            }
+            None => (raw_type, None, text(&row, 10)),
+        };
         steps.push(RunStep {
-            node_id: row.get::<String>(0).unwrap_or_default(),
+            partition_key: (!partition.is_empty()).then_some(partition),
             status: row.get::<String>(1).unwrap_or_default(),
             elapsed_seconds: row.get::<f64>(2).ok(),
-            error: row.get::<String>(3).ok(),
+            attempts: row.get::<i64>(4).ok(),
+            run_hash: text(&row, 5),
+            artifact_path: text(&row, 6),
+            artifact_format: text(&row, 7),
+            artifact_size_bytes: row.get::<i64>(8).ok(),
+            worker_exit,
+            error_type,
+            error_message,
+            error_traceback,
+            error: raw_error,
+            node_id,
         });
     }
     Ok(steps)

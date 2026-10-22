@@ -91,9 +91,18 @@ pub struct HistoryQuery {
     pub limit: Option<usize>,
     /// `--all`: every run whatever `limit` says.
     pub all: Option<String>,
+    /// `--status`: comma-separated statuses.
+    pub status: Option<String>,
+    /// `--target`: a function name or node id.
+    pub target: Option<String>,
+    /// `--triggered-by`: comma-separated triggers.
+    pub triggered_by: Option<String>,
+    /// `--since`: a duration back from now on this server's clock, or a time.
+    pub since: Option<String>,
 }
 
-/// `GET /history?limit=N&all=1` — `barca history --json`.
+/// `GET /history?limit=N&all=1&status=..&target=..&triggered_by=..&since=..` — `barca history
+/// --json` with the same filters. A filter value barca does not accept is a 400.
 pub async fn history(
     State(state): State<AppState>,
     Query(query): Query<HistoryQuery>,
@@ -103,9 +112,16 @@ pub async fn history(
         .as_deref()
         .is_some_and(|v| !matches!(v, "" | "0" | "false"));
     let limit = if all { None } else { query.limit };
+    let filter = barca_core::history_filter::HistoryFilter::parse(
+        query.status.as_deref(),
+        query.target.as_deref(),
+        query.triggered_by.as_deref(),
+        query.since.as_deref(),
+        chrono::Utc::now(),
+    )
+    .map_err(ApiError::BadRequest)?;
     let snapshot = snapshot_db(&state).await?;
-    let total = barca_core::db::count_runs(&snapshot.path).await?;
-    let runs = barca_core::db::get_recent_runs(&snapshot.path, limit.unwrap_or(total)).await?;
+    let (runs, total) = barca_core::queries::history_at(&snapshot.path, limit, &filter).await?;
     let rendered = barca_core::report::render_history(&runs, total, true, None);
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }

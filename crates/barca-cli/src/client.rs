@@ -1017,19 +1017,24 @@ fn has_copy(layout: &barca_core::transfer::ArtifactLayout, artifact: Option<&str
         .is_some_and(|p| p.is_file())
 }
 
-/// `barca history --server`: `GET /history`.
+/// `barca history --server`: `GET /history`, with the filters as query parameters.
 pub(crate) async fn history(
     server: &Server,
     limit: Option<usize>,
+    filter: &barca_core::history_filter::HistoryFilter,
     json: bool,
     fields: Option<&[String]>,
     env: Option<&str>,
 ) -> Result<(), CliError> {
     server.health(env).await?;
-    let path = match limit {
-        Some(n) => format!("/history?limit={n}"),
-        None => "/history?all=1".to_string(),
-    };
+    let mut query = vec![match limit {
+        Some(n) => format!("limit={n}"),
+        None => "all=1".to_string(),
+    }];
+    for (key, value) in filter.query_pairs() {
+        query.push(format!("{key}={}", encode(&value)));
+    }
+    let path = format!("/history?{}", query.join("&"));
     let body = server.get_json(&path).await?;
     let bad = |e: serde_json::Error| server.unexpected("GET /history", &e.to_string());
     let runs: Vec<barca_core::db::RunRecord> =
@@ -1038,6 +1043,39 @@ pub(crate) async fn history(
     crate::commands::emit(barca_core::report::render_history(
         &runs, total, json, fields,
     ));
+    Ok(())
+}
+
+/// `barca history RUN_ID` against a server: `GET /runs/{run_id}`, the run and the steps it
+/// recorded. A run the server does not know but this machine does gets the command that
+/// reads it here.
+pub(crate) async fn run_detail(
+    server: &Server,
+    run_id: &str,
+    json: bool,
+    select: &str,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let path = format!("/runs/{}", encode(run_id));
+    let body = match server.get_json(&path).await {
+        Ok(body) => body,
+        Err(e) => {
+            let here = format!("barca history {run_id} --local");
+            return Err(here_instead(e, run_id, env, &here).await);
+        }
+    };
+    let bad = |e: serde_json::Error| server.unexpected(&format!("GET {path}"), &e.to_string());
+    let run: barca_core::db::RunRecord = serde_json::from_value(body.clone()).map_err(bad)?;
+    let mut steps: Vec<barca_core::db::RunStep> =
+        serde_json::from_value(body["steps"].clone()).map_err(bad)?;
+    // The steps the run recorded, as on this machine: a finished run the server started also
+    // lists the cached steps it streamed, until the server restarts.
+    if !matches!(run.status.as_str(), "pending" | "running") {
+        steps.retain(|step| step.status != "cached");
+    }
+    let detail = barca_core::queries::RunDetail { run, steps };
+    crate::commands::emit(barca_core::report::render_run_detail(&detail, json, select));
     Ok(())
 }
 
@@ -1111,7 +1149,10 @@ pub(crate) async fn logs(
     }
     let (status, lines) = match recorded_logs(server, &run_id, args).await {
         Ok(found) => found,
-        Err(e) => return Err(here_instead(e, &run_id, env).await),
+        Err(e) => {
+            let here = format!("barca logs {run_id} --local");
+            return Err(here_instead(e, &run_id, env, &here).await);
+        }
     };
     args.print_all(&lines).map_err(engine)?;
     if args.follow {
@@ -1145,20 +1186,17 @@ fn started_key(ts: &str) -> String {
 }
 
 /// A server that does not know `run_id`, when this machine does: the same error, with the
-/// command that reads it here as its remediation.
-async fn here_instead(e: CliError, run_id: &str, env: Option<&str>) -> CliError {
+/// command that reads it here (`here`) as its remediation.
+async fn here_instead(e: CliError, run_id: &str, env: Option<&str>, here: &str) -> CliError {
     if e.kind != ErrorKind::Usage
-        || !e.error.contains("was not found")
+        || !e.error.contains("not found")
         || local_run(env, Some(run_id)).await.is_none()
     {
         return e;
     }
     CliError::from_prose(
         ErrorKind::Usage,
-        format!(
-            "error: {}\nthis run is on this machine: barca logs {run_id} --local",
-            e.error
-        ),
+        format!("error: {}\nthis run is on this machine: {here}", e.error),
     )
 }
 

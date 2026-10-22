@@ -130,6 +130,12 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ),
     ("status", ["status", "pipeline.py", "--json", "--sample", "1"], "stdout", 0),
     ("history", ["history", "--json", "--limit", "1"], "stdout", 0),
+    (
+        "history_filtered",
+        ["history", "--status", "failed", "--target", "broken", "--since", "1d", "--json"],
+        "stdout",
+        0,
+    ),
     ("stats", ["stats", "total", "pipeline.py", "--json"], "stdout", 0),
     ("doctor", ["doctor", "pipeline.py", "--json"], "stdout", 0),
     # A dry run deletes nothing, so the cases after it see the same project. A moved-aside
@@ -174,6 +180,7 @@ MISMATCH_ARGV = ["get", "summary", "pipeline.py", "--refresh", "total", "--json"
 SETUP_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_artifact_mismatch", MISMATCH_ARGV, "stdout", 0),
     ("logs", ["logs", "RUN_ID", "--step", "report", "--json"], "stdout", 0),
+    ("history_run", ["history", "RUN_ID", "--json"], "stdout", 0),
     (
         "get_bytes_changed",
         ["get", "value", "pipeline.py", "--refresh", "value", "--json"],
@@ -444,6 +451,10 @@ def runs(tmp_path_factory) -> dict:
     assert proc.returncode == 0, proc.stderr
     s = command_schema(json.loads(proc.stdout))
     out["logs"] = (s, render_snapshot(SETUP_CASES[1][1], "stdout", 0, s), proc)
+    proc = barca(["history", run_id, "--json"])
+    assert proc.returncode == 0, proc.stderr
+    s = command_schema(json.loads(proc.stdout))
+    out["history_run"] = (s, render_snapshot(SETUP_CASES[2][1], "stdout", 0, s), proc)
 
     digest_case = tmp_path_factory.mktemp("contract_digest")
     (digest_case / "pipeline.py").write_text(
@@ -460,7 +471,7 @@ def runs(tmp_path_factory) -> dict:
     )
     assert baseline.returncode == 0, baseline.stderr
     (digest_case / "external.txt").write_text("after")
-    for case, argv, stream, code in SETUP_CASES[2:]:
+    for case, argv, stream, code in SETUP_CASES[3:]:
         proc = subprocess.run(
             [binary, *argv], cwd=digest_case, env=env, capture_output=True, text=True, timeout=60
         )

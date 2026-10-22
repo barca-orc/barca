@@ -28,6 +28,7 @@ pub mod gc;
 pub mod groups;
 pub mod hash;
 pub mod helper_proc;
+pub mod history_filter;
 pub mod http;
 mod input_params;
 pub mod interrupt;

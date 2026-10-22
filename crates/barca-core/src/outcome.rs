@@ -596,6 +596,16 @@ pub struct RunView {
     pub steps_executed: i64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub steps_cached: i64,
+    /// The run's job: `all`, or its resolved node ids sorted and comma-separated; `null` while
+    /// a live run has not recorded it, and for runs recorded before 0.29.0.
+    pub job: Option<String>,
+    /// Total recorded attempts (`barca history`); `null` while the run has recorded none.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub attempts: Option<i64>,
+    /// For a run a laptop posted to the ledger: its run id on that laptop.
+    pub client_run_id: Option<String>,
+    /// The first recorded failed step and the first line of its error (`barca history`).
+    pub failure: Option<crate::db::RunFailure>,
     /// The run's full result once it finished; `null` while it runs, and for runs not started
     /// through `barca serve`.
     #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown> | null"))]

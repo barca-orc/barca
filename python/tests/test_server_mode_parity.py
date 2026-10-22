@@ -16,6 +16,7 @@ Normalized, because they differ by design (the declared differences, listed in
   server's stderr: they are dropped from both sides.
 - Run ids, timestamps and durations differ between any two runs; they read `<run_id>`, `<t>`
   and `<n>s`.
+- The hint of `barca history RUN_ID` names the server it read (`--server <url>`): dropped.
 
 Each copy computes its own artifacts, so an artifact's `size_bytes` and `content_hash` read
 `<size_bytes>` and `<content_hash>` (the planning pipeline writes parquet whose bytes vary).
@@ -77,6 +78,15 @@ CONTRACT_TABLE += [
     ("status_fields", ["status", "pipeline.py", "--fields", "id,cache", "--limit", "2"]),
     ("whole_project", ["get", "--json"]),
     ("stats_unknown", ["stats", "nope", "pipeline.py", "--json"]),
+    # History filters and one run in detail. `FAILED_RUN` is the newest failed run of the side
+    # the case runs on.
+    ("history_failed", ["history", "--status", "failed", "--json"]),
+    ("history_filters", ["history", "--status", "success", "--target", "total", "--since", "1d"]),
+    ("history_no_schedule", ["history", "--triggered-by", "schedule", "--json"]),
+    ("pretty_history_failed", ["history", "--status", "failed", "--pretty", "-l", "2"]),
+    ("history_bad_status", ["history", "--status", "nope", "--json"]),
+    ("run_detail_failed", ["history", "FAILED_RUN", "--json"]),
+    ("pretty_run_detail", ["history", "FAILED_RUN", "--pretty"]),
 ]
 
 PLANNING_TABLE: list[tuple[str, list[str]]] = [
@@ -94,9 +104,13 @@ DURATION = re.compile(r"\b\d+(\.\d+)?(ms|s)\b")
 TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?")
 
 
+TRIGGER = re.compile(r"\btriggered by (manual|api)\b")
+
+
 def _text(s: str, roots: list[str]) -> str:
     for root in roots:
         s = s.replace(root, "<root>")
+    s = TRIGGER.sub("triggered by <trigger>", s)
     s = TIMESTAMP.sub("<t>", s)
     s = RUN_ID.sub("<run_id>", s)
     return DURATION.sub("<n>s", s)
@@ -206,21 +220,38 @@ class Served:
             self.proc.wait()
 
 
+def _resolve(cwd: Path, argv: list[str], server: list[str]) -> list[str]:
+    """`argv` with `FAILED_RUN` replaced by the newest failed run that side recorded."""
+    if "FAILED_RUN" not in argv:
+        return argv
+    out = _run(cwd, ["history", "--status", "failed", "-l", "1", "--json", *server])
+    [run] = json.loads(out.stdout)["runs"]
+    return [run["run_id"] if a == "FAILED_RUN" else a for a in argv]
+
+
 def _parity(local_root: Path, served_root: Path, table, files: tuple[str, ...]):
     """Run `table` locally on `local_root`, then with `--server` against `served_root`; return
     each case whose normalized output differs."""
     spellings = {str(p) for r in (local_root, served_root) for p in (r, r.resolve())}
     roots = sorted(spellings, key=len, reverse=True)
-    local = [(case, _run(local_root, argv)) for case, argv in table]
+    local = [(case, _run(local_root, _resolve(local_root, argv, []))) for case, argv in table]
     server = Served(served_root, *files)
+    flag = ["--server", server.url]
     try:
-        remote = [(case, _run(local_root, [*argv, "--server", server.url])) for case, argv in table]
+        remote = [
+            (case, _run(local_root, [*_resolve(local_root, argv, flag), *flag]))
+            for case, argv in table
+        ]
     finally:
         server.stop()
+    # A hint names the server it read (`barca history RUN_ID`'s `barca logs ... --server URL`).
+    named = f" --server {server.url}"
     diffs = []
     for (case, here), (_, there) in zip(local, remote, strict=True):
+        there_out = there.stdout.replace(named, "")
+        there_err = there.stderr.replace(named, "")
         a = (here.returncode, _normalize(here.stdout, roots), _normalize(here.stderr, roots))
-        b = (there.returncode, _normalize(there.stdout, roots), _normalize(there.stderr, roots))
+        b = (there.returncode, _normalize(there_out, roots), _normalize(there_err, roots))
         if a != b:
             diffs.append(
                 f"--- {case}\nexit: {a[0]} local, {b[0]} server\n"

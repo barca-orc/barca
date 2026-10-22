@@ -381,13 +381,18 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             .await
         }
         Cli::History {
+            run_id,
             reconcile,
+            status,
+            target,
+            triggered_by,
+            since,
             limit,
             all,
             format,
             fields,
             env,
-            ..
+            server: flags,
         } => {
             if reconcile.is_some() {
                 return Err(CliError::from_prose(
@@ -396,9 +401,34 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                      take --server\nRun it on the server's machine, without --server.",
                 ));
             }
+            if let Some(run_id) = run_id {
+                let select = same_history(&flags, env.as_deref());
+                return client::run_detail(
+                    server,
+                    &run_id,
+                    is_json(format),
+                    &select,
+                    env.as_deref(),
+                )
+                .await;
+            }
+            let filter = history_filter(
+                status.as_deref(),
+                target.as_deref(),
+                triggered_by.as_deref(),
+                since.as_deref(),
+            )?;
             let json = fields_json(format, fields.as_deref())?;
             let limit = inspection_limit(limit, all, json, 10);
-            client::history(server, limit, json, fields.as_deref(), env.as_deref()).await
+            client::history(
+                server,
+                limit,
+                &filter,
+                json,
+                fields.as_deref(),
+                env.as_deref(),
+            )
+            .await
         }
         Cli::Stats {
             target,
@@ -577,22 +607,42 @@ async fn run_cli(
         .await
         .map_err(engine),
         Cli::History {
+            run_id,
             reconcile,
+            status,
+            target,
+            triggered_by,
+            since,
             limit,
             all,
             format,
             fields,
             env,
-            ..
+            server,
         } => {
+            if let Some(run_id) = run_id {
+                let select = same_history(&server, env.as_deref());
+                return run_detail_cmd(env.as_deref(), &run_id, is_json(format), &select)
+                    .await
+                    .map_err(engine);
+            }
+            let filter = history_filter(
+                status.as_deref(),
+                target.as_deref(),
+                triggered_by.as_deref(),
+                since.as_deref(),
+            )?;
             let json = fields_json(format, fields.as_deref())?;
             let limit = inspection_limit(limit, all, json, 10);
             history_cmd(
                 env.as_deref(),
-                limit,
-                json,
-                fields.as_deref(),
-                reconcile.as_deref(),
+                HistoryArgs {
+                    limit,
+                    json,
+                    fields: fields.as_deref(),
+                    reconcile: reconcile.as_deref(),
+                    filter,
+                },
             )
             .await
             .map_err(engine)

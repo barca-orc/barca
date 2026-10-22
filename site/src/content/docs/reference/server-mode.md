@@ -171,6 +171,13 @@ remediation `this run is on this machine: barca logs RUN_ID --local`, and `barca
 run id adds `[barca] note: this machine has a newer run <id> (...); barca logs --local reads it`
 on stderr when this machine's newest run is newer than the server's.
 
+`barca history`'s filters (`--status`, `--target`, `--triggered-by`, `--since`) are applied by
+the server (`GET /history?status=...&target=...&triggered_by=...&since=...`; a relative
+`--since` counts back from the server's clock), and `barca history RUN_ID` reads
+`GET /runs/{run_id}`: the run, its steps with their attempts, run hashes, artifacts, errors and
+tracebacks. A run only this machine has (a failed run against the ledger is never posted) fails
+(exit 2) with the remediation `this run is on this machine: barca history RUN_ID --local`.
+
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`
 gets `local`: `true` when this machine has a copy of the result the server would serve (its
 mirror of the store object exists under this machine's artifact directory), else `false`. That

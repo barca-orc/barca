@@ -5,6 +5,7 @@ runs[].attempts : integer
 runs[].client_run_id : null
 runs[].command : string
 runs[].elapsed_seconds : null
+runs[].failure : null
 runs[].files : array
 runs[].finished_at : null
 runs[].job : null

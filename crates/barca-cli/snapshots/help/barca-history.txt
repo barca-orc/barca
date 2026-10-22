@@ -1,18 +1,25 @@
-Show recent run history
+Show recent run history, or one run's steps and errors
 
-Usage: barca history [OPTIONS]
+Usage: barca history [OPTIONS] [RUN_ID]
+
+Arguments:
+  [RUN_ID]  One run in detail: its fields, every step it recorded, and each failed step's error, traceback and how its worker ended
 
 Options:
-      --reconcile <RUN_ID>  After verifying a run stopped, record it as interrupted; refuses a proven live owner
-  -l, --limit <LIMIT>       Maximum recent runs (default: every run in JSON, 10 in a human table)
-      --all                 Show every recorded run (no limit)
-      --json                Emit JSON on stdout (the default when stdout is not a terminal)
-      --pretty              Emit human-readable output (the default when stdout is a terminal)
-      --fields <FIELDS>     Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id]
-      --env <ENV>           Environment name (separates cache/state per environment)
-      --server [<URL>]      Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server
-      --local               Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server
-  -h, --help                Print help
+      --reconcile <RUN_ID>            After verifying a run stopped, record it as interrupted; refuses a proven live owner
+      --status <STATUS[,...]>         Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted
+      --target <NAME>                 Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out
+      --triggered-by <TRIGGER[,...]>  Only runs started this way (comma-separated): manual, api, schedule, client
+      --since <WHEN>                  Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22)
+  -l, --limit <LIMIT>                 Maximum recent runs (default: every run in JSON, 10 in a human table)
+      --all                           Show every recorded run (no limit)
+      --json                          Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty                        Emit human-readable output (the default when stdout is a terminal)
+      --fields <FIELDS>               Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure]
+      --env <ENV>                     Environment name (separates cache/state per environment)
+      --server [<URL>]                Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server
+      --local                         Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server
+  -h, --help                          Print help
 
 Examples:
   barca history                # last 10 in a terminal, every run as JSON when piped
@@ -27,6 +34,13 @@ Examples:
   barca history --env dev      # runs recorded in another environment
   barca history --server -l 20 # the runs of the configured barca server (barca docs server-mode)
   barca history --local        # this machine's runs, even with a server configured
+  barca history --status failed            # failed runs only, each with its failing step and error
+  barca history --status failed,interrupted --since 24h   # what went wrong in the last day
+  barca history --target clean             # runs whose target or job is clean
+  barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
+  barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
+  barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
+  barca history 7f30b3e9 --json   # {run, steps: [...], hint?}
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -38,4 +52,10 @@ files the run was given. TARGET in the table is the run's job by function name (
 run without targets), cut at 24 characters with `…`; JSON `job` holds it in full: `all`, or the
 resolved node ids sorted and comma-separated (null for runs recorded before 0.29.0).
 JSON returns every item unless --limit is given; human tables keep their default bound.
+A failed run's row ends with its first failed step and the first line of its error; JSON has it
+as `failure: {node, error}` (null otherwise). Filters combine with AND, and --limit, `total`
+and `truncated` count the runs they keep. With a RUN_ID, the run in detail: the steps it
+executed or that failed (cached steps are counted, not listed), each failed step's traceback,
+and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. Replace the example id
+with a run_id from barca history.
 More: barca docs agents, barca docs cache

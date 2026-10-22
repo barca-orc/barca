@@ -332,6 +332,13 @@ Examples:
   barca history --env dev      # runs recorded in another environment
   barca history --server -l 20 # the runs of the configured barca server (barca docs server-mode)
   barca history --local        # this machine's runs, even with a server configured
+  barca history --status failed            # failed runs only, each with its failing step and error
+  barca history --status failed,interrupted --since 24h   # what went wrong in the last day
+  barca history --target clean             # runs whose target or job is clean
+  barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
+  barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
+  barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
+  barca history 7f30b3e9 --json   # {run, steps: [...], hint?}
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -343,6 +350,12 @@ files the run was given. TARGET in the table is the run's job by function name (
 run without targets), cut at 24 characters with `…`; JSON `job` holds it in full: `all`, or the
 resolved node ids sorted and comma-separated (null for runs recorded before 0.29.0).
 JSON returns every item unless --limit is given; human tables keep their default bound.
+A failed run's row ends with its first failed step and the first line of its error; JSON has it
+as `failure: {node, error}` (null otherwise). Filters combine with AND, and --limit, `total`
+and `truncated` count the runs they keep. With a RUN_ID, the run in detail: the steps it
+executed or that failed (cached steps are counted, not listed), each failed step's traceback,
+and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. Replace the example id
+with a run_id from barca history.
 More: barca docs agents, barca docs cache";
 
 const GC_HELP: &str = "\
@@ -760,12 +773,31 @@ pub(crate) enum Cli {
         #[command(flatten)]
         server: ServerFlags,
     },
-    /// Show recent run history
+    /// Show recent run history, or one run's steps and errors
     #[command(after_help = HISTORY_HELP)]
     History {
+        /// One run in detail: its fields, every step it recorded, and each failed step's error,
+        /// traceback and how its worker ended
+        #[arg(value_name = "RUN_ID", conflicts_with_all = ["reconcile", "limit", "all", "fields", "status", "target", "triggered_by", "since"])]
+        run_id: Option<String>,
         /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
-        #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all"])]
+        #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all", "status", "target", "triggered_by", "since"])]
         reconcile: Option<String>,
+        /// Only runs with one of these statuses (comma-separated): success, failed, cancelled,
+        /// error, running, interrupted
+        #[arg(long, value_name = "STATUS[,...]")]
+        status: Option<String>,
+        /// Only runs whose target or job is this node (a function name or node id); runs of
+        /// every node (`all`) are left out
+        #[arg(long, value_name = "NAME")]
+        target: Option<String>,
+        /// Only runs started this way (comma-separated): manual, api, schedule, client
+        #[arg(long, value_name = "TRIGGER[,...]")]
+        triggered_by: Option<String>,
+        /// Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an
+        /// RFC 3339 time or a UTC date (2026-10-22)
+        #[arg(long, value_name = "WHEN")]
+        since: Option<String>,
         /// Maximum recent runs (default: every run in JSON, 10 in a human table)
         #[arg(short, long)]
         limit: Option<usize>,

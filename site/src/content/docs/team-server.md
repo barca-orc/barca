@@ -91,6 +91,8 @@ the cache, because a result is shared whenever the code and inputs match.
 ```bash
 barca status                 # what the team has, and each result's shape
 barca history                # everyone's runs
+barca history --status failed --since 24h   # what failed today, each with its step and error
+barca history 836fdca186c8   # one run: its steps, the error and traceback, and the logs command
 barca get revenue --server   # run it on the server
 barca get revenue --local    # skip the server once
 ```
@@ -101,6 +103,14 @@ RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME 
 ------------------------------------------------------------------------------------------------------
 9086ad528e03   get     revenue                  success         0      2   0.0s 2026-10-22 19:00:53 UTC
 9085f266d644   get     revenue                  success         2      0   2.1s 2026-10-22 19:00:46 UTC
+```
+
+```
+$ barca history --status failed
+RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
+------------------------------------------------------------------------------------------------------
+836f80e59467   get     enrich                   failed          1      1   0.1s 2026-10-22 22:57:27 UTC  enrich: ConnectionError: pricing API timed out
+836fdca186c8   get     clean                    failed          1      1   0.1s 2026-10-22 22:57:27 UTC  clean: ZeroDivisionError: division by zero
 ```
 
 `--server` runs the server's copy of the code, not your local edits, and prints the output here.
