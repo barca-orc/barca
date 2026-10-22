@@ -160,14 +160,57 @@ pub fn stderr_str(text: &str) {
         }
         return;
     }
-    let _order = ChildOutput::copy_pending();
-    let _one = locked(&STDERR_WRITER);
-    write_to(
-        &mut Stream(libc::STDERR_FILENO),
-        &STDERR,
-        format_args!("{text}"),
-        false,
-    );
+    clear_of_bar(|| {
+        let _order = ChildOutput::copy_pending();
+        let _one = locked(&STDERR_WRITER);
+        write_to(
+            &mut Stream(libc::STDERR_FILENO),
+            &STDERR,
+            format_args!("{text}"),
+            false,
+        );
+    });
+}
+
+/// The progress bar a run is drawing on stderr, if any. A line written to stderr while it is
+/// drawn would land on the bar's line and be overwritten or run into it, so [`stderr_line`] and
+/// [`stderr_str`] clear the bar, write, and draw it again below. Held weakly: the bar's owner
+/// decides when it ends.
+static PROGRESS_BAR: Mutex<Option<indicatif::WeakProgressBar>> = Mutex::new(None);
+
+/// Route every later stderr line above `bar` while it is drawn (until it is finished or
+/// dropped).
+pub fn above_progress_bar(bar: &indicatif::ProgressBar) {
+    *PROGRESS_BAR.lock().unwrap_or_else(|e| e.into_inner()) = Some(bar.downgrade());
+}
+
+/// The progress bar currently drawn on stderr.
+fn drawn_bar() -> Option<indicatif::ProgressBar> {
+    let bar = PROGRESS_BAR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()?
+        .upgrade()?;
+    drawn(&bar).then_some(bar)
+}
+
+/// Whether `bar` is on the screen: a bar on a stream that is not a terminal is hidden, and a
+/// finished one has been cleared or left behind for good.
+fn drawn(bar: &indicatif::ProgressBar) -> bool {
+    !bar.is_hidden() && !bar.is_finished()
+}
+
+/// Run `write` with the progress bar, if one is drawn, cleared from the screen.
+fn clear_of_bar<R>(write: impl FnOnce() -> R) -> R {
+    clear_of(drawn_bar(), write)
+}
+
+/// Run `write` with `bar` cleared from the screen, and draw it again after.
+fn clear_of<R>(bar: Option<indicatif::ProgressBar>, write: impl FnOnce() -> R) -> R {
+    match bar {
+        Some(bar) => bar.suspend(write),
+        None => write(),
+    }
 }
 
 /// `eprintln!` that does not panic. Use [`errln!`](crate::errln). Child output
@@ -183,9 +226,11 @@ pub fn stderr_line(args: fmt::Arguments<'_>) {
         ));
         return;
     }
-    let _order = ChildOutput::copy_pending();
-    let _one = locked(&STDERR_WRITER);
-    write_to(&mut Stream(libc::STDERR_FILENO), &STDERR, args, true);
+    clear_of_bar(|| {
+        let _order = ChildOutput::copy_pending();
+        let _one = locked(&STDERR_WRITER);
+        write_to(&mut Stream(libc::STDERR_FILENO), &STDERR, args, true);
+    });
 }
 
 /// The pipe barca's children write to when barca's own stderr could lose its reader.
@@ -400,6 +445,73 @@ macro_rules! errln {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A terminal that keeps what is on its current line.
+    #[derive(Clone, Debug, Default)]
+    struct Screen(std::sync::Arc<Mutex<String>>);
+    impl Screen {
+        fn line(&self) -> String {
+            self.0.lock().unwrap().trim_end().to_string()
+        }
+    }
+    impl indicatif::TermLike for Screen {
+        fn width(&self) -> u16 {
+            80
+        }
+        fn move_cursor_up(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_down(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_right(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn move_cursor_left(&self, _: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn write_line(&self, s: &str) -> std::io::Result<()> {
+            *self.0.lock().unwrap() = s.to_string();
+            Ok(())
+        }
+        fn write_str(&self, s: &str) -> std::io::Result<()> {
+            self.0.lock().unwrap().push_str(s);
+            Ok(())
+        }
+        fn clear_line(&self) -> std::io::Result<()> {
+            self.0.lock().unwrap().clear();
+            Ok(())
+        }
+        fn flush(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_line_is_written_with_the_progress_bar_cleared_and_the_bar_comes_back() {
+        // A line written while the bar was drawn landed on the bar's own line (`0/2 |[barca]
+        // checking artifact store ...`) and left a stray bar frame on screen.
+        let screen = Screen::default();
+        let bar = indicatif::ProgressBar::with_draw_target(
+            Some(2),
+            indicatif::ProgressDrawTarget::term_like(Box::new(screen.clone())),
+        );
+        bar.set_style(indicatif::ProgressStyle::with_template("BAR {pos}/{len}").unwrap());
+        bar.tick();
+        assert_eq!(screen.line(), "BAR 0/2");
+        assert!(drawn(&bar));
+        let seen = clear_of(Some(bar.clone()), || screen.line());
+        assert_eq!(
+            seen, "",
+            "the bar must be off its line while a line is written"
+        );
+        assert_eq!(screen.line(), "BAR 0/2", "and drawn again after");
+        bar.finish_and_clear();
+        assert!(!drawn(&bar), "a finished bar is not cleared or drawn again");
+        assert!(!drawn(&indicatif::ProgressBar::hidden()));
+        // No bar: the line is just written.
+        assert_eq!(clear_of(None, || 7), 7);
+    }
 
     struct Fails(ErrorKind);
     impl Write for Fails {

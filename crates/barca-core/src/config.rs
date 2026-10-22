@@ -224,6 +224,18 @@ impl ResolvedConfig {
         norm(&self.artifact_root) != norm(&self.local_artifact_dir)
     }
 
+    /// For `get` and `run` on a machine with a server configured (with or without `--local`):
+    /// take no metadata backups. The server is the ledger and backs up its own database; a
+    /// client's copies would land in the server's backup set, where they rotate the server's
+    /// own out and are candidates for a restore of the server (DIRECTION.md, "Store and
+    /// backup": the store is a backup only for a machine without a server). `barca serve` does
+    /// not call this, whatever its `[server] url`.
+    pub fn as_server_client(&mut self) {
+        if self.server_url.is_some() {
+            self.backup_uri = None;
+        }
+    }
+
     /// The line `get`, `run` and `serve` print on stderr at startup, when the environment
     /// comes from `default_env` in barca.toml or a separate artifact store is configured:
     /// either can point a one-off command at another environment's data without a flag

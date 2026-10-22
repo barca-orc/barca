@@ -168,6 +168,10 @@ nothing is ever downloaded before a run. With a store configured by `[remote] ur
 - by `barca serve`, every minute in which the database changed, and once when it shuts down
   (not with `--read-only`).
 
+A machine with a server configured (`[server] url` or `BARCA_SERVER`) takes no backups, with or
+without `--local`: the server is the ledger and backs up its own database (`barca docs
+server-mode`, "Backups").
+
 A backup whose bytes would equal the newest one is not taken. None is taken under
 `BARCA_REMOTE=off`, or when only `BARCA_ARTIFACT_URI` / `[remote] artifacts_uri` name the store.
 

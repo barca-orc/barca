@@ -541,6 +541,24 @@ def test_local_touches_nothing_on_the_server(team):
     assert "local" not in nodes["pipeline.py:report"]
 
 
+def test_a_client_backs_up_nothing_the_server_is_the_ledger(team):
+    """A machine with a server configured takes no metadata backups, with or without --local:
+    its copies landed in the server's backup set (`<store>/<env>/state/backups`), rotated the
+    server's own out and were candidates for a restore of the server."""
+    backups = team.store / "default" / "state" / "backups"
+    for args in (("report",), ("report", "--refresh-all"), ("report", "--local")):
+        out = barca(team.a, "get", *args, "--json")
+        assert out.returncode == 0, out.stderr
+        assert "backed up the metadata DB" not in out.stderr, out.stderr
+    _, err = get(team.b, "report")
+    assert "backed up the metadata DB" not in err, err
+    for root in (team.a, team.b):
+        assert not (root / ".barca" / "backups").exists()
+    sidecars = [json.loads(p.read_text()) for p in backups.glob("*.json")]
+    clients = {str(team.a.resolve()), str(team.b.resolve())}
+    assert not [s for s in sidecars if s.get("project") in clients], sidecars
+
+
 def _status(root: Path, *args: str) -> tuple[dict, str]:
     out = barca(root, "status", *args, "--json")
     assert out.returncode == 0, out.stderr

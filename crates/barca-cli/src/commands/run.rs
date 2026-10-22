@@ -22,6 +22,8 @@ pub(crate) async fn run_cmd(
     let mut cfg = barca_core::config::resolve(env)?;
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
     cfg.ledger = ledger;
+    // The server backs up the ledger; this machine backs up nothing (barca docs server-mode).
+    cfg.as_server_client();
     if let Some(line) = cfg.startup_line() {
         barca_core::errln!("{line}");
     }
