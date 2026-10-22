@@ -4,7 +4,8 @@ Sharing results between machines means one `barca serve` that everyone points at
 is the ledger**: it holds the one record of which results exist (run hashes, artifact paths, run
 history) and it is the only process that writes it. The artifact bytes stay in the store
 (`[remote]`, `barca docs remote`); the server never moves them. Server mode is experimental
-(`barca docs contract`).
+(`barca docs contract`). To set it up in three steps, see
+https://barca.sh/team-server/.
 
 With a server configured, a command does one of three things:
 

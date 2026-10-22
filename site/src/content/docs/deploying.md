@@ -82,6 +82,7 @@ an internal load balancer), or through a proxy that admits the client's network.
 
 ## The server as the team's ledger
 
+[Share Results With a Team](/team-server/) sets this up in three steps.
 The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted and implemented:
 the run contract over HTTP (#393), the CLI's `--server` (#394) and the ledger (#402). A laptop
 with `[server] url` (or `BARCA_SERVER`) pointing at this server and `[remote]` pointing at its
