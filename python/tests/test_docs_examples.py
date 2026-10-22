@@ -272,6 +272,40 @@ def test_partitions_topic_example(binary, topics, tmp_path, monkeypatch, pool):
     assert shrunk["steps_executed"] == 1  # the fan-in
 
 
+@pytest.mark.parametrize("pool", [1, 3])
+def test_partitions_topic_selecting_keys(binary, topics, tmp_path, monkeypatch, pool):
+    """The partitions topic, "Selecting keys": a selection narrows `sales` as well as the
+    target, skips the fan-in with one note, and a later full run serves the selected key."""
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(pool))
+    write_example(topics, "partitions", tmp_path)
+    apac = result(
+        barca(binary, tmp_path, "get", "margin", "pipeline.py", "--partition", "region=apac")
+    )
+    assert partition_keys_run(apac) == {
+        "pipeline.py:sales": ["region=apac"],
+        "pipeline.py:margin": ["region=apac"],
+    }
+    proc = subprocess.run(
+        [binary, "get", "pipeline.py", "--partition", "region=emea", "--json"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (
+        "[barca] note: --partition skips a fan-in that reads every key: summary. Run without "
+        "--partition to update it."
+    ) in proc.stderr.splitlines()
+    steps = {s["id"]: s for s in json.loads(proc.stdout.splitlines()[-1])["steps"]}
+    assert steps["pipeline.py:summary"]["reason"] == "partition_selection"
+    full = result(barca(binary, tmp_path, "get", "margin", "pipeline.py"))
+    assert partition_keys_run(full) == {
+        "pipeline.py:sales": ["region=amer"],
+        "pipeline.py:margin": ["region=amer"],
+    }
+
+
 def test_overview_topic_example(binary, topics, tmp_path):
     write_example(topics, "overview", tmp_path)
     nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]

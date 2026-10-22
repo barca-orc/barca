@@ -157,7 +157,7 @@ default, and any aliases.
 | `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at most 7d). Experimental |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys of a partitioned target: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Only those keys are computed and returned, and --refresh of the target refreshes only them |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select partition keys across the cone: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Every partitioned node with a named dimension computes only those keys (--refresh too); a fan-in over them is skipped. Works without a target |
 | `--refresh` | comma-separated names | - | stable | Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
@@ -176,6 +176,7 @@ default, and any aliases.
 | `--refresh` | comma-separated names | - | stable | Upstream assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the task's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select partition keys across the task's cone, as for `barca get --partition`: every partitioned node with a named dimension computes only those keys |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
@@ -191,6 +192,7 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | experimental (with the command) | Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep the selected keys, and fan-ins over them are left out (listed in partition_selection) |
 
 #### barca doctor
 
@@ -406,9 +408,13 @@ A partitioned target returns every key, or the keys `--partition` selects
 (`DIMENSION=VALUE[,VALUE...]`, or a JSON object of dimension to value or list of values). Its
 `final_output` is an object keyed by partition key (`dim=value`, dimensions sorted and joined
 with `,`), sorted, each a pointer or (under `-o value`) a value; `-o path` prints one line per
-key in the same order. A `--partition` that names no target, a target that is not partitioned
-or has no such dimension, a value that is not one of its keys, or a target another target of the
-run reads, is a usage error (exit 2) before anything runs.
+key in the same order. `--partition` narrows every partitioned node of the run with a named
+dimension, with or without a target, on `get`, `run` and `plan`; the result then carries
+`partition_selection` (`selection`, `nodes[]` with `id`, `selected`, `skipped`, and
+`skipped_nodes`), and a node it does not run is a step with status (dry run: action) `skipped`
+and reason `partition_selection`, without changing the exit code. A dimension no node in the
+cone has, a value no node with that dimension has, or a target the selection would skip, is a
+usage error (exit 2) before anything runs. Up to 0.29.2 it narrowed only the target.
 
 Up to 0.24, `final_output` held the value of a json artifact and a terminal printed the value;
 `-o value` (with `--json` for the JSON line) prints it now. A partitioned target returned the
@@ -688,7 +694,9 @@ may grow.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
+  words. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
+  or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
+  `partition_selection`, and the result has `partition_selection` (see "Partitioned targets"). A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
   stale; `barca docs cache`) carries a `detail` starting `Manual`. Breaking in this release: a
   stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
   `artifact_missing` is a step that has a cached result whose artifact file is gone
@@ -866,6 +874,16 @@ With `--partition k=a -o value --json`, only the selected keys, each its value:
 | `elapsed_seconds` | number | always |
 | `final_output` | object | always |
 | `final_output.<key>` | `<user value>` | always |
+| `partition_selection` | object | always |
+| `partition_selection.nodes` | array | always |
+| `partition_selection.nodes[]` | object | always |
+| `partition_selection.nodes[].id` | string | always |
+| `partition_selection.nodes[].selected` | integer | always |
+| `partition_selection.nodes[].skipped` | integer | always |
+| `partition_selection.selection` | object | always |
+| `partition_selection.selection.k` | array | always |
+| `partition_selection.selection.k[]` | string | always |
+| `partition_selection.skipped_nodes` | array | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |
@@ -882,6 +900,94 @@ With `--partition k=a -o value --json`, only the selected keys, each its value:
 | `steps_executed` | integer | always |
 | `warnings` | array | always |
 <!-- END GENERATED schema get_partition_values -->
+
+With `--partition k=a` and no target, every narrowed node's key counts in `partition_selection`
+and the skipped fan-in in `steps` and `skipped_nodes` (the dry run has the same key, with
+`action` `skipped`):
+
+<!-- BEGIN GENERATED schema get_partition_selection -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
+| `partition_selection` | object | always |
+| `partition_selection.nodes` | array | always |
+| `partition_selection.nodes[]` | object | always |
+| `partition_selection.nodes[].id` | string | always |
+| `partition_selection.nodes[].selected` | integer | always |
+| `partition_selection.nodes[].skipped` | integer | always |
+| `partition_selection.selection` | object | always |
+| `partition_selection.selection.k` | array | always |
+| `partition_selection.selection.k[]` | string | always |
+| `partition_selection.skipped_nodes` | array | always |
+| `partition_selection.skipped_nodes[]` | string | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact` | string | sometimes |
+| `steps[].detail` | string | sometimes |
+| `steps[].env` | object | sometimes |
+| `steps[].env.<name>` | null \| string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].partitions` | object | sometimes |
+| `steps[].partitions.cached` | integer | always |
+| `steps[].partitions.total` | integer | always |
+| `steps[].partitions.will_run` | integer | always |
+| `steps[].partitions.will_run_keys` | array | always |
+| `steps[].reason` | string | sometimes |
+| `steps[].run_hash` | string | sometimes |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_partition_selection -->
+
+<!-- BEGIN GENERATED schema get_partition_selection_dry_run -->
+| Key | Type | Present |
+|---|---|---|
+| `capacity` | integer | always |
+| `command` | string | always |
+| `dry_run` | boolean | always |
+| `partition_selection` | object | always |
+| `partition_selection.nodes` | array | always |
+| `partition_selection.nodes[]` | object | always |
+| `partition_selection.nodes[].id` | string | always |
+| `partition_selection.nodes[].selected` | integer | always |
+| `partition_selection.nodes[].skipped` | integer | always |
+| `partition_selection.selection` | object | always |
+| `partition_selection.selection.k` | array | always |
+| `partition_selection.selection.k[]` | string | always |
+| `partition_selection.skipped_nodes` | array | always |
+| `partition_selection.skipped_nodes[]` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].action` | string | always |
+| `steps[].artifact` | string | sometimes |
+| `steps[].detail` | string | sometimes |
+| `steps[].env` | object | sometimes |
+| `steps[].env.<name>` | null \| string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].partitions` | object | sometimes |
+| `steps[].partitions.cached` | integer | always |
+| `steps[].partitions.total` | integer | always |
+| `steps[].partitions.will_run` | integer | always |
+| `steps[].partitions.will_run_keys` | array | always |
+| `steps[].reason` | string | sometimes |
+| `steps[].run_hash` | string | sometimes |
+| `summary` | object | always |
+| `summary.cached` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.will_run` | integer | always |
+| `target` | null | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_partition_selection_dry_run -->
 
 `run` prints the same shape:
 
@@ -2043,6 +2149,46 @@ stderr. These keys are experimental (0.29, #436).
 | `warnings[].param` | string | always |
 | `weights` | object | always |
 <!-- END GENERATED schema plan -->
+
+`barca plan --partition k=a` adds `partition_selection`:
+
+<!-- BEGIN GENERATED schema plan_partition_selection -->
+| Key | Type | Present |
+|---|---|---|
+| `capacity` | integer | always |
+| `capacity_source` | string | always |
+| `partition_selection` | object | always |
+| `partition_selection.nodes` | array | always |
+| `partition_selection.nodes[]` | object | always |
+| `partition_selection.nodes[].id` | string | always |
+| `partition_selection.nodes[].selected` | integer | always |
+| `partition_selection.nodes[].skipped` | integer | always |
+| `partition_selection.selection` | object | always |
+| `partition_selection.selection.k` | array | always |
+| `partition_selection.selection.k[]` | string | always |
+| `partition_selection.skipped_nodes` | array | always |
+| `partition_selection.skipped_nodes[]` | string | always |
+| `phases` | array | always |
+| `phases[]` | object | always |
+| `phases[].reason` | object | always |
+| `phases[].reason.node_id` | string | sometimes |
+| `phases[].reason.type` | string | always |
+| `phases[].streams` | array | always |
+| `phases[].streams[]` | object | always |
+| `phases[].streams[].steps` | array | always |
+| `phases[].streams[].steps[]` | string | always |
+| `phases[].streams[].stream_id` | string | always |
+| `plan_version` | integer | always |
+| `pool_size` | integer | always |
+| `total_steps` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
+| `weights` | object | always |
+<!-- END GENERATED schema plan_partition_selection -->
 
 ### docs
 

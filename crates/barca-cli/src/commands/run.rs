@@ -18,6 +18,7 @@ pub(crate) async fn run_cmd(
     agent: bool,
     fields: Option<&[String]>,
     ledger: Option<barca_core::ledger::Ledger>,
+    partition: Option<barca_core::selection::PartitionSelection>,
 ) -> Result<(), barca_core::BarcaError> {
     let mut cfg = barca_core::config::resolve(env)?;
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
@@ -30,7 +31,15 @@ pub(crate) async fn run_cmd(
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if dry_run {
         return explain_cmd(
-            &cfg, &targets, &file_args, python, policy, "run", mode, fields, None,
+            &cfg,
+            &targets,
+            &file_args,
+            python,
+            policy,
+            "run",
+            mode,
+            fields,
+            partition.as_ref(),
         )
         .await;
     }
@@ -45,6 +54,7 @@ pub(crate) async fn run_cmd(
             agent,
             cancel_on_ctrl_c(),
             Some(events),
+            partition,
         )
         .await;
         let _ = log_task.await;
@@ -61,6 +71,7 @@ pub(crate) async fn run_cmd(
         agent,
         cancel_on_ctrl_c(),
         Some(events),
+        partition,
     )
     .await;
     let _ = log_task.await;

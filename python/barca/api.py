@@ -258,7 +258,11 @@ def get(
     A partitioned target returns a dict of partition key (``"region=emea"``) to
     value, for every key or for the keys ``partition`` selects: ``"region=emea,amer"``
     or a dict for compound keys, ``{"region": "emea", "day": ["d1", "d2"]}``
-    (``--partition``).
+    (``--partition``). The selection applies to the whole cone: every partitioned asset
+    with a selected dimension computes only those keys, and a ``collect()`` fan-in over
+    them is skipped. It works without a target too (``get("pipeline.py", partition=...)``).
+    With ``server=``, the values are read on the server and come back as JSON (a table as a
+    list of row objects).
 
     ``server=True`` runs it on the configured barca server (``BARCA_SERVER`` or
     ``[server] url``), ``server="https://..."`` on that one (``barca get --server``); files
@@ -269,9 +273,10 @@ def get(
     args: list[str] = ["get", target_or_file, *extra_files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
     if partition is not None:
-        if server:
-            raise BarcaError("partition= cannot be used with server= yet")
         args += ["--partition", partition if isinstance(partition, str) else json.dumps(partition)]
+        if server:
+            # A server returns the selected keys' values read on it (``-o value``), as JSON.
+            args += ["-o", "value"]
     args += _server_args(server)
     result = _exec(args)
     output = result.get("final_output")
@@ -286,6 +291,7 @@ def run(
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
+    partition: "str | dict[str, Any] | None" = None,
     server: bool | str = False,
 ) -> Any:
     """Run a task (and its cone). The task always re-runs.
@@ -294,13 +300,16 @@ def run(
     ``refresh=["asset_name", ...]`` to force re-materialize those assets and every
     asset downstream of them in the task's cone; add ``cascade=False``
     (``--no-cascade``) to re-materialize only the named assets. Pass
-    ``refresh_all=True`` to refresh every upstream asset. ``server=`` runs it on a barca
-    server, as for :func:`get`.
+    ``refresh_all=True`` to refresh every upstream asset. ``partition=`` selects partition
+    keys across the task's cone, as for :func:`get` (``--partition``). ``server=`` runs it
+    on a barca server, as for :func:`get`.
 
     Returns the deserialized value of the target task directly (or ``None``).
     """
     args: list[str] = ["run", target, *files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
+    if partition is not None:
+        args += ["--partition", partition if isinstance(partition, str) else json.dumps(partition)]
     args += _server_args(server)
     result = _exec(args)
     output = result.get("final_output")
@@ -309,15 +318,21 @@ def run(
     return output
 
 
-def plan(file: str, *extra_files: str) -> dict:
+def plan(file: str, *extra_files: str, partition: "str | dict[str, Any] | None" = None) -> dict:
     """Return the execution plan as a dict.
+
+    ``partition=`` plans only the selected partition keys (``barca plan --partition``); the
+    plan then has a ``partition_selection`` entry.
 
     Returns a dict with:
         - total_steps: int
         - phases: list of phase dicts
     """
     files = [file, *extra_files]
-    return _exec(["plan", *files])
+    args = ["plan", *files]
+    if partition is not None:
+        args += ["--partition", partition if isinstance(partition, str) else json.dumps(partition)]
+    return _exec(args)
 
 
 def history(limit: int = 10) -> list[dict]:

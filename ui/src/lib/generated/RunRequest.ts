@@ -41,7 +41,7 @@ agent?: boolean,
  */
 values?: boolean,
 /**
- * `get --partition`: the keys of the targets to compute and return, as the flag takes
- * them (`"region=emea,amer"`, or a JSON object for compound keys).
+ * `--partition` of `get` or `run`: the partition keys the run computes across its cone, as
+ * the flag takes them (`"region=emea,amer"`, or a JSON object for compound keys).
  */
 partition?: string, };

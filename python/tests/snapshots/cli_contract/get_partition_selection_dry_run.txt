@@ -1,0 +1,37 @@
+# barca get pipeline.py --partition k=a --dry-run --json  (stdout, exit 0)
+capacity : integer
+command : string
+dry_run : boolean
+partition_selection : object
+partition_selection.nodes : array
+partition_selection.nodes[] : object
+partition_selection.nodes[].id : string
+partition_selection.nodes[].selected : integer
+partition_selection.nodes[].skipped : integer
+partition_selection.selection : object
+partition_selection.selection.k : array
+partition_selection.selection.k[] : string
+partition_selection.skipped_nodes : array
+partition_selection.skipped_nodes[] : string
+steps : array
+steps[] : object
+steps[].action : string
+steps[].artifact : string  (optional)
+steps[].detail : string  (optional)
+steps[].env : object  (optional)
+steps[].env.<name> : null|string
+steps[].id : string
+steps[].kind : string
+steps[].partitions : object  (optional)
+steps[].partitions.cached : integer
+steps[].partitions.total : integer
+steps[].partitions.will_run : integer
+steps[].partitions.will_run_keys : array
+steps[].reason : string  (optional)
+steps[].run_hash : string  (optional)
+summary : object
+summary.cached : integer
+summary.unknown : integer
+summary.will_run : integer
+target : null
+warnings : array

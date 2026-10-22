@@ -323,8 +323,8 @@ or query an asset built with `collect`.
 
 ## Selecting keys with `--partition`
 
-A key cannot be named as a target or in `--refresh`; select keys of the target with
-`--partition` instead:
+A key cannot be named as a target or in `--refresh`; select keys with `--partition` instead.
+The selection applies to the whole run, upstream and downstream:
 
 ```
 $ barca get 'sales[region=emea]' pipeline.py
@@ -341,6 +341,11 @@ $ barca get summary pipeline.py --refresh 'sales[region=emea]'
   `final_output` object keyed by `region=...`. The Python call `barca.get("sales", "pipeline.py")`
   returns a dict of key to value. `--partition region=emea` (or `partition="region=emea"` in
   Python) computes and returns only that key, and scopes `--refresh sales` to it.
+- `barca get margin pipeline.py --partition region=emea` computes only the emea key of `sales`
+  too, and `barca get pipeline.py --partition region=emea` (no target) every asset for emea.
+  `summary`, a `collect(sales)` fan-in, is skipped with a note on stderr: over one key it would be
+  a different result. Run without `--partition` to update it. A key computed under a selection
+  is the key a full run computes, so the next full run serves it from cache.
 
 ## When a key fails
 
@@ -404,8 +409,9 @@ per key, not what your functions cost.
   and must keep the upstream's dimension name; anything else is a usage error (exit 2).
 - **A partitioned asset in a plain `inputs=`** of an unpartitioned asset, without `collect()`,
   is a usage error (exit 2).
-- **`--partition` narrows the target only.** Upstream partitioned assets are still brought up
-  to date for every key, and `--refresh` of an upstream asset recomputes all its keys.
+- **`--partition` skips fan-ins.** A `collect()` over a narrowed asset, and what is below it, is
+  not run under a selection (reason `partition_selection`); a partitioned asset on another
+  dimension keeps every key. Up to 0.29.2 `--partition` narrowed only the target.
 - With `@sink`, each key writes its own file: `barca docs sinks`.
 - To fan work out at run time from inside a task, without caching, see
   [Parallel Tasks](/patterns/04-parallel-tasks/).

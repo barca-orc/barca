@@ -112,6 +112,21 @@ CASES: list[tuple[str, list[str], str, int]] = [
         "stdout",
         0,
     ),
+    # No target, one key: `per_key` and `flaky` are narrowed (`flaky` has no key `a`), and the
+    # fan-in `keys` is skipped (`partition_selection`).
+    (
+        "get_partition_selection",
+        ["get", "pipeline.py", "--partition", "k=a", "--json"],
+        "stdout",
+        0,
+    ),
+    (
+        "get_partition_selection_dry_run",
+        ["get", "pipeline.py", "--partition", "k=a", "--dry-run", "--json"],
+        "stdout",
+        0,
+    ),
+    ("plan_partition_selection", ["plan", "pipeline.py", "--partition", "k=a"], "stdout", 0),
     ("get_multi_target", ["get", "total,frame", "pipeline.py", "--json"], "stdout", 0),
     ("run", ["run", "report", "pipeline.py", "--json"], "stdout", 0),
     (
@@ -741,8 +756,16 @@ def test_warnings_is_always_an_array_filled_only_where_the_plan_has_report(runs)
     """`barca docs contract`, "Plan warnings": the key is on every plan/get/run document; the
     fixture's unused input (`report`'s `rows`) and undeclared environment read
     (`CONTRACT_REPORT_TITLE`) fill it exactly where `report` is planned."""
-    with_warning = {"plan", "run", "run_dry_run_multi_target", "run_multi_target_failed"}
+    with_warning = {
+        "plan",
+        "plan_partition_selection",
+        "run",
+        "run_dry_run_multi_target",
+        "run_multi_target_failed",
+    }
     without = {
+        "get_partition_selection",
+        "get_partition_selection_dry_run",
         "get_dry_run",
         "get",
         "get_value",

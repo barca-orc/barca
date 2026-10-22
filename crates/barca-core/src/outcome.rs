@@ -161,8 +161,8 @@ pub struct RunRequest {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
     pub values: bool,
-    /// `get --partition`: the keys of the targets to compute and return, as the flag takes
-    /// them (`"region=emea,amer"`, or a JSON object for compound keys).
+    /// `--partition` of `get` or `run`: the partition keys the run computes across its cone, as
+    /// the flag takes them (`"region=emea,amer"`, or a JSON object for compound keys).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub partition: Option<String>,
@@ -635,6 +635,7 @@ mod tests {
             warnings: vec![],
             cache: None,
             uploads: None,
+            partition_selection: None,
         }
     }
 
@@ -706,6 +707,7 @@ mod tests {
                     },
                 ),
             ],
+            partition_selection: None,
         };
         let ctx = Context {
             command: "get",

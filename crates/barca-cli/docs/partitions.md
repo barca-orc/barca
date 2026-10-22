@@ -90,24 +90,71 @@ and joined with `,` for a compound key). `-o value` maps each key to its value i
 barca get sales pipeline.py                                  # one path per key
 barca get sales pipeline.py -o value                         # {"region=amer": {...}, "region=apac": {...}, "region=emea": {...}}
 barca get sales pipeline.py --partition region=emea,amer     # only these keys run and are returned
-barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only emea
 barca get margin pipeline.py --partition '{"region":"apac"}'           # a JSON object (for compound keys)
 ```
 
-- `--partition DIMENSION=VALUE[,VALUE...]` selects keys of the target; a JSON object selects on
-  several dimensions, each a value or a list of values. A key is selected when every named
-  dimension has one of the listed values.
-- Only the selected keys of the target are computed, returned and refreshed. The rest of the
-  cone is planned as without the flag: `barca get margin --partition region=apac` brings every
-  key of `sales` up to date (from cache when fresh), and `--refresh sales` with it recomputes
-  every key of `sales`.
-- A usage error (exit 2), before anything runs: no target, a target that is not partitioned or
-  lacks a named dimension, a value that is not one of the target's keys (when its keys are known
-  before the run), or a target that another target of the same run reads.
-- The keys of a `partitions_from` target are known only after its source ran. A selection that
-  matches none of them returns no key, with a warning on stderr.
-- When a key fails, the run fails (exit 1, `failed_node` names the key). The keys that succeeded
-  are returned; a failed key has no artifact and runs again on the next `get`.
+- When some keys fail, the run fails (exit 1, `failed_node` names the key). The keys that
+  succeeded are returned; a failed key has no artifact and runs again on the next `get`.
+
+## Selecting keys
+
+`--partition DIMENSION=VALUE[,VALUE...]` selects partition keys for the whole run, for
+backfills, reruns and debugging; a JSON object selects on several dimensions, each a value or a
+list of values. It applies to every node the run plans, upstream of the target and downstream:
+
+```bash
+barca get margin pipeline.py --partition region=apac                    # sales and margin: apac only
+barca get margin pipeline.py --partition region=apac --refresh sales    # recompute apac of both, nothing else
+barca get pipeline.py --partition region=emea,amer                      # no target: every asset and sensor
+barca get pipeline.py --partition region=emea --dry-run                 # what would run; what is skipped
+barca run notify pipeline.py --partition region=emea                    # a task's cone, the same way
+barca plan pipeline.py --partition region=emea                          # the narrowed plan
+```
+
+- **Narrowed.** Every planned partitioned node with a named dimension computes only the keys
+  whose value of that dimension is selected: `partitions_from` chains, `partitions([...])` nodes
+  that declare the same dimension name, and partitioned sensors and tasks. With a JSON object a
+  node is narrowed by the named dimensions it has. `--refresh sales` with a selection recomputes
+  only the selected keys of `sales` (and, by the cascade, of what is below it).
+- **The same keys as a full run.** A selected key is computed exactly as without the flag, with
+  the same run hash and artifact, so a later run without `--partition` serves it from cache and
+  computes only the other keys, and a selection after a full run is all cache hits.
+- **Planned as without the flag.** A partitioned node with none of the named dimensions keeps
+  all its keys (from cache when fresh): its consumers read all of it. An unpartitioned input of a
+  narrowed node runs as usual.
+- **Skipped.** A node that reads every key of a narrowed node is not run: computed over the
+  selected keys only it would be a different result. That is a `collect()` fan-in, or a
+  partitioned node whose dimensions differ from those of a narrowed input. Everything below a
+  skipped node is skipped too. Each is a step with status `skipped` (action `skipped` in a dry
+  run), reason `partition_selection` and a detail naming the fix (run without `--partition` to
+  update it), and stderr prints one note:
+
+  ```
+  [barca] note: --partition skips a fan-in that reads every key: summary. Run without --partition to update it.
+  ```
+
+  Skipped nodes do not change the exit code: a run whose selected keys all succeeded exits 0. A
+  skipped node that is a target, or that `--refresh` names, is a usage error.
+- **No target** means the default `get` target set, every asset and sensor, for those keys; the
+  return value is that of the last asset planned, as without the flag. `barca run` needs a task:
+  the selection narrows its cone, and a task the selection would skip is a usage error.
+- **Usage errors (exit 2), before anything runs:** a dimension that no node in the cone has; a
+  value that is a key of no narrowed node with that dimension (the error lists a sample of the
+  valid values), checked when those keys are known before the run.
+- **Keys known late.** The keys of `partitions_from(<a list asset>)` are known only once the list
+  asset ran (it runs whole). They are narrowed then; a node with none of the selected values gets
+  a warning on stderr, and computes and returns nothing.
+- **In JSON**, `get`, `run`, `--dry-run` and `plan` carry `partition_selection`: `selection`
+  (dimension to the selected values), `nodes` (each narrowed node with its `selected` and
+  `skipped` key counts, `null` while its keys are not known) and `skipped_nodes`. `--server`
+  (`RunRequest.partition`) and `barca.get(..., partition=...)`, `barca.run` and `barca.plan` take
+  the same selection with the same meaning.
+- **Planning cost.** Only the selected keys of a narrowed node are built: on a three-asset chain
+  with 200,000 keys, planning 10 keys takes about 70 ms, against about 380 ms (and over 850 MB) for
+  every key.
+- Up to 0.29.2, `--partition` narrowed only the target: upstream partitioned assets brought every
+  key up to date, `--refresh` of an upstream asset recomputed all its keys, and `--partition`
+  without a target was a usage error.
 
 `barca plan` uses the same worker-pool size as execution: available cores, overridden
 by a positive `BARCA_POOL_SIZE`. Warnings sort by node, parameter and kind. Key previews

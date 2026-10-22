@@ -170,7 +170,7 @@ def test_partition_takes_a_json_object_for_compound_keys(project):
         ["get", "total", "pipeline.py", "--partition", "region=emea"],  # not partitioned
         ["get", "sales", "pipeline.py", "--partition", "day=d1"],  # no such dimension
         ["get", "sales", "pipeline.py", "--partition", "region=latam"],  # no such key
-        ["get", "pipeline.py", "--partition", "region=emea"],  # no target
+        ["get", "pipeline.py", "--partition", "region=latam"],  # no target, no such key
         ["get", "sales", "pipeline.py", "--partition", "region"],  # malformed
     ],
 )

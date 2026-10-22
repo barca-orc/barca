@@ -311,7 +311,8 @@ Limits:
   a module-level constant as above, another expression, or `partitions_from(...)`.
 - **`barca get sales` returns every key**: one artifact path per key (`-o value` for the
   values). `--partition region=emea` computes and returns only that key, and scopes
-  `--refresh sales` to it. Upstream partitioned assets are not narrowed by it.
+  `--refresh sales` to it. It narrows upstream partitioned assets too, and skips a `collect()`
+  fan-in over them.
 - **A removed key's result stays on disk** until the cache size limit evicts it, and its runs stay
   in the history. `barca sql` shows only the current keys: with `latam` removed again, the view
   above has three rows.

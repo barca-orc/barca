@@ -57,43 +57,6 @@ fn phase_step_count(phase: &Phase) -> usize {
         .sum()
 }
 
-/// Narrow a phase whose `partitions_from` keys were just expanded to the `--partition`
-/// selection. A target whose expanded keys include none of the selected ones gets a warning:
-/// its keys were not known when the command started, so this is the first point to say so.
-fn narrow_expanded(
-    selection: &crate::selection::PartitionSelection,
-    phase: &mut Phase,
-    targets: &[(String, String)],
-) {
-    let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let had: Vec<&str> = ids
-        .iter()
-        .copied()
-        .filter(|id| {
-            phase
-                .streams
-                .iter()
-                .flat_map(|s| &s.steps)
-                .any(|st| st.step_id.base_id() == *id && !st.partition_keys.is_empty())
-        })
-        .collect();
-    selection.narrow_phase(phase, &ids);
-    for id in had {
-        let kept = phase
-            .streams
-            .iter()
-            .flat_map(|s| &s.steps)
-            .any(|st| st.step_id.base_id() == id);
-        if !kept {
-            crate::run_line!(
-                Always,
-                "[barca] warning: --partition: '{}' has none of the selected keys; nothing of it is returned",
-                short_name(id)
-            );
-        }
-    }
-}
-
 /// Worker pool size: `BARCA_POOL_SIZE` overrides auto-detection when set to a
 /// positive integer. Lets benchmark harnesses (and anyone else) pin the pool
 /// to a fixed core count instead of whatever `available_parallelism()` reports
@@ -192,6 +155,7 @@ impl Executed {
             targets: self.targets,
             cache: r.cache,
             uploads: r.uploads,
+            partition_selection: r.partition_selection,
         }
     }
 }
@@ -207,7 +171,7 @@ pub(crate) struct ExecuteRequest<'a> {
     pub(crate) command_label: &'a str,
     pub(crate) interrupt: crate::interrupt::Interrupt,
     pub(crate) event_tx: Option<UnboundedSender<crate::RunEvent>>,
-    /// `--partition`: the keys of the targets to compute and return (all keys when `None`).
+    /// `--partition`: the keys every narrowed node of the cone computes (all keys when `None`).
     pub(crate) partition: Option<crate::selection::PartitionSelection>,
     /// The run id to use and what started the run.
     pub(crate) options: crate::outcome::RunOptions,
@@ -362,6 +326,8 @@ struct RunState {
     pin: Option<crate::gc::Pin>,
     /// Artifact paths (as recorded) handed to steps as inputs: `last_read_at` moves for them.
     read_paths: std::collections::HashSet<String>,
+    /// `--partition`: the plan's narrowing, with the counts of keys known once a source ran.
+    narrowing: Option<crate::selection::Narrowing>,
 }
 // Fields drop in the same order as the original run locals: recorder, workers, store.
 struct RunSession<'a, 'r> {
@@ -416,6 +382,7 @@ async fn execute_started(
                 partitions: None,
                 cache: None,
                 uploads: None,
+                partition_selection: None,
             },
             targets: prepared.blocked,
             step_failure: None,
@@ -1059,6 +1026,7 @@ async fn open_run<'a, 'r>(
     let mut state = RunState {
         total_steps: prepared.exec_plan.total_steps,
         total_estimated,
+        narrowing: prepared.narrowing.clone(),
         ..Default::default()
     };
     // Lines are spooled as they arrive, so `barca logs -f` can read a run still in progress.
@@ -1248,10 +1216,10 @@ async fn expand_and_decide(
         &session.state.all_outputs,
         session.prepared.pool_size,
     );
-    if let (Some(selection), Some(expanded)) =
-        (session.request.partition.as_ref(), expanded_phase.as_mut())
+    if let (Some(narrowing), Some(expanded)) =
+        (session.state.narrowing.as_mut(), expanded_phase.as_mut())
     {
-        narrow_expanded(selection, expanded, &session.prepared.targets);
+        narrowing.narrow_expanded(expanded);
     }
     let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
 
@@ -1898,6 +1866,10 @@ async fn return_outputs(
         &session.prepared.dag,
         &session.prepared.blocked,
     ));
+    // Under --partition, a fan-in over a narrowed node (and what is below it) is not run.
+    if let Some(n) = &session.state.narrowing {
+        step_reports.extend(n.skipped_reports(&session.prepared.dag, false));
+    }
     Ok(Executed {
         result: GetResult {
             run_id: std::mem::take(&mut session.started.run_id),
@@ -1910,6 +1882,7 @@ async fn return_outputs(
             partitions,
             cache: None,
             uploads: session.state.uploads.take(),
+            partition_selection: session.state.narrowing.as_ref().map(|n| n.report()),
         },
         targets: outcomes
             .into_iter()
@@ -1947,6 +1920,8 @@ struct Prepared {
     pinned: HashMap<String, crate::freshness::Pin>,
     /// Under a tick: the targets that read a `Manual` node that has never been computed.
     blocked: Vec<(String, TargetOutcome)>,
+    /// `--partition`: what the selection narrowed and skipped.
+    narrowing: Option<crate::selection::Narrowing>,
 }
 
 /// The step reports of a tick's targets blocked on a `Manual` node that has never been
@@ -2138,16 +2113,16 @@ async fn prepare_run(
         Some(cone) => {
             let cone: Vec<&str> = cone.iter().map(String::as_str).collect();
             crate::queries::filter_plan_to_subgraph(
-                crate::planner::plan_from_dag(&dag, &config),
+                crate::planner::plan_from_dag_narrowed(&dag, &config, partition),
                 &cone,
             )
         }
-        None => plan_for_targets(&dag, &target_ids, &config, command_label),
+        None => plan_for_targets(&dag, &target_ids, &config, command_label, partition),
     };
-    if let Some(selection) = partition {
-        selection.validate(&dag, &target_ids, &exec_plan)?;
-        selection.narrow_plan(&mut exec_plan, &target_ids);
-    }
+    let narrowing = match partition {
+        Some(selection) => Some(selection.apply(&dag, &mut exec_plan, &target_ids)?),
+        None => None,
+    };
     trace("planned");
 
     if let CachePolicy::RefreshSelective { names, .. } = policy {
@@ -2161,6 +2136,12 @@ async fn prepare_run(
             command_label == "get",
             planned.as_deref(),
         )?;
+        if let Some(n) = &narrowing {
+            n.check_refresh(names)?;
+        }
+    }
+    if let Some(note) = narrowing.as_ref().and_then(|n| n.note()) {
+        crate::run_line!(Always, "{note}");
     }
     // A planned step whose file imports a helper that does not parse cannot run (#550).
     dag.check_imports(exec_plan.step_ids())?;
@@ -2182,6 +2163,7 @@ async fn prepare_run(
         plan_warnings,
         pinned,
         blocked,
+        narrowing,
     })
 }
 
@@ -2377,15 +2359,15 @@ pub(crate) async fn explain_dag_with_membership(
     };
     let mut exec_plan = match &cone {
         Some(cone) => crate::queries::filter_plan_to_subgraph(
-            crate::planner::plan_from_dag(dag, &config),
+            crate::planner::plan_from_dag_narrowed(dag, &config, partition),
             cone,
         ),
-        None => plan_for_targets(dag, &target_ids, &config, command_label),
+        None => plan_for_targets(dag, &target_ids, &config, command_label, partition),
     };
-    if let Some(selection) = partition {
-        selection.validate(dag, &target_ids, &exec_plan)?;
-        selection.narrow_plan(&mut exec_plan, &target_ids);
-    }
+    let mut narrowing = match partition {
+        Some(selection) => Some(selection.apply(dag, &mut exec_plan, &target_ids)?),
+        None => None,
+    };
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(
             dag,
@@ -2394,7 +2376,11 @@ pub(crate) async fn explain_dag_with_membership(
             command_label == "get",
             cone.as_deref(),
         )?;
+        if let Some(n) = &narrowing {
+            n.check_refresh(names)?;
+        }
     }
+
     dag.check_imports(exec_plan.step_ids())?;
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
 
@@ -2467,7 +2453,7 @@ pub(crate) async fn explain_dag_with_membership(
         hash_unknown: &mut hash_unknown,
         steps: &mut steps,
         summary: &mut summary,
-        partition: partition.map(|s| (s, targets.as_slice())),
+        narrowing: narrowing.as_mut(),
     };
     for phase in &exec_plan.phases {
         predict_phase(&mut prediction, phase).await?;
@@ -2491,6 +2477,9 @@ pub(crate) async fn explain_dag_with_membership(
     );
 
     let mut steps = merge_partition_reports(steps);
+    if let Some(n) = &narrowing {
+        steps.extend(n.skipped_reports(dag, true));
+    }
     // The weights a real run would schedule by, and the capacity they share (#436).
     let weights = planned_weights(&exec_plan);
     for r in &mut steps {
@@ -2534,6 +2523,7 @@ pub(crate) async fn explain_dag_with_membership(
             warnings,
             uploads,
             capacity,
+            partition_selection: narrowing.as_ref().map(|n| n.report()),
         },
         state.into_membership(),
     ))
@@ -2553,10 +2543,7 @@ struct Prediction<'a> {
     hash_unknown: &'a mut std::collections::HashSet<String>,
     steps: &'a mut Vec<StepReport>,
     summary: &'a mut ExplainSummary,
-    partition: Option<(
-        &'a crate::selection::PartitionSelection,
-        &'a [(String, String)],
-    )>,
+    narrowing: Option<&'a mut crate::selection::Narrowing>,
 }
 fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: String) -> StepReport {
     StepReport {
@@ -2774,8 +2761,8 @@ async fn predict_steps(
 async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), BarcaError> {
     let ready = expand_prediction(ctx, phase);
     let mut expanded = dispatch::expand_pending_partitions(&ready, ctx.all_outputs, ctx.pool_size);
-    if let (Some((selection, targets)), Some(phase)) = (ctx.partition, expanded.as_mut()) {
-        narrow_expanded(selection, phase, targets);
+    if let (Some(narrowing), Some(phase)) = (ctx.narrowing.as_deref_mut(), expanded.as_mut()) {
+        narrowing.narrow_expanded(phase);
     }
     let phase_ref = expanded.as_ref().unwrap_or(&ready);
     // The steps of this phase that would execute: what they read has to be there.

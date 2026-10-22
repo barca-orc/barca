@@ -36,6 +36,36 @@ pub struct GetResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub uploads: Option<UploadsReport>,
+    /// `--partition`: the selection, each narrowed node's selected and skipped key counts, and
+    /// the nodes the selection did not run. Absent without `--partition`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub partition_selection: Option<PartitionSelectionReport>,
+}
+
+/// `partition_selection` in the JSON results of a run, a dry run and `barca plan` under
+/// `--partition` (see [`crate::selection`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct PartitionSelectionReport {
+    /// Dimension → the selected values, sorted.
+    pub selection: std::collections::BTreeMap<String, Vec<String>>,
+    /// Each narrowed node (a planned partitioned node with a selected dimension), by id.
+    pub nodes: Vec<SelectedNode>,
+    /// The nodes not run: each reads a narrowed node across keys, or is below one. Each is also
+    /// a `steps` entry with status `skipped` and reason `partition_selection`.
+    pub skipped_nodes: Vec<String>,
+}
+
+/// One narrowed node of a [`PartitionSelectionReport`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SelectedNode {
+    pub id: String,
+    /// The keys kept; `null` while not known (a `partitions_from` list before its source ran).
+    pub selected: Option<usize>,
+    /// The keys left out; `null` while not known.
+    pub skipped: Option<usize>,
 }
 
 /// What a run did not publish to the artifact store: the run JSON's `uploads` object, and the
@@ -77,6 +107,9 @@ pub struct MultiResult {
     /// See [`GetResult::uploads`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploads: Option<UploadsReport>,
+    /// See [`GetResult::partition_selection`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_selection: Option<PartitionSelectionReport>,
 }
 
 fn serialize_targets<S: serde::Serializer>(
@@ -254,6 +287,8 @@ pub struct ExplainResult {
     pub uploads: Option<UploadsReport>,
     /// The most the `weight=` of the steps running at once may add up to (#436).
     pub capacity: usize,
+    /// See [`GetResult::partition_selection`].
+    pub partition_selection: Option<PartitionSelectionReport>,
 }
 
 /// One target of a multi-target dry run.
@@ -284,7 +319,7 @@ impl Serialize for ExplainResult {
                 s.collect_map(self.0.iter().map(|(k, v)| (k, v)))
             }
         }
-        let mut s = serializer.serialize_struct("ExplainResult", 8)?;
+        let mut s = serializer.serialize_struct("ExplainResult", 9)?;
         s.serialize_field("dry_run", &self.dry_run)?;
         s.serialize_field("command", &self.command)?;
         if self.targets.len() > 1 {
@@ -298,6 +333,9 @@ impl Serialize for ExplainResult {
         s.serialize_field("warnings", &self.warnings)?;
         if let Some(uploads) = &self.uploads {
             s.serialize_field("uploads", uploads)?;
+        }
+        if let Some(selection) = &self.partition_selection {
+            s.serialize_field("partition_selection", selection)?;
         }
         s.end()
     }
@@ -321,6 +359,8 @@ impl<'de> Deserialize<'de> for ExplainResult {
             uploads: Option<UploadsReport>,
             #[serde(default)]
             capacity: usize,
+            #[serde(default)]
+            partition_selection: Option<PartitionSelectionReport>,
         }
         let wire = WireExplain::deserialize(deserializer)?;
         if !wire.targets.is_empty() && (wire.targets.len() < 2 || wire.target.is_some()) {
@@ -338,6 +378,7 @@ impl<'de> Deserialize<'de> for ExplainResult {
             warnings: wire.warnings,
             uploads: wire.uploads,
             capacity: wire.capacity,
+            partition_selection: wire.partition_selection,
         })
     }
 }
@@ -389,6 +430,10 @@ pub struct PlanResult {
     /// Plan-time warnings for the planned steps (`[]` when there are none).
     #[serde(default)]
     pub warnings: Vec<PlanWarning>,
+    /// See [`GetResult::partition_selection`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub partition_selection: Option<PartitionSelectionReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,6 +2,16 @@
 elapsed_seconds : number
 final_output : object
 final_output.<key> : <user value>
+partition_selection : object
+partition_selection.nodes : array
+partition_selection.nodes[] : object
+partition_selection.nodes[].id : string
+partition_selection.nodes[].selected : integer
+partition_selection.nodes[].skipped : integer
+partition_selection.selection : object
+partition_selection.selection.k : array
+partition_selection.selection.k[] : string
+partition_selection.skipped_nodes : array
 phases : integer
 run_id : string
 status : string
