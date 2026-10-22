@@ -24,6 +24,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Documentation
 
+- A new guide, [Share Results With a Team](https://barca.sh/team-server/), sets up server mode
+  in three steps: one committed `barca.toml`, `barca serve`, and `barca get` as usual. Every
+  output sample and error message in it was captured from a real run of 0.29.1.
+
 - Sample output on the site is re-captured on 0.29.1 (#503): the `barca status`, `barca history`
   and `barca list` tables on the workflow pages, Pattern 01 and the cron comparison show times
   with `UTC` (local time for `NEXT FIRE`), and the execution-controls page shows the retry count

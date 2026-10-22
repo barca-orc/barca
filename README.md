@@ -198,7 +198,7 @@ patterns.
 | Output formats and large inputs (parquet, CSV, lazy DuckDB and polars) | `barca docs types`, `barca docs big-inputs` | [Guide: large inputs](https://barca.sh/guide/#6-large-inputs) |
 | Partitions: fan-out over keys, fan-in with `collect` | `barca docs partitions` | [Guide: partitions](https://barca.sh/guide/#7-partitions) |
 | Schedules, `barca serve` and its HTTP API | `barca docs scheduling` | [Scheduling](https://barca.sh/scheduling/), [Deploying](https://barca.sh/deploying/) |
-| Server mode: one server as the team's ledger | `barca docs server-mode` | [Server mode](https://barca.sh/reference/server-mode/) |
+| Server mode: one server as the team's ledger | `barca docs server-mode` | [Share with a team](https://barca.sh/team-server/), [Server mode](https://barca.sh/reference/server-mode/) |
 | A remote store (S3, GCS, Azure): this machine's backup and read-through cache | `barca docs remote` | [Remote storage](https://barca.sh/reference/remote-storage/) |
 | Datadog traces, Slack notifications, JSON logs | `barca docs telemetry` | [Telemetry](https://barca.sh/reference/telemetry/) |
 | Inspecting results: status, logs, sql | `barca docs status`, `barca docs logs`, `barca docs sql` | [SQL](https://barca.sh/reference/sql/) |
