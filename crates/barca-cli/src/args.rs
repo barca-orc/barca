@@ -302,11 +302,18 @@ Examples:
   barca doctor                      # diagnose the discovered project
   barca doctor pipeline.py --json    # structured checks, no steps executed
   barca doctor src/ --env local --pretty   # selected sources and environment
+  barca doctor --server                # also the configured server: version, store, load errors, schedules
+  barca doctor --server http://127.0.0.1:8274 --json   # a server named here
+  barca doctor --local                 # this machine only, even with a server configured
 
 Checks project root, Python, config, backups, cache writability, metadata integrity,
 static source parsing, and configured stores. Never imports pipeline modules or evaluates
 dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
 3 when a prerequisite fails. Store probes list but never create buckets or objects.
+With a server configured (BARCA_SERVER, [server] url) or --server, doctor also checks it: its
+URL, barca and API version against this client, its store against this project's [remote],
+whether it is draining, files it failed to load, its scheduler (schedules paused or failing),
+and the runs this machine has not posted to it yet. Each failed check says what to do.
 More: barca docs doctor";
 
 const LOGS_HELP: &str = "\
@@ -492,6 +499,9 @@ Examples:
   barca status total --server              # cache state on the configured barca server
   barca status total --json                # with a server configured: its ledger, plus `local` per node
   barca status total --local               # this machine's own state, even with a server configured
+  barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
+  barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
+  barca status --problems --server         # what needs attention on the configured server
 
 Cache state per node: cached, unsynced (cached here, its upload to the artifact store still
 pending: reason `local_only`), stale (ran before; code or inputs changed, or its artifact file is
@@ -509,6 +519,12 @@ the recorded digest agree: reason `local_only`, `store_only` or `mismatch` (barc
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
 requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
 cannot be reached is a `note` on each shape, not a failed command.
+--problems keeps the nodes that need attention: every state but cached and always_runs, a task
+or sensor whose last run failed, and a schedule that is paused or failing (max_failures reached).
+--state keeps the named states. Either way the summary counts every node, and the JSON says
+which filter applied in `filter`. A failed node's error is `last_materialization.error`, and its
+first line is in the WHY column. A scheduled node has `schedule` (cron, next fire, failures,
+paused): from a server, its scheduler's view; on this machine, what the metadata DB holds.
 JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs status, barca docs agents";
 
@@ -782,6 +798,19 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+        /// Also check a barca server: the URL given, or with no URL the configured one
+        /// (BARCA_SERVER, else [server] url). A configured server is checked without it
+        #[arg(
+            long,
+            value_name = "URL",
+            num_args = 0..=1,
+            default_missing_value = "",
+            conflicts_with = "local"
+        )]
+        server: Option<String>,
+        /// Check this machine only, without the configured server
+        #[arg(long)]
+        local: bool,
     },
     /// Read a run's recorded step output (stdout and stderr), without progress messages
     #[command(after_help = LOGS_HELP)]
@@ -981,6 +1010,14 @@ pub(crate) enum Cli {
         /// are never sampled)
         #[arg(long, value_name = "N")]
         sample: Option<usize>,
+        /// Show only nodes in these cache states (comma-separated): cached, unsynced, stale,
+        /// never_run, partial, unknown, always_runs. The summary still counts every node
+        #[arg(long, value_name = "STATE", value_delimiter = ',')]
+        state: Vec<String>,
+        /// Show only nodes that need attention: not cached (unsynced, stale, never_run, partial,
+        /// unknown), a task or sensor whose last run failed, or a paused or failing schedule
+        #[arg(long)]
+        problems: bool,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,

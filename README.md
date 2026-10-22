@@ -163,12 +163,12 @@ examples.
 | `barca get [target] [files...]` | Bring assets up to date and print their artifact paths; `-o value` prints the values. No target: every asset and sensor. |
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. |
 | `barca list [files...]` | Every asset, sensor and task, with its kind, freshness and inputs. |
-| `barca status [target] [files...]` | Per node: cached or stale and why, the last run, and the artifact's rows and columns. |
+| `barca status [target] [files...]` | Per node: cached or stale and why, the last run (and its error), the artifact's rows and columns, and a schedule's state; `--problems` keeps what needs attention. |
 | `barca logs [RUN_ID]` | A run's recorded step stdout and stderr, without progress messages; the most recent run without an id, `-f` to follow a running one, from a configured server too. |
 | `barca history [RUN_ID]` | Recent runs, filtered by `--status`, `--target`, `--triggered-by` and `--since`, each failed one with its failing step and error; with a run id, its steps, errors and tracebacks. |
 | `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view, barca's records are `barca.runs`, `barca.materializations` and `barca.nodes`; with a server, the team's results (experimental). |
-| `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps. |
+| `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps, and a configured server: its version, store, load errors, schedules and the runs not posted to it. |
 | `barca plan [files...]` | The execution plan as JSON, with the capacity and step weights (experimental). |
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (barca also does this after every run). |
 | `barca serve [files...]` | Cron scheduler, HTTP API and web UI; `--server` on other commands runs them there. |

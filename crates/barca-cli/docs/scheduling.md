@@ -176,6 +176,11 @@ failures and are not counted.
 [barca] pipeline.py:inbox failing: 3 consecutive failed ticks (max_failures=3); skipped until an explicit request or a change in its inputs
 ```
 
+From the CLI, `barca status --problems` lists a failing (or paused) schedule with the error of
+its last run, and `schedule` in `barca status --json` has the same `failures`, `max_failures`,
+`failing`, `paused` and `next_fire` as `GET /schedule`; `barca doctor` with a server fails its
+`server_scheduler` check while one is failing (`barca docs status`, "Schedules").
+
 A tick is skipped, not queued, while a run of the same node is pending or running, whoever
 started it: an earlier tick, `POST /runs` naming the node, or a `POST /runs` of every asset and
 sensor (it does not hold back a scheduled task). A `barca get` or `barca run` started from a

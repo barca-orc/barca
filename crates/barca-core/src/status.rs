@@ -24,8 +24,11 @@ pub struct StatusResult {
     pub targets: Vec<String>,
     /// Every node in scope, in dependency order.
     pub nodes: Vec<NodeStatus>,
-    /// Node counts per cache state.
+    /// Node counts per cache state, for every node in scope: a filter does not change them.
     pub summary: StatusSummary,
+    /// `--state` / `--problems`: which nodes `nodes` keeps. Absent without a filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<StatusFilter>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +71,266 @@ pub struct NodeStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub local: Option<bool>,
+    /// A node with `freshness=Schedule(...)`: its schedule's state (`barca status`, "Schedules").
+    /// Absent for a node that is not scheduled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub schedule: Option<ScheduleStatus>,
+}
+
+/// The state of one scheduled node's schedule. With a server it is what the server's scheduler
+/// reports (`GET /schedule`, the numbers the web UI shows); on this machine there is no
+/// scheduler, so it is read from the metadata DB, which holds what a `barca serve` of this
+/// `.barca/` recorded (failures, pauses, the last tick), and `live` is false.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScheduleStatus {
+    /// The cron expression.
+    pub cron: String,
+    /// When the cron expression next matches (RFC 3339, UTC): in the server's `--timezone` from
+    /// a server, in this machine's local time otherwise, as `barca list` computes it.
+    pub next_fire: Option<String>,
+    /// The last tick the scheduler fired (RFC 3339, UTC), if any.
+    pub last_fired: Option<String>,
+    /// Status of the run the last tick started, while the server remembers it (`null` after a
+    /// restart, and always on this machine).
+    pub last_status: Option<String>,
+    /// Consecutive failed ticks.
+    pub failures: u32,
+    /// `Schedule(..., max_failures=N)`, default 5.
+    pub max_failures: u32,
+    /// `failures >= max_failures`: ticks are skipped until an explicit request or a change in
+    /// the node's inputs.
+    pub failing: bool,
+    /// Held back by `POST /schedule/{id}/pause`.
+    pub paused: bool,
+    /// When a timed pause ends (RFC 3339, UTC); `null` for a pause until resumed.
+    pub paused_until: Option<String>,
+    /// Why the last due tick was skipped: `in_flight` or `paused` (server only).
+    pub skip_reason: Option<String>,
+    /// True when a running scheduler reported this (a `barca serve` that fires schedules);
+    /// false when it was read from the metadata DB because no scheduler runs here.
+    pub live: bool,
+}
+
+impl ScheduleStatus {
+    /// A schedule that needs attention: paused, or skipped after `max_failures` failed ticks.
+    pub fn needs_attention(&self) -> bool {
+        self.paused || self.failing
+    }
+
+    /// The table's SCHEDULE cell: `*/5 * * * *; failing 3/3`, `0 6 * * *; paused`,
+    /// `0 6 * * *; next 2026-10-23 06:00:00 UTC`.
+    pub fn cell(&self) -> String {
+        let state = if self.failing {
+            format!("failing {}/{}", self.failures, self.max_failures)
+        } else if self.paused {
+            match &self.paused_until {
+                Some(until) => format!("paused until {}", crate::report::utc_cell(until)),
+                None => "paused".to_string(),
+            }
+        } else {
+            let next = self
+                .next_fire
+                .as_deref()
+                .map(|t| format!("next {}", crate::report::utc_cell(t)))
+                .unwrap_or_else(|| "no next fire".to_string());
+            match self.failures {
+                0 => next,
+                1 => format!("1 failure, {next}"),
+                n => format!("{n} failures, {next}"),
+            }
+        };
+        format!("{}; {state}", self.cron)
+    }
+}
+
+/// Unix seconds as RFC 3339 UTC (`2026-10-22T06:00:00Z`).
+pub fn rfc3339_secs(secs: i64) -> Option<String> {
+    use chrono::TimeZone;
+    chrono::Utc
+        .timestamp_opt(secs, 0)
+        .single()
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// Give every scheduled node in `nodes` its [`ScheduleStatus`] from the metadata DB at
+/// `db_path` (none yet: no failures, no pauses), with next fire times evaluated in `zone`.
+pub async fn attach_schedules(
+    nodes: &mut [NodeStatus],
+    dag: &crate::dag::Dag,
+    db_path: Option<&str>,
+    zone: &crate::schedule::Zone,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), BarcaError> {
+    let jobs = crate::schedule::jobs_from_dag(dag);
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    let (fired, failures, pauses) = match db_path.filter(|p| Path::new(p).exists()) {
+        Some(path) => (
+            db::get_schedule_state(path).await?,
+            db::get_schedule_failures(path).await?,
+            db::get_schedule_pauses(path).await?,
+        ),
+        None => Default::default(),
+    };
+    for node in nodes.iter_mut() {
+        let Some(job) = jobs.iter().find(|j| j.id == node.id) else {
+            continue;
+        };
+        let failures = failures.get(&job.id).map_or(0, |f| f.failures);
+        let pause = pauses
+            .get(&job.id)
+            .filter(|p| p.until.is_none_or(|until| until > now.timestamp()));
+        node.schedule = Some(ScheduleStatus {
+            cron: job.cron_str.clone(),
+            next_fire: crate::schedule::next_fire(&job.cron, zone, now)
+                .and_then(|t| rfc3339_secs(t.timestamp())),
+            last_fired: fired.get(&job.id).and_then(|s| rfc3339_secs(*s)),
+            last_status: None,
+            failures,
+            max_failures: job.max_failures,
+            failing: failures >= job.max_failures,
+            paused: pause.is_some(),
+            paused_until: pause.and_then(|p| p.until).and_then(rfc3339_secs),
+            skip_reason: None,
+            live: false,
+        });
+    }
+    Ok(())
+}
+
+/// The `cache.state` values, as JSON and `--state` spell them.
+pub const STATES: &[&str] = &[
+    "cached",
+    "unsynced",
+    "stale",
+    "never_run",
+    "partial",
+    "unknown",
+    "always_runs",
+];
+
+/// Which nodes `barca status --state` / `--problems` (and `GET /nodes?state=&problems=`) keep.
+/// The summary always counts every node in scope.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusFilter {
+    /// Keep nodes whose `cache.state` is one of these (snake_case, as in JSON).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
+    /// Keep nodes that need attention ([`needs_attention`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub problems: bool,
+    /// How many nodes passed, before any `--limit` (the table's note).
+    #[serde(skip)]
+    pub matched: usize,
+}
+
+impl StatusFilter {
+    /// Parse `--state a,b` (or `?state=a,b`): each one of [`STATES`], `never-run` spelled either
+    /// way. An unknown state is an error naming the valid ones.
+    pub fn parse_states(raw: &[String]) -> Result<Vec<String>, String> {
+        let mut out: Vec<String> = Vec::new();
+        for state in raw.iter().flat_map(|s| s.split(',')) {
+            let state = state.trim();
+            if state.is_empty() {
+                continue;
+            }
+            let snake = state.replace('-', "_");
+            if !STATES.contains(&snake.as_str()) {
+                let hint = if snake == "failed" {
+                    " A failed node is `stale` or `never_run` with reason `failed`: --problems \
+                     shows it."
+                } else {
+                    ""
+                };
+                return Err(format!(
+                    "unknown state '{state}'\nUse one of {}.{hint}",
+                    STATES.join(", ")
+                ));
+            }
+            if !out.contains(&snake) {
+                out.push(snake);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty() && !self.problems
+    }
+
+    /// Whether `node` passes: its state is one of `states` (when given) and, with `problems`,
+    /// it needs attention.
+    pub fn keep(&self, node: &NodeStatus) -> bool {
+        (self.states.is_empty() || self.states.contains(&node.cache.state))
+            && (!self.problems || needs_attention(node))
+    }
+
+    /// Drop the nodes that do not pass, and record the filter on the result. The summary is
+    /// left as it was: it counts every node in scope.
+    pub fn apply(&self, result: &mut StatusResult) {
+        if self.is_empty() {
+            return;
+        }
+        result.nodes.retain(|n| self.keep(n));
+        result.filter = Some(StatusFilter {
+            matched: result.nodes.len(),
+            ..self.clone()
+        });
+    }
+
+    /// The flags that select this filter, for the table's note: `--problems`, `--state stale`.
+    pub fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        if self.problems {
+            parts.push("--problems".to_string());
+        }
+        if !self.states.is_empty() {
+            parts.push(format!("--state {}", self.states.join(",")));
+        }
+        parts.join(" ")
+    }
+}
+
+/// A node that is not fine (`--problems`): every state but `cached` and `always_runs`
+/// (`unsynced`, `stale`, `never_run`, `partial`, `unknown`), a task or sensor whose last run
+/// failed, and a node whose schedule is paused or failing.
+pub fn needs_attention(node: &NodeStatus) -> bool {
+    let state_ok = matches!(node.cache.state.as_str(), "cached" | "always_runs");
+    let last_failed = node.cache.state == "always_runs"
+        && node
+            .last_materialization
+            .as_ref()
+            .is_some_and(|m| m.status == "failed");
+    !state_ok
+        || last_failed
+        || node
+            .schedule
+            .as_ref()
+            .is_some_and(ScheduleStatus::needs_attention)
+}
+
+/// The first line of a failure's message, at most `max` characters: `ZeroDivisionError:
+/// division by zero` out of a traceback.
+pub fn short_error(error: &str, max: usize) -> String {
+    let lines: Vec<&str> = error
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    // A Python traceback ends with the exception line; anything else starts with its message.
+    let line = if lines.first().is_some_and(|l| l.starts_with("Traceback")) {
+        lines.last().copied().unwrap_or_default()
+    } else {
+        lines.first().copied().unwrap_or_default()
+    };
+    if line.chars().count() <= max {
+        line.to_string()
+    } else {
+        let cut: String = line.chars().take(max.saturating_sub(3)).collect();
+        format!("{cut}...")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,11 +504,21 @@ pub async fn status(
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
-    Ok(
-        status_with_membership(cfg, target_names, file_args, python, sample, shape)
+    let dag = crate::load::build_dag(file_args, python).await?;
+    let mut result =
+        status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape)
             .await?
-            .0,
+            .0;
+    // No scheduler runs here: a schedule's state is what the metadata DB holds.
+    attach_schedules(
+        &mut result.nodes,
+        &dag,
+        Some(&cfg.db_path),
+        &crate::schedule::Zone::Local,
+        chrono::Utc::now(),
     )
+    .await?;
+    Ok(result)
 }
 
 /// SQL reuses this prediction instead of loading the DAG or interpreting keys again.
@@ -396,6 +669,7 @@ pub(crate) async fn status_from_dag_with_membership(
             env: node.extracted.env.clone(),
             undeclared_env: node.extracted.undeclared_env(),
             local: None,
+            schedule: None,
         });
     }
 
@@ -416,6 +690,7 @@ pub(crate) async fn status_from_dag_with_membership(
             target: explained.target,
             nodes,
             summary,
+            filter: None,
         },
         membership,
     ))
@@ -941,6 +1216,7 @@ mod tests {
             env: vec![],
             undeclared_env: vec![],
             local: Some(false),
+            schedule: None,
         }
     }
 
@@ -1104,5 +1380,192 @@ mod tests {
     fn partition_suffix() {
         assert_eq!(partition_of("p.py:x[k=a]").as_deref(), Some("k=a"));
         assert_eq!(partition_of("p.py:x"), None);
+    }
+
+    fn failed(mut n: NodeStatus, error: &str) -> NodeStatus {
+        n.last_materialization = Some(LastMaterialization {
+            content_hash: None,
+            status: "failed".into(),
+            created_at: "2026-10-22 06:00:00".into(),
+            elapsed_seconds: None,
+            run_hash: None,
+            artifact: None,
+            format: None,
+            size_bytes: None,
+            partition: None,
+            error: Some(error.into()),
+        });
+        n
+    }
+
+    #[test]
+    fn problems_are_every_state_but_cached_and_always_runs() {
+        for state in STATES {
+            let fine = matches!(*state, "cached" | "always_runs");
+            assert_eq!(needs_attention(&node(state, None)), !fine, "{state}");
+        }
+    }
+
+    #[test]
+    fn a_task_whose_last_run_failed_and_a_paused_or_failing_schedule_are_problems() {
+        assert!(needs_attention(&failed(node("always_runs", None), "boom")));
+        let mut scheduled = node("cached", None);
+        scheduled.schedule = Some(ScheduleStatus {
+            cron: "0 6 * * *".into(),
+            max_failures: 5,
+            failures: 2,
+            ..Default::default()
+        });
+        assert!(!needs_attention(&scheduled), "failures below max_failures");
+        scheduled.schedule.as_mut().unwrap().paused = true;
+        assert!(needs_attention(&scheduled));
+        let schedule = scheduled.schedule.as_mut().unwrap();
+        schedule.paused = false;
+        schedule.failing = true;
+        assert!(needs_attention(&scheduled));
+    }
+
+    #[test]
+    fn a_filter_keeps_matching_nodes_and_leaves_the_summary_alone() {
+        let nodes = vec![
+            node("cached", None),
+            node("stale", None),
+            node("never_run", None),
+        ];
+        let mut result = StatusResult {
+            target: None,
+            targets: vec![],
+            summary: StatusSummary::of(&nodes),
+            nodes,
+            filter: None,
+        };
+        let summary = result.summary.clone();
+        StatusFilter {
+            states: StatusFilter::parse_states(&["never-run,stale".into()]).unwrap(),
+            ..Default::default()
+        }
+        .apply(&mut result);
+        assert_eq!(result.nodes.len(), 2);
+        assert_eq!(result.summary, summary);
+        let filter = result.filter.as_ref().unwrap();
+        assert_eq!(filter.states, ["never_run", "stale"]);
+        assert_eq!(filter.matched, 2);
+        assert_eq!(filter.describe(), "--state never_run,stale");
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            json["filter"],
+            serde_json::json!({"states": ["never_run", "stale"]})
+        );
+    }
+
+    #[test]
+    fn an_unknown_state_names_the_valid_ones_and_failed_points_at_problems() {
+        let err = StatusFilter::parse_states(&["bogus".into()]).unwrap_err();
+        assert!(
+            err.contains("unknown state 'bogus'\nUse one of cached,"),
+            "{err}"
+        );
+        let err = StatusFilter::parse_states(&["failed".into()]).unwrap_err();
+        assert!(err.contains("--problems"), "{err}");
+    }
+
+    #[test]
+    fn short_error_takes_the_exception_line() {
+        assert_eq!(
+            short_error(
+                "ZeroDivisionError: division by zero\n  File \"p.py\", line 3",
+                80
+            ),
+            "ZeroDivisionError: division by zero"
+        );
+        assert_eq!(
+            short_error(
+                "Traceback (most recent call last):\n  File \"p.py\"\nValueError: bad",
+                80
+            ),
+            "ValueError: bad"
+        );
+        assert_eq!(short_error(&"x".repeat(100), 10), "xxxxxxx...");
+    }
+
+    #[test]
+    fn schedule_cells() {
+        let mut s = ScheduleStatus {
+            cron: "*/5 * * * *".into(),
+            next_fire: Some("2026-10-23T06:00:00Z".into()),
+            max_failures: 3,
+            ..Default::default()
+        };
+        assert_eq!(s.cell(), "*/5 * * * *; next 2026-10-23 06:00:00 UTC");
+        s.failures = 1;
+        assert_eq!(
+            s.cell(),
+            "*/5 * * * *; 1 failure, next 2026-10-23 06:00:00 UTC"
+        );
+        s.paused = true;
+        s.paused_until = Some("2026-10-24T00:00:00Z".into());
+        assert_eq!(
+            s.cell(),
+            "*/5 * * * *; paused until 2026-10-24 00:00:00 UTC"
+        );
+        s.failures = 3;
+        s.failing = true;
+        assert_eq!(s.cell(), "*/5 * * * *; failing 3/3");
+    }
+
+    #[test]
+    fn the_table_shows_the_error_the_schedule_and_the_filter() {
+        let mut task = failed(
+            node("always_runs", None),
+            "RuntimeError: 503\n  File \"p.py\"",
+        );
+        task.name = "sync".into();
+        task.kind = "task".into();
+        task.cache.reason = "task".into();
+        task.schedule = Some(ScheduleStatus {
+            cron: "* * * * *".into(),
+            failures: 2,
+            max_failures: 2,
+            failing: true,
+            ..Default::default()
+        });
+        let mut asset = failed(
+            node("never_run", None),
+            "ZeroDivisionError: division by zero",
+        );
+        asset.cache.reason = "failed".into();
+        let nodes = vec![task, asset, node("cached", None)];
+        let mut result = StatusResult {
+            target: None,
+            targets: vec![],
+            summary: StatusSummary::of(&nodes),
+            nodes,
+            filter: None,
+        };
+        StatusFilter {
+            problems: true,
+            ..Default::default()
+        }
+        .apply(&mut result);
+        let table = crate::report::render_status_table(&result);
+        assert!(table.contains("SCHEDULE"), "{table}");
+        assert!(
+            table.contains("last run failed: RuntimeError: 503"),
+            "{table}"
+        );
+        assert!(table.contains("* * * * *; failing 2/2"), "{table}");
+        assert!(
+            table.contains("failed: ZeroDivisionError: division by zero"),
+            "{table}"
+        );
+        assert!(
+            table.contains("2 of 3 nodes match --problems; the counts below are for every node"),
+            "{table}"
+        );
+        assert!(table.contains("1 cached, 0 stale, 1 never run"), "{table}");
+
+        result.nodes.clear();
+        let table = crate::report::render_status_table(&result);
+        assert!(table.contains("No node matches --problems."), "{table}");
     }
 }

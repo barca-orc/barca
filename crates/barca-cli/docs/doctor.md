@@ -43,6 +43,41 @@ snapshot without migrating or changing the original; an absent database is repor
 left absent. Store reachability does not establish upload permission or validate user input
 paths inside steps.
 
+## Checking a server
+
+With a server configured (`BARCA_SERVER`, or `[server] url` in `barca.toml`; `barca docs
+server-mode`), `doctor` checks it too, after `[barca] server <url> (<source>)` on stderr, as
+`status` answers from it. `--server <url>` checks that server instead (bare `--server` the
+configured one, a usage error when none is), and `--local` checks this machine only. The
+server's checks follow this machine's, in the same report:
+
+```bash
+barca doctor                                    # this machine, and the configured server
+barca doctor --server http://127.0.0.1:8274 --json   # a server named here
+barca doctor --local                            # this machine only
+```
+
+| check | fails when | data |
+|---|---|---|
+| `server` | the server cannot be reached or does not answer `GET /health` as barca; the other server checks are then skipped | `url`, `source`, `reachable` |
+| `server_version` | it speaks another API version than this client (another barca version with the same API passes, and says so) | `version`, `api_version`, `client_version`, `client_api_version` |
+| `server_store` | its artifact store is not this project's `[remote]` (or either has none): a result one records could not be read by the other | `server`, `project`, `server_env`, `project_env` |
+| `server_health` | it is draining (shutting down), or cannot use its metadata DB (`metadata_error`) | `status`, `read_only`, `metadata_error` |
+| `server_sources` | it failed to load a deployed file (`GET /health` `load_errors`): that file's nodes are missing from everything it answers | `load_errors` |
+| `server_scheduler` | its scheduler stopped on an error, or a schedule is failing (`max_failures` failed ticks in a row, so its ticks are skipped). A paused schedule is reported and passes; a server started with `--no-schedule` or `--read-only` passes | `running`, `schedules`, `paused`, `failing` (node ids) |
+| `server_posts` | runs this machine computed against the server's ledger are not recorded there yet (`barca status` shows their results `unsynced`, `not_in_ledger`) | `unsynced`, `runs`, `last_error` |
+
+The failed check's `detail` ends with a line that says what to do (in the table, after `; `):
+
+```
+[error] server_scheduler: running; 1 schedule, 1 failing (pipeline.py:nightly_sync): pipeline.py:nightly_sync failed 2 ticks in a row (max_failures=2) and its ticks are skipped; Run `barca status --problems` for the error and fix it, then `barca run pipeline.py:nightly_sync --server`: a success resets the count and the ticks resume.
+[error] server_posts: 1 run computed here is not recorded on the server yet: 83fdf4585f8a (last: the server could not be reached: could not connect (Connection refused (os error 111))); The next `barca get` or `barca run` against the server sends it first; `barca status --state unsynced` lists the results.
+```
+
+Doctor only reads: it changes nothing on the server and sends no pending post. The scheduler
+counts are those of `GET /schedule`, the numbers the web UI shows. `barca status --problems`
+lists the schedules that are paused or failing with their nodes' errors (`barca docs status`).
+
 ## Local-only debugging profile
 
 Run this block from your project root. Use local input fixtures in your pipeline/config;
@@ -59,4 +94,4 @@ barca get --refresh-all
 `--env` overrides `BARCA_ENV` for an individual command.
 
 See also: `barca docs remote` (store configuration), `barca docs discovery` (project roots and
-source selection).
+source selection), `barca docs server-mode`, `barca docs agents` ("Debugging pipelines").

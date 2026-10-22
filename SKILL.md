@@ -119,6 +119,21 @@ set -o pipefail
 barca run report pipeline.py | jq '.status'
 ```
 
+## Debugging: what is wrong, and why
+
+```bash
+barca doctor                             # setup, and a configured server: version, store, load errors, schedules, unposted runs
+barca status --problems                  # nodes that need attention: not cached, a failed run, a paused or failing schedule
+barca history --json                     # runs, newest first: run_id, target, status
+barca logs RUN_ID --step NODE --stream stderr   # that step's traceback and logging
+```
+
+- A failed node's error is `last_materialization.error` in `status --json`; WHY shows its first
+  line. A scheduled node has `schedule` (`failures`, `max_failures`, `failing`, `paused`).
+- With a server configured, these answer from it; `--local` reads this machine.
+- Each failed doctor check ends with what to do. Full walkthrough: `barca docs agents`,
+  "Debugging pipelines".
+
 ## Guardrails
 
 - **Never edit or delete anything in `.barca/`** or query its DB; barca owns it. Reading an
@@ -140,6 +155,7 @@ barca run report pipeline.py | jq '.status'
 | Re-run upstream assets            | `barca run <task> <files> --refresh a,b`   |
 | Pick up data changed in place     | a `@sensor` returning its etag, read by the asset |
 | Past runs / the last run's prints | `barca history` / `barca logs`             |
+| What needs attention?             | `barca status --problems`, then `barca doctor` |
 | Flags / concepts                  | `barca <command> --help` / `barca docs <topic>` |
 
 Use these spellings. Older ones still parse for compatibility (`-o json`, `barca pipeline.py`

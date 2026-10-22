@@ -21,7 +21,8 @@ pub struct DoctorReport {
 }
 
 impl DoctorReport {
-    fn add(&mut self, name: &str, ok: bool, detail: impl Into<String>, data: Value) {
+    /// Add one check. A failed check's `detail` ends with a line saying what to do.
+    pub fn add(&mut self, name: &str, ok: bool, detail: impl Into<String>, data: Value) {
         self.checks.push(Check {
             name: name.into(),
             ok,

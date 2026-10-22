@@ -383,6 +383,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/list", "/list"),
         ("/nodes", "/nodes"),
         ("/nodes?targets=first&sample=1", "/nodes"),
+        ("/nodes?state=never_run,stale&problems=1", "/nodes"),
         ("/history?limit=5", "/history"),
         ("/history?all=1", "/history"),
         ("/stats/first", "/stats/{name}"),
@@ -442,6 +443,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
     .await;
     assert_eq!(steps["total"], 0);
     assert_eq!(steps["limit"], 1000);
+    checked(&router, "GET", "/nodes?state=failed", "/nodes", 400).await;
     for (method, url, path) in [
         ("POST", "/run", "/run"),
         ("POST", "/run/publish", "/run/{target}"),
@@ -1133,6 +1135,12 @@ async fn schedule_pause_and_resume_match_contract() {
     )
     .await;
     assert_eq!(paused["paused"], true);
+    // `GET /nodes` carries the schedule; a paused one is a problem.
+    let nodes = checked(&router, "GET", "/nodes?problems=1", "/nodes", 200).await;
+    let daily = &nodes["nodes"][0];
+    assert_eq!(daily["schedule"]["paused"], true, "{nodes}");
+    assert_eq!(daily["schedule"]["cron"], "0 5 * * *");
+    assert_eq!(nodes["filter"]["problems"], true);
     checked(
         &router,
         "POST",

@@ -346,6 +346,51 @@ pub async fn schedule(State(state): State<AppState>) -> Result<Json<Value>, ApiE
     Ok(Json(schedule_at(&state, chrono::Utc::now())))
 }
 
+/// Each scheduled node's `schedule` in `GET /nodes` (`barca status`): what the metadata DB holds
+/// (failures, pauses, the last tick), with next fire times in the server's `--timezone`, and,
+/// while the scheduler runs, its `GET /schedule` entry, so the numbers are the ones the web UI
+/// shows.
+pub(crate) async fn attach_live_schedules(
+    state: &AppState,
+    nodes: &mut [barca_core::status::NodeStatus],
+    dag: &barca_core::dag::Dag,
+    db_path: &str,
+) -> Result<(), ApiError> {
+    let now = chrono::Utc::now();
+    let zone = crate::scheduler::zone_of(&state.config);
+    barca_core::status::attach_schedules(nodes, dag, Some(db_path), &zone, now).await?;
+    crate::pause::pauses(state).await?;
+    let live = schedule_at(state, now);
+    let secs = |v: &Value| v.as_i64().and_then(barca_core::status::rfc3339_secs);
+    let text = |v: &Value| v.as_str().map(str::to_string);
+    for node in nodes.iter_mut() {
+        let Some(schedule) = node.schedule.as_mut() else {
+            continue;
+        };
+        let Some(job) = live
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|j| j["id"].as_str() == Some(node.id.as_str()))
+        else {
+            continue;
+        };
+        schedule.next_fire = secs(&job["next_fire"]);
+        schedule.last_fired = secs(&job["last_fired"]);
+        schedule.last_status = text(&job["last_status"]);
+        schedule.failures = job["failures"].as_u64().unwrap_or(0) as u32;
+        schedule.max_failures = job["max_failures"]
+            .as_u64()
+            .map_or(schedule.max_failures, |n| n as u32);
+        schedule.failing = job["failing"].as_bool().unwrap_or(false);
+        schedule.paused = job["paused"].as_bool().unwrap_or(false);
+        schedule.paused_until = secs(&job["paused_until"]);
+        schedule.skip_reason = text(&job["skip_reason"]);
+        schedule.live = true;
+    }
+    Ok(())
+}
+
 /// The body of `GET /schedule` as of `now`. `next_fire` is computed in the zone the server
 /// evaluates cron in (`--timezone`), so it is the time the scheduler will fire the job.
 pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) -> Value {

@@ -16,6 +16,9 @@ the repository it is a short guide and covers what an agent needs before its fir
 - the output contract: the JSON result on stdout (its last line), the error envelope as the last
   line of stderr, and exit codes 0 / 1 step failed / 2 usage / 3 infra / 130 cancelled;
 - `--agent`, `--fields`, and `set -o pipefail` before piping into `jq`;
+- debugging: `barca doctor` (with a server configured, the server too), `barca status
+  --problems` (failed nodes with their error, stale results, paused or failing schedules) and
+  `barca logs RUN_ID --step NODE --stream stderr` for a step's traceback;
 - guardrails: never edit or delete files under `.barca/`, never import the user's modules to
   inspect outputs (use `barca status` or `barca sql`), force a recompute with `--refresh` and not
   by deleting files, and one spelling per task.
