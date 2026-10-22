@@ -158,6 +158,10 @@ nothing is ever downloaded before a run. With a store configured by `[remote] ur
 - by `barca serve`, every minute in which the database changed, and once when it shuts down
   (not with `--read-only`).
 
+A machine with a server configured (`[server] url` or `BARCA_SERVER`) takes no backups, with or
+without `--local`: the server is the ledger and backs up its own database (`barca docs
+server-mode`, "Backups").
+
 A backup whose bytes would equal the newest one is not taken. None is taken under
 `BARCA_REMOTE=off`, or when only `BARCA_ARTIFACT_URI` / `[remote] artifacts_uri` name the store.
 
@@ -216,7 +220,7 @@ earlier). The `HOST` column shows another project directory on this host as `hos
 Put one back, only when you ask:
 
 ```bash
-barca state restore                  # this machine's newest (the newest, if it has none)
+barca state restore                  # this machine's newest (see below if it has none)
 barca state restore --from 1         # the newest, whichever machine took it
 barca state restore --from 2         # by index in barca state backups
 barca state restore --from 2026-10-14T18-01-10.907Z-3f9a1c2e
@@ -238,7 +242,10 @@ Without `--from`, `restore` takes this machine's newest backup (same host and pr
 directory), and says so when newer ones came from elsewhere:
 `[barca] restoring this machine's newest backup, 2026-10-14T18-01-10.907Z-3f9a1c2e.db (#3); the
 2 newer ones were taken by desktop. barca state restore --from 1 restores the newest`. With
-none of its own (a fresh machine taking over), it takes the newest and names who took it.
+none of its own (a fresh machine taking over), it takes the newest when one other machine took
+every backup listed, and names it. When several did, it takes none: exit 2, nothing changed,
+and the error names each one's newest backup, so another machine's history is never restored
+by elimination; pick one with `--from`.
 
 - No backup at all, an unknown `--from`, or a copy that fails the check: exit 2, nothing changed.
   A copy that fails names the next newest (`barca state restore --from 3`).

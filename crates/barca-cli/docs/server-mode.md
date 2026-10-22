@@ -122,6 +122,18 @@ dropped (`barca docs remote`) and taken out of the post, and the rest of the run
 A server that is draining before it stops (SIGTERM, `barca docs scheduling`) refuses posts with
 `503`; the run stays `unsynced` here and the next command against the server sends it again.
 
+### Backups
+
+The server backs up its database to the store (`<uri>/<env>/state/backups`, `barca docs
+remote`); the machines that use it take no backups, with or without `--local`, and print no
+`backed up the metadata DB` line. A client's history that matters is on the server, and a
+client's copies in the server's backup set would rotate the server's own out of it and be
+candidates for a restore of the server. Backups barca 0.29.1 and older took on a client stay
+in the store (pruning keeps every machine's newest; `barca state backups` lists them with their
+`host` and `project`), and you can delete them there. `barca state restore` without `--from`
+takes the server's own newest; on a machine with none of its own and several other machines'
+backups listed, it refuses to choose (exit 2, nothing changed) and asks for `--from`.
+
 ### Two machines, same run hash, different bytes
 
 When the ledger already holds a run hash with another digest (a function that is not

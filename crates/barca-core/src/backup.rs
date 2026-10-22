@@ -771,7 +771,7 @@ pub async fn restore(
         return Err(BarcaError::Usage(msg));
     }
     let index = match from {
-        None => newest_mine(cfg, &listing.backups),
+        None => newest_mine(cfg, &listing.backups)?,
         Some(sel) => select(&listing.backups, sel)?,
     };
     let chosen = &listing.backups[index];
@@ -858,32 +858,56 @@ pub async fn restore(
 }
 
 /// The backup `restore` takes without `--from`: this writer's newest, when it has one, saying
-/// so when other writers' backups are newer; otherwise the newest.
-fn newest_mine(cfg: &ResolvedConfig, backups: &[BackupEntry]) -> usize {
+/// so when other writers' backups are newer. With none of its own, the newest when one other
+/// writer took them all (a fresh machine taking over), naming it; when several did (a server
+/// and the machines that used it, say), none: a usage error listing them, so another machine's
+/// database is never picked by elimination.
+fn newest_mine(cfg: &ResolvedConfig, backups: &[BackupEntry]) -> Result<usize, BarcaError> {
     let here = Writer::of(&cfg.db_path);
+    let who = |b: &BackupEntry| match &b.host {
+        Some(host) => here.describe(host, b.project.as_deref()),
+        None => "an older barca".to_string(),
+    };
     match backups.iter().position(|b| b.mine == Some(true)) {
-        Some(0) | None => {
+        Some(0) => Ok(0),
+        None => {
+            // Each writer's newest backup, newest first.
+            let mut writers: Vec<(String, &BackupEntry)> = Vec::new();
+            for b in backups {
+                let name = who(b);
+                if !writers.iter().any(|(w, _)| *w == name) {
+                    writers.push((name, b));
+                }
+            }
+            if writers.len() > 1 {
+                let listed: Vec<String> = writers
+                    .iter()
+                    .map(|(w, b)| format!("{w} (newest #{}, {})", b.index, b.name))
+                    .collect();
+                return Err(BarcaError::Usage(format!(
+                    "this machine has no backup of its own, and the {} backups were taken by {} \
+                     others: {}. Restoring one would put another machine's history here, so \
+                     barca does not choose: name the backup with --from (barca state backups \
+                     lists them). Nothing was changed.",
+                    backups.len(),
+                    writers.len(),
+                    listed.join("; ")
+                )));
+            }
             if let Some(b) = backups.first()
                 && b.mine == Some(false)
-                && let Some(host) = &b.host
             {
                 crate::errln!(
                     "[barca] restoring the newest backup, {}, which {} took (this machine has \
                      none of its own)",
                     b.name,
-                    here.describe(host, b.project.as_deref())
+                    who(b)
                 );
             }
-            0
+            Ok(0)
         }
         Some(i) => {
-            let mut others: Vec<String> = backups[..i]
-                .iter()
-                .map(|b| match &b.host {
-                    Some(host) => here.describe(host, b.project.as_deref()),
-                    None => "an older barca".to_string(),
-                })
-                .collect();
+            let mut others: Vec<String> = backups[..i].iter().map(who).collect();
             others.sort();
             others.dedup();
             crate::errln!(
@@ -895,7 +919,7 @@ fn newest_mine(cfg: &ResolvedConfig, backups: &[BackupEntry]) -> usize {
                 if i == 1 { "one was" } else { "ones were" },
                 others.join(", ")
             );
-            i
+            Ok(i)
         }
     }
 }
@@ -1536,6 +1560,27 @@ mod tests {
         );
         // --from 1 is still the newest, whoever took it.
         let restored = restore(&python, a, Some("1")).await.unwrap();
+        assert_eq!(restored.restored, from_b);
+
+        // A third directory with no backup of its own, on a store two others back up to (a
+        // server and a client that used to back up beside it, say), is handed neither: the
+        // newest is not "its" database by elimination. Nothing is changed; --from picks one.
+        let dir = root_path.join("c");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = cfg(&dir);
+        c.backup_uri = Some(store.to_string_lossy().into_owned());
+        with_runs(&c, 1).await;
+        let before = std::fs::read(&c.db_path).unwrap();
+        let Err(BarcaError::Usage(why)) = restore(&python, &c, None).await else {
+            panic!("restore picked another machine's backup");
+        };
+        assert!(why.contains("no backup of its own"), "{why}");
+        assert!(why.contains(root_path.join("a").to_str().unwrap()), "{why}");
+        assert!(why.contains(root_path.join("b").to_str().unwrap()), "{why}");
+        assert!(why.contains("--from"), "{why}");
+        assert_eq!(std::fs::read(&c.db_path).unwrap(), before);
+        assert!(!Path::new(&format!("{}.pre-restore", c.db_path)).exists());
+        let restored = restore(&python, &c, Some("1")).await.unwrap();
         assert_eq!(restored.restored, from_b);
     }
 
