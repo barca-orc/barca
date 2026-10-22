@@ -369,6 +369,8 @@ paths:
             text/plain:
               schema: *id005
       description: Newest first. Without limit, every run, as barca history --json prints without -l.
+        The filters combine with AND; total and truncated count the runs they keep, and limit applies
+        after them. An unknown filter value is a 400.
       parameters: &id010
       - name: limit
         in: query
@@ -381,6 +383,29 @@ paths:
         required: false
         schema: *id005
         description: 'Any value but 0 or false: every run.'
+      - name: status
+        in: query
+        required: false
+        schema: *id005
+        description: 'barca history --status: comma-separated, any of success, failed, cancelled, error,
+          running, interrupted.'
+      - name: target
+        in: query
+        required: false
+        schema: *id005
+        description: 'barca history --target: runs whose target or job names this node (a function name
+          or node id).'
+      - name: triggered_by
+        in: query
+        required: false
+        schema: *id005
+        description: 'barca history --triggered-by: comma-separated, any of manual, api, schedule, client.'
+      - name: since
+        in: query
+        required: false
+        schema: *id005
+        description: 'barca history --since: started at or after a duration back from the server''s clock
+          (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date.'
     head:
       summary: barca history --json (headers only)
       operationId: head_history
@@ -1545,7 +1570,7 @@ paths:
               schema: *id003
       description: Answers from the metadata DB once the run has finished, so a restart does not lose
         it; a live run is pending or running until it has recorded its outcome. Inspection uses a private
-        DB snapshot.
+        DB snapshot. barca history RUN_ID --server reads it.
       parameters: &id026
       - name: run_id
         in: path
@@ -3255,14 +3280,29 @@ components:
     RunStep:
       type: object
       additionalProperties: false
+      description: A step the run recorded (one it executed, or one that failed); a live run also lists
+        the steps it has streamed and not recorded yet, cached ones included. Cached steps of a finished
+        run recorded no row and are not listed.
       required:
       - node_id
       - status
       - elapsed_seconds
       - error
+      - partition_key
+      - attempts
+      - run_hash
+      - artifact_path
+      - artifact_format
+      - artifact_size_bytes
+      - error_type
+      - error_message
+      - error_traceback
+      - worker_exit
       properties:
         node_id: *id003
-        status: *id003
+        status:
+          type: string
+          description: success or failed; cached for a step a live run has reported.
         elapsed_seconds:
           anyOf:
           - *id045
@@ -3271,6 +3311,71 @@ components:
           anyOf:
           - *id003
           - type: 'null'
+          description: 'A failed step''s error as recorded: for a Python exception, Type: message and
+            the traceback''s frames.'
+        partition_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The partition key (k=v pairs joined by a comma) of one key of a partitioned step.
+        attempts:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Attempts made, retries included.
+        run_hash:
+          anyOf:
+          - type: string
+          - type: 'null'
+        artifact_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The recorded result's path, or its artifact-store location when it was uploaded.
+        artifact_format:
+          anyOf:
+          - type: string
+          - type: 'null'
+        artifact_size_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+        error_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: A failed step's exception type; WorkerError when its worker died, UploadError when
+            its result could not be stored.
+        error_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: A failed step's error message alone, without its type and traceback.
+        error_traceback:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: A failed step's Python traceback, barca's frames left out.
+        worker_exit:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: How a dead worker ended (SIGKILL (possibly the OOM killer), another signal, code N,
+            disconnected); null for a step that raised.
+    RunFailure:
+      type: object
+      additionalProperties: false
+      description: A run's first failed step and the first line of its error.
+      required:
+      - node
+      - error
+      properties:
+        node:
+          type: string
+          description: The step's node id, with its partition key when it has one.
+        error:
+          type: string
+          description: 'ErrorType: message, the first line of the message only.'
     RunEvent:
       oneOf:
       - type: object
@@ -3550,6 +3655,10 @@ components:
       - steps_total
       - steps_executed
       - steps_cached
+      - job
+      - attempts
+      - client_run_id
+      - failure
       - outcome
       - error
       - steps
@@ -3591,6 +3700,27 @@ components:
         steps_total: *id058
         steps_executed: *id056
         steps_cached: *id056
+        job:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The run's job (all, or its resolved node ids sorted and comma-separated); null while
+            a live run has not recorded it.
+        attempts:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Total recorded attempts, as barca history counts them.
+        client_run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: For a run a laptop posted to the ledger, its run id on that laptop.
+        failure:
+          anyOf:
+          - $ref: '#/components/schemas/RunFailure'
+          - type: 'null'
+          description: The first failed step and its error; null for a run with no failed step.
         outcome:
           anyOf:
           - $ref: '#/components/schemas/Outcome'
@@ -3832,6 +3962,7 @@ components:
       - scheduled_at
       - schedule_id
       - client_run_id
+      - failure
       properties:
         run_id: *id005
         command: *id005
@@ -3862,6 +3993,11 @@ components:
           - 'null'
           description: For a run a laptop posted to the ledger (triggered_by client), its run id on that
             laptop; null otherwise.
+        failure:
+          anyOf:
+          - $ref: '#/components/schemas/RunFailure'
+          - type: 'null'
+          description: The first failed step and its error; null for a run with no failed step.
     HistoryBody:
       type: object
       additionalProperties: false

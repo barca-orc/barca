@@ -6,6 +6,26 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Features
+
+- Debugging a failed job from the CLI, here or from a server. `barca history` takes
+  `--status failed,...`, `--target NAME` (the run's target or job), `--triggered-by
+  manual|api|schedule|client` and `--since 24h` (or an RFC 3339 time or a date); they combine
+  with AND, and `--limit`, `total` and `truncated` count the runs they keep. A failed run's row
+  ends with its first failed step and error (`clean: ZeroDivisionError: division by zero`), and
+  JSON runs gain `failure: {node, error}`. `barca history RUN_ID` shows one run: its fields, the
+  schedule tick and `client_run_id`, every step it recorded with attempts, time, run hash and
+  artifact, each failed step's error, traceback and how a dead worker ended (`SIGKILL (possibly
+  the OOM killer)`), and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. Against
+  a server the filters are `GET /history` query parameters and the detail reads `GET
+  /runs/{run_id}`, whose steps gain `partition_key`, `attempts`, `run_hash`, the artifact,
+  `error_type`, `error_message`, `error_traceback` and `worker_exit`, and which gains `job`,
+  `attempts`, `client_run_id` and `failure`. A run only this machine has says `barca history
+  RUN_ID --local`. Cached steps are counted, not listed (`barca docs status`, "Finding and
+  reading a failed run").
+
 ## 0.29.2 (2026-10-22)
 
 ### Features

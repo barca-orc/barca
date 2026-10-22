@@ -165,7 +165,7 @@ examples.
 | `barca list [files...]` | Every asset, sensor and task, with its kind, freshness and inputs. |
 | `barca status [target] [files...]` | Per node: cached or stale and why, the last run, and the artifact's rows and columns. |
 | `barca logs [RUN_ID]` | A run's recorded step stdout and stderr, without progress messages; the most recent run without an id, `-f` to follow a running one, from a configured server too. |
-| `barca history` | Recent runs. |
+| `barca history [RUN_ID]` | Recent runs, filtered by `--status`, `--target`, `--triggered-by` and `--since`, each failed one with its failing step and error; with a run id, its steps, errors and tracebacks. |
 | `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (experimental). |
 | `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps. |

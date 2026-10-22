@@ -76,12 +76,53 @@ pub fn plan_from_dag(
 pub async fn history(
     cfg: &crate::config::ResolvedConfig,
     limit: Option<usize>,
+    filter: &crate::history_filter::HistoryFilter,
 ) -> Result<(Vec<db::RunRecord>, usize), BarcaError> {
     db::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
-    let total = db::count_runs(&cfg.db_path).await?;
-    let runs = db::get_recent_runs(&cfg.db_path, limit.unwrap_or(total)).await?;
+    history_at(&cfg.db_path, limit, filter).await
+}
+
+/// The newest `limit` runs of the database at `db_path` that `filter` keeps (every one when
+/// `None`), and how many it keeps in all.
+pub async fn history_at(
+    db_path: &str,
+    limit: Option<usize>,
+    filter: &crate::history_filter::HistoryFilter,
+) -> Result<(Vec<db::RunRecord>, usize), BarcaError> {
+    let total = db::count_runs(db_path).await?;
+    if filter.is_empty() {
+        let runs = db::get_recent_runs(db_path, limit.unwrap_or(total)).await?;
+        return Ok((runs, total));
+    }
+    let mut runs = db::get_recent_runs(db_path, total).await?;
+    runs.retain(|run| filter.matches(run));
+    let total = runs.len();
+    runs.truncate(limit.unwrap_or(total));
     Ok((runs, total))
+}
+
+/// One run and the steps it recorded, for `barca history RUN_ID`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RunDetail {
+    pub run: db::RunRecord,
+    pub steps: Vec<db::RunStep>,
+}
+
+/// [`RunDetail`] of `run_id` in this environment; a usage error when it is not recorded.
+pub async fn run_detail(
+    cfg: &crate::config::ResolvedConfig,
+    run_id: &str,
+) -> Result<RunDetail, BarcaError> {
+    db::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await?;
+    let Some(run) = db::get_run(&cfg.db_path, run_id).await? else {
+        return Err(BarcaError::Usage(format!(
+            "run '{run_id}' was not found; use barca history --json to find a run id"
+        )));
+    };
+    let steps = db::get_run_steps(&cfg.db_path, run_id).await?;
+    Ok(RunDetail { run, steps })
 }
 
 /// Record a running row as interrupted after the operator has verified it stopped.

@@ -301,4 +301,50 @@ carries the tick it was started for in `scheduled_at` (RFC 3339, UTC) and the sc
 barca history --json --fields run_id,triggered_by,scheduled_at,schedule_id
 ```
 
+## Finding and reading a failed run
+
+`barca history` filters its runs; the filters combine with AND, and `--limit`, `total` and
+`truncated` count the runs they keep:
+
+- `--status success,failed,...`: any of `success`, `failed`, `cancelled`, `error`, `running`,
+  `interrupted`.
+- `--target NAME`: runs whose target (as typed) or job (resolved node ids) is that node, by
+  function name or node id. A run of every node (`all`) is left out.
+- `--triggered-by manual,api,schedule,client`.
+- `--since WHEN`: started at or after a duration back from now (`30m`, `24h`, `7d`, `2w`), an
+  RFC 3339 time or a UTC date (`2026-10-22`).
+
+A failed run's row ends with its first failed step and the first line of its error, and JSON
+carries it as `failure: {node, error}` (`null` for every other run, and for a run that failed
+before any step did, such as a file that does not parse).
+
+```bash
+barca history --status failed --since 24h
+barca history --status failed --target clean --json --fields run_id,started_at,failure
+barca history --triggered-by schedule --status failed,interrupted
+```
+
+`barca history RUN_ID` shows one run: its own fields (status, target, job, timing, attempts,
+what started it, the schedule tick and `client_run_id` when it has them), then each step it
+recorded with its status, attempts, time, run hash and artifact (path, format and size), then
+each failed step's error, its full traceback and, when its worker died, how the process ended
+(`worker exit: SIGKILL (possibly the OOM killer)`, another signal, an exit code). A hint on
+stderr names the command that prints the failed step's stderr. JSON is `{run, steps, hint?}`:
+`run` is the run as `barca history --json` lists it, and each step has `node_id`,
+`partition_key`, `status` (`success` or `failed`), `attempts`, `elapsed_seconds`, `run_hash`,
+`artifact_path`, `artifact_format`, `artifact_size_bytes`, `error` (as recorded), `error_type`,
+`error_message`, `error_traceback` and `worker_exit`.
+
+```bash
+barca history 7f30b3e9
+barca history 7f30b3e9 --json
+barca logs 7f30b3e9 --step clean --stream stderr
+```
+
+Replace the example id with a `run_id` from `barca history`. Only the steps a run executed or
+that failed are listed: cached steps are counted in the run's `steps_cached` (they recorded no
+new row), and steps a failure skipped are not recorded. With a server configured, both forms
+answer from the server (`barca docs server-mode`); a run id only this machine has is an error
+whose remediation is `barca history RUN_ID --local`.
+
 See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.

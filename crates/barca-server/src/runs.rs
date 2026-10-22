@@ -761,6 +761,10 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
             steps_total: record.steps_total,
             steps_executed: record.steps_executed,
             steps_cached: record.steps_cached,
+            job: record.job.clone(),
+            attempts: record.attempts,
+            client_run_id: record.client_run_id.clone(),
+            failure: record.failure.clone(),
             outcome: None,
             error: None,
             steps: Vec::new(),
@@ -785,6 +789,10 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
             steps_total: None,
             steps_executed: 0,
             steps_cached: 0,
+            job: None,
+            attempts: None,
+            client_run_id: None,
+            failure: None,
             outcome: None,
             error: None,
             steps: Vec::new(),
@@ -843,6 +851,7 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
                         .into(),
                         elapsed_seconds,
                         error,
+                        ..Default::default()
                     })
                 }
                 _ => {}

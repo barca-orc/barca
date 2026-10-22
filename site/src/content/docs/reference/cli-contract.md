@@ -92,7 +92,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
 | `barca doctor` | `[<FILES>...]` | experimental: new prerequisite report; check names and provider-specific data may evolve | Diagnose project prerequisites without running pipeline steps |
 | `barca logs` | `[<RUN_ID>]` | stable | Read a run's recorded step output (stdout and stderr), without progress messages |
-| `barca history` | - | stable | Show recent run history |
+| `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes are aliases until the next minor | Run a long-running HTTP server exposing the orchestrator as a JSON API |
@@ -219,12 +219,17 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
+| `<RUN_ID>` | - | - | experimental: new in 0.29.3: the run detail's step keys and human layout may change after field use | One run in detail: its fields, every step it recorded, and each failed step's error, traceback and how its worker ended |
 | `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
+| `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted |
+| `--target` | `NAME` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out |
+| `--triggered-by` | `TRIGGER[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started this way (comma-separated): manual, api, schedule, client |
+| `--since` | `WHEN` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table) |
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -1666,6 +1671,36 @@ otherwise its resolved node ids, sorted and comma-separated (`barca.job` in tele
 `null` for runs recorded before barca stored it. `target` stays the target as typed. The human
 table's TARGET column shows the job by function name, cut at 24 characters with `…`.
 
+`runs[].failure` (additive, 0.29.3) is `{node, error}` for a run with a failed step: the first
+failed step's node id and the first line of its error (`ZeroDivisionError: division by zero`);
+`null` for every other run. The human table ends a failed run's row with
+`<function>: <error>`, cut at 72 characters with `…`.
+
+Experimental filters (0.29.3): `--status` (comma-separated: `success`, `failed`, `cancelled`,
+`error`, `running`, `interrupted`), `--target NAME` (the run's target or job names the node),
+`--triggered-by` (comma-separated: `manual`, `api`, `schedule`, `client`) and `--since` (a
+duration `30m`/`24h`/`7d`/`2w`, an RFC 3339 time or a UTC date). They combine with AND;
+`total` and `truncated` count the runs they keep and `--limit` applies after them. An unknown
+value is a usage error (exit 2) naming the valid ones. Against a server they are the query
+parameters `status`, `target`, `triggered_by` and `since` of `GET /history` (a 400 for an
+unknown value).
+
+Experimental `barca history RUN_ID` (0.29.3) prints one run as `{run, steps, hint?}`. `run` is
+one `runs[]` entry. `steps[]` are the steps the run recorded, in the order it recorded them:
+`node_id`, `partition_key` (`k=v` pairs joined by `,`, or `null`), `status` (`success` or
+`failed`; `cached` only for a step a live server run has reported), `attempts`,
+`elapsed_seconds`, `run_hash`, `artifact_path` (this machine's path or the store location),
+`artifact_format`, `artifact_size_bytes`, `error` (the error as recorded: for a Python
+exception `Type: message` and the frames), `error_type`, `error_message` (the message alone),
+`error_traceback` and `worker_exit` (how a dead worker ended: `SIGKILL (possibly the OOM
+killer)`, another signal name, `code N` or `disconnected`; `null` for a step that raised).
+Cached steps are not listed: `run.steps_cached` counts them. `hint`, present when a step
+failed, is the `barca logs RUN_ID --step STEP --stream stderr` command for the first failed
+step, with the `--server`, `--local` and `--env` this command was given. An unknown run id is
+exit 2; against a server, one only this machine has adds the remediation `this run is on this
+machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the filters,
+`--limit`, `--all` and `--fields`.
+
 
 <!-- BEGIN GENERATED schema history -->
 | Key | Type | Present |
@@ -1677,6 +1712,9 @@ table's TARGET column shows the job by function name, cut at 24 characters with 
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
+| `runs[].failure` | object | always |
+| `runs[].failure.error` | string | always |
+| `runs[].failure.node` | string | always |
 | `runs[].files` | array | always |
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
@@ -1694,6 +1732,84 @@ table's TARGET column shows the job by function name, cut at 24 characters with 
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema history -->
+
+`barca history --status failed --target broken --since 1d --json` has the same shape:
+
+<!-- BEGIN GENERATED schema history_filtered -->
+| Key | Type | Present |
+|---|---|---|
+| `runs` | array | always |
+| `runs[]` | object | always |
+| `runs[].attempts` | integer | always |
+| `runs[].client_run_id` | null | always |
+| `runs[].command` | string | always |
+| `runs[].elapsed_seconds` | number | always |
+| `runs[].failure` | object | always |
+| `runs[].failure.error` | string | always |
+| `runs[].failure.node` | string | always |
+| `runs[].files` | array | always |
+| `runs[].files[]` | string | always |
+| `runs[].finished_at` | string | always |
+| `runs[].job` | string | always |
+| `runs[].run_id` | string | always |
+| `runs[].schedule_id` | null | always |
+| `runs[].scheduled_at` | null | always |
+| `runs[].started_at` | string | always |
+| `runs[].status` | string | always |
+| `runs[].steps_cached` | integer | always |
+| `runs[].steps_executed` | integer | always |
+| `runs[].steps_total` | integer | always |
+| `runs[].target` | string | always |
+| `runs[].triggered_by` | string | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema history_filtered -->
+
+`barca history RUN_ID --json` (a failed run):
+
+<!-- BEGIN GENERATED schema history_run -->
+| Key | Type | Present |
+|---|---|---|
+| `hint` | string | always |
+| `run` | object | always |
+| `run.attempts` | integer | always |
+| `run.client_run_id` | null | always |
+| `run.command` | string | always |
+| `run.elapsed_seconds` | number | always |
+| `run.failure` | object | always |
+| `run.failure.error` | string | always |
+| `run.failure.node` | string | always |
+| `run.files` | array | always |
+| `run.files[]` | string | always |
+| `run.finished_at` | string | always |
+| `run.job` | string | always |
+| `run.run_id` | string | always |
+| `run.schedule_id` | null | always |
+| `run.scheduled_at` | null | always |
+| `run.started_at` | string | always |
+| `run.status` | string | always |
+| `run.steps_cached` | integer | always |
+| `run.steps_executed` | integer | always |
+| `run.steps_total` | integer | always |
+| `run.target` | string | always |
+| `run.triggered_by` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact_format` | null \| string | always |
+| `steps[].artifact_path` | null \| string | always |
+| `steps[].artifact_size_bytes` | integer \| null | always |
+| `steps[].attempts` | integer | always |
+| `steps[].elapsed_seconds` | null \| number | always |
+| `steps[].error` | null \| string | always |
+| `steps[].error_message` | null \| string | always |
+| `steps[].error_traceback` | null \| string | always |
+| `steps[].error_type` | null \| string | always |
+| `steps[].node_id` | string | always |
+| `steps[].partition_key` | null | always |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps[].worker_exit` | null | always |
+<!-- END GENERATED schema history_run -->
 
 Newest first. `files` is an array of the `.py` files the run was given. `target`,
 `steps_total`, `finished_at` and `elapsed_seconds` can be `null` (no target; a run still in
@@ -1720,6 +1836,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | null | always |
+| `runs[].failure` | null | always |
 | `runs[].files` | array | always |
 | `runs[].finished_at` | null | always |
 | `runs[].job` | null | always |

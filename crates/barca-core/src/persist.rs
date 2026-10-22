@@ -392,41 +392,10 @@ async fn record_steps_with_until(
     .await
 }
 
-/// The exception a step failure carries, as (type, message, traceback). A worker reports a
-/// Python exception as the generic `WorkerError` whose text is `Type: message` followed by the
-/// traceback frames; the type is what groups errors in a telemetry backend.
+/// The exception a step failure carries, as (type, message, traceback): see
+/// [`db::split_exception`]. The type is what groups errors in a telemetry backend.
 fn exception_of(error: &dispatch::StepError) -> (String, String, Option<String>) {
-    // The frames are the trailing run of `  File "..."` lines and their indented source lines.
-    // Taking only that run keeps a message that itself quotes a traceback in one piece.
-    let lines: Vec<&str> = error.message.split('\n').collect();
-    let mut first_frame = lines.len();
-    for (i, line) in lines.iter().enumerate().rev() {
-        if line.starts_with("  File \"") {
-            first_frame = i;
-        } else if !line.starts_with("    ") {
-            break;
-        }
-    }
-    let joined;
-    let (text, frames) = if first_frame > 0 && first_frame < lines.len() {
-        joined = lines[..first_frame].join("\n");
-        (joined.as_str(), Some(lines[first_frame..].join("\n")))
-    } else {
-        (error.message.as_str(), None)
-    };
-    let stack = Some(error.traceback.clone())
-        .filter(|t| !t.is_empty())
-        .or(frames);
-    if error.error_type == "WorkerError"
-        && let Some((head, rest)) = text.split_once(": ")
-        && !head.is_empty()
-        && head
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-    {
-        return (head.to_string(), rest.to_string(), stack);
-    }
-    (error.error_type.clone(), text.to_string(), stack)
+    db::split_exception(&error.error_type, &error.message, &error.traceback)
 }
 
 /// Group resolved ids consistently in APM. The run ledger retains the

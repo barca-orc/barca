@@ -519,8 +519,7 @@ pub fn render_history(
             .elapsed_seconds
             .map(|e| format!("{:.1}s", e))
             .unwrap_or_else(|| "-".to_string());
-        line!(
-            rendered,
+        let row = format!(
             "{:<14} {:<7} {:<TARGET_WIDTH$} {:<11} {:>5} {:>6} {:>6} {:<20}",
             r.run_id,
             r.command,
@@ -531,9 +530,255 @@ pub fn render_history(
             elapsed_str,
             crate::report::utc_cell(&r.started_at),
         );
+        match &r.failure {
+            Some(failure) => line!(rendered, "{row}  {}", failure_cell(failure)),
+            None => line!(rendered, "{row}"),
+        }
     }
     if let Some(note) = page.note(runs.len(), "runs") {
         note!(rendered, "{note}");
+    }
+    rendered
+}
+
+/// The longest failure text after a history row.
+const FAILURE_WIDTH: usize = 72;
+
+/// `clean: ZeroDivisionError: division by zero`, cut to [`FAILURE_WIDTH`].
+fn failure_cell(failure: &crate::db::RunFailure) -> String {
+    let text = format!("{}: {}", step_label(&failure.node), failure.error);
+    if text.chars().count() > FAILURE_WIDTH {
+        let cut: String = text.chars().take(FAILURE_WIDTH - 1).collect();
+        format!("{cut}…")
+    } else {
+        text
+    }
+}
+
+/// A step as a table names it: its function name, with its partition key when it has one.
+fn step_label(node_id: &str) -> String {
+    let id = crate::StepId::parse(node_id);
+    let name = crate::telemetry::short_name(id.base_id());
+    let key = id.partition.suffix();
+    if key.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}[{key}]")
+    }
+}
+
+/// What `--step` should say to select `failed` among `steps`: its function name when no other
+/// definition shares it, otherwise its node id; quoted when a shell would read it otherwise.
+fn step_arg(failed: &crate::db::RunStep, steps: &[crate::db::RunStep]) -> String {
+    let base = crate::StepId::parse(&failed.node_id).base_id().to_string();
+    let name = crate::telemetry::short_name(&base);
+    let shared = steps.iter().any(|s| {
+        let other = crate::StepId::parse(&s.node_id).base_id().to_string();
+        other != base && crate::telemetry::short_name(&other) == name
+    });
+    let arg = if shared { base.as_str() } else { name };
+    if arg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_.:/-".contains(c))
+    {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', r"'\''"))
+    }
+}
+
+/// The command that prints a failed run's stderr: `barca logs RUN --step STEP --stream stderr`,
+/// then `select` (the `--server URL`, `--local` or `--env NAME` the caller was given, so the
+/// command reads the same history). `None` when no step failed.
+pub fn run_detail_hint(detail: &crate::queries::RunDetail, select: &str) -> Option<String> {
+    let failed = detail.steps.iter().find(|s| s.status == "failed")?;
+    Some(format!(
+        "barca logs {} --step {} --stream stderr{select}",
+        detail.run.run_id,
+        step_arg(failed, &detail.steps)
+    ))
+}
+
+/// `barca history RUN_ID`: the run's own fields, a row per recorded step, and for each failed
+/// step its error, traceback and how its worker ended. JSON: `{run, steps, hint?}`.
+pub fn render_run_detail(
+    detail: &crate::queries::RunDetail,
+    json: bool,
+    select: &str,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    let hint = run_detail_hint(detail, select);
+    if json {
+        let mut out = serde_json::json!({ "run": detail.run, "steps": detail.steps });
+        if let Some(hint) = &hint {
+            out["hint"] = hint.clone().into();
+        }
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    let r = &detail.run;
+    let secs = |s: Option<f64>| s.map_or_else(|| "-".to_string(), |e| format!("{e:.1}s"));
+    let target = r.target.as_deref().unwrap_or("all");
+    let mut head = format!(
+        "run {}  {} {}  {}  {}",
+        r.run_id,
+        r.command,
+        target,
+        r.status,
+        secs(r.elapsed_seconds)
+    );
+    if let Some(n) = r.attempts {
+        let s = if n == 1 { "" } else { "s" };
+        head.push_str(&format!("  {n} attempt{s}"));
+    }
+    line!(rendered, "{head}");
+    let mut when = format!("started {}", crate::report::utc_cell(&r.started_at));
+    if let Some(finished) = &r.finished_at {
+        when.push_str(&format!("  finished {}", crate::report::utc_cell(finished)));
+    }
+    line!(rendered, "{when}");
+    if let Some(trigger) = r.triggered_by {
+        let mut by = format!("triggered by {}", trigger.as_str());
+        if let Some(tick) = &r.scheduled_at {
+            by.push_str(&format!("  tick {}", crate::report::utc_cell(tick)));
+        }
+        if let Some(schedule) = &r.schedule_id {
+            by.push_str(&format!("  schedule {schedule}"));
+        }
+        if let Some(client) = &r.client_run_id {
+            by.push_str(&format!("  client run {client}"));
+        }
+        line!(rendered, "{by}");
+    }
+    if let Some(job) = &r.job
+        && job != target
+        && history_target(r) != target
+    {
+        line!(rendered, "job {job}");
+    }
+    if !r.files.is_empty() {
+        line!(rendered, "files {}", r.files.join(" "));
+    }
+    let failed = detail.steps.iter().filter(|s| s.status == "failed").count();
+    let mut counts = format!("{} executed", r.steps_executed);
+    if failed > 0 {
+        counts.push_str(&format!(" ({failed} failed)"));
+    }
+    counts.push_str(&format!(", {} cached", r.steps_cached));
+    if r.steps_cached > 0 {
+        counts.push_str(" (cached steps are not listed)");
+    }
+    line!(rendered, "steps: {counts}");
+    if !detail.steps.is_empty() {
+        let rows: Vec<[String; 6]> = detail
+            .steps
+            .iter()
+            .map(|s| {
+                let artifact = match (&s.artifact_path, &s.artifact_format) {
+                    (Some(path), format) => {
+                        let mut about: Vec<String> = format.iter().cloned().collect();
+                        if let Some(size) = s.artifact_size_bytes {
+                            about.push(crate::gc::size::human(size.max(0) as u64));
+                        }
+                        if about.is_empty() {
+                            path.clone()
+                        } else {
+                            format!("{path} ({})", about.join(", "))
+                        }
+                    }
+                    (None, _) => "-".to_string(),
+                };
+                [
+                    s.node_id.clone(),
+                    s.status.clone(),
+                    s.attempts
+                        .map_or_else(|| "-".to_string(), |n| n.to_string()),
+                    secs(s.elapsed_seconds),
+                    s.run_hash
+                        .as_deref()
+                        .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
+                    artifact,
+                ]
+            })
+            .collect();
+        let header = ["STEP", "STATUS", "ATTEMPTS", "TIME", "RUN_HASH", "ARTIFACT"];
+        let mut widths = header.map(str::len);
+        for row in &rows {
+            for (w, cell) in widths.iter_mut().zip(row) {
+                *w = (*w).max(cell.chars().count());
+            }
+        }
+        let fmt_row = |cells: [&str; 6]| {
+            let mut out = String::new();
+            for (i, cell) in cells.iter().enumerate() {
+                if i == cells.len() - 1 {
+                    out.push_str(cell);
+                } else {
+                    out.push_str(&format!("{cell:<w$}  ", w = widths[i]));
+                }
+            }
+            out.trim_end().to_string()
+        };
+        line!(rendered, "");
+        line!(rendered, "{}", fmt_row(header));
+        for row in &rows {
+            line!(rendered, "{}", fmt_row(row.each_ref().map(String::as_str)));
+        }
+    }
+    for step in detail.steps.iter().filter(|s| s.status == "failed") {
+        line!(rendered, "");
+        let attempts = match step.attempts {
+            Some(n) if n > 1 => format!(" after {n} attempts"),
+            _ => String::new(),
+        };
+        let message = step
+            .error_message
+            .as_deref()
+            .or(step.error.as_deref())
+            .unwrap_or_default();
+        let failure = crate::db::RunFailure::new(
+            step.node_id.clone(),
+            step.error_type.as_deref().unwrap_or_default(),
+            message,
+        );
+        line!(
+            rendered,
+            "{} failed{attempts}: {}",
+            step.node_id,
+            failure.error
+        );
+        if let Some(traceback) = step
+            .error_traceback
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+        {
+            line!(rendered, "  Traceback (most recent call last):");
+            for frame in traceback.lines() {
+                line!(rendered, "  {frame}");
+            }
+            let error_type = step.error_type.as_deref().unwrap_or_default();
+            let mut last = message.lines();
+            match last.next() {
+                Some(first) if !error_type.is_empty() => {
+                    line!(rendered, "  {error_type}: {first}")
+                }
+                Some(first) => line!(rendered, "  {first}"),
+                None => line!(rendered, "  {error_type}"),
+            }
+            for more in last {
+                line!(rendered, "  {more}");
+            }
+        } else {
+            for more in message.lines().skip(1) {
+                line!(rendered, "  {more}");
+            }
+        }
+        if let Some(exit) = &step.worker_exit {
+            line!(rendered, "  worker exit: {exit}");
+        }
+    }
+    if let Some(hint) = hint {
+        note!(rendered, "hint: {hint}");
     }
     rendered
 }
@@ -1137,6 +1382,7 @@ mod history_target_tests {
             scheduled_at: None,
             schedule_id: None,
             client_run_id: None,
+            failure: None,
         }
     }
 
@@ -1157,5 +1403,173 @@ mod history_target_tests {
         let long = history_target(&run(None, Some("p.py:country_report,p.py:weekly_summary")));
         assert_eq!(long, "country_report,weekly_s…");
         assert_eq!(long.chars().count(), 24);
+    }
+}
+
+#[cfg(test)]
+mod run_detail_tests {
+    use super::*;
+    use crate::db::{RunFailure, RunStep};
+
+    fn failed(node: &str) -> RunStep {
+        RunStep {
+            node_id: node.into(),
+            status: "failed".into(),
+            attempts: Some(3),
+            error_type: Some("ZeroDivisionError".into()),
+            error_message: Some("division by zero".into()),
+            error_traceback: Some("  File \"p.py\", line 3, in clean\n    1 / 0".into()),
+            ..Default::default()
+        }
+    }
+
+    fn detail(steps: Vec<RunStep>) -> crate::queries::RunDetail {
+        let mut run = super::history_target_tests_run();
+        run.status = "failed".into();
+        run.failure = Some(RunFailure::new(
+            "p.py:clean".into(),
+            "WorkerError",
+            "ZeroDivisionError: division by zero\n  File \"p.py\", line 3, in clean",
+        ));
+        crate::queries::RunDetail { run, steps }
+    }
+
+    fn text(out: &RenderedOutput) -> (String, String) {
+        let (mut stdout, mut stderr) = (String::new(), String::new());
+        for chunk in &out.chunks {
+            match chunk {
+                OutputChunk::Stdout(s) => stdout.push_str(s),
+                OutputChunk::Stderr(s) => stderr.push_str(s),
+            }
+        }
+        (stdout, stderr)
+    }
+
+    #[test]
+    fn a_failure_is_its_type_and_the_first_line_of_its_message() {
+        let d = detail(vec![]);
+        assert_eq!(
+            d.run.failure.as_ref().unwrap().error,
+            "ZeroDivisionError: division by zero"
+        );
+        let long = RunFailure::new("p.py:clean".into(), "ValueError", &"x".repeat(200));
+        assert_eq!(failure_cell(&long).chars().count(), FAILURE_WIDTH);
+        assert!(failure_cell(&long).starts_with("clean: ValueError: xxx"));
+        let keyed = RunFailure::new("p.py:weekly[week=w1]".into(), "KeyError", "'w1'");
+        assert_eq!(failure_cell(&keyed), "weekly[week=w1]: KeyError: 'w1'");
+    }
+
+    #[test]
+    fn the_hint_names_the_failed_step_and_the_same_history() {
+        let d = detail(vec![failed("p.py:clean")]);
+        assert_eq!(
+            run_detail_hint(&d, " --server http://h:1").as_deref(),
+            Some("barca logs r --step clean --stream stderr --server http://h:1")
+        );
+        // Two definitions share the name: the node id. A partition key needs no quoting, the
+        // base name selects every key.
+        let d = detail(vec![
+            failed("a.py:clean[k=1]"),
+            RunStep {
+                node_id: "b.py:clean".into(),
+                status: "success".into(),
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            run_detail_hint(&d, "").as_deref(),
+            Some("barca logs r --step a.py:clean --stream stderr")
+        );
+        let ok = detail(vec![RunStep {
+            node_id: "p.py:load".into(),
+            status: "success".into(),
+            ..Default::default()
+        }]);
+        assert_eq!(run_detail_hint(&ok, ""), None);
+    }
+
+    #[test]
+    fn the_human_form_shows_the_traceback_and_how_the_worker_ended() {
+        let mut killed = failed("p.py:big");
+        killed.error_type = Some("WorkerError".into());
+        killed.error_message =
+            Some("worker for p.py:big exited with SIGKILL (possibly the OOM killer)".into());
+        killed.error_traceback = None;
+        killed.worker_exit = Some("SIGKILL (possibly the OOM killer)".into());
+        let d = detail(vec![failed("p.py:clean"), killed]);
+        let (stdout, stderr) = text(&render_run_detail(&d, false, ""));
+        assert!(
+            stdout.starts_with("run r  get all  failed  -\n"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains("p.py:clean failed after 3 attempts: ZeroDivisionError: division by zero\n  Traceback (most recent call last):\n    File \"p.py\", line 3, in clean\n      1 / 0\n  ZeroDivisionError: division by zero\n"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains("  worker exit: SIGKILL (possibly the OOM killer)\n"),
+            "{stdout}"
+        );
+        assert_eq!(stderr, "hint: barca logs r --step clean --stream stderr\n");
+        let (json, _) = text(&render_run_detail(&d, true, ""));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["hint"], "barca logs r --step clean --stream stderr");
+        assert_eq!(
+            v["steps"][1]["worker_exit"],
+            "SIGKILL (possibly the OOM killer)"
+        );
+        assert_eq!(v["run"]["failure"]["node"], "p.py:clean");
+    }
+
+    #[test]
+    fn a_dead_worker_is_read_from_its_recorded_error() {
+        use crate::db::worker_exit;
+        let w = Some("WorkerError");
+        assert_eq!(
+            worker_exit(
+                w,
+                Some("worker for p.py:a exited with SIGKILL (possibly the OOM killer)")
+            ),
+            Some("SIGKILL (possibly the OOM killer)".into())
+        );
+        assert_eq!(
+            worker_exit(
+                w,
+                Some(
+                    "worker for p.py:a exited with SIGSEGV while it waited for its parallel() branches"
+                )
+            ),
+            Some("SIGSEGV".into())
+        );
+        assert_eq!(
+            worker_exit(w, Some("worker disconnected")),
+            Some("disconnected".into())
+        );
+        assert_eq!(worker_exit(w, Some("ValueError: boom")), None);
+        assert_eq!(worker_exit(Some("ValueError"), Some("exited with x")), None);
+    }
+}
+
+#[cfg(test)]
+fn history_target_tests_run() -> crate::db::RunRecord {
+    crate::db::RunRecord {
+        run_id: "r".into(),
+        command: "get".into(),
+        files: vec![],
+        target: None,
+        job: Some("all".into()),
+        status: "success".into(),
+        steps_total: None,
+        steps_executed: 0,
+        steps_cached: 0,
+        attempts: None,
+        started_at: String::new(),
+        finished_at: None,
+        elapsed_seconds: None,
+        triggered_by: None,
+        scheduled_at: None,
+        schedule_id: None,
+        client_run_id: None,
+        failure: None,
     }
 }

@@ -45,7 +45,8 @@ barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca doctor [file.py|dir/ ...] [--json]      Diagnose project prerequisites without running steps
 barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]  A run's recorded step stdout and stderr (default: the most recent run)
-barca history [-l N | --all] [--json|--pretty]  Show recent runs
+barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
+                                               Show recent runs, or one run's steps and errors
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
 barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS]
@@ -366,7 +367,7 @@ RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME 
 
 Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `job`, `status`,
 `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`,
-`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`. `triggered_by` says what
+`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`. `triggered_by` says what
 started the run: `manual` (a command typed on a machine), `api` (an HTTP request to
 `barca serve`), `schedule` (a cron tick, with the tick in `scheduled_at`, RFC 3339 in UTC, and
 the scheduled node in `schedule_id`) or `client`; it is `null` for runs recorded before barca
@@ -393,6 +394,51 @@ Mid-run database writes commit completed-step rows and their progress count toge
 Failed batches are retained and retried without waiting for another step; replay does
 not count a completed step twice. Progress can be absent while the database cannot commit.
 The final write still records completed results not saved during execution.
+
+### Finding and reading a failed run
+
+Filters combine with AND, and `--limit`, `total` and `truncated` count the runs they keep:
+`--status` (comma-separated: `success`, `failed`, `cancelled`, `error`, `running`,
+`interrupted`), `--target NAME` (the run's target or job is that node; runs of every node are
+left out), `--triggered-by` (comma-separated: `manual`, `api`, `schedule`, `client`) and
+`--since` (`30m`, `24h`, `7d`, `2w`, an RFC 3339 time or a UTC date). A failed run's row ends
+with its first failed step and the first line of its error; JSON runs carry it as
+`failure: {node, error}` (`null` otherwise).
+
+```bash
+barca history --status failed --since 24h
+barca history --target clean --triggered-by schedule --json
+barca history 836fdca186c8          # one run in detail
+barca history 836fdca186c8 --json   # {run, steps: [...], hint?}
+```
+
+`barca history RUN_ID` prints the run's fields, the steps it recorded (status, attempts, time,
+run hash, artifact path, format and size), and for each failed step its error, traceback and,
+when the worker died, how it ended (`worker exit: SIGKILL (possibly the OOM killer)`). A hint on
+stderr names `barca logs RUN_ID --step STEP --stream stderr`. Cached steps are counted in
+`steps_cached`, not listed: a run records no row for them. With a server configured, both
+forms answer from the server; a run only this machine has is an error whose remediation is
+`barca history RUN_ID --local`.
+
+```
+$ barca history 836fdca186c8
+run 836fdca186c8  get clean  failed  0.1s  1 attempt
+started 2026-10-22 22:57:27.000 UTC  finished 2026-10-22 22:57:27.000 UTC
+triggered by api
+files pipeline.py
+steps: 1 executed (1 failed), 1 cached (cached steps are not listed)
+
+STEP               STATUS  ATTEMPTS  TIME  RUN_HASH      ARTIFACT
+pipeline.py:clean  failed  1         -     d64e1b00647e  -
+
+pipeline.py:clean failed: ZeroDivisionError: division by zero
+  Traceback (most recent call last):
+    File "/srv/pipelines/pipeline.py", line 11, in clean
+      return [{"id": o["id"], "per_unit": 10 / o["qty"]} for o in orders]
+                                          ~~~^~~~~~~~~~
+  ZeroDivisionError: division by zero
+hint: barca logs 836fdca186c8 --step clean --stream stderr
+```
 
 A run's `status` is `running`, `success`, `failed`, `cancelled` or `interrupted`. A run records
 each step as it finishes, so a `running` run already counts them in `steps_executed`, and

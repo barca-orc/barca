@@ -9,7 +9,7 @@ Commands:
   plan     Parse source files and emit the execution plan as JSON
   doctor   Diagnose project prerequisites without running pipeline steps
   logs     Read a run's recorded step output (stdout and stderr), without progress messages
-  history  Show recent run history
+  history  Show recent run history, or one run's steps and errors
   gc       Evict cached results to keep .barca/ under its size limit
   stats    Show execution statistics for an asset
   serve    Run a long-running HTTP server exposing the orchestrator as a JSON API

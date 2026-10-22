@@ -47,8 +47,28 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use",
     ),
     (
+        "history <RUN_ID>",
+        "new in 0.29.3: the run detail's step keys and human layout may change after field use",
+    ),
+    (
         "history --reconcile",
         "explicit operator recovery for stopped runs whose owner cannot be verified",
+    ),
+    (
+        "history --status",
+        "new in 0.29.3: the history filters' values and matching may change after field use",
+    ),
+    (
+        "history --target",
+        "new in 0.29.3: the history filters' values and matching may change after field use",
+    ),
+    (
+        "history --triggered-by",
+        "new in 0.29.3: the history filters' values and matching may change after field use",
+    ),
+    (
+        "history --since",
+        "new in 0.29.3: the history filters' values and matching may change after field use",
     ),
     (
         "list --groups",
