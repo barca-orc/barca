@@ -196,14 +196,12 @@ pub fn not_in_ledger(node: &mut NodeStatus, pending: &[PendingPost]) -> bool {
     if node.cache.state == "cached" || node.kind != "asset" {
         return false;
     }
-    let mine = pending.iter().find(|p| {
-        let base = p.node_id.split('[').next().unwrap_or(&p.node_id);
-        base == node.id
-            && (node.partitioned
-                || node.cache.run_hash.is_none()
-                || node.cache.run_hash.as_deref() == Some(p.run_hash.as_str()))
-    });
-    let Some(p) = mine else {
+    let Some(p) = pending_for(
+        &node.id,
+        node.partitioned,
+        node.cache.run_hash.as_deref(),
+        pending,
+    ) else {
         return false;
     };
     node.cache.state = "unsynced".to_string();
@@ -215,6 +213,21 @@ pub fn not_in_ledger(node: &mut NodeStatus, pending: &[PendingPost]) -> bool {
     );
     node.local = Some(true);
     true
+}
+
+/// The pending post of `node_id` that [`not_in_ledger`] counts: one of its steps (any key of a
+/// partitioned node), at the run hash the server's code gives it now when that is known.
+pub fn pending_for<'a>(
+    node_id: &str,
+    partitioned: bool,
+    run_hash: Option<&str>,
+    pending: &'a [PendingPost],
+) -> Option<&'a PendingPost> {
+    pending.iter().find(|p| {
+        let base = p.node_id.split('[').next().unwrap_or(&p.node_id);
+        base == node_id
+            && (partitioned || run_hash.is_none() || run_hash == Some(p.run_hash.as_str()))
+    })
 }
 
 /// Gather status for every node in scope (the targets' upstream cones, or the whole DAG when
@@ -265,7 +278,7 @@ pub async fn status_from_dag(
 }
 
 /// Preserve the given graph and move the prediction's private membership to SQL.
-async fn status_from_dag_with_membership(
+pub(crate) async fn status_from_dag_with_membership(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     dag: &crate::dag::Dag,

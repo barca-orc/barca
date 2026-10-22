@@ -93,6 +93,7 @@ barca status                 # what the team has, and each result's shape
 barca history                # everyone's runs
 barca history --status failed --since 24h   # what failed today, each with its step and error
 barca history 836fdca186c8   # one run: its steps, the error and traceback, and the logs command
+barca sql "select * from revenue"   # query the team's results here (the server runs no SQL)
 barca get revenue --server   # run it on the server
 barca get revenue --local    # skip the server once
 ```

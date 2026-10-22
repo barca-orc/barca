@@ -19,6 +19,8 @@ pub fn router(state: AppState) -> Router {
         .route("/nodes", get(inspect::nodes))
         .route("/history", get(inspect::history))
         .route("/stats/{name}", get(inspect::stats))
+        .route("/sql/views", get(inspect::sql_views))
+        .route("/materializations", get(inspect::materializations))
         .route("/assets", get(handlers::assets))
         .route("/assets/{name}", get(handlers::asset_detail))
         .route("/assets/{name}/schema", get(handlers::asset_schema))

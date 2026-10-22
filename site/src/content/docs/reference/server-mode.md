@@ -19,11 +19,11 @@ https://barca.sh/team-server/.
 
 With a server configured, a command does one of three things:
 
-| You type | `get` / `run` | `status` / `history` / `stats` |
-|---|---|---|
-| nothing extra | run on this machine, against the server's ledger | answered by the server |
-| `--server [<url>]` | run on the server, printed here | answered by the server |
-| `--local` | run on this machine against its own ledger; nothing is read from or sent to the server | answered from this machine's records |
+| You type | `get` / `run` | `status` / `history` / `stats` | `sql` |
+|---|---|---|---|
+| nothing extra | run on this machine, against the server's ledger | answered by the server | views from the server's ledger, query run here |
+| `--server [<url>]` | run on the server, printed here | answered by the server | views from that server, query run here |
+| `--local` | run on this machine against its own ledger; nothing is read from or sent to the server | answered from this machine's records | this machine's results |
 
 ```bash
 barca get daily_report                        # here; cache hits come from the server's ledger
@@ -35,6 +35,8 @@ barca run deploy --server --agent             # a task on the server, with the a
 barca status                                  # the server's ledger, and what is here
 barca history -l 20                           # the server's runs
 barca stats daily_report                      # timings from the server
+barca sql "select * from daily_report"        # the team's result, queried here
+barca sql "select * from barca.runs" --local  # this machine's own runs
 barca list --server --json                    # the deployed nodes
 barca get daily_report --local                # this machine only; the server is not touched
 ```
@@ -69,10 +71,11 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
   with `http://` or `https://`.
 - `--local` ignores the configured server for one command; `--local` with `--server` is a usage
   error.
-- `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history`, `stats` and
-  `logs`. `serve`, `plan`, `sql`, `doctor`, `docs` and `version` always run on this machine;
+- `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history`, `stats`, `logs`
+  and `sql`. `serve`, `plan`, `doctor`, `docs` and `version` always run on this machine;
   `--server` or `--local` on them is a usage error. `barca list` without `--server` reads this
-  machine's files, and `barca sql` reads this machine's database and artifacts.
+  machine's files. `barca sql` always runs its query on this machine: a server only says which
+  results its views read ([`barca docs sql`](/reference/sql/), "With a server"); the server never runs SQL.
 
 ## A local run against the server's ledger
 
@@ -159,7 +162,7 @@ once, and marks the step `bytes_changed: true` in its `--json` output. Artifacts
 by run hash, so the second machine's upload has replaced the object in the store; a later fetch
 of that result notes the mismatch and uses the store's copy.
 
-## status, history, stats and logs with a server
+## status, history, stats, logs and sql with a server
 
 With a server configured, `barca status`, `barca history`, `barca stats` and `barca logs` answer
 from the server, as `--server` does, after printing `[barca] server <url> (<source>)`. The server
@@ -180,13 +183,19 @@ tracebacks. A run only this machine has (a failed run against the ledger is neve
 
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`
 gets `local`: `true` when this machine has a copy of the result the server would serve (its
-mirror of the store object exists under this machine's artifact directory), else `false`. That
-is what `barca sql` can query here. A node the server does not have a result for, whose result
+mirror of the store object exists under this machine's artifact directory), else `false`.
+`barca sql` queries the server's result either way, read from the store. A node the server does
+not have a result for, whose result
 this machine computed and could not post yet, is `unsynced` with `cache.reason:
 "not_in_ledger"` and `local: true`; the table prints `unsynced  not in ledger`, and
 `summary.unsynced` counts it. A result is matched by node and run hash, so one computed here
 with code the server does not run keeps the server's state. A partitioned node has no single
 artifact, so its `local` is `false`.
+
+`barca sql` asks the server which result each view reads (`GET /sql/views`) and reads barca's
+tables (`barca.runs`, `barca.materializations`, `barca.nodes`) from its records, then runs the
+query here over the store; the server never runs SQL ([`barca docs sql`](/reference/sql/), "With a server"). An
+unsynced result is not mixed into a view: the error or note says so and names `--local`.
 
 `barca history --reconcile` writes this machine's history and runs here. Add `--local` to see
 this machine's own runs, statuses and timings.
@@ -291,6 +300,8 @@ proxy's URL, prefix included; `https://` works for every request, ledger ones in
 | Route | Body | Answer |
 |---|---|---|
 | `POST /ledger/lookup` | `{"hashes": [{"node_id", "run_hash"}]}` | `{"results": [{"node_id", "run_hash", "exists", "path", "format", "size_bytes", "digest"}]}`, one per pair, in order; only `exists: false` for a miss |
+| `GET /sql/views?files=a.py` | - | `{"views": [{"name", "node", "kind", "partitioned", "format", "files": [{"path", "partition", "content_hash"}], "stale", "run_hash"}], "missing": [{"name", "node", "command", ...}], "duplicates": [{"name", "ids"}]}`: which result each `barca sql` view reads |
+| `GET /materializations?limit=N&offset=M` | - | `{"materializations": [...], "total", "limit", "offset"}`: step results, newest first (`barca.materializations`); `limit` defaults to 1000, at most 10000 |
 | `POST /ledger/runs` | `{"run": {...}, "steps": [...]}`: the run row and its step rows | `201 {"run_id", "bytes_changed"}`, or `409` with the error envelope naming the node and nothing recorded; `400` on a server with no store, `403` on a `--read-only` one, `503` while it shuts down |
 
 A repeated post of a run the server already recorded (same `run.run_id`) answers `201` with the

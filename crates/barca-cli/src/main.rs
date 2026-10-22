@@ -110,8 +110,12 @@ fn main() {
     // `--server`: the command runs on a barca server and prints here (client.rs). Nothing
     // below (the project root, discovery, Python) is needed on this machine.
     let server = server_flags(&cli).map_or(Ok(None), client::choose);
+    // `barca sql --server`: the server resolves the views and the query runs here, in the
+    // project (below).
+    let mut sql_server = None;
     match server {
         Err(e) => e.emit(json),
+        Ok(Some(server)) if matches!(cli, Cli::Sql { .. }) => sql_server = Some(server),
         Ok(Some(server)) => {
             let rt = runtime(json);
             if let Err(e) = rt.block_on(run_on_server(cli, &server, &ctx)) {
@@ -122,6 +126,9 @@ fn main() {
         }
         Ok(None) => {}
     }
+    // Files typed after a `barca sql` query; without any, a server resolves every deployed file
+    // (not the files discovery finds here).
+    let sql_files_given = matches!(&cli, Cli::Sql { files, .. } if !files.is_empty());
     // Run from the project root (the nearest barca.toml at or above the cwd), so `.barca/`,
     // node ids and relative paths inside steps are the same wherever barca is invoked.
     if let Err(e) = enter_project_root(&mut cli) {
@@ -137,6 +144,10 @@ fn main() {
     let mut ledger = None;
     match (configured, &cli) {
         (Some(server), Cli::Get { .. } | Cli::Run { .. }) => ledger = Some(server.into_ledger()),
+        (Some(server), Cli::Sql { .. }) => {
+            server.announce();
+            sql_server = Some(server);
+        }
         (Some(server), Cli::Status { .. } | Cli::Stats { .. } | Cli::Logs { .. })
         | (
             Some(server),
@@ -153,6 +164,15 @@ fn main() {
             finish(json);
         }
         _ => {}
+    }
+
+    if let Some(server) = sql_server {
+        let rt = runtime(json);
+        if let Err(e) = rt.block_on(sql_on_server(cli, &server, sql_files_given)) {
+            e.emit(json);
+        }
+        drop(rt);
+        finish(json);
     }
 
     let rt = runtime(json);
@@ -187,7 +207,8 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
         | Cli::List { server, .. }
         | Cli::History { server, .. }
         | Cli::Stats { server, .. }
-        | Cli::Logs { server, .. } => Some(server),
+        | Cli::Logs { server, .. }
+        | Cli::Sql { server, .. } => Some(server),
         _ => None,
     }
 }
@@ -454,6 +475,42 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
     }
 }
 
+/// `barca sql` with a server (configured, or `--server`): run in the project root, so the
+/// query, the store and `.barca/sql-cache/` are this machine's.
+#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
+async fn sql_on_server(
+    cli: Cli,
+    server: &client::Server,
+    files_given: bool,
+) -> Result<(), CliError> {
+    let Cli::Sql {
+        query,
+        mut files,
+        format,
+        limit,
+        all,
+        env,
+        ..
+    } = cli
+    else {
+        unreachable!("only barca sql reaches here")
+    };
+    if !files_given {
+        files.clear();
+    }
+    server_files("sql", &files, None)?;
+    let limit = (!all).then_some(limit);
+    client::sql(
+        server,
+        &query,
+        &files,
+        limit,
+        is_json(format),
+        env.as_deref(),
+    )
+    .await
+}
+
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 async fn run_cli(
     cli: Cli,
@@ -703,6 +760,7 @@ async fn run_cli(
             limit,
             all,
             env,
+            ..
         } => {
             let limit = (!all).then_some(limit);
             sql_cmd(

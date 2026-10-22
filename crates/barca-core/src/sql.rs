@@ -8,6 +8,11 @@
 //! in `python -m barca._sql`, an in-memory DuckDB that opens artifact files only: user code is
 //! never imported and nothing is recorded. An artifact in remote storage is fetched, when the
 //! query names its view, into [`CACHE_DIR`] and queried from there.
+//!
+//! Two steps: [`Catalog`] resolves which result each view reads (on this machine from its
+//! metadata DB, or on a server from its ledger: `GET /sql/views` serves [`catalog_from_dag`]),
+//! and [`run`] queries it here. barca's own records are tables in the `barca` schema
+//! ([`tables`]): `barca.runs`, `barca.materializations` and `barca.nodes`.
 
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
@@ -16,22 +21,86 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+pub mod tables;
+
 /// Local copies of remote artifacts, laid out as `<scheme>/<bucket>/<path>`. Every environment
 /// shares it: the object's full URI is the key.
 pub const CACHE_DIR: &str = ".barca/sql-cache";
 
-#[derive(Debug, Clone, Serialize)]
-struct ViewFile {
-    path: String,
-    partition: Option<String>,
+/// One file of a view: a stored result, and for a partitioned asset its key.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ViewFile {
+    /// Where the result is stored (a store path with a remote store).
+    pub path: String,
+    /// The partition key (`week=w1`); `null` for an unpartitioned node.
+    pub partition: Option<String>,
+    /// SHA-256 of the result's bytes as recorded, when it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct View {
-    name: String,
-    node: String,
-    format: String,
-    files: Vec<ViewFile>,
+/// A queryable view: a node and the results it reads.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct View {
+    /// The view's name in SQL: the node's name, or its id when two nodes share the name.
+    pub name: String,
+    /// Node id.
+    pub node: String,
+    /// `asset`, `task` or `sensor`.
+    pub kind: String,
+    pub partitioned: bool,
+    /// `parquet`, `csv`, `json` or `pickle`.
+    pub format: String,
+    pub files: Vec<ViewFile>,
+    /// The code or inputs changed since the result was computed: the view shows the last one.
+    pub stale: bool,
+    /// The run hash the node's code and inputs give now, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_hash: Option<String>,
+}
+
+/// A node with no queryable result: no view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Missing {
+    pub name: String,
+    pub node: String,
+    pub kind: String,
+    pub partitioned: bool,
+    /// The command that produces it (`barca get revenue`).
+    pub command: String,
+    /// A partitioned node whose current keys are not known until a source materializes: why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys_unknown: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_hash: Option<String>,
+}
+
+/// Several nodes with one name: their views are named by id.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Duplicate {
+    pub name: String,
+    pub ids: Vec<String>,
+}
+
+/// Which result every view reads: `GET /sql/views`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Catalog {
+    pub views: Vec<View>,
+    pub missing: Vec<Missing>,
+    pub duplicates: Vec<Duplicate>,
+}
+
+/// Where the catalog came from, for the notes and errors.
+#[derive(Debug, Clone)]
+pub enum Origin {
+    /// This machine's metadata DB.
+    Local,
+    /// A server's ledger. `pending` holds this machine's results whose post to it is pending
+    /// (with a configured server; empty for `--server`).
+    Server {
+        url: String,
+        pending: Vec<status::PendingPost>,
+    },
 }
 
 /// The query's result: column names in order, one object per row, and how many rows the query
@@ -102,7 +171,7 @@ fn format_of(path: &str) -> String {
 
 /// Whether `query` names the view `name`: the name as a whole word, in any case (the same rule
 /// `barca._sql` uses to decide which remote views to fetch).
-fn names(query: &str, name: &str) -> bool {
+pub fn names(query: &str, name: &str) -> bool {
     let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let (query, name) = (query.to_lowercase(), name.to_lowercase());
     query.match_indices(&name).any(|(at, _)| {
@@ -112,7 +181,8 @@ fn names(query: &str, name: &str) -> bool {
     })
 }
 
-/// Run `query` over the views of every node in the project (or in `file_args`).
+/// Run `query` on this machine over the views of every node in the project (or in
+/// `file_args`) and barca's tables, from this machine's metadata DB.
 pub async fn sql(
     cfg: &ResolvedConfig,
     query: &str,
@@ -122,32 +192,79 @@ pub async fn sql(
 ) -> Result<SqlResult, BarcaError> {
     let (st, membership) =
         status::status_with_membership(cfg, &[], file_args, python, 0, false).await?;
+    let catalog = resolve(cfg, &st, &membership, |_| true).await?;
+    let tables = tables::local(cfg, query, &st.nodes).await?;
+    run(
+        cfg,
+        query,
+        limit,
+        catalog,
+        tables,
+        Vec::new(),
+        python,
+        &Origin::Local,
+    )
+    .await
+}
 
+/// The views of a loaded DAG (`barca serve`'s), for the nodes `keep` accepts (by node id).
+pub async fn catalog_from_dag(
+    cfg: &ResolvedConfig,
+    dag: &crate::dag::Dag,
+    python: &std::path::Path,
+    keep: impl Fn(&str) -> bool,
+) -> Result<Catalog, BarcaError> {
+    let (st, membership) =
+        status::status_from_dag_with_membership(cfg, &[], dag, python, 0, false).await?;
+    resolve(cfg, &st, &membership, keep).await
+}
+
+/// Which result each node's view reads.
+async fn resolve(
+    cfg: &ResolvedConfig,
+    st: &status::StatusResult,
+    membership: &crate::cache::ExpandedMembership,
+    keep: impl Fn(&str) -> bool,
+) -> Result<Catalog, BarcaError> {
+    let nodes: Vec<&status::NodeStatus> = st.nodes.iter().filter(|n| keep(&n.id)).collect();
     let mut by_name: HashMap<&str, Vec<&str>> = HashMap::new();
-    for n in &st.nodes {
+    for n in &nodes {
         by_name
             .entry(n.name.as_str())
             .or_default()
             .push(n.id.as_str());
     }
 
-    let mut views: Vec<View> = Vec::new();
-    // View name -> (command that would produce it, node name) for nodes with no result yet.
-    let mut missing: HashMap<String, String> = HashMap::new();
-    let mut unknown_membership: HashMap<String, String> = HashMap::new();
-    let mut notes: Vec<String> = Vec::new();
-    let mut stale: Vec<String> = Vec::new();
-    for n in &st.nodes {
+    let mut catalog = Catalog::default();
+    for n in nodes {
         let view_name = if by_name[n.name.as_str()].len() > 1 {
             n.id.clone()
         } else {
             n.name.clone()
         };
         let get = if n.kind == "task" { "run" } else { "get" };
+        let missing = |keys_unknown: Option<String>| Missing {
+            name: view_name.clone(),
+            node: n.id.clone(),
+            kind: n.kind.clone(),
+            partitioned: n.partitioned,
+            command: format!("barca {get} {}", n.name),
+            keys_unknown,
+            run_hash: n.cache.run_hash.clone(),
+        };
+        let view = |format: String, files: Vec<ViewFile>, stale: bool| View {
+            name: view_name.clone(),
+            node: n.id.clone(),
+            kind: n.kind.clone(),
+            partitioned: n.partitioned,
+            format,
+            files,
+            stale,
+            run_hash: n.cache.run_hash.clone(),
+        };
         if n.partitioned {
             let Some(current) = membership.get(&n.id) else {
-                unknown_membership.insert(view_name.clone(), n.cache.detail.clone());
-                missing.insert(view_name, format!("barca {get} {}", n.name));
+                catalog.missing.push(missing(Some(n.cache.detail.clone())));
                 continue;
             };
             let mut files = if Path::new(&cfg.db_path).exists() {
@@ -155,34 +272,39 @@ pub async fn sql(
             } else {
                 Vec::new()
             };
-            files.retain(|(id, _, _)| current.contains(id));
+            files.retain(|a| current.contains(&a.node_id));
             if files.is_empty() {
-                missing.insert(view_name, format!("barca {get} {}", n.name));
+                catalog.missing.push(missing(None));
                 continue;
             }
-            if n.cache.state != "cached" {
-                stale.push(view_name.clone());
-            }
-            views.push(View {
-                name: view_name,
-                node: n.id.clone(),
-                format: files[0].2.clone(),
-                files: files
-                    .into_iter()
-                    .map(|(node_id, path, _)| ViewFile {
-                        path,
-                        partition: node_id
-                            .strip_prefix(&n.id)
-                            .and_then(|suffix| suffix.strip_prefix('['))
-                            .and_then(|suffix| suffix.strip_suffix(']'))
-                            .map(str::to_string),
-                    })
-                    .collect(),
-            });
+            let format = files[0].format.clone();
+            let files = files
+                .into_iter()
+                .map(|a| ViewFile {
+                    partition: a
+                        .node_id
+                        .strip_prefix(&n.id)
+                        .and_then(|suffix| suffix.strip_prefix('['))
+                        .and_then(|suffix| suffix.strip_suffix(']'))
+                        .map(str::to_string),
+                    path: a.path,
+                    content_hash: a.content_hash,
+                })
+                .collect();
+            catalog
+                .views
+                .push(view(format, files, n.cache.state != "cached"));
             continue;
         }
-        let (path, format) = match (&n.cache.artifact, &n.last_materialization) {
-            (Some(path), _) if n.cache.state == "cached" => (path.clone(), format_of(path)),
+        let last = n.last_materialization.as_ref();
+        let (path, format, stale) = match (&n.cache.artifact, last) {
+            (Some(path), _) if n.cache.state == "cached" => {
+                let format = last
+                    .filter(|m| m.artifact.as_deref() == Some(path.as_str()))
+                    .and_then(|m| m.format.clone())
+                    .unwrap_or_else(|| format_of(path));
+                (path.clone(), format, false)
+            }
             (_, Some(m))
                 if m.status == "success"
                     && m.artifact
@@ -190,47 +312,92 @@ pub async fn sql(
                         .is_some_and(|path| cfg.allows_artifact(path)) =>
             {
                 let path = m.artifact.clone().unwrap_or_default();
-                if n.cache.state == "stale" {
-                    stale.push(view_name.clone());
-                }
                 let format = m.format.clone().unwrap_or_else(|| format_of(&path));
-                (path, format)
+                (path, format, n.cache.state == "stale")
             }
             _ => {
-                missing.insert(view_name, format!("barca {get} {}", n.name));
+                catalog.missing.push(missing(None));
                 continue;
             }
         };
-        views.push(View {
-            name: view_name,
-            node: n.id.clone(),
+        let content_hash = last
+            .filter(|m| m.artifact.as_deref() == Some(path.as_str()))
+            .and_then(|m| m.content_hash.clone());
+        catalog.views.push(view(
             format,
-            files: vec![ViewFile {
+            vec![ViewFile {
                 path,
                 partition: None,
+                content_hash,
             }],
-        });
+            stale,
+        ));
     }
 
-    let mut dup: Vec<&str> = by_name
+    let mut dup: Vec<(&str, &Vec<&str>)> = by_name
         .iter()
         .filter(|(_, ids)| ids.len() > 1)
-        .map(|(name, _)| *name)
+        .map(|(name, ids)| (*name, ids))
         .collect();
     dup.sort();
-    for name in dup {
-        let ids: Vec<String> = by_name[name].iter().map(|id| format!("\"{id}\"")).collect();
+    catalog.duplicates = dup
+        .into_iter()
+        .map(|(name, ids)| Duplicate {
+            name: name.to_string(),
+            ids: ids.iter().map(|id| id.to_string()).collect(),
+        })
+        .collect();
+    Ok(catalog)
+}
+
+/// Run `query` here over `catalog`'s views and barca's `tables`. `notes` are printed before
+/// the query's own.
+#[allow(clippy::too_many_arguments)]
+pub async fn run(
+    cfg: &ResolvedConfig,
+    query: &str,
+    limit: Option<usize>,
+    catalog: Catalog,
+    tables: Vec<tables::Table>,
+    mut notes: Vec<String>,
+    python: &std::path::Path,
+    origin: &Origin,
+) -> Result<SqlResult, BarcaError> {
+    let Catalog {
+        views,
+        missing,
+        duplicates,
+    } = catalog;
+    let pending = |node: &str, partitioned: bool, run_hash: Option<&str>| match origin {
+        Origin::Server { pending, .. } => {
+            status::pending_for(node, partitioned, run_hash, pending).is_some()
+        }
+        Origin::Local => false,
+    };
+    for d in &duplicates {
+        let ids: Vec<String> = d.ids.iter().map(|id| format!("\"{id}\"")).collect();
         notes.push(format!(
-            "several nodes are named '{name}': their views are named by id: {}",
+            "several nodes are named '{}': their views are named by id: {}",
+            d.name,
             ids.join(", ")
         ));
     }
-    let lower = query.to_lowercase();
-    for name in &stale {
-        if lower.contains(&name.to_lowercase()) {
+    for v in &views {
+        if !names(query, &v.name) {
+            continue;
+        }
+        let name = &v.name;
+        if v.stale {
             notes.push(format!(
                 "'{name}' is stale (its code or inputs changed since it ran): the view shows its \
                  last result. Run `barca get {name}` to refresh it."
+            ));
+        }
+        if v.kind == "asset" && pending(&v.node, v.partitioned, v.run_hash.as_deref()) {
+            notes.push(format!(
+                "'{name}' has a result computed here that the server has not recorded yet \
+                 (unsynced): the view shows the server's. `barca sql --local` queries this \
+                 machine's; the next get or run against the server posts it."
             ));
         }
     }
@@ -240,6 +407,7 @@ pub async fn sql(
         "limit": limit,
         "cache_dir": CACHE_DIR,
         "views": views,
+        "tables": tables,
     });
     let out = run_helper(python, cfg, &request).await?;
     if out.fetched.files > 0 {
@@ -249,6 +417,13 @@ pub async fn sql(
             if n == 1 { "" } else { "s" },
             crate::gc::size::human(out.fetched.bytes)
         ));
+    }
+    for t in &tables {
+        if let Some(note) = &t.note
+            && names(query, t.name)
+        {
+            notes.push(note.clone());
+        }
     }
     let Some(err) = out.error else {
         // The results the query read: `last_read_at` moves, so the cache size limit evicts them
@@ -274,34 +449,65 @@ pub async fn sql(
             .filter(|n| !out.unavailable.contains_key(*n))
             .collect();
         names.sort();
-        if names.is_empty() {
-            "No views are available: nothing has a cached result yet. Run `barca get` first."
-                .to_string()
+        let tables: Vec<String> = tables
+            .iter()
+            .map(|t| format!("{}.{}", t.schema, t.name))
+            .collect();
+        let tables = if tables.is_empty() {
+            String::new()
         } else {
-            format!("Views: {}", names.join(", "))
+            format!("\nbarca's tables: {}", tables.join(", "))
+        };
+        if names.is_empty() {
+            let none = match origin {
+                Origin::Local => {
+                    "No views are available: nothing has a cached result yet. Run `barca get` first."
+                        .to_string()
+                }
+                Origin::Server { url, .. } => format!(
+                    "No views are available: the server at {url} has no result yet. Run \
+                     `barca get` first."
+                ),
+            };
+            format!("{none}{tables}")
+        } else {
+            format!("Views: {}{tables}", names.join(", "))
         }
     };
     Err(match err.kind.as_str() {
         "missing_table" => {
             let table = err.table.unwrap_or_default();
-            let find = |m: &HashMap<String, String>| {
-                m.iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case(&table))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-            };
             let unavailable: HashMap<String, String> =
                 out.unavailable.clone().into_iter().collect();
-            if let Some((name, cmd)) = find(&missing) {
-                if let Some(why) = unknown_membership.get(&name) {
+            if let Some(m) = missing.iter().find(|m| m.name.eq_ignore_ascii_case(&table)) {
+                let (name, cmd) = (&m.name, &m.command);
+                if let Some(why) = &m.keys_unknown {
                     return Err(BarcaError::Usage(format!(
                         "'{name}' has no current partition view: {why}\n\
                          Partition keys require source materialization. Run `{cmd}` first, then re-run this query."
                     )));
                 }
-                BarcaError::Usage(format!(
-                    "'{name}' has no result yet, so there is no view for it\n\
-                     Run `{cmd}` first, then re-run this query."
-                ))
+                match origin {
+                    Origin::Local => BarcaError::Usage(format!(
+                        "'{name}' has no result yet, so there is no view for it\n\
+                         Run `{cmd}` first, then re-run this query."
+                    )),
+                    Origin::Server { url, .. }
+                        if pending(&m.node, m.partitioned, m.run_hash.as_deref()) =>
+                    {
+                        BarcaError::Usage(format!(
+                            "'{name}' has no result on the server at {url}: this machine \
+                             computed one the server has not recorded yet (unsynced)\n\
+                             Query this machine's result with `barca sql --local`, or run \
+                             `{cmd}` to post it, then re-run this query."
+                        ))
+                    }
+                    Origin::Server { url, .. } => BarcaError::Usage(format!(
+                        "'{name}' has no result on the server at {url} yet, so there is no view \
+                         for it\n\
+                         Run `{cmd}` first, then re-run this query."
+                    )),
+                }
             } else if let Some((name, why)) = out
                 .unreachable
                 .iter()
@@ -319,7 +525,10 @@ pub async fn sql(
                          remote store (`barca docs remote`), then re-run this query."
                     ))
                 }
-            } else if let Some((name, why)) = find(&unavailable) {
+            } else if let Some((name, why)) = unavailable
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(&table))
+            {
                 BarcaError::Usage(format!(
                     "'{name}' cannot be queried: {why}\n\
                      Return a DataFrame, Arrow table, DuckDB relation or list of dicts to store \

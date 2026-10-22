@@ -74,13 +74,15 @@ impl From<LogStreamArg> for barca_core::LogStream {
 }
 
 /// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1). On `get`, `run`,
-/// `status`, `list`, `history`, `stats` and `logs` only; the other commands always run here.
+/// `status`, `list`, `history`, `stats`, `logs` and `sql` only; the other commands always run
+/// here.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct ServerFlags {
     /// Run this command on a barca server (`barca serve`) and print its result here: the URL
     /// given, or with no URL the configured one (BARCA_SERVER, else [server] url in
     /// barca.toml). Without it, get and run run on this machine (against a configured server's
-    /// ledger) and status, history, stats and logs are answered by a configured server
+    /// ledger), status, history, stats and logs are answered by a configured server, and sql
+    /// resolves its views from it (the query always runs here)
     #[arg(
         long,
         value_name = "URL",
@@ -410,7 +412,8 @@ Invalid sources and their graph dependents are excluded; healthy definitions and
 continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
 --watch restores repaired configured sources; one-shot commands remain strict.
 From another machine, `--server <url>` on get, run, status, list, history, stats and logs runs
-the command on this server and prints it there as a local run would (barca docs server-mode).
+the command on this server and prints it there as a local run would; `barca sql` resolves its
+views from the server and runs the query on that machine (barca docs server-mode).
 `serve` itself always runs here: --server on it is a usage error.
 The first line names the env, the artifact store and the metadata DB with its format:
 [barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>).
@@ -505,6 +508,11 @@ Examples:
   barca sql \"select * from orders\" --all                    # every row
   barca sql \"select * from orders\" --json                   # {columns, rows, total, truncated, hint?}
   barca sql \"select * from orders\" --env dev                # results cached in another environment
+  barca sql \"select target, status, elapsed_seconds from barca.runs where status = 'failed' order by started_at desc limit 10\"
+  barca sql \"select node_id, elapsed_seconds, size_bytes from barca.materializations order by created_at desc\"
+  barca sql \"select name, state, reason from barca.nodes where state <> 'cached'\"
+  barca sql \"select * from revenue\" --local                # this machine's results, not a configured server's
+  barca sql \"select * from revenue\" --server https://barca.example.com   # views resolved by that server
 
 Every asset, sensor and task with a result on disk is a view named after its declared name
 (or its function name when unnamed; full id, quoted, when two nodes share a name; stderr says so).
@@ -517,6 +525,12 @@ keys require their source to materialize first. Zero current keys have no result
 With remote storage, the artifacts of the views a query names are downloaded into
 .barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Explicit SQL
 COPY ... TO writes the requested output file.
+barca's own records are tables in the barca schema: barca.runs (barca history --json),
+barca.materializations (one row per step result) and barca.nodes (barca status --json, flattened);
+`show tables` lists them with the views.
+With a server configured (barca docs server-mode), the views and barca's tables come from the
+server's ledger and the query runs here, over the store you share with it; --local uses this
+machine's records. The server never runs SQL. An unreachable server exits 3.
 Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
 the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
 Experimental: barca docs contract.
@@ -970,6 +984,8 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Metadata backups: list them, put one back in place of the local database, or start over
     ///

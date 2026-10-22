@@ -9,9 +9,15 @@ the fsspec filesystem the workers use, and queried from there. A copy is reused 
 object's size and version (etag, generation, modified time) are unchanged, so a query costs one
 metadata request per remote file it reads, and a download only the first time.
 
+barca's own records (`barca.runs`, `barca.materializations`, `barca.nodes`) arrive as rows from
+Rust and become tables in the `barca` schema; a table the query does not name arrives without
+rows and is a typed placeholder that errors when read. `show tables` lists the views and those
+tables (as `barca.runs`), not only the views of the default schema.
+
 Protocol: one JSON document on stdin,
   {"query": str, "limit": int | null, "cache_dir": str,
-   "views": [{"name", "node", "format", "files": [{"path", "partition": str | null}]}]}
+   "views": [{"name", "node", "format", "files": [{"path", "partition": str | null}]}],
+   "tables": [{"schema", "name", "columns": [[name, duckdb type]], "rows": [{...}] | null}]}
 and one JSON document on stdout, either
   {"columns": [...], "rows": [{col: value}], "total": int, "truncated": bool,
    "unavailable": {view: reason}, "unreachable": {view: {"kind": "driver" | "fetch", "reason"}},
@@ -29,6 +35,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -86,6 +93,65 @@ def _register(con, view: dict) -> str | None:
             pass
         return f"its {fmt} artifact cannot be read as a table ({str(e).splitlines()[0]})"
     return None
+
+
+# ─── barca's tables ───────────────────────────────────────────────────────────
+
+_SHOW_TABLES = re.compile(r"^\s*show\s+tables\s*$", re.IGNORECASE)
+
+# `show tables` over every schema: views by their name, barca's tables as `barca.<name>`.
+_ALL_TABLES = """
+SELECT CASE WHEN schema_name = 'main' THEN name ELSE schema_name || '.' || name END AS name
+FROM (
+    SELECT schema_name, view_name AS name FROM duckdb_views() WHERE NOT internal
+    UNION ALL
+    SELECT schema_name, table_name AS name FROM duckdb_tables() WHERE NOT internal
+)
+WHERE schema_name NOT IN ('information_schema', 'pg_catalog')
+ORDER BY schema_name = 'barca', name
+"""
+
+
+def _table(con, table: dict) -> None:
+    """Create one of barca's tables: its rows, or (rows null) a placeholder with its columns."""
+    qualified = f"{_quote(table['schema'])}.{_quote(table['name'])}"
+    columns = table["columns"]
+    rows = table.get("rows")
+    if rows is None:
+        why = (
+            f"barca: {table['schema']}.{table['name']} was not loaded for this query; "
+            "name it in the query"
+        )
+        nulls = ", ".join(f"CAST(NULL AS {ty}) AS {_quote(c)}" for c, ty in columns)
+        con.execute(
+            f"CREATE VIEW {qualified} AS SELECT {nulls} WHERE error({_quote_str(why)}) IS NULL"
+        )
+        return
+    con.execute(
+        f"CREATE TABLE {qualified} ({', '.join(f'{_quote(c)} {ty}' for c, ty in columns)})"
+    )
+    if not rows:
+        return
+    spec = "{" + ", ".join(f"{_quote_str(c)}: {_quote_str(ty)}" for c, ty in columns) + "}"
+    fd, path = tempfile.mkstemp(prefix="barca-sql-", suffix=".ndjson")
+    try:
+        with os.fdopen(fd, "w") as f:
+            for row in rows:
+                f.write(json.dumps({c: row.get(c) for c, _ in columns}))
+                f.write("\n")
+        con.execute(
+            f"INSERT INTO {qualified} SELECT * FROM read_json({_quote_str(path)}, "
+            f"format='newline_delimited', columns={spec})"
+        )
+    finally:
+        os.remove(path)
+
+
+def _tables(con, tables: list[dict]) -> None:
+    for schema in sorted({t["schema"] for t in tables}):
+        con.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote(schema)}")
+    for table in tables:
+        _table(con, table)
 
 
 # ─── remote artifacts ─────────────────────────────────────────────────────────
@@ -247,6 +313,9 @@ def run(request: dict) -> dict:
         why = _register(con, view)
         if why:
             unavailable[view["name"]] = why
+    _tables(con, request.get("tables") or [])
+    if _SHOW_TABLES.match(query):
+        query = _ALL_TABLES
     remote = {"unreachable": unreachable, "fetched": fetched}
     try:
         rel = con.sql(query)

@@ -43,7 +43,9 @@ from .test_serve_robustness import _env, _free_port, wait_for
 
 TIMEOUT = 300
 
-# The commands that take `--server`.
+# The commands that take `--server` and print what the server prints. `sql` takes it too, but
+# only resolves its views there and reads the results from the store the two machines share,
+# which these two copies do not: test_sql_server.py compares it with a local `barca sql`.
 SERVER_COMMANDS = {"get", "run", "status", "list", "history", "stats", "logs"}
 # Contract cases that only exist on this machine: `--reconcile` writes local history.
 LOCAL_ONLY = {"history_reconciled"}
@@ -349,7 +351,7 @@ def test_bare_server_with_nothing_configured_and_server_on_local_commands_are_us
     for argv in (
         ["get", "total", "--server", "--json"],
         ["plan", "--server"],
-        ["sql", "select 1", "--server", "http://127.0.0.1:1"],
+        ["doctor", "--server", "http://127.0.0.1:1"],
         ["serve", "--local"],
         ["get", "total", "--server", "ftp://nowhere", "--json"],
     ):

@@ -326,6 +326,17 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         nodes, _ = _checked(server, "GET", "/nodes?targets=value", 200)
         status = json.loads(cli("status", "value", "pipeline.py", "--json", "--all"))
         assert nodes == status
+        # `barca sql` with a server: the views it resolves and barca.materializations' rows.
+        catalog, _ = _checked(server, "GET", "/sql/views", 200)
+        [view] = [v for v in catalog["views"] if v["name"] == "value"]
+        assert view["node"] == "pipeline.py:value" and view["stale"] is False
+        steps, _ = _checked(server, "GET", "/materializations?limit=1000", 200)
+        table = json.loads(
+            cli("sql", "select * from barca.materializations", "--json", "--all", "--local")
+        )
+        assert steps["total"] == len(table["rows"]) == len(steps["materializations"])
+        key = lambda r: (r["node_id"], r["created_at"], r["status"])  # noqa: E731
+        assert sorted(table["rows"], key=key) == sorted(steps["materializations"], key=key)
         history, _ = _checked(server, "GET", "/history?limit=1", 200)
         assert history["truncated"] is True and history["runs"][0]["triggered_by"] == "api"
         health, _ = _checked(server, "GET", "/health", 200)

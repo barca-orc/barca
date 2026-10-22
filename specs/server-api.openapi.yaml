@@ -2,12 +2,12 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '8'
-  description: 'Normative current wire contract; specification version 8 is independent of package versions.
+  version: '9'
+  description: 'Normative current wire contract; specification version 9 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
-    /stats/{name}, /project), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
+    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
@@ -420,6 +420,162 @@ paths:
         '400':
           description: Invalid request
       parameters: *id010
+  /sql/views:
+    get:
+      summary: Which result each barca sql view reads in the ledger
+      operationId: get_sql_views
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SqlCatalog'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema:
+                type: string
+      description: barca sql with a server resolves its views here and runs the query on the client,
+        over the store paths this returns. The server runs no SQL (DuckDB reads and writes files, and
+        the API has no authentication). Built by the function a local barca sql uses, against a private
+        snapshot of the metadata DB, so view names, stale results and current partition keys follow the
+        same rules.
+      parameters:
+      - name: files
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'Comma-separated deployed files (root-relative); absent: every deployed file.'
+    head:
+      summary: Which result each barca sql view reads in the ledger (headers only)
+      operationId: head_sql_views
+      responses:
+        '200':
+          description: Response
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+      parameters:
+      - name: files
+        in: query
+        required: false
+        schema:
+          type: string
+  /materializations:
+    get:
+      summary: Step results, newest first, one page at a time
+      operationId: get_materializations
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterializationsBody'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema:
+                type: string
+      description: barca sql's barca.materializations table with a server. One row per recorded step
+        result (successful or failed), without the columns that describe one machine's disk.
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: Rows to return; default 1000, at most 10000.
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: Rows to skip, newest first; default 0.
+    head:
+      summary: Step results, newest first, one page at a time (headers only)
+      operationId: head_materializations
+      responses:
+        '200':
+          description: Response
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
   /stats/{name}:
     get:
       summary: barca stats --json
@@ -3998,6 +4154,229 @@ components:
           - $ref: '#/components/schemas/RunFailure'
           - type: 'null'
           description: The first failed step and its error; null for a run with no failed step.
+    SqlCatalog:
+      type: object
+      additionalProperties: false
+      required:
+      - views
+      - missing
+      - duplicates
+      description: Which result each barca sql view reads (GET /sql/views).
+      properties:
+        views:
+          type: array
+          items:
+            $ref: '#/components/schemas/SqlView'
+        missing:
+          type: array
+          description: Nodes with no queryable result, so no view.
+          items:
+            $ref: '#/components/schemas/SqlMissing'
+        duplicates:
+          type: array
+          description: Names several nodes share; their views are named by node id.
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - name
+            - ids
+            properties:
+              name:
+                type: string
+              ids:
+                type: array
+                items:
+                  type: string
+    SqlView:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - node
+      - kind
+      - partitioned
+      - format
+      - files
+      - stale
+      properties:
+        name:
+          type: string
+          description: The view's name in SQL.
+        node:
+          type: string
+        kind:
+          enum:
+          - asset
+          - task
+          - sensor
+        partitioned:
+          type: boolean
+        format:
+          type: string
+          description: parquet, csv, json or pickle (a pickle view cannot be queried).
+        files:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - path
+            - partition
+            properties:
+              path:
+                type: string
+                description: Where the result is stored (a store path).
+              partition:
+                type:
+                - string
+                - 'null'
+                description: The partition key; null for an unpartitioned node.
+              content_hash:
+                type: string
+                description: SHA-256 of the result's bytes, when recorded.
+        stale:
+          type: boolean
+          description: The code or inputs changed since the result was computed; the view shows it.
+        run_hash:
+          type: string
+          description: The run hash the node's code and inputs give now, when known.
+    SqlMissing:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - node
+      - kind
+      - partitioned
+      - command
+      properties:
+        name:
+          type: string
+        node:
+          type: string
+        kind:
+          enum:
+          - asset
+          - task
+          - sensor
+        partitioned:
+          type: boolean
+        command:
+          type: string
+          description: The command that produces it (barca get NAME).
+        keys_unknown:
+          type: string
+          description: A partitioned node whose current keys are not known until a source materializes.
+        run_hash:
+          type: string
+    MaterializationsBody:
+      type: object
+      additionalProperties: false
+      required:
+      - materializations
+      - total
+      - limit
+      - offset
+      properties:
+        materializations:
+          type: array
+          items:
+            $ref: '#/components/schemas/StepRow'
+        total:
+          type: integer
+          minimum: 0
+          description: Rows recorded in all.
+        limit:
+          type: integer
+          minimum: 0
+        offset:
+          type: integer
+          minimum: 0
+    StepRow:
+      type: object
+      additionalProperties: false
+      required:
+      - node_id
+      - partition
+      - run_id
+      - run_hash
+      - status
+      - created_at
+      - elapsed_seconds
+      - cpu_seconds
+      - max_rss_bytes
+      - attempts
+      - format
+      - size_bytes
+      - artifact
+      - content_hash
+      - error_type
+      - error_message
+      description: One recorded step result (barca sql's barca.materializations).
+      properties:
+        node_id:
+          type: string
+          description: Node id, with the partition suffix for a partitioned step.
+        partition:
+          type:
+          - string
+          - 'null'
+        run_id:
+          type:
+          - string
+          - 'null'
+        run_hash:
+          type:
+          - string
+          - 'null'
+        status:
+          enum:
+          - success
+          - failed
+        created_at:
+          type: string
+          description: UTC, YYYY-MM-DD HH:MM:SS.
+        elapsed_seconds:
+          type:
+          - number
+          - 'null'
+        cpu_seconds:
+          type:
+          - number
+          - 'null'
+        max_rss_bytes:
+          type:
+          - integer
+          - 'null'
+        attempts:
+          type:
+          - integer
+          - 'null'
+        format:
+          type:
+          - string
+          - 'null'
+        size_bytes:
+          type:
+          - integer
+          - 'null'
+        artifact:
+          type:
+          - string
+          - 'null'
+        content_hash:
+          type:
+          - string
+          - 'null'
+        error_type:
+          type:
+          - string
+          - 'null'
+        error_message:
+          type:
+          - string
+          - 'null'
     HistoryBody:
       type: object
       additionalProperties: false

@@ -68,7 +68,8 @@ barca --help                                  Show help
 `get`, `run`, `status`, `list`, `history` and `stats` also take `--server [<url>]`, which runs
 the command on a `barca serve` and prints it here as the local command would, and `--local`,
 which ignores a configured server (experimental; [Server mode](/reference/config/#server-mode),
-`barca docs server-mode`).
+`barca docs server-mode`). `sql` takes both too: a server resolves its views, and the query
+always runs here.
 
 `barca pipeline.py` is read as `barca get pipeline.py`. It is kept for compatibility; write
 `barca get`.
@@ -689,7 +690,9 @@ view with a `partition` column. No step
 runs, your code is not imported, and no run is recorded. Only parquet, CSV and json results are
 views; a pickled result cannot be queried. Install SQL support with `uv add 'barca[sql]'`. With a remote store the
 artifacts of the views a query names are downloaded into `.barca/sql-cache/` and reused.
-Experimental.
+barca's own records are tables in the `barca` schema: `barca.runs`, `barca.materializations` and
+`barca.nodes`. With a server configured, the views and those tables come from the server's
+ledger and the query runs on your machine; the server never runs SQL. Experimental.
 
 ```
 $ barca sql "select region, sum(amount) as amount from orders group by 1 order by 1"
@@ -704,6 +707,8 @@ emea    10.0
 | `--all` | off | Return every row. Cannot be combined with `--limit`. |
 | `--json`, `--pretty` | by terminal | Force JSON or the table. |
 | `--env <name>` | `default` | Query a named environment's results. |
+| `--server [<url>]` | the configured server | Resolve the views from that server's ledger; the query runs here. |
+| `--local` | off | Query this machine's own results and records, ignoring a configured server. |
 
 See [barca sql](/reference/sql/) for views, errors and limits.
 

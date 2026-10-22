@@ -386,6 +386,10 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/history?limit=5", "/history"),
         ("/history?all=1", "/history"),
         ("/stats/first", "/stats/{name}"),
+        ("/sql/views", "/sql/views"),
+        ("/sql/views?files=pipeline.py", "/sql/views"),
+        ("/materializations", "/materializations"),
+        ("/materializations?limit=5&offset=1", "/materializations"),
     ] {
         checked(&router, "GET", url, path, 200).await;
         checked(&router, "HEAD", url, path, 200).await;
@@ -409,6 +413,35 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         checked(&router, "GET", url, path, 404).await;
     }
     checked(&router, "GET", "/runs?limit=invalid", "/runs", 400).await;
+    checked(
+        &router,
+        "GET",
+        "/materializations?limit=invalid",
+        "/materializations",
+        400,
+    )
+    .await;
+    // Nothing has run: no views, and every node names the command that produces it.
+    let catalog = checked(&router, "GET", "/sql/views", "/sql/views", 200).await;
+    assert_eq!(catalog["views"], json!([]));
+    assert!(
+        catalog["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["name"] == "second" && m["command"] == "barca get second"),
+        "{catalog}"
+    );
+    let steps = checked(
+        &router,
+        "GET",
+        "/materializations",
+        "/materializations",
+        200,
+    )
+    .await;
+    assert_eq!(steps["total"], 0);
+    assert_eq!(steps["limit"], 1000);
     for (method, url, path) in [
         ("POST", "/run", "/run"),
         ("POST", "/run/publish", "/run/{target}"),
@@ -781,6 +814,48 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         200,
     )
     .await;
+    // `second` and its input ran: each is a view at the result the ledger records, and a step
+    // row; `broken` failed, so it has a step row and no view.
+    let catalog = checked(&router, "GET", "/sql/views", "/sql/views", 200).await;
+    let view = |name: &str| {
+        catalog["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == name)
+            .cloned()
+    };
+    let second = view("second").expect("a view of second");
+    assert_eq!(second["format"], "json");
+    assert_eq!(second["stale"], false);
+    let path = second["files"][0]["path"].as_str().unwrap();
+    assert!(Path::new(path).is_file(), "{path}");
+    assert!(view("broken").is_none());
+    let steps = checked(
+        &router,
+        "GET",
+        "/materializations?limit=100",
+        "/materializations",
+        200,
+    )
+    .await;
+    let rows = steps["materializations"].as_array().unwrap();
+    assert_eq!(steps["total"].as_u64().unwrap() as usize, rows.len());
+    assert!(
+        rows.iter()
+            .any(|r| r["artifact"] == path && r["status"] == "success")
+    );
+    assert!(rows.iter().any(|r| r["status"] == "failed"));
+    let page = checked(
+        &router,
+        "GET",
+        "/materializations?limit=1&offset=1",
+        "/materializations",
+        200,
+    )
+    .await;
+    assert_eq!(page["materializations"].as_array().unwrap().len(), 1);
+    assert_eq!(page["materializations"][0], rows[1]);
     for url in ["/history", "/list", "/nodes", "/stats/second"] {
         let path = if url.starts_with("/stats") {
             "/stats/{name}"
