@@ -696,6 +696,9 @@ fn prepare_progress(
             bar.set_prefix("        ");
         }
         bar.set_message("");
+        // Every stderr line from here on (the store check, a fetch, a warning) is written above
+        // the bar, not into it.
+        crate::term::above_progress_bar(&bar);
         Some(bar)
     } else {
         None
