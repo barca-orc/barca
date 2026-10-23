@@ -379,6 +379,12 @@ pub struct PartitionState {
     pub missing: usize,
     /// Keys without a cached result, capped at 20.
     pub missing_keys: Vec<String>,
+    /// For each key of `missing_keys` with an earlier successful result, what changed in its
+    /// run hash since then (`value ID` when a dict `partitions_from` source returned a new value
+    /// for it). A new key is absent. Absent when no key has an earlier result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub changed: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -629,6 +635,7 @@ pub(crate) async fn status_from_dag_with_membership(
                 cached: p.cached,
                 missing: p.will_run,
                 missing_keys: p.will_run_keys.clone(),
+                changed: p.changed.clone(),
             });
         let mut cache = cache_status(report, &inputs, &states, &history);
         local_only(

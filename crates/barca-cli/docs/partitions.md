@@ -54,9 +54,26 @@ def summary(all_sales: list[dict]) -> dict:
 - Mixing `partitions()` and `partitions_from()` dimensions on one asset is unsupported
   and fails before execution with exit 2. Use only derived dimensions or declare every
   dimension explicitly with `partitions([...])`.
-- `partitions_from(keys)` on an *unpartitioned* asset that returns a list uses the list's values
-  as keys. They are only known once `keys` has run (a dry run reports the asset as `unknown`
-  until then), and the list itself is not passed to the function.
+- `partitions_from(keys)` on an *unpartitioned* asset or sensor that returns a list uses the
+  list's values as keys. They are only known once `keys` has run (a dry run reports the asset
+  as `unknown` until then), and the list itself is not passed to the function.
+- `partitions_from(source)` on an unpartitioned asset or sensor that returns a **dict** uses the
+  dict's keys as keys, and each key's call receives **that key's value** as the parameter
+  named after the source (or the `inputs=` key that names it); a function without that
+  parameter gets the key only. Each key's run hash folds in its own value and the source's
+  run hash, not the whole dict: when one value changes, that key and what `partitions_from`
+  chains below it run again, and every other key is served from cache. See "Updating only
+  what changed, across many partitions" below.
+- What a `partitions_from` source may return: a list (or tuple) of keys, or a dict of key ->
+  value. Dict keys are strings or integers; an integer key becomes its string (`{1: "a"}`
+  gives the key `"1"`, as JSON writes it), and two keys that become the same string, or any
+  other key type (a tuple, a bool, `None`), are an error. Values must be JSON-writable (str,
+  int, float, bool, None, and lists and dicts of them; not NaN). The source is written as
+  JSON whatever its return annotation. Anything else fails the source step (exit 1) with an
+  error naming the key, or the types it may return. Up to 0.29.5 a dict was not read for keys,
+  and its consumer failed with `TypeError: ... missing 2 required positional arguments`.
+- A source that returns an empty list or dict has no keys: its `partitions_from` consumers
+  run nothing, and a `collect` over them receives an empty list.
 - `collect(upstream)` inside `inputs=` aggregates all partitions of `upstream` into one list.
 - A partitioned asset in an *unpartitioned* asset's `inputs=` without `collect()`, for example
   `@asset(inputs={"all_sales": sales})`, is a usage error (exit 2) naming both fixes:
@@ -79,6 +96,107 @@ def summary(all_sales: list[dict]) -> dict:
   ran again when the split changed. Such a key, and a fan-in over it, runs once more after
   upgrading; with at least as many workers as the two assets have keys together, nothing
   changes.
+
+## Updating only what changed, across many partitions
+
+With many keys (10k, 200k retailers), poll once for all of them and let each key's value say
+whether it changed. One sensor runs one query that returns every retailer and its version;
+`partitions_from(retailer_versions)` makes one key per retailer, and each key is computed
+again only when its version changed:
+
+```python
+import duckdb
+from barca import Schedule, asset, partitions_from, sensor
+
+
+@sensor(freshness=Schedule("*/5 * * * *"))
+def retailer_versions() -> tuple[bool, dict]:
+    rows = duckdb.connect("warehouse.duckdb", read_only=True).execute(
+        "select retailer, max(updated_at)::varchar from orders group by retailer"
+    ).fetchall()
+    return True, dict(rows)                       # {"r000001": "2026-10-22 09:14:03", ...}
+
+
+@asset(partitions={"retailer": partitions_from(retailer_versions)})
+def cleaned(retailer: str, retailer_versions: str) -> dict:
+    # retailer_versions is this retailer's value only: its max(updated_at)
+    orders = duckdb.connect("warehouse.duckdb", read_only=True).execute(
+        "select * from orders where retailer = ?", [retailer]
+    ).df()
+    return {"retailer": retailer, "rows": len(orders), "as_of": retailer_versions}
+
+
+@asset(partitions={"retailer": partitions_from(cleaned)})
+def scored(retailer: str, cleaned: dict) -> dict:
+    return {**cleaned, "score": cleaned["rows"] * 0.1}
+```
+
+```bash
+barca get scored pipeline.py          # first run: every retailer
+barca get scored pipeline.py          # the sensor runs; every key is cached
+barca get scored pipeline.py --dry-run    # after the sensor saw new data: which keys, and why
+barca serve pipeline.py               # every 5 minutes: the sensor, then the changed retailers
+```
+
+A tick where 1 of 10,000 retailers changed, on the fixture of `benchmarks/keyed_partitions`
+(the same chain, its sensor named `versions`), run with `barca get` in a terminal; under
+`barca serve` the schedule runs the same:
+
+```
+$ barca get scored pipeline.py
+[barca] 3/20001 steps | done in 0.2s
+Run 7a0c4e7b7357 | got 'scored' in 0.249s (3 steps, 2 phases)
+
+retailer=r000000: .barca/artifacts/pipeline.py--scored_retailer_r000000/5ededa19....json
+...                                                   (one path per retailer, 10,000 in all)
+
+$ barca history --limit 1
+RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
+7a0c4e7b7357   get     scored                   success         3  19998   0.2s 2026-10-23 01:57:48 UTC
+```
+
+Three steps ran: the sensor, and the changed retailer's key of `cleaned` and of `scored`;
+the other 19,998 keys were served from cache. A dry run after the sensor has seen a new value
+(a scheduled poll, or `barca get versions pipeline.py`) names the key and why:
+
+```
+$ barca get scored pipeline.py --dry-run
+Dry run: barca get scored (nothing executed, nothing written)
+
+STATUS    WHY                                                                     STEP
+will run  sensors always re-run                                                   pipeline.py:versions
+partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.py:versions changed)  pipeline.py:cleaned
+partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.py:cleaned changed)  pipeline.py:scored
+
+3 will run, 19998 cached, 0 unknown
+```
+
+- In JSON (`--dry-run --json`, `barca status --json`), a partitioned step's `partitions`
+  object has `changed`: for each previewed key that ran before, what changed in its run hash
+  (`value ID` for a dict source's new value). A new key has no entry. Like every sensor
+  prediction, the dry run assumes the sensor returns what it last returned.
+- The value hash is canonical JSON: the value as written to the source's JSON artifact, with
+  object keys sorted at every level and no whitespace, then SHA-256. Reordering the dict, or
+  the keys of a nested dict, changes nothing; an integer outside 64 bits is compared as a
+  float.
+- Editing the source's code (its query) changes its run hash, and every key runs again, as for
+  anything that reads a sensor (`barca docs cache`). Its `freshness=` does not count.
+- A removed key runs nothing; `barca get scored` returns the remaining keys. A new key runs
+  that key only. A `collect(scored)` downstream runs whenever a key is added, removed or
+  recomputed, since its inputs changed.
+- Return only what identifies a retailer's data (a version, a max timestamp, an etag), not the
+  data itself: the whole dict is written once per poll and read by every worker that runs a
+  key.
+- The cost of a tick grows with the number of keys even when one changed: each key is hashed
+  and looked up. Measured on one loaded machine (`benchmarks/RESULTS.md`, "Keyed
+  partitions"), `barca get` of the chain with one key changed: 0.32 s at 10k keys, 1.7 s at 50k,
+  7 s at 200k (it also returns 200k paths and checks each artifact is there); a `barca serve`
+  tick at 200k: 4.3 to 4.6 s. A sensor that runs once per key
+  (`@sensor(partitions={"retailer": partitions(KEYS)})`) makes one call per key on every
+  tick instead: 3.3 s at 10k keys, 16 s at 50k.
+- Known limit under `barca serve`: a run keeps its full outcome, which lists every output of
+  its targets. At 200k keys a tick records about 80 MB of JSON in the metadata DB
+  (`runs.outcome_json`) and the server holds each finished run in memory for an hour.
 
 ## Getting partitions
 

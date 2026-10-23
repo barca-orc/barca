@@ -296,6 +296,7 @@ impl CachedSteps {
                     partition_keys: Vec::new(),
                     param_types: found.param_types.clone(),
                     return_type: found.return_type,
+                    keyed: found.keyed.clone(),
                 }
             });
             step.partition_keys.push(found.partition_keys[key].clone());
@@ -625,6 +626,7 @@ mod tests {
             partition_keys,
             param_types: HashMap::new(),
             return_type: None,
+            keyed: Default::default(),
         }
     }
 
@@ -920,6 +922,7 @@ mod tests {
                 cached: KEYS,
                 will_run: 0,
                 will_run_keys: vec![],
+                changed: None,
             }),
             ..Default::default()
         }];
@@ -1091,6 +1094,7 @@ mod tests {
                 cached: 2,
                 will_run: 0,
                 will_run_keys: vec![],
+                changed: None,
             }),
             ..Default::default()
         }];
@@ -1124,6 +1128,7 @@ mod tests {
                 cached: 1,
                 will_run: 1,
                 will_run_keys: vec!["k=new".to_string()],
+                changed: None,
             }),
             ..Default::default()
         }];

@@ -264,6 +264,7 @@ mod tests {
                 cached: 0,
                 missing: 0,
                 missing_keys: vec![],
+                changed: None,
             }),
             last_materialization: None,
             last_bytes_change: Some(barca_core::db::BytesChange {

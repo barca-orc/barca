@@ -99,6 +99,35 @@ pub struct StreamStep {
     pub param_types: HashMap<String, crate::model::ValueType>,
     /// Return frame type from the function's return annotation.
     pub return_type: Option<crate::model::ValueType>,
+    /// Keyed `partitions_from` sources (`crate::keyed`): the dict sources the keys were
+    /// expanded from, and whether this step is itself a source a `partitions_from` reads.
+    pub keyed: crate::keyed::StepKeyed,
+}
+
+impl StreamStep {
+    /// This step with `keys` in place of its partition keys, without copying its own (a
+    /// partitioned step can hold 200k keys).
+    pub fn with_keys(&self, keys: Vec<PartitionKey>) -> StreamStep {
+        StreamStep {
+            step_id: self.step_id.clone(),
+            kind: self.kind,
+            function_name: self.function_name.clone(),
+            source_file: self.source_file.clone(),
+            inputs: self.inputs.clone(),
+            pending_partitions: self.pending_partitions.clone(),
+            serializer: self.serializer.clone(),
+            sinks: self.sinks.clone(),
+            run_hashes: HashMap::new(),
+            timeout_seconds: self.timeout_seconds,
+            retries: self.retries,
+            weight: self.weight,
+            retry_backoff_seconds: self.retry_backoff_seconds,
+            partition_keys: keys,
+            param_types: self.param_types.clone(),
+            return_type: self.return_type,
+            keyed: self.keyed.clone(),
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -447,6 +476,7 @@ fn build_phases(
                                     partition_keys: chunk.to_vec(),
                                     param_types: step.param_types.clone(),
                                     return_type: step.return_type,
+                                    keyed: step.keyed.clone(),
                                 }]);
                             }
                         }
@@ -489,6 +519,7 @@ fn build_phases(
                                     partition_keys: pks,
                                     param_types: step.param_types.clone(),
                                     return_type: step.return_type,
+                                    keyed: step.keyed.clone(),
                                 });
                             }
                         }
@@ -547,6 +578,13 @@ fn chain_to_steps(
         let source_file: Arc<str> = Arc::from(node.source_file());
         let param_types = node.extracted.param_types.clone();
         let return_type = node.extracted.return_type;
+        // An unpartitioned node a `partitions_from(...)` reads: the worker checks what it
+        // returns can be read for keys (a list, or a dict with JSON values).
+        let keyed = crate::keyed::StepKeyed {
+            sources: None,
+            is_source: node.extracted.partitions.is_empty() && dag.feeds_partitions(node_id),
+            no_keys: false,
+        };
 
         if !static_partitions.is_empty() {
             let combos = expand_partition_combos(&static_partitions);
@@ -568,6 +606,7 @@ fn chain_to_steps(
                 partition_keys: pks,
                 param_types: param_types.clone(),
                 return_type,
+                keyed: keyed.clone(),
             });
         } else if !derived_partitions.is_empty() {
             steps.push(StreamStep {
@@ -587,6 +626,7 @@ fn chain_to_steps(
                 partition_keys: Vec::new(),
                 param_types: param_types.clone(),
                 return_type,
+                keyed: keyed.clone(),
             });
         } else {
             steps.push(StreamStep {
@@ -606,6 +646,7 @@ fn chain_to_steps(
                 partition_keys: Vec::new(),
                 param_types,
                 return_type,
+                keyed: keyed.clone(),
             });
         }
     }
@@ -837,6 +878,7 @@ mod tests {
                     env: Vec::new(),
                     unused_inputs: Vec::new(),
                     env_reads: Vec::new(),
+                    inherited_partitions: Vec::new(),
                 }
             })
             .collect();
@@ -897,6 +939,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         };
         extracted.sinks.push(SinkDecl {
             path: "exports/out.parquet".to_string(),
@@ -1329,6 +1372,7 @@ mod tests {
                 env: Vec::new(),
                 unused_inputs: Vec::new(),
                 env_reads: Vec::new(),
+                inherited_partitions: Vec::new(),
             })
             .collect();
         let dag = Dag::build(&extracted).unwrap();
@@ -1476,6 +1520,7 @@ mod tests {
                     env: Vec::new(),
                     unused_inputs: Vec::new(),
                     env_reads: Vec::new(),
+                    inherited_partitions: Vec::new(),
                 }
             })
             .collect();
@@ -1764,6 +1809,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         };
         let collector = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1797,6 +1843,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         };
         Dag::build(&[producer, collector]).unwrap()
     }
@@ -1881,6 +1928,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         };
         let fetch_prices = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1915,6 +1963,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         };
         let aggregate = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1948,6 +1997,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         };
         let dag = Dag::build(&[tickers, fetch_prices, aggregate]).unwrap();
         let p = plan_from_dag(&dag, &cfg(10));

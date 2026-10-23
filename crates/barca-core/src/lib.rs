@@ -34,6 +34,7 @@ mod input_params;
 pub mod interrupt;
 pub mod io_loop;
 pub mod jsonlog;
+pub mod keyed;
 pub mod ledger;
 pub mod lines;
 pub mod load;

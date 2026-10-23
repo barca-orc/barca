@@ -4,4 +4,10 @@ export type PartitionState = { total: number, cached: number, missing: number,
 /**
  * Keys without a cached result, capped at 20.
  */
-missing_keys: Array<string>, };
+missing_keys: Array<string>,
+/**
+ * For each key of `missing_keys` with an earlier successful result, what changed in its
+ * run hash since then (`value ID` when a dict `partitions_from` source returned a new value
+ * for it). A new key is absent. Absent when no key has an earlier result.
+ */
+changed?: { [key in string]: Array<string> }, };

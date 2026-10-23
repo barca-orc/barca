@@ -420,6 +420,7 @@ fn try_extract_function(
         env,
         unused_inputs,
         env_reads,
+        inherited_partitions: Vec::new(),
     }))
 }
 

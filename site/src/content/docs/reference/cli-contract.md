@@ -1657,10 +1657,16 @@ counts every node even when `nodes` is truncated.
 - `cache.changed` (experimental, 0.29.0) appears on a `stale` node (reason `changed` or
   `upstream_stale`) whose last successful materialization recorded its run-hash components: an
   array of strings naming what differs, `code`, `decorator argument NAME`, `decorator NAME`,
-  `helper FILE:NAME` (or `helper FILE`), `input ID`, `sensor ID`, `env NAME` or `kind`, in that
-  order. With reason `changed`, `detail` is then `changed: <first>` plus ` (+N more)`. Absent for
+  `helper FILE:NAME` (or `helper FILE`), `input ID`, `sensor ID`, `value ID`, `env NAME` or
+  `kind`, in that order (`value ID`: a dict `partitions_from` source's value for the key, 0.29.6).
+  With reason `changed`, `detail` is then `changed: <first>` plus ` (+N more)`. Absent for
   a result recorded before 0.29.0. A dry run's step (`steps[].changed`) carries the same list
-  when its `reason` is `not_materialized` and the step succeeded before.
+  when its `reason` is `not_materialized` and the step succeeded before (for a partitioned
+  step, its first key that ran before).
+- `partitions.changed` (experimental, 0.29.6) on a partitioned node of `barca status` and on a
+  partitioned step of `--dry-run`: an object from each previewed key that will run
+  (`missing_keys` / `will_run_keys`) and ran before to the same list for that key. A new key is
+  absent; the object is absent when no key has an entry.
 - With a configured server (experimental, [`barca docs server-mode`](/reference/server-mode/)), `barca status` without
   `--server` or `--local` is answered by the server and each node gets `local` (boolean: this
   machine has a copy of the result). A node the server has no result for whose result this

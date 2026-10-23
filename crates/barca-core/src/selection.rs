@@ -605,6 +605,13 @@ pub fn partition_outputs(
         .iter()
         .filter(|(id, _)| id.starts_with(&prefix))
         .filter_map(|(id, oref)| {
+            // Without a selection the key is the id's bracketed suffix as it is: no parse
+            // for each of (say) 200k keys.
+            if selection.is_none() {
+                let suffix = id.get(prefix.len()..id.len().saturating_sub(1))?;
+                let branch = suffix.starts_with("_branch=") || suffix.contains(",_branch=");
+                return (!branch).then(|| (suffix.to_string(), oref.clone()));
+            }
             let step = crate::StepId::parse(id);
             if step.partition.0.contains_key("_branch") {
                 return None;
@@ -615,7 +622,7 @@ pub fn partition_outputs(
             Some((step.partition.suffix(), oref.clone()))
         })
         .collect();
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     Some(keyed)
 }
 

@@ -49,7 +49,17 @@ pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> Str
                     "{} of {} keys cached; will run: {}",
                     p.cached,
                     p.total,
-                    p.will_run_keys.join(", ")
+                    p.will_run_keys
+                        .iter()
+                        // What changed in a key that ran before (a dict source's new value).
+                        .map(|k| match p.changed.as_ref().and_then(|c| c.get(k)) {
+                            Some(changed) => {
+                                format!("{k} ({} changed)", crate::changes::summary(changed))
+                            }
+                            None => k.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 (Some(p), Some(d)) => format!("{} keys; {d}", p.total),
                 (None, Some(d)) => d.clone(),
@@ -564,9 +574,24 @@ pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepRepor
                         .into_iter()
                         .chain(p.will_run_keys),
                 );
+                if let Some(changed) = p.changed {
+                    mp.changed
+                        .get_or_insert_with(Default::default)
+                        .extend(changed);
+                }
+                if let Some(changed) = &mut mp.changed {
+                    let keys = &mp.will_run_keys;
+                    changed.retain(|k, _| keys.contains(k));
+                }
                 if m.reason.is_none() {
                     m.reason = r.reason;
                     m.detail = r.detail;
+                } else if m.changed.is_none() && r.changed.is_some() {
+                    // What changed in the first key that ran before, whichever chunk it is in.
+                    m.detail = r.detail;
+                }
+                if m.changed.is_none() {
+                    m.changed = r.changed;
                 }
             }
         }
@@ -679,6 +704,7 @@ pub(crate) fn report_for(
                     cached: 0,
                     will_run: step.partition_keys.len(),
                     will_run_keys: key_preview(step.partition_keys.iter().map(|k| k.suffix())),
+                    changed: None,
                 });
                 word_run
             }
@@ -705,6 +731,7 @@ pub(crate) fn report_for(
                 cached: cached.len(),
                 will_run: missing.len(),
                 will_run_keys: key_preview(missing.iter().map(|k| k.suffix())),
+                changed: None,
             });
             if !missing.is_empty() {
                 r.reason = Some(RunReason::NotMaterialized.code().to_string());

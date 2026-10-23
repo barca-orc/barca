@@ -135,6 +135,7 @@ Examples:
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
   barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
   barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store
+  barca get scored pipeline.py --dry-run --json  # partitions.changed: per key, what changed (a dict sensor's new value)
   barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
   barca get total pipeline.py --pretty     # summary and artifact path for humans (the default in a terminal)
   barca get total pipeline.py -o path      # only the artifact path, one per line (pipe it to xargs cat)
@@ -513,6 +514,7 @@ Examples:
   barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
+  barca status scored pipeline.py --json   # partitions.changed: why each missing key will run
   barca status big.py --limit 20           # first 20 nodes; the summary counts all
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment

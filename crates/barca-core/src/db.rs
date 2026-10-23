@@ -634,10 +634,14 @@ impl CacheReader {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
-                 output_hash FROM materializations NOT INDEXED \
-                 WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
-                 AND artifact_path IS NOT NULL",
+                format!(
+                    "SELECT id, node_id, run_hash, artifact_path, artifact_format, \
+                     artifact_size_bytes, output_hash, evicted_at IS NULL AND \
+                     last_read_at >= datetime('now', '{}') FROM materializations NOT INDEXED \
+                     WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                     AND artifact_path IS NOT NULL",
+                    crate::cache::READ_STAMP_REFRESH
+                ),
                 [lo, hi],
             )
             .await
@@ -668,6 +672,8 @@ impl CacheReader {
             let format = row.get::<String>(4).ok();
             let size = row.get::<i64>(5).ok();
             let content = row.get::<String>(6).ok().filter(|h| !h.is_empty());
+            // Read within the hour (`cache::READ_STAMP_REFRESH`): a read now need not be stamped.
+            let recent = row.get::<i64>(7).is_ok_and(|r| r == 1);
             out.add(
                 id,
                 &node,
@@ -676,6 +682,7 @@ impl CacheReader {
                 format.as_deref(),
                 size,
                 content.as_deref(),
+                recent,
             );
         }
         Ok(Some(out))
@@ -709,6 +716,8 @@ struct KeyRow {
     /// `None` when the latest row has no format or size: as for a lookup, no hit.
     format_size: Option<(Span, u64)>,
     content: Option<Span>,
+    /// Its `last_read_at` is less than an hour old.
+    recently_read: bool,
     next: Option<u32>,
 }
 
@@ -752,6 +761,7 @@ impl KeyRows {
         format: Option<&str>,
         size: Option<i64>,
         content: Option<&str>,
+        recently_read: bool,
     ) {
         if let Some(i) = self.find(node, run_hash)
             && self.rows[i].id > id
@@ -770,6 +780,7 @@ impl KeyRows {
             row.path = path_span;
             row.format_size = format_size;
             row.content = content;
+            row.recently_read = recently_read;
             return;
         }
         let node_span = self.span(node);
@@ -784,8 +795,15 @@ impl KeyRows {
             path: path_span,
             format_size,
             content,
+            recently_read,
             next,
         });
+    }
+
+    /// Whether the row a lookup of `node_id` at `run_hash` finds was read within the hour.
+    pub(crate) fn recently_read(&self, node_id: &str, run_hash: &str) -> bool {
+        self.find(node_id, run_hash)
+            .is_some_and(|i| self.rows[i].recently_read)
     }
 
     /// What a lookup of `node_id` at `run_hash` finds.
@@ -823,6 +841,10 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
     let conn = db
         .connect()
         .map_err(|e| BarcaError::Db(format!("failed to connect: {e}")))?;
+    // A page cache of up to 32 MiB (allocated as pages are read). The default is small enough
+    // that one pass over the results of a node with 200k partition keys reads its pages from
+    // disk several times over: 2.8 s against 0.25 s (benchmarks/keyed_partitions).
+    let _ = conn.execute("PRAGMA cache_size = -32768", ()).await;
     crate::db_schema::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;

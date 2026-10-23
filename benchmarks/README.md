@@ -193,6 +193,7 @@ worker count is read once, at server startup, from the environment.
 | `collect_fan_in` | 51 | 50 partitions → 1 (`collect()`, many-to-one gather) | Parallel partitions |
 | `partitioned_10k` | 10k | 10 assets × 1000 partitions, barca, Dagster, Prefect and Airflow (`scripts/run_all.py`) | Parallel partitions |
 | `partition_scaling` | 3 × N keys (2k, 20k) | 3 assets × N partitions, cold and warm, barca only (#345); `FAIL_HALF=1` fails every odd key (#461) | Parallel partitions |
+| `keyed_partitions` | 1 sensor + 2 × N keys (10k, 50k, 200k) | one tick with one key changed: a dict sensor feeding `partitions_from` (`MODES=keyed`) against a sensor partitioned by key (`MODES=partitioned`); also the tick with nothing changed, `--dry-run` and `status`, barca only | Change detection across many partitions |
 
 ### Dynamic dispatch & resilience (v0.2.0)
 

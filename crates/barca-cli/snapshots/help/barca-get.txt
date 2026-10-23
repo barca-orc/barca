@@ -81,6 +81,7 @@ Examples:
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
   barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
   barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store
+  barca get scored pipeline.py --dry-run --json  # partitions.changed: per key, what changed (a dict sensor's new value)
   barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
   barca get total pipeline.py --pretty     # summary and artifact path for humans (the default in a terminal)
   barca get total pipeline.py -o path      # only the artifact path, one per line (pipe it to xargs cat)

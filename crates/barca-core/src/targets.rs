@@ -271,12 +271,11 @@ pub(crate) fn output_for(
 ) -> Option<OutputRef> {
     all_outputs.get(target_id).cloned().or_else(|| {
         let prefix = format!("{target_id}[");
-        let mut matches: Vec<_> = all_outputs
+        all_outputs
             .iter()
             .filter(|(k, _)| k.starts_with(&prefix))
-            .collect();
-        matches.sort_by_key(|(k, _)| (*k).clone());
-        matches.first().map(|(_, v)| (*v).clone())
+            .min_by(|a, b| a.0.cmp(b.0))
+            .map(|(_, v)| v.clone())
     })
 }
 
@@ -778,6 +777,7 @@ def lone() -> int:
                 cached,
                 will_run,
                 will_run_keys: Vec::new(),
+                changed: None,
             }),
             ..Default::default()
         };

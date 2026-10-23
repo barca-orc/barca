@@ -298,6 +298,11 @@ After appending `latam` to `regions.txt`:
 
 After removing `amer` from the file, `regions` and `summary` ran and no key of `sales` did.
 
+When the source returns a **dict** instead of a list, its keys are the keys and each key is
+called with its own value; a key runs again only when its value changes. One sensor query
+that returns `{retailer: max(updated_at)}` then runs only the retailers with new data, out of
+any number: see [Only What Changed, Across Many Partitions](/patterns/09-changed-partitions/).
+
 The keys are known only after `regions` has run. Before its first run, `--dry-run` and
 `barca status` report `sales` and everything below it as `unknown` ("partition keys come from
 the output of 'regions', which is not available until it runs"). The list itself is not
