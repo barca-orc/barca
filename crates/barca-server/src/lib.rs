@@ -19,6 +19,7 @@ mod handlers;
 mod inspect;
 mod ledger;
 mod pause;
+mod read_cache;
 mod reset;
 mod routes;
 mod running;
@@ -177,6 +178,9 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     } else {
         None
     };
+
+    // `GET /state` computed ahead of the web UI's polls (`read_cache`).
+    tokio::spawn(read_cache::keep_warm(state.clone()));
 
     let app = routes::router(state.clone());
 

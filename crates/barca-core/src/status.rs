@@ -530,7 +530,9 @@ pub(crate) async fn status_with_membership(
     sample: usize,
     shape: bool,
 ) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
+    let t0 = std::time::Instant::now();
     let dag = crate::load::build_dag(file_args, python).await?;
+    trace_since("status: load", t0);
     status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape).await
 }
 
@@ -559,6 +561,7 @@ pub(crate) async fn status_from_dag_with_membership(
     sample: usize,
     shape: bool,
 ) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
+    let t0 = std::time::Instant::now();
     let (explained, membership) = crate::execution::explain_dag_with_membership(
         dag,
         cfg,
@@ -570,6 +573,8 @@ pub(crate) async fn status_from_dag_with_membership(
         &[],
     )
     .await?;
+    trace_since("status: cache decisions", t0);
+    let t0 = std::time::Instant::now();
     let reports: HashMap<&str, &StepReport> =
         explained.steps.iter().map(|s| (s.id.as_str(), s)).collect();
 
@@ -592,6 +597,8 @@ pub(crate) async fn status_from_dag_with_membership(
         HashMap::new()
     };
 
+    trace_since("status: histories", t0);
+    let t0 = std::time::Instant::now();
     // Results computed here whose upload to the store is still pending (#390).
     let pending = if cfg.remote_artifacts() {
         crate::pending_uploads::list(&cfg.db_path).await?
@@ -679,9 +686,12 @@ pub(crate) async fn status_from_dag_with_membership(
         check_store_copies(python, cfg, &mut nodes).await;
     }
 
+    trace_since("status: store check", t0);
+    let t0 = std::time::Instant::now();
     if shape {
         read_shapes(python, cfg, &mut nodes, sample).await;
     }
+    trace_since("status: shapes", t0);
 
     let summary = StatusSummary::of(&nodes);
     Ok((
@@ -694,6 +704,17 @@ pub(crate) async fn status_from_dag_with_membership(
         },
         membership,
     ))
+}
+
+/// With `BARCA_TRACE_TIMING` set: one stderr line with how long `what` took since `t0`, so the
+/// cost of each part of `barca status` (and of a dry run) can be read without a profiler.
+pub(crate) fn trace_since(what: &str, t0: std::time::Instant) {
+    if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
+        crate::errln!(
+            "[timing] {what}: {:.1} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 }
 
 /// A cached node whose result was computed here and whose upload is still pending is

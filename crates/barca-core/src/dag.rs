@@ -19,6 +19,12 @@ pub struct Dag {
     /// Pipeline files (as node `source_file`s) that import a project module that does not
     /// parse (#550). Their steps cannot run: [`Dag::check_imports`] refuses a plan with one.
     pub(crate) broken_imports: HashMap<String, crate::project_modules::BrokenImport>,
+    /// Every project file loading looked at besides the pipeline files: the helper modules it
+    /// read, and the paths it probed and found missing (a module created there later changes
+    /// what an import resolves to). With the pipeline files, these are the files whose edit
+    /// can change this graph's run hashes; `barca serve` keeps a graph until one of them
+    /// changes. Dynamic partition keys are not covered: they can depend on anything.
+    pub files_read: Vec<std::path::PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -776,6 +782,7 @@ impl Dag {
             index,
             groups: Vec::new(),
             broken_imports: HashMap::new(),
+            files_read: Vec::new(),
         };
 
         // Verify acyclicity.

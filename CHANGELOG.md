@@ -6,6 +6,24 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Performance
+
+- Inspection is fast at 300 assets with a 200k-key partitioned node and 2,000 runs
+  (`benchmarks/read_routes`; numbers in `benchmarks/RESULTS.md`): the web UI's state view
+  (`GET /state`) 76 s to 2 ms (2.2 s for the first request after a change), `GET /nodes` 72 s
+  to 1 ms, `barca status` 76 s to 2.0 s, `barca status --server` timed out (exit 3) to 13 ms,
+  `GET /history` 1.4 s to 42 ms, and `barca get` with every asset cached 14.1 s to 3.6 s.
+  Queries that filtered node ids with `substr` or `LIKE` scanned the whole table once per node;
+  they use the node id index now, with three partial indexes added within format 1
+  (`idx_mat_changed`, `idx_mat_attempts`, `idx_mat_evicted`; built on the first open after the
+  upgrade, about 4 s for 400k rows). The dry run reads a node with many keys in one pass. The
+  server keeps its parsed graph, one copy of the metadata DB and its status results until a
+  source file or the database changes, answers an unchanged poll with `304 Not Modified`
+  (`ETag` and `If-None-Match` on every inspection route), and computes `/state` again in the
+  background while the UI is open.
+
 ## 0.29.3 (2026-10-22)
 
 ### Breaking

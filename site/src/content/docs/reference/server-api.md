@@ -394,6 +394,36 @@ wins, then the oldest. `GET /assets/{name}` has the same `running` field. The UI
 endpoint every 2 s while any node is running (10 s otherwise) and shows the runs on every page,
 whichever tab or client started them.
 
+### Polling cheaply: what the server keeps
+
+The inspection routes (`/state`, `/nodes`, `/assets`, `/assets/{name}`, `/list`, `/history`,
+`/stats/{name}`, `/runs`, `/runs/{run_id}`, the log routes, `/schedule`, `/plan`, `/groups`,
+`/project` and `/health`) answer every `GET` with an `ETag`, a digest of the body, and
+`Cache-Control: no-cache`. A request whose `If-None-Match` names that `ETag` gets
+`304 Not Modified` and no body while the body is the same. A browser does this by itself, so the
+UI's polls of an unchanged project transfer nothing.
+
+Between requests the server keeps what the answers are computed from, each with the evidence
+that it is still right:
+
+- the graph it decides cache states with, until a pipeline file, a helper module a step reads
+  or a path an import was looked up at changes (or `--watch` sees an edit). A graph with keys
+  from `partitions(<expression>)` is loaded again at least every 30 seconds, since the
+  expression can read anything;
+- one private copy of the metadata DB for every request, until the database or its WAL
+  changes on disk;
+- each `barca status` result (`/state`, `/nodes`, the `running` fields), until the graph or the
+  database changes. An answer kept for more than 30 seconds is computed again in the
+  background, which bounds how long an artifact deleted by hand, outside barca, still shows as
+  `cached`.
+
+A finished run, a run on this project by the CLI, a ledger post or an edit is in the next answer.
+A file is trusted to be unchanged only once it has been still for a moment (2 seconds for source
+files, a tenth of a second for the database), so a request right after a write computes its
+answer afresh. While a client polls `/state` (the UI does every 10 seconds while open), the
+server computes it again in the background once a change has settled and no run of the server
+is going, so the poll finds it ready.
+
 ### Resetting the database
 
 ```

@@ -1196,9 +1196,10 @@ pub async fn list(
     Query(query): Query<RunsQuery>,
 ) -> Result<Json<RunList>, ApiError> {
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
     if query.status == Some(RunsFilter::Running) {
-        return in_flight_list(&state, &snapshot.path, limit)
+        return in_flight_list(&state, &db_state, &snapshot, limit)
             .await
             .map(Json);
     }
@@ -1244,18 +1245,16 @@ pub async fn list(
 /// working on now ([`crate::running`]).
 async fn in_flight_list(
     state: &AppState,
-    read_path: &str,
+    db_state: &crate::read_cache::Stamp,
+    snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
     limit: usize,
 ) -> Result<RunList, ApiError> {
+    let read_path = snapshot.path.as_str();
     let flights = crate::running::in_flight(state, Some(read_path)).await;
     let mut runs = Vec::with_capacity(flights.len());
     if !flights.is_empty() {
-        let dag = state.loaded_dag().await?;
-        let mut cfg = state.config.resolved.clone();
-        cfg.db_path = read_path.to_string();
-        let status =
-            barca_core::status::status_from_dag(&cfg, &[], &dag, &state.config.python, 0, false)
-                .await?;
+        let dag = state.inspect_dag().await?;
+        let status = crate::handlers::whole_status(state, &dag, db_state, snapshot).await?;
         for flight in &flights {
             let mut row = match state.runs.get(&flight.run_id) {
                 Some(live) => live_summary(&live, &state.config.files),

@@ -38,6 +38,8 @@ def _barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 def _as_written_by_0_23(project: Path) -> None:
     """Remove what format 1 added in 0.24.0, as a database last written by 0.23 lacks it."""
     with closing(sqlite3.connect(project / ".barca/metadata.db")) as db:
+        # An index on the column came later still (0.29.3).
+        db.execute("DROP INDEX IF EXISTS idx_mat_changed")
         db.execute("ALTER TABLE materializations DROP COLUMN bytes_changed")
         db.commit()
 
@@ -84,6 +86,8 @@ def _as_written_by_0_24_3(project: Path) -> None:
             "DROP TABLE notifications",
             "DROP INDEX idx_runs_job",
             "DROP INDEX idx_mat_path",
+            # Added in 0.29.3, on a column this removes.
+            "DROP INDEX IF EXISTS idx_mat_evicted",
             "ALTER TABLE runs DROP COLUMN job",
             "ALTER TABLE materializations DROP COLUMN evicted_at",
             "ALTER TABLE materializations DROP COLUMN last_read_at",

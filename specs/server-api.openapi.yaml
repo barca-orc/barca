@@ -2,13 +2,13 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '9'
-  description: 'Normative current wire contract; specification version 9 is independent of package versions.
+  version: '10'
+  description: 'Normative current wire contract; specification version 10 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
     /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
-    envelope. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
+    envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
@@ -23,10 +23,24 @@ paths:
       responses:
         '200':
           description: Response
+          headers: &id_etag
+            ETag:
+              description: A digest of the body. Send it back as If-None-Match to get 304 Not Modified, and no body, while the body is unchanged.
+              schema:
+                type: string
+                pattern: ^"[0-9a-f]{24}"$
+            Cache-Control:
+              description: A client may keep the body, and asks again each time (with If-None-Match).
+              schema:
+                type: string
+                const: no-cache
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '405':
           description: Registered path with unsupported method; Allow header identifies supported methods
           content:
@@ -62,10 +76,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Project'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '500':
           description: Inspection infrastructure error
           content:
@@ -114,10 +132,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Plan'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '400':
           description: Invalid source/target or wrong node kind
           content:
@@ -163,12 +185,16 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/NodeGroup'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '400':
           description: Invalid source/target or wrong node kind
           content:
@@ -208,10 +234,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListBody'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '500':
           description: Inspection infrastructure error
           content:
@@ -258,10 +288,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusBody'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '404':
           description: Unknown target
           content:
@@ -356,10 +390,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HistoryBody'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '500':
           description: Inspection infrastructure error
           content:
@@ -444,10 +482,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SqlCatalog'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '500':
           description: Inspection infrastructure error
           content:
@@ -516,10 +558,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MaterializationsBody'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '500':
           description: Inspection infrastructure error
           content:
@@ -600,10 +646,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Stats'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '404':
           description: Unknown node
           content:
@@ -673,12 +723,16 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/Asset'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '400':
           description: Invalid source/target or wrong node kind
           content:
@@ -722,10 +776,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AssetDetail'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '400':
           description: Invalid source/target or wrong node kind
           content:
@@ -794,12 +852,16 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/NodeStatus'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '400':
           description: Invalid source/target or wrong node kind
           content:
@@ -866,12 +928,16 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/NodeState'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '400':
           description: Invalid source/target or wrong node kind
           content:
@@ -973,12 +1039,16 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/Job'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '405':
           description: Registered path with unsupported method; Allow header identifies supported methods
           content:
@@ -1561,10 +1631,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Runs'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '500':
           description: Execution/inspection infrastructure error
           content:
@@ -1707,10 +1781,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RunView'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '404':
           description: Resource not found
           content:
@@ -1974,10 +2052,14 @@ paths:
       responses:
         '200':
           description: The run's status and its recorded lines in order, filtered by step and stream
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RunLogs'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '404':
           description: Unknown run
           content:
@@ -2065,10 +2147,14 @@ paths:
       responses:
         '200':
           description: Response
+          headers: *id_etag
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Logs'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
         '500':
           description: Execution/inspection infrastructure error
           content:

@@ -207,6 +207,15 @@ Not a `hyperfine` run: `python benchmarks/transfer_hash/bench.py [MB] [--max-sec
 times the SHA-256 a remote-backed run takes of each local artifact it reads (about 0.5 s/GB with a
 warm page cache), so a regression in `python/barca/_transfer.py` shows up as a number.
 
+### Read routes at 300 assets
+
+Not a `hyperfine` run, barca only: `benchmarks/read_routes/bench.sh` generates a 300-asset
+project with a 200k-key partitioned node, seeds it with 2,000 runs through barca, and times
+every read route of `barca serve` (cold, warm and `304`) and `barca status`, `list`, `history`
+and `stats`, locally and with `--server`. `STORE=1` adds a `file://` artifact store; `KEYS` and
+`RUNS` shrink it. Results: [RESULTS.md](RESULTS.md), "Read routes and inspection at 300
+assets".
+
 ### Planning pipeline (#250)
 
 Not a `hyperfine` run, barca only: `benchmarks/planning_pipeline/bench.sh [--scale N] [--pool N]`
