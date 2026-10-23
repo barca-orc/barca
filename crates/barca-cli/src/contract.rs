@@ -103,6 +103,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "sample rows come from a Python helper whose output may grow",
     ),
     (
+        "status --problems",
+        "new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule)",
+    ),
+    (
         "get --server",
         "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
     ),

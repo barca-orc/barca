@@ -53,14 +53,15 @@ outside the `GENERATED` blocks is written by hand.
 
 | Item | Why |
 |---|---|
-| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr |
+| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
-| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [`barca docs server-mode`](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [`barca docs server-mode`](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
 | `barca sql` with a server (`GET /sql/views`, `GET /materializations`) and the `barca` schema (`barca.runs`, `barca.materializations`, `barca.nodes`) | new in 0.29.3: the columns of barca's tables, the limit of rows read from a server and the wording of the notes may change after field use; the result JSON is `sql`'s |
 | `logs -f/--follow` | new in 0.29.2: the end-of-run line on stderr (`barca: run <run_id> ended: <status>`) and the choice of the run to follow without a run id may change after field use; the exit codes (0 succeeded, 130 cancelled, 1 otherwise) and the JSON Lines on stdout are stable |
+| `status --problems`, `nodes[].schedule` and `filter` in `status --json` (and `GET /nodes?state=&problems=`) | new in 0.29.3: what counts as needing attention may grow (now every state but `cached` and `always_runs`, a task or sensor whose last run failed, and a paused or failing schedule); `schedule` may gain keys. `--state` and the summary counting every node are stable |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
@@ -202,6 +203,8 @@ default, and any aliases.
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
+| `--server` | `URL` | - | experimental (with the command) | Also check a barca server: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url). A configured server is checked without it |
+| `--local` | - | default `false` | experimental (with the command) | Check this machine only, without the configured server |
 
 #### barca logs
 
@@ -297,8 +300,10 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
+| `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, unknown, always_runs. The summary still counts every node |
+| `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -449,7 +454,7 @@ value of its first key only.
 `[server] url` in `barca.toml` or `BARCA_SERVER` (experimental) points `get` and `run` at a
 server's ledger ([`barca docs server-mode`](/reference/server-mode/)): they still run here, read cache hits from the server
 and post what they compute, over `http://` or `https://`. `status`, `history`, `stats` and `logs` answer
-from the server. `--local` ignores it for one command. A server that cannot be reached, answers
+from the server, and `doctor` checks it beside this machine. `--local` ignores it for one command. A server that cannot be reached, answers
 unexpectedly or speaks another API version is exit 3 naming its URL, with `--local` as the
 remediation; a server whose store is not this project's `[remote]` (or a project with no
 `[remote]`) is exit 2 naming both.
@@ -599,7 +604,9 @@ use `refresh_all=True`.
 stdout, `--fields` and `BARCA_OUTPUT=json`. An explicit `--limit N` applies in either
 format; `--all` cannot be combined with it. Human tables default to 100 nodes for
 `list`/`status` and 10 runs for `history`. Truncation still reports `total`, `truncated`
-and a `hint` naming `--all`; the status summary still counts every node.
+and a `hint` naming `--all`; the status summary still counts every node. So does a filter:
+`status --state <states>` and `--problems` keep only the matching nodes (`total` counts them),
+name the filter in `filter`, and leave `summary` counting every node in scope.
 
 ## JSON output schemas
 
@@ -1647,6 +1654,67 @@ counts every node even when `nodes` is truncated.
 - `shape` is `null` unless the last materialization succeeded, and is experimental: `type`, and
   by format `rows`, `columns[]`, `keys`, `key_count`, `sample` (with `--sample`), or only `note`
   when it cannot be read.
+- `schedule` (experimental, 0.29.3) appears on a node with `freshness=Schedule(...)`: `cron`,
+  `next_fire`, `last_fired`, `paused_until` (RFC 3339 UTC or `null`), `last_status`,
+  `skip_reason` (string or `null`), `failures`, `max_failures` (integers), `failing`, `paused`
+  and `live` (booleans; `live` is `true` when a running scheduler reported it). Its types are in
+  `specs/server-api.openapi.yaml` (`NodeSchedule`).
+
+#### Problems only
+
+`barca status pipeline.py --problems --json` (after `broken` failed) keeps the nodes that need
+attention, adds `filter`, and leaves `summary` counting every node; `--state <states>` gives
+`filter.states` instead of `filter.problems`:
+
+<!-- BEGIN GENERATED schema status_problems -->
+| Key | Type | Present |
+|---|---|---|
+| `filter` | object | always |
+| `filter.problems` | boolean | always |
+| `nodes` | array | always |
+| `nodes[]` | object | always |
+| `nodes[].cache` | object | always |
+| `nodes[].cache.detail` | string | always |
+| `nodes[].cache.reason` | string | always |
+| `nodes[].cache.run_hash` | string | sometimes |
+| `nodes[].cache.state` | string | always |
+| `nodes[].env` | array | always |
+| `nodes[].id` | string | always |
+| `nodes[].inputs` | array | always |
+| `nodes[].inputs[]` | string | always |
+| `nodes[].kind` | string | always |
+| `nodes[].last_materialization` | null \| object | always |
+| `nodes[].last_materialization.artifact` | null | always |
+| `nodes[].last_materialization.created_at` | string | always |
+| `nodes[].last_materialization.elapsed_seconds` | null | always |
+| `nodes[].last_materialization.error` | string | always |
+| `nodes[].last_materialization.format` | null | always |
+| `nodes[].last_materialization.run_hash` | string | always |
+| `nodes[].last_materialization.size_bytes` | null | always |
+| `nodes[].last_materialization.status` | string | always |
+| `nodes[].name` | string | always |
+| `nodes[].partitioned` | boolean | always |
+| `nodes[].partitions` | object | sometimes |
+| `nodes[].partitions.cached` | integer | always |
+| `nodes[].partitions.missing` | integer | always |
+| `nodes[].partitions.missing_keys` | array | always |
+| `nodes[].partitions.missing_keys[]` | string | always |
+| `nodes[].partitions.total` | integer | always |
+| `nodes[].shape` | null | always |
+| `root` | string | always |
+| `summary` | object | always |
+| `summary.always_runs` | integer | always |
+| `summary.cached` | integer | always |
+| `summary.never_run` | integer | always |
+| `summary.partial` | integer | always |
+| `summary.stale` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
+| `target` | null | always |
+| `targets` | array | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_problems -->
 
 #### What changed
 

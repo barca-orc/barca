@@ -399,6 +399,113 @@ use `barca history --reconcile RUN_ID --json`. It records `interrupted`, prints 
 run using the normal history envelope, preserves successful results, and refuses a proven
 live owner. Ordinary history inspection stays read-only. See `barca docs cache`.
 
+## Debugging pipelines
+
+To find what is wrong and why, ask in this order. Each step is read-only: nothing runs, nothing
+is written. With a server configured (`barca docs server-mode`), every command below answers
+from the server, after `[barca] server <url> (<source>)` on stderr; add `--local` for this
+machine's own records, or `--server <url>` for another server.
+
+1. **`barca doctor`**: is the setup sound? Exit 0 when every check passes, 3 when one fails,
+   and each failed check's detail ends with what to do. With a server it also checks the
+   server: its version and API version against this client, its store against this project's
+   `[remote]`, whether it is draining, the files it failed to load, its scheduler (schedules
+   paused or failing) and the runs this machine has not posted to it yet (`barca docs doctor`).
+2. **`barca status --problems`**: which nodes need attention, and why. Every state but `cached`
+   and `always_runs`, a task or sensor whose last run failed, and a schedule that is paused or
+   failing. A failed node's error is `last_materialization.error` in JSON and its first line
+   is in the WHY column; a scheduled node has `schedule` (`failures`, `max_failures`,
+   `failing`, `paused`, `next_fire`). The summary still counts every node (`barca docs status`).
+3. **`barca history --status failed`**: the failed runs, newest first, each with its first
+   failed step and error; `--target NODE`, `--since 24h` and `--triggered-by schedule` narrow
+   it. **`barca history RUN_ID`** shows one run: every step it recorded, each failed step's
+   error and traceback, and how a dead worker ended (`barca docs status`, "Finding and reading a
+   failed run").
+4. **`barca logs RUN_ID --step NODE --stream stderr`**: the step's traceback, warnings and
+   logging, as recorded (`barca docs logs`).
+5. **Fix, then re-run the same command.** Steps that succeeded stay cached. For a schedule that
+   reached `max_failures`, a successful `barca get NODE --server` (`barca run` for a task) resets
+   the count and its ticks resume.
+
+```bash
+barca doctor --json                                 # {ok, checks: [{name, ok, detail, data}]}; exit 3 if a check failed
+barca status --problems --json                      # only what needs attention; summary counts every node
+barca status --state stale,never_run --json         # only these cache states
+barca status --problems --json --fields id,cache,last_materialization,schedule
+barca history --status failed --since 24h --json --fields run_id,target,started_at,failure
+barca history 81c89c44f469 --json                   # one run: {run, steps, hint}
+barca logs 81c89c44f469 --step ratio --stream stderr   # the traceback of one step
+barca status --problems --local                     # this machine's own state, with a server configured
+```
+
+Against a server with an asset that raises, an asset whose code changed, and a scheduled task
+that failed `max_failures=2` ticks in a row:
+
+```text
+$ barca status --problems
+[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
+NAME          KIND   STATE        WHY                                                       LAST RUN                               SHAPE         SCHEDULE                    DEPS
+nightly_sync  task   always-runs  last run failed: RuntimeError: upstream API returned 503  failed 2026-10-22 22:51:16 UTC         -             */2 * * * * *; failing 2/2  -
+prices        asset  stale        changed: code                                             success 2026-10-22 22:51:12 UTC 0.00s  dict (1 key)  -                           -
+ratio         asset  never-run    failed: ZeroDivisionError: division by zero               failed 2026-10-22 22:51:12 UTC         -             -                           orders
+
+3 of 4 nodes match --problems; the counts below are for every node
+
+1 cached, 1 stale, 1 never run, 0 partial, 0 unknown, 1 always run
+```
+
+```text
+$ barca history --status failed
+[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
+RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
+------------------------------------------------------------------------------------------------------
+81a922c0d954   run     nightly_sync             failed          1      0   0.1s 2026-10-22 23:36:08 UTC  nightly_sync: RuntimeError: upstream API returned 503
+81a9a8f1453f   run     nightly_sync             failed          1      0   0.1s 2026-10-22 23:36:06 UTC  nightly_sync: RuntimeError: upstream API returned 503
+81c89c44f469   get     ratio                    failed          2      0   0.1s 2026-10-22 23:36:05 UTC  ratio: ZeroDivisionError: division by zero
+```
+
+```text
+$ barca logs 81c89c44f469 --step ratio --stream stderr --pretty
+[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
+Traceback (most recent call last):
+  File "/srv/project/pipeline.py", line 11, in ratio
+    return orders["n"] / 0
+           ~~~~~~~~~~~~^~~
+ZeroDivisionError: division by zero
+```
+
+`barca doctor` on the same laptop, whose `[remote]` is not the server's store and whose server
+has a file that does not parse (the lines about this machine are left out):
+
+```text
+$ barca doctor
+[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
+...
+[ok] server: http://127.0.0.1:8391 ([server] url in barca.toml) answers
+[ok] server_version: barca 0.29.3, API version 1, the same as this client
+[error] server_store: the server writes artifacts to /srv/store/default/artifacts, this project to /home/me/store2/default/artifacts: a result one of them records could not be read by the other; Set [remote] uri in barca.toml to the uri the server's barca.toml has, and use the server's environment.
+[ok] server_health: serving
+[error] server_sources: the server did not load 1 file, so its nodes are missing there: broken.py: Parse error: syntax error in broken.py: line 1, column 12: Expected a parameter or the end of the parameter list; Fix the file and deploy it again: a `barca serve --watch` reloads it, otherwise restart barca serve.
+[error] server_scheduler: running; 1 schedule, 1 failing (pipeline.py:nightly_sync): pipeline.py:nightly_sync failed 2 ticks in a row (max_failures=2) and its ticks are skipped; Run `barca status --problems` for the error and fix it, then `barca run pipeline.py:nightly_sync --server`: a success resets the count and the ticks resume.
+[ok] server_posts: every run this machine computed against the server is recorded there
+```
+
+`barca sql` answers the questions the commands above do not, over barca's own tables
+(`barca.runs`, `barca.materializations`, `barca.nodes`; `barca docs sql`), from the server's
+records with a server configured:
+
+```bash
+barca sql "select run_id, target, status, failure.node as node, failure.error as error from barca.runs where status = 'failed' order by started_at desc"
+```
+
+```text
+[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
+run_id        target                    status  node                      error
+7f39c226c7c1  pipeline.py:nightly_sync  failed  pipeline.py:nightly_sync  RuntimeError: upstream API returned 503
+7f3978fbc56d  pipeline.py:nightly_sync  failed  pipeline.py:nightly_sync  RuntimeError: upstream API returned 503
+7facd30b04c3  ratio                     failed  pipeline.py:ratio         ZeroDivisionError: division by zero
+```
+
 ## Bounded output: --limit, --all, --fields
 
 `list`, `status` and `history` return every item in JSON unless `--limit N` is explicit.

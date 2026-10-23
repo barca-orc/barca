@@ -26,6 +26,17 @@ Remote-off skips provider probes. The finite Python probe is stopped and reaped 
 No remote object writes, metadata creation or migrations are permitted. The local cache
 directory and an immediately removed temporary write probe are allowed.
 
+With a server (`--server [URL]`, or `BARCA_SERVER` / `[server] url` without `--local`), the
+report adds server checks after the local ones: `server` (reachable, answers `GET /health`;
+when it fails the other server checks are skipped), `server_version` (fails only on another
+API version), `server_store` (the server's `store_uri` against this project's `[remote]`),
+`server_health` (draining or `metadata_error`), `server_sources` (`load_errors`),
+`server_scheduler` (fails when the scheduler stopped on an error or a schedule is `failing` in
+`GET /schedule`; paused, `--no-schedule` and `--read-only` pass) and `server_posts` (this
+machine's `ledger_posts` rows for that URL in state `unsynced`, read from a snapshot). A failed
+check's `detail` ends with a remediation line. Server checks only read: no request changes the
+server and no pending post is sent. `--server` with no URL and none configured is a usage error.
+
 Identity lookup uses the selected storage driver's credentials. Report effective identity
 when available; report configured context and an explicit unresolved lookup otherwise.
 Lookup failure alone does not change a successful store listing into failure. Error hints
@@ -37,5 +48,6 @@ issue #86; controlled tests do not establish real-provider success.
 
 Conformance: [CLI/no-execution controls](../python/tests/test_doctor.py),
 [selected-credential adapters and redaction](../python/tests/test_identity.py),
-[CLI JSON snapshots](../python/tests/test_cli_contract.py), shared helper lifecycle tests
+[CLI JSON snapshots](../python/tests/test_cli_contract.py),
+[server checks against a real `barca serve`](../python/tests/test_debugging_problems.py), shared helper lifecycle tests
 in `helper_proc.rs`.

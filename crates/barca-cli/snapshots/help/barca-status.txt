@@ -24,10 +24,16 @@ Options:
       --fields <FIELDS>
           Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local]
+          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
 
       --sample <N>
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
+
+      --state <STATE>
+          Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, unknown, always_runs. The summary still counts every node
+
+      --problems
+          Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, unknown), a task or sensor whose last run failed, or a paused or failing schedule
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -55,6 +61,9 @@ Examples:
   barca status total --server              # cache state on the configured barca server
   barca status total --json                # with a server configured: its ledger, plus `local` per node
   barca status total --local               # this machine's own state, even with a server configured
+  barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
+  barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
+  barca status --problems --server         # what needs attention on the configured server
 
 Cache state per node: cached, unsynced (cached here, its upload to the artifact store still
 pending: reason `local_only`), stale (ran before; code or inputs changed, or its artifact file is
@@ -72,5 +81,11 @@ the recorded digest agree: reason `local_only`, `store_only` or `mismatch` (barc
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
 requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
 cannot be reached is a `note` on each shape, not a failed command.
+--problems keeps the nodes that need attention: every state but cached and always_runs, a task
+or sensor whose last run failed, and a schedule that is paused or failing (max_failures reached).
+--state keeps the named states. Either way the summary counts every node, and the JSON says
+which filter applied in `filter`. A failed node's error is `last_materialization.error`, and its
+first line is in the WHY column. A scheduled node has `schedule` (cron, next fire, failures,
+paused): from a server, its scheduler's view; on this machine, what the metadata DB holds.
 JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs status, barca docs agents

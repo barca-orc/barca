@@ -45,9 +45,14 @@ pub struct NodesQuery {
     pub targets: Option<String>,
     /// `--sample N`.
     pub sample: Option<usize>,
+    /// `--state a,b`: only nodes in these cache states.
+    pub state: Option<String>,
+    /// `--problems`: only nodes that need attention (`1`, `true`).
+    pub problems: Option<String>,
 }
 
-/// `GET /nodes?targets=a,b&sample=N` — `barca status --json --all` for the server's ledger.
+/// `GET /nodes?targets=a,b&sample=N&state=a,b&problems=1` — `barca status --json --all` for the
+/// server's ledger, each scheduled node with its scheduler's view in `schedule`.
 pub async fn nodes(
     State(state): State<AppState>,
     Query(query): Query<NodesQuery>,
@@ -60,6 +65,17 @@ pub async fn nodes(
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect();
+    let filter = barca_core::status::StatusFilter {
+        states: barca_core::status::StatusFilter::parse_states(
+            &query.state.iter().cloned().collect::<Vec<_>>(),
+        )
+        .map_err(|e| ApiError::BadRequest(format!("state: {e}")))?,
+        problems: query
+            .problems
+            .as_deref()
+            .is_some_and(|v| !matches!(v, "" | "0" | "false")),
+        matched: 0,
+    };
     let dag = state.current_dag().await?;
     let snapshot = snapshot_db(&state).await?;
     let mut cfg = state.config.resolved.clone();
@@ -74,6 +90,9 @@ pub async fn nodes(
     )
     .await
     .map_err(|e| ApiError::run(e, context("status", &state)))?;
+    let mut result = result;
+    crate::handlers::attach_live_schedules(&state, &mut result.nodes, &dag, &snapshot.path).await?;
+    filter.apply(&mut result);
     let rendered = barca_core::report::render_status(result, true, None, None, root().as_deref());
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }

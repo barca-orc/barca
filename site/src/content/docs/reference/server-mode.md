@@ -37,6 +37,8 @@ barca history -l 20                           # the server's runs
 barca stats daily_report                      # timings from the server
 barca sql "select * from daily_report"        # the team's result, queried here
 barca sql "select * from barca.runs" --local  # this machine's own runs
+barca status --problems                       # what needs attention on the server
+barca doctor                                  # this machine and the server: version, store, load errors, schedules
 barca list --server --json                    # the deployed nodes
 barca get daily_report --local                # this machine only; the server is not touched
 ```
@@ -71,11 +73,13 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
   with `http://` or `https://`.
 - `--local` ignores the configured server for one command; `--local` with `--server` is a usage
   error.
-- `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history`, `stats`, `logs`
-  and `sql`. `serve`, `plan`, `doctor`, `docs` and `version` always run on this machine;
+- `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history`, `stats`, `logs`,
+  `sql` and `doctor`. `serve`, `plan`, `docs` and `version` always run on this machine;
   `--server` or `--local` on them is a usage error. `barca list` without `--server` reads this
   machine's files. `barca sql` always runs its query on this machine: a server only says which
   results its views read ([`barca docs sql`](/reference/sql/), "With a server"); the server never runs SQL.
+  `doctor` runs its checks here and, with a server (configured, or `--server`), checks the
+  server too; `--local` leaves it out ([`barca docs doctor`](/reference/doctor/), "Checking a server").
 
 ## A local run against the server's ledger
 
@@ -196,6 +200,11 @@ artifact, so its `local` is `false`.
 tables (`barca.runs`, `barca.materializations`, `barca.nodes`) from its records, then runs the
 query here over the store; the server never runs SQL ([`barca docs sql`](/reference/sql/), "With a server"). An
 unsynced result is not mixed into a view: the error or note says so and names `--local`.
+
+`barca status --problems` (or `--state <states>`) keeps the nodes that need attention, the
+server's failures, stale results and failing or paused schedules among them, plus this
+machine's `not_in_ledger` results; each scheduled node carries the server scheduler's view in
+`schedule` (`barca docs status`, "Schedules"). `barca doctor` checks the server itself.
 
 `barca history --reconcile` writes this machine's history and runs here. Add `--local` to see
 this machine's own runs, statuses and timings.

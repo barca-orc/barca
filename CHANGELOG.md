@@ -37,6 +37,20 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   `attempts`, `client_run_id` and `failure`. A run only this machine has says `barca history
   RUN_ID --local`. Cached steps are counted, not listed (`barca docs status`, "Finding and
   reading a failed run").
+- Debug a pipeline from the CLI, against a server too. `barca status --problems` keeps the
+  nodes that need attention (every state but `cached` and `always_runs`, a task or sensor whose
+  last run failed, a schedule that is paused or failing) and `--state <states>` the named cache
+  states; the summary still counts every node and the JSON names the filter in `filter`
+  (`GET /nodes?state=&problems=` over HTTP). The table's WHY column shows the first line of a
+  failed node's error (`failed: ZeroDivisionError: division by zero`). A scheduled node has
+  `schedule` in `status --json` (`cron`, `next_fire`, `failures`, `max_failures`, `failing`,
+  `paused`, `last_status`, `live`) and a SCHEDULE column: from a server, its scheduler's view,
+  the numbers `GET /schedule` and the web UI show; on this machine, what the metadata DB holds.
+  `barca doctor` checks a configured server (or `--server <url>`; `--local` skips it): its
+  version and API version, its store against this project's `[remote]`, draining, files it
+  failed to load, its scheduler and failing schedules, and the runs this machine has not posted
+  to it, each failed check with what to do. `barca docs agents` has a new "Debugging pipelines"
+  section (`barca docs status`, `barca docs doctor`).
 
 - `barca sql` works with server mode. With a server configured (`[server] url`,
   `BARCA_SERVER`) or `--server <url>`, the server says which result each view reads from its

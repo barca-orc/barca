@@ -43,7 +43,8 @@ barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] 
                                                Get assets — cache-aware; prints their artifact paths
 barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
-barca doctor [file.py|dir/ ...] [--json]      Diagnose project prerequisites without running steps
+barca doctor [file.py|dir/ ...] [--json] [--server [URL] | --local]
+                                               Diagnose project prerequisites (and a server) without running steps
 barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]  A run's recorded step stdout and stderr (default: the most recent run)
 barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
                                                Show recent runs, or one run's steps and errors
@@ -52,7 +53,7 @@ barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .b
 barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
-barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
+barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]
                                                Cache state, last run and artifact shape per node
 barca sql "<query>" [file.py|dir/ ...] [--json] [-l N | --all]
                                                Query cached results with DuckDB (experimental)
@@ -69,7 +70,8 @@ barca --help                                  Show help
 the command on a `barca serve` and prints it here as the local command would, and `--local`,
 which ignores a configured server (experimental; [Server mode](/reference/config/#server-mode),
 `barca docs server-mode`). `sql` takes both too: a server resolves its views, and the query
-always runs here.
+always runs here. `doctor` takes both too: `--server` checks that server beside this
+machine (a configured one is checked without it), `--local` checks this machine only.
 
 `barca pipeline.py` is read as `barca get pipeline.py`. It is kept for compatibility; write
 `barca get`.
@@ -623,7 +625,21 @@ barca status total pipeline.py                   # only `total` and its upstream
 barca status total,notify pipeline.py            # several targets: the union of their cones
 barca status pipeline.py --json                  # {target, targets, nodes, summary, total, truncated, root}
 barca status pipeline.py --json --sample 5       # plus up to 5 sample rows per json/parquet/CSV artifact
+barca status --problems                          # only nodes that need attention
+barca status --state stale,never_run             # only these cache states
 ```
+
+`--problems` keeps every node that is not fine: every state but `cached` and `always_runs`, a
+task or sensor whose last run failed, and a schedule that is paused or failing (`max_failures`
+reached). `--state` keeps the named states. The summary still counts every node, and the JSON
+names the filter in `filter`. A node whose last run failed shows the first line of its error in
+WHY (`failed: ZeroDivisionError: division by zero`); the whole message is
+`last_materialization.error`. A scheduled node has `schedule` (`cron`, `next_fire`,
+`failures`, `max_failures`, `failing`, `paused`, `paused_until`, `last_status`, `live`) and the
+table a SCHEDULE column: from a server it is the server's scheduler's view, the numbers of
+`GET /schedule` and the web UI; on this machine it is what the metadata DB holds, with
+`live: false`. See [Agent Skill](/reference/agent-skill/) and `barca docs agents`,
+"Debugging pipelines".
 
 ```
 NAME    KIND   STATE        WHY           LAST RUN                               SHAPE            DEPS

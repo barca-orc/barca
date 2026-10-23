@@ -6,18 +6,27 @@ Arguments:
   [FILES]...  Python files or directories to inspect (default: discovered project sources)
 
 Options:
-      --json       Emit JSON on stdout (the default when stdout is not a terminal)
-      --pretty     Emit human-readable output (the default when stdout is a terminal)
-      --env <ENV>  Environment name (separates cache/state per environment)
-  -h, --help       Print help
+      --json            Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty          Emit human-readable output (the default when stdout is a terminal)
+      --env <ENV>       Environment name (separates cache/state per environment)
+      --server [<URL>]  Also check a barca server: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url). A configured server is checked without it
+      --local           Check this machine only, without the configured server
+  -h, --help            Print help
 
 Examples:
   barca doctor                      # diagnose the discovered project
   barca doctor pipeline.py --json    # structured checks, no steps executed
   barca doctor src/ --env local --pretty   # selected sources and environment
+  barca doctor --server                # also the configured server: version, store, load errors, schedules
+  barca doctor --server http://127.0.0.1:8274 --json   # a server named here
+  barca doctor --local                 # this machine only, even with a server configured
 
 Checks project root, Python, config, backups, cache writability, metadata integrity,
 static source parsing, and configured stores. Never imports pipeline modules or evaluates
 dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
 3 when a prerequisite fails. Store probes list but never create buckets or objects.
+With a server configured (BARCA_SERVER, [server] url) or --server, doctor also checks it: its
+URL, barca and API version against this client, its store against this project's [remote],
+whether it is draining, files it failed to load, its scheduler (schedules paused or failing),
+and the runs this machine has not posted to it yet. Each failed check says what to do.
 More: barca docs doctor

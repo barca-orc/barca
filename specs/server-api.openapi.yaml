@@ -300,7 +300,10 @@ paths:
             text/plain:
               schema: *id005
       description: Built by the function barca status --json uses, against a private snapshot of the metadata
-        DB.
+        DB. A scheduled node's schedule is the running scheduler's view (GET /schedule), or with no
+        scheduler what the metadata DB holds (live false). state and problems keep only the matching
+        nodes, as barca status --state and --problems do; summary still counts every node, and filter
+        names the filter. An unknown state is 400.
       parameters: &id008
       - name: targets
         in: query
@@ -314,6 +317,20 @@ paths:
           type: integer
           minimum: 0
         description: --sample N
+      - name: state
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'Comma-separated cache states (--state): cached, unsynced, stale, never_run, partial,
+          unknown, always_runs.'
+      - name: problems
+        in: query
+        required: false
+        schema:
+          type: string
+        description: '--problems: 1 or true keeps the nodes that need attention (every state but cached
+          and always_runs, a task or sensor whose last run failed, a paused or failing schedule).'
     head:
       summary: barca status --json for the ledger (headers only)
       operationId: head_nodes
@@ -3068,6 +3085,63 @@ components:
         env: &id053
           type: array
           items: *id003
+        undeclared_env:
+          type: array
+          items: *id003
+        schedule:
+          $ref: '#/components/schemas/NodeSchedule'
+    NodeSchedule:
+      type: object
+      additionalProperties: false
+      description: barca status --json nodes[].schedule. Times are RFC 3339 UTC.
+      required:
+      - cron
+      - next_fire
+      - last_fired
+      - last_status
+      - failures
+      - max_failures
+      - failing
+      - paused
+      - paused_until
+      - skip_reason
+      - live
+      properties:
+        cron:
+          type: string
+        next_fire:
+          type:
+          - string
+          - 'null'
+        last_fired:
+          type:
+          - string
+          - 'null'
+        last_status:
+          type:
+          - string
+          - 'null'
+        failures:
+          type: integer
+          minimum: 0
+        max_failures:
+          type: integer
+          minimum: 0
+        failing:
+          type: boolean
+        paused:
+          type: boolean
+        paused_until:
+          type:
+          - string
+          - 'null'
+        skip_reason:
+          type:
+          - string
+          - 'null'
+        live:
+          type: boolean
+          description: true when a running scheduler reported it; false when read from the metadata DB.
     Durations:
       type: object
       additionalProperties: false
@@ -3975,6 +4049,17 @@ components:
         total: *id056
         truncated: *id059
         root: *id005
+        filter:
+          type: object
+          additionalProperties: false
+          description: Present when state or problems was given.
+          properties:
+            states:
+              type: array
+              items:
+                type: string
+            problems:
+              type: boolean
     LedgerKey:
       type: object
       additionalProperties: false

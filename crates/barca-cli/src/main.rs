@@ -198,6 +198,22 @@ fn runtime(json: bool) -> tokio::runtime::Runtime {
         })
 }
 
+/// `barca status --state a,b --problems`: an unknown state is a usage error naming the valid
+/// ones.
+#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
+fn status_filter(
+    states: &[String],
+    problems: bool,
+) -> Result<barca_core::status::StatusFilter, CliError> {
+    let states = barca_core::status::StatusFilter::parse_states(states)
+        .map_err(|e| usage_error(&format!("error: --state: {e}")))?;
+    Ok(barca_core::status::StatusFilter {
+        states,
+        problems,
+        matched: 0,
+    })
+}
+
 /// The `--server` / `--local` flags of the commands that take them.
 fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
     match cli {
@@ -353,11 +369,14 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             all,
             fields,
             sample,
+            state,
+            problems,
             env,
             ..
         } => {
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
+            let filter = status_filter(&state, problems)?;
             let (target, files) = split_target_files(args);
             server_files("status", &files, None)?;
             let targets = targets_arg(target.as_deref())?;
@@ -367,6 +386,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 limit,
                 fields: fields.as_deref(),
                 sample: sample.unwrap_or(0),
+                filter,
             };
             client::status(server, &targets, &files, opts, env.as_deref()).await
         }
@@ -647,8 +667,25 @@ async fn run_cli(
                     .map_err(engine)
             }
         },
-        Cli::Doctor { files, format, env } => {
-            doctor_cmd(files, env.as_deref(), &python, is_json(format)).await
+        Cli::Doctor {
+            files,
+            format,
+            env,
+            server,
+            local,
+        } => {
+            // `--server [<url>]` checks that server too; a configured one is checked without
+            // it, as `status` answers from it, unless `--local`. A barca.toml that cannot be
+            // read is the `configuration` check's failure, not a usage error here.
+            let flags = args::ServerFlags { server, local };
+            let server = match client::choose(&flags)? {
+                Some(server) => Some(server),
+                None => client::configured(&flags)
+                    .ok()
+                    .flatten()
+                    .inspect(|s| s.announce()),
+            };
+            doctor_cmd(files, env.as_deref(), &python, is_json(format), server).await
         }
         Cli::Logs {
             run_id,
@@ -790,11 +827,14 @@ async fn run_cli(
             all,
             fields,
             sample,
+            state,
+            problems,
             env,
             ..
         } => {
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
+            let filter = status_filter(&state, problems)?;
             let (target, files) = split_target_files(args);
             check_py_files("status", &files, None)?;
             if files.is_empty() {
@@ -814,6 +854,7 @@ async fn run_cli(
                     limit,
                     fields: fields.as_deref(),
                     sample: sample.unwrap_or(0),
+                    filter,
                 },
                 &python,
             )

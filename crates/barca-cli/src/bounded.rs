@@ -109,6 +109,7 @@ pub const STATUS_FIELDS: &[&str] = &[
     "env",
     "undeclared_env",
     "local",
+    "schedule",
 ];
 
 /// Fields of `barca docs --json`: `topics[]` items, or the single topic object.
@@ -275,6 +276,7 @@ mod tests {
             env: vec![],
             undeclared_env: vec![String::new()],
             local: Some(true),
+            schedule: Some(Default::default()),
         };
         assert_eq!(
             keys(&serde_json::to_value(node).unwrap()),

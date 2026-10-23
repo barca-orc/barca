@@ -8,8 +8,13 @@ pub(crate) async fn doctor_cmd(
     env: Option<&str>,
     python: &Path,
     json: bool,
+    server: Option<crate::client::Server>,
 ) -> Result<(), CliError> {
-    let report = barca_core::diagnostics::doctor(&files, env, python).await;
+    let mut report = barca_core::diagnostics::doctor(&files, env, python).await;
+    if let Some(server) = &server {
+        crate::client::doctor_checks(server, &mut report, env).await;
+        report.ok = report.checks.iter().all(|check| check.ok);
+    }
     if json {
         barca_core::outln!("{}", serde_json::to_string_pretty(&report).unwrap());
     } else {

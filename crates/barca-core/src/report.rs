@@ -173,7 +173,9 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
         let base = id.split('[').next().unwrap_or(id);
         base.rsplit(':').next().unwrap_or(base).to_string()
     };
-    let rows: Vec<[String; 7]> = result
+    // Like NEXT FIRE in `barca list`, SCHEDULE appears only when a shown node is scheduled.
+    let has_schedule = result.nodes.iter().any(|n| n.schedule.is_some());
+    let rows: Vec<Vec<String>> = result
         .nodes
         .iter()
         .map(|n| {
@@ -191,6 +193,25 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                     n.cache.detail.clone()
                 }
                 _ => n.cache.reason.clone(),
+            };
+            // A failure's message in short: `failed: ZeroDivisionError: division by zero`.
+            let why = match n.last_materialization.as_ref() {
+                Some(m) if m.status == "failed" && n.cache.state != "cached" => {
+                    let error = m
+                        .error
+                        .as_deref()
+                        .map(|e| crate::status::short_error(e, 80))
+                        .filter(|e| !e.is_empty())
+                        .unwrap_or_else(|| "no message".to_string());
+                    if n.cache.reason == "failed" {
+                        format!("failed: {error}")
+                    } else if n.cache.state == "always_runs" {
+                        format!("last run failed: {error}")
+                    } else {
+                        format!("{why}; last run failed: {error}")
+                    }
+                }
+                _ => why,
             };
             let last = n
                 .last_materialization
@@ -212,7 +233,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            [
+            let mut row = vec![
                 n.name.clone(),
                 n.kind.clone(),
                 // Human form: `never-run`, `always-runs` (JSON says `never_run`, `always_runs`).
@@ -223,11 +244,24 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                     .as_ref()
                     .map(shape_cell)
                     .unwrap_or_else(|| "-".to_string()),
-                deps,
-            ]
+            ];
+            if has_schedule {
+                row.push(
+                    n.schedule
+                        .as_ref()
+                        .map(|s| s.cell())
+                        .unwrap_or_else(|| "-".to_string()),
+                );
+            }
+            row.push(deps);
+            row
         })
         .collect();
-    let header = ["NAME", "KIND", "STATE", "WHY", "LAST RUN", "SHAPE", "DEPS"];
+    let mut header = vec!["NAME", "KIND", "STATE", "WHY", "LAST RUN", "SHAPE"];
+    if has_schedule {
+        header.push("SCHEDULE");
+    }
+    header.push("DEPS");
     let widths: Vec<usize> = (0..header.len())
         .map(|i| {
             rows.iter()
@@ -248,9 +282,19 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
         }
         writeln!(&mut rendered, "{}", out.trim_end()).unwrap();
     };
-    line(&header.map(String::from));
-    for r in &rows {
-        line(r);
+    let filter = result.filter.as_ref().filter(|f| !f.is_empty());
+    if rows.is_empty() && filter.is_some() {
+        writeln!(
+            &mut rendered,
+            "No node matches {}.",
+            filter.map(|f| f.describe()).unwrap_or_default()
+        )
+        .unwrap();
+    } else {
+        line(&header.iter().map(|h| h.to_string()).collect::<Vec<_>>());
+        for r in &rows {
+            line(r);
+        }
     }
     for node in &result.nodes {
         if let Some(event) = &node.last_bytes_change {
@@ -265,6 +309,18 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
         }
     }
     let s = &result.summary;
+    if let Some(filter) = filter {
+        let all =
+            s.cached + s.unsynced + s.stale + s.never_run + s.partial + s.unknown + s.always_runs;
+        writeln!(
+            &mut rendered,
+            "\n{} of {} match {}; the counts below are for every node",
+            filter.matched,
+            plural(all as u64, "node"),
+            filter.describe()
+        )
+        .unwrap();
+    }
     writeln!(
         &mut rendered,
         "\n{} cached, {}{} stale, {} never run, {} partial, {} unknown, {} always run",

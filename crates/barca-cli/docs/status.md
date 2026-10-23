@@ -32,6 +32,8 @@ barca status total,notify pipeline.py           # several targets: the union of 
 barca status pipeline.py --json                 # one JSON document (the default when piped)
 barca status pipeline.py --fields id,cache      # JSON with only these keys per node
 barca status pipeline.py --json --sample 2      # plus up to 2 sample rows per json/parquet artifact
+barca status pipeline.py --problems             # only the nodes that need attention (below)
+barca status pipeline.py --state stale,never_run   # only nodes in these cache states
 ```
 
 ```
@@ -152,6 +154,81 @@ and `local: true`; the next `get` or `run` against the server posts it. `summary
 counts unsynced nodes. A partitioned node's `local` is `false` (it has no single artifact).
 `barca status --local` shows this machine's own state.
 
+## Finding problems: `--problems` and `--state`
+
+`--state <state[,state...]>` keeps the nodes whose `cache.state` is one of those named, spelled
+as in JSON (`never-run` is accepted for `never_run`). An unknown state is a usage error (exit 2)
+naming the valid ones; `failed` is not a state (a failed node is `stale` or `never_run` with
+reason `failed`), and the error says to use `--problems`.
+
+`--problems` keeps every node that needs attention:
+
+- every state but `cached` and `always_runs`: `unsynced`, `stale`, `never_run`, `partial` and
+  `unknown`. A node that never ran counts: nothing it would serve exists yet;
+- a task or sensor (`always_runs`) whose last run failed;
+- a node whose schedule is paused or failing (below).
+
+A cached node and a task that last succeeded are fine. Given both, a node must pass both
+(`--problems --state stale` is the stale nodes). The filter applies after the targets' cones and
+before `--limit`; `total` counts the nodes that passed. The **summary still counts every node in
+scope**, so the counts do not change with the filter, and the JSON names the filter in `filter`
+(`{"problems": true}`, `{"states": ["stale"]}`); it is absent without one. The table says how many
+nodes matched before the summary line, or `No node matches --problems.` when none did:
+
+```bash
+barca status --problems --json --fields id,cache,last_materialization,schedule
+```
+
+```
+NAME          KIND   STATE        WHY                                                       LAST RUN                               SHAPE         SCHEDULE                    DEPS
+nightly_sync  task   always-runs  last run failed: RuntimeError: upstream API returned 503  failed 2026-10-22 22:51:16 UTC         -             */2 * * * * *; failing 2/2  -
+prices        asset  stale        changed: code                                             success 2026-10-22 22:51:12 UTC 0.00s  dict (1 key)  -                           -
+ratio         asset  never-run    failed: ZeroDivisionError: division by zero               failed 2026-10-22 22:51:12 UTC         -             -                           orders
+
+3 of 4 nodes match --problems; the counts below are for every node
+
+1 cached, 1 stale, 1 never run, 0 partial, 0 unknown, 1 always run
+```
+
+A node whose last run failed shows the first line of its error in WHY: `failed:
+ZeroDivisionError: division by zero` for reason `failed`, `last run failed: ...` for a task or
+sensor, and `<reason>; last run failed: ...` otherwise (a cached node is not marked). The whole
+message, with the traceback, is `last_materialization.error` in JSON; `barca logs RUN_ID --step
+NODE --stream stderr` has the step's own stderr.
+
+With a server configured, the server answers and the filter is applied here, after this
+machine's `not_in_ledger` results are marked, so `--state unsynced` finds them. `GET
+/nodes?state=stale&problems=1` filters the same way over HTTP.
+
+## Schedules
+
+A node with `freshness=Schedule(...)` has `schedule` in JSON (absent on other nodes), and the
+table adds a SCHEDULE column when a node it shows is scheduled:
+
+| key | meaning |
+|---|---|
+| `cron` | the cron expression |
+| `next_fire` | when it next matches (RFC 3339, UTC) |
+| `last_fired` | the last tick fired (RFC 3339, UTC), or `null` |
+| `last_status` | the status of the run that tick started, while the server remembers it (`null` after a restart) |
+| `failures`, `max_failures`, `failing` | consecutive failed ticks, `Schedule(..., max_failures=N)` (default 5), and `failures >= max_failures`: ticks are skipped (`barca docs scheduling`) |
+| `paused`, `paused_until` | held back by `POST /schedule/{id}/pause`; `paused_until` is `null` for a pause until resumed |
+| `skip_reason` | why the last due tick was skipped: `in_flight` or `paused`, or `null` |
+| `live` | `true` when a running scheduler reported this entry |
+
+The SCHEDULE cell is `<cron>; failing 2/2`, `<cron>; paused` (or `paused until <time> UTC`), or
+`<cron>; next <time> UTC`, with `1 failure, ` before `next` while failures are counting.
+
+- **From a server** (configured, or `--server`): the server's scheduler's view, the same numbers
+  `GET /schedule` and the web UI's Schedules page show, with `next_fire` in the server's
+  `--timezone`, and `live: true`. A server started with `--no-schedule` or `--read-only` fires
+  nothing: its entries come from its metadata DB as below, with `live: false`.
+- **On this machine** (`--local`, or no server): no scheduler runs, so the entry is what the
+  metadata DB holds: the failures and pauses a `barca serve` of this `.barca/` recorded, and the
+  last tick it fired. `next_fire` is the next match in this machine's local time, as `barca
+  list` computes it. `last_status` and `skip_reason` are `null` and `live` is `false`. A laptop
+  that never ran `barca serve` shows `failures: 0` and `paused: false`.
+
 ## Last materialization
 
 `last_materialization` is the most recent execution recorded in the metadata DB, successful or
@@ -248,6 +325,11 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
   "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "unknown": 0, "always_runs": 0}
 }
 ```
+
+A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-23T06:00:00Z",
+"last_fired": null, "last_status": null, "failures": 0, "max_failures": 5, "failing": false,
+"paused": false, "paused_until": null, "skip_reason": null, "live": false}`, and `--state` or
+`--problems` add `"filter"` beside `summary`.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column
 order. `--env <name>` reads another environment's state (`barca docs cache`).

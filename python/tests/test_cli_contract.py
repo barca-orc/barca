@@ -144,6 +144,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
         1,
     ),
     ("status", ["status", "pipeline.py", "--json", "--sample", "1"], "stdout", 0),
+    ("status_problems", ["status", "pipeline.py", "--problems", "--json"], "stdout", 0),
     ("history", ["history", "--json", "--limit", "1"], "stdout", 0),
     (
         "history_filtered",

@@ -636,7 +636,8 @@ pub fn same_store(
 }
 
 /// A store URI compared as text, without a trailing `/` or `file://`.
-fn normalize_uri(uri: &str) -> String {
+/// A store URI as the ledger compares two of them: without `file://` and a trailing `/`.
+pub fn normalize_uri(uri: &str) -> String {
     let uri = uri.strip_prefix("file://").unwrap_or(uri);
     uri.trim_end_matches('/').to_string()
 }

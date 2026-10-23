@@ -30,7 +30,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 /// Display a location without URI passwords or signed query parameters.
-pub(crate) fn diagnostic_uri(uri: &str) -> String {
+pub fn diagnostic_uri(uri: &str) -> String {
     if local_path(uri).is_some() {
         return uri.to_string();
     }
