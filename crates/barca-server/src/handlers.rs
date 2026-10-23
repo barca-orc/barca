@@ -313,14 +313,8 @@ pub async fn asset_schema(
         .nodes
         .clone();
     nodes.retain(|n| n.id == id || inputs.contains(&n.id));
-    let mut result = barca_core::status::StatusResult {
-        target: None,
-        targets: Vec::new(),
-        summary: barca_core::status::StatusSummary::of(&nodes),
-        nodes,
-    };
-    barca_core::status::read_schemas(&state.config.python, &cfg, &mut result.nodes).await;
-    Ok(Json(result.nodes))
+    barca_core::status::read_schemas(&state.config.python, &cfg, &mut nodes).await;
+    Ok(Json(nodes))
 }
 
 /// `GET /assets/{name}` — one node as `barca list --json` shows it, with its

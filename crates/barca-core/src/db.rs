@@ -651,7 +651,7 @@ impl CacheReader {
         {
             // A long read that never waits: let the thread's other tasks run now and then.
             read += 1;
-            if read % 4096 == 0 {
+            if read.is_multiple_of(4096) {
                 tokio::task::yield_now().await;
             }
             let (Ok(id), Ok(node), Ok(run_hash), Ok(path)) = (

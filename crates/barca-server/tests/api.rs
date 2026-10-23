@@ -2332,14 +2332,15 @@ async fn a_kept_state_shows_a_new_run_and_an_edit_at_once() {
     .await;
     let events = read_events(&app, &format!("/runs/{id}/events"), Default::default()).await;
     assert_eq!(events.last().unwrap().1["ok"], true, "{events:?}");
-    let (status, after_run, nodes) = state_again(&app, Some(&tag)).await;
+    let (status, _, nodes) = state_again(&app, Some(&tag)).await;
     assert_eq!(status, StatusCode::OK, "the run changed the state");
     assert_eq!(cache_state(&nodes, "second"), "cached", "{nodes}");
     assert_eq!(cache_state(&nodes, "first"), "cached");
 
-    // Kept again once the database is still, and still right.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    let (_, _, nodes) = state_again(&app, None).await;
+    // Kept again once the database is still (the run's last writes may land after its last
+    // event), and still right.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let (_, after_run, nodes) = state_again(&app, None).await;
     assert_eq!(cache_state(&nodes, "second"), "cached");
     let (status, ..) = state_again(&app, after_run.as_deref()).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
