@@ -3,7 +3,7 @@ title: 'RFC-0013: Batched Partitions'
 description: 'batch= lets one call of a partitioned step compute many keys: N at a time, all of them, or groups you name. Each key keeps its own run hash and artifact, so caching, selection and change detection are the same as one key per call.'
 ---
 
-- **Status:** Under Review
+- **Status:** Accepted (planned for 0.32.0)
 - **Date:** 2026-10-23
 - **Touches:** barca-core | barca-cli | python/barca | HTTP server
 - **Supersedes / Related:** #643 (this design). Builds on keyed partition sources (#622, 0.29.6), `--partition` across the cone (#614, 0.29.3), lazy inputs (`barca docs big-inputs`), dataset sinks (#621, 0.30.0), early cutoff (#636, 0.31.0) and server-wide capacity (#635, 0.31.0).
@@ -260,11 +260,18 @@ Decided:
 - **Memory:** no automatic cap on `"all"`.
 - **Lazy-table column:** named after the dimension.
 
-Unresolved:
-
-- **Per-node override:** `--batch scored=all` in v1, or later?
-- **Multi-dimension assets:** should `batches_by` receive the full key (a dict of dimension to
-  value), or should batching group by one named dimension? v1 proposal: the full key as a dict.
+- **Override scope:** a bare `--batch V` overrides every node that declares `batch=`, and
+  `--batch scored=V` (repeatable) overrides only the nodes named. Nodes without `batch=` are
+  never batched by an override, because their functions take a single key.
+- **Multi-dimension keys:** `batches_by` receives the full key as a dict of dimension to value
+  (`{"retailer": "r1", "month": "2026-10"}`).
+- **Key order:** "key order" is the declared order: dimension order, then each dimension's key
+  list, and a keyed source's dict order. Grouping is therefore stable from run to run.
+- **Table outputs:** the dimension column's values are matched to keys by their string form
+  (`1` matches key `"1"`). A value matching no key of the call is an extra-key error.
+- **Lazy inputs:** a lazy table input needs tabular upstream artifacts (parquet, CSV, or JSON
+  lists of records). Any other format is a step error naming `dict[str, T]` as the fix. Nothing
+  is converted silently.
 
 ## 11. Future Possibilities
 
