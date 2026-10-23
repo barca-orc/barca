@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.29.6 (2026-10-23)
+
 ### Features
 
 - Keyed partition sources: `partitions_from(source)` where `source` is an unpartitioned asset
