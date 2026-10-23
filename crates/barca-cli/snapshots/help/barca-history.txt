@@ -3,7 +3,7 @@ Show recent run history, or one run's steps and errors
 Usage: barca history [OPTIONS] [RUN_ID]
 
 Arguments:
-  [RUN_ID]  One run in detail: its fields, every step it recorded, and each failed step's error, traceback and how its worker ended
+  [RUN_ID]  One run in detail: its fields, the steps it recorded (the first 1000, failed steps always; --limit and --all change it), and each failed step's error, traceback and how its worker ended
 
 Options:
       --reconcile <RUN_ID>            After verifying a run stopped, record it as interrupted; refuses a proven live owner
@@ -11,8 +11,8 @@ Options:
       --target <NAME>                 Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out
       --triggered-by <TRIGGER[,...]>  Only runs started this way (comma-separated): manual, api, schedule, client
       --since <WHEN>                  Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22)
-  -l, --limit <LIMIT>                 Maximum recent runs (default: every run in JSON, 10 in a human table)
-      --all                           Show every recorded run (no limit)
+  -l, --limit <LIMIT>                 Maximum recent runs (default: every run in JSON, 10 in a human table); with a RUN_ID, the most steps listed (default 1000)
+      --all                           Show every recorded run (no limit); with a RUN_ID, every step it recorded
       --json                          Emit JSON on stdout (the default when stdout is not a terminal)
       --pretty                        Emit human-readable output (the default when stdout is a terminal)
       --fields <FIELDS>               Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure]
@@ -40,7 +40,9 @@ Examples:
   barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
   barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
   barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
-  barca history 7f30b3e9 --json   # {run, steps: [...], hint?}
+  barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}
+  barca history 7f30b3e9 --limit 50   # one run's first 50 recorded steps (failed steps always listed)
+  barca history 7f30b3e9 --all --json # every step the run recorded
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -56,6 +58,8 @@ A failed run's row ends with its first failed step and the first line of its err
 as `failure: {node, error}` (null otherwise). Filters combine with AND, and --limit, `total`
 and `truncated` count the runs they keep. With a RUN_ID, the run in detail: the steps it
 executed or that failed (cached steps are counted, not listed), each failed step's traceback,
-and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. Replace the example id
-with a run_id from barca history.
+and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. A run of many partition keys
+records a step per key it computed: the first 1000 are listed, failed ones always, and
+`steps_page` gives the `total` and whether the list is `truncated` (a note on stderr in the
+table). Replace the example id with a run_id from barca history.
 More: barca docs agents, barca docs cache

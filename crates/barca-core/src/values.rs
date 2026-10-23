@@ -55,7 +55,9 @@ pub async fn returned_values(
     cfg: &crate::config::ResolvedConfig,
     single: Option<&OutputRef>,
     keys: Option<&[(String, OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
 ) -> Option<Value> {
+    let keys = crate::results::KeySummary::listed(summary, keys);
     let items: Vec<(Option<&str>, &OutputRef)> = match keys {
         Some(keys) => keys.iter().map(|(k, o)| (Some(k.as_str()), o)).collect(),
         None => single.into_iter().map(|o| (None, o)).collect(),
@@ -77,12 +79,13 @@ pub async fn returned_values(
         })
         .collect();
     match keys {
-        Some(_) => Some(Value::Object(
+        Some(_) => Some(crate::report::keyed_output(
             items
                 .iter()
                 .zip(values)
                 .map(|((key, _), v)| (key.unwrap_or_default().to_string(), v))
                 .collect(),
+            summary,
         )),
         None => values.into_iter().next(),
     }

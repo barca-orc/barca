@@ -396,7 +396,8 @@ Up to 0.11 this passed the list without an error.
   or `--refresh` on it, re-runs every key.
 - Artifacts are stored per key: `.barca/artifacts/pipeline.py--sales_region_emea/<run_hash>.json`.
 - `barca get sales` on a partitioned asset returns every key: one artifact path per key, and a
-  `final_output` object keyed by partition key (`region=emea`). `--partition region=emea`
+  `final_output` object keyed by partition key (`region=emea`); past 1000 keys, only the keys
+  the run computed ([many partition keys](/reference/cli/#many-partition-keys)). `--partition region=emea`
   selects keys across the run (upstream partitioned assets too; a `collect()` over them is
   skipped), computes only those and scopes `--refresh sales` to them
   ([CLI reference](/reference/cli/#get)). [`barca sql`](/reference/sql/) has one view with a

@@ -38,3 +38,6 @@ steps[].partition_key : null
 steps[].run_hash : string
 steps[].status : string
 steps[].worker_exit : null
+steps_page : object
+steps_page.total : integer
+steps_page.truncated : boolean

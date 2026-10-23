@@ -14,6 +14,15 @@ use serde_json::Value;
 pub const LIST_DEFAULT_LIMIT: usize = 100;
 
 /// Explicit limits apply to either format; JSON otherwise returns every item.
+/// `barca history RUN_ID`: how many of the run's steps to list (`None`: every one).
+pub fn steps_limit(limit: Option<usize>, all: bool) -> Option<usize> {
+    if all {
+        None
+    } else {
+        Some(limit.unwrap_or(barca_core::db::RUN_STEPS_LIMIT))
+    }
+}
+
 pub fn inspection_limit(
     limit: Option<usize>,
     all: bool,

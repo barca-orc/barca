@@ -343,7 +343,8 @@ $ barca get summary pipeline.py --refresh 'sales[region=emea]'
 - `--refresh sales` recomputes every key, and everything downstream; with
   `--partition region=emea` on a `sales` target, only that key.
 - `barca get sales pipeline.py` returns every key: one artifact path per key, and in JSON a
-  `final_output` object keyed by `region=...`. The Python call `barca.get("sales", "pipeline.py")`
+  `final_output` object keyed by `region=...` (past 1000 keys, only the keys the run
+  computed, with a count of the rest). The Python call `barca.get("sales", "pipeline.py")`
   returns a dict of key to value. `--partition region=emea` (or `partition="region=emea"` in
   Python) computes and returns only that key, and scopes `--refresh sales` to it.
 - `barca get margin pipeline.py --partition region=emea` computes only the emea key of `sales`

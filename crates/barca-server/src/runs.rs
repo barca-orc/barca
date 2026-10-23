@@ -523,25 +523,37 @@ async fn execute(
         _ => None,
     };
     let values = spec.values && spec.command == RunCommand::Get;
-    let returned_values = |single, keys| {
+    let returned_values = |single, keys, summary| {
         barca_core::values::returned_values(
             &state.config.python,
             &state.config.resolved,
             single,
             keys,
+            summary,
         )
     };
     let outcome = match result {
         Ok(RunResult::Single(r)) if values => {
-            let output = returned_values(r.final_output.as_ref(), r.partitions.as_deref()).await;
+            let output = returned_values(
+                r.final_output.as_ref(),
+                r.partitions.as_deref(),
+                r.key_summary.as_ref(),
+            )
+            .await;
             Outcome::success_with(&r, output)
         }
         Ok(RunResult::Single(r)) => Outcome::success(&r, spec.command),
         Ok(RunResult::Multi(m)) if values => {
             let mut outputs = Vec::with_capacity(m.targets.len());
             for (_, t) in &m.targets {
-                outputs
-                    .push(returned_values(t.final_output.as_ref(), t.partitions.as_deref()).await);
+                outputs.push(
+                    returned_values(
+                        t.final_output.as_ref(),
+                        t.partitions.as_deref(),
+                        t.key_summary.as_ref(),
+                    )
+                    .await,
+                );
             }
             Outcome::multi_with(&m, &outputs, &ctx)
         }
@@ -565,10 +577,11 @@ async fn execute(
                 && f.run.as_ref().is_some_and(|r| r.partitions.is_some()) =>
         {
             let keys = f.run.as_ref().and_then(|r| r.partitions.clone());
+            let summary = f.run.as_ref().and_then(|r| r.key_summary.clone());
             let output = if values {
-                returned_values(None, keys.as_deref()).await
+                returned_values(None, keys.as_deref(), summary.as_ref()).await
             } else {
-                barca_core::report::pointer_output(None, keys.as_deref())
+                barca_core::report::pointer_output(None, keys.as_deref(), summary.as_ref())
             };
             Outcome::of_failed(BarcaError::WorkerFailed(f), &ctx, output)
         }
@@ -637,7 +650,13 @@ async fn finish(
             OutcomeStatus::Cancelled => RunStatus::Cancelled,
             OutcomeStatus::Failed | OutcomeStatus::Error => RunStatus::Failed,
         };
-        r.result = result;
+        // The outcome holds what the run returned; the result is kept for its pointer and
+        // counts, not for every key of a partitioned target (#623).
+        r.result = result.map(|mut r| {
+            r.partitions = None;
+            r.key_summary = None;
+            r
+        });
         r.error = error;
         r.outcome = Some(outcome.clone());
     }
@@ -646,6 +665,56 @@ async fn finish(
         ok: status == OutcomeStatus::Success,
         outcome: Some(outcome.into_raw()),
     });
+    evict_over_budget(state, FINISHED_RUNS_BUDGET);
+    // What the run freed (at 200k keys, about a gigabyte) goes back to the system, so the
+    // server's resident memory does not stay at the largest run each thread has served.
+    tokio::task::spawn_blocking(barca_core::release_free_memory);
+}
+
+/// How many bytes of finished runs (their outcomes and event backlogs) the server keeps in
+/// memory. Past it the oldest finished runs are dropped first, as runs older than an hour are;
+/// their history stays in the DB, where `GET /runs/{run_id}` reads it (#623).
+pub(crate) const FINISHED_RUNS_BUDGET: usize = 64 << 20;
+
+/// About how many bytes a finished run holds in memory: its outcome and its event backlog.
+fn retained_bytes(state: &AppState, handle: &str, run: &RunState) -> usize {
+    run.outcome.as_ref().map_or(0, |o| o.text().len())
+        + state.events.get(handle).map_or(0, |c| c.bytes())
+}
+
+/// Drop the oldest finished runs from memory until those left hold at most `budget` bytes.
+/// The most recently finished run is always kept, so a client that has just seen it start can
+/// still read its events.
+pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
+    let mut finished: Vec<(f64, String, usize)> = state
+        .runs
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.status,
+                RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled
+            )
+        })
+        .map(|r| {
+            let bytes = retained_bytes(state, r.key(), r.value());
+            (r.finished_at.unwrap_or(0.0), r.key().clone(), bytes)
+        })
+        .collect();
+    let mut total: usize = finished.iter().map(|(_, _, b)| b).sum();
+    if total <= budget {
+        return;
+    }
+    // Oldest first; the newest is never dropped.
+    finished.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    finished.pop();
+    for (_, handle, bytes) in finished {
+        if total <= budget {
+            break;
+        }
+        state.runs.remove(&handle);
+        state.events.remove(&handle);
+        total -= bytes;
+    }
 }
 
 async fn persist_outcome(
@@ -787,11 +856,31 @@ pub async fn cancel(
 pub async fn detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(page): Query<StepsQuery>,
 ) -> Result<Json<RunView>, ApiError> {
-    Ok(Json(view(&state, &id).await?))
+    let limit = (!page.all).then(|| page.limit.unwrap_or(db::RUN_STEPS_LIMIT));
+    Ok(Json(view_page(&state, &id, limit).await?))
+}
+
+/// `GET /runs/{run_id}?limit=N` lists at most N of the run's steps (default
+/// [`db::RUN_STEPS_LIMIT`]), `?all=true` every one; `steps_page` says how many there are.
+#[derive(Debug, Default, Deserialize)]
+pub struct StepsQuery {
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub all: bool,
 }
 
 pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError> {
+    view_page(state, id, Some(db::RUN_STEPS_LIMIT)).await
+}
+
+/// [`view`], listing at most `limit` steps (every one with `None`).
+pub(crate) async fn view_page(
+    state: &AppState,
+    id: &str,
+    limit: Option<usize>,
+) -> Result<RunView, ApiError> {
     let snapshot = snapshot_db(state).await?;
     let live = state.runs.get(id).map(|r| r.clone());
     let record = db::get_run(&snapshot.path, id).await?;
@@ -827,6 +916,7 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
             outcome: None,
             error: None,
             steps: Vec::new(),
+            steps_page: db::StepsPage::default(),
             logs: Vec::new(),
         },
         (None, Some(run)) => RunView {
@@ -855,6 +945,7 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
             outcome: None,
             error: None,
             steps: Vec::new(),
+            steps_page: db::StepsPage::default(),
             logs: Vec::new(),
         },
         (None, None) => return Err(ApiError::NotFound(format!("run '{id}' not found"))),
@@ -871,11 +962,23 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
         view.error = outcome.envelope().map(|e| e.error);
     }
     view.outcome = outcome;
-    view.steps = db::get_run_steps(&snapshot.path, id).await?;
+    let (steps, mut steps_page) = db::get_run_steps_page(&snapshot.path, id, limit).await?;
+    view.steps = steps;
     view.logs = db::get_logs(&snapshot.path, id).await?;
     if let Some(run) = &live
         && let Some(channel) = state.events.get(&run.handle)
     {
+        // The steps it streamed and has not recorded yet are listed after the recorded ones.
+        let mut recorded: std::collections::HashSet<String> = if steps_page.truncated {
+            db::get_run_steps_page(&snapshot.path, id, None)
+                .await?
+                .0
+                .into_iter()
+                .map(|s| s.node_id)
+                .collect()
+        } else {
+            view.steps.iter().map(|s| s.node_id.clone()).collect()
+        };
         // The live backlog has every line; recorded logs only become canonical at wrap-up.
         let live_logs = view.logs.is_empty();
         for event in channel.snapshot() {
@@ -899,7 +1002,11 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
                     elapsed_seconds,
                     error,
                     ..
-                } if !view.steps.iter().any(|s| s.node_id == node_id) => {
+                } if recorded.insert(node_id.clone()) => {
+                    steps_page.total += 1;
+                    if limit.is_some_and(|n| view.steps.len() >= n) {
+                        continue;
+                    }
                     view.steps.push(db::RunStep {
                         node_id,
                         status: match (cached, ok) {
@@ -917,6 +1024,8 @@ pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError
             }
         }
     }
+    steps_page.truncated = view.steps.len() < steps_page.total;
+    view.steps_page = steps_page;
     if view.error.is_none() {
         view.error = view.steps.iter().find_map(|step| step.error.clone());
     }
@@ -1478,6 +1587,42 @@ mod tests {
         assert_eq!(history.runs.len(), 1);
         assert_eq!(history.runs[0].id, "durable");
         assert_eq!(history.runs[0].error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn finished_runs_past_the_memory_budget_are_dropped_oldest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        // Five finished runs whose event backlogs hold about 10 KB each, and one still running.
+        for (i, handle) in ["r1", "r2", "r3", "r4", "r5"].iter().enumerate() {
+            let mut run = live(handle);
+            run.status = RunStatus::Complete;
+            run.finished_at = Some(1000.0 + i as f64);
+            state.runs.insert(handle.to_string(), run);
+            let channel = RunChannel::new();
+            channel.emit(RunEvent::Line {
+                line: "x".repeat(10_000),
+                when: barca_core::lines::LineWhen::Always,
+            });
+            state.events.insert(handle.to_string(), channel);
+        }
+        let mut running = live("running");
+        running.status = RunStatus::Running;
+        state.runs.insert("running".into(), running);
+        // Under the budget: nothing is dropped.
+        evict_over_budget(&state, 1 << 20);
+        assert_eq!(state.runs.len(), 6);
+        // About two runs' worth: the oldest go, the newest and the running run stay.
+        evict_over_budget(&state, 25_000);
+        let mut kept: Vec<String> = state.runs.iter().map(|r| r.key().clone()).collect();
+        kept.sort();
+        assert_eq!(kept, ["r4", "r5", "running"]);
+        assert!(!state.events.contains_key("r1") && state.events.contains_key("r4"));
+        // Even a budget of nothing keeps the run that finished last.
+        evict_over_budget(&state, 0);
+        let mut kept: Vec<String> = state.runs.iter().map(|r| r.key().clone()).collect();
+        kept.sort();
+        assert_eq!(kept, ["r5", "running"]);
     }
 
     #[tokio::test]

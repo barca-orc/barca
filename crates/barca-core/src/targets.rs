@@ -310,6 +310,7 @@ pub(crate) fn target_outcomes(
                     error: Some(f.error.message.clone()),
                     failed_node: Some(f.node_id.clone()),
                     partitions,
+                    key_summary: None,
                 },
                 (None, Some(out)) => TargetOutcome {
                     status: "success".to_string(),
@@ -317,6 +318,7 @@ pub(crate) fn target_outcomes(
                     error: None,
                     failed_node: None,
                     partitions,
+                    key_summary: None,
                 },
                 (None, None) => TargetOutcome {
                     status: "failed".to_string(),
@@ -324,6 +326,7 @@ pub(crate) fn target_outcomes(
                     error: Some("did not run".to_string()),
                     failed_node: None,
                     partitions,
+                    key_summary: None,
                 },
             };
             (name.clone(), outcome)
@@ -536,6 +539,7 @@ def lone() -> int:
             error: None,
             failed_node: None,
             partitions: None,
+            key_summary: None,
         }
     }
 

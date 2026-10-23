@@ -109,6 +109,25 @@ pub fn epoch_timestamp(seconds: f64) -> String {
 }
 
 impl RunEvent {
+    /// About how many bytes this event holds in memory: its strings plus a fixed overhead. What
+    /// `barca serve` counts against the memory it keeps finished runs in.
+    pub fn approx_bytes(&self) -> usize {
+        const OVERHEAD: usize = 64;
+        let len = |s: &Option<String>| s.as_ref().map_or(0, String::len);
+        OVERHEAD
+            + match self {
+                RunEvent::RunStarted { run_id } => run_id.len(),
+                RunEvent::Line { line, .. } => line.len(),
+                RunEvent::Log {
+                    node_id, line, ts, ..
+                } => node_id.len() + line.len() + len(ts),
+                RunEvent::StepFinished { node_id, error, .. } => node_id.len() + len(error),
+                RunEvent::RunFinished {
+                    run_id, outcome, ..
+                } => run_id.len() + outcome.as_ref().map_or(0, |o| o.get().len()),
+            }
+    }
+
     /// A line of a step's output, stamped now.
     pub fn log(node_id: String, line: String, stream: LogStream) -> Self {
         RunEvent::Log {

@@ -70,7 +70,7 @@ return the corresponding headers without a body.
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/runs` | Start a run of `barca get` or `barca run` on the server. Body: [`RunRequest`](#starting-a-run). `202 {"run_id", "status", "position"}` (the run joins the [run queue](#the-run-queue): `running` when it started at once, or `pending` and its place, 1 = next), or `200` with the `--dry-run` JSON when `dry_run` is set. |
-| `GET`  | `/runs/{run_id}` | The run: what started it, its status and, once finished, its [outcome](#outcomes), with its steps and captured lines. Survives a restart. |
+| `GET`  | `/runs/{run_id}` | The run: what started it, its status and, once finished, its [outcome](#outcomes), with its steps and captured lines. Survives a restart. At most 1000 steps (`?limit=N`, `?all=true`; failed steps first), with `steps_page: {total, truncated}`. |
 | `GET`  | `/runs/{run_id}/events` | Server-sent events, each with an `id:`: `run_started`, `line`, `log`, `step_finished`, `run_finished`. |
 | `DELETE` | `/runs/{run_id}` | Cancel a pending or running run. |
 | `GET`  | `/runs/{run_id}/output` | The final artifact's bytes of a successful single-target run. |
@@ -194,7 +194,8 @@ number in the run, from `0`:
 
 A subscriber receives the run from its first event whenever it connects, and every event once,
 however slowly it reads: the server keeps the run's events for as long as it keeps the run (an
-hour after it finished) and a lagging subscriber reads on from where it was. A connection that
+hour after it finished, while finished runs hold at most 64 MB of memory; past that the oldest
+go first, never the run that finished last) and a lagging subscriber reads on from where it was. A connection that
 drops mid-run is not resumed: reconnecting replays the run from its first event, and resuming
 from `Last-Event-ID` is future work. The run goes on whether anyone is reading. Once the run is no
 longer kept, the stream is a `404`; `GET /runs/{run_id}` answers from the database then.
@@ -242,7 +243,8 @@ tagged by `status`:
 - `success`: the exact `barca get --json` / `barca run --json` stdout body. For `get`,
   `final_output` is the artifact pointer (`{"_barca_artifact": {"path", "format", "size_bytes"}}`,
   a path on the server), and for a partitioned target an object of them keyed by partition key,
-  as `barca get --json` prints it; for `run` it is the value for a JSON artifact and an artifact
+  as `barca get --json` prints it (past 1000 keys, the `_barca_partitions` summary that lists
+  only the keys the run computed); for `run` it is the value for a JSON artifact and an artifact
   pointer for binary formats. Several targets carry `targets`, in the order given.
 - `failed`: the CLI's failed-run stdout body (`failed_node`, `error`, `steps`, ...) plus
   `envelope`, the stderr error envelope with the traceback.

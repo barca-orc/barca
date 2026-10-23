@@ -136,6 +136,7 @@ impl Executed {
                     steps: r.steps,
                     warnings: r.warnings,
                     partitions: r.partitions,
+                    key_summary: r.key_summary,
                 }));
                 Err(BarcaError::WorkerFailed(Box::new(failed)))
             }
@@ -382,6 +383,7 @@ async fn execute_started(
                 steps: blocked_steps(&prepared.dag, &prepared.blocked),
                 warnings: Vec::new(),
                 partitions: None,
+                key_summary: None,
                 cache: None,
                 uploads: None,
                 partition_selection: None,
@@ -1851,7 +1853,7 @@ async fn return_outputs(
     session: &mut RunSession<'_, '_>,
     elapsed: f64,
 ) -> Result<Executed, BarcaError> {
-    let (mut step_reports, outcomes, final_output, partitions) = finalize_outputs(
+    let (mut step_reports, outcomes, final_output, partitions, key_summary) = finalize_outputs(
         &session.prepared.dag,
         &session.prepared.targets,
         &session.prepared.exec_plan,
@@ -1862,6 +1864,7 @@ async fn return_outputs(
         std::mem::take(&mut session.state.step_reports),
         &session.state.failed_bases,
         &session.state.skipped_bases,
+        &session.state.cached_node_ids,
         &mut session.store,
         &session.started.cancel,
         // With a server, its ledger holds the record (#576).
@@ -1956,6 +1959,7 @@ async fn return_outputs(
             steps: step_reports,
             warnings: session.prepared.plan_warnings.clone(),
             partitions,
+            key_summary,
             cache: None,
             uploads: session.state.uploads.take(),
             partition_selection: session.state.narrowing.as_ref().map(|n| n.report()),
@@ -2079,6 +2083,7 @@ async fn pin_manual<'a>(
                             )),
                             failed_node: Some(manual),
                             partitions: None,
+                            key_summary: None,
                         },
                     ));
                     false
@@ -2255,6 +2260,7 @@ async fn finalize_outputs(
     step_reports: Vec<StepReport>,
     failed_bases: &std::collections::HashSet<String>,
     skipped_bases: &std::collections::HashSet<String>,
+    cached: &std::collections::HashSet<String>,
     store: &mut Option<StoreSync>,
     cancel: &CancellationToken,
     adopt_digests_in: Option<&str>,
@@ -2264,6 +2270,7 @@ async fn finalize_outputs(
         Vec<(String, TargetOutcome)>,
         Option<OutputRef>,
         Option<Vec<(String, OutputRef)>>,
+        Option<crate::results::KeySummary>,
     ),
     BarcaError,
 > {
@@ -2312,16 +2319,24 @@ async fn finalize_outputs(
         }
     }
 
-    let outcomes = target_outcomes(dag, targets, all_outputs, all_failures, selection);
+    let mut outcomes = target_outcomes(dag, targets, all_outputs, all_failures, selection);
+    // Many keys: `final_output` lists the computed ones and counts the rest (#623).
+    for ((_, tid), (_, outcome)) in targets.iter().zip(outcomes.iter_mut()) {
+        outcome.key_summary = outcome.partitions.as_deref().and_then(|keys| {
+            crate::results::KeySummary::of(tid, keys, selection.is_some(), cached)
+        });
+    }
 
-    let partitions = returned_partitions(
-        dag,
-        exec_plan,
-        &target_ids,
-        keep_going,
-        all_outputs,
-        selection,
-    );
+    let returned_node = returned_node(exec_plan, &target_ids, keep_going);
+    let partitions = returned_node
+        .as_deref()
+        .and_then(|node| crate::selection::partition_outputs(dag, node, all_outputs, selection));
+    let key_summary = match (&returned_node, &partitions) {
+        (Some(node), Some(keys)) => {
+            crate::results::KeySummary::of(node, keys, selection.is_some(), cached)
+        }
+        _ => None,
+    };
     let final_output = match &partitions {
         Some(keys) => keys.first().map(|(_, o)| o.clone()),
         None => final_output_of(exec_plan, &target_ids, keep_going, all_outputs),
@@ -2361,7 +2376,31 @@ async fn finalize_outputs(
         }
     }
 
-    Ok((step_reports, outcomes, final_output, partitions))
+    Ok((
+        step_reports,
+        outcomes,
+        final_output,
+        partitions,
+        key_summary,
+    ))
+}
+
+/// The node a single-target run (or a run with no target) returns.
+fn returned_node(
+    exec_plan: &ExecutionPlan,
+    target_ids: &[&str],
+    several_targets: bool,
+) -> Option<String> {
+    match target_ids {
+        [one] => Some(one.to_string()),
+        _ if several_targets => None,
+        _ => Some(
+            recover::returned_step(exec_plan)?
+                .step_id
+                .base_id()
+                .to_string(),
+        ),
+    }
 }
 
 /// The keys a single-target run (or a run with no target) returns when the node it returns
@@ -2374,14 +2413,7 @@ fn returned_partitions(
     all_outputs: &HashMap<String, OutputRef>,
     selection: Option<&crate::selection::PartitionSelection>,
 ) -> Option<Vec<(String, OutputRef)>> {
-    let node = match target_ids {
-        [one] => one.to_string(),
-        _ if several_targets => return None,
-        _ => recover::returned_step(exec_plan)?
-            .step_id
-            .base_id()
-            .to_string(),
-    };
+    let node = returned_node(exec_plan, target_ids, several_targets)?;
     crate::selection::partition_outputs(dag, &node, all_outputs, selection)
 }
 

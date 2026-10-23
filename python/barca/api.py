@@ -158,11 +158,17 @@ def _read_output(output_ref: Any, server: "bool | str" = False, run_id: str | No
     return output_ref
 
 
-def _read_final_output(
-    output: Any, server: "bool | str" = False, run_id: str | None = None
-) -> Any:
+def _read_final_output(output: Any, server: "bool | str" = False, run_id: str | None = None) -> Any:
     """Read `final_output` from `barca get --json`: one artifact pointer, or for a partitioned
-    target a mapping of partition key (``"region=emea"``) to pointer, read as key to value."""
+    target a mapping of partition key (``"region=emea"``) to pointer, read as key to value.
+    A target of more keys than a run lists (``{"_barca_partitions": ...}``) is an error naming
+    ``partition=``."""
+    if isinstance(output, dict) and "_barca_partitions" in output:
+        summary = output["_barca_partitions"]
+        raise BarcaError(
+            f"the target returned {summary.get('keys')} partition keys, more than a run lists; "
+            'select the keys to read with partition= (barca docs partitions, "Many keys")'
+        )
     if (
         isinstance(output, dict)
         and output
@@ -261,6 +267,8 @@ def get(
     (``--partition``). The selection applies to the whole cone: every partitioned asset
     with a selected dimension computes only those keys, and a ``collect()`` fan-in over
     them is skipped. It works without a target too (``get("pipeline.py", partition=...)``).
+    Without ``partition``, a target of more than 1000 keys raises :class:`BarcaError`: a
+    run lists only the keys it computed then, so select the keys to read.
     With ``server=``, the values are read on the server and come back as JSON (a table as a
     list of row objects).
 

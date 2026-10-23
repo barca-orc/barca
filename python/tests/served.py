@@ -55,7 +55,7 @@ class Materializations:
             run_id = run["run_id"]
             steps = self.finished.get(run_id)
             if steps is None:
-                view = get(self.port, f"/runs/{run_id}")
+                view = get(self.port, f"/runs/{run_id}?all=true")
                 steps = [(s["node_id"].rsplit(":", 1)[1], s["status"]) for s in view["steps"]]
                 if view["status"] not in LIVE:
                     self.finished[run_id] = steps

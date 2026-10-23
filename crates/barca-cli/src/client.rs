@@ -1344,12 +1344,17 @@ pub(crate) async fn history(
 pub(crate) async fn run_detail(
     server: &Server,
     run_id: &str,
+    limit: Option<usize>,
     json: bool,
     select: &str,
     env: Option<&str>,
 ) -> Result<(), CliError> {
     server.health(env).await?;
-    let path = format!("/runs/{}", encode(run_id));
+    let page = match limit {
+        Some(n) => format!("?limit={n}"),
+        None => "?all=true".to_string(),
+    };
+    let path = format!("/runs/{}{page}", encode(run_id));
     let body = match server.get_json(&path).await {
         Ok(body) => body,
         Err(e) => {
@@ -1363,10 +1368,29 @@ pub(crate) async fn run_detail(
         serde_json::from_value(body["steps"].clone()).map_err(bad)?;
     // The steps the run recorded, as on this machine: a finished run the server started also
     // lists the cached steps it streamed, until the server restarts.
+    let listed = steps.len();
     if !matches!(run.status.as_str(), "pending" | "running") {
         steps.retain(|step| step.status != "cached");
     }
-    let detail = barca_core::queries::RunDetail { run, steps };
+    // A server older than 0.30.2 lists every step and sends no page. The cached steps left
+    // out above are not counted either.
+    let steps_page = match body.get("steps_page") {
+        Some(page) => {
+            let mut page: barca_core::db::StepsPage =
+                serde_json::from_value(page.clone()).map_err(bad)?;
+            page.total -= listed - steps.len();
+            page
+        }
+        None => barca_core::db::StepsPage {
+            total: steps.len(),
+            truncated: false,
+        },
+    };
+    let detail = barca_core::queries::RunDetail {
+        run,
+        steps,
+        steps_page,
+    };
     crate::commands::emit(barca_core::report::render_run_detail(&detail, json, select));
     Ok(())
 }

@@ -169,6 +169,9 @@ pub struct PartialRun {
     /// absent); `None` for an unpartitioned target.
     #[serde(default, skip)]
     pub partitions: Option<Vec<(String, dispatch::OutputRef)>>,
+    /// See [`results::GetResult::key_summary`].
+    #[serde(default, skip)]
+    pub key_summary: Option<results::KeySummary>,
 }
 
 impl FailedStep {
@@ -263,3 +266,15 @@ mod failed_step_tests {
 }
 
 mod wire;
+
+/// Hand the heap memory that is free back to the operating system. A run of many partition keys
+/// allocates and frees hundreds of megabytes; glibc keeps freed memory in each thread's arena,
+/// so a long-lived `barca serve` grows by the largest run each arena has served unless it is
+/// returned. `barca serve` calls this when a run ends (#623). A no-op off glibc.
+pub fn release_free_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only walks the allocator's own free lists.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}

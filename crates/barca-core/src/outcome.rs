@@ -302,9 +302,11 @@ impl Outcome {
     /// artifact pointer (paths by default, #404), `run` the value.
     pub fn success(result: &GetResult, command: RunCommand) -> Self {
         let output = match command {
-            RunCommand::Get => {
-                report::pointer_output(result.final_output.as_ref(), result.partitions.as_deref())
-            }
+            RunCommand::Get => report::pointer_output(
+                result.final_output.as_ref(),
+                result.partitions.as_deref(),
+                result.key_summary.as_ref(),
+            ),
             RunCommand::Run => result.final_output.as_ref().map(report::read_final_output),
         };
         Self::success_with(result, output)
@@ -322,9 +324,11 @@ impl Outcome {
             .targets
             .iter()
             .map(|(_, t)| match command {
-                RunCommand::Get => {
-                    report::pointer_output(t.final_output.as_ref(), t.partitions.as_deref())
-                }
+                RunCommand::Get => report::pointer_output(
+                    t.final_output.as_ref(),
+                    t.partitions.as_deref(),
+                    t.key_summary.as_ref(),
+                ),
                 RunCommand::Run => t.final_output.as_ref().map(report::read_final_output),
             })
             .collect();
@@ -423,6 +427,7 @@ impl Outcome {
                     final_output: output.filter(|v| !v.is_null()).cloned(),
                     values: true,
                     shown: Vec::new(),
+                    key_summary: output.and_then(report::parse_key_summary),
                 }
             } else {
                 report::returned_from_pointers(output)
@@ -612,8 +617,12 @@ pub struct RunView {
     pub outcome: Option<Outcome>,
     /// The first error of the run, in one line, for a list or a page title.
     pub error: Option<String>,
-    /// Each step the run recorded, then each step it streamed and has not recorded yet.
+    /// Each step the run recorded, then each step it streamed and has not recorded yet: at
+    /// most `?limit=N` of them (default 1000, failed recorded steps first), every one with
+    /// `?all=true`.
     pub steps: Vec<crate::db::RunStep>,
+    /// How many steps there are in all, and whether `steps` lists fewer (#623).
+    pub steps_page: crate::db::StepsPage,
     /// The lines the run's steps printed.
     pub logs: Vec<crate::db::LogEntry>,
 }
@@ -631,6 +640,7 @@ mod tests {
             phases: 1,
             final_output: None,
             partitions: None,
+            key_summary: None,
             steps: vec![],
             warnings: vec![],
             cache: None,
@@ -692,6 +702,7 @@ mod tests {
                         status: "success".into(),
                         final_output: None,
                         partitions: None,
+                        key_summary: None,
                         error: None,
                         failed_node: None,
                     },
@@ -702,6 +713,7 @@ mod tests {
                         status: "failed".into(),
                         final_output: None,
                         partitions: None,
+                        key_summary: None,
                         error: Some("ValueError: no".into()),
                         failed_node: Some("p.py:alpha".into()),
                     },
@@ -745,6 +757,7 @@ mod tests {
                 steps: vec![],
                 warnings: vec![],
                 partitions: None,
+                key_summary: None,
             })),
         }));
         let local = report::render_failed_run(&error, ResultFormat::Json);

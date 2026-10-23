@@ -1466,6 +1466,7 @@ mod tests {
             steps,
             warnings: Vec::new(),
             partitions: None,
+            key_summary: None,
             cache: None,
             uploads: None,
             partition_selection: None,

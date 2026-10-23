@@ -1,10 +1,43 @@
 # Benchmark Results
 
-Latest passes: 2026-10-22, keyed partition sources at 10k to 200k keys (first section below),
-and the read routes of `barca serve` and the inspection commands at 300 assets (second). Latest comparison pass: 2026-10-21, barca 0.28.0 against Dagster
+Latest passes: 2026-10-23, bounded run records under `barca serve` at 200k keys (first section
+below); 2026-10-22, keyed partition sources at 10k to 200k keys (second), and the read routes of `barca serve` and the inspection commands at 300 assets (second). Latest comparison pass: 2026-10-21, barca 0.28.0 against Dagster
 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (third section, #65). The sections after it are older passes on
 other hardware and are kept for the record. Absolute times from different machines are not
 comparable; within one pass, the ratios between frameworks are.
+
+## Bounded run records under serve (2026-10-23)
+
+`benchmarks/keyed_partitions/serve_ticks.py`: the keyed fixture (`versions -> cleaned -> scored`,
+200k retailers, 400k keys) with `freshness=Schedule(...)` on the sensor under `barca serve`, one
+retailer's version changed before each tick, the tick's run awaited through `GET /runs`. Same
+machine as the next section (32 threads, 62 GiB, other agents building). Before is 0.29.6
+(`a1eae781`), after is this change (#623). The before run was stopped at 20 ticks: its RSS was
+past 8 GB.
+
+```bash
+python benchmarks/keyed_partitions/serve_ticks.py 200000 50 --payloads --idle 2
+python benchmarks/keyed_partitions/serve_ticks.py 200000 50 --cron "*/2 * * * * *"
+```
+
+| | Before (0.29.6) | After |
+|---|---:|---:|
+| Outcome stored per tick (`runs.outcome_json`) | 82.6 MB | 1.5 to 2.7 KB |
+| Metadata DB growth per tick | 82.7 MB (1.47 GB over 20 ticks) | about 50 KB (2.65 MB over 50 ticks, file size with the WAL checkpointed at both ends); rows: the outcome and 3 materializations |
+| Server RSS over ticks | 2.3 GB after tick 1, 8.4 GB after tick 19, about +400 MB per tick | no trend over 50 ticks: 90 MB to 1.8 GB, by whether a tick or the read routes' 200k-key cache (#617) was resident when sampled |
+| Same, without returning freed memory to the system | | levels off at 4.6 to 4.9 GB (glibc keeps each thread's arena at its largest run) |
+| Tick `elapsed_seconds`, median | 5.46 s (19 ticks, `*/2` cron) | 5.46 s (49 ticks, `*/2` cron); 4.66 s (`*/10` cron) |
+| `GET /runs/{id}` | 82.6 MB | 2.6 to 5.9 KB |
+| `GET /runs/{id}/events` | 82.6 MB | 2.0 to 4.3 KB |
+| `barca history RUN_ID --json` | 2.5 KB | 1.3 to 3.9 KB |
+| `barca get scored --json`, `final_output` | 42.8 MB | 277 B (`_barca_partitions` summary) |
+
+- A run recorded before keeps its 82 MB outcome: `GET /runs/{id}` of one from the before pass
+  took 6.5 s with the new server and returned it whole.
+- With a sensor partitioned by retailer (`--mode partitioned`, 20k keys), every tick executes
+  and records 20k sensor steps: the DB grows about 20 MB per tick, by what ran. Its outcome is
+  200 KB (the first 1000 computed keys listed), `GET /runs/{id}` lists 1000 of the 20k steps, and
+  the event stream (5.8 MB) carries a line per executed key. Use a keyed source.
 
 ## Keyed partitions (2026-10-22)
 

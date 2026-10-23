@@ -112,7 +112,10 @@ every database from before 0.29.2 (#629):
   `runs.schedule_id` and `runs.outcome_json` (all TEXT, nullable, 0.27.0, #393): what started a
   run, the tick and schedule of a scheduled run, and the full outcome of a run `barca serve`
   started, so `GET /runs/{id}` answers after a restart. Rows written before have `NULL` there
-  (`triggered_by: null`).
+  (`triggered_by: null`). From 0.30.2 (#623) a partitioned target of more than 1000 keys is
+  stored as the `_barca_partitions` summary (the keys the run computed, counts of the rest), so
+  the row's size follows what the run computed; rows written before keep every key and are
+  read as they are. No migration.
 - `runs.client_run_id` (TEXT, nullable, 0.27.0, RFC-0007 §4.1): on a server, the run id a laptop
   gave a run it posted to the ledger (`triggered_by: client`); a repeated post of that run is
   recognised by it.

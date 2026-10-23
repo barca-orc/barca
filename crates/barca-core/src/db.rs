@@ -3050,6 +3050,31 @@ pub fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<St
 }
 
 pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
+    Ok(get_run_steps_page(db_path, run_id, None).await?.0)
+}
+
+/// A page of a run's recorded steps: what `barca history RUN_ID` and `GET /runs/{run_id}`
+/// list (#623). A run of many partition keys records one step per key it computed.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct StepsPage {
+    /// How many steps the run recorded.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub total: usize,
+    /// True when `steps` lists fewer than `total`.
+    pub truncated: bool,
+}
+
+/// How many recorded steps `barca history RUN_ID` and `GET /runs/{run_id}` list by default.
+pub const RUN_STEPS_LIMIT: usize = 1000;
+
+/// At most `limit` of `run_id`'s recorded steps (every one with `None`), in the order they were
+/// recorded, failed steps first among those kept; and how many there are.
+pub async fn get_run_steps_page(
+    db_path: &str,
+    run_id: &str,
+    limit: Option<usize>,
+) -> Result<(Vec<RunStep>, StepsPage), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     // Read-only snapshots of older databases may lack later columns: those read as null.
@@ -3062,8 +3087,32 @@ pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, 
         });
     }
     let (attempts, error_type) = (columns[0], columns[1]);
+    let total = match limit {
+        None => None,
+        Some(_) => {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM materializations WHERE run_id = ?1",
+                    [run_id],
+                )
+                .await
+                .map_err(|e| BarcaError::Db(format!("failed to count run steps: {e}")))?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| BarcaError::Db(format!("failed to count run steps: {e}")))?;
+            Some(row.and_then(|r| r.get::<i64>(0).ok()).unwrap_or(0) as usize)
+        }
+    };
+    // Past the limit, the failed steps are kept before the others.
+    let page = match (limit, total) {
+        (Some(limit), Some(total)) if total > limit => format!(
+            " AND id IN (SELECT id FROM materializations WHERE run_id = ?1 ORDER BY (status = 'failed') DESC, id LIMIT {limit})"
+        ),
+        _ => String::new(),
+    };
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback FROM materializations WHERE run_id = ?1 ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &turso::Row, i: usize| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -3106,7 +3155,12 @@ pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, 
             node_id,
         });
     }
-    Ok(steps)
+    let total = total.unwrap_or(steps.len());
+    let page = StepsPage {
+        total,
+        truncated: steps.len() < total,
+    };
+    Ok((steps, page))
 }
 
 /// One step result as `barca sql` shows it in `barca.materializations` and `GET
@@ -3952,6 +4006,55 @@ mod tests {
     /// #475: the keys of one run finish in any order, so the row id alone picks an arbitrary key
     /// as a partitioned node's last materialization. The rule: the latest run (by row id), and
     /// within it the first key in sort order; rows without a run id fall back to the row id.
+    #[tokio::test]
+    async fn a_page_of_run_steps_keeps_failed_steps_and_counts_them_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            for i in 0..5 {
+                let node = format!("p.py:k[n={i}]");
+                let status = if i == 3 { "failed" } else { "success" };
+                conn.execute(
+                    "INSERT INTO materializations (run_id, node_id, run_hash, status) VALUES ('many', ?1, 'h', ?2)",
+                    [node.as_str(), status],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let (steps, page) = super::get_run_steps_page(&path, "many", Some(2))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = steps.iter().map(|s| s.node_id.as_str()).collect();
+        // In recorded order, the failed step kept although it is not among the first two.
+        assert_eq!(ids, ["p.py:k[n=0]", "p.py:k[n=3]"]);
+        assert_eq!(
+            page,
+            super::StepsPage {
+                total: 5,
+                truncated: true
+            }
+        );
+        let (steps, page) = super::get_run_steps_page(&path, "many", None)
+            .await
+            .unwrap();
+        assert_eq!(steps.len(), 5);
+        assert_eq!(
+            page,
+            super::StepsPage {
+                total: 5,
+                truncated: false
+            }
+        );
+        let (steps, page) = super::get_run_steps_page(&path, "many", Some(10))
+            .await
+            .unwrap();
+        assert_eq!((steps.len(), page.truncated), (5, false));
+    }
+
     #[tokio::test]
     async fn last_materialization_of_a_partitioned_node_does_not_depend_on_completion_order() {
         let mut picked = Vec::new();

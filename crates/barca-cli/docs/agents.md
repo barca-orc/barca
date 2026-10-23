@@ -179,6 +179,11 @@ an object keyed by partition key (`dim=value`, dimensions sorted and joined with
 {"final_output": {"region=amer": {"_barca_artifact": {...}}, "region=emea": {"_barca_artifact": {...}}}}
 ```
 
+Past 1000 keys, unless `--partition` selected them, `final_output` is
+`{"_barca_partitions": {"keys", "computed", "cached", "outputs", "truncated", "hint"}}`: `outputs`
+holds only the keys this run computed (a tick that changed one key of 200k lists one), and
+`--partition` names the keys whose paths you need (`barca docs partitions`, "Many keys").
+
 Under `-o value` each key maps to its value. `--partition region=emea,amer` selects keys across
 the whole run: every partitioned node with that dimension, upstream and downstream, computes only
 those keys, the target returns them, and `--refresh` refreshes only them. Compound keys take a

@@ -174,7 +174,10 @@ whose upload is pending (`local only`) is uploaded first; one that still is not 
 credentials that cannot sign, is exit 3 (barca docs remote).
 A partitioned target returns every key, sorted: final_output is an object keyed by partition key
 (\"region=emea\") and -o path prints one path per key. When some keys fail the run fails (exit 1)
-and final_output in the failed result line holds the keys that succeeded.
+and final_output in the failed result line holds the keys that succeeded. Past 1000 keys, without
+--partition, final_output is {\"_barca_partitions\": {keys, computed, cached, outputs, truncated,
+hint}}: outputs lists only the keys this run computed, and -o path prints those with a note on
+stderr (barca docs partitions, \"Many keys\"); --partition returns every key it selects.
 --partition region=emea,amer (or a JSON object for compound keys) selects keys across the whole
 cone: every partitioned node with a named dimension, upstream and downstream, computes and returns
 only those keys, and --refresh refreshes only them; the rest is planned as without the flag. A
@@ -367,7 +370,9 @@ Examples:
   barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
   barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
   barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
-  barca history 7f30b3e9 --json   # {run, steps: [...], hint?}
+  barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}
+  barca history 7f30b3e9 --limit 50   # one run's first 50 recorded steps (failed steps always listed)
+  barca history 7f30b3e9 --all --json # every step the run recorded
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -383,8 +388,10 @@ A failed run's row ends with its first failed step and the first line of its err
 as `failure: {node, error}` (null otherwise). Filters combine with AND, and --limit, `total`
 and `truncated` count the runs they keep. With a RUN_ID, the run in detail: the steps it
 executed or that failed (cached steps are counted, not listed), each failed step's traceback,
-and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. Replace the example id
-with a run_id from barca history.
+and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. A run of many partition keys
+records a step per key it computed: the first 1000 are listed, failed ones always, and
+`steps_page` gives the `total` and whether the list is `truncated` (a note on stderr in the
+table). Replace the example id with a run_id from barca history.
 More: barca docs agents, barca docs cache";
 
 const GC_HELP: &str = "\
@@ -869,9 +876,10 @@ pub(crate) enum Cli {
     /// Show recent run history, or one run's steps and errors
     #[command(after_help = HISTORY_HELP)]
     History {
-        /// One run in detail: its fields, every step it recorded, and each failed step's error,
-        /// traceback and how its worker ended
-        #[arg(value_name = "RUN_ID", conflicts_with_all = ["reconcile", "limit", "all", "fields", "status", "target", "triggered_by", "since"])]
+        /// One run in detail: its fields, the steps it recorded (the first 1000, failed steps
+        /// always; --limit and --all change it), and each failed step's error, traceback and
+        /// how its worker ended
+        #[arg(value_name = "RUN_ID", conflicts_with_all = ["reconcile", "fields", "status", "target", "triggered_by", "since"])]
         run_id: Option<String>,
         /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
         #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all", "status", "target", "triggered_by", "since"])]
@@ -891,10 +899,11 @@ pub(crate) enum Cli {
         /// RFC 3339 time or a UTC date (2026-10-22)
         #[arg(long, value_name = "WHEN")]
         since: Option<String>,
-        /// Maximum recent runs (default: every run in JSON, 10 in a human table)
+        /// Maximum recent runs (default: every run in JSON, 10 in a human table); with a
+        /// RUN_ID, the most steps listed (default 1000)
         #[arg(short, long)]
         limit: Option<usize>,
-        /// Show every recorded run (no limit)
+        /// Show every recorded run (no limit); with a RUN_ID, every step it recorded
         #[arg(long, conflicts_with = "limit")]
         all: bool,
         #[command(flatten)]

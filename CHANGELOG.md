@@ -10,6 +10,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## 0.30.1 (2026-10-23)
 
+### Breaking
+
+- A partitioned target of more than 1000 keys, returned without `--partition`, no longer lists
+  every key in `final_output`: it is `{"_barca_partitions": {"keys", "computed", "cached",
+  "outputs", "truncated", "hint"}}`, where `outputs` maps only the keys the run computed (at
+  most 1000) to their pointers, values or links, and `-o path` prints those paths with a note
+  on stderr. 1000 keys or fewer, and every `--partition` selection, are unchanged. To read
+  other keys, select them with `--partition` (`partition=` in Python; `barca.get()` raises for
+  the summary) or query them with `barca sql` (`barca docs partitions`, "Many keys"; #623).
+
 ### Bug Fixes
 
 - A metadata DB written before 0.29.2 opens again (#629): 0.29.2 to 0.30.0 refused it with exit 3
@@ -18,6 +28,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   `logs.ts` columns that migration adds. Opening it now adds them in place and keeps every row;
   lines recorded before read as stdout with no time. No `barca state reset` is needed. A test
   now opens a database written by a release of every minor from 0.20 with the current build.
+
+- `barca serve` no longer grows without bound under a schedule over many partition keys. At
+  200k keys each tick wrote about 82 MB of run outcome to the metadata DB and kept about 400 MB
+  more memory; with one key changing per tick it records a 2 KB outcome (the DB grows about
+  50 KB a tick) and its memory stays flat. A run's outcome lists the keys it computed and counts the cached ones; finished
+  runs are kept in memory under a 64 MB budget as well as for an hour, oldest dropped first;
+  the server returns the memory a run freed to the system when it ends; `GET /runs/{run_id}`
+  and `barca history RUN_ID` list at most 1000 steps (`?limit=N` / `--limit N`, `?all=true` /
+  `--all`) with a new `steps_page: {total, truncated}`. Runs recorded before keep their
+  outcomes and read as before (#623).
 
 ## 0.30.0 (2026-10-23)
 

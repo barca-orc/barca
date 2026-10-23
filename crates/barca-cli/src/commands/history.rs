@@ -66,11 +66,12 @@ pub(crate) async fn history_cmd(
 pub(crate) async fn run_detail_cmd(
     env: Option<&str>,
     run_id: &str,
+    limit: Option<usize>,
     json: bool,
     select: &str,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
-    let detail = barca_core::queries::run_detail(&cfg, run_id).await?;
+    let detail = barca_core::queries::run_detail(&cfg, run_id, limit).await?;
     super::emit(barca_core::report::render_run_detail(&detail, json, select));
     Ok(())
 }

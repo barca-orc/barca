@@ -266,6 +266,9 @@ pub struct RunChannel {
     /// How many events have been emitted; subscribers wait on it. Held only by the channel's
     /// handles, so when the last one is dropped the subscribers see it closed.
     emitted: Arc<tokio::sync::watch::Sender<usize>>,
+    /// About how many bytes the backlog holds ([`RunEvent::approx_bytes`]): what a finished
+    /// run costs the server's memory budget (#623).
+    bytes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for RunChannel {
@@ -279,11 +282,19 @@ impl RunChannel {
         Self {
             backlog: Arc::new(Mutex::new(Vec::new())),
             emitted: Arc::new(tokio::sync::watch::channel(0).0),
+            bytes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    /// About how many bytes the events emitted so far hold.
+    pub fn bytes(&self) -> usize {
+        self.bytes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Record an event and wake the subscribers.
     pub fn emit(&self, event: RunEvent) {
+        self.bytes
+            .fetch_add(event.approx_bytes(), std::sync::atomic::Ordering::Relaxed);
         let mut backlog = self.backlog.lock().unwrap();
         backlog.push(event);
         self.emitted.send_replace(backlog.len());

@@ -310,7 +310,8 @@ Limits:
 - **A new key runs alone however the keys are written:** a literal list inside the decorator,
   a module-level constant as above, another expression, or `partitions_from(...)`.
 - **`barca get sales` returns every key**: one artifact path per key (`-o value` for the
-  values). `--partition region=emea` computes and returns only that key, and scopes
+  values). Past 1000 keys it lists only the keys the run computed and counts the rest
+  ([many partition keys](/reference/cli/#many-partition-keys)). `--partition region=emea` computes and returns only that key, and scopes
   `--refresh sales` to it. It narrows upstream partitioned assets too, and skips a `collect()`
   fan-in over them.
 - **A removed key's result stays on disk** until the cache size limit evicts it, and its runs stay
