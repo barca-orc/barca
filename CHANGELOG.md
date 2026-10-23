@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.30.0 (2026-10-23)
+
 ### Breaking
 
 - A sink that cannot be written now fails its step, for every `@sink`: the step's error is a
