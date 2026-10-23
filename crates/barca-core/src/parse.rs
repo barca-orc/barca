@@ -378,6 +378,17 @@ fn try_extract_function(
                 .to_string(),
         }
     })?;
+    let deterministic = extract_deterministic(&keywords, source).map_err(|(offset, message)| {
+        ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..offset].matches('\n').count() + 1,
+            message,
+            fix: "write deterministic=False (or True, the default), e.g. \
+                  @asset(deterministic=False) (see `barca docs cache`)"
+                .to_string(),
+        }
+    })?;
     let env = extract_env(&keywords, file_path, func.name.as_str())?;
     let artifact_serializer = keywords
         .iter()
@@ -421,6 +432,7 @@ fn try_extract_function(
         timeout_seconds,
         retries,
         weight,
+        deterministic,
         retry_backoff_seconds,
         description,
         tags,
@@ -896,6 +908,30 @@ fn extract_weight(keywords: &[&Keyword], source: &str) -> Result<u32, (usize, St
             "weight= must be a whole number of at least 1, got `{}`",
             source
                 .get(kw.value.range().start().to_usize()..kw.value.range().end().to_usize())
+                .unwrap_or("?")
+        ),
+    ))
+}
+
+/// `deterministic=False`: a `True` or `False` literal, `True` when not written (#627). Anything
+/// else is refused rather than read as `True`.
+fn extract_deterministic(keywords: &[&Keyword], source: &str) -> Result<bool, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("deterministic"))
+    else {
+        return Ok(true);
+    };
+    if let Expr::BooleanLiteral(b) = &kw.value {
+        return Ok(b.value);
+    }
+    let range = kw.value.range();
+    Err((
+        range.start().to_usize(),
+        format!(
+            "deterministic= must be True or False, got `{}`",
+            source
+                .get(range.start().to_usize()..range.end().to_usize())
                 .unwrap_or("?")
         ),
     ))

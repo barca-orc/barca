@@ -223,6 +223,7 @@ mod tests {
             timeout_seconds: 300,
             retries: 1,
             weight: 1,
+            deterministic: true,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: Default::default(),

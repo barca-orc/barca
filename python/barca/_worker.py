@@ -171,7 +171,7 @@ def _captured(out, err):
 
 
 def _peak_rss_bytes() -> int:
-    """Peak RSS of this process in bytes (0 if unavailable).
+    """Peak RSS of this process over its whole life, in bytes (0 if unavailable).
 
     `ru_maxrss` is kilobytes on Linux and bytes on macOS.
     """
@@ -184,6 +184,49 @@ def _peak_rss_bytes() -> int:
         return int(peak) * 1024
     except Exception:
         return 0
+
+
+def _vm_hwm_bytes() -> int | None:
+    """`VmHWM` from /proc/self/status (Linux): the peak RSS since it was last reset."""
+    try:
+        with open("/proc/self/status", "rb") as status:
+            for line in status:
+                if line.startswith(b"VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _start_rss_window():
+    """Start measuring one step's peak RSS (#627).
+
+    A worker runs many steps, so the process's lifetime peak (`ru_maxrss`) is the largest step
+    it has run so far, not this one. On Linux, writing `5` to /proc/self/clear_refs resets the
+    peak (`VmHWM`) to the current RSS, so the peak read when the step ends is this step's own:
+    the most memory the worker held while it ran, the worker's baseline (Python, imports, a
+    DuckDB connection) included. Elsewhere, the lifetime peak before the step is kept, and the
+    step's peak is known only when it raised it. Returns what `_step_peak_rss_bytes` needs.
+    """
+    try:
+        with open("/proc/self/clear_refs", "w") as refs:
+            refs.write("5")
+        if _vm_hwm_bytes() is not None:
+            return ("hwm", 0)
+    except OSError:
+        pass
+    return ("lifetime", _peak_rss_bytes())
+
+
+def _step_peak_rss_bytes(window) -> int | None:
+    """The step's peak RSS in bytes, from `_start_rss_window`'s window; None when unknown."""
+    kind, before = window
+    if kind == "hwm":
+        return _vm_hwm_bytes()
+    after = _peak_rss_bytes()
+    # The lifetime peak grew during the step: that is the step's peak. Otherwise the step
+    # stayed under an earlier step's peak, and how far under is not known.
+    return after if after > before else None
 
 
 # Tier-1 cache limits. Sizes are bytes of the serialized artifact: known without touching the
@@ -888,6 +931,11 @@ def _materialize(
             **timing,
             "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
         }
+    if timing and "rss_window" in timing:
+        timing = dict(timing)
+        peak = _step_peak_rss_bytes(timing.pop("rss_window"))
+        if peak:
+            timing["max_rss_bytes"] = peak
     artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
     if upload_snapshot is not None:
         artifact["upload_snapshot"] = upload_snapshot
@@ -1207,6 +1255,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
     node_id = step.get("node_id", "unknown")
     t0 = time.perf_counter()
     c0 = time.process_time()
+    rss_window = _start_rss_window()
 
     # Views bound for duckdb-typed inputs. They must outlive materialization: a returned
     # relation is lazy and may still reference them when it is written to parquet.
@@ -1335,7 +1384,9 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 elapsed_in_artifact=True,
                 timing={
                     "cpu_seconds": cpu,
-                    "max_rss_bytes": _peak_rss_bytes(),
+                    # Read after the result is written: a returned DuckDB relation or lazy
+                    # frame does its work while it is serialized.
+                    "rss_window": rss_window,
                     **(
                         {"import_seconds": import_seconds}
                         if import_seconds and import_seconds > 1

@@ -8,6 +8,38 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- Production feedback from a pipeline under `barca serve` (#627, #628). Why a run failed is one
+  field away: `barca history --json` runs gain the flat `failed_node` and `error` (beside
+  `failure`), so `--fields run_id,failed_node,error` works, and `barca history RUN_ID` shows the
+  last 20 lines a failed step printed (`steps[].output_tail`, without the traceback it already
+  shows). Per-step memory: the worker resets the kernel's peak counter when a step starts, so
+  `max_rss_bytes` is the step's own peak, not the worker's peak over every step it ran (Linux;
+  elsewhere it is recorded only when a step raised the worker's peak), measured up to the end of
+  writing the result, so a returned DuckDB relation counts. It is in `barca history RUN_ID`
+  (`PEAK_RSS`, `steps[].max_rss_bytes` and `cpu_seconds`), in `barca stats` (`max_rss_bytes` and
+  `median_max_rss_bytes`, and each `recent_runs` entry's `max_rss_bytes` and `cpu_seconds`) and
+  in `barca.materializations`. Bytes DuckDB spilled are not recorded (DuckDB keeps no total).
+  `barca stats` `recent_runs` entries gain `run_id`. A project setting makes `--env` required:
+  `require_env = true` in `barca.toml` or `BARCA_REQUIRE_ENV=1`, and a command that touches an
+  environment without `--env` or `BARCA_ENV` exits 2 naming the environments there are; without
+  it, a command that names none in a project with several environments prints one note on
+  stderr saying which it uses. `@asset(deterministic=False)` silences the "not deterministic"
+  warning for an asset expected to return new bytes (caching and the run hash are unchanged);
+  sensors never had it. `barca plan` accepts `--json` and `--pretty`, which change nothing (the
+  plan is always JSON). OpenAPI specification 12: `GET /runs/{run_id}` steps gain `cpu_seconds`,
+  `max_rss_bytes` and `output_tail`, `GET /stats/{name}` the memory keys and `run_id`, and `GET
+  /history` runs `failed_node` and `error`.
+
+### Bug Fixes
+
+- `partitions(<expression>)` imports the asset's module the way a worker does, with the project
+  root on `sys.path`, so an expression that reads a project module from a file in a
+  subdirectory works (#628). An expression that raises is a load error naming the node, with the
+  traceback, in `barca list`, `barca status`, `get`, `GET /health` and `barca doctor`; up to
+  0.30 the node silently got no partition keys.
+
 ## 0.30.2 (2026-10-23)
 
 ### Breaking

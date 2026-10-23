@@ -25,7 +25,14 @@ def summary(all_sales: list[dict]) -> dict:
 ```
 
 - `partitions([...])` declares keys. A literal list is read statically; any other expression
-  (a list comprehension, a function call) is evaluated by the Python runtime at plan time.
+  (a list comprehension, a function call) is evaluated by the Python runtime at plan time. It
+  imports the asset's module the way a worker does, with the module's directory and the project
+  root on `sys.path`, so a helper module beside it or a package of the project imports. An
+  expression that raises (or a module that fails to import) is a load error naming the node,
+  with the traceback, in `barca list`, `barca status`, `get` (exit 2 when it is the target),
+  `GET /health` `load_errors` and `barca doctor`; the node and what reads it are left out of
+  the plan, as for a file that does not parse. Up to 0.30 such a node got no keys, with only a
+  warning.
 - The partition key is passed to the function as the parameter named in `partitions={...}`. A
   dimension that is not a parameter of the function is an error when the file is read, exit 2
   (`barca docs assets`, "Inputs and parameters").

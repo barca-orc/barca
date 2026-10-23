@@ -4,4 +4,19 @@ import type { AssetRunEntry } from "./AssetRunEntry";
 /**
  * Aggregated statistics for a single asset node.
  */
-export type AssetStats = { node_id: string, total_runs: number, avg_elapsed_seconds: number | null, median_elapsed_seconds: number | null, max_elapsed_seconds: number | null, p95_elapsed_seconds: number | null, cache_hit_rate: number, recent_runs: Array<AssetRunEntry>, };
+export type AssetStats = { node_id: string, total_runs: number, avg_elapsed_seconds: number | null, median_elapsed_seconds: number | null, max_elapsed_seconds: number | null, p95_elapsed_seconds: number | null,
+/**
+ * The share of executions that repeated an earlier execution's run hash (not cache hits,
+ * which execute nothing and are not recorded per asset).
+ */
+cache_hit_rate: number,
+/**
+ * The largest peak RSS any recorded execution of this node reached, in bytes (#627): the
+ * worker process's peak while the step ran. `null` when none was recorded.
+ */
+max_rss_bytes: number | null,
+/**
+ * The median of the recorded executions' peak RSS, in bytes. `null` when none was
+ * recorded.
+ */
+median_max_rss_bytes: number | null, recent_runs: Array<AssetRunEntry>, };

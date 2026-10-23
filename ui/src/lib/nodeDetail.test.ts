@@ -39,6 +39,9 @@ describe('historyBars', () => {
     created_at: at,
     error_message: status === 'failed' ? 'boom' : null,
     attempts: 1,
+    run_id: null,
+    cpu_seconds: null,
+    max_rss_bytes: null,
   })
 
   it('oldest first, heights relative to the slowest run, failures marked', () => {
@@ -83,6 +86,9 @@ const timed = (elapsed: number | null, status = 'success'): AssetRunEntry => ({
   created_at: '2026-01-01 00:00:00',
   error_message: null,
   attempts: 1,
+  run_id: null,
+  cpu_seconds: null,
+  max_rss_bytes: null,
 })
 
 describe('durationHistogram', () => {

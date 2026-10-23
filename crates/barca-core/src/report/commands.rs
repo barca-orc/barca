@@ -533,6 +533,18 @@ pub fn history_target(run: &crate::db::RunRecord) -> String {
     }
 }
 
+/// One run of `barca history --json`: the record, plus `failure`'s node and error as the flat
+/// `failed_node` and `error` (#627), so `--fields run_id,failed_node,error` needs no nesting.
+pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
+    let mut out = serde_json::to_value(run).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = out.as_object_mut() {
+        let failure = run.failure.as_ref();
+        obj.insert("failed_node".into(), failure.map(|f| f.node.clone()).into());
+        obj.insert("error".into(), failure.map(|f| f.error.clone()).into());
+    }
+    out
+}
+
 pub fn render_history(
     runs: &[crate::db::RunRecord],
     total: usize,
@@ -542,10 +554,7 @@ pub fn render_history(
     let mut rendered = RenderedOutput::default();
     let page = Page::new(runs.len(), total);
     if json || fields.is_some() {
-        let mut items: Vec<serde_json::Value> = runs
-            .iter()
-            .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
-            .collect();
+        let mut items: Vec<serde_json::Value> = runs.iter().map(history_json).collect();
         if let Some(f) = fields {
             project(&mut items, f);
         }
@@ -734,7 +743,7 @@ pub fn render_run_detail(
     }
     line!(rendered, "steps: {counts}");
     if !detail.steps.is_empty() {
-        let rows: Vec<[String; 6]> = detail
+        let rows: Vec<[String; 7]> = detail
             .steps
             .iter()
             .map(|s| {
@@ -758,6 +767,10 @@ pub fn render_run_detail(
                     s.attempts
                         .map_or_else(|| "-".to_string(), |n| n.to_string()),
                     secs(s.elapsed_seconds),
+                    s.max_rss_bytes.map_or_else(
+                        || "-".to_string(),
+                        |b| crate::gc::size::human(b.max(0) as u64),
+                    ),
                     s.run_hash
                         .as_deref()
                         .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
@@ -765,14 +778,16 @@ pub fn render_run_detail(
                 ]
             })
             .collect();
-        let header = ["STEP", "STATUS", "ATTEMPTS", "TIME", "RUN_HASH", "ARTIFACT"];
+        let header = [
+            "STEP", "STATUS", "ATTEMPTS", "TIME", "PEAK_RSS", "RUN_HASH", "ARTIFACT",
+        ];
         let mut widths = header.map(str::len);
         for row in &rows {
             for (w, cell) in widths.iter_mut().zip(row) {
                 *w = (*w).max(cell.chars().count());
             }
         }
-        let fmt_row = |cells: [&str; 6]| {
+        let fmt_row = |cells: [&str; 7]| {
             let mut out = String::new();
             for (i, cell) in cells.iter().enumerate() {
                 if i == cells.len() - 1 {
@@ -846,6 +861,17 @@ pub fn render_run_detail(
         if let Some(exit) = &step.worker_exit {
             line!(rendered, "  worker exit: {exit}");
         }
+        if let Some(tail) = step.output_tail.as_deref().filter(|t| !t.is_empty()) {
+            let n = tail.len();
+            line!(
+                rendered,
+                "  last {n} line{} of its output:",
+                if n == 1 { "" } else { "s" }
+            );
+            for out in tail {
+                line!(rendered, "  | {out}");
+            }
+        }
     }
     if let Some(hint) = hint {
         note!(rendered, "hint: {hint}");
@@ -882,14 +908,30 @@ pub fn render_stats(
         "Re-executed with unchanged inputs: {:.1}%",
         stats.cache_hit_rate * 100.0
     );
+    let mem = |v: Option<i64>| {
+        v.map_or_else(
+            || "-".to_string(),
+            |b| crate::gc::size::human(b.max(0) as u64),
+        )
+    };
+    if stats.max_rss_bytes.is_some() {
+        line!(
+            rendered,
+            "Peak memory (RSS):  median {}  max {}",
+            mem(stats.median_max_rss_bytes),
+            mem(stats.max_rss_bytes),
+        );
+    }
     if !stats.recent_runs.is_empty() {
         line!(rendered, "\nRecent runs:");
         line!(
             rendered,
-            "  {:<10} {:<9} {:<8} {:<20}",
+            "  {:<10} {:<9} {:<8} {:<10} {:<12} {}",
             "ELAPSED",
             "STATUS",
             "ATTEMPTS",
+            "PEAK_RSS",
+            "RUN",
             "CREATED"
         );
         for entry in &stats.recent_runs {
@@ -897,14 +939,17 @@ pub fn render_stats(
                 .elapsed_seconds
                 .map(|e| format!("{:.3}s", e))
                 .unwrap_or_else(|| "-".to_string());
-            line!(
-                rendered,
-                "  {:<10} {:<9} {:<8} {:<20}",
+            let created = crate::report::utc_cell(&entry.created_at);
+            let row = format!(
+                "  {:<10} {:<9} {:<8} {:<10} {:<12} {}",
                 elapsed_str,
                 entry.status,
                 entry.attempts,
-                crate::report::utc_cell(&entry.created_at),
+                mem(entry.max_rss_bytes),
+                entry.run_id.as_deref().unwrap_or("-"),
+                created,
             );
+            line!(rendered, "{}", row.trim_end());
             if entry.status == "failed"
                 && let Some(msg) = &entry.error_message
                 && !msg.is_empty()

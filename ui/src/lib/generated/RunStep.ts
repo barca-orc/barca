@@ -41,4 +41,20 @@ error_traceback: string | null,
  * How the worker process ended, for a step whose worker died: `SIGKILL (possibly the OOM
  * killer)`, another signal, `code N`, or `disconnected`. `null` for a step that raised.
  */
-worker_exit: string | null, };
+worker_exit: string | null,
+/**
+ * CPU seconds the step used (the worker process's user and system time).
+ */
+cpu_seconds: number | null,
+/**
+ * The worker process's peak RSS while the step ran, in bytes (#627). `null` when not
+ * recorded (a failed step, a row from an older barca, or a platform that cannot tell).
+ */
+max_rss_bytes: number | null,
+/**
+ * A failed step's last lines of output, stdout and stderr in the order they were written,
+ * without the traceback barca already shows (at most [`OUTPUT_TAIL_LINES`]; `barca logs
+ * RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it
+ * printed nothing.
+ */
+output_tail: Array<string> | null, };

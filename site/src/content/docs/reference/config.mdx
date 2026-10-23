@@ -130,6 +130,7 @@ url = "https://barca.internal.example.com"
 | Key | Default | Meaning |
 |---|---|---|
 | `default_env` | `default` | Environment name when `--env` and `BARCA_ENV` are absent. |
+| `require_env` | `false` | `true`: a command that reads or writes an environment exits 2 unless `--env` or `BARCA_ENV` names it, even with `default_env` set. See [Environments](#environments---env). |
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
@@ -148,7 +149,7 @@ valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`, `server`, `execution`
+unknown field `defualt_env`, expected one of `default_env`, `require_env`, `remote`, `discovery`, `cache`, `server`, `execution`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.
@@ -206,6 +207,7 @@ Variables that override `barca.toml`:
 | Variable | Overrides | Notes |
 |---|---|---|
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
+| `BARCA_REQUIRE_ENV` | `require_env` | `1` (or `true`, `yes`) requires `--env` or `BARCA_ENV`; `0` (or `false`, `no`) does not; anything else exits 2. |
 | `BARCA_CAPACITY` | `[execution].capacity` | Experimental. A whole number of at least 1; anything else exits 2. |
 | `BARCA_SERVER_RECONNECT` | none | Experimental. Seconds a `--server` client following a run (and `logs -f --server`) waits for a restarting server to come back (default 60; `0` gives up at once). Not a number of seconds exits 2. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |
@@ -295,6 +297,22 @@ default`; credentials and signed URI queries are redacted. The line is never on 
 `--json` output is unchanged. `barca serve` always prints it, with the metadata DB and its
 format added: `...; metadata .barca/envs/prod/metadata.db (db format 1)` (see
 [Deploying](/deploying/)).
+
+On a machine with more than one environment (`.barca/metadata.db` for `default`, and each
+directory of `.barca/envs/`), a command that names none with `--env` or `BARCA_ENV` prints one
+note on stderr naming the environment it uses and the ones there are, in every output mode
+(stdout and `--json` are unchanged):
+
+```
+[barca] note: no --env given, so this uses env staging (default_env in barca.toml); this project has 2 environments (prod, staging). Pass --env NAME or set BARCA_ENV; require_env = true in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required
+```
+
+`require_env = true` at the top level of `barca.toml` (or `BARCA_REQUIRE_ENV=1`, which beats
+it; `BARCA_REQUIRE_ENV=0` turns it off) makes the environment required: every command that
+reads or writes one (`get`, `run`, `status`, `history`, `logs`, `stats`, `sql`, `gc`, `state`
+and `serve`) exits 2 without `--env` or `BARCA_ENV`, naming the environments there are, even
+when `default_env` is set, and `barca doctor` reports it as a failed `environment` check.
+`plan`, `list` and `docs` read no environment and are not affected.
 
 | | env = `default` | named env `<e>` |
 |---|---|---|

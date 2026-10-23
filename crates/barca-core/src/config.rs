@@ -22,6 +22,9 @@ pub const DEFAULT_ENV: &str = "default";
 #[serde(deny_unknown_fields)]
 pub struct BarcaToml {
     pub default_env: Option<String>,
+    /// Every command that reads or writes an environment must name it with `--env` or
+    /// `BARCA_ENV` (#627); `BARCA_REQUIRE_ENV` overrides it.
+    pub require_env: Option<bool>,
     pub remote: Option<RemoteToml>,
     pub discovery: Option<DiscoveryToml>,
     pub cache: Option<CacheToml>,
@@ -368,6 +371,40 @@ pub fn load_toml(cwd: &Path) -> Result<Option<BarcaToml>, BarcaError> {
     Ok(Some(parsed))
 }
 
+/// Whether `--env` (or `BARCA_ENV`) is required, and the setting that says so:
+/// `BARCA_REQUIRE_ENV` (`1`/`true`/`yes` or `0`/`false`/`no`) > `require_env` in barca.toml.
+fn require_env(file: Option<bool>) -> Result<Option<&'static str>, BarcaError> {
+    if let Some(raw) = env_var("BARCA_REQUIRE_ENV") {
+        return match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Ok(Some("BARCA_REQUIRE_ENV")),
+            "0" | "false" | "no" => Ok(None),
+            _ => Err(BarcaError::Usage(format!(
+                "invalid BARCA_REQUIRE_ENV '{raw}' (expected 1 or 0)"
+            ))),
+        };
+    }
+    Ok((file == Some(true)).then_some("require_env = true in barca.toml"))
+}
+
+/// The environments this project has data for under `cwd`: `default` when `.barca/metadata.db`
+/// exists, and every directory of `.barca/envs/`, sorted.
+pub fn known_envs(cwd: &Path) -> Vec<String> {
+    let barca = cwd.join(".barca");
+    let mut out: Vec<String> = std::fs::read_dir(barca.join("envs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| valid_env_name(name))
+        .collect();
+    if barca.join("metadata.db").is_file() && !out.iter().any(|e| e == DEFAULT_ENV) {
+        out.push(DEFAULT_ENV.to_string());
+    }
+    out.sort();
+    out
+}
+
 fn valid_env_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -419,6 +456,37 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         return Err(BarcaError::Usage(format!(
             "invalid environment name '{env}' — allowed characters: A-Z a-z 0-9 . _ -"
         )));
+    }
+    let chosen = matches!(env_source, EnvSource::Flag | EnvSource::EnvVar);
+    if !chosen {
+        let known = known_envs(cwd);
+        let named = |known: &[String]| {
+            if known.is_empty() {
+                "none yet".to_string()
+            } else {
+                known.join(", ")
+            }
+        };
+        if let Some(source) = require_env(file.require_env)? {
+            return Err(BarcaError::Usage(format!(
+                "no environment given, and {source} requires one: pass --env NAME or set \
+                 BARCA_ENV (environments here: {})",
+                named(&known)
+            )));
+        }
+        if known.len() > 1 {
+            static NOTED: std::sync::Once = std::sync::Once::new();
+            NOTED.call_once(|| {
+                crate::errln!(
+                    "[barca] note: no --env given, so this uses env {env} ({}); this project has \
+                     {} environments ({}). Pass --env NAME or set BARCA_ENV; require_env = true \
+                     in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required",
+                    env_source.describe(),
+                    known.len(),
+                    named(&known)
+                );
+            });
+        }
     }
 
     let (cache_max_size, cache_max_size_source) = cache_max_size(file.cache.as_ref())?;
@@ -781,6 +849,7 @@ mod tests {
         "BARCA_CACHE_MAX_SIZE",
         "BARCA_SERVER",
         "BARCA_CAPACITY",
+        "BARCA_REQUIRE_ENV",
     ];
 
     fn clean_env() -> EnvGuard {
@@ -1044,6 +1113,37 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
         // named env uses env-scoped local db and backups
         assert!(cfg.db_path.contains(".barca/envs/dev/"));
         assert_eq!(cfg.local_backup_dir(), Path::new(".barca/envs/dev/backups"));
+    }
+
+    #[test]
+    fn require_env_refuses_a_command_without_env_or_barca_env() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".barca/envs/prod")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".barca/envs/staging")).unwrap();
+        assert_eq!(known_envs(dir.path()), ["prod", "staging"]);
+        write_toml(
+            dir.path(),
+            "default_env = \"staging\"\nrequire_env = true\n",
+        );
+        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("require_env = true in barca.toml requires one"),
+            "{err}"
+        );
+        assert!(err.contains("environments here: prod, staging"), "{err}");
+        assert_eq!(resolve_in(Some("prod"), dir.path()).unwrap().env, "prod");
+        unsafe { std::env::set_var("BARCA_ENV", "prod") };
+        assert_eq!(resolve_in(None, dir.path()).unwrap().env, "prod");
+        unsafe { std::env::remove_var("BARCA_ENV") };
+        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "0") };
+        assert_eq!(resolve_in(None, dir.path()).unwrap().env, "staging");
+        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "sometimes") };
+        assert!(resolve_in(None, dir.path()).is_err());
+        write_toml(dir.path(), "");
+        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "1") };
+        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        assert!(err.contains("BARCA_REQUIRE_ENV requires one"), "{err}");
     }
 
     #[test]

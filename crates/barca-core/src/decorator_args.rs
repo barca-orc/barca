@@ -77,6 +77,7 @@ pub const SIGNATURES: &[Signature] = &[
             "tags",
             "env",
             "weight",
+            "deterministic",
         ],
         deferred: &[],
         usage: "@asset(inputs={\"param\": upstream}, ...)",
@@ -1140,14 +1141,21 @@ mod tests {
             name: "partitions",
             passing: Passing::Keyword
         }));
-        // What the parser reads on one node kind it reads on all three; `inputs` on a sensor
-        // is the one difference, and it is an error of its own.
+        // What the parser reads on one node kind it reads on all three, apart from
+        // `deterministic`, which only an asset has (only an asset's bytes are checked), and
+        // `inputs` on a sensor, an error of its own.
         let keywords = |call: &str| -> Vec<&str> {
             all.iter()
                 .filter(|a| a.call == call)
                 .map(|a| a.name)
+                .filter(|name| *name != "deterministic" || call != "asset")
                 .collect()
         };
+        assert!(all.contains(&Argument {
+            call: "asset",
+            name: "deterministic",
+            passing: Passing::Keyword
+        }));
         assert_eq!(keywords("asset"), keywords("task"));
         let mut sensor = keywords("asset");
         sensor.retain(|k| *k != "inputs");

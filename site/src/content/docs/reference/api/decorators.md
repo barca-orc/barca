@@ -47,7 +47,7 @@ check in the binary equal), so a type checker and an IDE know them too.
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `group()` | one | `members`, `output`, `description` |
-| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
@@ -117,6 +117,7 @@ Star-import dependency hashing remains conservative.
     tags: dict[str, str] | None = None,
     env: list[str] | None = None,
     weight: int = 1,
+    deterministic: bool = True,
 )
 ```
 
@@ -137,7 +138,7 @@ delay in seconds between attempts (delay grows linearly: `retry_backoff * attemp
 Of these arguments, `inputs`, `serializer` and the dimension names in `partitions` are part of
 the run hash, with stacked `@sink` decorators and any decorator that is not barca's: changing
 one runs the asset again. `name`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`,
-`weight`, `description`, `tags` and the partition keys are not, and neither is the formatting of the
+`weight`, `deterministic`, `description`, `tags` and the partition keys are not, and neither is the formatting of the
 decorator: editing them re-runs nothing. `barca docs cache` has the full list with the reason
 for each (from 0.19; up to 0.18 any edit to the decorator re-ran the asset).
 
@@ -145,6 +146,13 @@ for each (from 0.19; up to 0.18 any edit to the decorator re-ran the asset).
 [Declared environment variables](#declared-environment-variables-env) below. `weight` is how
 much of the pool's capacity the step takes while it runs; see
 [Heavy steps](#heavy-steps-weight) below.
+
+`deterministic=False` says the asset may return other bytes for the same code and inputs (a
+snapshot of an external system), so barca does not warn `produced different bytes for the same
+code and inputs; the function is not deterministic` for it, and does not report
+`bytes_changed` or `last_bytes_change`. It changes nothing else: the result is cached under
+its run hash as before, and what reads it is not made stale by new bytes alone. Sensors and
+`Manual` assets never get the warning.
 
 ```python
 from barca import asset, Always, Manual, Schedule
