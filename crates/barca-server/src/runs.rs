@@ -72,8 +72,9 @@ impl RunSpec {
     }
 }
 
-/// Refuse a new run while the server drains before it stops: `503` with `Retry-After`.
-/// Runs already admitted go on; `DELETE /runs/{id}` and every read stay available.
+/// Refuse a request while the server drains before it stops: `503` with `Retry-After`
+/// (`POST /state/reset`). Runs are not refused: they join the queue, which the next server
+/// resumes.
 pub(crate) fn refuse_if_draining(state: &AppState) -> Result<(), ApiError> {
     if state.is_draining() {
         return Err(ApiError::Unavailable {
@@ -251,7 +252,6 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
         return dry_run(&state, &request, &files).await;
     }
     refuse_if_read_only(&state)?;
-    refuse_if_draining(&state)?;
     let verb = request.command.as_str();
     let mut nodes = Vec::new();
     for target in &request.targets {
@@ -260,8 +260,8 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
     if request.targets.is_empty() {
         check_any_asset(&state).await?;
     }
-    let run_id = start(
-        state,
+    let admitted = crate::queue::admit(
+        &state,
         RunSpec {
             command: request.command,
             policy: request.policy(),
@@ -274,8 +274,17 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
             // The run contract runs what `barca get` / `barca run` would run here.
             rules: barca_core::freshness::RunRules::request(),
         },
-    );
-    Ok((StatusCode::ACCEPTED, Json(json!({ "run_id": run_id }))).into_response())
+    )
+    .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "run_id": admitted.run_id,
+            "status": live_status(admitted.status),
+            "position": admitted.position,
+        })),
+    )
+        .into_response())
 }
 
 /// `partition`, parsed as `--partition` is; `400` when it does not parse.
@@ -360,33 +369,25 @@ fn context(command: RunCommand, files: &[String]) -> Context {
     }
 }
 
-/// Accept a run: allocate its id, record it as pending, and execute it in the background.
-pub(crate) fn start(state: AppState, spec: RunSpec) -> String {
-    let run_id = db::generate_run_id();
-    // Child of the server-wide shutdown token: DELETE /runs/{id} cancels just this run;
-    // shutdown cancels all of them.
-    let cancel = state.shutdown.child_token();
-    state.runs.insert(
-        run_id.clone(),
-        RunState {
-            handle: run_id.clone(),
-            db_run_id: None,
-            command: spec.command.as_str().into(),
-            target: (!spec.targets.is_empty()).then(|| spec.targets.join(",")),
-            nodes: spec.nodes.clone(),
-            trigger: spec.trigger.clone(),
-            files: spec.files.clone(),
-            status: RunStatus::Pending,
-            result: None,
-            error: None,
-            started_at: now_ts(),
-            finished_at: None,
-            outcome: None,
-            cancel: cancel.clone(),
-        },
-    );
-    let channel = RunChannel::new();
-    state.events.insert(run_id.clone(), channel.clone());
+/// Accept a run ([`crate::queue::admit`]): it is recorded in the run queue and starts when the
+/// queue lets it. Returns its run id.
+pub(crate) async fn start(state: AppState, spec: RunSpec) -> Result<String, ApiError> {
+    crate::queue::admit(&state, spec).await.map(|a| a.run_id)
+}
+
+/// Execute a run the queue let start, in the background, holding one of the run slots.
+pub(crate) fn launch(
+    state: AppState,
+    waiting: crate::queue::Waiting,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) {
+    let run_id = waiting.run_id;
+    let cancel = state.runs.get(&run_id).map(|r| r.cancel.clone());
+    let channel = state.events.get(&run_id).map(|c| c.clone());
+    let (Some(cancel), Some(channel)) = (cancel, channel) else {
+        // Forgotten meanwhile (it cannot be: a run is tracked until it finishes).
+        return;
+    };
     // Tracked, so a drain waits for it; inside the server's cancel-reason scope, so a run the
     // server cancels records why (`server shutdown`). Boxed: the run's future is large, and
     // the scope must not hold it on the stack.
@@ -394,12 +395,12 @@ pub(crate) fn start(state: AppState, spec: RunSpec) -> String {
     let tasks = state.run_tasks.clone();
     tasks.spawn(reason.scope(Box::pin(execute(
         state,
-        run_id.clone(),
-        spec,
+        run_id,
+        waiting.spec,
         cancel,
         channel,
+        permit,
     ))));
-    run_id
 }
 
 async fn execute(
@@ -408,20 +409,24 @@ async fn execute(
     spec: RunSpec,
     cancel: barca_core::CancellationToken,
     channel: RunChannel,
+    permit: tokio::sync::OwnedSemaphorePermit,
 ) {
-    // Bound concurrency: acquire a run slot. Runs execute in parallel; the shared
-    // metadata.db is kept safe by barca-core's process-wide DB lock.
-    let _permit = state.run_slots.acquire().await.ok();
+    // The run holds one run slot (`--max-runs`) until it ends. Runs execute in parallel; the
+    // shared metadata.db is kept safe by barca-core's process-wide DB lock.
     let ctx = context(spec.command, &spec.files);
 
     if cancel.is_cancelled() {
-        // Cancelled while queued: never started, nothing to clean up.
+        // Cancelled as it was leaving the queue: never started, nothing to clean up.
         let outcome = cancelled(&state, &ctx);
         finish(&state, &run_id, &spec, &channel, None, outcome, false).await;
+        drop(permit);
+        crate::queue::dispatch(&state);
         return;
     }
-    if let Some(mut r) = state.runs.get_mut(&run_id) {
-        r.status = RunStatus::Running;
+    if let Err(e) =
+        barca_core::run_queue::mark_running(&state.config.resolved.db_path, &run_id).await
+    {
+        barca_core::errln!("[barca] warning: run {run_id}: {e}");
     }
     channel.emit(RunEvent::RunStarted {
         run_id: run_id.clone(),
@@ -499,6 +504,20 @@ async fn execute(
     // lines and logs land before `run_finished`.
     let recorded = drain.await.unwrap_or(false);
 
+    // Stopped by a server whose drain deadline passed: back to the queue, to start again after
+    // the restart, unless someone cancelled it.
+    if matches!(result, Err(BarcaError::Cancelled))
+        && !timed_out
+        && state
+            .queue
+            .requeue
+            .load(std::sync::atomic::Ordering::SeqCst)
+        && state.runs.get(&run_id).is_some_and(|r| !r.cancel_requested)
+    {
+        requeue(&state, &run_id).await;
+        return;
+    }
+
     let single = match &result {
         Ok(RunResult::Single(r)) => Some(r.clone()),
         _ => None,
@@ -557,6 +576,28 @@ async fn execute(
     };
     finish(&state, &run_id, &spec, &channel, single, outcome, recorded).await;
     // The run slot is released here, freeing capacity for a queued run.
+    drop(permit);
+    crate::queue::dispatch(&state);
+}
+
+/// Put a run the stopping server stopped back in the queue ([`barca_core::run_queue::requeue`]):
+/// the next server starts it again, under the same id. Its event stream ends without
+/// `run_finished` when the server stops; a client following it reconnects to the next one.
+async fn requeue(state: &AppState, run_id: &str) {
+    match barca_core::run_queue::requeue(&state.config.resolved.db_path, run_id).await {
+        Ok(()) => {
+            barca_core::errln!(
+                "[barca] run {run_id} stopped and put back in the queue: it starts again when \
+                 the server restarts"
+            );
+            if let Some(mut r) = state.runs.get_mut(run_id) {
+                r.status = RunStatus::Pending;
+            }
+        }
+        Err(e) => {
+            barca_core::errln!("[barca] could not put run {run_id} back in the queue: {e}");
+        }
+    }
 }
 
 /// The outcome of a cancelled run. When the server cancelled it (a forced stop), its message
@@ -583,6 +624,10 @@ async fn finish(
     let status = outcome.status();
     if let Err(e) = persist_outcome(state, run_id, spec, &outcome, recorded).await {
         barca_core::errln!("[barca] could not record the outcome of run {run_id}: {e}");
+    }
+    // Recorded: it leaves the queue.
+    if let Err(e) = barca_core::run_queue::remove(&state.config.resolved.db_path, run_id).await {
+        barca_core::errln!("[barca] warning: run {run_id}: {e}");
     }
     let error = outcome.envelope().map(|e| e.error);
     if let Some(mut r) = state.runs.get_mut(run_id) {
@@ -640,9 +685,8 @@ async fn persist_outcome(
 /// `POST /run` (alias) — get every asset and sensor; `200 {"run_id"}`.
 pub async fn run_all(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
-    refuse_if_draining(&state)?;
     check_any_asset(&state).await?;
-    let run_id = start(state, RunSpec::api(RunCommand::Get, vec![], vec![]));
+    let run_id = start(state, RunSpec::api(RunCommand::Get, vec![], vec![])).await?;
     Ok(Json(json!({ "run_id": run_id })))
 }
 
@@ -653,11 +697,10 @@ pub async fn run_target(
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
-    refuse_if_draining(&state)?;
     let node = check_target_as(&state, &target, "run", Wording::Route).await?;
     let mut spec = RunSpec::api(RunCommand::Run, vec![target], vec![node]);
     spec.policy = CachePolicy::RefreshAll;
-    Ok(Json(json!({ "run_id": start(state, spec) })))
+    Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
 /// `POST /get/{target}` (alias) — a cache-aware get of one target; `200 {"run_id"}`.
@@ -666,10 +709,9 @@ pub async fn get_target(
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
-    refuse_if_draining(&state)?;
     let node = check_target_as(&state, &target, "get", Wording::Route).await?;
     let spec = RunSpec::api(RunCommand::Get, vec![target], vec![node]);
-    Ok(Json(json!({ "run_id": start(state, spec) })))
+    Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
 /// `GET /status/{run_id}` (alias) — the live state of a run this server started.
@@ -687,16 +729,39 @@ pub async fn status(
 // ─── cancel ─────────────────────────────────────────────────────────────────
 
 /// `DELETE /runs/{run_id}` (and the alias `DELETE /run/{run_id}`) — cancel a pending or
-/// running run. Its workers are terminated and it ends `cancelled`; its event stream ends with
-/// that outcome. A finished run is `409`.
+/// running run. A queued run leaves the queue; a running one has its workers terminated.
+/// Either ends `cancelled`, and its event stream ends with that outcome. A finished run is
+/// `409`.
 pub async fn cancel(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
-    let finished = match state.runs.get(&run_id) {
-        Some(run) => match run.status {
+    if let Some(waiting) = state.queue.take(&run_id) {
+        if let Some(mut run) = state.runs.get_mut(&run_id) {
+            run.cancel_requested = true;
+            run.cancel.cancel();
+        }
+        let ctx = context(waiting.spec.command, &waiting.spec.files);
+        let outcome = cancelled(&state, &ctx);
+        if let Some(channel) = state.events.get(&run_id).map(|c| c.clone()) {
+            finish(
+                &state,
+                &run_id,
+                &waiting.spec,
+                &channel,
+                None,
+                outcome,
+                false,
+            )
+            .await;
+        }
+        return Ok(Json(json!({ "run_id": run_id, "status": "cancelling" })));
+    }
+    let finished = match state.runs.get_mut(&run_id) {
+        Some(mut run) => match run.status {
             RunStatus::Pending | RunStatus::Running => {
+                run.cancel_requested = true;
                 run.cancel.cancel();
                 return Ok(Json(json!({ "run_id": run_id, "status": "cancelling" })));
             }
@@ -1358,6 +1423,7 @@ mod tests {
             finished_at: None,
             outcome: None,
             cancel: barca_core::CancellationToken::new(),
+            cancel_requested: false,
         }
     }
     #[test]

@@ -21,6 +21,7 @@ import type {
   RunView,
   ScheduleJob,
   ResetResult,
+  QueueView,
 } from './types'
 
 
@@ -72,7 +73,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-/** Start a run: the flags of `barca get` / `barca run`. Answers `202 { run_id }`. */
+/** Start a run: the flags of `barca get` / `barca run`. Answers `202 { run_id, status, position }`. */
 function startRun(body: RunRequest): Promise<RunHandle> {
   return request<RunHandle>('/runs', { method: 'POST', body: JSON.stringify(body) })
 }
@@ -106,6 +107,11 @@ export const api = {
     ),
   resumeSchedule: (id: string) =>
     request<unknown>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+  /** The run queue: what runs, what waits (in order), and whether it is paused. */
+  queue: () => request<QueueView>('/queue'),
+  /** Pause the queue: runs keep being accepted, none starts until resumed. 403 on a read-only server. */
+  pauseQueue: () => request<QueueView>('/queue/pause', { method: 'POST' }),
+  resumeQueue: () => request<QueueView>('/queue/resume', { method: 'POST' }),
   /** `barca state reset`: move the metadata database aside and start an empty one. */
   resetState: () => request<ResetResult>('/state/reset', { method: 'POST' }),
 }

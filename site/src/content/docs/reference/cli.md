@@ -50,8 +50,9 @@ barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since 
                                                Show recent runs, or one run's steps and errors
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
-barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N]
                                                Run the HTTP API server
+barca queue [pause|resume] [--server [URL]] [--json]  A server's run queue; pause or resume it (experimental)
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]
                                                Cache state, last run and artifact shape per node
@@ -534,6 +535,7 @@ barca serve pipeline.py                 # default port 8274
 barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no auth
 barca serve --timezone utc              # every file in the project; cron evaluated in UTC
 barca serve pipeline.py --drain-timeout 120   # on SIGTERM, runs in flight get 2 minutes
+barca serve pipeline.py --max-runs 2    # at most 2 runs at once; the others wait in the queue
 ```
 
 | Flag | Default | Meaning |
@@ -544,14 +546,34 @@ barca serve pipeline.py --drain-timeout 120   # on SIGTERM, runs in flight get 2
 | `--no-schedule` | off | Do not fire `Schedule(...)` nodes. |
 | `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name such as `America/New_York`. Any other value is a usage error (exit 2). |
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
-| `--drain-timeout <SECONDS>` | `[server] drain_timeout`, else `30` | On SIGTERM or SIGINT, how long runs in flight get to finish before they are cancelled. `0` cancels them at once. |
+| `--drain-timeout <SECONDS>` | `[server] drain_timeout`, else `30` | On SIGTERM or SIGINT, how long runs in flight get to finish before they are put back in the run queue for the next start. `0` requeues them at once. |
+| `--max-runs <N>` | `[server] max_runs`, else one per core | How many runs execute at once; the others wait in the run queue, in order (experimental). |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
 
-SIGTERM or SIGINT drains the server: new runs get `503` with `Retry-After`, the scheduler stops,
-`/health` reports `draining`, and runs in flight finish, uploads included. The exit code is `0`
-when they all finished. When `--drain-timeout` passes or a second signal arrives first, the runs
-left are cancelled (recorded as `cancelled`, reason `server shutdown`) and the exit code is `1`.
-See [Server API](/reference/server-api/#stopping-the-drain).
+Every accepted run is recorded in the run queue before the server answers, and a restart resumes
+the queued runs in order under their run ids. SIGTERM or SIGINT drains the server: no queued run
+starts (new ones are still accepted and queued), the scheduler stops, `/health` reports
+`draining`, and runs in flight finish, uploads included. The exit code is `0` when they all
+finished, and `0` when `--drain-timeout` passed and the runs left were put back at the head of
+the queue (they start again from the beginning after the restart). A second signal cancels them
+instead (recorded as `cancelled`, reason `server shutdown`): exit code `1`. See
+[Server API](/reference/server-api/#stopping-the-drain) and
+[Restarting without losing work](/deploying/#restarting-without-losing-work).
+
+## queue
+
+A barca server's run queue: the runs executing and the runs waiting to start, in order. It needs
+a server (`--server URL`, `BARCA_SERVER` or `[server] url`); without one it exits 2. Experimental.
+
+```bash
+barca queue --server                 # running and queued runs (a table in a terminal)
+barca queue --server --json          # {paused, paused_at, draining, max_runs, running, queued}
+barca queue pause --server           # queued runs wait; runs in flight go on; kept across restarts
+barca queue resume --server          # queued runs start again, in order
+```
+
+`pause` and `resume` answer with the queue after the change, and exit 2 on a `--read-only`
+server. See `barca docs scheduling`, "The run queue".
 
 With a remote store, `barca serve` backs its metadata DB up every minute it changed (not with
 `--read-only`), and `barca state restore` refuses to run while it is up. See
@@ -918,6 +940,11 @@ on stderr when `default_env` or an artifact store is in effect. See
 - From 0.27.0: `barca serve` drains on SIGTERM or SIGINT: runs in flight finish, for up to
   `--drain-timeout` seconds, before it exits; it used to cancel them at once
   ([serve](#serve)).
+- From 0.29.4: a draining `barca serve` accepts new runs into its run queue (`202`, `pending`)
+  instead of refusing them with `503`, and at `--drain-timeout` it puts the runs left back in
+  the queue (exit 0) instead of cancelling them (exit 1); only a second signal cancels them.
+  `--server` clients and `logs -f --server` wait up to 60 seconds (`BARCA_SERVER_RECONNECT`) for
+  a restarting server instead of exiting 3 at once ([serve](#serve)).
 
 ## Recorded output
 

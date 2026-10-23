@@ -93,8 +93,11 @@ include = ["pipelines/**/*.py"]            # only these files (replaces the walk
 max_size = "20GB"
 
 [server]
-# Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before cancelling them.
+# Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before putting them back
+# in its run queue for the next start.
 drain_timeout = 30
+# How many runs `barca serve` executes at once; the others wait in its run queue (experimental).
+max_runs = 4
 
 [execution]
 # The most the weight= of the steps running at once may add up to (experimental).
@@ -131,7 +134,8 @@ url = "https://barca.internal.example.com"
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
 | `[execution].capacity` | the pool size | Experimental. The most the `weight=` of the steps running at once may add up to; a whole number of at least 1. A step heavier than it runs alone. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight). |
-| `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it cancels them and exits 1. `0` cancels at once. `--drain-timeout` overrides it. |
+| `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it puts them back at the head of its run queue (they start again after the restart) and exits 0. `0` requeues at once; a second signal cancels them instead. `--drain-timeout` overrides it. |
+| `[server].max_runs` | one per core | Experimental. How many runs `barca serve` executes at once; the others wait in its run queue, in order. At least 1. `--max-runs` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
@@ -203,6 +207,7 @@ Variables that override `barca.toml`:
 |---|---|---|
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
 | `BARCA_CAPACITY` | `[execution].capacity` | Experimental. A whole number of at least 1; anything else exits 2. |
+| `BARCA_SERVER_RECONNECT` | none | Experimental. Seconds a `--server` client following a run (and `logs -f --server`) waits for a restarting server to come back (default 60; `0` gives up at once). Not a number of seconds exits 2. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |
 | `BARCA_REMOTE` | process override | `off` uses local artifacts/history, takes no backups and overrides all remote settings. Unset/empty keeps normal resolution; other values exit 2. |
 | `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage and history backups on. |

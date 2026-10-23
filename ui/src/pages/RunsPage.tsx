@@ -7,6 +7,7 @@ import { useRunDetail, useRuns } from '@/hooks/useRuns'
 import { connection } from '@/lib/connection'
 import { formatSeconds } from '@/lib/assetTable'
 import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, triggeredByLabel } from '@/lib/runs'
+import { QueuePanel } from './QueuePanel'
 import './runs.css'
 
 function RunPanel({ id, onClose, onResolved }: { id: string; onClose: () => void; onResolved: (id: string) => void }) {
@@ -97,6 +98,7 @@ export function RunsPage() {
         <div className="barca-view-title"><h1>Runs</h1>{data && <span className="barca-count">{data.total} runs</span>}</div>
         <div className="barca-view-actions"><ConnectionBadge connection={connection(health.data, health.isError)} /></div>
       </div></div>
+      <QueuePanel readOnly={health.data?.read_only} />
       <div className="barca-assets-split">
         <div className="barca-view-body barca-table-scroll">
           {isError && <p className="barca-table-empty" role="alert">Can't load runs: {error.message} <Button size="sm" onClick={() => void refetch()}>Retry</Button></p>}

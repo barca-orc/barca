@@ -83,6 +83,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.13: the view naming and the JSON result shape may change after field use",
     ),
     (
+        "queue",
+        "new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use",
+    ),
+    (
         "serve",
         "the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes are aliases until the next minor",
     ),

@@ -127,6 +127,11 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
             mark INTEGER NOT NULL
         )",
     ),
+    // The run queue of `barca serve` (0.29.4): every run it accepted and has not finished, in
+    // order, with the request that describes it, so a restart resumes them.
+    ("run_queue", crate::run_queue::CREATE_QUEUE),
+    // Settings `barca serve` keeps across restarts: whether its run queue is paused.
+    ("server_state", crate::run_queue::CREATE_SERVER_STATE),
 ];
 
 /// Create every table of [`ADDED_TABLES`] that is missing.

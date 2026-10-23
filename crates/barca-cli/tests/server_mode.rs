@@ -218,8 +218,21 @@ fn server_mode_without_python() {
                 }),
             ),
     );
-    let out = barca(&local, &["get", "total", "--json", "--server", &dropping]);
+    // It reconnects (the stream breaks again before anything new arrives), for at most
+    // BARCA_SERVER_RECONNECT seconds in all, then gives up.
+    let started = std::time::Instant::now();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_barca"));
+    cmd.args(["get", "total", "--json", "--server", &dropping])
+        .current_dir(&local)
+        .env_remove("BARCA_SERVER")
+        .env_remove("BARCA_ENV")
+        .env_remove("BARCA_OUTPUT")
+        .env_remove("BARCA_REMOTE_URI")
+        .env("BARCA_SERVER_RECONNECT", "2");
+    let out = barca_core::helper_proc::output_std(&mut cmd).expect("barca runs");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
     assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("did not come back within 2s"));
     let e = envelope(&out);
     assert_eq!(e["kind"], "infra");
     assert!(e["error"].as_str().unwrap().contains("0123456789ab"));

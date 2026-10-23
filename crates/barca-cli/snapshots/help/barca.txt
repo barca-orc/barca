@@ -13,6 +13,7 @@ Commands:
   gc       Evict cached results to keep .barca/ under its size limit
   stats    Show execution statistics for an asset
   serve    Run a long-running HTTP server exposing the orchestrator as a JSON API
+  queue    Show a barca server's run queue, or pause or resume it (experimental)
   list     List all discovered definitions (assets, tasks, sensors) with their deps
   status   Show every node's cache state, last materialization and artifact shape (read-only)
   sql      Query cached results with SQL (DuckDB) — each asset is a named view

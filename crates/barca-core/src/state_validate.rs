@@ -139,6 +139,11 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         "schedule_failures",
         &["node_id", "failures", "failed_nodes", "mark"],
     ),
+    (
+        "run_queue",
+        &["run_id", "seq", "state", "spec", "queued_at"],
+    ),
+    ("server_state", &["key", "value"]),
 ];
 
 /// The tables whose rows are identified by an `id` row id column.

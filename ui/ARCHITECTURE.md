@@ -55,6 +55,7 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 |---|---|---|
 | `lib/runStream.ts` | `reduceRunEvent(state, event)` — fold an SSE event stream into UI state | `runStream.test.ts` |
 | `lib/runs.ts` | `runStatus`, `runIsLive`, `triggeredByLabel`, `parseOutcome` — a run's status, trigger and outcome → display | `runs.test.ts` |
+| `lib/queue.ts` | `queueState`, `queueControl`, `queueRows`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list | `queue.test.ts` |
 | `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause | `schedules.test.ts` |
 | `lib/runFeedback.ts` | `runFeedback(status, logs, error)` — map a node's status to a feedback descriptor | `runFeedback.test.ts` |
 | `lib/status.ts` | `statusMeta`, `freshnessLabel`, `nodeKindLabel` — domain → display tokens | — |

@@ -42,6 +42,8 @@ export type { NodeRunning } from './generated/NodeRunning'
 export type { RunningStep } from './generated/RunningStep'
 export type { PartitionProgress } from './generated/PartitionProgress'
 export type { ActiveStep } from './generated/ActiveStep'
+export type { QueueView } from './generated/QueueView'
+export type { QueueEntry } from './generated/QueueEntry'
 
 import type { LoadError } from './generated/LoadError'
 
@@ -71,6 +73,18 @@ export interface Health {
   env: string
   /** The artifact store this server writes to; null when artifacts stay on its machine. */
   store_uri: string | null
+  /** When this server started (RFC 3339). */
+  started_at: string
+  /** The run queue in brief; `GET /queue` has the runs. */
+  queue: HealthQueue
+}
+
+/** `GET /health`'s `queue`. */
+export interface HealthQueue {
+  paused: boolean
+  queued: number
+  running: number
+  max_runs: number
 }
 
 /**
@@ -131,9 +145,13 @@ export interface ScheduleJob {
   failing: boolean
 }
 
-/** POST /runs — `202 { run_id }`, the database run id. */
+/** POST /runs — `202 { run_id, status, position }`: the database run id, and whether it started or waits. */
 export interface RunHandle {
   run_id: string
+  /** `running` when it started at once, `pending` while it waits in the queue. */
+  status: 'pending' | 'running'
+  /** Its place in the queue, 1 = next; null when it started. */
+  position: number | null
 }
 
 /** `barca stats --json`: the generated `AssetStats` with `id` in place of `node_id`. */

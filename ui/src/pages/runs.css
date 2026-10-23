@@ -10,3 +10,18 @@
 .barca-run-error { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-default); }
 .barca-run-result { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
 .barca-run-more { padding: 16px; }
+.barca-queue { padding: 0 24px 12px; flex: none; }
+.barca-queue-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  min-height: 34px; padding: 4px 12px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  font-family: var(--font-sans); font-size: var(--text-sm);
+}
+.barca-queue-title { font-weight: 600; color: var(--text-strong); }
+.barca-queue-count { display: inline-flex; align-items: center; gap: 6px; color: var(--text-default); }
+.barca-queue-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+.barca-queue-bar .barca-note { margin: 0; }
+.barca-queue-error { margin: 8px 0 0; }
+.barca-queue-table { margin-top: 8px; }
+.barca-queue-table tbody tr { cursor: default; }
+.barca-queue-table td { white-space: nowrap; }

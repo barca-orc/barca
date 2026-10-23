@@ -2,12 +2,12 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '10'
-  description: 'Normative current wire contract; specification version 10 is independent of package versions.
+  version: '11'
+  description: 'Normative current wire contract; specification version 11 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
-    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
+    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset, and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
@@ -54,7 +54,8 @@ paths:
               description: Methods accepted by this route
       description: Liveness, not readiness or authentication. The API has no authentication.
         status is draining from the first SIGTERM or SIGINT until the server exits; the
-        response stays 200. Read-only mode refuses mutating routes; it does not restrict inspection access.
+        response stays 200. started_at changes when the server restarts (a client following a run
+        tells a restart by it); queue counts the runs waiting and running. Read-only mode refuses mutating routes; it does not restrict inspection access.
         load_errors reports unloaded sources and excluded dependent definitions from
         the selected served graph. Healthy loads return an empty array; healthy
         definitions remain inspectable beside those diagnostics. scheduler_enabled is
@@ -1032,6 +1033,125 @@ paths:
               schema:
                 type: string
               description: Methods accepted by this route
+  /queue:
+    get:
+      summary: The run queue
+      operationId: get_queue
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '500':
+          description: Metadata DB error (a read-only server reads the queue from a snapshot)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: The runs executing and the runs waiting to start, next first, and whether the queue is
+        paused. A read-only server runs nothing; it answers what the metadata DB records (a snapshot of
+        the queue of the server that writes it).
+    head:
+      summary: The run queue (headers only)
+      operationId: head_queue
+      responses:
+        '200':
+          description: Response
+        '500':
+          description: Metadata DB error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+  /queue/pause:
+    post:
+      summary: Pause the run queue
+      operationId: post_queue_pause
+      responses:
+        '200':
+          description: The queue, paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'No queued run starts until POST /queue/resume; runs in flight go on and new runs (and
+        scheduled ticks) still join the queue. Kept in server_state: a restart keeps it paused. Pausing a
+        paused queue changes nothing.'
+  /queue/resume:
+    post:
+      summary: Resume the run queue
+      operationId: post_queue_resume
+      responses:
+        '200':
+          description: The queue, resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: Queued runs start again, in order, as there is room. Resuming a queue that is not paused
+        changes nothing.
   /schedule:
     get:
       summary: Scheduler job registry
@@ -1220,20 +1340,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '503':
-          description: The server is draining before it stops (SIGTERM or SIGINT) and
-            admits no new run; runs already admitted go on
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                pattern: ^[1-9][0-9]*$
-              description: Seconds to wait before retrying, the server's drain timeout
-                (at least 1)
         '405':
           description: Registered path with unsupported method; Allow header identifies supported methods
           content:
@@ -1274,20 +1380,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '503':
-          description: The server is draining before it stops (SIGTERM or SIGINT) and
-            admits no new run; runs already admitted go on
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                pattern: ^[1-9][0-9]*$
-              description: Seconds to wait before retrying, the server's drain timeout
-                (at least 1)
         '404':
           description: Resource not found
           content:
@@ -1404,20 +1496,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '503':
-          description: The server is draining before it stops (SIGTERM or SIGINT) and
-            admits no new run; runs already admitted go on
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                pattern: ^[1-9][0-9]*$
-              description: Seconds to wait before retrying, the server's drain timeout
-                (at least 1)
         '404':
           description: Resource not found
           content:
@@ -1705,11 +1783,11 @@ paths:
               $ref: '#/components/schemas/RunRequest'
       responses:
         '202':
-          description: Accepted; stream GET /runs/{run_id}/events
+          description: Accepted and recorded in the run queue; stream GET /runs/{run_id}/events
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RunHandle'
+                $ref: '#/components/schemas/RunAccepted'
         '200':
           description: 'dry_run: the --dry-run JSON; nothing started'
           content:
@@ -1742,24 +1820,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: Source-loading infrastructure error before the run starts
+          description: Source-loading infrastructure error before the run starts, or the run
+            could not be recorded in the run queue
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '503':
-          description: The server is draining before it stops (SIGTERM or SIGINT) and admits no new
-            run; runs already admitted go on. A dry_run is still answered
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                pattern: ^[1-9][0-9]*$
-              description: Seconds to wait before retrying, the server's drain timeout
         '405':
           description: Registered path with unsupported method; Allow header identifies supported methods
           content:
@@ -1773,7 +1839,10 @@ paths:
               description: Methods accepted by this route
       description: 'The command runs here with the deployed code, as barca get / barca run would. Targets
         are checked first: no run starts for a request the CLI would refuse. A failed step is not an HTTP
-        error: it is a run whose outcome is failed.'
+        error: it is a run whose outcome is failed. The run joins the run queue (GET /queue), recorded in
+        the metadata DB before the answer: it starts in order when fewer than max_runs run, the queue
+        is not paused and the server is not draining. A draining server accepts it too (status pending):
+        the next server resumes it under the same run id.'
   /runs/{run_id}:
     get:
       summary: One run, with its outcome once finished
@@ -2552,11 +2621,18 @@ components:
       - store_uri
       - scheduler_enabled
       - metadata_error
+      - started_at
+      - queue
       properties:
+        started_at:
+          type: string
+          description: When this server process started, RFC 3339 UTC with milliseconds.
+        queue:
+          $ref: '#/components/schemas/QueueHealth'
         status:
           description: ok, or draining once the server was told to stop (SIGTERM or
-            SIGINT); a draining server refuses new runs with 503 and finishes the runs
-            in flight
+            SIGINT); a draining server starts no queued run, queues new runs for the next
+            start and finishes the runs in flight
           enum:
           - ok
           - draining
@@ -2608,6 +2684,126 @@ components:
         affected_nodes:
           type: array
           items: *id003
+    QueueHealth:
+      type: object
+      additionalProperties: false
+      required:
+      - paused
+      - queued
+      - running
+      - max_runs
+      properties:
+        paused:
+          type: boolean
+        queued:
+          type: integer
+          minimum: 0
+        running:
+          type: integer
+          minimum: 0
+        max_runs:
+          type: integer
+          minimum: 1
+    RunAccepted:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - status
+      - position
+      properties:
+        run_id:
+          type: string
+          description: The database run id, the one barca history shows.
+        status:
+          description: pending when it waits in the queue, running when it started at once.
+          enum:
+          - pending
+          - running
+        position:
+          description: Its place among the queued runs (1 = next); null when it is running.
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+    QueueEntry:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - status
+      - position
+      - command
+      - target
+      - triggered_by
+      - schedule_id
+      - queued_at
+      properties:
+        run_id:
+          type: string
+        status:
+          enum:
+          - pending
+          - running
+        position:
+          description: Its place among the queued runs (1 = next); null for a running run.
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+        command:
+          enum:
+          - get
+          - run
+        target:
+          description: The targets as given, comma-separated; null for every asset and sensor.
+          anyOf:
+          - type: string
+          - type: 'null'
+        triggered_by:
+          $ref: '#/components/schemas/TriggeredBy'
+        schedule_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+        queued_at:
+          type: string
+          description: When the server accepted it, RFC 3339 UTC.
+    Queue:
+      type: object
+      additionalProperties: false
+      required:
+      - paused
+      - paused_at
+      - draining
+      - max_runs
+      - running
+      - queued
+      properties:
+        paused:
+          type: boolean
+          description: Paused by an operator (POST /queue/pause); kept across restarts.
+        paused_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: When it was paused, RFC 3339; null when it is not.
+        draining:
+          type: boolean
+          description: The server is stopping; nothing starts until the next server resumes the queue.
+        max_runs:
+          type: integer
+          minimum: 1
+          description: How many runs execute at once (--max-runs, [server] max_runs, else one per core).
+        running:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueEntry'
+        queued:
+          type: array
+          description: Next first.
+          items:
+            $ref: '#/components/schemas/QueueEntry'
     RunHandle:
       type: object
       additionalProperties: false

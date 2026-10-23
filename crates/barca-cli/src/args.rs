@@ -427,6 +427,7 @@ Examples:
   barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
   barca serve pipeline.py --drain-timeout 120   # on SIGTERM, give runs in flight 2 minutes
+  barca serve pipeline.py --max-runs 2       # at most 2 runs at once; the others wait in the queue
   barca serve pipeline.py --env prod         # .barca/envs/prod/metadata.db, named on the startup line
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
@@ -447,11 +448,30 @@ answer with an error whose reason is metadata_unusable. /health scheduler_enable
 whether the scheduler is running.
 With a store ([remote] uri), the metadata DB is backed up there every minute it changed
 (barca docs remote); barca state restore refuses to run while the server is up.
-SIGTERM or SIGINT drains: new runs get 503 with Retry-After, the scheduler stops, /health
-says draining, and runs in flight finish (uploads included) for up to --drain-timeout seconds
-(default 30, [server] drain_timeout in barca.toml). Exit 0 when they all finished. The deadline
-or a second signal cancels the rest with reason \"server shutdown\": exit 1.
+Every accepted run is recorded in the run queue (barca queue) before the server answers; a
+restart resumes the queued runs in order, under their run ids ([barca] resuming N queued runs).
+SIGTERM or SIGINT drains: the queue pauses (new runs are still accepted, queued for the next
+start), the scheduler stops, /health says draining, and runs in flight finish (uploads included)
+for up to --drain-timeout seconds (default 30, [server] drain_timeout in barca.toml). Exit 0
+when they all finished. At the deadline the rest are stopped and put back at the head of the
+queue, to start again from the beginning after the restart: exit 0. A second signal cancels
+them instead, with reason \"server shutdown\": exit 1.
 Lines go to stderr as text; BARCA_LOG=json writes them to stdout as JSON (barca docs telemetry).
+More: barca docs scheduling";
+
+const QUEUE_HELP: &str = "\
+Examples:
+  barca queue --server                 # the configured server's run queue: running and queued runs
+  barca queue --server http://barca.internal:8274 --json  # {paused, paused_at, draining, max_runs, running, queued}
+  barca queue pause --server           # queued runs wait (runs in flight go on); kept across restarts
+  barca queue resume --server          # queued runs start again, in order
+  barca queue                          # the server in BARCA_SERVER or [server] url
+
+Every run a server accepts (POST /runs, --server, the UI, a scheduled tick) joins its run queue,
+recorded in the metadata DB, and starts in order when fewer than --max-runs run. While paused,
+new runs and ticks still join the queue; nothing new starts. A restart keeps the queue and the
+pause: queued runs resume under their run ids. Exit 2 with no server configured or on a
+--read-only server (pause and resume), 3 when the server cannot be reached. Experimental.
 More: barca docs scheduling";
 
 const LIST_HELP: &str = "\
@@ -949,13 +969,37 @@ pub(crate) enum Cli {
         /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
         #[arg(long)]
         read_only: bool,
-        /// Seconds to wait for runs in flight after SIGTERM or SIGINT before cancelling them
-        /// (exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 cancels at once
+        /// Seconds to wait for runs in flight after SIGTERM or SIGINT before stopping them and
+        /// putting them back in the run queue for the next start (exit 0; a second signal
+        /// cancels them instead, exit 1). Default: [server] drain_timeout in barca.toml, else
+        /// 30. 0 requeues them at once
         #[arg(long, value_name = "SECONDS")]
         drain_timeout: Option<u64>,
+        /// How many runs execute at once; the others wait in the run queue, in order. At least
+        /// 1. Default: [server] max_runs in barca.toml, else one per core. Experimental
+        #[arg(long, value_name = "N", value_parser = parse_max_runs)]
+        max_runs: Option<usize>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+    },
+    /// Show a barca server's run queue, or pause or resume it (experimental)
+    ///
+    /// The queue holds the runs a server accepted and has not finished, in order. It lives on
+    /// the server: the command needs one (--server URL, BARCA_SERVER or [server] url).
+    #[command(after_help = QUEUE_HELP)]
+    Queue {
+        /// pause: queued runs wait until resumed (runs in flight go on); resume: they start
+        /// again. Omit to show the queue
+        #[arg(value_enum)]
+        action: Option<QueueAction>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// The server's environment, checked against it (as for the other --server commands)
+        #[arg(long)]
+        env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// List all discovered definitions (assets, tasks, sensors) with their deps
     ///
@@ -1086,6 +1130,15 @@ pub(crate) enum Cli {
     Version,
 }
 
+/// `barca queue pause|resume`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum QueueAction {
+    /// Hold every queued run back until resumed
+    Pause,
+    /// Let queued runs start again, in order
+    Resume,
+}
+
 /// `barca state ...`.
 #[derive(clap::Subcommand)]
 pub(crate) enum StateCommand {
@@ -1124,6 +1177,15 @@ pub(crate) enum StateCommand {
         #[arg(long)]
         env: Option<String>,
     },
+}
+
+fn parse_max_runs(value: &str) -> Result<usize, String> {
+    match value.parse::<usize>() {
+        Ok(n) if n >= 1 => Ok(n),
+        _ => Err(format!(
+            "'{value}' is not a number of runs: give 1 or more (how many runs execute at once)"
+        )),
+    }
 }
 
 fn parse_timezone(value: &str) -> Result<String, String> {

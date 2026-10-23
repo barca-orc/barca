@@ -282,8 +282,15 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         &json!({"node_id":"p.py:a", "run_hash":"h", "created_at":"2026-10-15 00:00:00"})
     ));
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
-    let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[],"scheduler_enabled":false,"metadata_error":null});
+    let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[],"scheduler_enabled":false,"metadata_error":null,"started_at":"2026-10-22T10:00:00.000Z","queue":{"paused":false,"queued":0,"running":0,"max_runs":4}});
     assert!(health.is_valid(&ok));
+    let mut no_queue = ok.clone();
+    no_queue.as_object_mut().unwrap().remove("queue");
+    assert!(!health.is_valid(&no_queue));
+    let accepted = validator(&json!({"$ref":"#/components/schemas/RunAccepted"}));
+    assert!(accepted.is_valid(&json!({"run_id":"r","status":"pending","position":2})));
+    assert!(accepted.is_valid(&json!({"run_id":"r","status":"running","position":null})));
+    assert!(!accepted.is_valid(&json!({"run_id":"r","status":"queued","position":0})));
     let mut unusable = ok.clone();
     unusable["metadata_error"] = json!("the metadata DB .barca/metadata.db cannot be used: x");
     assert!(health.is_valid(&unusable));
@@ -763,7 +770,10 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     )
     .await;
     assert_eq!(got, 202);
-    validate(&contract()["components"]["schemas"]["RunHandle"], &accepted);
+    validate(
+        &contract()["components"]["schemas"]["RunAccepted"],
+        &accepted,
+    );
     let run_id = accepted["run_id"].as_str().unwrap().to_owned();
     let events = request(&router, "GET", &format!("/runs/{run_id}/events")).await;
     assert_eq!(events.status(), StatusCode::OK);
@@ -1102,53 +1112,142 @@ async fn declared_asset_name_matches_schema_state_and_get_target() {
 }
 
 #[tokio::test]
-async fn a_draining_server_refuses_runs_and_says_so_on_health() {
+async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health() {
     let dir = tempfile::tempdir().unwrap();
     let router = draining_app(config(dir.path(), false));
     let health = checked(&router, "GET", "/health", "/health", 200).await;
     assert_eq!(health["status"], "draining");
+    // The older trigger routes are accepted: the runs wait in the queue.
     for (url, path) in [
         ("/run", "/run"),
         ("/run/publish", "/run/{target}"),
         ("/get/first", "/get/{target}"),
     ] {
-        let resp = request(&router, "POST", url).await;
-        assert_eq!(
-            resp.headers()["retry-after"].to_str().unwrap(),
-            "30",
-            "the default drain timeout"
-        );
-        let body = checked(&router, "POST", url, path, 503).await;
-        assert!(
-            body["error"].as_str().unwrap().contains("shutting down"),
-            "{body}"
-        );
+        let body = checked(&router, "POST", url, path, 200).await;
+        assert!(body["run_id"].is_string(), "{body}");
     }
-    // `POST /runs` is refused the same way.
-    let resp = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/runs")
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"command": "get"}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status().as_u16(), 503);
-    assert_eq!(resp.headers()["retry-after"].to_str().unwrap(), "30");
-    // So is a reset of the metadata database.
+    // So is `POST /runs`: 202, pending, with its place in the queue.
+    let (status, body) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["first"]}),
+    )
+    .await;
+    assert_eq!(status, 202, "{body}");
+    validate(
+        &contract()["paths"]["/runs"]["post"]["responses"]["202"]["content"]["application/json"]["schema"],
+        &body,
+    );
+    assert_eq!(body["status"], "pending");
+    assert_eq!(body["position"], 4);
+    let queue = checked(&router, "GET", "/queue", "/queue", 200).await;
+    assert_eq!(queue["draining"], true);
+    assert_eq!(queue["running"], json!([]));
+    let ids: Vec<_> = queue["queued"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["position"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids, [1, 2, 3, 4]);
+    assert_eq!(queue["queued"][3]["run_id"], body["run_id"]);
+    // Recorded: the next server resumes them.
+    let recorded =
+        barca_core::run_queue::list(&dir.path().join("metadata.db").display().to_string())
+            .await
+            .unwrap();
+    assert_eq!(recorded.len(), 4);
+    let health = checked(&router, "GET", "/health", "/health", 200).await;
+    assert_eq!(health["queue"]["queued"], 4);
+    assert_eq!(health["queue"]["running"], 0);
+    // A reset of the metadata database is still refused.
     let resp = request(&router, "POST", "/state/reset").await;
     assert_eq!(resp.headers()["retry-after"].to_str().unwrap(), "30");
     checked(&router, "POST", "/state/reset", "/state/reset", 503).await;
     // Reads stay available while the runs in flight finish.
     checked(&router, "GET", "/runs?limit=0", "/runs", 200).await;
+    // A queued run can be cancelled: it leaves the queue and ends cancelled.
+    let id = body["run_id"].as_str().unwrap();
+    let cancelled = checked(
+        &router,
+        "DELETE",
+        &format!("/runs/{id}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(cancelled["status"], "cancelling");
+    let run = checked(
+        &router,
+        "GET",
+        &format!("/runs/{id}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(run["status"], "cancelled", "{run}");
+    let queue = checked(&router, "GET", "/queue", "/queue", 200).await;
+    assert_eq!(queue["queued"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn queue_pause_and_resume_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    let queue = checked(&router, "GET", "/queue", "/queue", 200).await;
+    assert_eq!(queue["paused"], false);
+    assert_eq!(queue["paused_at"], Value::Null);
+    checked(&router, "HEAD", "/queue", "/queue", 200).await;
+    let paused = checked(&router, "POST", "/queue/pause", "/queue/pause", 200).await;
+    assert_eq!(paused["paused"], true);
+    assert!(paused["paused_at"].is_string());
+    // Pausing again changes nothing.
+    let again = checked(&router, "POST", "/queue/pause", "/queue/pause", 200).await;
+    assert_eq!(again["paused_at"], paused["paused_at"]);
+    // While paused a run is accepted and waits.
+    let (status, body) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["first"]}),
+    )
+    .await;
+    assert_eq!((status, body["status"].as_str()), (202, Some("pending")));
+    assert_eq!(body["position"], 1);
+    let health = checked(&router, "GET", "/health", "/health", 200).await;
+    assert_eq!(health["queue"]["paused"], true);
+    // A server started on the same database keeps the pause and the queued run.
+    let db = dir.path().join("metadata.db").display().to_string();
     assert!(
-        !dir.path().join("metadata.db").exists(),
-        "a refused run touched history"
+        barca_core::run_queue::paused_at(&db)
+            .await
+            .unwrap()
+            .is_some()
     );
+    assert_eq!(barca_core::run_queue::list(&db).await.unwrap().len(), 1);
+    let resumed = checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;
+    assert_eq!(resumed["paused"], false);
+    assert!(
+        barca_core::run_queue::paused_at(&db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let done = wait(&router, body["run_id"].as_str().unwrap()).await;
+    assert_eq!(done["status"], "complete", "{done}");
+    assert!(
+        barca_core::run_queue::list(&db).await.unwrap().is_empty(),
+        "a finished run leaves the queue"
+    );
+    checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;
+    checked(&router, "GET", "/queue/pause", "/queue/pause", 405).await;
+    // A read-only server refuses both and shows what the database records.
+    let read_only = app(config(dir.path(), true));
+    checked(&read_only, "POST", "/queue/pause", "/queue/pause", 403).await;
+    checked(&read_only, "POST", "/queue/resume", "/queue/resume", 403).await;
+    let view = checked(&read_only, "GET", "/queue", "/queue", 200).await;
+    assert_eq!(view["queued"], json!([]));
 }
 
 #[tokio::test]
