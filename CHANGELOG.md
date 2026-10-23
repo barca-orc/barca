@@ -13,6 +13,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - `barca serve` no longer stops a run after 600 seconds. That limit was fixed and undocumented,
   and it cancelled long partitioned rebuilds; runs now have no time limit by default.
   `barca serve --run-timeout 600` (or `[server] run_timeout_seconds = 600`) restores it (#628).
+- A run of `barca serve` that times out is recorded with status `error` and the outcome `run
+  timed out after Ns (<setting>)`; up to 0.30 it was recorded as `cancelled`. Automation that
+  read `cancelled` as a timeout can match the outcome instead; a run cancelled with `DELETE
+  /runs/{id}` is still `cancelled` (#628).
+- A `partitions(<expression>)` that raises is a load error: `barca list`, `status`, `get`,
+  `plan` and `doctor` exit 2 naming the node with the traceback, and `barca serve` reports it in
+  `load_errors` and serves the rest of the project. Up to 0.30 it printed a warning and the node
+  had no partition keys. Fix the expression, or make it return `[]` when there are no keys
+  (#628).
 
 ### Features
 
