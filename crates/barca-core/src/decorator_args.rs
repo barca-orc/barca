@@ -175,7 +175,7 @@ pub const SIGNATURES: &[Signature] = &[
         name: "Schedule",
         decorator: false,
         positional: &["cron"],
-        keywords: &["max_failures"],
+        keywords: &["max_failures", "timeout_seconds"],
         deferred: &[],
         usage: "Schedule(\"0 5 * * *\")",
         topic: "scheduling",

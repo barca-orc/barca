@@ -135,6 +135,7 @@ def test_plan_dry_run_and_doctor_show_the_capacity_and_the_weights(tmp_path):
     assert plan["capacity"] == 4
     assert plan["capacity_source"] == "[execution] capacity"
     assert plan["pool_size"] == 4
+    assert plan["pool_source"] == "BARCA_POOL_SIZE"
     assert plan["weights"] == {"p.py:heavy_a": 2, "p.py:heavy_b": 2, "p.py:heavy_c": 2}
 
     plan = json.loads(cli(tmp_path, "plan", "p.py", BARCA_CAPACITY="6").stdout)
@@ -154,7 +155,12 @@ def test_plan_dry_run_and_doctor_show_the_capacity_and_the_weights(tmp_path):
 
     doctor = json.loads(cli(tmp_path, "doctor", "p.py", "--json").stdout)
     check = next(c for c in doctor["checks"] if c["name"] == "capacity")
-    assert check["data"] == {"capacity": 4, "pool_size": 4, "source": "[execution] capacity"}
+    assert check["data"] == {
+        "capacity": 4,
+        "pool_size": 4,
+        "source": "[execution] capacity",
+        "pool_source": "BARCA_POOL_SIZE",
+    }
 
 
 def test_a_bad_capacity_or_weight_is_a_usage_error(tmp_path):

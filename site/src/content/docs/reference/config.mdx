@@ -98,11 +98,19 @@ max_size = "20GB"
 drain_timeout = 30
 # How many runs `barca serve` executes at once; the others wait in its run queue (experimental).
 max_runs = 4
+# The most the weight= of the steps of every run of `barca serve` may add up to (experimental).
+# Default: none (each run has only its own capacity).
+capacity = 4
+# Seconds a run under `barca serve` may take before it is stopped. Default: 0, no limit.
+run_timeout_seconds = 3600
 
 [execution]
 # The most the weight= of the steps running at once may add up to (experimental).
 # Default: the pool size. See "Heavy steps" on the Decorators page.
 capacity = 4
+# How many worker processes a run starts at most. Default: the cores, or the capacity when
+# it is smaller. BARCA_POOL_SIZE wins over it.
+pool_size = 4
 
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
@@ -135,6 +143,9 @@ url = "https://barca.internal.example.com"
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
 | `[execution].capacity` | the pool size | Experimental. The most the `weight=` of the steps running at once may add up to; a whole number of at least 1. A step heavier than it runs alone. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight). |
 | `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it puts them back at the head of its run queue (they start again after the restart) and exits 0. `0` requeues at once; a second signal cancels them instead. `--drain-timeout` overrides it. |
+| `[execution].pool_size` | the cores, or the capacity when smaller | How many worker processes a run starts at most; a whole number of at least 1. Without it a run starts no more workers than its capacity (every step weighs at least 1). `BARCA_POOL_SIZE` overrides it. `barca plan` (`pool_source`) and `barca doctor` say which applied. |
+| `[server].capacity` | none | Experimental. The most the `weight=` of the steps of every run of `barca serve` may add up to, admitted first come, first served across runs (a heavy step is not overtaken by lighter ones). Bounds each run's pool too. `--capacity` overrides it. See [Scheduling](/scheduling/). |
+| `[server].run_timeout_seconds` | `0` (no limit) | Seconds a run under `barca serve` may take, from when it leaves the queue; a run that takes longer is stopped and recorded as an error naming the setting. `--run-timeout` overrides it; `Schedule(..., timeout_seconds=N)` wins for its ticks. Before 0.31.0 the limit was a fixed 600 s. |
 | `[server].max_runs` | one per core | Experimental. How many runs `barca serve` executes at once; the others wait in its run queue, in order. At least 1. `--max-runs` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
@@ -229,7 +240,7 @@ Variables with no `barca.toml` key:
 |---|---|
 | `BARCA_OUTPUT` | `json` or `pretty`: the output format when no flag is given. Any other value exits 2. |
 | `BARCA_PROGRESS_SECS` | Seconds between `still running` lines on stderr (default 15; `0` turns them off). |
-| `BARCA_POOL_SIZE` | Number of Python worker processes (default: the available cores). |
+| `BARCA_POOL_SIZE` | Number of Python worker processes (default: `[execution].pool_size`, else the available cores, or the capacity when it is smaller). |
 | `BARCA_TRACE_TIMING` | When set, prints a timing breakdown on stderr. |
 | `BARCA_TELEMETRY` | `datadog` sends finished runs to Datadog. See [Telemetry](/reference/telemetry/) for it and the `DD_*` variables. |
 | `BARCA_COMM_COST_SECONDS` | The scheduler's estimate of the cost of dispatching one step. |

@@ -29,8 +29,25 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Default timeout for a single run (10 minutes).
-const RUN_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long a run may take, and which setting said so: `Schedule(..., timeout_seconds=N)` for
+/// a scheduled tick > `--run-timeout` > `[server] run_timeout_seconds` > no limit (#628). 0 at
+/// any of them means no limit. The time counts from when the run leaves the queue.
+pub(crate) fn run_timeout(state: &AppState, spec: &RunSpec) -> Option<(Duration, String)> {
+    let (secs, source) = match (spec.timeout, &spec.rules.tick) {
+        (Some(secs), Some(node)) => (
+            secs,
+            format!(
+                "Schedule(timeout_seconds=) of {}",
+                barca_core::telemetry::short_name(node)
+            ),
+        ),
+        _ => {
+            let (secs, source) = state.config.resolved.server_run_timeout_secs?;
+            (secs, source.to_string())
+        }
+    };
+    (secs > 0).then(|| (Duration::from_secs(secs), source))
+}
 
 // ─── starting runs ──────────────────────────────────────────────────────────
 
@@ -52,6 +69,12 @@ pub(crate) struct RunSpec {
     /// The freshness rules (RFC-0008): a `Manual` node read as it is (`POST /runs`, as the CLI
     /// does), and whether this is a scheduled tick.
     pub rules: barca_core::freshness::RunRules,
+    /// `Schedule(..., timeout_seconds=N)` of the tick that started it: how long the run may
+    /// take (0: no limit). `None`: the server's run timeout ([`run_timeout`]).
+    pub timeout: Option<u64>,
+    /// How many times a server killed during its drain left this run unfinished, and the next
+    /// server put it back in the queue ([`crate::queue::resume_at_startup`]).
+    pub kill_requeues: u32,
 }
 
 impl RunSpec {
@@ -68,6 +91,8 @@ impl RunSpec {
             partition: None,
             // The older trigger routes compute what they are asked for, as before RFC-0008.
             rules: barca_core::freshness::RunRules::default(),
+            timeout: None,
+            kill_requeues: 0,
         }
     }
 }
@@ -273,6 +298,8 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
             partition,
             // The run contract runs what `barca get` / `barca run` would run here.
             rules: barca_core::freshness::RunRules::request(),
+            timeout: None,
+            kill_requeues: 0,
         },
     )
     .await?;
@@ -418,7 +445,10 @@ async fn execute(
     if cancel.is_cancelled() {
         // Cancelled as it was leaving the queue: never started, nothing to clean up.
         let outcome = cancelled(&state, &ctx);
-        finish(&state, &run_id, &spec, &channel, None, outcome, false).await;
+        finish(
+            &state, &run_id, &spec, &channel, None, outcome, false, false,
+        )
+        .await;
         drop(permit);
         crate::queue::dispatch(&state);
         return;
@@ -456,8 +486,12 @@ async fn execute(
     };
 
     let mut timed_out = false;
+    let timeout = run_timeout(&state, &spec);
+    // The run's own cancel reason, so a timeout names itself in the run's logs
+    // (`[barca] run cancelled: run timed out after ...`); a server that stops copies its own in.
+    let run_reason = barca_core::interrupt::CancelReason::new();
     let result: Result<RunResult, BarcaError> = {
-        let fut = async {
+        let fut = run_reason.clone().scope(async {
             // A request that names files reads only those, as `barca get x a.py` does.
             let files = run_files(&state, &spec.files);
             let dag = if spec.files.is_empty() {
@@ -478,25 +512,45 @@ async fn execute(
                 options: RunOptions {
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
+                    shared_capacity: state.capacity.clone(),
                 },
                 partition: spec.partition.clone(),
                 rules: spec.rules.clone(),
             })
             .await
-        };
+        });
         tokio::pin!(fut);
         // On timeout, cancel the token and keep awaiting: the run observes the cancellation,
         // terminates its workers, persists partial results, and returns — nothing is left
         // running in the background.
         tokio::select! {
-            res = &mut fut => res,
-            _ = tokio::time::sleep(RUN_TIMEOUT) => {
+            // Before the run is polled again: it reads the reason when it sees the cancel.
+            biased;
+            _ = cancel.cancelled() => {
+                if let Some(why) = state.cancel_reason.get() {
+                    run_reason.set(why);
+                }
+                fut.await
+            }
+            _ = async {
+                match &timeout {
+                    Some((limit, _)) => tokio::time::sleep(*limit).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
                 // An operator cancel that is still unwinding when the deadline hits stays
                 // classified as cancelled, not as a timeout.
                 timed_out = !cancel.is_cancelled();
+                if let Some((limit, source)) = &timeout {
+                    run_reason.set(format!(
+                        "run timed out after {}s ({source})",
+                        limit.as_secs()
+                    ));
+                }
                 cancel.cancel();
                 fut.await
             }
+            res = &mut fut => res,
         }
         // `fut` (and with it the event sender) is dropped here.
     };
@@ -548,14 +602,16 @@ async fn execute(
         Ok(RunResult::Multi(m)) => Outcome::multi(&m, spec.command, &ctx),
         Err(BarcaError::Cancelled) if timed_out => Outcome::ended(
             OutcomeStatus::Error,
-            &ErrorEnvelope::from_prose(
-                ErrorKind::Infra,
+            &ErrorEnvelope::from_prose(ErrorKind::Infra, {
+                let (limit, source) = timeout.clone().unwrap_or_default();
                 format!(
-                    "run timed out after {}s\nThe server stops a run after {}s; steps that finished are cached.",
-                    RUN_TIMEOUT.as_secs(),
-                    RUN_TIMEOUT.as_secs()
-                ),
-            ),
+                    "run timed out after {}s ({source})\nThe server stops a run that takes \
+                         longer than its run timeout; steps that finished are cached. Raise it \
+                         with --run-timeout, [server] run_timeout_seconds or \
+                         Schedule(..., timeout_seconds=N); 0 means no limit.",
+                    limit.as_secs(),
+                )
+            }),
         ),
         Err(BarcaError::Cancelled) => cancelled(&state, &ctx),
         // A partitioned `get` that stopped at a failed key still returns the keys that
@@ -574,7 +630,10 @@ async fn execute(
         }
         Err(e) => Outcome::of_error(e, &ctx),
     };
-    finish(&state, &run_id, &spec, &channel, single, outcome, recorded).await;
+    finish(
+        &state, &run_id, &spec, &channel, single, outcome, recorded, timed_out,
+    )
+    .await;
     // The run slot is released here, freeing capacity for a queued run.
     drop(permit);
     crate::queue::dispatch(&state);
@@ -584,7 +643,7 @@ async fn execute(
 /// the next server starts it again, under the same id. Its event stream ends without
 /// `run_finished` when the server stops; a client following it reconnects to the next one.
 async fn requeue(state: &AppState, run_id: &str) {
-    match barca_core::run_queue::requeue(&state.config.resolved.db_path, run_id).await {
+    match barca_core::run_queue::requeue(&state.config.resolved.db_path, run_id, None).await {
         Ok(()) => {
             barca_core::errln!(
                 "[barca] run {run_id} stopped and put back in the queue: it starts again when \
@@ -612,6 +671,7 @@ fn cancelled(state: &AppState, ctx: &Context) -> Outcome {
 
 /// Record how a run ended: its outcome in the metadata DB (a row of its own when the run
 /// never wrote one), the live state, and the terminal `run_finished` event.
+#[allow(clippy::too_many_arguments)]
 async fn finish(
     state: &AppState,
     run_id: &str,
@@ -620,9 +680,10 @@ async fn finish(
     result: Option<GetResult>,
     outcome: Outcome,
     recorded: bool,
+    timed_out: bool,
 ) {
     let status = outcome.status();
-    if let Err(e) = persist_outcome(state, run_id, spec, &outcome, recorded).await {
+    if let Err(e) = persist_outcome(state, run_id, spec, &outcome, recorded, timed_out).await {
         barca_core::errln!("[barca] could not record the outcome of run {run_id}: {e}");
     }
     // Recorded: it leaves the queue.
@@ -654,10 +715,17 @@ async fn persist_outcome(
     spec: &RunSpec,
     outcome: &Outcome,
     recorded: bool,
+    timed_out: bool,
 ) -> Result<(), BarcaError> {
     let cfg = &state.config.resolved;
     let status = outcome.status().as_str();
-    if recorded && db::set_run_outcome(&cfg.db_path, run_id, status, outcome.text()).await? {
+    // A run stopped at its timeout recorded itself `cancelled`: it is an `error`, with the
+    // reason in its outcome.
+    if recorded && timed_out {
+        if db::replace_run_outcome(&cfg.db_path, run_id, status, outcome.text()).await? {
+            return Ok(());
+        }
+    } else if recorded && db::set_run_outcome(&cfg.db_path, run_id, status, outcome.text()).await? {
         return Ok(());
     }
     db::ensure_env_dirs(&cfg.env)?;
@@ -752,6 +820,7 @@ pub async fn cancel(
                 &channel,
                 None,
                 outcome,
+                false,
                 false,
             )
             .await;

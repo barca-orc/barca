@@ -269,6 +269,8 @@ default, and any aliases.
 | `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
 | `--drain-timeout` | `SECONDS` | - | experimental (with the command) | Seconds to wait for runs in flight after SIGTERM or SIGINT before stopping them and putting them back in the run queue for the next start (exit 0; a second signal cancels them instead, exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 requeues them at once |
 | `--max-runs` | `N` | - | experimental (with the command) | How many runs execute at once; the others wait in the run queue, in order. At least 1. Default: [server] max_runs in barca.toml, else one per core. Experimental |
+| `--capacity` | `N` | - | experimental: new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use | The most the weight= of the steps running at once may add up to across every run of this server, admitted first come, first served. At least 1. Default: [server] capacity in barca.toml, else none (each run has only its own). Experimental |
+| `--run-timeout` | `SECONDS` | - | experimental (with the command) | Seconds a run may take before the server stops it (recorded as an error, steps that finished stay cached). 0: no limit. Default: [server] run_timeout_seconds in barca.toml, else no limit; Schedule(..., timeout_seconds=N) wins for its ticks |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
 #### barca queue
@@ -2223,6 +2225,7 @@ stderr. These keys are experimental (0.29, #436).
 | `phases[].streams[].stream_id` | string | always |
 | `plan_version` | integer | always |
 | `pool_size` | integer | always |
+| `pool_source` | string | always |
 | `total_steps` | integer | always |
 | `warnings` | array | always |
 | `warnings[]` | object | always |
@@ -2263,6 +2266,7 @@ stderr. These keys are experimental (0.29, #436).
 | `phases[].streams[].stream_id` | string | always |
 | `plan_version` | integer | always |
 | `pool_size` | integer | always |
+| `pool_source` | string | always |
 | `total_steps` | integer | always |
 | `warnings` | array | always |
 | `warnings[]` | object | always |
@@ -2625,6 +2629,7 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].data.nodes` | integer | sometimes |
 | `checks[].data.path` | string | sometimes |
 | `checks[].data.pool_size` | integer | sometimes |
+| `checks[].data.pool_source` | string | sometimes |
 | `checks[].data.size_bytes` | integer | sometimes |
 | `checks[].data.source` | string | sometimes |
 | `checks[].data.uri` | null | sometimes |

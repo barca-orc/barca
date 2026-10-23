@@ -897,6 +897,8 @@ async fn run_cli(
             read_only,
             drain_timeout,
             max_runs,
+            capacity,
+            run_timeout,
             env,
         } => {
             serve_cmd(
@@ -910,6 +912,8 @@ async fn run_cli(
                 read_only,
                 drain_timeout,
                 max_runs,
+                capacity,
+                run_timeout,
                 &python,
                 ctx,
             )

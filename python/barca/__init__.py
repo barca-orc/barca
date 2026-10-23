@@ -61,11 +61,23 @@ class Schedule:
     `max_failures` caps consecutive failed ticks (default 5): past it the
     schedule is skipped and reported `failing` until an explicit request or a
     change in its inputs.
+
+    `timeout_seconds` limits how long one of its ticks' runs may take under
+    `barca serve` (0: no limit); without it the server's run timeout applies
+    (`--run-timeout`, `[server] run_timeout_seconds`, none by default).
     """
 
-    def __init__(self, cron: str, /, *, max_failures: int = 5) -> None:
+    def __init__(
+        self,
+        cron: str,
+        /,
+        *,
+        max_failures: int = 5,
+        timeout_seconds: int | None = None,
+    ) -> None:
         self.cron = cron
         self.max_failures = max_failures
+        self.timeout_seconds = timeout_seconds
 
 
 # ─── Decorators ───────────────────────────────────────────────────────────────

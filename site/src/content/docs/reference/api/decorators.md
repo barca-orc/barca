@@ -55,7 +55,7 @@ check in the binary equal), so a type checker and an IDE know them too.
 | `partitions_from()` | one | none |
 | `collect()` | one | none |
 | `asset_ref()` | one | none |
-| `Schedule()` | one | `max_failures` |
+| `Schedule()` | one | `max_failures`, `timeout_seconds` |
 
 Any other argument is an error when barca reads the file, before anything runs (exit 2, `kind`
 `usage`). Up to 0.18.1 it was ignored without a message: `@asset(after=other)`,
@@ -272,6 +272,8 @@ def embed_c() -> dict:
 - The weights of the steps running at once add up to at most the **capacity**: the pool size,
   unless `[execution] capacity` in `barca.toml` or `BARCA_CAPACITY` sets it (the environment
   variable wins). With a capacity of 4 the three assets above run two at a time.
+- The pool size is `BARCA_POOL_SIZE`, else `[execution] pool_size`, else the available cores, or
+  the capacity when it is smaller: with `capacity = 1` a run starts one worker.
 - `weight` is a whole number of at least 1 (default 1); anything else is a parse error. It is
   accepted on `@asset`, `@task` and `@sensor`, and it is not part of the run hash: outputs and
   cache decisions are the same at any weight or capacity.
@@ -282,9 +284,12 @@ def embed_c() -> dict:
 - Partition keys take their node's weight. `parallel()` branches take the weight of the step
   that called `parallel()`; that step is not counted while it waits for them.
 - The capacity is per run: two runs at the same time (two commands, or `barca serve` running two
-  schedules at once) each fill their own.
-- `barca plan` shows `capacity` and `weights`, `--dry-run` shows `capacity` and each heavy
-  step's `weight`, and `barca doctor` reports the capacity.
+  schedules at once) each fill their own. `barca serve --capacity N` (`[server] capacity`) adds
+  one capacity that every run of the server shares, admitted first come, first served across
+  runs; see [Scheduling](/scheduling/#heavy-rebuilds-beside-a-frequent-job).
+- `barca plan` shows `pool_size`, `pool_source`, `capacity` and `weights`, `--dry-run` shows
+  `capacity` and each heavy step's `weight`, and `barca doctor` reports the capacity and the
+  pool size.
 
 ## Partitions
 
@@ -697,6 +702,7 @@ still served from cache while its run hash matches.
 Schedule("0 5 * * *")                   # 5-field cron: daily at 05:00
 Schedule("*/15 * * * * *")              # 6-field cron: every 15 seconds
 Schedule("*/5 * * * *", max_failures=3) # skip ticks after 3 consecutive failed ones
+Schedule("* * * * *", timeout_seconds=50)  # stop a tick's run after 50 seconds
 ```
 
 A freshness value for `freshness=` on `@asset`, `@sensor` or `@task`. It has an effect only
@@ -707,7 +713,11 @@ The cron is passed by position. `max_failures=` is keyword-only and must be a po
 literal; the default is 5. It caps the consecutive failed ticks of the node: past it, its ticks
 are skipped until an explicit request for it or for a node that failed, or a new result of one
 of a failed node's inputs, succeeds. `GET /schedule` reports `failures`, `max_failures` and
-`failing`. Any other keyword, `cron=` included, is an error when the file is read (exit 2).
+`failing`. `timeout_seconds=` is keyword-only, a whole number of seconds (0: no limit): how long
+a run started by one of its ticks may take under `barca serve`, over `--run-timeout` and `[server]
+run_timeout_seconds` (no limit by default); a run that takes longer is recorded as `error`, `run
+timed out after Ns (Schedule(timeout_seconds=) of NODE)`. Neither is part of the run hash. Any
+other keyword, `cron=` included, is an error when the file is read (exit 2).
 
 The cron has 5 fields (`minute hour day-of-month month day-of-week`) or 6 with a leading
 seconds field. There is no year field. See [Scheduling](/scheduling/) for what a tick does.

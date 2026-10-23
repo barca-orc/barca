@@ -473,6 +473,8 @@ async fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<Str
             values: false,
             partition: None,
             rules: barca_core::freshness::RunRules::tick(&job.id),
+            timeout: job.timeout_seconds,
+            kill_requeues: 0,
         },
     )
     .await

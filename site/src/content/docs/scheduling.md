@@ -275,9 +275,35 @@ in `barca.toml`) and exits 0. Runs still going at the deadline are put back at t
 queue and start again from the beginning when the server comes back (exit 0); a second SIGTERM
 cancels them instead (reason `server shutdown`, exit 1). When it starts, the server resumes the
 queued runs in order under their run ids. systemd waits 90 seconds (`TimeoutStopSec`) before it
-kills the service; keep that longer than the drain timeout plus 15 seconds. The full recipe is
+kills the service; keep that longer than the number `barca serve` prints at startup under
+systemd (`[barca] stop grace: ...`: the drain timeout plus 12 seconds, more with a store). The full recipe is
 [Restarting without losing work](/deploying/#restarting-without-losing-work); for a container,
 see [Deploying](/deploying/#in-a-container).
+
+## Heavy rebuilds beside a frequent job
+
+Each run under `barca serve` admits its steps against its own capacity (`[execution] capacity`,
+see [Heavy steps](/reference/api/decorators/#heavy-steps-weight)), so `--max-runs 1` used to be
+the only way to keep two runs from overloading the machine, and a one-minute job then waited
+behind a long rebuild. Give the server a capacity instead (experimental):
+
+```toml
+# barca.toml
+[server]
+capacity = 4               # the steps of every run together weigh at most 4
+run_timeout_seconds = 0    # no limit on how long a run takes (the default)
+```
+
+With the rebuild's heavy steps at `@asset(weight=3)`, one of them runs at a time and the
+one-minute job's weight-1 steps run beside it. Steps are admitted first come, first served
+across runs, and a heavy step that waits for room is not overtaken by lighter steps that asked
+after it, so it is never starved. `GET /queue` shows the weight in use and the steps waiting.
+The pool of each run is the cores, bounded by the capacity, so `capacity = 1` starts one worker.
+
+A run has no time limit by default (before 0.31.0, a fixed 600 seconds). `--run-timeout`,
+`[server] run_timeout_seconds` or `Schedule("...", timeout_seconds=N)` for one schedule set one;
+a run that takes longer is recorded as `error`, `run timed out after Ns (<setting>)`.
+`barca docs scheduling` has the details.
 
 ## Inspecting the schedule
 

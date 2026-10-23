@@ -112,6 +112,12 @@ struct Stored {
     pin_manual: bool,
     #[serde(default)]
     tick: Option<String>,
+    /// `Schedule(..., timeout_seconds=N)` of the tick that started it.
+    #[serde(default)]
+    timeout: Option<u64>,
+    /// How many times it was put back after its server was killed during a drain.
+    #[serde(default)]
+    kill_requeues: u32,
     /// When the server accepted it (unix seconds).
     accepted_at: f64,
 }
@@ -143,6 +149,8 @@ fn store(spec: &RunSpec, accepted_at: f64) -> String {
         partition: spec.partition.as_ref().map(|p| p.0.clone()),
         pin_manual: spec.rules.pin_manual,
         tick: spec.rules.tick.clone(),
+        timeout: spec.timeout,
+        kill_requeues: spec.kill_requeues,
         accepted_at,
     };
     serde_json::to_string(&stored).expect("a run spec is JSON")
@@ -171,6 +179,8 @@ fn load(text: &str) -> Result<(RunSpec, f64), String> {
             pin_manual: stored.pin_manual,
             tick: stored.tick,
         },
+        timeout: stored.timeout,
+        kill_requeues: stored.kill_requeues,
     };
     Ok((spec, stored.accepted_at))
 }
@@ -322,7 +332,40 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
                 });
                 resumed += 1;
             }
-            (QueueState::Running, loaded) => {
+            // In flight when the last server was told to stop, and it never finished the drain:
+            // what sent the signal killed it (a supervisor's grace period ran out), not a crash
+            // of its own. Back in its place, once: a run killed in two drains in a row is
+            // interrupted like a crash, so a run that keeps its server from stopping cannot
+            // loop (#628).
+            (QueueState::Draining, Ok((mut spec, accepted_at))) if spec.kill_requeues == 0 => {
+                spec.kill_requeues += 1;
+                match run_queue::requeue(&path, &row.run_id, Some(&store(&spec, accepted_at))).await
+                {
+                    Ok(()) => {
+                        barca_core::errln!(
+                            "[barca] run {} was in flight when the last server was killed during \
+                             its drain (SIGKILL after SIGTERM: the stop grace period ran out); \
+                             it is put back in the queue and starts again (steps that finished \
+                             are cached)",
+                            row.run_id
+                        );
+                        track(state, &row.run_id, &spec, accepted_at);
+                        state.queue.waiting.lock().unwrap().push_back(Waiting {
+                            run_id: row.run_id,
+                            spec,
+                        });
+                        resumed += 1;
+                    }
+                    Err(e) => {
+                        barca_core::errln!(
+                            "[barca] warning: could not put run {} back in the queue: {e}",
+                            row.run_id
+                        );
+                        interrupted(state, &row.run_id, Some(spec)).await;
+                    }
+                }
+            }
+            (QueueState::Running | QueueState::Draining, loaded) => {
                 interrupted(state, &row.run_id, loaded.ok().map(|(s, _)| s)).await;
             }
             (QueueState::Queued, Err(why)) => {
@@ -435,6 +478,10 @@ pub struct QueueView {
     pub running: Vec<QueueEntry>,
     /// The runs waiting to start, next first.
     pub queued: Vec<QueueEntry>,
+    /// The capacity every run shares (`--capacity`, `[server] capacity`): the weight in use,
+    /// by run, and the steps waiting for it, in the order they are admitted. `null` when the
+    /// server has none (each run has only its own).
+    pub capacity: Option<barca_core::capacity::CapacitySnapshot>,
 }
 
 fn entry(run: &RunState, position: Option<usize>) -> QueueEntry {
@@ -479,6 +526,7 @@ pub fn view(state: &AppState) -> QueueView {
         max_runs: state.queue.max_runs,
         running,
         queued,
+        capacity: state.capacity.as_ref().map(|c| c.snapshot()),
     }
 }
 
@@ -493,7 +541,7 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
         let Ok((spec, accepted_at)) = load(&row.spec) else {
             continue;
         };
-        let started = row.state == QueueState::Running;
+        let started = row.state != QueueState::Queued;
         let item = QueueEntry {
             run_id: row.run_id,
             status: if started { "running" } else { "pending" }.into(),
@@ -517,6 +565,7 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
         max_runs: state.queue.max_runs,
         running,
         queued,
+        capacity: None,
     })
 }
 
@@ -577,6 +626,14 @@ pub fn health(state: &AppState) -> serde_json::Value {
         "queued": state.queue.waiting_ids().len(),
         "running": state.runs.iter().filter(|r| r.status == RunStatus::Running).count(),
         "max_runs": state.queue.max_runs,
+        "capacity": state.capacity.as_ref().map(|c| {
+            let s = c.snapshot();
+            serde_json::json!({
+                "total": s.total,
+                "in_use": s.in_use,
+                "waiting": s.waiting.len(),
+            })
+        }),
     })
 }
 
@@ -686,6 +743,8 @@ mod tests {
             values: true,
             partition: Some(barca_core::selection::PartitionSelection(selection)),
             rules: barca_core::freshness::RunRules::tick("p.py:report"),
+            timeout: None,
+            kill_requeues: 0,
         };
         let (back, at) = load(&store(&spec, 12.5)).unwrap();
         assert_eq!(at, 12.5);

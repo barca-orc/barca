@@ -2291,6 +2291,31 @@ pub async fn set_run_outcome(
     Ok(changed == 1)
 }
 
+/// [`set_run_outcome`] over whatever status the run recorded: a run `barca serve` stopped at its
+/// run timeout recorded itself `cancelled` (it was stopped as a cancel is) and is an `error`
+/// (#628).
+pub async fn replace_run_outcome(
+    db_path: &str,
+    run_id: &str,
+    status: &str,
+    outcome_json: &str,
+) -> Result<bool, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let changed = conn
+        .execute(
+            "UPDATE runs SET outcome_json = ?2, status = ?3, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
+            [
+                run_id.to_string(),
+                outcome_json.to_string(),
+                status.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to record run outcome: {e}")))?;
+    Ok(changed == 1)
+}
+
 /// The artifact (path, format) `run_id` wrote for `node_id`, if it wrote one.
 pub async fn run_artifact(
     db_path: &str,

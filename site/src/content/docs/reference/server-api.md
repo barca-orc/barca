@@ -97,7 +97,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/sql/views?files=a.py,b.py` | Which result each `barca sql` view reads in the ledger: `{"views": [{name, node, kind, partitioned, format, files: [{path, partition, content_hash}], stale, run_hash}], "missing": [{name, node, kind, partitioned, command, keys_unknown?}], "duplicates": [{name, ids}]}`, by the function a local `barca sql` uses. The client runs the query; the server runs no SQL. |
 | `GET`  | `/materializations?limit=N&offset=M` | Step results, newest first: `{"materializations": [{node_id, partition, run_id, run_hash, status, created_at, elapsed_seconds, cpu_seconds, max_rss_bytes, attempts, format, size_bytes, artifact, content_hash, error_type, error_message}], total, limit, offset}`; `limit` defaults to 1000, at most 10000. `barca sql`'s `barca.materializations`. |
 | `GET`  | `/project` | The deployed tree: `{api_version, root, env, deployed_at, commit, files: [{path, sha256}]}` |
-| `GET`  | `/health` | Liveness (or `draining`), `api_version`, `env`, the artifact store (`store_uri`), read-only, scheduler, load diagnostics, the cache size against its limit, `started_at` (changes on a restart) and `queue: {paused, queued, running, max_runs}`. |
+| `GET`  | `/health` | Liveness (or `draining`), `api_version`, `env`, the artifact store (`store_uri`), read-only, scheduler, load diagnostics, the cache size against its limit, `started_at` (changes on a restart) and `queue: {paused, queued, running, max_runs, capacity}` (`capacity: {total, in_use, waiting}` with `--capacity`, else `null`). |
 
 **The served graph and the UI.**
 
@@ -113,7 +113,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause. |
 | `POST` | `/schedule/{id}/pause` | Hold one schedule back, optionally `?until=<RFC 3339>`. |
 | `POST` | `/schedule/{id}/resume` | Let a paused schedule fire again. |
-| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...]}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at}`. |
+| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at}`; `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
 | `POST` | `/queue/pause` | Hold every queued run back until resumed; runs in flight go on. Kept across restarts. Answers the queue; `403` read-only. |
 | `POST` | `/queue/resume` | Let queued runs start again, in order. Answers the queue; `403` read-only. |
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
@@ -519,7 +519,13 @@ cancelled: server shutdown` in their logs and `barca.reason: server shutdown` on
 `barca.run` span; the server exits 1. The queued runs are kept either way. Open `/events` streams
 end once the runs are over, without `run_finished` for a run still queued; the CLI's clients
 reconnect to the next server. See [Deploying](/deploying/#restarting-without-losing-work) for
-supervisor grace periods.
+supervisor grace periods. The first signal marks the runs in flight `draining` in the queue: if
+the server is killed before the drain ends (a grace period that ran out), the next server puts
+them back in the queue, once, instead of recording them interrupted.
+
+A run that takes longer than its run timeout (`--run-timeout`, `[server] run_timeout_seconds`,
+or `Schedule(..., timeout_seconds=N)` for a tick; none by default) is stopped and recorded with
+status `error` and `"error": "run timed out after Ns (<setting>)\n..."`.
 
 ### Read-only mode
 
@@ -547,7 +553,7 @@ are `null` until the node has run.
 ### Plan
 
 ```
-GET /plan              → { total_steps, pool_size, capacity, capacity_source, weights, phases: [{ reason: {type, node_id?}, streams: [{ stream_id, steps }] }], warnings: [{ kind, node, param, message }] }
+GET /plan              → { total_steps, pool_size, pool_source, capacity, capacity_source, weights, phases: [{ reason: {type, node_id?}, streams: [{ stream_id, steps }] }], warnings: [{ kind, node, param, message }] }
 ```
 
 `warnings` is always present: the plan-time warnings for every step of the project, `[]` when

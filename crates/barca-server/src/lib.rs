@@ -152,8 +152,18 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // at their end too.
     // The last one is taken after the runs have stopped and recorded themselves.
     let backup_stop = barca_core::CancellationToken::new();
+    let mut stop = StopBudget::of(
+        state.config.resolved.drain_timeout_secs,
+        backups.is_some(),
+        false,
+    );
     let backup_task = backups.map(|(python, resolved)| {
-        tokio::spawn(backup_every_minute(python, resolved, backup_stop.clone()))
+        tokio::spawn(backup_every_minute(
+            python,
+            resolved,
+            backup_stop.clone(),
+            stop.backup,
+        ))
     });
 
     // Evict completed/failed runs older than 1 hour, checking every 5 minutes.
@@ -208,6 +218,12 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         if n_files == 1 { "" } else { "s" },
         if watch { " · watch" } else { "" },
     );
+    if telemetry.is_some() {
+        stop.telemetry = Some(telemetry::FINISH_LIMIT);
+    }
+    if let Some(supervisor) = supervisor() {
+        barca_core::errln!("{}", stop.grace_line(supervisor));
+    }
     if !addr.ip().is_loopback() {
         barca_core::errln!(
             "[barca] warning: listening on {} with no authentication — anyone who can reach \
@@ -228,7 +244,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         let stopping = stopping.clone();
         async move {
             let first = signals.recv().await;
-            let stopped = drain_then_stop(&state, first, signals.recv()).await;
+            let stopped = drain_then_stop(&state, first, signals.recv(), stop).await;
             stopping.cancel();
             // Dropping the channels closes the event streams once each has delivered what
             // its run emitted, the final `run_finished` included. A `GET /events/{run_id}`
@@ -248,13 +264,13 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         // are dropped with the server.
         _ = async {
             lifecycle.clone().await;
-            tokio::time::sleep(CONNECTION_GRACE).await;
+            tokio::time::sleep(stop.connections).await;
         } => {}
     }
     let stopped = lifecycle.await;
     backup_stop.cancel();
     if let Some(task) = backup_task {
-        let _ = tokio::time::timeout(BACKUP_BUDGET + CONNECTION_GRACE, task).await;
+        let _ = tokio::time::timeout(stop.backup + BACKUP_SLACK, task).await;
     }
     if let Some(telemetry) = telemetry.as_mut() {
         telemetry.finish().await;
@@ -364,6 +380,7 @@ async fn backup_every_minute(
     python: std::path::PathBuf,
     cfg: barca_core::config::ResolvedConfig,
     stopping: barca_core::CancellationToken,
+    last_budget: std::time::Duration,
 ) {
     let mut tick = tokio::time::interval_at(
         tokio::time::Instant::now() + BACKUP_INTERVAL,
@@ -376,9 +393,10 @@ async fn backup_every_minute(
             _ = tick.tick() => false,
             _ = stopping.cancelled() => true,
         };
+        let budget = if last { last_budget } else { BACKUP_BUDGET };
         let until = barca_core::helper_proc::Until {
             cancel: None,
-            deadline: Some(std::time::Instant::now() + BACKUP_BUDGET),
+            deadline: Some(std::time::Instant::now() + budget),
         };
         let failed = match barca_core::backup::take(&python, &cfg, None, until).await {
             Ok(taken) => match taken.upload {
@@ -414,11 +432,135 @@ async fn backup_every_minute(
     }
 }
 
-/// How long a forced stop waits for cancelled runs to stop their workers and record themselves.
-const RUN_STOP_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long the backup taken at shutdown is waited for beyond its own budget.
+const BACKUP_SLACK: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// How long open connections get to finish once the runs are over.
-const CONNECTION_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+/// What a stopping server may take after its drain: the time it gives the runs it stops to
+/// terminate their workers and record themselves, open connections to finish, the last
+/// metadata backup (with a store) and the telemetry flush (with telemetry). The supervisor's
+/// grace period must cover the drain timeout plus all of it (#628).
+///
+/// With a drain timeout of 10 s or more: 10 s for the runs, 2 s for connections, 30 s (+1) for
+/// the backup. Below that each part shrinks with it, so a server asked to stop quickly fits a
+/// short grace period: the runs get half the drain timeout (at least 2 s), connections 1 s,
+/// the backup the drain timeout (at least 5 s). Stopping runs takes well under a second unless
+/// a step ignores SIGTERM; a run that has not recorded itself when its time is up is found
+/// `draining` by the next server and put back in the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopBudget {
+    pub drain: std::time::Duration,
+    pub runs: std::time::Duration,
+    pub connections: std::time::Duration,
+    /// The last backup's budget; it counts only with a store.
+    pub backup: std::time::Duration,
+    pub with_backup: bool,
+    /// The telemetry flush (3 s), when telemetry is on.
+    pub telemetry: Option<std::time::Duration>,
+}
+
+impl StopBudget {
+    pub fn of(drain_secs: u64, with_backup: bool, telemetry: bool) -> Self {
+        use std::time::Duration;
+        let drain = Duration::from_secs(drain_secs);
+        let runs = (drain / 2).clamp(Duration::from_secs(2), Duration::from_secs(10));
+        let connections = if drain_secs >= 10 {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(1)
+        };
+        let backup = drain.clamp(Duration::from_secs(5), Duration::from_secs(30));
+        Self {
+            drain,
+            runs,
+            connections,
+            backup,
+            with_backup,
+            telemetry: telemetry.then_some(telemetry::FINISH_LIMIT),
+        }
+    }
+
+    /// Everything after the drain, in whole seconds rounded up.
+    pub fn after_drain_secs(&self) -> u64 {
+        let mut total = self.runs + self.connections;
+        if self.with_backup {
+            total += self.backup + BACKUP_SLACK;
+        }
+        if let Some(t) = self.telemetry {
+            total += t;
+        }
+        total.as_millis().div_ceil(1000) as u64
+    }
+
+    /// The least grace period a supervisor must give between SIGTERM and SIGKILL, in seconds.
+    pub fn grace_secs(&self) -> u64 {
+        self.drain.as_secs() + self.after_drain_secs()
+    }
+
+    /// The startup line under a supervisor.
+    pub fn grace_line(&self, supervisor: Supervisor) -> String {
+        let mut parts = vec!["stopping runs and closing connections"];
+        if self.with_backup {
+            parts.push("the last metadata backup");
+        }
+        if self.telemetry.is_some() {
+            parts.push("the telemetry flush");
+        }
+        format!(
+            "[barca] stop grace: {} must allow at least {}s between SIGTERM and SIGKILL (drain \
+             timeout {}s + {}s for {}); {}",
+            supervisor.name(),
+            self.grace_secs(),
+            self.drain.as_secs(),
+            self.after_drain_secs(),
+            parts.join(", "),
+            supervisor.setting(),
+        )
+    }
+}
+
+/// What stops this server, when it runs under something that does (#628).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Supervisor {
+    /// Process 1: a container's entrypoint.
+    Container,
+    Kubernetes,
+    Systemd,
+}
+
+impl Supervisor {
+    fn name(self) -> &'static str {
+        match self {
+            Supervisor::Container => "the container runtime",
+            Supervisor::Kubernetes => "Kubernetes",
+            Supervisor::Systemd => "systemd",
+        }
+    }
+
+    fn setting(self) -> &'static str {
+        match self {
+            Supervisor::Container => {
+                "set docker stop -t or stop_grace_period (Docker's default is 10s)"
+            }
+            Supervisor::Kubernetes => "set terminationGracePeriodSeconds (default 30)",
+            Supervisor::Systemd => "set TimeoutStopSec= (default 90s)",
+        }
+    }
+}
+
+/// The supervisor this process runs under: Kubernetes (`KUBERNETES_SERVICE_HOST`), systemd
+/// (`INVOCATION_ID`, set for every unit it starts), or a container when this is process 1.
+fn supervisor() -> Option<Supervisor> {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    if set("KUBERNETES_SERVICE_HOST") {
+        Some(Supervisor::Kubernetes)
+    } else if set("INVOCATION_ID") {
+        Some(Supervisor::Systemd)
+    } else if std::process::id() == 1 {
+        Some(Supervisor::Container)
+    } else {
+        None
+    }
+}
 
 /// The reason a run cancelled by a stopping server records, in its logs and on its
 /// `barca.run` span.
@@ -461,10 +603,26 @@ async fn drain_then_stop(
     state: &AppState,
     first: &str,
     again: impl std::future::Future<Output = &'static str>,
+    budget: StopBudget,
 ) -> Stopped {
     let secs = state.config.resolved.drain_timeout_secs;
     state.draining.cancel();
     state.run_tasks.close();
+    // Recorded before anything else: if whatever sent the signal kills the server before the
+    // drain ends, the next server puts these runs back in the queue instead of recording them
+    // interrupted (#628).
+    let flying: Vec<String> = state
+        .runs
+        .iter()
+        .filter(|r| r.status == state::RunStatus::Running)
+        .map(|r| r.handle.clone())
+        .collect();
+    if !state.config.read_only
+        && let Err(e) =
+            barca_core::run_queue::mark_draining(&state.config.resolved.db_path, &flying).await
+    {
+        barca_core::errln!("[barca] warning: could not mark the runs in flight draining: {e}");
+    }
     let in_flight = runs_in_flight(state);
     let waiting = runs_queued(state);
     let kept = if waiting > 0 {
@@ -534,7 +692,7 @@ async fn drain_then_stop(
         }
     };
     state.shutdown.cancel();
-    let _ = tokio::time::timeout(RUN_STOP_LIMIT, state.run_tasks.wait()).await;
+    let _ = tokio::time::timeout(budget.runs, state.run_tasks.wait()).await;
     let queued = runs_queued(state);
     if queued > 0 {
         barca_core::errln!(
@@ -591,5 +749,45 @@ impl StopSignals {
             _ = self.interrupt.recv() => "SIGINT",
             _ = self.terminate.recv() => "SIGTERM",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_stop_budget_shrinks_with_a_short_drain_timeout() {
+        // The default drain: 30 s + 10 s for runs + 2 s for connections.
+        let default = StopBudget::of(30, false, false);
+        assert_eq!(default.after_drain_secs(), 12);
+        assert_eq!(default.grace_secs(), 42);
+        // With a store, the last backup gets up to 30 s (+1).
+        assert_eq!(StopBudget::of(30, true, false).grace_secs(), 73);
+        // drain_timeout = 5 fits Docker's default 10 s: 5 + 2.5 + 1, rounded up.
+        let short = StopBudget::of(5, false, false);
+        assert_eq!(short.after_drain_secs(), 4);
+        assert_eq!(short.grace_secs(), 9);
+        assert_eq!(StopBudget::of(5, true, false).grace_secs(), 15);
+        // 0 stops at once: 2 s for runs and 1 for connections.
+        assert_eq!(StopBudget::of(0, false, false).grace_secs(), 3);
+        // Telemetry adds its 3 s flush.
+        assert_eq!(StopBudget::of(0, false, true).grace_secs(), 6);
+        // Long drains keep the full budgets.
+        assert_eq!(StopBudget::of(300, false, false).after_drain_secs(), 12);
+    }
+
+    #[test]
+    fn the_grace_line_names_the_supervisor_setting() {
+        let line = StopBudget::of(5, false, false).grace_line(Supervisor::Container);
+        assert_eq!(
+            line,
+            "[barca] stop grace: the container runtime must allow at least 9s between SIGTERM \
+             and SIGKILL (drain timeout 5s + 4s for stopping runs and closing connections); set \
+             docker stop -t or stop_grace_period (Docker's default is 10s)"
+        );
+        let line = StopBudget::of(30, true, true).grace_line(Supervisor::Systemd);
+        assert!(line.contains("at least 76s"), "{line}");
+        assert!(line.contains("TimeoutStopSec="), "{line}");
     }
 }

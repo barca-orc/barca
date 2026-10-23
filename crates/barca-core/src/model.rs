@@ -412,6 +412,10 @@ pub struct ExtractedNode {
     /// and reported `failing`. `None` when not written (the scheduler's default applies).
     #[serde(default)]
     pub max_failures: Option<u32>,
+    /// `Schedule(..., timeout_seconds=N)`: how long a scheduled run of this node may take under
+    /// `barca serve` (0: no limit). `None` when not written (the server's setting applies).
+    #[serde(default)]
+    pub schedule_timeout: Option<u64>,
     /// Declared inputs (parameter → upstream mapping). Typically 0–4 items.
     pub inputs: SmallVec<[DeclaredInput; 4]>,
     /// Partition dimensions.

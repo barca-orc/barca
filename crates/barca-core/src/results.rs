@@ -421,9 +421,15 @@ pub struct PlanResult {
     /// Version of this plan document, independent of the package/worker/DB versions.
     pub plan_version: u32,
     pub total_steps: usize,
-    /// Worker processes: available cores, or `BARCA_POOL_SIZE`.
+    /// Worker processes a run starts at most: `BARCA_POOL_SIZE`, `[execution] pool_size`, or
+    /// the cores, bounded by the capacity when one is set (#628).
     #[serde(default)]
     pub pool_size: usize,
+    /// Where `pool_size` came from: `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the
+    /// capacity setting that bounded the cores (`[execution] capacity`, `BARCA_CAPACITY`,
+    /// `[server] capacity`, `--capacity`).
+    #[serde(default)]
+    pub pool_source: String,
     /// The most the `weight=` of the steps running at once may add up to (#436).
     #[serde(default)]
     pub capacity: usize,

@@ -413,10 +413,20 @@ with the rest of the database.
 When the server starts it resumes the runs it finds queued, in their order and under their run
 ids, before its scheduler catches up, and prints `[barca] resuming 3 queued runs`. A client that
 holds a run id sees the run go `pending` → `running` → `success` across the restart. A run the
-previous server had started and never finished recording (it was killed: SIGKILL, a crash, a
-supervisor's grace period that ran out) is not started again: it is reported once on startup and
-recorded as interrupted (`error` when it never wrote a row), because a run that kills its server
-would otherwise kill every server after it.
+previous server had started and never finished recording is not started again when the server
+died on its own (SIGKILL without a stop signal first, such as the OOM killer, or a crash): it is
+reported once on startup and recorded as interrupted (`error` when it never wrote a row), because
+a run that kills its server would otherwise kill every server after it.
+
+A run that was in flight when the server was told to stop is different. The first SIGTERM or
+SIGINT marks every run in flight `draining` in the queue before anything else; if whatever sent
+the signal kills the server before the drain ends (a supervisor whose grace period is too short),
+the next server finds the run still `draining`, prints `[barca] run RUN_ID was in flight when the
+last server was killed during its drain (SIGKILL after SIGTERM: the stop grace period ran out);
+it is put back in the queue and starts again`, and starts it again first, under the same id, as
+if the drain timeout had passed. This happens once per run: a run that is in flight through two
+killed drains in a row is recorded as interrupted, so a run that keeps its server from stopping
+cannot loop.
 
 ## Stopping the server
 
@@ -466,7 +476,7 @@ logs (`barca logs RUN_ID`) and `barca.reason: server shutdown` on its `barca.run
 The server exits 1, after an error naming how many runs were cancelled, so a supervisor or
 deploy script can tell a forced stop from a clean one. The queued runs are kept either way.
 Stopped runs get 10 seconds to stop their workers and record themselves, and connections still
-open after that get 2 more.
+open after that get 2 more (shorter with a drain timeout under 10 seconds: below).
 
 ### At least once
 
@@ -500,10 +510,29 @@ barca queue resume --server      # if you paused it
    drain timeout, go back to the queue, and it exits 0. Clients following a run reconnect.
 3. The new server prints `[barca] resuming N queued runs` and starts them in order.
 
-Give the supervisor a stop grace period longer than the drain timeout plus about 15 seconds
-(10 for stopped runs to record themselves, 2 for open connections, and the metadata backup with
-a store). Otherwise it kills the server mid-drain and the runs in flight are interrupted rather
-than requeued. With the default 30-second drain timeout, 45 seconds or more:
+Give the supervisor a stop grace period of at least the drain timeout plus what the server takes
+after it. Otherwise it kills the server mid-drain; the runs in flight are then put back in the
+queue by the next server, once (above), but they lose the time the drain gave them. After the
+drain the server takes:
+
+| Part | Drain timeout 10 s or more | Drain timeout under 10 s |
+|---|---|---|
+| Stopped runs terminate their workers and record themselves | 10 s | half the drain timeout, at least 2 s |
+| Open connections finish | 2 s | 1 s |
+| The last metadata backup (only with a store) | 31 s | the drain timeout, at least 5 s, plus 1 s |
+| The telemetry flush (only with `BARCA_TELEMETRY`) | 3 s | 3 s |
+
+So 42 seconds with the default drain timeout of 30 and no store, 73 with a store; 9 seconds with
+`drain_timeout = 5`, which fits Docker's default of 10; 3 with `drain_timeout = 0`. Under a
+supervisor, `barca serve` prints the number for its configuration when it starts: as process 1
+of a container, under systemd (`INVOCATION_ID` is set) and under Kubernetes
+(`KUBERNETES_SERVICE_HOST` is set):
+
+```text
+[barca] stop grace: the container runtime must allow at least 9s between SIGTERM and SIGKILL (drain timeout 5s + 4s for stopping runs and closing connections); set docker stop -t or stop_grace_period (Docker's default is 10s)
+```
+
+With the default 30-second drain timeout, 45 seconds or more:
 
 | Supervisor | Setting | Default | With `drain_timeout = 30` |
 |---|---|---|---|
@@ -550,9 +579,98 @@ capacity = 4
 ```
 
 and `@asset(weight=2)` on the heavy assets, at most two of them run at once, and light steps
-still use what is left. `barca doctor` reports the capacity in effect. Lowering
-`BARCA_POOL_SIZE` instead limits every step. The capacity is per run: two schedules that fire
-together run with a capacity each.
+still use what is left. `barca doctor` reports the capacity in effect and the pool size. The
+pool is the cores, or the capacity when it is smaller (`[execution] pool_size` or
+`BARCA_POOL_SIZE` set it outright), so `capacity = 1` starts one worker, not one per core. That
+capacity is per run: two schedules that fire together run with a capacity each. To limit the
+server as a whole, give it a capacity of its own (below).
+
+## A capacity shared by every run
+
+Experimental. `barca serve --capacity N` (or `[server] capacity = N` in barca.toml; the flag wins)
+admits the `weight=` of the steps of every run on the server against one budget. A step starts
+only when it fits its own run's capacity and the server's. Use it instead of `--max-runs 1` to
+keep a light, frequent job running while a long heavy rebuild holds the rest:
+
+```toml
+# barca.toml
+[server]
+capacity = 4      # the steps of every run together weigh at most 4
+```
+
+```python
+from barca import Schedule, asset
+
+
+@asset(freshness=Schedule("* * * * *"))   # the one-minute sync: weight 1
+def sync() -> dict:
+    return {"rows": 1}
+
+
+@asset(weight=3)                          # the rebuild's heavy steps: 3 of the 4
+def rebuild_customer() -> dict:
+    return {"rows": 2}
+```
+
+```bash
+barca serve pipeline.py --capacity 4           # the same, from the command line
+barca queue --server --json                    # capacity: {total, in_use, runs, waiting}
+```
+
+While a rebuild step of weight 3 runs, the sync's weight-1 steps run beside it, one at a time;
+a second weight-3 step waits. How a step is admitted:
+
+- **First come, first served across runs, with the head reserved.** A run asks for the step at
+  the head of its own ready queue once that step fits the run's own capacity. If nothing waits
+  and it fits what is left, it starts. Otherwise the run waits in line, one place per run. Only
+  the run at the front of the line can be admitted, when its step fits; nothing behind it goes
+  first, even a lighter step that would fit. So a heavy step is never starved by a stream of
+  light ones: the weight that comes free is kept for it until it fits, and the light steps that
+  asked after it wait that long (in the example, at most one heavy step's length when a heavy
+  step waits). Steps within one run keep the order of their run's queue, as before.
+- **No deadlock.** Only running steps hold weight, and they finish, fail or are cancelled. A
+  step heavier than the server's capacity counts as all of it: it runs alone on the server, with
+  `[barca] warning: 'x' has weight=8, more than the capacity 4 (--capacity); it runs alone` when
+  its run is planned. A step that calls `parallel()` gives its weight to its branches while it
+  waits for them and takes it back when it resumes, even if that briefly goes over.
+- **Per-run capacity.** `[execution] capacity` still limits each run. The pool of each run is
+  the cores, bounded by the smaller of the two capacities. Runs keep their own worker pools; a
+  run waiting for the server's capacity holds no worker for the step it waits with.
+- **`--max-runs`** still limits how many runs execute at once; a run waiting for capacity holds
+  its run slot. With a server capacity, `--max-runs` can be larger than you would otherwise set
+  it: the capacity, not the number of runs, bounds the load.
+- **The run queue** is unchanged: runs leave it as before, and the capacity is held in memory, so
+  a restart starts with nothing in use.
+
+`GET /queue` (and `barca queue --server --json`) has `capacity: {total, source, in_use, runs,
+waiting}`: the weight in use, the weight each run holds, and the steps waiting in admission
+order with their run, weight and `waiting_seconds`; `null` without a server capacity. `GET
+/health` has `queue.capacity: {total, in_use, waiting}`. The web UI's Runs page shows `weight 3
+of 4 in use · 1 step waiting` and the waiting steps.
+
+## Run timeout
+
+A run under `barca serve` has no time limit by default. `--run-timeout SECONDS` (or `[server]
+run_timeout_seconds` in barca.toml; the flag wins) stops a run that takes longer, and
+`Schedule(cron, timeout_seconds=N)` sets it for one schedule's ticks, over both. 0 means no
+limit at any of them. The time counts from when the run leaves the queue.
+
+```bash
+barca serve pipeline.py --run-timeout 3600     # stop any run after an hour
+barca serve pipeline.py --run-timeout 0        # no limit (the default)
+```
+
+```python
+@asset(freshness=Schedule("*/5 * * * *", timeout_seconds=240))   # a tick's run may take 4 minutes
+def sync() -> dict:
+    return {"rows": 1}
+```
+
+A run that times out is stopped like a cancelled one (its workers are terminated; steps that
+finished stay cached) and is recorded as `error` in `barca history`, with the reason in its
+outcome: `run timed out after 240s (Schedule(timeout_seconds=) of sync)`, naming the setting
+that applied. Before 0.31.0 every run under `barca serve` stopped at 600 seconds, a limit that was
+not configurable; `--run-timeout 600` restores it.
 
 ## Source load failures
 

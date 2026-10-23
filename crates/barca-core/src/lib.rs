@@ -4,6 +4,7 @@
 #[doc(hidden)]
 pub mod backup;
 pub mod cache;
+pub mod capacity;
 pub mod changes;
 pub mod commands;
 pub mod cone;
@@ -75,6 +76,7 @@ pub mod warnings;
 
 pub use dag::Dag;
 pub use events::{LogStream, RunEvent};
+pub use execution::{Sizing, sizing};
 pub use model::*;
 pub use planner::{ExecutionPlan, ResourceConfig, expand_partition_combos};
 /// Re-exported so callers (CLI, server) share one token type without depending

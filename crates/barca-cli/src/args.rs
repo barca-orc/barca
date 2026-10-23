@@ -432,6 +432,9 @@ Examples:
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
   barca serve pipeline.py --drain-timeout 120   # on SIGTERM, give runs in flight 2 minutes
   barca serve pipeline.py --max-runs 2       # at most 2 runs at once; the others wait in the queue
+  barca serve pipeline.py --capacity 4       # the weight= of every run's running steps adds up to at most 4
+  barca serve pipeline.py --run-timeout 3600 # stop a run that takes longer than an hour
+  barca serve pipeline.py --run-timeout 0    # no run timeout (the default)
   barca serve pipeline.py --env prod         # .barca/envs/prod/metadata.db, named on the startup line
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
@@ -459,7 +462,15 @@ start), the scheduler stops, /health says draining, and runs in flight finish (u
 for up to --drain-timeout seconds (default 30, [server] drain_timeout in barca.toml). Exit 0
 when they all finished. At the deadline the rest are stopped and put back at the head of the
 queue, to start again from the beginning after the restart: exit 0. A second signal cancels
-them instead, with reason \"server shutdown\": exit 1.
+them instead, with reason \"server shutdown\": exit 1. Under a supervisor (process 1 of a
+container, systemd, Kubernetes) the startup prints the stop grace period it needs:
+[barca] stop grace: allow at least N s between SIGTERM and SIGKILL (...).
+--capacity N ([server] capacity) admits the weight= of the steps of every run against one budget,
+first come first served across runs: a light run proceeds beside a heavy one, and a heavy step
+is never overtaken by lighter ones. /health and /queue show it (capacity: in_use, waiting).
+--run-timeout SECONDS ([server] run_timeout_seconds, Schedule(..., timeout_seconds=N) per
+schedule) stops a run that takes longer; none by default. The run is recorded as an error:
+run timed out after Ns (<setting>).
 Lines go to stderr as text; BARCA_LOG=json writes them to stdout as JSON (barca docs telemetry).
 More: barca docs scheduling";
 
@@ -984,6 +995,16 @@ pub(crate) enum Cli {
         /// 1. Default: [server] max_runs in barca.toml, else one per core. Experimental
         #[arg(long, value_name = "N", value_parser = parse_max_runs)]
         max_runs: Option<usize>,
+        /// The most the weight= of the steps running at once may add up to across every run
+        /// of this server, admitted first come, first served. At least 1. Default: [server]
+        /// capacity in barca.toml, else none (each run has only its own). Experimental
+        #[arg(long, value_name = "N", value_parser = parse_capacity)]
+        capacity: Option<usize>,
+        /// Seconds a run may take before the server stops it (recorded as an error, steps that
+        /// finished stay cached). 0: no limit. Default: [server] run_timeout_seconds in
+        /// barca.toml, else no limit; Schedule(..., timeout_seconds=N) wins for its ticks
+        #[arg(long, value_name = "SECONDS")]
+        run_timeout: Option<u64>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
@@ -1189,6 +1210,16 @@ fn parse_max_runs(value: &str) -> Result<usize, String> {
         Ok(n) if n >= 1 => Ok(n),
         _ => Err(format!(
             "'{value}' is not a number of runs: give 1 or more (how many runs execute at once)"
+        )),
+    }
+}
+
+fn parse_capacity(value: &str) -> Result<usize, String> {
+    match value.parse::<usize>() {
+        Ok(n) if n >= 1 => Ok(n),
+        _ => Err(format!(
+            "'{value}' is not a capacity: give 1 or more (the most the weight= of the steps \
+             running at once may add up to)"
         )),
     }
 }

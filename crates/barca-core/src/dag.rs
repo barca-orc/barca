@@ -998,6 +998,7 @@ mod tests {
             explicit_name: None,
             freshness: crate::model::Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: smallvec::SmallVec::new(),
             partitions: HashMap::new(),
             sinks: smallvec::SmallVec::new(),

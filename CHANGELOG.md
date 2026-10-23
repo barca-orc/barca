@@ -8,6 +8,41 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- `barca serve` no longer stops a run after 600 seconds. That limit was fixed and undocumented,
+  and it cancelled long partitioned rebuilds; runs now have no time limit by default.
+  `barca serve --run-timeout 600` (or `[server] run_timeout_seconds = 600`) restores it (#628).
+
+### Features
+
+- The worker pool follows the capacity (#628): without `BARCA_POOL_SIZE`, a run starts at most
+  the cores or the capacity, whichever is smaller, so `[execution] capacity = 1` starts one
+  worker, not one per core. `[execution] pool_size` in barca.toml sets the pool
+  (`BARCA_POOL_SIZE` wins over it). `barca plan` adds `pool_source` beside `pool_size`, and
+  `barca doctor`'s `capacity` check names the pool size and where it came from.
+- A capacity shared by every run of `barca serve` (experimental, #628): `--capacity N` or
+  `[server] capacity = N` admits the `weight=` of the steps of all runs against one budget, first
+  come, first served across runs with the head reserved, so a light run proceeds beside a heavy
+  rebuild while the heavy steps stay serialized, and a heavy step is never starved by light ones.
+  `GET /queue` (`barca queue --json`) has `capacity: {total, source, in_use, runs, waiting}`,
+  `GET /health` has `queue.capacity`, and the web UI's Runs page shows the weight in use and the
+  waiting steps.
+- The run timeout of `barca serve` is configurable (#628): `--run-timeout SECONDS`, `[server]
+  run_timeout_seconds`, and per schedule `Schedule(cron, timeout_seconds=N)`, which wins for its
+  ticks; 0 is no limit. A run that times out is recorded as `error` with `run timed out after Ns
+  (<setting>)`.
+- Under a supervisor (process 1 of a container, systemd, Kubernetes) `barca serve` prints the
+  stop grace period it needs at startup: `[barca] stop grace: ... must allow at least Ns between
+  SIGTERM and SIGKILL (drain timeout ...)`. With a drain timeout under 10 seconds the time it
+  takes after the drain shrinks with it (half the drain timeout for stopped runs, at least 2 s;
+  1 s for connections), so `drain_timeout = 5` needs 9 seconds and fits Docker's default of 10
+  (#628).
+- A run that was in flight when a supervisor killed the server during its drain (SIGKILL after
+  SIGTERM) is put back in the queue by the next server instead of being recorded as interrupted,
+  once per run. A server that dies without a stop signal (the OOM killer, a crash) still records
+  its runs as interrupted, so a run that kills its server cannot loop (#628).
+
 ### Bug Fixes
 
 - A metadata DB written before 0.29.2 opens again (#629): 0.29.2 to 0.30.0 refused it with exit 3
