@@ -111,3 +111,6 @@ sibling paths from your session.
 - New worktree setup hooks: [`.cursor/worktrees.json`](.cursor/worktrees.json) (`uv sync`
   only; build into the tree's own `target-local/` when you need a binary)
 - Driving barca from scripts/agents: `barca docs agents` / `barca docs skill`
+- Release notes: put your `CHANGELOG.md` bullet under `## Pending`, never in a released
+  `## X.Y.Z` section; CI (`scripts/check-changelog.py`) fails a PR that edits one, unless a
+  commit message has a `Changelog-Fix: <reason>` line for a deliberate fix.
