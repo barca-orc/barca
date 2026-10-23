@@ -47,7 +47,7 @@ check in the binary equal), so a type checker and an IDE know them too.
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `group()` | one | `members`, `output`, `description` |
-| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `cutoff` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
@@ -117,6 +117,7 @@ Star-import dependency hashing remains conservative.
     tags: dict[str, str] | None = None,
     env: list[str] | None = None,
     weight: int = 1,
+    cutoff: bool = False,
 )
 ```
 
@@ -137,14 +138,15 @@ delay in seconds between attempts (delay grows linearly: `retry_backoff * attemp
 Of these arguments, `inputs`, `serializer` and the dimension names in `partitions` are part of
 the run hash, with stacked `@sink` decorators and any decorator that is not barca's: changing
 one runs the asset again. `name`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`,
-`weight`, `description`, `tags` and the partition keys are not, and neither is the formatting of the
+`weight`, `cutoff`, `description`, `tags` and the partition keys are not, and neither is the formatting of the
 decorator: editing them re-runs nothing. `barca docs cache` has the full list with the reason
 for each (from 0.19; up to 0.18 any edit to the decorator re-ran the asset).
 
 `env` declares the environment variables the function reads. See
 [Declared environment variables](#declared-environment-variables-env) below. `weight` is how
 much of the pool's capacity the step takes while it runs; see
-[Heavy steps](#heavy-steps-weight) below.
+[Heavy steps](#heavy-steps-weight) below. `cutoff=True` makes what reads the asset depend on the
+bytes it wrote instead of its run hash; see [Early cutoff](#early-cutoff-cutofftrue) below.
 
 ```python
 from barca import asset, Always, Manual, Schedule
@@ -285,6 +287,49 @@ def embed_c() -> dict:
   schedules at once) each fill their own.
 - `barca plan` shows `capacity` and `weights`, `--dry-run` shows `capacity` and each heavy
   step's `weight`, and `barca doctor` reports the capacity.
+
+### Early cutoff (`cutoff=True`)
+
+Experimental (0.31). What reads an asset folds in its run hash, so when the asset reruns (its
+code, an upstream or a sensor it reads changed) everything below it reruns, even when it wrote
+the same bytes. With `cutoff=True`, what reads it folds in the SHA-256 of the bytes it wrote
+instead: a rerun that writes the same bytes leaves its consumers cached. A global step that
+every partition key reads is where this pays: one rerun with unchanged output no longer reruns
+every key.
+
+```python
+from pathlib import Path
+from barca import asset, partitions, sensor
+
+@sensor()
+def rate_feed() -> tuple[bool, float]:
+    return True, float(Path("rate.txt").read_text())
+
+@asset(inputs={"raw": rate_feed}, cutoff=True)
+def rates(raw: float) -> dict:
+    return {"usd_eur": round(raw, 1)}
+
+@asset(inputs={"rates": rates}, partitions={"customer": partitions(["acme", "globex"])})
+def billed(customer: str, rates: dict) -> dict:
+    return {"customer": customer, "eur": 100 * rates["usd_eur"]}
+```
+
+- The digest is of the serialized artifact (the `content_hash` every materialization records),
+  per key for a partitioned asset; a `collect()` fan-in reads every key's digest by key.
+- What reads it still reruns when its own code, its other inputs or its declared env change.
+- What reads it is decided after it ran, in a later phase. A dry run or `barca status` cannot
+  know the bytes of a cutoff asset that would run: what reads it is `unknown` with reason
+  `cutoff_pending`.
+- `cutoff` is not part of the asset's own run hash, but turning it on or off reruns what reads
+  it once.
+- A `--refresh` cascade stops at it: its consumers are decided by the bytes the refresh wrote.
+- A dict `partitions_from` source with `cutoff=True` gives each key its own value only, as a
+  sensor source does.
+- On `@asset` only. A nondeterministic asset writes new bytes every rerun, so cutoff saves
+  nothing on it.
+
+`barca docs cache` ("Early cutoff") has the details: what is hashed, parquet and library
+versions, server mode, sinks, and why it is opt-in.
 
 ## Partitions
 

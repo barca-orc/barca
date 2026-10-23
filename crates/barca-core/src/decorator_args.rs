@@ -77,6 +77,7 @@ pub const SIGNATURES: &[Signature] = &[
             "tags",
             "env",
             "weight",
+            "cutoff",
         ],
         deferred: &[],
         usage: "@asset(inputs={\"param\": upstream}, ...)",
@@ -1141,15 +1142,18 @@ mod tests {
             passing: Passing::Keyword
         }));
         // What the parser reads on one node kind it reads on all three; `inputs` on a sensor
-        // is the one difference, and it is an error of its own.
+        // is an error of its own, and `cutoff` is an asset's only: a sensor's output already
+        // counts below it, and a task is never served from cache (#628).
         let keywords = |call: &str| -> Vec<&str> {
             all.iter()
                 .filter(|a| a.call == call)
                 .map(|a| a.name)
                 .collect()
         };
-        assert_eq!(keywords("asset"), keywords("task"));
-        let mut sensor = keywords("asset");
+        let mut asset = keywords("asset");
+        asset.retain(|k| *k != "cutoff");
+        assert_eq!(asset, keywords("task"));
+        let mut sensor = asset.clone();
         sensor.retain(|k| *k != "inputs");
         assert_eq!(keywords("sensor"), sensor);
     }

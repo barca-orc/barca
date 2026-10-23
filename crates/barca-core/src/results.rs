@@ -201,8 +201,8 @@ pub struct StepReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     /// Why the step runs: `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`,
-    /// `not_materialized`, `artifact_missing`, `evicted`, `partitions_unknown` or
-    /// `sensor_output_unknown`.
+    /// `not_materialized`, `artifact_missing`, `evicted`, `partitions_unknown`,
+    /// `sensor_output_unknown` or `cutoff_pending`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The reason in words.

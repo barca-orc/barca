@@ -128,6 +128,12 @@ pub const RULES: &[Rule] = &[
         reason: "decides how many steps run at once, not what the step returns",
     },
     Rule {
+        part: "cutoff",
+        counts: Counts::No,
+        reason: "decides what the asset's consumers fold into their run hashes (its output's \
+                 bytes instead of its run hash), not what it returns",
+    },
+    Rule {
         part: "description",
         counts: Counts::No,
         reason: "documentation",

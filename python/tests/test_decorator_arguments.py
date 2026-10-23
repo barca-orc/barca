@@ -23,7 +23,7 @@ from barca.api import _find_binary
 
 ASSET_ACCEPTS = (
     "@asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, "
-    "retries, retry_backoff, description, tags, env, weight"
+    "retries, retry_backoff, description, tags, env, weight, cutoff"
 )
 
 GOOD = """

@@ -378,6 +378,15 @@ fn try_extract_function(
                 .to_string(),
         }
     })?;
+    let cutoff = extract_cutoff(&keywords, source).map_err(|(offset, message)| {
+        ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..offset].matches('\n').count() + 1,
+            message,
+            fix: "write cutoff=True or cutoff=False (see `barca docs cache`)".to_string(),
+        }
+    })?;
     let env = extract_env(&keywords, file_path, func.name.as_str())?;
     let artifact_serializer = keywords
         .iter()
@@ -421,6 +430,7 @@ fn try_extract_function(
         timeout_seconds,
         retries,
         weight,
+        cutoff,
         retry_backoff_seconds,
         description,
         tags,
@@ -896,6 +906,45 @@ fn extract_weight(keywords: &[&Keyword], source: &str) -> Result<u32, (usize, St
             "weight= must be a whole number of at least 1, got `{}`",
             source
                 .get(kw.value.range().start().to_usize()..kw.value.range().end().to_usize())
+                .unwrap_or("?")
+        ),
+    ))
+}
+
+/// Whether `func` is an `@asset(cutoff=True)` (#628), read from its decorators alone: for the
+/// dependency cone (`crate::cone`, rule 8), which sees functions before nodes are extracted.
+pub(crate) fn is_cutoff_asset(
+    func: &ast::StmtFunctionDef,
+    barca: &crate::decorator_args::BarcaNames,
+) -> bool {
+    func.decorator_list.iter().any(|d| {
+        match_node_decorator(&d.expression, barca).is_some_and(|(kind, keywords)| {
+            kind == NodeKind::Asset && extract_cutoff(&keywords, "").unwrap_or(false)
+        })
+    })
+}
+
+/// `cutoff=True|False` on `@asset` (#628): a boolean literal, `False` when not written.
+/// Anything else is refused with the byte offset of the value: a cutoff that silently did
+/// nothing would rerun everything below the asset, and one read as on by mistake would change
+/// what its consumers' run hashes fold in.
+fn extract_cutoff(keywords: &[&Keyword], source: &str) -> Result<bool, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("cutoff"))
+    else {
+        return Ok(false);
+    };
+    if let Expr::BooleanLiteral(b) = &kw.value {
+        return Ok(b.value);
+    }
+    let range = kw.value.range();
+    Err((
+        range.start().to_usize(),
+        format!(
+            "cutoff= must be True or False, got `{}`",
+            source
+                .get(range.start().to_usize()..range.end().to_usize())
                 .unwrap_or("?")
         ),
     ))

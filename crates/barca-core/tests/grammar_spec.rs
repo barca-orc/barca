@@ -1140,7 +1140,7 @@ def my_asset() -> dict:
         err,
         "test.py:my_asset (line 4): `unknown_param` is not an argument of @asset. @asset \
          accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, \
-         retry_backoff, description, tags, env, weight\n\
+         retry_backoff, description, tags, env, weight, cutoff\n\
          Remove `unknown_param`, or replace it with an argument @asset accepts. See `barca \
          docs assets`."
     );

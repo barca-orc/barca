@@ -8,6 +8,17 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- `@asset(cutoff=True)` (experimental): what reads the asset folds in the SHA-256 of the bytes
+  it wrote instead of its run hash, so when it reruns and writes the same bytes, everything
+  below it stays cached. A global step that reruns with unchanged output no longer reruns every
+  partition key below it; per key on a partitioned asset; a cutoff dict `partitions_from` source
+  gives each key its own value. Its consumers are decided after it runs; until then `--dry-run`
+  and `barca status` report them `unknown` with the new reason `cutoff_pending`. A `--refresh`
+  cascade stops at a cutoff asset. Turning `cutoff` on or off reruns what reads the asset once
+  (`barca docs cache`, "Early cutoff") (#628).
+
 ### Bug Fixes
 
 - A metadata DB written before 0.29.2 opens again (#629): 0.29.2 to 0.30.0 refused it with exit 3

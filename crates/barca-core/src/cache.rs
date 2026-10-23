@@ -5,11 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 /// Compute the run_hash for a step given its context. `env` is the step's declared env values
 /// ([`crate::envdeps::hash_input`]); `None` leaves the hash exactly as a node without `env=`.
 ///
-/// `outputs` maps an upstream step (display id) to a content hash of its output. Only sensors
-/// have an entry: a consumer depends on what the sensor returned, so the output hash is folded
-/// in next to the sensor's run hash (which covers only the sensor's code). Upstreams without an
-/// entry contribute their run hash alone, so a pipeline without sensors hashes exactly as it did
-/// before sensor outputs were hashed.
+/// `outputs` maps an upstream step (display id) to a content hash of its output. Only the steps
+/// whose output is folded ([`folds_output`]) have an entry: a consumer of a sensor depends on
+/// what the sensor returned, so the output hash is folded in next to the sensor's run hash
+/// (which covers only the sensor's code). Upstreams without an entry contribute their run hash
+/// alone, so a pipeline without sensors hashes exactly as it did before sensor outputs were
+/// hashed. This form knows no `@asset(cutoff=True)` upstream ([`compute_run_hash_with`]).
 pub fn compute_run_hash(
     def_hash: &str,
     partition_key: Option<&str>,
@@ -26,11 +27,14 @@ pub fn compute_run_hash(
         outputs,
         env,
         Vec::new(),
+        None,
     )
 }
 
-/// [`compute_run_hash`] with `extra` upstream tokens: a key's value from a dict
-/// `partitions_from` source ([`crate::keyed::token`]).
+/// [`compute_run_hash`] with `extra` upstream tokens (a key's value from a dict
+/// `partitions_from` source, [`crate::keyed::token`]), and the graph `dag` that says which
+/// upstreams are `@asset(cutoff=True)` ([`is_cutoff`]): their output replaces their run hash.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_run_hash_with(
     def_hash: &str,
     partition_key: Option<&str>,
@@ -39,14 +43,17 @@ pub(crate) fn compute_run_hash_with(
     outputs: &HashMap<String, String>,
     env: Option<&str>,
     extra: Vec<String>,
+    dag: Option<&Dag>,
 ) -> String {
     let mut upstream_hashes: Vec<String> = extra;
     for uid in upstream_ids {
+        let uid = uid.as_ref();
         upstream_hashes.extend(upstream_tokens(
-            uid.as_ref(),
+            uid,
             partition_key,
             cached_run_hashes,
             outputs,
+            dag.is_some_and(|d| is_cutoff(d, uid)),
         ));
     }
     let hash_refs: Vec<&str> = upstream_hashes.iter().map(|s| s.as_str()).collect();
@@ -56,13 +63,20 @@ pub(crate) fn compute_run_hash_with(
 /// What upstream `uid` contributes to the run hash of a step with `partition_key`: its run hash
 /// (with the output folded in, see [`compute_run_hash`]), the partition-aligned one, or every
 /// partition's for a fan-in. Empty when nothing is known for it.
+///
+/// `cutoff`: `uid` is an `@asset(cutoff=True)` ([`is_cutoff`]). A step of it whose output is
+/// known contributes [`cutoff_token`], its output alone, and not its run hash. One whose output
+/// is not known (a result recorded before barca hashed outputs) contributes its run hash, as
+/// without `cutoff`: a consumer is then never served a result computed from other bytes.
 pub(crate) fn upstream_tokens(
     uid: &str,
     partition_key: Option<&str>,
     cached_run_hashes: &HashMap<String, String>,
     outputs: &HashMap<String, String>,
+    cutoff: bool,
 ) -> Vec<String> {
     let token = |key: &str, h: &String| match outputs.get(key) {
+        Some(out) if cutoff => cutoff_token(&key[uid.len().min(key.len())..], out),
         Some(out) => format!("{h}+output:{out}"),
         None => h.clone(),
     };
@@ -88,6 +102,16 @@ pub(crate) fn upstream_tokens(
         .into_iter()
         .map(|(k, h)| token(k, h))
         .collect()
+}
+
+/// What one step of an `@asset(cutoff=True)` contributes to a consumer's run hash (#628): the
+/// SHA-256 of the bytes it wrote, and its partition (`[region=emea]`, empty for an
+/// unpartitioned asset). Not its run hash: a rerun that writes the same bytes gives the same
+/// token, so what reads it is served from cache. The partition is there for a fan-in
+/// (`collect`), which reads every key's bytes by key: two keys that swap their bytes are a
+/// different input. The `cutoff` prefix keeps the token apart from any run hash.
+pub(crate) fn cutoff_token(partition: &str, content_hash: &str) -> String {
+    format!("cutoff{partition}:{content_hash}")
 }
 
 use crate::store_sync::StoreSync;
@@ -242,6 +266,9 @@ pub(crate) struct KeyedHashes {
     pub(crate) dim: String,
     pub(crate) source_id: String,
     pub(crate) hashes: std::sync::Arc<HashMap<String, String>>,
+    /// The source is an `@asset(cutoff=True)`: a key folds in its value alone, not the
+    /// source's run hash (#628).
+    pub(crate) cutoff: bool,
 }
 
 impl DecideState {
@@ -259,11 +286,15 @@ impl DecideState {
             .iter()
             .filter_map(|ks| {
                 let value = ks.hashes.get(partition.get(&ks.dim)?)?;
-                let source_run_hash = self
-                    .run_hashes
-                    .get(&ks.source_id)
-                    .map(String::as_str)
-                    .unwrap_or("");
+                // A cutoff source: the key's value is its output, and replaces its run hash.
+                let source_run_hash = if ks.cutoff {
+                    "cutoff"
+                } else {
+                    self.run_hashes
+                        .get(&ks.source_id)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                };
                 Some((
                     ks.source_id.clone(),
                     crate::keyed::token(source_run_hash, value),
@@ -349,12 +380,27 @@ impl DecideState {
 /// its run hash: a sensor (#183), and a `Manual` asset (#548). A `Manual` asset is read as it
 /// is and refreshed by hand with the same code and inputs, so its run hash stays the same when
 /// a refresh gives new bytes; its output is what tells what reads it that it changed.
+///
+/// And an `@asset(cutoff=True)` (#628, [`is_cutoff`]), whose output replaces its run hash.
+/// Either way the node ends its chain in the planner and its consumers are decided in a later
+/// phase, once its output is known.
 pub(crate) fn folds_output(dag: &Dag, id: &str) -> bool {
     dag.get_node(id).is_some_and(|n| match n.kind() {
         crate::NodeKind::Sensor => true,
-        crate::NodeKind::Asset => n.extracted.freshness == crate::Freshness::Manual,
+        crate::NodeKind::Asset => {
+            n.extracted.freshness == crate::Freshness::Manual || n.extracted.cutoff
+        }
         crate::NodeKind::Task => false,
     })
+}
+
+/// Whether `id` (a base id) is an `@asset(cutoff=True)` (#628): what reads it folds in the
+/// content hash of its output ([`cutoff_token`]) instead of its run hash, so a rerun that
+/// writes the same bytes leaves its consumers cached. A `--refresh` cascade stops at it for
+/// the same reason: what reads it is decided by the bytes the refresh wrote.
+pub(crate) fn is_cutoff(dag: &Dag, id: &str) -> bool {
+    dag.get_node(id)
+        .is_some_and(|n| n.kind() == crate::NodeKind::Asset && n.extracted.cutoff)
 }
 
 /// Whether new bytes under an unchanged run hash mean `node` is not deterministic, so barca
@@ -499,13 +545,15 @@ pub(crate) fn hash_step(
         } else {
             Some(step.step_id.partition.suffix())
         };
-        let run_h = compute_run_hash(
+        let run_h = compute_run_hash_with(
             def_hash,
             partition_key.as_deref(),
             step.inputs.values(),
             &state.run_hashes,
             &state.sensor_outputs,
             env_input.as_deref(),
+            Vec::new(),
+            Some(dag),
         );
         state.run_hashes.insert(display_id.clone(), run_h.clone());
         step.run_hashes.insert(display_id.clone(), run_h);
@@ -518,6 +566,7 @@ pub(crate) fn hash_step(
                 dim: ks.dim.clone(),
                 source_id: ks.source_id.clone(),
                 hashes: ks.hashes.clone(),
+                cutoff: is_cutoff(dag, &ks.source_id),
             })
             .collect();
         if !keyed.is_empty() {
@@ -540,6 +589,7 @@ pub(crate) fn hash_step(
                 &shared.sensor_outputs,
                 env_input.as_deref(),
                 extra,
+                Some(dag),
             );
             (format!("{}[{suffix}]", step.step_id.base), run_h)
         });
@@ -709,8 +759,12 @@ pub(crate) async fn decide_step(
             } else if names.iter().any(|name| refresh_name_matches(base_id, name)) {
                 Some(RunReason::Refresh)
             } else if *cascade {
+                // Not through a cutoff asset: what reads it is decided by the bytes it wrote.
                 step.inputs.values().find_map(|up| {
                     let up_base = up.split('[').next().unwrap_or(up);
+                    if is_cutoff(dag, up_base) {
+                        return None;
+                    }
                     state
                         .cascade_roots
                         .get(up_base)
@@ -802,9 +856,12 @@ pub(crate) async fn decide_step(
         Some(oref) => {
             record_output(dag, state, &display_id, oref.content_hash.as_ref());
             // Cached, but does it depend on something refreshed in this run?
+            // A cutoff upstream's new bytes are in this step's run hash: not stale through it.
             let stale_root = step.inputs.values().find_map(|up| {
                 let up_base = up.split('[').next().unwrap_or(up);
-                if state.refreshed_ids.contains(up_base) {
+                if is_cutoff(dag, up_base) {
+                    None
+                } else if state.refreshed_ids.contains(up_base) {
                     Some(short_name(up_base).to_string())
                 } else {
                     state.stale_cached.get(up_base).cloned()
@@ -1987,5 +2044,329 @@ def d(c: int) -> int:
         for id in ["t.py:a", "t.py:b", "t.py:c", "t.py:d"] {
             assert_eq!(asked[id], state.run_hashes()[id], "{id}");
         }
+    }
+}
+
+/// `@asset(cutoff=True)` (#628): what its consumers' run hashes fold in.
+#[cfg(test)]
+mod cutoff_tests {
+    use super::*;
+    use crate::planner::ResourceConfig;
+
+    const PIPELINE: &str = r#"
+from barca import asset, collect, partitions
+
+@asset(cutoff=True)
+def dims() -> dict:
+    return {"a": 1}
+
+@asset(inputs={"dims": dims}, partitions={"c": partitions(["x", "y"])})
+def per_key(c: str, dims: dict) -> dict:
+    return {"c": c}
+
+@asset(partitions={"c": partitions(["x", "y"])}, cutoff=True)
+def keyed(c: str) -> str:
+    return c
+
+@asset(inputs={"k": keyed}, partitions={"c": partitions(["x", "y"])})
+def aligned(c: str, k: str) -> str:
+    return k
+
+@asset(inputs={"ks": collect(keyed)})
+def fan_in(ks: dict) -> int:
+    return len(ks)
+
+@asset()
+def plain() -> int:
+    return 1
+
+@asset(inputs={"p": plain})
+def below_plain(p: int) -> int:
+    return p
+"#;
+
+    fn dag() -> Dag {
+        let nodes = crate::parse::extract_nodes(PIPELINE, "t.py").unwrap();
+        Dag::build(&nodes).unwrap()
+    }
+
+    fn step(phases: &[Phase], base: &str) -> crate::planner::StreamStep {
+        phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .find(|s| s.step_id.base_id() == base)
+            .unwrap()
+            .clone()
+    }
+
+    fn phase_of(phases: &[Phase], base: &str) -> usize {
+        phases
+            .iter()
+            .position(|p| {
+                p.streams
+                    .iter()
+                    .flat_map(|s| &s.steps)
+                    .any(|s| s.step_id.base_id() == base)
+            })
+            .unwrap()
+    }
+
+    fn planned() -> (Dag, Vec<Phase>) {
+        let dag = dag();
+        let plan = crate::planner::plan_from_dag(
+            &dag,
+            &ResourceConfig {
+                pool_size: 1,
+                concurrency_groups: HashMap::new(),
+            },
+        );
+        (dag, plan.phases)
+    }
+
+    /// The run hash of `base` (unpartitioned) or of its key `c=x`, given `dims` and each key of
+    /// `keyed` hashed under `upstream` run hashes and with `outputs` recorded for them.
+    fn hash_of(
+        base: &str,
+        upstream: &HashMap<String, String>,
+        outputs: &HashMap<String, String>,
+    ) -> String {
+        let (dag, phases) = planned();
+        let mut state = DecideState::default();
+        for phase in &phases {
+            state.register_phase(phase);
+        }
+        state.run_hashes = upstream.clone();
+        state.complete_upstreams = upstream
+            .keys()
+            .map(|k| k.split('[').next().unwrap().to_string())
+            .collect();
+        state.sensor_outputs = outputs.clone();
+        let hashed = hash_step(&dag, &mut state, &step(&phases, base)).unwrap();
+        let id = if hashed.partition_keys.is_empty() {
+            base.to_string()
+        } else {
+            format!("{base}[c=x]")
+        };
+        hashed
+            .run_hashes
+            .get(&id)
+            .unwrap_or_else(|| panic!("{id} not in {:?}", hashed.run_hashes.keys()))
+            .clone()
+    }
+
+    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn upstreams(dims: &str, kx: &str, ky: &str) -> HashMap<String, String> {
+        map(&[
+            ("t.py:dims", dims),
+            ("t.py:keyed[c=x]", kx),
+            ("t.py:keyed[c=y]", ky),
+        ])
+    }
+
+    #[test]
+    fn the_cutoff_argument_is_read_and_only_true_or_false_is_accepted() {
+        let dag = dag();
+        assert!(is_cutoff(&dag, "t.py:dims"));
+        assert!(is_cutoff(&dag, "t.py:keyed"));
+        assert!(!is_cutoff(&dag, "t.py:plain"));
+        assert!(folds_output(&dag, "t.py:dims"));
+        assert!(!folds_output(&dag, "t.py:plain"));
+        // A cutoff asset is still checked for new bytes under the same run hash.
+        assert!(checks_bytes(dag.get_node("t.py:dims").unwrap()));
+        for bad in ["1", "\"yes\"", "None", "FLAG"] {
+            let source = format!(
+                "from barca import asset\n@asset(cutoff={bad})\ndef a() -> int:\n    return 1\n"
+            );
+            let err = crate::parse::extract_nodes(&source, "t.py").unwrap_err();
+            assert!(
+                err.to_string().contains("cutoff= must be True or False"),
+                "{bad}: {err}"
+            );
+        }
+        // Not an argument of @sensor or @task.
+        let source = "from barca import task\n@task(cutoff=True)\ndef t() -> None:\n    pass\n";
+        assert!(crate::parse::extract_nodes(source, "t.py").is_err());
+    }
+
+    #[test]
+    fn cutoff_does_not_change_the_assets_own_definition_hash() {
+        let with = dag().get_node("t.py:dims").unwrap().definition_hash.clone();
+        let source = PIPELINE.replacen("@asset(cutoff=True)\ndef dims", "@asset()\ndef dims", 1);
+        let nodes = crate::parse::extract_nodes(&source, "t.py").unwrap();
+        let without = Dag::build(&nodes).unwrap();
+        let without = without.get_node("t.py:dims").unwrap();
+        assert!(!without.extracted.cutoff);
+        assert_eq!(with, without.definition_hash);
+    }
+
+    #[test]
+    fn a_consumer_folds_in_the_cutoff_output_instead_of_its_run_hash() {
+        let out = map(&[("t.py:dims", "bytes1")]);
+        // A rerun of `dims` under a new run hash that writes the same bytes: the same hash.
+        let before = hash_of("t.py:per_key", &upstreams("h1", "kx", "ky"), &out);
+        let rerun = hash_of("t.py:per_key", &upstreams("h2", "kx", "ky"), &out);
+        assert_eq!(before, rerun);
+        // New bytes: a new hash.
+        let changed = hash_of(
+            "t.py:per_key",
+            &upstreams("h1", "kx", "ky"),
+            &map(&[("t.py:dims", "bytes2")]),
+        );
+        assert_ne!(before, changed);
+        // Without a recorded output (a result from before barca hashed outputs), the run hash
+        // counts, as without cutoff: a new run hash is a new input.
+        let none = HashMap::new();
+        assert_ne!(
+            hash_of("t.py:per_key", &upstreams("h1", "kx", "ky"), &none),
+            hash_of("t.py:per_key", &upstreams("h2", "kx", "ky"), &none)
+        );
+        assert_ne!(
+            hash_of("t.py:per_key", &upstreams("h1", "kx", "ky"), &none),
+            before
+        );
+    }
+
+    #[test]
+    fn an_upstream_without_cutoff_still_counts_by_its_run_hash() {
+        let hashes = map(&[("t.py:plain", "h1")]);
+        let other = map(&[("t.py:plain", "h2")]);
+        assert_ne!(
+            hash_of("t.py:below_plain", &hashes, &HashMap::new()),
+            hash_of("t.py:below_plain", &other, &HashMap::new())
+        );
+    }
+
+    #[test]
+    fn a_partitioned_cutoff_asset_cuts_off_per_key() {
+        let out = |x: &str, y: &str| map(&[("t.py:keyed[c=x]", x), ("t.py:keyed[c=y]", y)]);
+        // `aligned[c=x]` reads `keyed[c=x]` only: its run hash and `c=y`'s bytes do not count.
+        let base = hash_of(
+            "t.py:aligned",
+            &upstreams("d", "kx1", "ky1"),
+            &out("bx", "by"),
+        );
+        assert_eq!(
+            base,
+            hash_of(
+                "t.py:aligned",
+                &upstreams("d", "kx2", "ky2"),
+                &out("bx", "by2")
+            )
+        );
+        assert_ne!(
+            base,
+            hash_of(
+                "t.py:aligned",
+                &upstreams("d", "kx1", "ky1"),
+                &out("bx2", "by")
+            )
+        );
+    }
+
+    #[test]
+    fn a_fan_in_of_a_cutoff_asset_sees_which_key_wrote_which_bytes() {
+        let out = |x: &str, y: &str| map(&[("t.py:keyed[c=x]", x), ("t.py:keyed[c=y]", y)]);
+        let base = hash_of("t.py:fan_in", &upstreams("d", "kx", "ky"), &out("b1", "b2"));
+        // Every key reran with the same bytes: cached.
+        assert_eq!(
+            base,
+            hash_of(
+                "t.py:fan_in",
+                &upstreams("d", "kx2", "ky2"),
+                &out("b1", "b2")
+            )
+        );
+        // The keys swapped their bytes: `collect` hands a different dict.
+        assert_ne!(
+            base,
+            hash_of("t.py:fan_in", &upstreams("d", "kx", "ky"), &out("b2", "b1"))
+        );
+        // One key changed.
+        assert_ne!(
+            base,
+            hash_of("t.py:fan_in", &upstreams("d", "kx", "ky"), &out("b1", "b3"))
+        );
+    }
+
+    #[test]
+    fn the_cutoff_token_cannot_be_mistaken_for_a_run_hash_or_another_key() {
+        assert_eq!(cutoff_token("", "abc"), "cutoff:abc");
+        assert_eq!(cutoff_token("[c=x]", "abc"), "cutoff[c=x]:abc");
+        assert_ne!(cutoff_token("[c=x]", "abc"), cutoff_token("[c=y]", "abc"));
+        let tokens = upstream_tokens(
+            "t.py:dims",
+            None,
+            &map(&[("t.py:dims", "h")]),
+            &map(&[("t.py:dims", "abc")]),
+            true,
+        );
+        assert_eq!(tokens, vec!["cutoff:abc".to_string()]);
+        // The same output folded by a sensor or a `Manual` asset keeps its run hash.
+        let tokens = upstream_tokens(
+            "t.py:dims",
+            None,
+            &map(&[("t.py:dims", "h")]),
+            &map(&[("t.py:dims", "abc")]),
+            false,
+        );
+        assert_eq!(tokens, vec!["h+output:abc".to_string()]);
+    }
+
+    #[test]
+    fn consumers_of_a_cutoff_asset_are_planned_after_it() {
+        let (dag, phases) = planned();
+        assert!(phase_of(&phases, "t.py:per_key") > phase_of(&phases, "t.py:dims"));
+        assert!(phase_of(&phases, "t.py:aligned") > phase_of(&phases, "t.py:keyed"));
+        assert!(phase_of(&phases, "t.py:fan_in") > phase_of(&phases, "t.py:keyed"));
+        // And the ledger is asked for them in their own phase, not before anything runs.
+        let keys = cone_keys(&dag, &phases);
+        assert!(keys.iter().any(|(id, _)| id == "t.py:plain"));
+        assert!(
+            !keys
+                .iter()
+                .any(|(id, _)| id.starts_with("t.py:per_key") || id.starts_with("t.py:dims"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_cascade_stops_at_a_cutoff_asset() {
+        let (dag, phases) = planned();
+        let mut state = DecideState::default();
+        for phase in &phases {
+            state.register_phase(phase);
+        }
+        let policy = CachePolicy::RefreshSelective {
+            names: vec!["dims".to_string()],
+            cascade: true,
+        };
+        let (_, d) = decide_step(&dag, &policy, None, &mut state, &step(&phases, "t.py:dims"))
+            .await
+            .unwrap();
+        assert!(matches!(d, Decision::Run(RunReason::Refresh)));
+        state
+            .sensor_outputs
+            .insert("t.py:dims".into(), "bytes".into());
+        let (_, d) = decide_step(
+            &dag,
+            &policy,
+            None,
+            &mut state,
+            &step(&phases, "t.py:per_key"),
+        )
+        .await
+        .unwrap();
+        // Decided by the bytes `dims` wrote: no cache here, so it runs as not materialized,
+        // not as part of the cascade.
+        assert!(
+            matches!(&d, Decision::Partitioned { cached, missing } if cached.is_empty() && missing.len() == 2)
+        );
+        assert!(!state.refreshed_ids.contains("t.py:per_key"));
     }
 }

@@ -107,6 +107,7 @@ pub(crate) fn step_components(
             partition.as_deref(),
             state.run_hashes(),
             &state.sensor_outputs,
+            crate::cache::is_cutoff(dag, up),
         );
         if tokens.is_empty() {
             continue;
@@ -222,6 +223,7 @@ mod tests {
             sinks: Default::default(),
             timeout_seconds: 300,
             retries: 1,
+            cutoff: false,
             weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,

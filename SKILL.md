@@ -64,6 +64,10 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   `@sensor` re-runs when the sensor's returned value changes, so have a sensor return the etag.
   `--dry-run` and `status` assume the sensor returns its last value; before it ever ran, its
   consumers are `unknown` (reason `sensor_output_unknown`). See `barca docs cache`.
+- A global asset that many partition keys read: `@asset(cutoff=True)` makes what reads it
+  depend on the bytes it wrote, so a rerun with unchanged output reruns nothing below it.
+  Before it runs, `--dry-run` and `status` report its consumers `unknown` (reason
+  `cutoff_pending`). See `barca docs cache`, "Early cutoff".
 - Several targets: the result has `targets` (per name: `status`, then `final_output`, or
   `failed_node` and `error`) instead of `final_output`. Every target runs even if another fails.
 - A partitioned target returns every key. `--partition region=emea,amer` (a JSON object for

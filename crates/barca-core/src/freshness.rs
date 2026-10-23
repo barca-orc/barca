@@ -9,7 +9,7 @@
 //!   its last successful run used other versions of its inputs, or a task it reads has run
 //!   successfully since ([`crate::cache::decide_step`]).
 
-use crate::cache::{CachePolicy, compute_run_hash};
+use crate::cache::{CachePolicy, compute_run_hash_with};
 use crate::dag::Dag;
 use crate::db;
 use crate::dispatch::OutputRef;
@@ -261,13 +261,15 @@ pub(crate) async fn is_stale(
             .unwrap_or_default(),
     );
     let env = crate::envdeps::hash_input(&crate::envdeps::resolve(&node.extracted.env));
-    let current = compute_run_hash(
+    let current = compute_run_hash_with(
         &node.definition_hash,
         None,
         inputs.iter(),
         &hashes,
         &outputs,
         env.as_deref(),
+        Vec::new(),
+        Some(dag),
     );
     current != run_hash
 }

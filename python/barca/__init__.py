@@ -87,6 +87,7 @@ def asset(
     tags=None,
     env: list[str] | None = None,
     weight: int = 1,
+    cutoff: bool = False,
 ):
     """Declare a cached asset node.
 
@@ -111,6 +112,11 @@ def asset(
     pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it). Give a step
     that needs a lot of memory a higher weight so fewer run beside it. It does not
     count toward the run hash. Experimental.
+
+    `cutoff=True` makes what reads the asset depend on the bytes it writes instead of
+    on its run hash: when it reruns and writes the same bytes, its consumers stay
+    cached. Its consumers are decided after it runs. A literal `True` or `False`; not
+    part of its own run hash. Experimental (see `barca docs cache`, "Early cutoff").
 
     `retries` is the total number of attempts on failure (1 = no retry).
     `retry_backoff` is the base delay in seconds between attempts (delay grows

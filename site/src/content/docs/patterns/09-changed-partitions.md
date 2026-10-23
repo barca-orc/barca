@@ -65,6 +65,11 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.
 - A new key runs that key; a removed key runs nothing. A `collect(scored)` downstream runs
   when any key is added, removed or recomputed.
 - Editing the sensor's code re-runs every key, as for anything that reads a sensor.
+- A global asset that every key reads (a rate table, a dimension) reruns every key whenever it
+  reruns. Mark it `@asset(cutoff=True)` and a rerun that writes the same bytes reruns no key;
+  see [Early cutoff](/reference/api/decorators/#early-cutoff-cutofftrue). An asset that returns
+  the `{key: version}` dict with `cutoff=True` behaves as the sensor does here: each key folds in
+  its own value.
 - The alternative, a sensor partitioned by retailer
   (`@sensor(partitions={"retailer": partitions(RETAILERS)})`), runs once per key on every
   tick: 10,002 steps per tick at 10,000 keys instead of 3.

@@ -181,6 +181,10 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.
   float.
 - Editing the source's code (its query) changes its run hash, and every key runs again, as for
   anything that reads a sensor (`barca docs cache`). Its `freshness=` does not count.
+- The source may be an asset instead of a sensor. With `@asset(cutoff=True)` on it, each key
+  folds in its own value only, not the source's run hash, so when the asset reruns (an upstream
+  changed) only the keys whose value changed run. Without `cutoff`, every rerun of the asset
+  reruns every key.
 - A removed key runs nothing; `barca get scored` returns the remaining keys. A new key runs
   that key only. A `collect(scored)` downstream runs whenever a key is added, removed or
   recomputed, since its inputs changed.
@@ -197,6 +201,16 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.
 - Known limit under `barca serve`: a run keeps its full outcome, which lists every output of
   its targets. At 200k keys a tick records about 80 MB of JSON in the metadata DB
   (`runs.outcome_json`) and the server holds each finished run in memory for an hour.
+
+### A global step every key reads
+
+An unpartitioned asset that every key reads (a rate table, a dimension, a model) reruns every
+key below it whenever it reruns, even when it wrote the same bytes. Mark it
+`@asset(cutoff=True)` and what reads it folds in the bytes it wrote instead of its run hash: a
+rerun that writes the same bytes leaves every key cached, new bytes rerun all of them. Before
+it runs, a dry run reports the keys below it `unknown` (reason `cutoff_pending`). On a
+partitioned asset, `cutoff=True` applies per key. `barca docs cache`, "Early cutoff", has the
+details.
 
 ## Getting partitions
 

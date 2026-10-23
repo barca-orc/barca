@@ -90,6 +90,7 @@ function staleReason(reason: CacheStatus['reason']): string {
     .with('changed', () => 'code changed')
     .with('upstream_stale', () => 'upstream')
     .with('sensor_output_unknown', () => 'sensor')
+    .with('cutoff_pending', () => 'cutoff')
     .with('failed', () => 'last run failed')
     .with('artifact_missing', () => 'artifact missing')
     .with('evicted', () => 'evicted')
