@@ -10,8 +10,6 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## 0.30.2 (2026-10-23)
 
-## 0.30.1 (2026-10-23)
-
 ### Breaking
 
 - A partitioned target of more than 1000 keys, returned without `--partition`, no longer lists
@@ -24,13 +22,6 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
-- A metadata DB written before 0.29.2 opens again (#629): 0.29.2 to 0.30.0 refused it with exit 3
-  ("its `logs` table has no `stream` column") on every command, `barca serve` included,
-  because the check that runs before the in-place migration did not know the `logs.stream` and
-  `logs.ts` columns that migration adds. Opening it now adds them in place and keeps every row;
-  lines recorded before read as stdout with no time. No `barca state reset` is needed. A test
-  now opens a database written by a release of every minor from 0.20 with the current build.
-
 - `barca serve` no longer grows without bound under a schedule over many partition keys. At
   200k keys each tick wrote about 82 MB of run outcome to the metadata DB and kept about 400 MB
   more memory; with one key changing per tick it records a 2 KB outcome (the DB grows about
@@ -40,6 +31,17 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   and `barca history RUN_ID` list at most 1000 steps (`?limit=N` / `--limit N`, `?all=true` /
   `--all`) with a new `steps_page: {total, truncated}`. Runs recorded before keep their
   outcomes and read as before (#623).
+
+## 0.30.1 (2026-10-23)
+
+### Bug Fixes
+
+- A metadata DB written before 0.29.2 opens again (#629): 0.29.2 to 0.30.0 refused it with exit 3
+  ("its `logs` table has no `stream` column") on every command, `barca serve` included,
+  because the check that runs before the in-place migration did not know the `logs.stream` and
+  `logs.ts` columns that migration adds. Opening it now adds them in place and keeps every row;
+  lines recorded before read as stdout with no time. No `barca state reset` is needed. A test
+  now opens a database written by a release of every minor from 0.20 with the current build.
 
 ## 0.30.0 (2026-10-23)
 
