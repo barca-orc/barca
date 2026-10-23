@@ -7,7 +7,7 @@ A `@sensor` is a function with no inputs that looks at something outside the gra
 bucket, a table) and returns `(update_detected, value)`. A sensor runs on every `barca get` or
 `barca run` that includes it. Its `value` is part of the run hash of every asset that reads it.
 
-Everything on this page was run with barca 0.18.0. The terminal manual covers the same ground in
+Everything on this page was run with barca 0.30.2. The terminal manual covers the same ground in
 `barca docs cache` ("External data that changes in place") and `barca docs assets` ("Sensors").
 
 ## Outside data that changes in place
@@ -57,11 +57,22 @@ barca get total pipeline.py --refresh orders --agent -o value --json
 ```
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:orders completed 0.0s (1/2)
 [barca] step:pipeline.py:total completed 0.0s (2/2)
 [barca] 2/2 steps | done in 0.0s
-{"elapsed_seconds":0.100022459,"final_output":{"amount":60,"rows":3}, ...
+[barca] warning: pipeline.py:orders produced different bytes for the same code and inputs; the function is not deterministic
+[barca] warning: pipeline.py:total produced different bytes for the same code and inputs; the function is not deterministic
+{"elapsed_seconds":0.044999188,"final_output":{"amount":60,"rows":3}, ...
 ```
+
+`[barca] importing` is printed when a worker loads the file to run a step; it names the file's
+absolute path, shortened to `pipeline.py` on this page. A run served entirely from cache imports
+nothing.
+
+The warnings are barca noticing the problem this page is about: the same code and inputs gave a
+different result, because the data changed underneath them. `barca status` keeps a note of it
+(see below).
 
 ## Converting the asset to a sensor plus an asset
 
@@ -104,11 +115,12 @@ barca get total pipeline.py --agent -o value --json
 ```
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:orders_version completed 0.0s (1/3)
 [barca] step:pipeline.py:orders completed 0.0s (2/3)
 [barca] step:pipeline.py:total completed 0.0s (3/3)
-[barca] 3/3 steps | done in 0.0s
-{"elapsed_seconds":0.083302625,"final_output":{"amount":60,"rows":3}, ...
+[barca] 3/3 steps | done in 0.1s
+{"elapsed_seconds":0.051672066,"final_output":{"amount":60,"rows":3}, ...
 ```
 
 `orders` and `total` recompute once, although `orders.csv` has not changed since the last run.
@@ -122,7 +134,8 @@ barca get total pipeline.py --agent -o value --json
 ```
 
 ```
-[barca] step:pipeline.py:orders_version completed 0.1s (1/3)
+[barca] importing pipeline.py
+[barca] step:pipeline.py:orders_version completed 0.0s (1/3)
 [barca] step:pipeline.py:orders cached
 [barca] step:pipeline.py:total cached
 [barca] 1/3 steps | done in 0.1s
@@ -139,11 +152,12 @@ barca get total pipeline.py --agent -o value --json
 ```
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:orders_version completed 0.0s (1/3)
 [barca] step:pipeline.py:orders completed 0.0s (2/3)
 [barca] step:pipeline.py:total completed 0.0s (3/3)
 [barca] 3/3 steps | done in 0.0s
-{"elapsed_seconds":0.080977666,"final_output":{"amount":100,"rows":4}, ...
+{"elapsed_seconds":0.050542748,"final_output":{"amount":100,"rows":4}, ...
 ```
 
 In the JSON output the re-run steps carry `"reason": "not_materialized"` with the detail `no
@@ -161,11 +175,12 @@ barca get total pipeline.py --agent -o value --json
 ```
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:orders_version completed 0.0s (1/3)
 [barca] step:pipeline.py:orders cached
 [barca] step:pipeline.py:total cached
-[barca] 1/3 steps | done in 0.0s
-{"elapsed_seconds":0.157731625,"final_output":{"amount":60,"rows":3}, ...
+[barca] 1/3 steps | done in 0.1s
+{"elapsed_seconds":0.051768323,"final_output":{"amount":60,"rows":3}, ...
 ```
 
 This is correct when the value identifies the data's content or version (a content hash, an
@@ -197,6 +212,7 @@ def consumer(c: dict) -> dict:
 Two runs in a row, with the etag unchanged, each print:
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:checked completed 0.0s (1/2)
 [barca] step:pipeline.py:consumer completed 0.0s (2/2)
 [barca] 2/2 steps | done in 0.0s
@@ -210,7 +226,8 @@ for caching: the sensor returns `False` and its consumer re-runs anyway.
 Neither executes anything, so neither runs the sensor. They predict from the sensor's last
 recorded value.
 
-After `orders.csv` changes, and before any run, both still report the consumers as cached:
+After `orders.csv` changes to content it has not had before (here a fifth row appended to the
+three-row file), and before any run, both still report the consumers as cached:
 
 ```bash
 barca get total pipeline.py --dry-run
@@ -240,15 +257,22 @@ barca status pipeline.py
 
 ```
 NAME            KIND    STATE        WHY                                                                                                                 LAST RUN                               SHAPE            DEPS
-orders_version  sensor  always-runs  sensor                                                                                                              success 2026-10-21 21:07:50 UTC 0.00s  str              -
-orders          asset   stale        changed: sensor pipeline.py:orders_version; assumes sensor 'orders_version' returns the same value as its last run  success 2026-10-21 21:07:49 UTC 0.00s  3 rows x 2 cols  orders_version
-total           asset   stale        upstream_stale                                                                                                      success 2026-10-21 21:07:49 UTC 0.00s  dict (2 keys)    orders
+orders_version  sensor  always-runs  sensor                                                                                                              success 2026-10-23 17:01:40 UTC 0.00s  str              -
+orders          asset   stale        changed: sensor pipeline.py:orders_version; assumes sensor 'orders_version' returns the same value as its last run  success 2026-10-23 17:01:40 UTC 0.00s  4 rows x 2 cols  orders_version
+total           asset   stale        upstream_stale                                                                                                      success 2026-10-23 17:01:40 UTC 0.00s  dict (2 keys)    orders
+orders: different bytes for the same code and inputs at 2026-10-23 17:01:39 UTC (pipeline.py:orders)
+total: different bytes for the same code and inputs at 2026-10-23 17:01:39 UTC (pipeline.py:total)
 
 0 cached, 2 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
 
+LAST RUN and SHAPE describe the most recent materialization, the four-row one from "Changed
+observation" (going back to three rows was served from cache and materialized nothing). The two
+lines under the table are the notes left by the `--refresh` at the top of the page.
+
 A sensor that has never run has no recorded value. Its consumers, and everything downstream of
-them, are `unknown`. This is what both commands show straight after the conversion above:
+them, are `unknown`. This is what `--dry-run` shows straight after the conversion above
+(`barca status` reports both assets as `unknown` with the reason `sensor_output_unknown`):
 
 ```
 STATUS    WHY                                                                     STEP
@@ -278,8 +302,9 @@ aac441b2f011
 ```
 
 `barca sql` shows the result that matches the sensor's current value. `barca status` reports
-both assets as `cached` at this point, but its LAST RUN and SHAPE columns describe the most
-recent materialization, which here is the four-row one (`4 rows x 2 cols` for `orders`).
+both assets as `cached` at this point, but its LAST RUN and SHAPE columns still describe the most
+recent materialization, which here is the four-row one (`4 rows x 2 cols` for `orders`), as in
+the table above.
 
 ## A scheduled sensor under `barca serve`
 

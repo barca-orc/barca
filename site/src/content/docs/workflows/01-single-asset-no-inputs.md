@@ -1,10 +1,10 @@
 ---
 title: "Workflow: Single Asset, No Inputs"
-description: One asset with no inputs, run with barca 0.25.0. What is written to disk, when it is served from cache, and how to look at the result.
+description: One asset with no inputs, run with barca 0.30.2. What is written to disk, when it is served from cache, and how to look at the result.
 ---
 
 One asset with no inputs: what `barca get` does with it, what ends up on disk, and when the
-function runs again. Output on this page is from barca 0.25.0.
+function runs again. Output on this page is from barca 0.30.2.
 
 This page used to be a design specification (a `.barcafiles/` directory with `code.txt` and
 `metadata.json`, an indexing step that imports modules, a hash that covers `uv.lock` and the

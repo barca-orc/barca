@@ -91,6 +91,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   traceback, in `barca list`, `barca status`, `get`, `GET /health` and `barca doctor`; up to
   0.30 the node silently got no partition keys.
 
+### Documentation
+
+- The workflow pages 01, 02, 03 and 06 were re-run on 0.30.2 and restamped (#606): their
+  `--agent` samples show the `[barca] importing` line, page 06's `status` table agrees with its
+  text, and page 03 now says a removed partition key leaves the `barca sql` view and that a
+  failed key's fix that changes the code runs every key again.
+
 ## 0.30.2 (2026-10-23)
 
 ### Breaking

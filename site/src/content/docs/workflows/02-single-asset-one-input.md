@@ -1,10 +1,10 @@
 ---
 title: "Workflow: Single Asset With One Upstream Input"
-description: One asset that reads another, run with barca 0.18.0. What runs after each kind of change, and what --refresh and --no-cascade do.
+description: One asset that reads another, run with barca 0.30.2. What runs after each kind of change, and what --refresh and --no-cascade do.
 ---
 
 Two assets, one reading the other: how the input is passed, and which steps run after each
-kind of change. Output on this page is from barca 0.18.0.
+kind of change. Output on this page is from barca 0.30.2.
 
 This page used to be a design specification (a proposed decorator signature, an indexing
 step, a `.barcafiles/` layout). What follows is what the binary does. The shorter version of
@@ -73,7 +73,23 @@ also from cache.
 ## What runs after a change
 
 Each row was run in order, starting from the state above. `--agent` prints one line per step
-on stderr, which is where the "cached" and "completed" words come from.
+on stderr, which is where the "cached" and "completed" words come from. The stderr of the row
+that edits `a`:
+
+```bash
+barca get b pipeline.py --agent
+```
+
+```
+[barca] importing pipeline.py
+[barca] step:pipeline.py:a completed 0.0s (1/2)
+[barca] step:pipeline.py:b completed 0.0s (2/2)
+[barca] 2/2 steps | done in 0.1s
+```
+
+The `importing` line is printed when a worker loads the file to run a step. It names the
+file's absolute path, shortened to `pipeline.py` on this page. A run served entirely from cache
+imports nothing and prints only the `cached` lines.
 
 | Change | `a` | `b` |
 |---|---|---|
