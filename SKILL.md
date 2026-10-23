@@ -127,6 +127,7 @@ barca status --problems                  # nodes that need attention: not cached
 barca history --status failed            # failed runs, newest first, each with its first failed step and error
 barca history RUN_ID                     # one run: its steps, errors and tracebacks
 barca logs RUN_ID --step NODE --stream stderr   # that step's traceback and logging
+barca sql "select run_id, target, failure.error from barca.runs where status = 'failed'"   # history as SQL
 ```
 
 - A failed node's error is `last_materialization.error` in `status --json`; WHY shows its first

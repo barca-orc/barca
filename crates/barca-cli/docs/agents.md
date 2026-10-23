@@ -490,12 +490,20 @@ $ barca doctor
 [ok] server_posts: every run this machine computed against the server is recorded there
 ```
 
-Coming in 0.29.3 (not in this build yet): `barca sql` over the run history (`barca.runs`),
-against a server too. Until then, `barca history --json` with its filters answers the same
-questions:
+`barca sql` answers the questions the commands above do not, over barca's own tables
+(`barca.runs`, `barca.materializations`, `barca.nodes`; `barca docs sql`), from the server's
+records with a server configured:
+
+```bash
+barca sql "select run_id, target, status, failure.node as node, failure.error as error from barca.runs where status = 'failed' order by started_at desc"
+```
 
 ```text
-barca sql "select run_id, target, status, started_at from barca.runs where status = 'failed'"
+[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
+run_id        target                    status  node                      error
+7f39c226c7c1  pipeline.py:nightly_sync  failed  pipeline.py:nightly_sync  RuntimeError: upstream API returned 503
+7f3978fbc56d  pipeline.py:nightly_sync  failed  pipeline.py:nightly_sync  RuntimeError: upstream API returned 503
+7facd30b04c3  ratio                     failed  pipeline.py:ratio         ZeroDivisionError: division by zero
 ```
 
 ## Bounded output: --limit, --all, --fields

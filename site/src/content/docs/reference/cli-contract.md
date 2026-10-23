@@ -58,7 +58,8 @@ outside the `GENERATED` blocks is written by hand.
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
-| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [`barca docs server-mode`](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [`barca docs server-mode`](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `barca sql` with a server (`GET /sql/views`, `GET /materializations`) and the `barca` schema (`barca.runs`, `barca.materializations`, `barca.nodes`) | new in 0.29.3: the columns of barca's tables, the limit of rows read from a server and the wording of the notes may change after field use; the result JSON is `sql`'s |
 | `logs -f/--follow` | new in 0.29.2: the end-of-run line on stderr (`barca: run <run_id> ended: <status>`) and the choice of the run to follow without a run id may change after field use; the exit codes (0 succeeded, 130 cancelled, 1 otherwise) and the JSON Lines on stdout are stable |
 | `status --problems`, `nodes[].schedule` and `filter` in `status --json` (and `GET /nodes?state=&problems=`) | new in 0.29.3: what counts as needing attention may grow (now every state but `cached` and `always_runs`, a task or sensor whose last run failed, and a paused or failing schedule); `schedule` may gain keys. `--state` and the summary counting every node are stable |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
@@ -165,8 +166,8 @@ default, and any aliases.
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca run
 
@@ -184,8 +185,8 @@ default, and any aliases.
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca plan
 
@@ -217,8 +218,8 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | stable | Environment whose history to read |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca history
 
@@ -236,8 +237,8 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca gc
 
@@ -259,8 +260,8 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca serve
 
@@ -287,8 +288,8 @@ default, and any aliases.
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca status
 
@@ -304,8 +305,8 @@ default, and any aliases.
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, unknown, always_runs. The summary still counts every node |
 | `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history, stats and logs are answered by a configured server |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca sql
 
@@ -318,6 +319,8 @@ default, and any aliases.
 | `-l, --limit` | `LIMIT` | default `100` | experimental (with the command) | Maximum number of rows to return |
 | `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
+| `--server` | `URL` | - | experimental: new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca state
 
@@ -1524,6 +1527,22 @@ With remote storage, the artifacts of the views a query names are downloaded int
 `.barca/sql-cache/`; a download is reported on stderr (`barca: fetched 1 remote artifact ...`) and
 the JSON is the same. A remote artifact that cannot be downloaded exits 3 (`infra`); a missing
 storage driver exits 2 (`usage`).
+
+barca's own records are tables in the `barca` schema, loaded when a query names them:
+`barca.runs` (the keys of `barca history --json` runs), `barca.materializations` (one row per step
+result: `node_id`, `partition`, `run_id`, `run_hash`, `status`, `created_at`, `elapsed_seconds`,
+`cpu_seconds`, `max_rss_bytes`, `attempts`, `format`, `size_bytes`, `artifact`, `content_hash`,
+`error_type`, `error_message`) and `barca.nodes` (`barca status --json` nodes, flattened). `show
+tables` lists the views and those tables (`barca.runs`). Their rows are the query's result like any
+other; the JSON is the same.
+
+With a server configured (or `--server <url>`), `[barca] server <url> (<source>)` is printed on
+stderr, the views and barca's tables come from the server (`GET /sql/views`, `GET /history`, `GET
+/materializations`, `GET /nodes`) and the query runs on this machine; the result JSON is the same.
+An unreachable server exits 3 (`infra`, remediation `--local`); a project whose `[remote]` is not
+the server's store exits 2. A view with no result on the server exits 2 and, when this machine
+holds an unsynced result for it, says so and names `--local`. At most 10000 rows of each of
+barca's tables are read from a server, newest first, with a note on stderr when there are more.
 
 Partitioned views include only current identities from full cache-aware prediction,
 including cached keys across worker chunks. Removed-key history is preserved. A
