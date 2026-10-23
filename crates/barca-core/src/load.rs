@@ -265,6 +265,8 @@ fn load_files(
             all_nodes.push(node);
         }
     }
+    // Every step's cone has been hashed: these are all the project files it looked at.
+    let files_read = cones.paths_probed();
 
     if !partial && imported.is_empty() {
         let loaded_nodes: Vec<(String, Vec<crate::model::ExtractedNode>)> = sources
@@ -323,6 +325,7 @@ fn load_files(
         let mut dag = Dag::build(&all_nodes)?;
         dag.groups = groups;
         dag.broken_imports = broken_imports;
+        dag.files_read = files_read;
         return Ok((dag, errors));
     }
     let failed_files = errors.iter().map(|e| e.file.clone()).collect::<Vec<_>>();
@@ -337,6 +340,7 @@ fn load_files(
     resolve_dynamic_partitions(&mut healthy, python);
     let (mut dag, additional) = Dag::isolate(&healthy, &failed_files);
     dag.broken_imports = broken_imports;
+    dag.files_read = files_read;
     failures.extend(additional);
     for (id, error) in failures {
         let file = all_nodes

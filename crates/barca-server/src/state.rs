@@ -424,6 +424,8 @@ pub struct AppState {
     pub metadata_error: Arc<RwLock<Option<String>>>,
     /// Set when the scheduler stopped on an error; `GET /health` `scheduler_enabled`.
     pub scheduler_stopped: Arc<AtomicBool>,
+    /// What the read routes keep between requests ([`crate::read_cache`]).
+    pub reads: Arc<crate::read_cache::ReadCache>,
 }
 
 impl AppState {
@@ -447,6 +449,7 @@ impl AppState {
             started_at: chrono::Utc::now().timestamp(),
             metadata_error: Arc::new(RwLock::new(None)),
             scheduler_stopped: Arc::new(AtomicBool::new(false)),
+            reads: Arc::default(),
         }
     }
 }

@@ -60,7 +60,8 @@ pub(crate) fn upstream_tokens(
         .iter()
         .filter(|(k, _)| k.starts_with(&prefix))
         .collect();
-    partition_hashes.sort_by_key(|(k, _)| (*k).clone());
+    // Keys are unique: no clone per comparison (a fan-in over 200k keys made millions).
+    partition_hashes.sort_unstable_by(|a, b| a.0.cmp(b.0));
     partition_hashes
         .into_iter()
         .map(|(k, h)| token(k, h))
@@ -510,6 +511,10 @@ pub(crate) fn phase_keys(dag: &Dag, phase: &Phase, state: &DecideState) -> Vec<(
     keys
 }
 
+/// How many keys of one step make [`decide_step`] ask for the node's key rows in one pass
+/// ([`db::CacheReader::key_rows`]) instead of a lookup per key.
+const KEYS_READ_TOGETHER: usize = 256;
+
 /// Decide what happens to `step`. Steps must be visited in dependency order
 /// ([`in_dependency_order`]): in-phase upstream run
 /// hashes are already in `state` when a consumer is hashed, so check-time and persist-time hashes
@@ -609,14 +614,34 @@ pub(crate) async fn decide_step(
     if !step.partition_keys.is_empty() {
         let mut cached = Vec::new();
         let mut missing = Vec::new();
-        for pk in &step.partition_keys {
+        // Many keys: their rows in one pass, when that is cheaper than a lookup per key.
+        let rows = match cache {
+            Some(cache) if step.partition_keys.len() >= KEYS_READ_TOGETHER => {
+                let keys = state
+                    .expected_steps
+                    .get(base_id)
+                    .map_or(step.partition_keys.len(), |k| k.len());
+                cache.key_rows(base_id, keys).await
+            }
+            _ => None,
+        };
+        for (i, pk) in step.partition_keys.iter().enumerate() {
+            // Answered from memory, the keys of a big node never wait: give the other tasks
+            // of this thread a turn now and then (a helper's connection is accepted by one).
+            if i % 1024 == 1023 {
+                tokio::task::yield_now().await;
+            }
             let pdisplay = pk.display_id(&step.step_id.base);
             let run_h = step
                 .run_hashes
                 .get(&pdisplay)
                 .cloned()
                 .expect("partitioned step has a precomputed run hash per key");
-            match lookup_in(cache, &pdisplay, &run_h).await {
+            let hit = match &rows {
+                Some(rows) => rows.get(&pdisplay, &run_h),
+                None => lookup_in(cache, &pdisplay, &run_h).await,
+            };
+            match hit {
                 Some(oref) => {
                     record_output(dag, state, &pdisplay, oref.content_hash.as_ref());
                     cached.push((pdisplay, oref))
@@ -715,21 +740,24 @@ pub(crate) async fn lookup_cached(
     if let Some(ledger) = cache.ledger() {
         return ledger.answer(node_id, run_hash).flatten();
     }
-    const COLUMNS: &str = "artifact_path, artifact_format, artifact_size_bytes";
-    let query = |columns: String| {
-        cache.conn().query(
-            format!(
-                "SELECT {columns} FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
-                 AND status = 'success' ORDER BY id DESC"
-            ),
-            [node_id.to_string(), run_hash.to_string()],
-        )
-    };
+    // Prepared once per connection: a dry run of a 200k-key node asks 200k times, and compiling
+    // the statement each time cost more than the lookup.
+    const WITH_OUTPUT_HASH: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes, \
+         output_hash FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
+         AND status = 'success' ORDER BY id DESC";
     // A database from before barca recorded output hashes has no such column.
-    let mut rows = match query(format!("{COLUMNS}, output_hash")).await {
-        Ok(rows) => rows,
-        Err(_) => query(COLUMNS.to_string()).await.unwrap(),
+    const WITHOUT: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes \
+         FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
+         AND status = 'success' ORDER BY id DESC";
+    let conn = cache.conn();
+    let mut statement = match conn.prepare_cached(WITH_OUTPUT_HASH).await {
+        Ok(statement) => statement,
+        Err(_) => conn.prepare_cached(WITHOUT).await.unwrap(),
     };
+    let mut rows = statement
+        .query([node_id.to_string(), run_hash.to_string()])
+        .await
+        .unwrap();
     while let Some(row) = rows.next().await.unwrap() {
         let Some(path) = row.get::<String>(0).ok() else {
             continue;

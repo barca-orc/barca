@@ -1,9 +1,138 @@
 # Benchmark Results
 
-Latest pass: 2026-10-21, barca 0.28.0 against Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2
-on one Linux machine (first section below, #65). The sections after it are older passes on
+Latest pass: 2026-10-22, the read routes of `barca serve` and the inspection commands at 300
+assets (first section below). Latest comparison pass: 2026-10-21, barca 0.28.0 against Dagster
+1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (second section, #65). The sections after it are older passes on
 other hardware and are kept for the record. Absolute times from different machines are not
 comparable; within one pass, the ratios between frameworks are.
+
+## Read routes and inspection at 300 assets (2026-10-22)
+
+A user with about 300 assets reported that the web UI's state view took 20 s to load. The view
+is `GET /state` (the Assets page polls it every 10 s, every 2 s while something runs). This pass
+measures every read route of `barca serve` and the inspection commands on a fixture of that size,
+before and after the fixes of 0.29.3.
+
+### Setup
+
+- **Machine:** AMD Ryzen AI MAX+ 395 (16 cores, 32 threads), 62 GiB RAM, Fedora 44, kernel
+  7.2.8. Other agents were building and testing during the pass (1-minute load average 7 to 22),
+  so read differences under about 20% as noise.
+- **Builds:** before is `main` at `df4f7171` (0.29.2), after is the 0.29.3 branch; both release
+  builds (`maturin develop --release`).
+- **Fixture:** `benchmarks/read_routes/generate.py` (defaults): 300 assets and 5 tasks in six
+  files, eight layers deep with a fan-in of one to four, 3 sensors and 13 `Schedule(...)` nodes,
+  a json/pickle/parquet mix, partitioned assets with 5 and 24 keys and one, `retailer_sales`,
+  with 200,000 keys from an expression (the user has about 200k retailers), with a `collect`
+  fan-in below it. `seed.py` ran it through barca: two full `get`s (the second after an edit to
+  `retailer_sales`, so its keys have two generations of rows), then 2,000 single-asset runs. The
+  metadata DB holds 2,036 runs and 410k materialization rows (401 MB).
+- **Runner:** `benchmarks/read_routes/bench.py`, which starts `barca serve --no-schedule`, times
+  each route's first request after start (cold) and the median of 5 more (warm), a request with
+  the `If-None-Match` of the last answer (304), and each CLI command locally and with
+  `--server` against that server (first run and median). A route that took over 5 s was timed
+  warm once.
+
+### Routes the UI and the CLI read
+
+| Route | Before, cold | Before, warm | After, cold | After, warm | After, 304 |
+|---|---:|---:|---:|---:|---:|
+| `GET /state` (the state view) | 75.7 s | 76.5 s | 2.2 s ¹ | 2 ms | 2 ms |
+| `GET /state` 3 s after a run finished | | | | 4 ms ² | |
+| `GET /nodes` (`barca status --server`) | 72.1 s | 77.5 s | 1.8 s | 1 ms | 1 ms |
+| `GET /history` (all 2,036 runs) | 1.4 s | 1.6 s | 42 ms | 42 ms | 41 ms |
+| `GET /history?limit=20` | 1.3 s | 354 ms | 3 ms | 2 ms | 2 ms |
+| `GET /runs?limit=100` (Runs page, every 2 s) | 170 ms | 110 ms | 6 ms | 4 ms | 11 ms |
+| `GET /runs/{id}` | 111 ms | 105 ms | 4 ms | 3 ms | 3 ms |
+| `GET /runs/{id}/logs` | 95 ms | 96 ms | 2 ms | 2 ms | 2 ms |
+| `GET /logs/{id}` | 99 ms | 90 ms | 1 ms | 1 ms | 1 ms |
+| `GET /assets/{name}` (node panel, every 10 s) | 119 ms | 118 ms | 2 ms | 2 ms | 2 ms |
+| `GET /assets/{name}/schema` | 1.1 s | 881 ms | 155 ms | 150 ms | 156 ms |
+| `GET /stats/{name}` | 312 ms | 202 ms | 3 ms | 1 ms | 1 ms |
+| `GET /stats/retailer_sales` | 140 ms | 128 ms | 1 ms | 1 ms | 1 ms |
+| `GET /assets` | 1 ms | 1 ms | 1 ms | 1 ms | 1 ms |
+| `GET /list` | 1 ms | 1 ms | 2 ms | 1 ms | 1 ms |
+| `GET /plan` | 65 ms | 62 ms | 151 ms | 79 ms | 67 ms |
+| `GET /schedule` | 99 ms | 0 ms | 5 ms | 0 ms | 0 ms |
+| `GET /groups`, `/project`, `/health` | 0 to 1 ms | 0 ms | 0 to 1 ms | 0 ms | 0 ms |
+
+¹ The first request in the first second after start, while the server was loading. Five seconds
+after start the first `/state` took 4 ms: the server computes it once its database is still.
+The first request right after a run finished took 2.1 s; the UI's next poll found it computed.
+
+² While a client polls `/state`, the server computes it again in the background once a change
+has settled and none of its runs is going.
+
+| Command | Before, local | Before, `--server` | After, local | After, `--server` (first, then median) |
+|---|---:|---:|---:|---:|
+| `barca status --json` | 76.1 s | timed out after 30 s, exit 3 | 2.0 s | 1.9 s, then 13 ms |
+| `barca status` (table) | 89.2 s | timed out after 30 s, exit 3 | 2.1 s | 11 ms |
+| `barca history --json -l 20` | 150 ms (30 ms median) | timed out ³ | 24 ms (7 ms) | 7 ms |
+| `barca list --json` | 334 ms | 7 ms | 280 ms | 7 ms |
+| `barca stats retail_056 --json` | 204 ms | 11.6 s ³ | 143 ms | 6 ms |
+| `barca stats retailer_sales --json` | 156 ms | 99 ms | 146 ms | 7 ms |
+| `barca get` (every asset cached) | 14.1 s | | 3.6 s | |
+
+³ The server was still computing the `status` requests the client had abandoned.
+
+### With a `file://` artifact store
+
+A second fixture, the same generator with 20,000 keys (`--keys 20000`) and seeded with a
+`file://` store configured from the start (300 single-asset runs; 40k objects in the store),
+so `barca status` also compares each cached result with the store's copy:
+
+| | Before | After, cold | After, warm |
+|---|---:|---:|---:|
+| `GET /state` | 10.3 s | 395 ms | 2 ms |
+| `GET /nodes` | 10.0 s | 363 ms | 1 ms |
+| `GET /state` right after a run | 10.2 s | 465 ms | 3 ms 3 s later |
+| `barca status --json` | 10.4 s | 493 ms | |
+| `barca status --json --server` | 10.9 s | 430 ms | 13 ms |
+| `barca get` (every asset cached) | 1.8 s | 0.5 s | |
+
+### What was slow
+
+- **Node history** (`barca status`, `/state`, `/nodes`): four queries per node filtered node
+  ids with `substr(node_id, ...)`, which cannot use the node id index: four scans of the
+  410k-row table per node, 1,200 scans in all. They are index range scans now (`node_id >=
+  'n[' AND node_id < 'n\'`), and a node's last change in bytes comes from a partial index of the
+  rows whose bytes changed.
+- **Sensor outputs** (every dry run and every `get`): `node_id LIKE 'n[%'` scanned the table
+  once per sensor or `Manual` node. Same fix.
+- **The ETA of a partitioned step** (`barca get`): a `LIKE` scan per step, and a node split into
+  one step per worker was asked once per step (66 scans). Asked once per node, by index.
+- **`barca history`**: each run's attempt count summed a column over every row of the run (200k
+  for a run of the big node). It is counted from indexes now (`idx_mat_attempts` holds only the
+  rows whose attempts are not 1).
+- **Durations** (`/state`): every row of the table was read on every poll to compute each node's
+  median. Now each node's last 20 successes are read below its latest row.
+- **The 200k cache decisions**: each key's lookup compiled its SQL statement again (7 µs a key).
+  A node with many keys now has its key rows read in one pass when the table holds at most
+  eight rows per key, else one prepared lookup per key; a fan-in sorted 200k ids with a copy per
+  comparison; the dry run copied every output path once per phase.
+- **The server, per request**: parsed every source file and evaluated the 200k-key expression in
+  Python, copied the 401 MB database, and decided every node again. It now keeps the graph, one
+  copy of the database and the status results until a source or the database changes, answers
+  unchanged polls with `304` (`ETag`), computes status on the blocking pool (a `/health` waited
+  2.5 s behind one), and computes `/state` ahead of the UI's polls.
+
+### What still misses the targets
+
+- `barca status` takes 2 s on this fixture against a 1 s target, and the server's first
+  `/state` or `/nodes` after a change about the same. The time is the cache decision for each of
+  the 200k keys (the run hash of each, its lookup, its output record), the work `barca get` does
+  to decide what runs. Summarizing the output would not help: `status` already reports a
+  partitioned node as counts and at most 20 missing keys; computing the counts is the cost.
+- `GET /assets/{name}/schema` reads artifact shapes in a Python process (150 ms), on demand.
+
+Commands (from the repository root; the fixture is about 1.5 GB, under
+`benchmarks/read_routes/.fixture`):
+
+```bash
+benchmarks/read_routes/bench.sh                      # generate, seed (about 45 min), measure
+benchmarks/read_routes/bench.sh <dir>                # measure a seeded project
+python benchmarks/read_routes/bench.py <dir> --barca <path> --only /state,/nodes,status
+```
 
 ## Re-run on current versions (2026-10-21)
 

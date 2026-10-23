@@ -546,6 +546,13 @@ impl ProjectCones {
     fn files_read(&self) -> Vec<PathBuf> {
         self.files.read.borrow().clone()
     }
+
+    /// Every path looked up while loading, whether a file was there or not, sorted.
+    pub(crate) fn paths_probed(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self.files.sources.borrow().keys().cloned().collect();
+        paths.sort();
+        paths
+    }
 }
 
 fn qualified_path(file: &Path, root: &Path) -> String {

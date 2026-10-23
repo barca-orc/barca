@@ -53,11 +53,13 @@ pub(crate) struct SnapshotDb {
     pub(crate) path: String,
 }
 
-pub(crate) async fn snapshot_db(state: &AppState) -> Result<SnapshotDb, ApiError> {
-    Ok(state.note_metadata(snapshot_of(&state.config.resolved.db_path).await)?)
+/// The shared snapshot of the metadata DB ([`AppState::read_snapshot`]): a copy taken when
+/// the database last changed, shared by every request until it changes again.
+pub(crate) async fn snapshot_db(state: &AppState) -> Result<std::sync::Arc<SnapshotDb>, ApiError> {
+    Ok(state.note_metadata(state.read_snapshot().await)?)
 }
 
-async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError> {
+pub(crate) async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError> {
     db::directory_check(db_path)?;
     let (snapshot, scratch, path) = match db::DbSnapshot::take(db_path).await? {
         Some(s) => {
@@ -82,13 +84,78 @@ async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError> {
 /// `GET /state` — every node's cache state (would `barca get` reuse it?), latest
 /// attempt, typical durations, and next scheduled run. Read-only by
 /// construction: the cache check runs against a private snapshot of the DB.
+///
+/// The cache states and durations are kept until the sources or the database change
+/// ([`crate::read_cache`]); what runs now and the next fire times are read for every request.
 pub async fn state(State(state): State<AppState>) -> Result<Json<Vec<NodeState>>, ApiError> {
+    state.reads.polled();
+    Ok(Json(state_rows(&state).await?))
+}
+
+/// The body of `GET /state`.
+pub(crate) async fn state_rows(state: &AppState) -> Result<Vec<NodeState>, ApiError> {
     let cfg = &state.config;
     let zone = crate::scheduler::zone_of(cfg);
-    let dag = state.current_dag().await?;
-    Ok(Json(state.note_metadata(
-        node_states_in(&cfg.resolved, &dag, &cfg.python, &zone, Some(&state)).await,
-    )?))
+    let dag = state.inspect_dag().await?;
+    let db_state = state.db_state();
+    let snapshot = snapshot_db(state).await?;
+    let status = whole_status(state, &dag, &db_state, &snapshot).await?;
+    let durations = state
+        .cached_durations(&dag, &db_state, || async {
+            let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
+            Ok(durations_from(
+                db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
+            ))
+        })
+        .await?;
+    let runs = crate::running::in_flight(state, Some(&snapshot.path)).await;
+    let running = crate::running::by_node(&runs, &status.nodes, &dag);
+    Ok(rows(&status.nodes, &durations, &dag, &zone, running))
+}
+
+/// `barca status` of every node without artifact shapes, against `snapshot` of the database in
+/// state `db_state`: what `GET /state` and the `running` fields are built from, kept like every
+/// status result.
+pub(crate) async fn whole_status(
+    state: &AppState,
+    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    db_state: &crate::read_cache::Stamp,
+    snapshot: &std::sync::Arc<SnapshotDb>,
+) -> Result<std::sync::Arc<barca_core::status::StatusResult>, ApiError> {
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = snapshot.path.clone();
+    let python = state.config.python.clone();
+    let (graph, snapshot) = (dag.clone(), snapshot.clone());
+    Ok(state
+        .cached_status(dag, db_state, (Vec::new(), 0, false), move || async move {
+            let _snapshot = snapshot;
+            barca_core::status::status_from_dag(&cfg, &[], &graph, &python, 0, false).await
+        })
+        .await?)
+}
+
+/// The `GET /state` rows: each node's status with its durations, next fire time and run.
+fn rows(
+    nodes: &[barca_core::status::NodeStatus],
+    durations: &std::collections::HashMap<String, Durations>,
+    dag: &barca_core::dag::Dag,
+    zone: &crate::scheduler::Zone,
+    mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
+) -> Vec<NodeState> {
+    let next_run: std::collections::HashMap<String, i64> =
+        barca_core::schedule::describe_schedule_from_dag(Some(dag), zone)
+            .into_iter()
+            .filter_map(|s| s.next_fire.map(|t| (s.id, t)))
+            .collect();
+    nodes
+        .iter()
+        .map(|n| NodeState {
+            durations: durations.get(&n.id).cloned(),
+            next_run: next_run.get(&n.id).copied(),
+            running: running.remove(&n.id),
+            status: n.clone(),
+        })
+        .collect()
 }
 
 /// Every node's [`NodeState`], in topological order: its `barca status` entry
@@ -135,58 +202,35 @@ pub(crate) async fn node_states_in(
     };
 
     let status = barca_core::status::status_from_dag(&snap_cfg, &[], dag, python, 0, false).await;
-    let schedule = barca_core::schedule::describe_schedule_from_dag(Some(dag), zone);
-    let history = match &snapshot {
-        Some(s) => db::materialization_history(s.path()).await?,
-        None => Vec::new(),
+    let durations = match &snapshot {
+        Some(s) => {
+            let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
+            durations_from(db::recent_durations(s.path(), &ids, DURATION_WINDOW).await?)
+        }
+        None => Default::default(),
     };
-    let durations = durations_by_node(&history);
-    let next_run: std::collections::HashMap<String, i64> = schedule
-        .into_iter()
-        .filter_map(|s| s.next_fire.map(|t| (s.id, t)))
-        .collect();
-
     let nodes = status?.nodes;
-    let mut running = match server {
+    let running = match server {
         Some(state) => {
             let runs = crate::running::in_flight(state, snapshot.as_ref().map(|s| s.path())).await;
             crate::running::by_node(&runs, &nodes, dag)
         }
         None => Default::default(),
     };
-    Ok(nodes
-        .into_iter()
-        .map(|n| NodeState {
-            durations: durations.get(&n.id).cloned(),
-            next_run: next_run.get(&n.id).copied(),
-            running: running.remove(&n.id),
-            status: n,
-        })
-        .collect())
+    Ok(rows(&nodes, &durations, dag, zone, running))
 }
 
 /// Successful materializations considered for typical durations.
 const DURATION_WINDOW: usize = 20;
 
-/// Median and p95 over each node's last [`DURATION_WINDOW`] successful runs.
-/// Partition rows fold into their base node.
-fn durations_by_node(
-    rows: &[db::MaterializationRow],
+/// Median and p95 of each node's recent successful runs ([`db::recent_durations`], at most
+/// [`DURATION_WINDOW`] of them, partition keys folded into their node).
+fn durations_from(
+    recent: std::collections::HashMap<String, Vec<f64>>,
 ) -> std::collections::HashMap<String, Durations> {
-    let mut elapsed: std::collections::HashMap<String, Vec<f64>> = Default::default();
-    for r in rows {
-        if r.status != "success" {
-            continue;
-        }
-        if let Some(e) = r.elapsed_seconds {
-            let base = barca_core::StepId::parse(&r.node_id).base_id().to_string();
-            elapsed.entry(base).or_default().push(e);
-        }
-    }
-    elapsed
+    recent
         .into_iter()
-        .filter_map(|(id, all)| {
-            let mut recent = all[all.len().saturating_sub(DURATION_WINDOW)..].to_vec();
+        .filter_map(|(id, mut recent)| {
             if recent.is_empty() {
                 return None;
             }
@@ -247,7 +291,7 @@ pub async fn asset_schema(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Vec<barca_core::status::NodeStatus>>, ApiError> {
-    let dag = state.current_dag().await?;
+    let dag = state.inspect_dag().await?;
     let summaries = queries::list_assets_from_dag(&dag);
     let matches: Vec<_> = summaries
         .iter()
@@ -260,23 +304,17 @@ pub async fn asset_schema(
     };
     let id = summary.id.clone();
     let inputs = &summary.inputs;
+    let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let mut result = barca_core::status::status_from_dag(
-        &cfg,
-        std::slice::from_ref(&id),
-        &dag,
-        &state.config.python,
-        0,
-        false,
-    )
-    .await?;
-    result
+    let mut nodes = whole_status(&state, &dag, &db_state, &snapshot)
+        .await?
         .nodes
-        .retain(|n| n.id == id || inputs.contains(&n.id));
-    barca_core::status::read_schemas(&state.config.python, &cfg, &mut result.nodes).await;
-    Ok(Json(result.nodes))
+        .clone();
+    nodes.retain(|n| n.id == id || inputs.contains(&n.id));
+    barca_core::status::read_schemas(&state.config.python, &cfg, &mut nodes).await;
+    Ok(Json(nodes))
 }
 
 /// `GET /assets/{name}` — one node as `barca list --json` shows it, with its
@@ -307,11 +345,12 @@ pub async fn asset_detail(
         }
     };
 
+    let db_state = state.db_state();
     let snap = snapshot_db(&state).await?;
     let stats = db::get_asset_stats(&snap.path, &summary.id).await?;
 
     let next_fire = next_fires(&dag).remove(&summary.id);
-    let running = running_node(&state, &dag, &snap.path, &summary.id).await?;
+    let running = running_node(&state, &db_state, &snap, &summary.id).await?;
     Ok(Json(json!({
         "asset": barca_core::report::list_node_json(&summary, next_fire.as_ref()),
         "stats": barca_core::report::stats_json(&stats),
@@ -319,23 +358,21 @@ pub async fn asset_detail(
     })))
 }
 
-/// The run working on node `id` now ([`crate::running`]), read from the snapshot at
-/// `read_path`. The cache state it needs is computed only while some run is in flight.
+/// The run working on node `id` now ([`crate::running`]), read from `snapshot` of the database
+/// in state `db_state`. The cache state it needs is computed only while some run is in flight.
 async fn running_node(
     state: &AppState,
-    dag: &barca_core::dag::Dag,
-    read_path: &str,
+    db_state: &crate::read_cache::Stamp,
+    snapshot: &std::sync::Arc<SnapshotDb>,
     id: &str,
 ) -> Result<Option<crate::running::NodeRunning>, ApiError> {
-    let runs = crate::running::in_flight(state, Some(read_path)).await;
+    let runs = crate::running::in_flight(state, Some(&snapshot.path)).await;
     if runs.is_empty() {
         return Ok(None);
     }
-    let mut cfg = state.config.resolved.clone();
-    cfg.db_path = read_path.to_string();
-    let status =
-        barca_core::status::status_from_dag(&cfg, &[], dag, &state.config.python, 0, false).await?;
-    Ok(crate::running::by_node(&runs, &status.nodes, dag).remove(id))
+    let dag = state.inspect_dag().await?;
+    let status = whole_status(state, &dag, db_state, snapshot).await?;
+    Ok(crate::running::by_node(&runs, &status.nodes, &dag).remove(id))
 }
 
 /// `GET /schedule` — list scheduled jobs with next fire time and last run status.
@@ -514,16 +551,6 @@ pub async fn groups(
 mod duration_tests {
     use super::*;
 
-    fn row(node_id: &str, status: &str, e: f64) -> db::MaterializationRow {
-        db::MaterializationRow {
-            node_id: node_id.into(),
-            status: status.into(),
-            created_at: String::new(),
-            elapsed_seconds: Some(e),
-            error_message: None,
-        }
-    }
-
     use crate::state::RunStatus;
     use std::time::Duration;
 
@@ -597,23 +624,5 @@ mod duration_tests {
         assert_eq!(percentile(&v, 0.5), 3.0);
         assert_eq!(percentile(&v, 0.95), 100.0);
         assert_eq!(percentile(&[7.0], 0.95), 7.0);
-    }
-
-    #[test]
-    fn durations_use_recent_successes_and_fold_partitions() {
-        let mut rows: Vec<_> = (0..5).map(|_| row("p.py:a", "success", 1.0)).collect();
-        rows.extend((0..20).map(|_| row("p.py:a", "success", 10.0)));
-        rows.push(row("p.py:a", "failed", 999.0));
-        rows.push(row("p.py:f[k=x]", "success", 2.0));
-        rows.push(row("p.py:f[k=y]", "success", 4.0));
-        let d = durations_by_node(&rows);
-        let a = &d["p.py:a"];
-        assert_eq!(
-            (a.samples, a.median_seconds),
-            (20, 10.0),
-            "window + failures ignored"
-        );
-        assert_eq!(d["p.py:f"].samples, 2, "partitions fold into the base node");
-        assert!(!d.contains_key("p.py:missing"));
     }
 }

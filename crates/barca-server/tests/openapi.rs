@@ -171,6 +171,40 @@ async fn checked(router: &Router, method: &str, url: &str, path: &str, status: u
     }
 }
 
+/// A repeated `GET` of `url` with the `ETag` of the first answer is the documented `304`: no
+/// body, the same `ETag`.
+async fn not_modified(router: &Router, url: &str, path: &str) {
+    let first = request(router, "GET", url).await;
+    let tag = first
+        .headers()
+        .get("etag")
+        .unwrap_or_else(|| panic!("no ETag on GET {url}"))
+        .clone();
+    let again = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(url)
+                .header("if-none-match", tag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.status(), StatusCode::NOT_MODIFIED, "GET {url} again");
+    let spec = &contract()["paths"][path]["get"]["responses"]["304"];
+    assert!(!spec.is_null(), "undocumented GET {path} 304");
+    for (name, header) in spec["headers"].as_object().into_iter().flatten() {
+        let actual = again
+            .headers()
+            .get(name)
+            .unwrap_or_else(|| panic!("missing {name} on the 304 of {url}"));
+        validate(&header["schema"], &json!(actual.to_str().unwrap()));
+    }
+    assert_eq!(again.headers().get("etag"), Some(&tag));
+    assert!(to_bytes(again.into_body(), 1024).await.unwrap().is_empty());
+}
+
 #[test]
 fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let source = include_str!("../src/routes.rs");
@@ -393,6 +427,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/materializations?limit=5&offset=1", "/materializations"),
     ] {
         checked(&router, "GET", url, path, 200).await;
+        not_modified(&router, url, path).await;
         checked(&router, "HEAD", url, path, 200).await;
         checked(&router, "PUT", url, path, 405).await;
     }

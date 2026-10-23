@@ -563,6 +563,10 @@ async fn a_version_1_database_from_an_earlier_release_gains_the_columns() {
         let _g = crate::db::db_guard().await;
         let (_h, conn) = crate::db::open_conn(&path).await.unwrap();
         conn.execute("DROP INDEX idx_mat_path", ()).await.unwrap();
+        // The index on evicted rows came later still.
+        conn.execute("DROP INDEX idx_mat_evicted", ())
+            .await
+            .unwrap();
         conn.execute("ALTER TABLE materializations DROP COLUMN evicted_at", ())
             .await
             .unwrap();

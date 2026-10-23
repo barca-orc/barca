@@ -2262,3 +2262,98 @@ async fn a_writer_serve_whose_metadata_db_cannot_be_used_fails_before_binding() 
         "left as it was"
     );
 }
+
+/// `GET /state` once more, with the `ETag` of the last answer: `(status, etag, body)`.
+async fn state_again(
+    app: &axum::Router,
+    etag: Option<&str>,
+) -> (StatusCode, Option<String>, serde_json::Value) {
+    let mut request = Request::builder().uri("/state");
+    if let Some(tag) = etag {
+        request = request.header("if-none-match", tag);
+    }
+    let resp = app
+        .clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let tag = resp
+        .headers()
+        .get("etag")
+        .map(|v| v.to_str().unwrap().to_string());
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = if bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, tag, body)
+}
+
+fn cache_state(nodes: &serde_json::Value, name: &str) -> String {
+    nodes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == name)
+        .map(|n| n["cache"]["state"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no {name} in {nodes}"))
+}
+
+/// The read routes keep what they computed until the sources or the database change
+/// (`read_cache`): a kept answer must never hide a run that finished or an edit, and an
+/// unchanged poll is a `304` with no body.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_kept_state_shows_a_new_run_and_an_edit_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = runnable_config(dir.path());
+    let source = config.files[0].clone();
+    let app = app(config);
+    // Sources are trusted once they have been still for a moment.
+    tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+
+    let (status, tag, nodes) = state_again(&app, None).await;
+    assert_eq!(status, StatusCode::OK, "{nodes}");
+    assert_eq!(cache_state(&nodes, "second"), "never_run");
+    let tag = tag.expect("an ETag");
+    let (status, _, body) = state_again(&app, Some(&tag)).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED, "nothing changed: {body}");
+    assert!(body.is_null(), "a 304 has no body");
+
+    // A run: the next answer has it, with no wait.
+    let id = start_run(
+        &app,
+        serde_json::json!({"command": "get", "targets": ["second"]}),
+    )
+    .await;
+    let events = read_events(&app, &format!("/runs/{id}/events"), Default::default()).await;
+    assert_eq!(events.last().unwrap().1["ok"], true, "{events:?}");
+    let (status, _, nodes) = state_again(&app, Some(&tag)).await;
+    assert_eq!(status, StatusCode::OK, "the run changed the state");
+    assert_eq!(cache_state(&nodes, "second"), "cached", "{nodes}");
+    assert_eq!(cache_state(&nodes, "first"), "cached");
+
+    // Kept again once the database is still (the run's last writes may land after its last
+    // event), and still right.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let (_, after_run, nodes) = state_again(&app, None).await;
+    assert_eq!(cache_state(&nodes, "second"), "cached");
+    let (status, ..) = state_again(&app, after_run.as_deref()).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // An edit to `second`: stale at once.
+    let text = std::fs::read_to_string(&source).unwrap();
+    std::fs::write(
+        &source,
+        text.replace("first[\"n\"] + 1", "first[\"n\"] + 2"),
+    )
+    .unwrap();
+    let (status, _, nodes) = state_again(&app, after_run.as_deref()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cache_state(&nodes, "second"), "stale", "{nodes}");
+    assert_eq!(cache_state(&nodes, "first"), "cached");
+}

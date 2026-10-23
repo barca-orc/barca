@@ -135,6 +135,15 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
   key `node_id`: the consecutive failed ticks of one scheduled node, the nodes that failed in the
   last counted tick (a JSON array), and the highest `materializations.id` when it was counted. A
   scheduled node with no failures has no row. Older binaries ignore the table.
+- Partial indexes on `materializations` (0.29.3), each holding only a few rows, so reads that
+  used to scan the table are index lookups: `idx_mat_changed (node_id) WHERE bytes_changed = 1`
+  (a node's last change in bytes for the same run hash, `barca status`), `idx_mat_attempts
+  (run_id, attempts) WHERE attempts IS NULL OR attempts != 1` (a run's attempt count, `barca
+  history`: the run's rows counted by `idx_mat_run`, corrected by these) and `idx_mat_evicted
+  (artifact_path) WHERE evicted_at IS NOT NULL` (the results the cache size limit deleted, every
+  dry run). Opening an older database builds them, a few seconds for 400k rows; older binaries
+  ignore them. A node's partition-key rows (`<node>[...]`) are read as the range `node_id >=
+  '<node>[' AND node_id < '<node>\'` of `idx_mat_node_run`.
 
 Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` and
 `a_format_1_database_from_0_24_3_gains_everything_added_since` and

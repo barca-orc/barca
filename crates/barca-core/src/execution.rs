@@ -2347,6 +2347,7 @@ pub(crate) async fn explain_dag_with_membership(
     rules: &crate::freshness::RunRules,
     file_args: &[String],
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
+    let t0 = std::time::Instant::now();
     let mut targets = resolve_targets(dag, target_names, command_label)?;
     // The `Manual` nodes a real run would read as they are, and the cone it would plan.
     let Planned { cone, pinned, .. } =
@@ -2383,6 +2384,7 @@ pub(crate) async fn explain_dag_with_membership(
 
     dag.check_imports(exec_plan.step_ids())?;
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
+    crate::status::trace_since("dry run: plan", t0);
 
     // With a server, the dry run is decided against its ledger: check the server (a dry run
     // posts nothing) and ask once for every run hash known before anything runs. The ledger's
@@ -2455,10 +2457,14 @@ pub(crate) async fn explain_dag_with_membership(
         summary: &mut summary,
         narrowing: narrowing.as_mut(),
     };
-    for phase in &exec_plan.phases {
+    crate::status::trace_since("dry run: sensor outputs and evictions", t0);
+    for (i, phase) in exec_plan.phases.iter().enumerate() {
+        let tp = std::time::Instant::now();
         predict_phase(&mut prediction, phase).await?;
+        crate::status::trace_since(&format!("dry run: phase {}", i + 1), tp);
     }
     drop(cache);
+    crate::status::trace_since("dry run: decided", t0);
 
     // The outputs the command was asked for are read by whoever ran it.
     let returned = all_outputs

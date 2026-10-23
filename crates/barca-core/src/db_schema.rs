@@ -84,6 +84,15 @@ pub(crate) const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_mat_path ON materializations(artifact_path)",
     // A notification integration finds a job's previous finished run through this index.
     "CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job, id)",
+    // `barca status` finds a node's last change in bytes for the same run hash through this
+    // index: only the rows whose bytes changed are in it, so it costs nothing to keep.
+    "CREATE INDEX IF NOT EXISTS idx_mat_changed ON materializations(node_id) WHERE bytes_changed = 1",
+    // `barca history` sums a run's attempts from `idx_mat_run`'s row count and the rows in
+    // this index, the few whose attempts are not 1, instead of reading every row of the run.
+    "CREATE INDEX IF NOT EXISTS idx_mat_attempts ON materializations(run_id, attempts) WHERE attempts IS NULL OR attempts != 1",
+    // Every dry run asks which results the cache size limit deleted: the rows in this index,
+    // not a scan of the table.
+    "CREATE INDEX IF NOT EXISTS idx_mat_evicted ON materializations(artifact_path) WHERE evicted_at IS NOT NULL",
 ];
 
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
@@ -328,6 +337,10 @@ mod tests {
         populated(&path, "saved").await;
         {
             let (_db, conn) = raw(&path).await;
+            // An index on the column came later still.
+            conn.execute("DROP INDEX idx_mat_changed", ())
+                .await
+                .unwrap();
             conn.execute("ALTER TABLE materializations DROP COLUMN bytes_changed", ())
                 .await
                 .unwrap();
@@ -387,8 +400,9 @@ mod tests {
 
     /// A format-1 database last written by 0.24.3 lacks everything format 1 gained since: the
     /// cache size limit's columns and index (0.25.0), and `runs.job`, `idx_runs_job`,
-    /// `notifications` and `pending_uploads` (0.26.0), and `schedule_failures` (0.28.0). Opening
-    /// it adds all of them in place,
+    /// `notifications` and `pending_uploads` (0.26.0), `schedule_failures` (0.28.0), and the
+    /// partial indexes `idx_mat_changed`, `idx_mat_attempts` and `idx_mat_evicted` (0.29.3). Opening it adds all of
+    /// them in place,
     /// keeps its rows, and leaves exactly the schema a new database gets.
     #[tokio::test]
     async fn a_format_1_database_from_0_24_3_gains_everything_added_since() {
@@ -405,6 +419,9 @@ mod tests {
                 "DROP TABLE schedule_failures",
                 "DROP INDEX idx_runs_job",
                 "DROP INDEX idx_mat_path",
+                "DROP INDEX idx_mat_changed",
+                "DROP INDEX idx_mat_attempts",
+                "DROP INDEX idx_mat_evicted",
                 "ALTER TABLE runs DROP COLUMN job",
                 "ALTER TABLE materializations DROP COLUMN evicted_at",
                 "ALTER TABLE materializations DROP COLUMN last_read_at",

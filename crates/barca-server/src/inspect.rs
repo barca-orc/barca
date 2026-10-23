@@ -76,21 +76,30 @@ pub async fn nodes(
             .is_some_and(|v| !matches!(v, "" | "0" | "false")),
         matched: 0,
     };
-    let dag = state.current_dag().await?;
+    let dag = state.inspect_dag().await?;
+    let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let result = barca_core::status::status_from_dag(
-        &cfg,
-        &targets,
-        &dag,
-        &state.config.python,
-        query.sample.unwrap_or(0),
-        true,
-    )
-    .await
-    .map_err(|e| ApiError::run(e, context("status", &state)))?;
-    let mut result = result;
+    let sample = query.sample.unwrap_or(0);
+    let python = state.config.python.clone();
+    let (graph, names, kept_snapshot) = (dag.clone(), targets.clone(), snapshot.clone());
+    // Kept until the sources or the database change ([`crate::read_cache`]); the live schedule
+    // state and the filter are applied to each answer.
+    let kept = state
+        .cached_status(
+            &dag,
+            &db_state,
+            (targets, sample, true),
+            move || async move {
+                let _snapshot = kept_snapshot;
+                barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true)
+                    .await
+            },
+        )
+        .await
+        .map_err(|e| ApiError::run(e, context("status", &state)))?;
+    let mut result = (*kept).clone();
     crate::handlers::attach_live_schedules(&state, &mut result.nodes, &dag, &snapshot.path).await?;
     filter.apply(&mut result);
     let rendered = barca_core::report::render_status(result, true, None, None, root().as_deref());

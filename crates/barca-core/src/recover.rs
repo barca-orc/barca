@@ -446,12 +446,10 @@ pub(crate) fn predict_recomputes(
     summary: &mut ExplainSummary,
 ) {
     let gone = |oref: &&OutputRef| predicted_gone(oref, layout);
-    let paths: HashMap<String, String> = all_outputs
-        .iter()
-        .map(|(id, o)| (id.clone(), o.path.clone()))
-        .collect();
-    for id in predict_lost(cached_steps, all_outputs, &needed, gone) {
-        let was_evicted = paths.get(&id).is_some_and(|p| evicted.contains(p));
+    // Each lost output's path is taken as it leaves `all_outputs`: copying every path first
+    // cost a string per output per phase, 200k for a 200k-key node.
+    for (id, path) in lose(cached_steps, all_outputs, &needed, gone) {
+        let was_evicted = evicted.contains(&path);
         if mark_recomputed(steps, &id, true, was_evicted) {
             summary.cached = summary.cached.saturating_sub(1);
             summary.will_run += 1;
@@ -463,15 +461,32 @@ pub(crate) fn predict_recomputes(
 /// and compute again, followed through the inputs of each step it would then run. They are
 /// removed from `outputs`, which holds the cached outputs only. `gone` says whether the
 /// artifact of an output is unavailable.
+#[cfg(test)]
 pub(crate) fn predict_lost(
     cached: &mut CachedSteps,
     outputs: &mut HashMap<String, OutputRef>,
     needed: &[String],
     gone: impl Fn(&&OutputRef) -> bool + Sync,
 ) -> Vec<String> {
-    let mut lost: Vec<String> = Vec::new();
+    lose(cached, outputs, needed, gone)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// [`predict_lost`], with the artifact path each lost output had.
+fn lose(
+    cached: &mut CachedSteps,
+    outputs: &mut HashMap<String, OutputRef>,
+    needed: &[String],
+    gone: impl Fn(&&OutputRef) -> bool + Sync,
+) -> Vec<(String, String)> {
+    let mut lost: Vec<(String, String)> = Vec::new();
     let mut needed: HashSet<String> = needed.iter().cloned().collect();
     loop {
+        if needed.is_empty() {
+            return lost;
+        }
         let read: Vec<&OutputRef> = outputs
             .values()
             .filter(|o| needed.contains(&o.path))
@@ -486,8 +501,10 @@ pub(crate) fn predict_lost(
         if layer.is_empty() {
             return lost;
         }
+        let mut removed = Vec::with_capacity(layer.len());
         for id in &layer {
-            outputs.remove(id);
+            let path = outputs.remove(id).map(|o| o.path).unwrap_or_default();
+            removed.push((id.clone(), path));
         }
         // What the steps now due to run read is needed in turn.
         needed = cached
@@ -498,7 +515,7 @@ pub(crate) fn predict_lost(
                     .collect()
             })
             .unwrap_or_default();
-        lost.extend(layer);
+        lost.extend(removed);
     }
 }
 

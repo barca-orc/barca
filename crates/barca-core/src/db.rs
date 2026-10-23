@@ -540,6 +540,10 @@ pub struct CacheReader {
     local_artifact_dir: Option<String>,
     /// A server's ledger, which answers cache lookups in place of this database.
     ledger: Option<crate::ledger::Ledger>,
+    /// The successful rows of a partitioned node's keys, read in one pass the first time a
+    /// node with many keys is looked up ([`CacheReader::key_rows`]); `None` for a node whose
+    /// keys are looked up one by one.
+    key_rows: std::sync::Mutex<HashMap<String, Option<std::sync::Arc<KeyRows>>>>,
     conn: turso::Connection,
     _handle: DbHandle,
     _guard: MutexGuard<'static, ()>,
@@ -553,6 +557,7 @@ impl CacheReader {
         Ok(Self {
             local_artifact_dir: None,
             ledger: None,
+            key_rows: Default::default(),
             conn,
             _handle: handle,
             _guard: guard,
@@ -581,6 +586,219 @@ impl CacheReader {
 
     pub fn conn(&self) -> &turso::Connection {
         &self.conn
+    }
+
+    /// Every successful row of `base`'s partition keys, by key id, when reading them in one
+    /// pass is cheaper than looking each key up: a dry run of a 200k-key node asked 200k
+    /// times, at about 5µs a lookup. The pass reads the whole table (an index-ordered read of
+    /// the keys' rows costs a random page read per row), so it is taken only when the table has
+    /// at most [`ROWS_PER_KEY`] rows for each of the node's `keys`, the keys the plan has;
+    /// otherwise `None`, and the keys are looked up one by one. Asked once per node; the reader
+    /// is short-lived, so the rows are as current as one lookup's.
+    pub(crate) async fn key_rows(
+        &self,
+        base: &str,
+        keys: usize,
+    ) -> Option<std::sync::Arc<KeyRows>> {
+        if self.ledger.is_some() {
+            return None;
+        }
+        if let Some(known) = self.key_rows.lock().unwrap().get(base) {
+            return known.clone();
+        }
+        let rows = self
+            .read_key_rows(base, keys)
+            .await
+            .ok()
+            .flatten()
+            .map(std::sync::Arc::new);
+        self.key_rows
+            .lock()
+            .unwrap()
+            .insert(base.to_string(), rows.clone());
+        rows
+    }
+
+    async fn read_key_rows(&self, base: &str, keys: usize) -> Result<Option<KeyRows>, BarcaError> {
+        let (lo, hi) = key_range(base);
+        let table = query_i64(
+            &self.conn,
+            "SELECT max(id) FROM materializations",
+            Vec::new(),
+        )
+        .await?
+        .unwrap_or(0);
+        if table > (keys as i64).saturating_mul(ROWS_PER_KEY) {
+            return Ok(None);
+        }
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
+                 output_hash FROM materializations NOT INDEXED \
+                 WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                 AND artifact_path IS NOT NULL",
+                [lo, hi],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+        let mut out = KeyRows::default();
+        let mut read = 0usize;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+        {
+            // A long read that never waits: let the thread's other tasks run now and then.
+            read += 1;
+            if read.is_multiple_of(4096) {
+                tokio::task::yield_now().await;
+            }
+            let (Ok(id), Ok(node), Ok(run_hash), Ok(path)) = (
+                row.get::<i64>(0),
+                row.get::<String>(1),
+                row.get::<String>(2),
+                row.get::<String>(3),
+            ) else {
+                continue;
+            };
+            if !self.allows_artifact(&path) {
+                continue;
+            }
+            let format = row.get::<String>(4).ok();
+            let size = row.get::<i64>(5).ok();
+            let content = row.get::<String>(6).ok().filter(|h| !h.is_empty());
+            out.add(
+                id,
+                &node,
+                &run_hash,
+                &path,
+                format.as_deref(),
+                size,
+                content.as_deref(),
+            );
+        }
+        Ok(Some(out))
+    }
+}
+
+/// How many rows of the table per key [`CacheReader::key_rows`] reads at most in its pass: a
+/// lookup costs about as much as reading this many rows in order.
+const ROWS_PER_KEY: i64 = 8;
+
+/// A partitioned node's successful rows: for each key id and run hash, the latest row's id and
+/// output. Every string is kept in one buffer, so that building and dropping the rows of 400k
+/// keys costs a few allocations, not millions.
+#[derive(Default)]
+pub(crate) struct KeyRows {
+    text: String,
+    rows: Vec<KeyRow>,
+    /// The first row of each (key id, run hash) digest; further rows chain through `next`.
+    first: HashMap<u64, u32>,
+}
+
+/// A span of [`KeyRows::text`].
+#[derive(Clone, Copy)]
+struct Span(u32, u32);
+
+struct KeyRow {
+    id: i64,
+    node: Span,
+    run_hash: Span,
+    path: Span,
+    /// `None` when the latest row has no format or size: as for a lookup, no hit.
+    format_size: Option<(Span, u64)>,
+    content: Option<Span>,
+    next: Option<u32>,
+}
+
+impl KeyRows {
+    fn key(node: &str, run_hash: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (node, run_hash).hash(&mut h);
+        h.finish()
+    }
+
+    fn span(&mut self, s: &str) -> Span {
+        let start = self.text.len() as u32;
+        self.text.push_str(s);
+        Span(start, self.text.len() as u32)
+    }
+
+    fn text(&self, span: Span) -> &str {
+        &self.text[span.0 as usize..span.1 as usize]
+    }
+
+    fn find(&self, node: &str, run_hash: &str) -> Option<usize> {
+        let mut at = self.first.get(&Self::key(node, run_hash)).copied();
+        while let Some(i) = at {
+            let row = &self.rows[i as usize];
+            if self.text(row.node) == node && self.text(row.run_hash) == run_hash {
+                return Some(i as usize);
+            }
+            at = row.next;
+        }
+        None
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add(
+        &mut self,
+        id: i64,
+        node: &str,
+        run_hash: &str,
+        path: &str,
+        format: Option<&str>,
+        size: Option<i64>,
+        content: Option<&str>,
+    ) {
+        if let Some(i) = self.find(node, run_hash)
+            && self.rows[i].id > id
+        {
+            return;
+        }
+        let path_span = self.span(path);
+        let format_size = match (format, size) {
+            (Some(format), Some(size)) => Some((self.span(format), size as u64)),
+            _ => None,
+        };
+        let content = content.map(|c| self.span(c));
+        if let Some(i) = self.find(node, run_hash) {
+            let row = &mut self.rows[i];
+            row.id = id;
+            row.path = path_span;
+            row.format_size = format_size;
+            row.content = content;
+            return;
+        }
+        let node_span = self.span(node);
+        let hash_span = self.span(run_hash);
+        let key = Self::key(node, run_hash);
+        let next = self.first.get(&key).copied();
+        self.first.insert(key, self.rows.len() as u32);
+        self.rows.push(KeyRow {
+            id,
+            node: node_span,
+            run_hash: hash_span,
+            path: path_span,
+            format_size,
+            content,
+            next,
+        });
+    }
+
+    /// What a lookup of `node_id` at `run_hash` finds.
+    pub(crate) fn get(&self, node_id: &str, run_hash: &str) -> Option<OutputRef> {
+        let row = &self.rows[self.find(node_id, run_hash)?];
+        let (format, size_bytes) = row.format_size?;
+        Some(OutputRef {
+            path: self.text(row.path).to_string(),
+            format: self.text(format).to_string(),
+            size_bytes,
+            elapsed_seconds: None,
+            content_hash: row.content.map(|c| self.text(c).to_string()),
+        })
     }
 }
 
@@ -1153,44 +1371,95 @@ impl DbSnapshot {
     }
 }
 
-/// One row of materialization history, as needed for asset state.
-#[derive(Debug, Clone)]
-pub struct MaterializationRow {
-    pub node_id: String,
-    pub status: String,
-    pub created_at: String,
-    pub elapsed_seconds: Option<f64>,
-    pub error_message: Option<String>,
-}
-
-/// Every materialization attempt, oldest first. An older DB without the table
-/// yields no rows rather than an error.
-pub async fn materialization_history(db_path: &str) -> Result<Vec<MaterializationRow>, BarcaError> {
+/// The elapsed seconds of each node's last `window` successful materializations, its partition
+/// keys' rows folded into the node (newest first). What `GET /state` reports as typical
+/// durations, without reading every row of the table: a node's own rows come from the node id
+/// index; its keys' rows from the rows just below the latest key row, a window that grows until
+/// it holds `window` successes or reaches the first row. The keys of one run are written
+/// together, so for a node with many keys the first window is enough.
+pub async fn recent_durations(
+    db_path: &str,
+    base_ids: &[String],
+    window: usize,
+) -> Result<HashMap<String, Vec<f64>>, BarcaError> {
     let _g = db_guard().await;
     let (_h, conn) = open_conn(db_path).await?;
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT node_id, status, created_at, elapsed_seconds, error_message \
-             FROM materializations ORDER BY id ASC",
-            (),
+    let mut out = HashMap::new();
+    for base in base_ids {
+        // (row id, elapsed)
+        let mut found: Vec<(i64, f64)> = Vec::new();
+        let mut rows = conn
+            .query(
+                "SELECT id, elapsed_seconds FROM materializations INDEXED BY idx_mat_node_run \
+                 WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
+                 ORDER BY id DESC LIMIT ?2",
+                vec![
+                    turso::Value::Text(base.clone()),
+                    turso::Value::Integer(window as i64),
+                ],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
+        {
+            if let (Ok(id), Ok(e)) = (row.get::<i64>(0), row.get::<f64>(1)) {
+                found.push((id, e));
+            }
+        }
+        drop(rows);
+        let (lo, hi) = key_range(base);
+        let latest_key = query_i64(
+            &conn,
+            "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run \
+             WHERE node_id >= ?1 AND node_id < ?2",
+            vec![
+                turso::Value::Text(lo.clone()),
+                turso::Value::Text(hi.clone()),
+            ],
         )
-        .await
-    else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to read materialization: {e}")))?
-    {
-        out.push(MaterializationRow {
-            node_id: row.get::<String>(0).unwrap_or_default(),
-            status: row.get::<String>(1).unwrap_or_default(),
-            created_at: row.get::<String>(2).unwrap_or_default(),
-            elapsed_seconds: row.get::<f64>(3).ok(),
-            error_message: row.get::<String>(4).ok(),
-        });
+        .await?;
+        if let Some(top) = latest_key {
+            let mut keys: Vec<(i64, f64)> = Vec::new();
+            let mut span: i64 = 1024;
+            let mut below = top + 1;
+            while keys.len() < window && below > 0 {
+                let from = (top + 1 - span).max(0);
+                let mut rows = conn
+                    .query(
+                        "SELECT id, node_id, elapsed_seconds FROM materializations \
+                         WHERE id >= ?1 AND id < ?2 AND status = 'success' \
+                         AND elapsed_seconds IS NOT NULL ORDER BY id DESC",
+                        [from, below],
+                    )
+                    .await
+                    .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
+                {
+                    let node = row.get::<String>(1).unwrap_or_default();
+                    if node.as_str() >= lo.as_str()
+                        && node.as_str() < hi.as_str()
+                        && let (Ok(id), Ok(e)) = (row.get::<i64>(0), row.get::<f64>(2))
+                    {
+                        keys.push((id, e));
+                    }
+                }
+                below = from;
+                span *= 4;
+            }
+            found.extend(keys);
+        }
+        if found.is_empty() {
+            continue;
+        }
+        found.sort_unstable_by_key(|(id, _)| std::cmp::Reverse(*id));
+        found.truncate(window);
+        out.insert(base.clone(), found.into_iter().map(|(_, e)| e).collect());
     }
     Ok(out)
 }
@@ -1718,26 +1987,40 @@ pub async fn last_output_hashes(
 ) -> Result<HashMap<String, String>, BarcaError> {
     let mut out = HashMap::new();
     for base in base_ids {
-        let Ok(mut rows) = cache
-            .conn()
-            .query(
-                "SELECT node_id, output_hash FROM materializations \
-                 WHERE (node_id = ?1 OR node_id LIKE ?2) AND status = 'success' \
-                 AND output_hash IS NOT NULL ORDER BY id",
-                [base.to_string(), format!("{base}[%")],
-            )
-            .await
-        else {
-            return Ok(HashMap::new());
-        };
-        // LIKE treats `_` in a node id as a wildcard, and assets record output hashes too.
-        let partition_prefix = format!("{base}[");
-        while let Ok(Some(row)) = rows.next().await {
-            if let (Ok(id), Ok(h)) = (row.get::<String>(0), row.get::<String>(1))
-                && (id == *base || id.starts_with(&partition_prefix))
-            {
-                out.insert(id, h);
+        // The node's own rows, then its keys' (`base[...]`): two seeks of the node id index, where
+        // `node_id = ?1 OR node_id LIKE ?2` scanned the whole table once per sensor.
+        let (lo, hi) = key_range(base);
+        let mut found: Vec<(i64, String, String)> = Vec::new();
+        for (sql, params) in [
+            (
+                "SELECT id, node_id, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+                 WHERE node_id = ?1 AND status = 'success' AND output_hash IS NOT NULL",
+                vec![base.to_string()],
+            ),
+            (
+                "SELECT id, node_id, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+                 WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                 AND output_hash IS NOT NULL",
+                vec![lo.clone(), hi.clone()],
+            ),
+        ] {
+            let Ok(mut rows) = cache.conn().query(sql, params).await else {
+                return Ok(HashMap::new());
+            };
+            while let Ok(Some(row)) = rows.next().await {
+                if let (Ok(id), Ok(node), Ok(h)) = (
+                    row.get::<i64>(0),
+                    row.get::<String>(1),
+                    row.get::<String>(2),
+                ) {
+                    found.push((id, node, h));
+                }
             }
+        }
+        // The latest row of each node id wins.
+        found.sort_unstable_by_key(|(id, ..)| *id);
+        for (_, node, h) in found {
+            out.insert(node, h);
         }
     }
     Ok(out)
@@ -2040,6 +2323,22 @@ pub async fn get_run_outcome(db_path: &str, run_id: &str) -> Result<Option<Strin
 }
 
 /// Whether `table` has `column` (an inspected snapshot may predate it).
+/// Whether the database has the index `name` (a snapshot of an older database may not).
+async fn has_index(conn: &turso::Connection, name: &str) -> Result<bool, BarcaError> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = ?1",
+            [name],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to inspect indexes: {e}")))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to inspect indexes: {e}")))?
+        .is_some())
+}
+
 async fn has_column(
     conn: &turso::Connection,
     table: &str,
@@ -2583,10 +2882,18 @@ async fn read_runs(
         );
     }
     drop(columns);
-    let attempts = if names.contains("run_id") && names.contains("attempts") {
-        "(SELECT COALESCE(SUM(attempts), 0) FROM materializations WHERE run_id = runs.run_id)"
-    } else {
+    // The sum of a run's attempts, read from indexes only: its row count (`idx_mat_run`),
+    // corrected by the few rows whose attempts are not 1 (`idx_mat_attempts`). Summing the
+    // column itself reads every row of the run, 200k for a run of a 200k-key node.
+    let attempts = if !(names.contains("run_id") && names.contains("attempts")) {
         "NULL"
+    } else if has_index(&conn, "idx_mat_attempts").await? {
+        "((SELECT COUNT(*) FROM materializations INDEXED BY idx_mat_run WHERE run_id = runs.run_id) \
+          - (SELECT COUNT(*) - COALESCE(SUM(attempts), 0) FROM materializations \
+             INDEXED BY idx_mat_attempts WHERE run_id = runs.run_id \
+             AND (attempts IS NULL OR attempts != 1)))"
+    } else {
+        "(SELECT COALESCE(SUM(attempts), 0) FROM materializations WHERE run_id = runs.run_id)"
     };
     let trigger = if has_column(&conn, "runs", "triggered_by").await? {
         "triggered_by, scheduled_at, schedule_id"
@@ -3110,47 +3417,72 @@ pub async fn node_histories(
     let (_db, conn) = open_conn(db_path).await?;
     let mut out = HashMap::new();
     for base in base_ids {
-        let prefix = format!("{base}[");
-        let filter = "(node_id = ?1 OR substr(node_id, 1, length(?2)) = ?2)";
-        let mut h = NodeHistory::default();
-        // The last materialization is the latest run's (by row id). A partitioned node writes
-        // one row per key in completion order, so within that run the first key in sort order
-        // is reported, not whichever finished last (#475). Rows without a run id (an older
-        // barca's) keep the latest row.
+        out.insert(base.clone(), node_history(&conn, base).await?);
+    }
+    Ok(out)
+}
+
+/// [`node_histories`] of one node. Each question is asked of the node's own rows and of its keys'
+/// rows (`base[...]`, a range of `idx_mat_node_run`), so every query is an index seek or an
+/// index-only scan. A `substr(node_id, ...)` filter cannot use the index: it scanned the whole
+/// table four times per node, minutes for a project with a 200k-key node.
+async fn node_history(conn: &turso::Connection, base: &str) -> Result<NodeHistory, BarcaError> {
+    let (lo, hi) = key_range(base);
+    let exact = ("node_id = ?1", vec![turso::Value::Text(base.to_string())]);
+    let keys = (
+        "node_id >= ?1 AND node_id < ?2",
+        vec![turso::Value::Text(lo), turso::Value::Text(hi)],
+    );
+    let mut h = NodeHistory::default();
+    let mut latest: Option<i64> = None;
+    let mut bytes: Option<i64> = None;
+    for (filter, params) in [&exact, &keys] {
+        let id = query_i64(
+            conn,
+            &format!(
+                "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run WHERE {filter}"
+            ),
+            params.clone(),
+        )
+        .await?;
+        latest = latest.max(id);
+        if !h.ever_succeeded {
+            h.ever_succeeded = query_i64(
+                conn,
+                &format!(
+                    "SELECT 1 FROM materializations INDEXED BY idx_mat_node_run \
+                     WHERE {filter} AND status = 'success' LIMIT 1"
+                ),
+                params.clone(),
+            )
+            .await?
+            .is_some();
+        }
+        // `idx_mat_changed` holds only the rows whose bytes changed.
+        let changed = query_i64(
+            conn,
+            &format!("SELECT max(id) FROM materializations WHERE bytes_changed = 1 AND {filter}"),
+            params.clone(),
+        )
+        .await?;
+        bytes = bytes.max(changed);
+    }
+    // The last materialization is the latest run's (by row id). A partitioned node writes one
+    // row per key in completion order, so within that run the first key in sort order is
+    // reported, not whichever finished last (#475). Rows without a run id (an older barca's)
+    // keep the latest row.
+    let latest = match latest {
+        Some(id) => Some(first_key_of_latest_run(conn, id, &exact, &keys).await?),
+        None => None,
+    };
+    if let Some(id) = latest {
         let mut rows = conn
             .query(
-                &format!(
-                    "SELECT run_id FROM materializations WHERE {filter} ORDER BY id DESC LIMIT 1"
-                ),
-                [base.clone(), prefix.clone()],
+                "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
+                 elapsed_seconds, status, error_message, created_at, output_hash \
+                 FROM materializations WHERE id = ?1",
+                [id],
             )
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
-        let latest_run = match rows
-            .next()
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
-        {
-            Some(row) => row.get::<String>(0).ok().filter(|s| !s.is_empty()),
-            None => None,
-        };
-        drop(rows);
-        let columns = "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
-                       elapsed_seconds, status, error_message, created_at, output_hash FROM materializations";
-        let (sql, params) = match latest_run {
-            Some(run) => (
-                format!(
-                    "{columns} WHERE {filter} AND run_id = ?3 ORDER BY node_id ASC, id DESC LIMIT 1"
-                ),
-                vec![base.clone(), prefix.clone(), run],
-            ),
-            None => (
-                format!("{columns} WHERE {filter} ORDER BY id DESC LIMIT 1"),
-                vec![base.clone(), prefix.clone()],
-            ),
-        };
-        let mut rows = conn
-            .query(&sql, params)
             .await
             .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
         if let Some(row) = rows
@@ -3172,26 +3504,16 @@ pub async fn node_histories(
                 created_at: row.get::<String>(8).unwrap_or_default(),
             });
         }
-        drop(rows);
+    }
+    if let Some(id) = bytes {
         let mut rows = conn
             .query(
-                &format!(
-                    "SELECT 1 FROM materializations WHERE {filter} AND status = 'success' LIMIT 1"
-                ),
-                [base.clone(), prefix],
+                "SELECT node_id, run_hash, output_hash, created_at FROM materializations \
+                 WHERE id = ?1",
+                [id],
             )
             .await
-            .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
-        h.ever_succeeded = rows
-            .next()
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
-            .is_some();
-        drop(rows);
-        let mut rows = conn.query(
-            &format!("SELECT node_id, run_hash, output_hash, created_at FROM materializations WHERE {filter} AND bytes_changed = 1 ORDER BY id DESC LIMIT 1"),
-            [base.clone(), format!("{base}[")],
-        ).await.map_err(|e| BarcaError::Db(format!("failed to query byte change: {e}")))?;
+            .map_err(|e| BarcaError::Db(format!("failed to query byte change: {e}")))?;
         if let Some(row) = rows
             .next()
             .await
@@ -3204,9 +3526,110 @@ pub async fn node_histories(
                 created_at: row.get::<String>(3).unwrap_or_default(),
             });
         }
-        out.insert(base.clone(), h);
     }
-    Ok(out)
+    Ok(h)
+}
+
+/// The row [`node_history`] reports for a node whose latest row is `latest`: the row of the
+/// first node id in sort order (the base id, then its keys) in that row's run, that node's
+/// latest in the run. `latest` itself when it has no run id.
+async fn first_key_of_latest_run(
+    conn: &turso::Connection,
+    latest: i64,
+    exact: &(&str, Vec<turso::Value>),
+    keys: &(&str, Vec<turso::Value>),
+) -> Result<i64, BarcaError> {
+    let mut rows = conn
+        .query(
+            "SELECT run_id FROM materializations WHERE id = ?1",
+            [latest],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    let run = match rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+    {
+        Some(row) => row.get::<String>(0).ok().filter(|s| !s.is_empty()),
+        None => None,
+    };
+    drop(rows);
+    let Some(run) = run else {
+        return Ok(latest);
+    };
+    let with_run = |(filter, params): &(&str, Vec<turso::Value>)| {
+        let mut params = params.clone();
+        params.push(turso::Value::Text(run.clone()));
+        let n = params.len();
+        (format!("{filter} AND run_id = ?{n}"), params)
+    };
+    // The base id sorts before every key of it.
+    let (filter, params) = with_run(exact);
+    if let Some(id) = query_i64(
+        conn,
+        &format!("SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run WHERE {filter}"),
+        params,
+    )
+    .await?
+    {
+        return Ok(id);
+    }
+    // The first key in the run, walking the index in key order.
+    let (filter, params) = with_run(keys);
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT node_id FROM materializations INDEXED BY idx_mat_node_run WHERE {filter} \
+                 ORDER BY node_id LIMIT 1"
+            ),
+            params,
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    let first = match rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+    {
+        Some(row) => row.get::<String>(0).ok(),
+        None => None,
+    };
+    drop(rows);
+    let Some(first) = first else {
+        return Ok(latest);
+    };
+    Ok(query_i64(
+        conn,
+        "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run \
+         WHERE node_id = ?1 AND run_id = ?2",
+        vec![turso::Value::Text(first), turso::Value::Text(run)],
+    )
+    .await?
+    .unwrap_or(latest))
+}
+
+/// The first column of the first row as an integer; `None` for no row or a NULL.
+async fn query_i64(
+    conn: &turso::Connection,
+    sql: &str,
+    params: Vec<turso::Value>,
+) -> Result<Option<i64>, BarcaError> {
+    let mut rows = conn
+        .query(sql, params)
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+        .and_then(|row| row.get::<i64>(0).ok()))
+}
+
+/// The node ids of `base`'s partition keys, `base[...]`, as a half-open range of the
+/// `node_id` index: from `base[` up to `base\` (the character after `[`).
+pub(crate) fn key_range(base: &str) -> (String, String) {
+    (format!("{base}["), format!("{base}\\"))
 }
 
 /// The latest successful result of one key of a partitioned node.
@@ -3238,13 +3661,14 @@ async fn latest_partition_artifacts_scoped(
 ) -> Result<Vec<PartitionArtifact>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    let prefix = format!("{base_id}[");
+    let (lo, hi) = key_range(base_id);
     let mut rows = conn
         .query(
             "SELECT node_id, artifact_path, artifact_format, output_hash FROM materializations \
-             WHERE substr(node_id, 1, length(?1)) = ?1 AND status = 'success' \
-             AND artifact_path IS NOT NULL AND artifact_path != '' ORDER BY id DESC",
-            [prefix],
+             INDEXED BY idx_mat_node_run WHERE node_id >= ?1 AND node_id < ?2 \
+             AND status = 'success' AND artifact_path IS NOT NULL AND artifact_path != '' \
+             ORDER BY id DESC",
+            [lo, hi],
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
@@ -3343,7 +3767,7 @@ async fn avg_elapsed_on(
     Ok(result)
 }
 
-/// Look up the average elapsed_seconds for partitioned nodes using LIKE pattern matching.
+/// Look up the average elapsed_seconds of each partitioned node over all its keys.
 /// For base_node_ids like "file.py:fetch", matches all "file.py:fetch[%]" in the DB.
 /// Used for ETA estimation when steps carry partition_keys (late expansion).
 pub async fn get_avg_elapsed_for_partitioned(
@@ -3363,12 +3787,20 @@ async fn partitioned_avg_elapsed_on(
     base_node_ids: &[String],
 ) -> Result<HashMap<String, f64>, BarcaError> {
     let mut result = HashMap::new();
+    // A node split into one step per worker is named once per step: ask once per node.
+    let mut asked = std::collections::HashSet::new();
     for nid in base_node_ids {
-        let pattern = format!("{nid}[%]");
+        if !asked.insert(nid.as_str()) {
+            continue;
+        }
+        // Every key of the node, `nid[...]`, as a range of the node id index (a `LIKE` scanned
+        // the whole table).
+        let (lo, hi) = key_range(nid);
         let mut rows = conn
             .query(
-                "SELECT AVG(elapsed_seconds) FROM materializations WHERE node_id LIKE ?1 AND elapsed_seconds IS NOT NULL",
-                [pattern],
+                "SELECT AVG(elapsed_seconds) FROM materializations INDEXED BY idx_mat_node_run \
+                 WHERE node_id >= ?1 AND node_id < ?2 AND elapsed_seconds IS NOT NULL",
+                [lo, hi],
             )
             .await
             .map_err(|e| BarcaError::Db(format!("failed to query avg elapsed: {e}")))?;
@@ -4939,5 +5371,66 @@ mod fold_log_tests {
         let copy = dir.path().join("uploaded.db").to_string_lossy().to_string();
         std::fs::copy(&db_path, &copy).unwrap();
         assert_eq!(open_and_count(&copy, "t").await, 200);
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    /// `GET /state`'s typical durations: the last successes of a node, its keys folded in,
+    /// found below the latest key row however many other rows were written since.
+    #[tokio::test]
+    async fn recent_durations_take_the_last_successes_and_fold_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            let insert = |node: &str, status: &str, elapsed: f64| {
+                let conn = &conn;
+                let (node, status, elapsed) = (node.to_string(), status.to_string(), elapsed);
+                async move {
+                    conn.execute(
+                        "INSERT INTO materializations (node_id, status, elapsed_seconds) \
+                         VALUES (?1, ?2, ?3)",
+                        turso::params![node, status, elapsed],
+                    )
+                    .await
+                    .unwrap();
+                }
+            };
+            for _ in 0..5 {
+                insert("p.py:a", "success", 1.0).await;
+            }
+            for k in 0..30 {
+                insert(&format!("p.py:f[k={k}]"), "success", k as f64).await;
+            }
+            for _ in 0..20 {
+                insert("p.py:a", "success", 10.0).await;
+            }
+            insert("p.py:a", "failed", 999.0).await;
+            // A key row far below the latest one, and many rows of other nodes since.
+            insert("p.py:g[k=old]", "success", 7.0).await;
+            for _ in 0..3000 {
+                insert("p.py:other", "success", 0.5).await;
+            }
+            insert("p.py:g[k=new]", "failed", 99.0).await;
+            // `p.py:a_b` is not a key of `p.py:a`.
+            insert("p.py:a_b[k=1]", "success", 5.0).await;
+        }
+        let ids: Vec<String> = ["p.py:a", "p.py:f", "p.py:g", "p.py:missing"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let d = super::recent_durations(&path, &ids, 20).await.unwrap();
+        assert_eq!(
+            d["p.py:a"],
+            vec![10.0; 20],
+            "the last 20 successes, failures left out"
+        );
+        let f: Vec<f64> = (10..30).rev().map(|k| k as f64).collect();
+        assert_eq!(d["p.py:f"], f, "the latest 20 key rows, newest first");
+        assert_eq!(d["p.py:g"], vec![7.0], "found below 3000 other rows");
+        assert!(!d.contains_key("p.py:missing"));
     }
 }

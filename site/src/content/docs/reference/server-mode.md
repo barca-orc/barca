@@ -316,7 +316,13 @@ proxy's URL, prefix included; `https://` works for every request, ledger ones in
 | `POST /ledger/runs` | `{"run": {...}, "steps": [...]}`: the run row and its step rows | `201 {"run_id", "bytes_changed"}`, or `409` with the error envelope naming the node and nothing recorded; `400` on a server with no store, `403` on a `--read-only` one, `503` while it shuts down |
 
 A repeated post of a run the server already recorded (same `run.run_id`) answers `201` with the
-run it recorded. The full schemas are in `specs/server-api.openapi.yaml`; every route is
+run it recorded.
+
+The inspection routes (`GET /state`, `/nodes`, `/history`, `/stats/{name}` and the others the
+CLI and the web UI read) keep what they computed until the sources or the metadata DB change,
+and answer a request whose `If-None-Match` names their last `ETag` with `304` and no body. So
+`barca status --server` against an unchanged project answers in milliseconds, whatever the
+number of partition keys; a finished run or an edit is in the next answer. The full schemas are in `specs/server-api.openapi.yaml`; every route is
 described at https://barca.sh/reference/server-api/.
 
 See also: [`barca docs scheduling`](/scheduling/), [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).
