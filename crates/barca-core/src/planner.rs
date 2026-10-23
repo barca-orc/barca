@@ -944,10 +944,12 @@ mod tests {
         extracted.sinks.push(SinkDecl {
             path: "exports/out.parquet".to_string(),
             serializer: Some(SerializerKind::Parquet),
+            ..Default::default()
         });
         extracted.sinks.push(SinkDecl {
             path: "s3://bucket/model.pkl".to_string(),
             serializer: None,
+            ..Default::default()
         });
         let dag = Dag::build(std::slice::from_ref(&extracted)).unwrap();
         let chain = Chain {

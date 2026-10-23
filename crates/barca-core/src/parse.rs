@@ -343,6 +343,23 @@ fn try_extract_function(
             .unwrap_or((Freshness::default_for(kind), None));
     let inputs = extract_inputs(&keywords, names);
     let partitions = extract_partitions(&keywords, source, names);
+    // A dataset sink's directory levels are the asset's dimensions, in the order written.
+    let dims: Vec<String> = crate::sink_args::dimension_order(&keywords)
+        .into_iter()
+        .filter(|d| partitions.contains_key(d))
+        .collect();
+    if let Some(problem) = crate::sink_args::check(&func.decorator_list, &names.barca, &dims) {
+        return Err(ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..problem.offset].matches('\n').count() + 1,
+            message: problem.message,
+            fix: problem.fix,
+        });
+    }
+    for sink in sinks.iter_mut().filter(|s| s.is_dataset()) {
+        sink.dims = dims.clone();
+    }
     let explicit_name = extract_string_kwarg(&keywords, "name");
     let description = extract_string_kwarg(&keywords, "description");
     let timeout_seconds = extract_int_kwarg(&keywords, "timeout_seconds").unwrap_or(300);
@@ -521,7 +538,14 @@ pub(crate) fn try_extract_sink(
             .iter()
             .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("serializer"))
             .and_then(|kw| extract_serializer_kind(&kw.value));
-        return Some(SinkDecl { path, serializer });
+        let (partition_by, rows_per_file) = crate::sink_args::extract(call);
+        return Some(SinkDecl {
+            path,
+            serializer,
+            partition_by,
+            rows_per_file,
+            dims: Vec::new(),
+        });
     }
     None
 }

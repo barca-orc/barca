@@ -130,7 +130,7 @@ pub const SIGNATURES: &[Signature] = &[
         name: "sink",
         decorator: true,
         positional: &["path"],
-        keywords: &["serializer"],
+        keywords: &["serializer", "partition_by", "rows_per_file"],
         deferred: &[],
         usage: "@sink(\"path/to/file.json\", serializer=\"json\")",
         topic: "sinks",

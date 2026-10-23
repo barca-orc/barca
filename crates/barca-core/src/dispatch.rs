@@ -770,6 +770,7 @@ mod tests {
         let sink = crate::model::SinkDecl {
             path: "exports/out.parquet".to_string(),
             serializer: Some(crate::model::SerializerKind::Parquet),
+            ..Default::default()
         };
         let phase = Phase {
             reason: PhaseReason::Initial,

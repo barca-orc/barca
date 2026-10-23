@@ -74,7 +74,8 @@ outside the `GENERATED` blocks is written by hand.
 | `barca state reset` and its JSON, `POST /state/reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
 | `weight=` on `@asset`, `@task` and `@sensor`, `[execution] capacity`, `BARCA_CAPACITY`, `capacity` / `capacity_source` / `pool_size` / `weights` in `barca plan`, `capacity` and `steps[].weight` in `--dry-run`, the `capacity` doctor check | new in 0.29 (#436): how steps are admitted under the capacity, and whether a step waiting in `parallel()` counts, may change after field use |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
-| `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, `SINK FAILED`) whose wording may change |
+| dataset sinks: `@sink("prefix/")`, its `partition_by=` and `rows_per_file=`, the `_barca_sink.json` marker, the deletion of removed keys and the size warnings | new in 0.30.0 (#621): the marker's keys, the warning thresholds and how a key is swapped in on an object store may change after field use |
+| `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 ### Accepted exceptions
 
@@ -497,7 +498,7 @@ Each error `kind` has exactly one exit code (stable):
 | 130 | `cancelled` | stable |
 <!-- END GENERATED exit-codes -->
 
-`step_failed`: one of your steps raised (fix the code). `usage`: bad arguments, unknown target,
+`step_failed`: one of your steps raised (fix the code), or one of its `@sink`s could not be written (from 0.30.0; the error is a `SinkError` naming the sink). `usage`: bad arguments, unknown target,
 task/asset misuse, a `.py` file that does not parse, a decorator called with an argument it does
 not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `barca docs assets`,
 "Accepted arguments"), a DAG that cannot be built (an input that
@@ -2428,7 +2429,8 @@ placeholders:
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
 | `[barca] cache <size> over its <limit> limit; evicted <n> files (<size>): <n> <tier>, ...` | after `get`, `run` or a `serve` run, when `.barca/` was over `[cache] max_size` and something was evicted (every mode; `barca docs cache`, "Disk use") | experimental |
 | `[barca] <id>: its cached result was evicted to stay under the cache limit; computing it again` | a step whose cached result the size limit evicted is computed again because something reads it (every mode) | experimental |
-| `[barca] warning: ...`, `[barca] SINK FAILED: ...` | warnings (always this lowercase prefix; the text after it may change) and failed sinks. A plan warning (see "Plan warnings") is printed before the first `step:` line, once per run, with or without `--agent`; read it from the JSON `warnings` array rather than from this line | experimental |
+| `[barca] dataset sink <prefix>: deleted <n> key(s) its asset no longer has` | after a run, the directories of keys a dataset sink's asset no longer has were deleted (`barca docs sinks`) | experimental |
+| `[barca] warning: ...` | warnings (always this lowercase prefix; the text after it may change), including a dataset sink's size warning and a failed deletion of removed keys. Up to 0.29 a failed sink printed `[barca] SINK FAILED: ...`; from 0.30.0 it fails the step. A plan warning (see "Plan warnings") is printed before the first `step:` line, once per run, with or without `--agent`; read it from the JSON `warnings` array rather than from this line | experimental |
 
 Failed runs keep the complete `steps` fan-out and `failed_node` in JSON. Human output
 reports blocked downstream nodes as one count in the final line. This count is per node,

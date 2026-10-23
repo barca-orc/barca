@@ -50,7 +50,7 @@ check in the binary equal), so a type checker and an IDE know them too.
 | `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
-| `@sink` | one | `serializer` |
+| `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
 | `partitions()` | one | none |
 | `partitions_from()` | one | none |
 | `collect()` | one | none |
@@ -431,6 +431,8 @@ def process(data: dict) -> dict:
     /,
     *,
     serializer: str | None = None,
+    partition_by: list[str] | None = None,
+    rows_per_file: int | None = None,
 )
 ```
 
@@ -457,13 +459,51 @@ def banana() -> dict:
 - Writes go to a temporary file first and are then renamed or uploaded, so a crash does not
   leave a partial file at the destination.
 - No other node may take a sink as an input.
-- A failing sink does not fail the asset and does not change the exit code. It is reported on
-  stderr as `[barca] SINK FAILED: ...`; check stderr in automation.
+- A sink that fails fails the step (from 0.30.0): the step's error is a `SinkError` naming the
+  sink, the run exits 1 with a `step_failed` envelope, and the step is not recorded. Every sink
+  of the step is still attempted. Up to 0.29 a failed sink printed `[barca] SINK FAILED: ...` on
+  stderr and the asset succeeded.
 - On a partitioned asset each key writes its own file, with the key inserted before the
   extension: `@sink("./exports/sales.json")` on keys `region=emea` and `region=amer` wrote
   `exports/sales_region_emea.json` and `exports/sales_region_amer.json`.
 
-See `barca docs sinks`.
+### Dataset sinks
+
+A path ending in `/` is a dataset sink: a Hive-partitioned dataset with one directory level
+per partition dimension of the asset, in declared order. `partition_by=[...]` adds levels from
+columns of the returned table; `rows_per_file=` caps the rows of each parquet file.
+
+```python
+import pandas as pd
+from barca import asset, partitions, sink
+
+@asset(partitions={"retailer": partitions(["r1", "r2"])})
+@sink("s3://bucket/exports/scored/", partition_by=["order_date"])
+def scored(retailer: str) -> pd.DataFrame:
+    ...
+# s3://bucket/exports/scored/retailer=r1/order_date=2026-10-22/part-0.parquet
+```
+
+```sql
+select * from read_parquet('s3://bucket/exports/scored/**/*.parquet', hive_partitioning = true)
+```
+
+- Parquet (zstd) for a table by default; `serializer="csv"` or `"json"` (JSON Lines,
+  `part-0.jsonl`) write one file per partition. Partition columns live in the path, not in the
+  files.
+- DuckDB writes a returned relation (streaming), polars a polars frame, pyarrow a pandas frame
+  or an Arrow table; all three produce the same layout and file names.
+- A cached key writes nothing; a key that runs is written to staging and swapped in for its
+  directory (one rename on a local disk; on an object store the new files are uploaded, then
+  the old ones deleted). A key the asset no longer has is deleted after the run.
+- The sink owns its prefix and marks it with `_barca_sink.json`; a prefix that holds files
+  barca did not write, or that another asset owns, is refused.
+- A write that creates more than 1,000 directories, or at least 100 files averaging under 1 MB,
+  prints a warning: partition by a coarser column.
+- `partition_by=` and `rows_per_file=` on a file sink (no trailing `/`) are a usage error,
+  exit 2.
+
+`barca docs sinks` has the details and how to choose partition columns.
 
 ## @sensor
 

@@ -141,6 +141,12 @@ Use `@asset(serializer="csv")`, `@sensor(serializer="csv")` or
 also works on a sink. CSV writes a header without a pandas index column. The default
 format for frames remains Parquet.
 
+A dataset sink (`@sink("exports/orders/", partition_by=["order_date"])`, a path ending in
+`/`) is written by the library that made the returned value: DuckDB writes a relation
+(streaming, nothing loaded into Python; `rows_per_file=` and json stream Arrow batches to
+pyarrow), polars writes a polars frame, and pyarrow writes a pandas frame or an Arrow table. All
+three produce the same Hive layout and file names (`barca docs sinks`).
+
 Consuming parameter annotations select the CSV reader using the table above. CSV
 readers infer types: indexes, exact dtypes, null/empty-string distinctions and nested
 columns are not guaranteed to round-trip. Unsupported values fail rather than writing

@@ -231,14 +231,15 @@ def test_quick_steps_do_not_spam_progress_lines(project):
     assert "still running" not in proc.stderr
 
 
-def test_sink_failures_are_visible_without_agent_mode(project):
-    # The docs tell automation to check stderr for "SINK FAILED"; keep that true in a non-terminal
-    # run without --agent.
+def test_sink_failures_fail_the_run_without_agent_mode(project):
+    # A failed sink fails its step (0.30.0), so automation sees it in the exit code and the
+    # result, in a non-terminal run without --agent.
     (project / "sinky.py").write_text(
         "from barca import asset, sink\n\n\n"
         '@asset()\n@sink("/dev/null/cannot/write/here.json")\n'
         'def sinky() -> dict:\n    return {"x": 1}\n'
     )
     proc = barca(project, "get", "sinky", "sinky.py")
-    final(proc)  # a failing sink never fails the asset
-    assert "SINK FAILED" in proc.stderr, proc.stderr
+    assert proc.returncode == 1, proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1])["status"] == "failed"
+    assert "SinkError: sink /dev/null/cannot/write/here.json" in proc.stderr, proc.stderr

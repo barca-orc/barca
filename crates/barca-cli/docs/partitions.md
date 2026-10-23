@@ -278,4 +278,5 @@ barca plan pipeline.py --partition region=emea                          # the na
 by a positive `BARCA_POOL_SIZE`. Warnings sort by node, parameter and kind. Key previews
 list the first twenty keys in lexical order, independently of worker chunking.
 
-See also: `barca docs sinks` (one file per partition), `barca docs examples/partitions`.
+See also: `barca docs sinks` (one file per partition, or one Hive-partitioned dataset with a
+directory per key), `barca docs examples/partitions`.

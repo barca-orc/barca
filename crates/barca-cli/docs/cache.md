@@ -709,10 +709,11 @@ directory yourself, and run the command again.
 This applies only inside barca's own artifact directory (`.barca/artifacts/`). Barca moves,
 renames and replaces nothing anywhere else:
 
-- a `@sink` path is yours. Barca writes the file there and changes nothing else: a directory at
-  the path fails that sink (`[barca] SINK FAILED: ... IsADirectoryError`) and is left as it is,
-  and a symlink is written through (the file it points to is written, the link stays). The
-  asset itself succeeds either way (`barca docs sinks`);
+- a `@sink` file path is yours. Barca writes the file there and changes nothing else: a
+  directory at the path fails the sink, and so the step (`SinkError: sink ...:
+  IsADirectoryError`), and is left as it is, and a symlink is written through (the file it
+  points to is written, the link stays). A dataset sink (a path ending in `/`) owns its prefix
+  instead, and refuses one that holds files it did not write (`barca docs sinks`);
 - a directory at an object's path in an artifact store that is a shared directory fails the
   fetch (exit 3) or the upload (a warning; the result stays a pending upload), naming the
   path, and is left as it is. The message says to remove or rename it there; `--refresh-all`

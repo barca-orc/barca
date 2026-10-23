@@ -11,7 +11,7 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pytest
-from barca import _inspect, _storage
+from barca import _inspect, _sinks, _storage
 from barca._artifacts import deserialize, serialize_hashed
 from barca._worker import _write_sinks
 from barca.api import _find_binary
@@ -74,9 +74,8 @@ def test_csv_sink_inference_and_invalid_value_are_atomic(tmp_path):
     step = {"sinks": [{"path": str(path)}]}
     assert _write_sinks(pd.DataFrame({"id": [1]}), step, "frame", "parquet")[0]["status"] == "ok"
     before = path.read_bytes()
-    outcome = _write_sinks({"id": 2}, step, "frame", "json")[0]
-    assert outcome["status"] == "error"
-    assert "csv format requires" in outcome["error"]
+    with pytest.raises(_sinks.SinkError, match="csv format requires"):
+        _write_sinks({"id": 2}, step, "frame", "json")
     assert path.read_bytes() == before
     with pytest.raises(TypeError, match="csv format requires"):
         serialize_hashed([1, 2], path, "csv")
