@@ -456,9 +456,10 @@ A missing or evicted artifact that nothing needs to read leaves the node `cached
   refreshed data never reaches it. Barca prints
   `warning: 'mid' was served from cache but depends on refreshed 'src' ...` when this happens.
   `--no-cascade` without `--refresh` is a usage error (exit 2).
-- With `--partition`, only the selected keys of the target are planned, so refreshing the target
-  recomputes only them. An upstream partitioned asset named in `--refresh` is recomputed for
-  every key: the selection narrows the target only (`barca docs partitions`).
+- With `--partition`, only the selected keys of every partitioned node with that dimension are
+  planned, upstream and downstream, so `--refresh` of any of them recomputes only those keys. A
+  `collect()` fan-in over them is skipped, and naming it in `--refresh` is a usage error
+  (`barca docs partitions`, "Selecting keys").
 
 For external data that changes in place (a blob overwritten at the same path), the canonical
 answer is a sensor ("External data that changes in place" above). Without one, `--refresh`

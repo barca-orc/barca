@@ -179,15 +179,19 @@ an object keyed by partition key (`dim=value`, dimensions sorted and joined with
 {"final_output": {"region=amer": {"_barca_artifact": {...}}, "region=emea": {"_barca_artifact": {...}}}}
 ```
 
-Under `-o value` each key maps to its value. `--partition region=emea,amer` selects keys: only
-those are computed and returned, and `--refresh` of the target refreshes only them. Compound keys
-take a JSON object, `--partition '{"region": "emea", "day": ["2026-10-13", "2026-10-14"]}'`: a
-key is selected when every named dimension has one of the listed values. Upstream partitioned
-assets are not narrowed; they are brought up to date for every key, from cache when fresh.
-`--partition` needs a partitioned target with those dimensions; a key that does not exist, a
-target that is not partitioned, or a target that another target of the same run reads, is a
-usage error (exit 2). The keys of a `partitions_from` target are known only once its source has
-run; a selection that matches none of them returns `{}` with a warning on stderr.
+Under `-o value` each key maps to its value. `--partition region=emea,amer` selects keys across
+the whole run: every partitioned node with that dimension, upstream and downstream, computes only
+those keys, the target returns them, and `--refresh` refreshes only them. Compound keys take a
+JSON object, `--partition '{"region": "emea", "day": ["2026-10-13", "2026-10-14"]}'`: a node is
+narrowed by the named dimensions it has. A selected key has the run hash of a full run, so a full
+run later serves it from cache. A `collect()` fan-in over a narrowed node, and what is below it,
+is not run: a step with status `skipped`, reason `partition_selection`, one stderr note, exit
+code unchanged. No target means every asset and sensor for those keys. The JSON result carries
+`partition_selection` (`selection`, `nodes` with `selected`/`skipped` counts, `skipped_nodes`).
+A dimension no node in the cone has, a value no node with that dimension has, or a target the
+selection skips is a usage error (exit 2). The keys of a `partitions_from(<list>)` node are known
+only once its source has run; a selection that matches none of them returns `{}` with a warning
+on stderr.
 
 If some keys fail, the run is a failed step as before (exit 1): the result line has
 `"status": "failed"` and `failed_node` names the first key to fail (when several keys fail, which
@@ -199,6 +203,7 @@ failed keys is not decided yet.)
 ```bash
 barca get sales pipeline.py --partition region=emea -o value
 barca get sales pipeline.py --partition region=emea,amer --refresh sales
+barca get pipeline.py --partition region=emea --dry-run --json   # what runs for emea; skipped_nodes
 ```
 
 ### Several targets in one call

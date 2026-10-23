@@ -215,7 +215,8 @@ json|pretty` on `run`, `--fields`, `--limit` and `--agent` apply here as they do
 `get` prints the server's artifact paths (paths by default, as `barca get --help` says): its
 `--json` `final_output` is the server's `_barca_artifact` pointer. With `-o value` the server
 reads the values (`RunRequest.values`) and they print as locally, partitioned targets included.
-`--partition` selects keys as locally (`RunRequest.partition`). `get -o url` is a usage error
+`--partition` selects keys across the cone as locally, on `get` and `run` (`RunRequest.partition`).
+`get -o url` is a usage error
 (exit 2) with `--server`: run the command with `--local`. A step's own output (`[node] line`) is
 printed on stderr as a local run prints it.
 
@@ -241,8 +242,9 @@ once locally and once through `barca serve` on a copy of the same project and co
 normalized output with exactly these differences.
 
 `run -o value` on a parquet or pickle result prints the pointer, as locally. `barca.get(...,
-server=True)` reads the value from `GET /runs/{run_id}/output` (an unpartitioned target only;
-`partition=` with `server=` is an error).
+server=True)` reads the value from `GET /runs/{run_id}/output` (an unpartitioned target only).
+With `partition=` it asks for the values instead (`-o value`): the selected keys' values read on
+the server, as JSON (a table as a list of row objects).
 
 A draining server answers a new `--server` run with `503`: the client prints the server's
 error (`this server is shutting down: ...`, kind `infra`) and exits 3; nothing runs here.

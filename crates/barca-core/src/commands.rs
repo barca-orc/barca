@@ -144,6 +144,7 @@ pub async fn run_streaming(
     agent_mode: bool,
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    partition: Option<crate::selection::PartitionSelection>,
 ) -> Result<GetResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -156,7 +157,7 @@ pub async fn run_streaming(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
-        partition: None,
+        partition,
         options: Default::default(),
         rules: crate::freshness::RunRules::request(),
     })
@@ -234,6 +235,7 @@ pub async fn run_many_streaming(
     agent_mode: bool,
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    partition: Option<crate::selection::PartitionSelection>,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -246,7 +248,7 @@ pub async fn run_many_streaming(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
-        partition: None,
+        partition,
         options: Default::default(),
         rules: crate::freshness::RunRules::request(),
     })
@@ -276,7 +278,8 @@ pub struct ServedRun<'a> {
     pub cancel: CancellationToken,
     pub event_tx: Option<UnboundedSender<crate::RunEvent>>,
     pub options: crate::outcome::RunOptions,
-    /// `--partition`: the keys of the targets to compute and return (all keys when `None`).
+    /// `--partition`: the keys every narrowed node of the cone computes (all keys when `None`;
+    /// see [`crate::selection`]).
     pub partition: Option<crate::selection::PartitionSelection>,
     /// The freshness rules (RFC-0008): [`crate::freshness::RunRules::request`] for a run
     /// asked for with the CLI's flags (`POST /runs`), [`crate::freshness::RunRules::tick`] for

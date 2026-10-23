@@ -177,7 +177,8 @@ examples.
 | `barca version` | Print the version (also `barca --version`). |
 
 Common flags on `get` and `run`: `--refresh a,b`, `--no-cascade`, `--refresh-all`,
-`--dry-run`, `--env <name>` (a separate cache and history), `--partition key=value`.
+`--dry-run`, `--env <name>` (a separate cache and history), `--partition key=value` (only those
+keys, across the whole run; also on `barca plan`).
 
 **Scripts and AI agents.** Results go to stdout: a table or summary in a terminal, JSON when
 piped or captured (`--json` and `--pretty` override). Progress and errors go to stderr; in JSON

@@ -1,22 +1,28 @@
 Parse source files and emit the execution plan as JSON
 
-Usage: barca plan [FILES]...
+Usage: barca plan [OPTIONS] [FILES]...
 
 Arguments:
   [FILES]...  Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
 
 Options:
-  -h, --help  Print help
+      --partition <KEY=VALUE[,VALUE]|JSON>
+          Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep the selected keys, and fan-ins over them are left out (listed in partition_selection)
+  -h, --help
+          Print help
 
 Examples:
   barca plan                          # the whole project
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
+  barca plan pipeline.py --partition region=emea   # only the emea keys; skipped fan-ins listed
 
 Output: always pretty-printed JSON {plan_version, total_steps, pool_size, capacity, capacity_source,
 weights, phases: [{reason, streams: [{stream_id, steps}]}], warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
 plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
 stderr (barca docs assets, "Unused inputs").
+With --partition, the plan holds only the selected keys of each narrowed node, leaves out the
+fan-ins over them and gains partition_selection, as `barca get --partition` (barca docs partitions).
 `plan_version` is 1: the plan document format, independent of the package and database versions.
 `reason` is an object: {"type": "initial"} or {"type": "fan_in", "node_id": ...}.
 Planning uses the execution pool size (available cores, or BARCA_POOL_SIZE).

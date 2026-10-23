@@ -336,9 +336,9 @@ def unrelated(raw):
     #[test]
     fn only_the_targets_cone_is_reported() {
         let dag = dag();
-        let plan = plan_for_targets(&dag, &["p.py:unrelated"], &config(), "get");
+        let plan = plan_for_targets(&dag, &["p.py:unrelated"], &config(), "get", None);
         assert_eq!(for_plan(&dag, &plan), []);
-        let plan = plan_for_targets(&dag, &["p.py:total"], &config(), "get");
+        let plan = plan_for_targets(&dag, &["p.py:total"], &config(), "get", None);
         let got = for_plan(&dag, &plan);
         let mut p = pairs(&got);
         p.sort();

@@ -135,8 +135,8 @@ documented command; `python/tests/test_docs_examples.py` executes the manual's e
 and asserts what the text claims. `cargo test -p barca` (`crates/barca-cli/src/contract.rs`) and
 `python/tests/test_cli_contract.py` fail on any surface change that the snapshots and
 `contract.md` do not reflect. Document behavior you have run, and state known limitations
-plainly (e.g. `--partition` narrows only the target; upstream partitioned assets still update
-every key) rather than describing intended behavior.
+plainly (e.g. `--partition` skips a `collect()` fan-in over the selected keys instead of
+computing it over some keys) rather than describing intended behavior.
 
 ## Output and decorator arguments
 

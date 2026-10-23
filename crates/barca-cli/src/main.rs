@@ -250,8 +250,8 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             check_order("get", &args)?;
             let mode = get_mode(output, expires.as_deref(), format, fields.as_deref())?;
             // A served `get` returns the server's artifact pointers (its paths), or with
-            // `-o value` the values the server read. Signed links and a key selection are not
-            // in the run contract yet.
+            // `-o value` the values the server read. Signed links are not in the run contract
+            // yet.
             if mode.url_expires.is_some() {
                 return Err(CliError::from_prose(
                     ErrorKind::Usage,
@@ -301,6 +301,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             refresh,
             no_cascade,
             refresh_all,
+            partition,
             dry_run,
             agent,
             fields,
@@ -309,6 +310,12 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
         } => {
             check_order("run", &args)?;
             let mode = get_run_mode(output, format, fields.as_deref())?;
+            // Checked here as locally; the server parses it again.
+            if let Some(raw) = partition.as_deref() {
+                barca_core::selection::PartitionSelection::parse(raw).map_err(|msg| {
+                    CliError::from_prose(ErrorKind::Usage, format!("error: {msg}"))
+                })?;
+            }
             let (target, files) = split_target_files(args);
             server_files("run", &files, refresh.as_deref())?;
             if target.is_none() {
@@ -331,7 +338,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                     agent,
                     mode: mode.into(),
                     values: false,
-                    partition: None,
+                    partition,
                     fields,
                     env,
                 },
@@ -538,11 +545,7 @@ async fn run_cli(
         } => {
             check_order("get", &args)?;
             let output = get_mode(output, expires.as_deref(), format, fields.as_deref())?;
-            let partition = partition
-                .as_deref()
-                .map(barca_core::selection::PartitionSelection::parse)
-                .transpose()
-                .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))?;
+            let partition = parse_partition(partition.as_deref())?;
             let (target, files) = split_target_files(args);
             check_py_files("get", &files, refresh.as_deref())?;
             if files.is_empty() {
@@ -579,6 +582,7 @@ async fn run_cli(
             refresh,
             no_cascade,
             refresh_all,
+            partition,
             dry_run,
             output,
             format,
@@ -589,6 +593,7 @@ async fn run_cli(
         } => {
             check_order("run", &args)?;
             let output = get_run_mode(output, format, fields.as_deref())?;
+            let partition = parse_partition(partition.as_deref())?;
             let (target, files) = split_target_files(args);
             check_py_files("run", &files, refresh.as_deref())?;
             let Some(target) = target else {
@@ -616,11 +621,15 @@ async fn run_cli(
                 agent,
                 fields.as_deref(),
                 ledger,
+                partition,
             )
             .await
             .map_err(|e| get_run_error(e, ctx, &hint_files))
         }
-        Cli::Plan { files } => plan_cmd(files, &python).await.map_err(engine),
+        Cli::Plan { files, partition } => {
+            let partition = parse_partition(partition.as_deref())?;
+            plan_cmd(files, &python, partition).await.map_err(engine)
+        }
         Cli::State { command } => match command {
             StateCommand::Backups { format, env } => {
                 state_backups_cmd(env.as_deref(), &python, is_json(format))
@@ -846,3 +855,13 @@ async fn run_cli(
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+/// `--partition`, parsed; a usage error naming the accepted forms when it does not parse.
+#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
+fn parse_partition(
+    raw: Option<&str>,
+) -> Result<Option<barca_core::selection::PartitionSelection>, CliError> {
+    raw.map(barca_core::selection::PartitionSelection::parse)
+        .transpose()
+        .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
+}

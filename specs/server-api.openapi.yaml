@@ -2796,6 +2796,53 @@ components:
           $ref: '#/components/schemas/CacheReport'
         uploads:
           $ref: '#/components/schemas/Uploads'
+        partition_selection:
+          $ref: '#/components/schemas/PartitionSelection'
+    PartitionSelection:
+      type: object
+      additionalProperties: false
+      description: --partition (RunRequest.partition) on a run, a dry run or barca plan. The
+        selection, each narrowed node (a planned partitioned node with a selected dimension) with
+        the keys kept and left out (null while its keys are not known, before its partitions_from
+        source ran), and the nodes the selection does not run (each also a step with status, or in
+        a dry run action, skipped and reason partition_selection).
+      required:
+      - selection
+      - nodes
+      - skipped_nodes
+      properties:
+        selection:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - id
+            - selected
+            - skipped
+            properties:
+              id:
+                type: string
+              selected:
+                type:
+                - integer
+                - 'null'
+                minimum: 0
+              skipped:
+                type:
+                - integer
+                - 'null'
+                minimum: 0
+        skipped_nodes:
+          type: array
+          items:
+            type: string
     CacheReport:
       type: object
       additionalProperties: false
@@ -3707,8 +3754,9 @@ components:
             barca get -o value --json prints them, instead of the artifact pointers.
         partition:
           type: string
-          description: get --partition, as the flag takes it (region=emea,amer, or a JSON object for compound
-            keys). 400 when it does not parse, or with command run.
+          description: --partition of get or run, as the flag takes it (region=emea,amer, or a JSON object
+            for compound keys). It narrows every partitioned node of the run with a named dimension;
+            400 when it does not parse.
     Explain:
       type: object
       required:
@@ -3716,6 +3764,8 @@ components:
       - summary
       description: The barca get --dry-run --json / barca run --dry-run --json body.
       properties:
+        partition_selection:
+          $ref: '#/components/schemas/PartitionSelection'
         capacity:
           type: integer
           minimum: 0
@@ -3749,6 +3799,8 @@ components:
           phases: *id056
           final_output:
             description: 'Single target: the value, or an artifact pointer for binary formats.'
+          partition_selection:
+            $ref: '#/components/schemas/PartitionSelection'
           targets:
             type: object
             description: 'Several targets: each target by name, in the order given.'

@@ -16,13 +16,14 @@ use std::collections::HashMap;
 pub async fn plan(
     file_args: &[String],
     python: &std::path::Path,
+    partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<PlanResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
     // `barca plan` plans every step of the files it reads (#550).
     dag.check_imports(dag.graph.node_weights().map(|n| n.id.as_str()))?;
     let cwd = std::env::current_dir()
         .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
-    let result = plan_from_dag(&dag, crate::config::capacity_in(&cwd)?);
+    let result = plan_selected(&dag, crate::config::capacity_in(&cwd)?, partition)?;
     crate::warnings::print(&result.warnings);
     crate::execution::warn_over_capacity(&result.weights, result.capacity, &result.capacity_source);
     Ok(result)
@@ -34,16 +35,33 @@ pub fn plan_from_dag(
     dag: &crate::dag::Dag,
     capacity: crate::config::CapacitySetting,
 ) -> PlanResult {
+    plan_selected(dag, capacity, None).expect("a plan without a selection")
+}
+
+/// [`plan_from_dag`] narrowed to `partition` (`barca plan --partition`), as a `get` with no
+/// target narrows its plan; a usage error as for `get`.
+pub fn plan_selected(
+    dag: &crate::dag::Dag,
+    capacity: crate::config::CapacitySetting,
+    partition: Option<&crate::selection::PartitionSelection>,
+) -> Result<PlanResult, BarcaError> {
     let pool_size = crate::execution::default_pool_size();
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
     };
-    let plan = planner::plan_from_dag(dag, &config);
+    let mut plan = planner::plan_from_dag_narrowed(dag, &config, partition);
+    let narrowing = match partition {
+        Some(selection) => Some(selection.apply(dag, &mut plan, &[])?),
+        None => None,
+    };
+    if let Some(note) = narrowing.as_ref().and_then(|n| n.note()) {
+        crate::errln!("{note}");
+    }
     let (capacity, capacity_source) = crate::execution::capacity(capacity, pool_size);
 
     let warnings = crate::warnings::for_plan(dag, &plan);
-    PlanResult {
+    Ok(PlanResult {
         plan_version: crate::results::PLAN_VERSION,
         warnings,
         pool_size,
@@ -66,7 +84,8 @@ pub fn plan_from_dag(
                     .collect(),
             })
             .collect(),
-    }
+        partition_selection: narrowing.map(|n| n.report()),
+    })
 }
 
 // ─── history ──────────────────────────────────────────────────────────────────
@@ -439,6 +458,9 @@ pub async fn explain(
         file_args,
     )
     .await?;
+    if let Some(note) = crate::selection::explain_note(&result) {
+        crate::errln!("{note}");
+    }
     crate::warnings::print(&result.warnings);
     Ok(result)
 }

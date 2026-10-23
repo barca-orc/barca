@@ -228,8 +228,20 @@ fn detect_chains(dag: &Dag) -> Vec<Chain> {
 
 /// Generate an execution plan from a topology and resource config.
 pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> ExecutionPlan {
+    plan_narrowed(dag, topology, config, None)
+}
+
+/// [`plan`], expanding only the selected keys of a static dimension that `selection` names
+/// (`--partition`), so a few keys out of many are never all built. A pre-filter only:
+/// [`crate::selection::PartitionSelection::apply`] narrows the plan and decides what is skipped.
+pub fn plan_narrowed(
+    dag: &Dag,
+    topology: &Topology,
+    config: &ResourceConfig,
+    selection: Option<&crate::selection::PartitionSelection>,
+) -> ExecutionPlan {
     let phase_assignment = assign_phases(topology);
-    let phases = build_phases(dag, topology, &phase_assignment, config);
+    let phases = build_phases(dag, topology, &phase_assignment, config, selection);
     let phases = merge_single_stream_phases(dag, phases);
 
     let total_steps: usize = phases
@@ -364,6 +376,7 @@ fn build_phases(
     topology: &Topology,
     phase_assignment: &HashMap<usize, usize>,
     config: &ResourceConfig,
+    selection: Option<&crate::selection::PartitionSelection>,
 ) -> Vec<Phase> {
     let max_phase = phase_assignment.values().copied().max().unwrap_or(0);
 
@@ -391,7 +404,7 @@ fn build_phases(
         // across streams so each worker process handles a subset.
         let mut work_units: Vec<Vec<StreamStep>> = Vec::new();
         for &chain_idx in &chains_in_phase {
-            let steps = chain_to_steps(dag, &topology.chains[chain_idx]);
+            let steps = chain_to_steps(dag, &topology.chains[chain_idx], selection);
             let has_partitioned = steps.iter().any(|s| !s.partition_keys.is_empty());
 
             if !has_partitioned {
@@ -500,7 +513,11 @@ fn build_phases(
 }
 
 /// Convert a chain's nodes into StreamSteps, expanding static partitions.
-fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
+fn chain_to_steps(
+    dag: &Dag,
+    chain: &Chain,
+    selection: Option<&crate::selection::PartitionSelection>,
+) -> Vec<StreamStep> {
     let mut steps = Vec::new();
 
     for node_id in &chain.nodes {
@@ -511,7 +528,10 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
         }
 
         // Check for static partitions — expand into N steps.
-        let static_partitions = collect_static_partitions(&node.extracted.partitions);
+        let mut static_partitions = collect_static_partitions(&node.extracted.partitions);
+        if let Some(selection) = selection {
+            selection.prefilter(&mut static_partitions);
+        }
         // Check for derived partitions — mark for resolution at dispatch time.
         let derived_partitions = collect_derived_partitions(&node.extracted.partitions);
         let serializer: Option<Arc<str>> = node
@@ -734,8 +754,17 @@ fn topo_sort_indices(count: usize, deps: &HashMap<usize, HashSet<usize>>) -> Vec
 
 /// Full pipeline: DAG → decompose → plan.
 pub fn plan_from_dag(dag: &Dag, config: &ResourceConfig) -> ExecutionPlan {
+    plan_from_dag_narrowed(dag, config, None)
+}
+
+/// [`plan_from_dag`] with the [`plan_narrowed`] pre-filter.
+pub fn plan_from_dag_narrowed(
+    dag: &Dag,
+    config: &ResourceConfig,
+    selection: Option<&crate::selection::PartitionSelection>,
+) -> ExecutionPlan {
     let topology = decompose(dag);
-    plan(dag, &topology, config)
+    plan_narrowed(dag, &topology, config, selection)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -881,7 +910,7 @@ mod tests {
         let chain = Chain {
             nodes: vec!["test.py:a".to_string()],
         };
-        let steps = chain_to_steps(&dag, &chain);
+        let steps = chain_to_steps(&dag, &chain, None);
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].sinks.len(), 2);
         assert_eq!(steps[0].sinks[0].path, "exports/out.parquet");

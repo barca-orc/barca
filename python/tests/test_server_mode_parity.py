@@ -79,6 +79,9 @@ CONTRACT_TABLE += [
     ("json_fields", ["get", "total", "pipeline.py", "--json", "--fields", "id,status"]),
     ("status_fields", ["status", "pipeline.py", "--fields", "id,cache", "--limit", "2"]),
     ("whole_project", ["get", "--json"]),
+    ("pretty_partition_dry_run", ["get", "--partition", "k=a", "--dry-run", "--pretty"]),
+    ("run_partition_no_dimension", ["run", "report", "pipeline.py", "--partition", "k=a"]),
+    ("get_partition_skipped_target", ["get", "keys", "pipeline.py", "--partition", "k=a"]),
     ("stats_unknown", ["stats", "nope", "pipeline.py", "--json"]),
     # History filters and one run in detail. `FAILED_RUN` is the newest failed run of the side
     # the case runs on.

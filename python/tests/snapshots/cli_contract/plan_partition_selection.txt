@@ -1,0 +1,34 @@
+# barca plan pipeline.py --partition k=a  (stdout, exit 0)
+capacity : integer
+capacity_source : string
+partition_selection : object
+partition_selection.nodes : array
+partition_selection.nodes[] : object
+partition_selection.nodes[].id : string
+partition_selection.nodes[].selected : integer
+partition_selection.nodes[].skipped : integer
+partition_selection.selection : object
+partition_selection.selection.k : array
+partition_selection.selection.k[] : string
+partition_selection.skipped_nodes : array
+partition_selection.skipped_nodes[] : string
+phases : array
+phases[] : object
+phases[].reason : object
+phases[].reason.node_id : string  (optional)
+phases[].reason.type : string
+phases[].streams : array
+phases[].streams[] : object
+phases[].streams[].steps : array
+phases[].streams[].steps[] : string
+phases[].streams[].stream_id : string
+plan_version : integer
+pool_size : integer
+total_steps : integer
+warnings : array
+warnings[] : object
+warnings[].kind : string
+warnings[].message : string
+warnings[].node : string
+warnings[].param : string
+weights : object

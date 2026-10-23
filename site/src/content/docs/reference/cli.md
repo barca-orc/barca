@@ -168,11 +168,18 @@ each `_barca_artifact` pointer gains `url` and `url_expires_at`. See
 **Partitioned targets.** A partitioned asset returns every key, sorted: `final_output` is an
 object keyed by partition key (`"region=emea"`; a compound key is `"day=d1,region=emea"`), each a
 pointer, or a value under `-o value`, and `-o path` prints one line per key.
-`--partition region=emea,amer` selects keys: only those run, are returned, and are refreshed by
-`--refresh`. A JSON object selects on several dimensions,
-`--partition '{"region": "emea", "day": ["d1", "d2"]}'`. Upstream partitioned assets are not
-narrowed. A selection naming no target, an unpartitioned target, a missing dimension or key, or
-a target another target of the run reads is a usage error (exit 2). When some keys fail the run
+`--partition region=emea,amer` selects keys across the whole run: every partitioned node with
+that dimension, upstream of the target and downstream, computes only those keys, they are
+returned, and `--refresh` refreshes only them. A JSON object selects on several dimensions,
+`--partition '{"region": "emea", "day": ["d1", "d2"]}'`. A selected key has the same run hash as
+in a full run, so a later full run serves it from cache. A `collect()` fan-in over a narrowed node
+(and what is below it) is not run: status `skipped`, reason `partition_selection`, one note on
+stderr, and the exit code is unchanged. With no target the selection applies to every asset and
+sensor; `barca run` and `barca plan` take it too. JSON gains `partition_selection` (the
+selection, each narrowed node's `selected` and `skipped` key counts, `skipped_nodes`). A
+dimension no node in the cone has, a value no node with that dimension has, or a target the
+selection would skip is a usage error (exit 2). Up to 0.29.2 `--partition` narrowed only the
+target. See [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/#selecting-keys-with---partition). When some keys fail the run
 fails (exit 1, `failed_node` names the key) and `final_output` in the result line holds the
 keys that succeeded; how a partial failure is reported may still change
 (`barca docs partitions`).
@@ -200,7 +207,7 @@ exit code is still 2 and nothing runs.
 | `-o path` | Print only the artifact paths, one per line (one per partition key). With `--json`, the default JSON. |
 | `-o value` | Print only the value. With `--json`, the JSON result with the value in `final_output`. |
 | `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
-| `--partition KEY=V[,V]` | Select keys of a partitioned target (a JSON object for compound keys); only they run, are returned and are refreshed. |
+| `--partition KEY=V[,V]` | Select partition keys across the cone (a JSON object for compound keys): every partitioned node with that dimension computes only them, and fan-ins over them are skipped. Works without a target. |
 | `--agent` | Plain progress lines on stderr in place of the progress bar. |
 | `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
 | `--env <name>` | Use a named environment's cache and history. |

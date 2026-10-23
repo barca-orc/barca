@@ -571,6 +571,9 @@ async fn print_dry_run(
             barca_core::errln!("{note}");
         }
     }
+    if let Some(note) = barca_core::selection::explain_note(&result) {
+        barca_core::errln!("{note}");
+    }
     barca_core::warnings::print(&result.warnings);
     crate::commands::emit(barca_core::report::render_explain(
         &result,

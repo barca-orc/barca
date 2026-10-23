@@ -67,7 +67,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 - Several targets: the result has `targets` (per name: `status`, then `final_output`, or
   `failed_node` and `error`) instead of `final_output`. Every target runs even if another fails.
 - A partitioned target returns every key. `--partition region=emea,amer` (a JSON object for
-  compound keys) computes and returns only those keys, and scopes `--refresh` of the target.
+  compound keys) computes only those keys in every partitioned node of the run, returns them, and
+  scopes `--refresh`; a `collect()` fan-in over them is skipped (`partition_selection`).
 
 ## Output contract
 

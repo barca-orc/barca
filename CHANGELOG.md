@@ -8,6 +8,18 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- `--partition` narrows the whole planned cone, not only the target. Every partitioned node with
+  a selected dimension computes only the selected keys, upstream and downstream: `barca get
+  margin --partition region=apac` no longer brings every key of `sales` up to date, and
+  `--refresh sales` with it recomputes only `sales[region=apac]`. A selected key has the same run
+  hash and artifact as in a full run, so a later full run serves it from cache. A fan-in that
+  `collect`s a narrowed node, and what is below it, is not run: the step reports it `skipped`
+  with reason `partition_selection`, stderr names it in one note, and the run still exits 0. The
+  old target-only behaviour is gone, with no flag to keep it; run without `--partition` for every
+  key. This breaking change ships in a patch release (0.29.3) by choice.
+
 ### Features
 
 - Debugging a failed job from the CLI, here or from a server. `barca history` takes
@@ -39,6 +51,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   flattened), locally and from a server (at most 10000 rows of each, with a note), and `show
   tables` lists them. The server never runs SQL: DuckDB reads and writes files and the API has
   no authentication (`barca docs sql`, "With a server" and "barca's own tables").
+
+- `--partition` works without a target (`barca get --partition retailer=r1,r2`: every asset and
+  sensor, for those keys), on `barca run`, on `barca plan`, with `--server` (`RunRequest.partition`,
+  now accepted for `run` too) and in `barca.get(..., partition=...)`, including with `server=`. The
+  JSON results of `get`, `run`, `--dry-run` and `plan` gain `partition_selection`: the selection,
+  each narrowed node's `selected` and `skipped` key counts and the `skipped_nodes`. A value that is
+  a key of no node with that dimension, or a dimension no node in the cone has, is a usage error.
+  Selecting a few keys plans only those keys: at 200,000 keys on a three-asset chain, planning 10
+  keys takes 71 ms and 99 MB, against 378 ms and over 850 MB for every key (`barca docs
+  partitions`, "Selecting keys").
 
 ## 0.29.2 (2026-10-22)
 

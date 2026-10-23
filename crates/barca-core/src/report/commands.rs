@@ -68,7 +68,49 @@ pub fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
         obj.insert("cache".into(), serde_json::json!(cache));
     }
     uploads_field(&mut out, result.uploads.as_ref());
+    selection_field(&mut out, result.partition_selection.as_ref());
     out
+}
+
+/// The human lines for `partition_selection`: the selection, each narrowed node's share of
+/// its keys, and the nodes it skips.
+pub fn selection_lines(selection: &crate::results::PartitionSelectionReport) -> String {
+    let named: Vec<String> = selection
+        .selection
+        .iter()
+        .map(|(d, vs)| format!("{d}={}", vs.join(",")))
+        .collect();
+    let nodes: Vec<String> = selection
+        .nodes
+        .iter()
+        .map(|n| {
+            let name = crate::targets::short_name(&n.id);
+            match (n.selected, n.skipped) {
+                (Some(s), Some(k)) => format!("{name} {s} of {} keys", s + k),
+                _ => format!("{name} (keys known once its source runs)"),
+            }
+        })
+        .collect();
+    let mut out = format!("--partition {}: {}\n", named.join(" "), nodes.join(", "));
+    if !selection.skipped_nodes.is_empty() {
+        let skipped: Vec<&str> = selection
+            .skipped_nodes
+            .iter()
+            .map(|id| crate::targets::short_name(id))
+            .collect();
+        out.push_str(&format!(
+            "Skipped (run without --partition to update): {}\n",
+            skipped.join(", ")
+        ));
+    }
+    out
+}
+
+/// `partition_selection` on a run's JSON body, when it ran under `--partition`.
+fn selection_field(out: &mut Value, selection: Option<&crate::results::PartitionSelectionReport>) {
+    if let (Value::Object(obj), Some(selection)) = (out, selection) {
+        obj.insert("partition_selection".into(), serde_json::json!(selection));
+    }
 }
 
 /// What the human summary of a single-target run says it did: `got 'x'`, `all assets` or
@@ -1123,6 +1165,9 @@ pub fn render_explain(
                 result.summary.cached,
                 result.summary.unknown
             );
+            if let Some(selection) = &result.partition_selection {
+                text!(rendered, "{}", selection_lines(selection));
+            }
             let heavy: Vec<String> = result
                 .steps
                 .iter()
@@ -1193,6 +1238,7 @@ fn multi_run(result: &MultiResult) -> Value {
         obj.insert("cache".into(), serde_json::json!(cache));
     }
     uploads_field(&mut run, result.uploads.as_ref());
+    selection_field(&mut run, result.partition_selection.as_ref());
     run
 }
 

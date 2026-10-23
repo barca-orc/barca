@@ -1450,6 +1450,7 @@ mod tests {
             partitions: None,
             cache: None,
             uploads: None,
+            partition_selection: None,
         });
     }
 

@@ -31,7 +31,7 @@ Options:
           Emit human-readable output (the default when stdout is a terminal)
 
       --partition <KEY=VALUE[,VALUE]|JSON>
-          Select keys of a partitioned target: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Only those keys are computed and returned, and --refresh of the target refreshes only them
+          Select partition keys across the cone: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Every partitioned node with a named dimension computes only those keys (--refresh too); a fan-in over them is skipped. Works without a target
 
       --refresh <REFRESH>
           Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade)
@@ -91,7 +91,10 @@ Examples:
   barca get sales pipeline.py -o url --partition region=emea --expires 30m   # one key's link
   barca get sales pipeline.py              # a partitioned target: one path per key
   barca get sales pipeline.py --partition region=emea,amer   # only these keys: computed and returned
+  barca get margin pipeline.py --partition region=apac   # upstream partitioned assets compute apac only
   barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only that key
+  barca get pipeline.py --partition region=emea   # no target: every asset and sensor, for emea only
+  barca get pipeline.py --partition region=emea --dry-run   # what runs for emea, which fan-ins are skipped
   barca get total pipeline.py --agent      # plain progress lines on stderr
   barca get total pipeline.py --env dev    # separate cache and state per environment
   barca list pipeline.py                   # not sure of the name? list assets and tasks first
@@ -114,10 +117,17 @@ url_expires_at. It needs a cloud store (s3://, gs://, abfs://; a local store is 
 whose upload is pending (`local only`) is uploaded first; one that still is not in the store, or
 credentials that cannot sign, is exit 3 (barca docs remote).
 A partitioned target returns every key, sorted: final_output is an object keyed by partition key
-("region=emea") and -o path prints one path per key. --partition region=emea,amer (or a JSON
-object for compound keys) selects keys of the target: only they run, are returned and are
-refreshed by --refresh. When some keys fail the run fails (exit 1) and final_output in the
-failed result line holds the keys that succeeded.
+("region=emea") and -o path prints one path per key. When some keys fail the run fails (exit 1)
+and final_output in the failed result line holds the keys that succeeded.
+--partition region=emea,amer (or a JSON object for compound keys) selects keys across the whole
+cone: every partitioned node with a named dimension, upstream and downstream, computes and returns
+only those keys, and --refresh refreshes only them; the rest is planned as without the flag. A
+selected key has the run hash and artifact of a full run, so a later full run serves it from cache.
+A node that collect()s a narrowed node is not run (status skipped, reason partition_selection,
+one note on stderr), nor is anything below it; it does not change the exit code. JSON gains
+partition_selection {selection, nodes: [{id, selected, skipped}], skipped_nodes}. A value no node
+with that dimension has, a dimension no node in the cone has, or a target --partition would skip
+is exit 2 (barca docs partitions, "Selecting keys").
 JSON is one line on stdout with status ("success"), run_id,
 steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
 (ran or cached, and why; `env` holds the values of variables the node declares with env=[...],

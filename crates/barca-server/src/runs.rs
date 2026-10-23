@@ -278,16 +278,10 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
     Ok((StatusCode::ACCEPTED, Json(json!({ "run_id": run_id }))).into_response())
 }
 
-/// `partition`, parsed as `--partition` is; `400` when it does not parse or names keys of a
-/// `run`.
+/// `partition`, parsed as `--partition` is; `400` when it does not parse.
 fn partition_of(
     request: &RunRequest,
 ) -> Result<Option<barca_core::selection::PartitionSelection>, ApiError> {
-    if request.partition.is_some() && request.command == RunCommand::Run {
-        return Err(ApiError::BadRequest(
-            "`partition` applies to `get` only".to_string(),
-        ));
-    }
     request
         .partition_selection()
         .map_err(|msg| ApiError::BadRequest(format!("error: {msg}")))

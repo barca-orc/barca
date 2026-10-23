@@ -171,8 +171,9 @@ pub(crate) fn plan_for_targets(
     target_ids: &[&str],
     config: &ResourceConfig,
     command_label: &str,
+    selection: Option<&crate::selection::PartitionSelection>,
 ) -> ExecutionPlan {
-    let full_plan = planner::plan_from_dag(dag, config);
+    let full_plan = planner::plan_from_dag_narrowed(dag, config, selection);
     if !target_ids.is_empty() {
         filter_plan_to_subgraph(full_plan, &dag.subgraph_many(target_ids))
     } else if command_label == "get" {
@@ -569,7 +570,13 @@ def lone() -> int:
             pool_size: 4,
             concurrency_groups: HashMap::new(),
         };
-        let plan = plan_for_targets(&dag, &["p.py:check_a", "p.py:check_b"], &config, "run");
+        let plan = plan_for_targets(
+            &dag,
+            &["p.py:check_a", "p.py:check_b"],
+            &config,
+            "run",
+            None,
+        );
         let ids: Vec<String> = plan
             .phases
             .iter()
@@ -600,11 +607,11 @@ def lone() -> int:
             pool_size: 4,
             concurrency_groups: HashMap::new(),
         };
-        let mut got = planned_ids(&plan_for_targets(&dag, &[], &config, "get"));
+        let mut got = planned_ids(&plan_for_targets(&dag, &[], &config, "get", None));
         got.sort();
         assert_eq!(got, ["p.py:deeper", "p.py:left", "p.py:lone", "p.py:src"]);
         // status (inspection) still covers the whole file, tasks included.
-        let all = planned_ids(&plan_for_targets(&dag, &[], &config, "status"));
+        let all = planned_ids(&plan_for_targets(&dag, &[], &config, "status", None));
         assert!(all.iter().any(|i| i == "p.py:check_a"), "{all:?}");
     }
 
@@ -806,6 +813,7 @@ def lone() -> int:
             warnings: Vec::new(),
             uploads: None,
             capacity: 4,
+            partition_selection: None,
         };
         let one = serde_json::to_value(&r).unwrap();
         assert_eq!(one["target"], "a");
@@ -852,6 +860,7 @@ def lone() -> int:
             ],
             cache: None,
             uploads: None,
+            partition_selection: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(
