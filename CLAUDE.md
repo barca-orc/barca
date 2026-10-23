@@ -190,7 +190,10 @@ Types: `feat`, `fix`, `refactor`, `polish`, `doc`, `test`, `perf`, `remove`, `ch
 Release notes are not generated from commits: `CHANGELOG.md` is their source. A change adds one
 bullet under `## Pending` (`### Breaking`, `### Features`, `### Bug Fixes`, `### Performance`,
 `### Removed` or `### Documentation`), and the release workflow publishes the version's
-`## <version> (<date>)` section as the GitHub release body.
+`## <version> (<date>)` section as the GitHub release body. CI (`scripts/check-changelog.py`)
+fails a change that edits a released section (one whose `v<version>` tag exists), which catches a
+stale branch's bullets merging into it; to fix released notes on purpose, add a
+`Changelog-Fix: <reason>` line to a commit message.
 
 ## Versioning
 

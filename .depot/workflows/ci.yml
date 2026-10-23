@@ -23,6 +23,17 @@ jobs:
       PIP_CACHE_DIR: /mnt/cache/test/pip
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history and tags: the CHANGELOG check reads each release's tag.
+          fetch-depth: 0
+
+      # A branch cut before a release can merge its notes into the section that release
+      # shipped (git applies the hunk by context). Released sections must match their tag's
+      # copy or the base's; a commit line `Changelog-Fix: <reason>` allows a deliberate fix.
+      - name: Released CHANGELOG sections are unchanged
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 scripts/check-changelog.py --base "$BASE"
 
       - name: Mount cache disk
         uses: depot/cache-mount@v1
