@@ -390,3 +390,61 @@ def test_a_cutoff_dict_source_reruns_only_the_keys_whose_value_changed(tmp_path)
     (tmp_path / "versions.json").write_text(json.dumps({"c": 1, "b": 2, "a": 1}))
     get(tmp_path, "per_customer")
     assert calls(tmp_path) == []
+
+
+SNAPSHOT = """
+import pathlib
+
+from barca import asset
+
+HERE = pathlib.Path(__file__).parent
+
+
+def _called(what):
+    with (HERE / "calls.txt").open("a") as f:
+        f.write(what + "\\n")
+
+
+# A snapshot of an external system: new bytes for the same code and inputs are expected.
+@asset(cutoff=True{deterministic})
+def snapshot() -> str:
+    _called("snapshot")
+    return (HERE / "external.txt").read_text()
+
+
+@asset(inputs={{"s": snapshot}})
+def report(s: str) -> int:
+    _called("report")
+    return len(s)
+"""
+
+NOT_DETERMINISTIC = "produced different bytes for the same code and inputs"
+
+
+@pytest.mark.parametrize("deterministic", [False, True])
+def test_a_nondeterministic_cutoff_asset_reruns_what_reads_it_only_on_new_bytes(
+    tmp_path, deterministic
+):
+    """`deterministic=False` (#634) silences the warning; cutoff (#636) still decides what
+    reads the asset by its bytes, so new bytes under the same run hash are never served stale
+    and the same bytes keep it cached."""
+    (tmp_path / "pipeline.py").write_text(
+        SNAPSHOT.format(deterministic="" if deterministic else ", deterministic=False")
+    )
+    (tmp_path / "external.txt").write_text("one")
+    get(tmp_path, "report")
+    assert calls(tmp_path) == ["report", "snapshot"]
+
+    # The same run hash, new bytes: what reads it reruns.
+    (tmp_path / "external.txt").write_text("three")
+    proc = run(tmp_path, "get", "report", "pipeline.py", "--json", "--refresh", "snapshot")
+    assert proc.returncode == 0, proc.stderr
+    assert calls(tmp_path) == ["report", "snapshot"]
+    assert (NOT_DETERMINISTIC in proc.stderr) == deterministic, proc.stderr
+
+    # The same run hash, the same bytes: what reads it stays cached, and no warning.
+    proc = run(tmp_path, "get", "report", "pipeline.py", "--json", "--refresh", "snapshot")
+    assert proc.returncode == 0, proc.stderr
+    assert calls(tmp_path) == ["snapshot"]
+    assert NOT_DETERMINISTIC not in proc.stderr
+    assert step(json.loads(proc.stdout), "report")["status"] == "cached"

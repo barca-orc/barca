@@ -125,6 +125,39 @@ def test_runs_serve_started_are_in_the_clis_history_and_logs(tmp_path):
     assert "PEAK_RSS" in text
 
 
+KEYED_FAILURE = """
+from barca import asset, partitions
+
+
+@asset(partitions={"key": partitions(["k0", "k1", "k2", "k3", "k4", "k5"])})
+def scan(key: str) -> str:
+    print(f"scanning {key}")
+    if key == "k5":
+        print("k5 is malformed")
+        raise ValueError("bad key k5")
+    return key
+"""
+
+
+def test_a_failed_step_keeps_its_output_tail_in_a_bounded_page_of_steps(tmp_path):
+    """A run's steps are paged (#623, failed steps kept first); the failed key recorded last
+    is still listed past the limit, with its output tail (#627)."""
+    (tmp_path / "pipeline.py").write_text(KEYED_FAILURE)
+    out = barca(tmp_path, "get", "scan", "--json")
+    assert out.returncode == 1, out.stderr
+    run_id = json.loads(out.stdout)["run_id"]
+    view = ok(barca(tmp_path, "history", run_id, "--limit", "2", "--json"))
+    assert view["steps_page"] == {"total": 6, "truncated": True}, view["steps_page"]
+    assert len(view["steps"]) == 2
+    [failed] = [s for s in view["steps"] if s["status"] == "failed"]
+    assert failed["partition_key"] == "k5" or failed["node_id"].endswith("k5]"), failed
+    assert failed["output_tail"] == ["scanning k5", "k5 is malformed"], failed
+    runs = ok(barca(tmp_path, "history", "--json", "--fields", "run_id,failed_node,error"))
+    [run] = runs["runs"]
+    assert run["run_id"] == run_id and "k5" in run["failed_node"], run
+    assert run["error"].startswith("ValueError: bad key k5"), run
+
+
 # ─── #627.3 and #627.4: per-step memory, and run_id in barca stats ───────────
 
 MEMORY = """

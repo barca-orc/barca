@@ -473,3 +473,86 @@ def test_a_run_killed_without_a_drain_is_not_restarted(tmp_path):
     finally:
         second.kill()
     release(project, "slow")
+
+
+# ─── Where #628's runtime items meet the other 0.31.0 changes ────────────────
+
+MEMORY = """
+@asset()
+def big() -> int:
+    with open("pids", "a") as f:
+        f.write(f"{os.getpid()}\\n")
+    block = bytearray(300 * 1024 * 1024)
+    for i in range(0, len(block), 4096):
+        block[i] = 1
+    return len(block)
+
+
+@asset(inputs={"n": big})
+def small(n: int) -> int:
+    with open("pids", "a") as f:
+        f.write(f"{os.getpid()}\\n")
+    return n + 1
+"""
+
+
+@pytest.mark.skipif(os.uname().sysname != "Linux", reason="the per-step peak is Linux's")
+def test_a_server_capacity_of_one_runs_one_worker_and_each_steps_peak_is_its_own(tmp_path):
+    """The pool follows the server capacity (one worker), so both steps share a worker: the
+    per-step peak (#627) must still give `small` its own peak, not the 300 MB of `big`."""
+    project = write(tmp_path / "p", MEMORY)
+    with Serve(project, "--capacity", "1") as server:
+        status, body = server.request("POST", "/runs", {"command": "get", "targets": ["small"]})
+        assert status == 202, body
+        view = server.finished(body["run_id"])
+        assert view["status"] == "success", view
+        assert len(set((project / "pids").read_text().split())) == 1, "one worker"
+        rss = {s["node_id"].split(":")[1]: s["max_rss_bytes"] for s in view["steps"]}
+        assert rss["big"] > 300 * 1024 * 1024, rss
+        assert rss["small"] < 200 * 1024 * 1024, rss
+        assert queue(server)["capacity"]["in_use"] == 0
+
+
+PHASES = """
+@asset(weight=2, cutoff=True)
+def gate() -> int:
+    hold("gate")
+    return 1
+
+
+@asset(inputs={"g": gate}, weight=2)
+def after(g: int) -> int:
+    hold("after")
+    return g
+
+
+@task()
+def light() -> None:
+    hold("light")
+"""
+
+
+def test_a_cutoff_asset_gives_the_shared_capacity_back_between_its_phases(tmp_path):
+    """What reads a cutoff asset is planned in a later phase (#636). Between the phases the
+    run holds no weight, so a step waiting in the shared capacity's line goes first, and the
+    run's next phase queues behind it; nothing is left held at the end."""
+    project = write(tmp_path / "p", PHASES)
+    with Serve(project, "--capacity", "2", "--max-runs", "4") as server:
+        status, body = server.request("POST", "/runs", {"command": "get", "targets": ["after"]})
+        assert status == 202, body
+        chain = body["run_id"]
+        wait_for(lambda: started(project, "gate") == 1, "the cutoff asset to start")
+        other = submit(server, "light")
+        wait_for(lambda: queue(server)["capacity"]["waiting"], "the light step to wait")
+        release(project, "gate")
+        wait_for(lambda: started(project, "light") == 1, "the light step to start")
+        wait_for(lambda: queue(server)["capacity"]["waiting"], "the next phase to wait")
+        assert started(project, "after") == 0, "the next phase overtook a waiting step"
+        release(project, "light")
+        wait_for(lambda: started(project, "after") == 1, "the next phase to start")
+        release(project, "after")
+        assert server.finished(other)["status"] == "success"
+        assert server.finished(chain)["status"] == "success"
+        assert order(project) == ["gate", "light", "after"]
+        capacity = queue(server)["capacity"]
+        assert (capacity["in_use"], capacity["waiting"]) == (0, []), capacity
