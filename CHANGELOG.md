@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.31.0 (2026-10-23)
+
 ### Breaking
 
 - `barca serve` no longer stops a run after 600 seconds. That limit was fixed and undocumented,
