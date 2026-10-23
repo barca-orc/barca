@@ -310,6 +310,11 @@ async fn delete_cancels_in_flight_run() {
 
     // Wait until the run is executing (and, on Linux, its worker is alive).
     loop {
+        // Checked on every pass, the one waiting for the worker included.
+        assert!(
+            t0.elapsed() < Duration::from_secs(30),
+            "run never started executing"
+        );
         let (_, s) = send(&app, "GET", &status_uri).await;
         match s["status"].as_str() {
             Some("running") => {
@@ -323,10 +328,6 @@ async fn delete_cancels_in_flight_run() {
             Some("pending") => {}
             other => panic!("unexpected status before cancel: {other:?}"),
         }
-        assert!(
-            t0.elapsed() < Duration::from_secs(30),
-            "run never started executing"
-        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 

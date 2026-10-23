@@ -658,69 +658,76 @@ mod tests {
         })
     }
 
-    #[tokio::test]
-    async fn a_restarted_server_resumes_the_queue_in_order_under_the_same_ids_and_keeps_the_pause()
-    {
-        let dir = tempfile::tempdir().unwrap();
-        let first = state(dir.path());
-        // Paused: every run waits, recorded in the order it was accepted.
-        let _ = pause(State(first.clone())).await.unwrap();
-        let mut ids = Vec::new();
-        for target in ["a", "b", "c"] {
-            let spec = RunSpec::api(RunCommand::Get, vec![target.into()], vec![]);
-            let admitted = admit(&first, spec).await.unwrap();
-            assert_eq!(admitted.status, RunStatus::Pending);
-            assert_eq!(admitted.position, Some(ids.len() + 1));
-            ids.push(admitted.run_id);
-        }
-        // One leaves the queue before the restart.
-        let gone = first.queue.take(&ids[1]).unwrap();
-        assert_eq!(gone.spec.targets, ["b"]);
-        run_queue::remove(&first.config.resolved.db_path, &ids[1])
-            .await
-            .unwrap();
-        drop(first);
+    #[test]
+    fn a_restarted_server_resumes_the_queue_in_order_under_the_same_ids_and_keeps_the_pause() {
+        crate::test_support::bounded(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let first = state(dir.path());
+            // Paused: every run waits, recorded in the order it was accepted.
+            let _ = pause(State(first.clone())).await.unwrap();
+            let mut ids = Vec::new();
+            for target in ["a", "b", "c"] {
+                let spec = RunSpec::api(RunCommand::Get, vec![target.into()], vec![]);
+                let admitted = admit(&first, spec).await.unwrap();
+                assert_eq!(admitted.status, RunStatus::Pending);
+                assert_eq!(admitted.position, Some(ids.len() + 1));
+                ids.push(admitted.run_id);
+            }
+            // One leaves the queue before the restart.
+            let gone = first.queue.take(&ids[1]).unwrap();
+            assert_eq!(gone.spec.targets, ["b"]);
+            run_queue::remove(&first.config.resolved.db_path, &ids[1])
+                .await
+                .unwrap();
+            drop(first);
 
-        let next = state(dir.path());
-        resume_at_startup(&next).await.unwrap();
-        assert_eq!(next.queue.waiting_ids(), [ids[0].clone(), ids[2].clone()]);
-        assert!(next.queue.paused_at().is_some(), "the pause is kept");
-        let run = next.runs.get(&ids[2]).unwrap();
-        assert_eq!(run.status, RunStatus::Pending);
-        assert_eq!(run.target.as_deref(), Some("c"));
-        assert!(next.events.contains_key(&ids[2]), "a client can follow it");
-        let view = view(&next);
-        assert_eq!(view.queued.len(), 2);
-        assert_eq!(view.queued[1].position, Some(2));
-        assert_eq!(view.max_runs, 1);
-        // Paused, nothing starts; resumed, the head starts (and fails: no Python here).
-        dispatch(&next);
-        assert_eq!(next.queue.waiting_ids().len(), 2);
-        let _ = resume(State(next.clone())).await.unwrap();
-        assert_eq!(
-            next.queue.waiting_ids(),
-            [ids[2].clone()],
-            "one run at a time"
-        );
+            let next = state(dir.path());
+            resume_at_startup(&next).await.unwrap();
+            assert_eq!(next.queue.waiting_ids(), [ids[0].clone(), ids[2].clone()]);
+            assert!(next.queue.paused_at().is_some(), "the pause is kept");
+            {
+                // A `runs` guard held across `dispatch` below deadlocks when the two runs share a
+                // shard of the map (#637): read it in a scope of its own.
+                let run = next.runs.get(&ids[2]).unwrap();
+                assert_eq!(run.status, RunStatus::Pending);
+                assert_eq!(run.target.as_deref(), Some("c"));
+            }
+            assert!(next.events.contains_key(&ids[2]), "a client can follow it");
+            let view = view(&next);
+            assert_eq!(view.queued.len(), 2);
+            assert_eq!(view.queued[1].position, Some(2));
+            assert_eq!(view.max_runs, 1);
+            // Paused, nothing starts; resumed, the head starts (and fails: no Python here).
+            dispatch(&next);
+            assert_eq!(next.queue.waiting_ids().len(), 2);
+            let _ = resume(State(next.clone())).await.unwrap();
+            assert_eq!(
+                next.queue.waiting_ids(),
+                [ids[2].clone()],
+                "one run at a time"
+            );
+        });
     }
 
-    #[tokio::test]
-    async fn a_run_the_last_server_had_started_is_recorded_interrupted_not_started_again() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = state(dir.path());
-        let _ = pause(State(first.clone())).await.unwrap();
-        let spec = RunSpec::api(RunCommand::Get, vec!["a".into()], vec![]);
-        let id = admit(&first, spec).await.unwrap().run_id;
-        let db = first.config.resolved.db_path.clone();
-        // The server started it and was killed before it recorded anything.
-        run_queue::mark_running(&db, &id).await.unwrap();
-        drop(first);
-        let next = state(dir.path());
-        resume_at_startup(&next).await.unwrap();
-        assert!(next.queue.waiting_ids().is_empty());
-        assert!(run_queue::list(&db).await.unwrap().is_empty());
-        let record = db::get_run(&db, &id).await.unwrap().unwrap();
-        assert_eq!(record.status, "error");
+    #[test]
+    fn a_run_the_last_server_had_started_is_recorded_interrupted_not_started_again() {
+        crate::test_support::bounded(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let first = state(dir.path());
+            let _ = pause(State(first.clone())).await.unwrap();
+            let spec = RunSpec::api(RunCommand::Get, vec!["a".into()], vec![]);
+            let id = admit(&first, spec).await.unwrap().run_id;
+            let db = first.config.resolved.db_path.clone();
+            // The server started it and was killed before it recorded anything.
+            run_queue::mark_running(&db, &id).await.unwrap();
+            drop(first);
+            let next = state(dir.path());
+            resume_at_startup(&next).await.unwrap();
+            assert!(next.queue.waiting_ids().is_empty());
+            assert!(run_queue::list(&db).await.unwrap().is_empty());
+            let record = db::get_run(&db, &id).await.unwrap().unwrap();
+            assert_eq!(record.status, "error");
+        });
     }
 
     #[test]

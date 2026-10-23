@@ -36,6 +36,13 @@ pytest.importorskip("pandas")
 
 REGISTRY = "launch_registry"
 DRIVER = "driver_launch_item"
+# While this file exists in the project, the driver's step waits (`hold_the_driver`).
+HOLD = ".hold_driver"
+DRIVER_DEF = """def driver_launch_item(
+    registry: duckdb.DuckDBPyRelation,
+    forecast_item: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+"""
 
 
 @pytest.fixture(scope="module")
@@ -45,9 +52,25 @@ def bucket():
     b.remove()
 
 
+def hold_the_driver(root) -> None:
+    """Make the driver's step wait while the project holds `HOLD`: a test that kills a run
+    then always kills it mid-run, never after it finished (#616). Done before the first run,
+    so every run of the module computes the same code."""
+    assets = root / "assets.py"
+    source = assets.read_text()
+    assert source.count(DRIVER_DEF) == 1
+    wait = (
+        "    import time\n\n"
+        f"    while (Path(__file__).parent / {HOLD!r}).exists():\n"
+        "        time.sleep(0.05)\n"
+    )
+    assets.write_text(source.replace(DRIVER_DEF, DRIVER_DEF + wait))
+
+
 @pytest.fixture(scope="module")
 def machine(tmp_path_factory, bucket) -> Machine:
     m, _ = new_machine(tmp_path_factory.mktemp("overwrite") / "project", "store", bucket)
+    hold_the_driver(m.root)
     m.ok("get", DRIVER, "assets.py", "--json")
     return m
 
@@ -154,18 +177,27 @@ def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):
     """Killed between its upload and its row (most attempts), the store and this machine hold
     the new bytes and the record names the old ones; the next `get` that returns or reads the
     registry records the new ones (`settle`, #576). When the kill lands after the row instead,
-    nothing is left to repair."""
+    nothing is left to repair.
+
+    The driver's step, downstream of the registry, waits until the kill (`hold_the_driver`):
+    the run is always in flight when it is killed, however soon it would otherwise finish."""
     node = machine.status()[REGISTRY]
     artifact = node["cache"]["artifact"]
     before = machine.bucket.cat(artifact)
-    run = refresh(machine, 4, target=DRIVER)
-    deadline = time.monotonic() + 120
-    while machine.bucket.cat(artifact) == before:
-        assert run.poll() is None, "the refresh ended before its upload was seen"
-        assert time.monotonic() < deadline, "the refreshed registry never reached the store"
-        time.sleep(0.02)
-    os.killpg(run.pid, signal.SIGKILL)
-    run.communicate()
+    hold = machine.root / HOLD
+    hold.touch()
+    try:
+        run = refresh(machine, 4, target=DRIVER)
+        deadline = time.monotonic() + 120
+        while machine.bucket.cat(artifact) == before:
+            assert run.poll() is None, "the refresh ended before its upload was seen"
+            assert time.monotonic() < deadline, "the refreshed registry never reached the store"
+            time.sleep(0.02)
+        assert run.poll() is None, "the refresh ended while its driver step was held"
+        os.killpg(run.pid, signal.SIGKILL)
+        run.communicate(timeout=60)
+    finally:
+        hold.unlink(missing_ok=True)
 
     history = machine.ok("history", "--json", "--limit", "1")["runs"][0]
     assert history["status"] == "interrupted", history

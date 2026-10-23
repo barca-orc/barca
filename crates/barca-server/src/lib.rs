@@ -31,6 +31,45 @@ mod telemetry;
 mod ui;
 mod watch;
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::time::Duration;
+
+    /// How long a bounded test may take.
+    pub const LIMIT: Duration = Duration::from_secs(30);
+
+    /// Run the async test `body` on a runtime of its own thread, and fail when it has not
+    /// finished (runtime shutdown included) within [`LIMIT`]. A deadlock then fails the test
+    /// instead of hanging CI (#637): `tokio::time::timeout` cannot interrupt a thread blocked
+    /// on a lock.
+    pub fn bounded<F>(body: impl FnOnce() -> F + Send + 'static)
+    where
+        F: std::future::Future<Output = ()> + 'static,
+    {
+        let (done, finished) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a test runtime")
+                .block_on(body());
+            let _ = done.send(());
+        });
+        match finished.recv_timeout(LIMIT) {
+            Ok(()) => thread.join().expect("the test thread finished"),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                if let Err(panic) = thread.join() {
+                    std::panic::resume_unwind(panic);
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+                "the test did not finish within {LIMIT:?}: a deadlock or a wait without a \
+                 deadline"
+            ),
+        }
+    }
+}
+
 pub use handlers::node_states;
 pub use running::{NodeRunning, PartitionProgress, RunningStep};
 pub use state::{NodeState, ServeConfig};
