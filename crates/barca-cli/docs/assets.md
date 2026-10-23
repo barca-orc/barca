@@ -77,6 +77,7 @@ Star-import dependency hashing remains conservative.
 | `env=["NAME", ...]` | Environment variables the function reads. Their values are part of the cache key and are reported per step. See below. |
 | `weight=` | How much of the pool's capacity the step takes while it runs (default 1). Experimental. See "Heavy steps" below. |
 | `deterministic=False` | `@asset` only: new bytes for the same code and inputs are expected, so barca does not warn that the function is not deterministic. Caching is unchanged. See `barca docs cache`, "Recompute byte checks". |
+| `cutoff=True` | What reads the asset depends on the bytes it wrote, not its run hash: a rerun that writes the same bytes leaves everything below it cached. `@asset` only. Experimental. See `barca docs cache`, "Early cutoff". |
 | `description=`, `tags=` | Metadata. |
 
 Stacked under `@asset`, `@sink("path")` writes the output to a file as well, and
@@ -104,7 +105,7 @@ These are all the arguments barca's decorators and helpers take:
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `group()` | one | `members`, `output`, `description` |
-| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic` |
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic`, `cutoff` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
@@ -133,7 +134,7 @@ def report(raw: dict) -> int:
 
 ```
 $ barca list pipeline.py --pretty
-Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight, deterministic
+Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight, deterministic, cutoff
 Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 ```
 

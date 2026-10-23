@@ -1014,6 +1014,7 @@ mod tests {
             sinks: smallvec::SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            cutoff: false,
             weight: 1,
             deterministic: true,
             retry_backoff_seconds: 0.0,

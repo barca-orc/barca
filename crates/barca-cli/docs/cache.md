@@ -7,7 +7,8 @@ can be in, how to force a recompute, the cache size limit, and where everything 
 ## What is cached
 
 Each asset step has a **run hash**: a hash of the function's definition, its inputs' run hashes,
-the output of any sensor or `Manual` asset it reads, for partitioned assets the partition key,
+the output of any sensor or `Manual` asset it reads (and, in place of the run hash, the output
+of an `@asset(cutoff=True)` it reads: "Early cutoff" below), for partitioned assets the partition key,
 and the values of any environment variables it declares with `env=[...]`. If the hash matches a
 previous successful materialization, the artifact is reused and the function does not run.
 Change the function's code, any upstream, a sensor's or `Manual` asset's output or a declared
@@ -195,6 +196,7 @@ re-run, never a stale result.
 | `timeout_seconds=` | no | decides how long the step may take, not what it returns |
 | `weight=` | no | decides how many steps run at once, not what the step returns |
 | `deterministic=` | no | silences the warning about new bytes for the same code and inputs; caching is unchanged |
+| `cutoff=` | no | decides what the asset's consumers fold into their run hashes (its output's bytes instead of its run hash), not what it returns |
 | `description=` | no | documentation |
 | `tags=` | no | labels for people and tools |
 | `@unsafe` | no | a marker barca reads and does not act on |
@@ -411,6 +413,101 @@ with `reason: "sensor_output_unknown"`. Running the sensor alone (`barca get ord
 pipeline.py`, or a scheduled sensor under `barca serve`) records its output, so the next
 `--dry-run` or `barca status` shows its consumers as stale.
 
+## Early cutoff: `@asset(cutoff=True)`
+
+An asset's consumers fold in its run hash, so when it reruns (its code, an upstream or a sensor
+it reads changed) everything below it reruns, even when it wrote exactly the bytes it wrote
+before. A global step that every partition key reads is the expensive case: one rerun reruns
+every key. `cutoff=True` makes what reads the asset depend on the bytes it wrote instead:
+
+```python
+from pathlib import Path
+from barca import asset, partitions, sensor
+
+CUSTOMERS = ["acme", "globex", "initech"]
+
+
+@sensor()
+def rate_feed() -> tuple[bool, float]:
+    return True, float(Path("rate.txt").read_text())
+
+
+@asset(inputs={"raw": rate_feed}, cutoff=True)
+def rates(raw: float) -> dict:
+    return {"usd_eur": round(raw, 1)}          # most moves of the feed round the same
+
+
+@asset(inputs={"rates": rates}, partitions={"customer": partitions(CUSTOMERS)})
+def billed(customer: str, rates: dict) -> dict:
+    return {"customer": customer, "eur": 100 * rates["usd_eur"]}
+```
+
+```bash
+barca get billed pipeline.py              # rates and every key of billed run
+barca get billed pipeline.py              # the feed moved 0.91 -> 0.93: rates runs, billed is cached
+barca get billed pipeline.py --dry-run    # after an edit to rates: billed is unknown (cutoff_pending)
+```
+
+How it works:
+
+- **What is hashed: the serialized bytes.** Every materialization already records the SHA-256 of
+  the artifact file it wrote (`content_hash` in `barca status --json`, "Recompute byte checks"
+  below). A consumer folds in that digest and the key it came from in place of the cutoff
+  asset's run hash; nothing else is computed. The same value always gives the same bytes for
+  `json` and `pickle`, and for `parquet` from pandas, polars, pyarrow and DuckDB with the same
+  library version (checked with each: none writes a timestamp). A library upgrade that changes
+  the bytes reruns what reads the asset once; it never serves a stale result. A `json` dict
+  with the same items in another order is other bytes, and reruns its consumers: they are
+  handed the dict in that order.
+- **Its consumers are decided after it ran.** A cutoff asset ends its chain in the plan, as a
+  sensor does, and what reads it is decided in a later phase, from the bytes it wrote in this
+  run (or the digest recorded with its cached result). A partitioned consumer usually has a
+  phase of its own already, so the plan does not grow (`benchmarks/RESULTS.md`, "Early cutoff").
+- **Partitioned, it cuts off per key.** Each key of a consumer reads the bytes of the key it
+  reads; a `collect()` fan-in reads every key's bytes, by key.
+- **A dict `partitions_from` source.** An asset that returns `{key: value}` for
+  `partitions_from(...)` with `cutoff=True` gives each key its own value only, not the source's
+  run hash, as a sensor source does (`barca docs partitions`, "Updating only what changed"):
+  when it reruns, only the keys whose value changed run.
+- **Only the cutoff asset's bytes stand in for it.** What reads it still reruns when its own
+  code, its other inputs or its declared env change. Its code does not reach its consumers
+  another way: a consumer's parameter named after it (`def billed(customer, rates)`) counts as
+  a use of the module-level name (rule 2 under "What the definition covers"), which for a
+  cutoff asset adds a constant marker, not its code. Calling a cutoff asset as a plain function
+  from another step is not supported (read it as an input).
+- **`cutoff` itself does not count in the asset's run hash**: turning it on or off does not
+  rerun the asset. It does change what its consumers fold in, so **the first run after turning
+  it on (or off) reruns everything that reads it, once.**
+- **Dry runs and `barca status`** cannot know the bytes of a cutoff asset that would run. What
+  reads it, and everything below that, is `unknown` with reason `cutoff_pending` and a
+  `detail` naming the asset (`reads 'rates' (cutoff=True), which would run first: this step
+  runs only if it writes different bytes`). When the cutoff asset itself is cached, its
+  recorded digest decides, and the prediction is exact. For a partitioned consumer the whole
+  step is `unknown`, also when only some keys of a partitioned cutoff asset would run.
+- **`--refresh`** of a cutoff asset recomputes it; its cascade stops there ("Exactly what
+  `--refresh` does" above). `--refresh-all` recomputes everything. `--partition` narrows as
+  usual.
+- **With a server** (`barca docs server-mode`) the ledger is asked for a consumer's run hash in
+  the phase that decides it, once the cutoff asset ran or was found cached; the ledger rows
+  carry the digest, so a laptop and the server compute the same consumer hashes.
+- **Sinks** are written when their step runs. A consumer kept cached by cutoff does not write
+  its sinks again; what they hold was written from the same input bytes.
+- **A nondeterministic asset** (a timestamp, a random sample, rows in no fixed order) writes
+  new bytes on every rerun, so `cutoff=True` saves nothing on it, though it is legal. Barca does
+  not warn when you set it; a rerun under the same run hash that writes other bytes gets the
+  usual warning ("Recompute byte checks" below), unless the asset also says
+  `deterministic=False`. Either way what reads it reruns whenever its bytes differ, so it is
+  never served stale. Sort rows before you return them.
+- Only on `@asset`. A sensor's output already counts below it; a task is never served from
+  cache. Experimental (`barca docs contract`).
+
+Why opt-in, not automatic for small outputs: turning cutoff on reruns everything below the
+asset once, so turning it on for every asset in an upgrade would rerun every pipeline; and every
+cutoff asset ends its chain and makes what reads it `unknown` in a dry run until it has run.
+Whether an output is small is only known after it ran, so an automatic rule would change the
+plan and the dry run from run to run. You choose where the extra phase pays for itself: a global
+step read by many keys, or one whose inputs change more often than its result.
+
 ## Cached, stale, evicted, unsynced
 
 A result is a row in `.barca/metadata.db` (the run hash it was computed under) plus an artifact
@@ -455,6 +552,10 @@ A missing or evicted artifact that nothing needs to read leaves the node `cached
   typo never silently does nothing.
 - It does **not** rebuild the upstream of what you name, or assets in the cone that do not depend
   on it. Those keep serving from cache.
+- The cascade stops at an `@asset(cutoff=True)`: what reads it is decided by the bytes the
+  refresh wrote ("Early cutoff" below). Same bytes, it stays cached and carries no warning; new
+  bytes, it runs as `not_materialized`. Name it in `--refresh`, or use `--refresh-all`, to
+  recompute it anyway.
 - `--no-cascade` re-materializes **only** the assets you name. Run hashes cover definitions and
   upstream hashes, not output contents, so a cached downstream asset still matches and the
   refreshed data never reaches it. Barca prints
@@ -538,7 +639,7 @@ Each step has an `action`:
 | `cached` | Served from the cache (`artifact` is the file). |
 | `run` | Will execute; `reason` says why (below). |
 | `partial` | A partitioned asset where some keys are cached; `partitions` lists the counts and the keys that will run. |
-| `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), or an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), and anything that depends on either. |
+| `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), or an asset reading an `@asset(cutoff=True)` that would run first (`reason: "cutoff_pending"`, "Early cutoff" below), and anything that depends on any of them. |
 
 `reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
 `refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),

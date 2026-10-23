@@ -435,6 +435,11 @@ pub struct ExtractedNode {
     /// deterministic (#627). Not part of the run hash and no effect on caching.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub deterministic: bool,
+    /// `@asset(cutoff=True)`: what reads it folds in the content hash of its output instead of
+    /// its run hash, so a rerun that writes the same bytes leaves them cached (#628). Not part
+    /// of its own run hash; see [`crate::cache::is_cutoff`].
+    #[serde(default)]
+    pub cutoff: bool,
     /// Base backoff in seconds between attempts; delay = `retry_backoff_seconds * attempt`.
     pub retry_backoff_seconds: f64,
     /// Human-readable description.

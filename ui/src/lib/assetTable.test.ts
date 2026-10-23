@@ -148,6 +148,7 @@ describe('buildRows', () => {
     expect(label('changed')).toBe('stale · code changed')
     expect(label('upstream_stale')).toBe('stale · upstream')
     expect(label('sensor_output_unknown')).toBe('stale · sensor')
+    expect(label('cutoff_pending')).toBe('stale · cutoff')
   })
 
   it('reports partition progress and never-run nodes', () => {

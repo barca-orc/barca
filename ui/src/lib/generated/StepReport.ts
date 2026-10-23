@@ -19,8 +19,8 @@ action?: string | null,
 status?: string | null,
 /**
  * Why the step runs: `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`,
- * `not_materialized`, `artifact_missing`, `evicted`, `partitions_unknown` or
- * `sensor_output_unknown`.
+ * `not_materialized`, `artifact_missing`, `evicted`, `partitions_unknown`,
+ * `sensor_output_unknown` or `cutoff_pending`.
  */
 reason?: string | null,
 /**

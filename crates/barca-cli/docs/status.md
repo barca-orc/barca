@@ -85,7 +85,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
-| `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, or an asset reading a sensor with no recorded output (and what depends on either) | `partitions_unknown`, `sensor_output_unknown` |
+| `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, an asset reading a sensor with no recorded output, or an asset reading an `@asset(cutoff=True)` that would run first (and what depends on any of them) | `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending` |
 | `always_runs` | tasks and sensors are never cached | `task`, `sensor` |
 
 - `changed`: the run hash differs from the last successful materialization. `cache.changed` lists

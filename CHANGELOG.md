@@ -64,6 +64,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   SIGTERM) is put back in the queue by the next server instead of being recorded as interrupted,
   once per run. A server that dies without a stop signal (the OOM killer, a crash) still records
   its runs as interrupted, so a run that kills its server cannot loop (#628).
+- `@asset(cutoff=True)` (experimental): what reads the asset folds in the SHA-256 of the bytes
+  it wrote instead of its run hash, so when it reruns and writes the same bytes, everything
+  below it stays cached. A global step that reruns with unchanged output no longer reruns every
+  partition key below it; per key on a partitioned asset; a cutoff dict `partitions_from` source
+  gives each key its own value. Its consumers are decided after it runs; until then `--dry-run`
+  and `barca status` report them `unknown` with the new reason `cutoff_pending` (also in the
+  `Cache` reason enum of OpenAPI specification 12). A `--refresh`
+  cascade stops at a cutoff asset. Turning `cutoff` on or off reruns what reads the asset once
+  (`barca docs cache`, "Early cutoff") (#628).
 
 ### Bug Fixes
 

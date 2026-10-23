@@ -73,6 +73,7 @@ outside the `GENERATED` blocks is written by hand.
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
 | `barca state reset` and its JSON, `POST /state/reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
 | `weight=` on `@asset`, `@task` and `@sensor`, `[execution] capacity`, `BARCA_CAPACITY`, `capacity` / `capacity_source` / `pool_size` / `weights` in `barca plan`, `capacity` and `steps[].weight` in `--dry-run`, the `capacity` doctor check | new in 0.29 (#436): how steps are admitted under the capacity, and whether a step waiting in `parallel()` counts, may change after field use |
+| `cutoff=` on `@asset`, the dry-run and status reason `cutoff_pending` | new in 0.31.0 (#628): what is hashed (the serialized bytes), where a `--refresh` cascade stops and how a dry run predicts the consumers may change after field use |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
 | dataset sinks: `@sink("prefix/")`, its `partition_by=` and `rows_per_file=`, the `_barca_sink.json` marker, the deletion of removed keys and the size warnings | new in 0.30.0 (#621): the marker's keys, the warning thresholds and how a key is swapped in on an object store may change after field use |
 | `require_env` in `barca.toml`, `BARCA_REQUIRE_ENV` and the `[barca] note: no --env given, ...` line | new in 0.31 (#627): which commands count as touching an environment, and when the note is printed, may change after field use |
@@ -1412,8 +1413,10 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 `--dry-run` on `get` or `run` executes no steps and records no new run; it prints what
 would happen. `partitions(<expression>)` may evaluate Python while resolving keys. `steps[].action` is
 `cached`, `run`, `partial` or `unknown` (in place of `status`). An `unknown` step has `reason`
-`partitions_unknown` (dynamic partitions whose source has not run) or `sensor_output_unknown` (it,
-or a step upstream of it, reads a sensor with no recorded output). A step that reads a sensor is
+`partitions_unknown` (dynamic partitions whose source has not run), `sensor_output_unknown` (it,
+or a step upstream of it, reads a sensor with no recorded output) or `cutoff_pending` (it, or a
+step upstream of it, reads an `@asset(cutoff=True)` that would run, so whether it runs depends on
+the bytes that asset writes; experimental). A step that reads a sensor is
 predicted from the sensor's last recorded output, and `detail` says so. `capacity` is the most the
 `weight=` of the steps running at once may add up to, and a step whose node has a `weight=` above
 1 carries `weight` (both experimental, #436). With one target the
@@ -1666,7 +1669,7 @@ counts every node even when `nodes` is truncated.
   `never-run`; `summary.unsynced` is always present);
   `cache.reason` is `materialized`, `local_only`, `store_only`, `mismatch`, `not_in_ledger`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
   `evicted` (experimental), `no_record`, `partitions_missing`, `partitions_unknown`,
-  `sensor_output_unknown`, `task` or `sensor`.
+  `sensor_output_unknown`, `cutoff_pending` (experimental), `task` or `sensor`.
 - `cache.changed` (experimental, 0.29.0) appears on a `stale` node (reason `changed` or
   `upstream_stale`) whose last successful materialization recorded its run-hash components: an
   array of strings naming what differs, `code`, `decorator argument NAME`, `decorator NAME`,

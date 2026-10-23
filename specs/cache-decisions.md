@@ -20,6 +20,10 @@ Conformance: cache decision tests in [cache.rs](../crates/barca-core/src/cache.r
 [progress recording](../python/tests/test_incremental_persist.py),
 [progress counts](../python/tests/test_progress_counts.py),
 [terminal outcomes](../python/tests/test_terminal_persist.py),
+early cutoff in [cache.rs](../crates/barca-core/src/cache.rs) (`cutoff_tests`),
+[cone.rs](../crates/barca-core/src/cone.rs)
+(`a_cutoff_asset_reached_by_name_adds_a_marker_not_its_code`) and
+[test_asset_cutoff.py](../python/tests/test_asset_cutoff.py),
 persistence tests in [persist.rs](../crates/barca-core/src/persist.rs),
 run owners in [run_owner.rs](../crates/barca-core/src/run_owner.rs) and
 [reconciliation](../python/tests/test_history_reconcile.py).
@@ -64,6 +68,29 @@ changes the hash.
   reflective indirection or runtime side effects.
 
 Installed packages, the standard library and dynamic imports are outside the tracking boundary.
+
+## Early cutoff
+
+An `@asset(cutoff=True)` (#628, experimental) changes what its consumers fold in, not its own
+run hash (`cutoff` does not count in its definition):
+
+- A consumer folds in, for each step of the cutoff asset it reads, `cutoff<partition>:<digest>`:
+  the SHA-256 of the artifact bytes recorded for that step, and the partition it came from
+  (empty when unpartitioned). Not the cutoff asset's run hash. A step whose digest is not known
+  (a row recorded without one) contributes its run hash, as without `cutoff`.
+- A consumer is decided only once the digest of what it reads is known: the cutoff asset ends
+  its chain, its consumers are in a later phase, and they are not in the set asked of a server
+  ledger before the run starts. A dry run reports a consumer of a cutoff asset that would run,
+  and everything below it, `unknown` (`cutoff_pending`); it never predicts a hit or a miss for it.
+- A `--refresh` cascade does not pass a cutoff asset, and a consumer cached through one carries
+  no `--no-cascade` warning: its hash already holds the bytes the refresh wrote.
+- A dict `partitions_from` source with `cutoff` contributes each key's value hash with the
+  constant `cutoff` in place of its run hash.
+- In the dependency cone, a cutoff asset reached by name (a consumer's parameter named after
+  it) contributes a constant marker, not its definition or what it uses. This is the one place
+  a cone hashes less than the conservative rule above: the asset's code reaches its consumers
+  only through its bytes. Calling a cutoff asset as a plain function from another step is outside
+  the tracking boundary.
 
 ## Recording progress
 

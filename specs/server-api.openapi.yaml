@@ -3359,6 +3359,7 @@ components:
           - partitions_missing
           - partitions_unknown
           - sensor_output_unknown
+          - cutoff_pending
           - task
           - sensor
         detail: *id003

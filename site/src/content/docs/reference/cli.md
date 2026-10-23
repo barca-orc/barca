@@ -253,6 +253,12 @@ new value, the asset and everything downstream of it re-run. `--dry-run` predict
 sensor's last recorded value and says so in `detail`; before the sensor has ever run, its
 consumers are `unknown` (`reason: "sensor_output_unknown"`).
 
+An asset that reads an `@asset(cutoff=True)` is cached against the bytes that asset wrote, not
+its run hash: when it reruns and writes the same bytes, what reads it stays cached. A dry run
+cannot know those bytes before it runs, so its consumers are `unknown`
+(`reason: "cutoff_pending"`) until it has; see
+[Early cutoff](/reference/api/decorators/#early-cutoff-cutofftrue).
+
 Each entry in the result's `steps` array says what happened to that step. A node that declares
 environment variables with `env=[...]` also carries `env`, the values the step was hashed with
 (`null` when unset, `<redacted>` for names like `*_TOKEN`), and its `--agent` progress line ends

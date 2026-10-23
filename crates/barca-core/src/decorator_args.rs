@@ -78,6 +78,7 @@ pub const SIGNATURES: &[Signature] = &[
             "env",
             "weight",
             "deterministic",
+            "cutoff",
         ],
         deferred: &[],
         usage: "@asset(inputs={\"param\": upstream}, ...)",
@@ -1143,7 +1144,8 @@ mod tests {
         }));
         // What the parser reads on one node kind it reads on all three, apart from
         // `deterministic`, which only an asset has (only an asset's bytes are checked), and
-        // `inputs` on a sensor, an error of its own.
+        // `cutoff`, also an asset's only (a sensor's output already counts below it, and a task
+        // is never served from cache, #628), and `inputs` on a sensor, an error of its own.
         let keywords = |call: &str| -> Vec<&str> {
             all.iter()
                 .filter(|a| a.call == call)
@@ -1156,8 +1158,10 @@ mod tests {
             name: "deterministic",
             passing: Passing::Keyword
         }));
-        assert_eq!(keywords("asset"), keywords("task"));
-        let mut sensor = keywords("asset");
+        let mut asset = keywords("asset");
+        asset.retain(|k| *k != "cutoff");
+        assert_eq!(asset, keywords("task"));
+        let mut sensor = asset.clone();
         sensor.retain(|k| *k != "inputs");
         assert_eq!(keywords("sensor"), sensor);
     }

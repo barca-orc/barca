@@ -979,6 +979,35 @@ def test_cache_topic_external_data_sensor_example(binary, topics, tmp_path):
     assert "re-runs bronze every time" in trap
 
 
+def test_cache_topic_cutoff_example(binary, topics, tmp_path):
+    """`@asset(cutoff=True)`: a rerun that writes the same bytes leaves every key below it
+    cached; an edit to it makes what reads it `unknown` in a dry run (#628)."""
+    (code,) = (b for b in blocks(topics["cache"], "python") if "cutoff=True" in b)
+    (tmp_path / "pipeline.py").write_text(code)
+    (tmp_path / "rate.txt").write_text("0.91")
+
+    def get(*extra: str) -> dict:
+        return result(barca(binary, tmp_path, "get", "billed", "pipeline.py", "--json", *extra))
+
+    def by_name(r: dict) -> dict:
+        return {s["id"].split(":")[-1]: s for s in r["steps"]}
+
+    first = get()
+    assert first["steps_executed"] == 5  # the sensor, rates and three customers
+
+    (tmp_path / "rate.txt").write_text("0.93")
+    second = by_name(get())
+    assert second["rates"]["status"] == "ran"
+    assert second["billed"]["status"] == "cached"
+
+    path = tmp_path / "pipeline.py"
+    path.write_text(path.read_text().replace("round(raw, 1)}", "round(raw, 1) + 0.0}"))
+    dry = by_name(get("--dry-run"))
+    assert dry["rates"]["action"] == "run"
+    assert dry["billed"]["action"] == "unknown"
+    assert dry["billed"]["reason"] == "cutoff_pending"
+
+
 def test_cache_topic_helper_module_example(binary, topics, tmp_path):
     """Editing a used helper re-runs the step, editing an unused one doesn't, and every spelling
     of the pipeline path computes the same run hash (#178)."""
