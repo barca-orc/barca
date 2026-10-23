@@ -112,7 +112,7 @@ every database from before 0.29.2 (#629):
   `runs.schedule_id` and `runs.outcome_json` (all TEXT, nullable, 0.27.0, #393): what started a
   run, the tick and schedule of a scheduled run, and the full outcome of a run `barca serve`
   started, so `GET /runs/{id}` answers after a restart. Rows written before have `NULL` there
-  (`triggered_by: null`). From 0.30.1 (#623) a partitioned target of more than 1000 keys is
+  (`triggered_by: null`). From 0.30.2 (#623) a partitioned target of more than 1000 keys is
   stored as the `_barca_partitions` summary (the keys the run computed, counts of the rest), so
   the row's size follows what the run computed; rows written before keep every key and are
   read as they are. No migration.

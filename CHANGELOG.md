@@ -31,8 +31,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - `barca serve` no longer grows without bound under a schedule over many partition keys. At
   200k keys each tick wrote about 82 MB of run outcome to the metadata DB and kept about 400 MB
-  more memory; with one key changing per tick it now writes a few kilobytes and its memory
-  stays flat. A run's outcome lists the keys it computed and counts the cached ones; finished
+  more memory; with one key changing per tick it records a 2 KB outcome (the DB grows about
+  50 KB a tick) and its memory stays flat. A run's outcome lists the keys it computed and counts the cached ones; finished
   runs are kept in memory under a 64 MB budget as well as for an hour, oldest dropped first;
   the server returns the memory a run freed to the system when it ends; `GET /runs/{run_id}`
   and `barca history RUN_ID` list at most 1000 steps (`?limit=N` / `--limit N`, `?all=true` /

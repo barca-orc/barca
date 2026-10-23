@@ -1,6 +1,6 @@
 """What a run keeps does not grow with the partition keys it served from cache (#623).
 
-Up to 0.30.0 a run's outcome listed every key of a partitioned target: at 200k keys each
+Up to 0.30.1 a run's outcome listed every key of a partitioned target: at 200k keys each
 `barca serve` tick wrote about 82 MB of JSON to the metadata DB and the server kept about 400 MB
 more memory per tick. Past 1000 keys a run now lists the keys it computed and counts the rest,
 the server keeps finished runs under a memory budget and returns what a run freed, and

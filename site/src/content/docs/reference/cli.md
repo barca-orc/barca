@@ -189,7 +189,7 @@ keys that succeeded; how a partial failure is reported may still change
 
 #### Many partition keys
 
-A run lists at most 1000 keys (0.30.1). When a partitioned target returns more and no
+A run lists at most 1000 keys (0.30.2). When a partitioned target returns more and no
 `--partition` selected them, `final_output` lists the keys this run computed and counts the
 ones it served from cache, so a tick that recomputed one key of 200k returns one path:
 
@@ -946,7 +946,7 @@ on stderr when `default_env` or an artifact store is in effect. See
 - From 0.25.0: `get` prints artifact paths by default. `final_output` in the JSON is always a
   pointer, and a terminal shows the path with a small json value previewed under it; `-o value`
   prints the value. A partitioned target returns every key, and `--partition` selects keys.
-  (From 0.30.1, past 1000 keys only the keys a run computed are listed.)
+  (From 0.30.2, past 1000 keys only the keys a run computed are listed.)
   `.barca/` has a size limit (`[cache] max_size`, default 10% of the filesystem) and is evicted
   past it.
 - From 0.26.0: a remote store fails soft once the steps are done: an upload that fails after

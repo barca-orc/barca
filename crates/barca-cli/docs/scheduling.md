@@ -328,7 +328,7 @@ records a new run. The same inspection is available through `GET /runs?limit=100
 outcome in the DB, so `GET /runs/{run_id}` gives the same answer after a restart.
 
 What a run keeps is bounded by what it computed, not by how many keys it served from cache
-(0.30.1, #623):
+(0.30.2, #623):
 
 - Its outcome lists at most 1000 keys of a partitioned target; past that, the keys it
   computed and a count of the others (`barca docs partitions`, "Many keys").

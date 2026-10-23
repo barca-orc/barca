@@ -428,7 +428,7 @@ A partitioned target returns every key, or the keys `--partition` selects
 (`DIMENSION=VALUE[,VALUE...]`, or a JSON object of dimension to value or list of values). Its
 `final_output` is an object keyed by partition key (`dim=value`, dimensions sorted and joined
 with `,`), sorted, each a pointer or (under `-o value`) a value; `-o path` prints one line per
-key in the same order. Past 1000 keys with no `--partition` (0.30.1, #623), `final_output` is
+key in the same order. Past 1000 keys with no `--partition` (0.30.2, #623), `final_output` is
 `{"_barca_partitions": {keys, computed, cached, outputs, truncated, hint}}` instead: `outputs` is
 that object for the keys the run computed only (at most 1000, `truncated` when there are
 more), `keys` and `cached` count the rest, and `-o path` prints the computed keys with a note on
@@ -1910,7 +1910,7 @@ unknown value).
 Experimental `barca history RUN_ID` (0.29.3) prints one run as `{run, steps, steps_page,
 hint?}`. `run` is one `runs[]` entry. `steps[]` are the steps the run recorded, in the order it
 recorded them, at most 1000 of them (`--limit N` sets the number, `--all` lists every one;
-past the limit failed steps are kept first; 0.30.1, #623):
+past the limit failed steps are kept first; 0.30.2, #623):
 `node_id`, `partition_key` (`k=v` pairs joined by `,`, or `null`), `status` (`success` or
 `failed`; `cached` only for a step a live server run has reported), `attempts`,
 `elapsed_seconds`, `run_hash`, `artifact_path` (this machine's path or the store location),

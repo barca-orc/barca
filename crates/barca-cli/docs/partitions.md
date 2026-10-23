@@ -196,7 +196,7 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.
   tick instead: 3.3 s at 10k keys, 16 s at 50k.
 - Under `barca serve`, what a tick keeps does not grow with the keys it served from cache:
   its outcome lists the keys it computed and counts the others ("Many keys" below). At 200k
-  keys with one key changing per tick, the metadata DB grows by a few kilobytes per tick and
+  keys with one key changing per tick, the metadata DB grows by about 50 KB per tick and
   the server's memory stays flat (`benchmarks/RESULTS.md`, "Bounded run records").
 
 ## Getting partitions
@@ -239,7 +239,7 @@ from cache:
 - `barca.get()` in Python raises `BarcaError` for such a target; pass `partition=`.
 - The run's outcome under `barca serve` (`GET /runs/{run_id}`, the `run_finished` event, the
   metadata DB) holds the same object, so a tick that recomputed one key of 200k records a few
-  kilobytes. Runs recorded before 0.30.1 keep the outcome they stored, every key included.
+  kilobytes. Runs recorded before 0.30.2 keep the outcome they stored, every key included.
 
 ## Selecting keys
 

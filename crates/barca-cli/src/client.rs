@@ -1368,12 +1368,19 @@ pub(crate) async fn run_detail(
         serde_json::from_value(body["steps"].clone()).map_err(bad)?;
     // The steps the run recorded, as on this machine: a finished run the server started also
     // lists the cached steps it streamed, until the server restarts.
+    let listed = steps.len();
     if !matches!(run.status.as_str(), "pending" | "running") {
         steps.retain(|step| step.status != "cached");
     }
-    // A server older than 0.30.1 lists every step and sends no page.
+    // A server older than 0.30.2 lists every step and sends no page. The cached steps left
+    // out above are not counted either.
     let steps_page = match body.get("steps_page") {
-        Some(page) => serde_json::from_value(page.clone()).map_err(bad)?,
+        Some(page) => {
+            let mut page: barca_core::db::StepsPage =
+                serde_json::from_value(page.clone()).map_err(bad)?;
+            page.total -= listed - steps.len();
+            page
+        }
         None => barca_core::db::StepsPage {
             total: steps.len(),
             truncated: false,
