@@ -265,8 +265,11 @@ server=True)` reads the value from `GET /runs/{run_id}/output` (an unpartitioned
 With `partition=` it asks for the values instead (`-o value`): the selected keys' values read on
 the server, as JSON (a table as a list of row objects).
 
-A draining server answers a new `--server` run with `503`: the client prints the server's
-error (`this server is shutting down: ...`, kind `infra`) and exits 3; nothing runs here.
+A draining server (one that is restarting) accepts a new `--server` run into its run queue;
+the client keeps following it: when the stream breaks it waits up to 60 seconds
+(`BARCA_SERVER_RECONNECT`) for the server to come back and follows the same run id there, and
+only then exits 3 ([`barca docs scheduling`](/scheduling/), "Restarting without losing work"). `barca logs -f
+--server` does the same. Nothing runs here either way.
 
 Ctrl-C (or SIGTERM) asks the server to cancel the run (`DELETE /runs/<run_id>`) and keeps
 printing until the run has stopped; it then exits 130. A second Ctrl-C exits 130 at once, and

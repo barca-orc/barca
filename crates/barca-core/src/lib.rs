@@ -53,6 +53,7 @@ mod result_journal;
 pub mod results;
 pub mod run_logs;
 mod run_owner;
+pub mod run_queue;
 pub mod schedule;
 pub mod selection;
 pub mod sql;

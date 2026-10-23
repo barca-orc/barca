@@ -111,6 +111,9 @@ pub struct RunState {
     /// cancelled. Not part of the JSON status payload.
     #[serde(skip)]
     pub cancel: CancellationToken,
+    /// `DELETE /runs/{id}` asked for it: a stopping server does not put it back in the queue.
+    #[serde(skip)]
+    pub cancel_requested: bool,
 }
 
 /// Cached inspection results, invalidated by the file watcher in `--watch`
@@ -392,10 +395,12 @@ pub struct AppState {
     pub cache: Arc<RwLock<DagCache>>,
     /// Live event channels per run handle (logs + step/run lifecycle).
     pub events: Arc<DashMap<String, RunChannel>>,
-    /// Bounds how many runs execute concurrently. Runs execute Python in
+    /// Bounds how many runs execute concurrently (`--max-runs`). Runs execute Python in
     /// parallel; the shared metadata.db is kept race-free by a process-wide DB
     /// lock in `barca-core`, not by serializing whole runs.
     pub run_slots: Arc<Semaphore>,
+    /// The runs accepted and not started, in order, and whether the queue is paused.
+    pub queue: Arc<crate::queue::Queue>,
     /// Cancelled when a drain ends without the runs finishing (its deadline, or a second
     /// SIGTERM/SIGINT); every run token is a child of this, so in-flight runs stop (workers
     /// terminated, runs marked cancelled with [`Self::cancel_reason`]).
@@ -418,6 +423,9 @@ pub struct AppState {
     pub pauses: Arc<tokio::sync::OnceCell<RwLock<HashMap<String, db::SchedulePause>>>>,
     /// When this server started (unix seconds), for `GET /project`'s `deployed_at`.
     pub started_at: i64,
+    /// The same, RFC 3339 with milliseconds (`GET /health` `started_at`): a client that
+    /// reconnects tells a restarted server from the one it was following.
+    pub started: String,
     /// Why the metadata DB cannot be used, while it cannot: set when a read-only server finds
     /// it unusable (it keeps serving) or the scheduler stops on a metadata error, cleared when a
     /// read-only request reads it again. `GET /health` `metadata_error`.
@@ -430,7 +438,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: ServeConfig) -> Self {
-        let run_slot_count = default_run_concurrency();
+        let run_slot_count = config
+            .resolved
+            .server_max_runs
+            .unwrap_or_else(default_run_concurrency)
+            .max(1);
+        let now = chrono::Utc::now();
         Self {
             loaded: Arc::new(tokio::sync::Mutex::new(None)),
             load_errors: Arc::new(RwLock::new(Vec::new())),
@@ -439,6 +452,7 @@ impl AppState {
             cache: Arc::new(RwLock::new(DagCache::default())),
             events: Arc::new(DashMap::new()),
             run_slots: Arc::new(Semaphore::new(run_slot_count)),
+            queue: Arc::new(crate::queue::Queue::new(run_slot_count)),
             shutdown: CancellationToken::new(),
             draining: CancellationToken::new(),
             cancel_reason: barca_core::interrupt::CancelReason::new(),
@@ -446,7 +460,8 @@ impl AppState {
             schedule: Arc::new(RwLock::new(Vec::new())),
             dag_generation: Arc::new(AtomicU64::new(0)),
             pauses: Arc::new(tokio::sync::OnceCell::new()),
-            started_at: chrono::Utc::now().timestamp(),
+            started_at: now.timestamp(),
+            started: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             metadata_error: Arc::new(RwLock::new(None)),
             scheduler_stopped: Arc::new(AtomicBool::new(false)),
             reads: Arc::default(),
@@ -487,7 +502,7 @@ impl AppState {
         read
     }
 
-    /// Whether the server is draining (or past it): no new run is admitted.
+    /// Whether the server is draining (or past it): no queued run starts.
     pub fn is_draining(&self) -> bool {
         self.draining.is_cancelled()
     }

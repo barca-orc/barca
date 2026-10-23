@@ -3,7 +3,7 @@
 //! routes rather than in front of them, so API paths stay what the contract says.
 
 use crate::state::AppState;
-use crate::{handlers, inspect, ledger, pause, reset, runs, ui};
+use crate::{handlers, inspect, ledger, pause, queue, reset, runs, ui};
 use axum::Router;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -32,6 +32,10 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
         .route("/runs/{run_id}/logs", get(runs::logs))
         .route("/logs/{run_id}", get(handlers::logs))
+        // The run queue: what waits to start, and pausing it.
+        .route("/queue", get(queue::get))
+        .route("/queue/pause", post(queue::pause))
+        .route("/queue/resume", post(queue::resume))
         .route("/state", get(handlers::state))
         .route("/schedule", get(handlers::schedule))
         .route_layer(axum::middleware::from_fn(etag));

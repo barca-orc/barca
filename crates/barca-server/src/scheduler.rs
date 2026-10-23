@@ -445,14 +445,15 @@ fn skip_report(
 }
 
 /// Trigger the run for the tick of a due job at `epoch`: its node and the `Always` nodes below
-/// it, in one run. Returns the run id.
+/// it, in one run. Returns the run id: the run joins the queue (`None` when it could not be
+/// recorded there; the error is printed).
 ///
 /// A tick brings the nodes up to date, it does not force them: sensors upstream are polled,
 /// anything whose inputs changed is recomputed, and an asset whose inputs did not change is
 /// served from cache. The scheduled task itself always runs; a task below it fires only when
 /// it is out of date. The run's command follows the scheduled node's kind: `run` for a task,
 /// `get` for an asset or sensor.
-fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> String {
+async fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<String> {
     let command = match job.kind {
         NodeKind::Task => barca_core::outcome::RunCommand::Run,
         NodeKind::Asset | NodeKind::Sensor => barca_core::outcome::RunCommand::Get,
@@ -474,6 +475,16 @@ fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> String {
             rules: barca_core::freshness::RunRules::tick(&job.id),
         },
     )
+    .await
+    .map_err(|e| {
+        let (_, envelope) = e.parts();
+        barca_core::errln!(
+            "[barca] scheduled run {} not started: {}",
+            job.id,
+            envelope.error
+        );
+    })
+    .ok()
 }
 
 /// Whether a scheduled tick elapsed between `last_fired` and `now` — i.e. the
@@ -557,8 +568,7 @@ async fn catch_up(
                             now.timestamp(),
                             "catch-up run",
                         );
-                    } else {
-                        let handle = trigger(state, job, now.timestamp());
+                    } else if let Some(handle) = trigger(state, job, now.timestamp()).await {
                         barca_core::jsonlog::line(
                             barca_core::jsonlog::Level::Info,
                             Some(&job.id),
@@ -809,7 +819,9 @@ pub async fn run_scheduler(state: AppState) {
                     );
                 }
                 TickAction::Fire(job) => {
-                    let handle = trigger(&state, job, epoch);
+                    let Some(handle) = trigger(&state, job, epoch).await else {
+                        continue;
+                    };
                     barca_core::jsonlog::line(
                         barca_core::jsonlog::Level::Info,
                         Some(&job.id),
@@ -872,6 +884,12 @@ mod tests {
     /// A minimal `AppState`. `files` points at a nonexistent path so any run this
     /// triggers fails fast in the background (DAG read error) with no side effects.
     fn app_state() -> AppState {
+        let mut resolved =
+            barca_core::config::resolve_in(None, std::path::Path::new("/nonexistent")).unwrap();
+        // The run queue records each run it accepts: in a directory of its own.
+        let dir = tempfile::tempdir().unwrap();
+        resolved.db_path = dir.path().join("metadata.db").display().to_string();
+        std::mem::forget(dir);
         AppState::new(ServeConfig {
             files: vec!["/nonexistent-barca-test-file.py".to_string()],
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -880,8 +898,7 @@ mod tests {
             schedule: true,
             timezone: "local".to_string(),
             python: std::path::PathBuf::from("python3"),
-            resolved: barca_core::config::resolve_in(None, std::path::Path::new("/nonexistent"))
-                .unwrap(),
+            resolved,
             read_only: false,
         })
     }
@@ -914,6 +931,7 @@ mod tests {
                 finished_at: None,
                 outcome: None,
                 cancel: barca_core::CancellationToken::new(),
+                cancel_requested: false,
             },
         );
     }
@@ -2099,8 +2117,8 @@ mod tests {
         let task = job("f.py:t", NodeKind::Task, "* * * * *");
         // Both kinds must produce a handle that is registered in the runs map,
         // proving each routes into a real run-trigger path (get vs run).
-        let ha = trigger(&st, &asset, 0);
-        let ht = trigger(&st, &task, 0);
+        let ha = trigger(&st, &asset, 0).await.unwrap();
+        let ht = trigger(&st, &task, 0).await.unwrap();
         assert!(st.runs.contains_key(&ha));
         assert!(st.runs.contains_key(&ht));
         assert_ne!(ha, ht);

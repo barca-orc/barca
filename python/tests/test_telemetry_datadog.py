@@ -424,7 +424,16 @@ def test_a_tick_run_names_every_target_and_is_triggered_by_the_schedule(tmp_path
     assert root["meta"]["barca.schedule_id"] == "pipeline.py:inbox", root
 
 
-def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent):
+@pytest.mark.parametrize(
+    "stop, exit_code, reason",
+    [
+        # The drain timeout puts the run back in the queue: its stopped attempt says so.
+        ("timeout", 0, "server restart (requeued)"),
+        # A second signal cancels it.
+        ("second signal", 1, "server shutdown"),
+    ],
+)
+def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent, stop, exit_code, reason):
     """#190, #434 item 3: a run the drain did not finish is `cancelled` with a reason."""
     import signal
     import socket
@@ -441,9 +450,9 @@ def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    drain = ["--drain-timeout", "0"] if stop == "timeout" else []
     serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule",
-         "--drain-timeout", "0"],
+        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule", *drain],
         cwd=tmp_path,
         env={**base, **datadog(agent)},
         stdout=subprocess.PIPE,
@@ -462,17 +471,20 @@ def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent):
         while not (tmp_path / "started").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         serve.send_signal(signal.SIGTERM)
+        if stop == "second signal":
+            time.sleep(1)
+            serve.send_signal(signal.SIGINT)
         _, err = serve.communicate(timeout=30)
     finally:
         if serve.poll() is None:
             serve.kill()
             serve.communicate()
-    assert serve.returncode == 1, err
+    assert serve.returncode == exit_code, err
 
     roots = [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
     assert len(roots) == 1, roots
     assert roots[0]["meta"]["barca.status"] == "cancelled", roots[0]
-    assert roots[0]["meta"]["barca.reason"] == "server shutdown", roots[0]
+    assert roots[0]["meta"]["barca.reason"] == reason, roots[0]
 
 
 def serve_for(tmp_path: Path, seconds: float, env: dict[str, str], until=None):

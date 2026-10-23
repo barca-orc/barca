@@ -92,6 +92,45 @@ computes ([Server Mode](/reference/server-mode/)); `barca status`,
 and sends nothing. With a remote store the server backs its history up there, as described below.
 `barca.Client` is deprecated in favour of `barca.get(..., server=True)`.
 
+## Restarting without losing work
+
+A deploy, a reboot or a config change restarts the server. Every run it accepted (a request,
+a `--server` command, the UI, a scheduled tick) is in its run queue, kept in the metadata DB on
+the persistent `.barca/`, so nothing is lost or cancelled:
+
+```bash
+barca queue pause --server       # optional: nothing new starts; runs in flight finish
+systemctl restart barca          # or: docker restart barca, docker compose up -d
+barca queue --server             # the queue is back; still paused if you paused it
+barca queue resume --server      # if you paused it
+```
+
+1. **Pause (optional).** The runs in flight finish while nothing new starts, so the stop that
+   follows waits only for them. The pause is kept across the restart.
+2. **Restart.** The supervisor sends SIGTERM: the server drains, and exits 0 once the runs in
+   flight finished, or at `--drain-timeout` after putting the ones left back at the head of the
+   queue. Runs submitted meanwhile are accepted and queued.
+3. **The queue resumes.** The new server prints `[barca] resuming N queued runs` and starts them
+   in order under their run ids. `barca get|run --server` and `barca logs -f --server` clients
+   waiting on a run reconnect (for up to 60 seconds, `BARCA_SERVER_RECONNECT`) and follow it to
+   its end.
+
+A requeued run starts again from its beginning, so a run is executed at least once: assets that
+finished are cache hits, but an interrupted step or task runs again. Make tasks with side
+effects safe to repeat, or give them a longer drain timeout.
+
+The supervisor's grace period must be longer than the drain timeout plus about 15 seconds, or it
+kills the server mid-drain and the runs in flight are interrupted instead of requeued (the queued
+ones survive even that):
+
+| Supervisor | Setting | Default | With the default 30 s drain timeout |
+|---|---|---|---|
+| systemd | `TimeoutStopSec=` | 90 s | enough |
+| Docker | `docker stop -t`, `stop_grace_period` | 10 s | `45s` |
+| Kubernetes | `terminationGracePeriodSeconds` | 30 | `45` |
+
+More in `barca docs scheduling` ("The run queue", "Stopping the server").
+
 ## Listen on another interface
 
 ```bash
@@ -125,8 +164,9 @@ services:
       - ./project:/project
       - barca-state:/project/.barca
     restart: unless-stopped
-    # Longer than the drain timeout (30 s), so runs in flight finish on `docker compose stop`.
-    stop_grace_period: 40s
+    # Longer than the drain timeout (30 s) plus 15 s, so runs in flight finish (or go back to
+    # the run queue) on `docker compose stop`.
+    stop_grace_period: 45s
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
@@ -190,10 +230,10 @@ What each part is for:
   SIGTERM as on SIGINT, as process 1 too: with them the line can be removed, and leaving it in
   changes nothing.
 - **`stop_grace_period`.** On `docker compose stop` (and on a redeploy) barca drains: runs in
-  flight get up to 30 seconds to finish (`--drain-timeout`, `[server] drain_timeout`). Docker
-  kills the container after 10 seconds unless told otherwise, so give it longer than the drain
-  timeout. With `docker stop` that is `-t 40`; in Kubernetes, `terminationGracePeriodSeconds`
-  (default 30) should exceed it too.
+  flight get up to 30 seconds to finish (`--drain-timeout`, `[server] drain_timeout`), then go
+  back to the run queue. Docker kills the container after 10 seconds unless told otherwise, so
+  give it the drain timeout plus about 15 seconds. With `docker stop` that is `-t 45`; in
+  Kubernetes, `terminationGracePeriodSeconds` (default 30) should be 45 too.
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
   While it drains it still returns 200, with `"status": "draining"`. Alert on
   `scheduler_enabled: false` for a server that should schedule, and on a non-null
@@ -335,17 +375,20 @@ tracing are in [Telemetry](/reference/telemetry/#datadog).
 ### What happens on restart
 
 - **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,
-  Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above). From 0.27.0 the server drains: new
-  runs get `503` with `Retry-After`, the scheduler stops, `/health` reports `draining`, and the
-  runs in progress finish and are recorded, artifact uploads included, for up to
-  `--drain-timeout` seconds (default 30). The process then exits 0. If the deadline passes or
-  a second signal arrives first, the runs left are cancelled: their workers are stopped, the
-  steps that finished are kept, and they are recorded as `cancelled` with reason
-  `server shutdown`. The process then exits 1, after at most about 12 more seconds (10 for
-  the runs to stop, 2 for open connections). Before 0.27.0 the first signal cancelled the runs
-  in progress at once and the process exited 0. Give the supervisor a grace period longer
-  than the drain timeout (`stop_grace_period` above); otherwise Docker kills the container
-  mid-drain, as in the next case.
+  Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above). From 0.29.4 nothing the server
+  accepted is lost: the run queue pauses (new runs are still accepted, `202` with
+  `status: "pending"`, and wait for the next start), the scheduler stops, `/health` reports
+  `draining`, and the runs in progress finish and are recorded, artifact uploads included, for
+  up to `--drain-timeout` seconds (default 30). The process then exits 0. If the deadline
+  passes first, the runs left are stopped and put back at the head of the queue, and the
+  process exits 0; the next server starts them again from the beginning (the steps that
+  finished are cache hits). A second signal cancels them instead: they are recorded as
+  `cancelled` with reason `server shutdown`, and the process exits 1, after at most about 12
+  more seconds (10 for the runs to stop, 2 for open connections). From 0.27.0 to 0.29.3 a
+  draining server refused new runs with `503` and cancelled the runs left at the deadline;
+  before 0.27.0 the first signal cancelled the runs in progress at once. Give the supervisor
+  a grace period longer than the drain timeout plus 15 seconds (`stop_grace_period` above);
+  otherwise Docker kills the container mid-drain, as in the next case.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
   and are served from cache next time. In 0.19.0 and earlier the run in progress stays in
   `barca history` with status `running` for good: those versions look for the run's process

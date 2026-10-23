@@ -20,6 +20,10 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         // `draining` once the server was told to stop: it finishes its runs and starts none.
         "status": if state.is_draining() { "draining" } else { "ok" },
+        // When this server started: a client that reconnects tells a restart by it.
+        "started_at": state.started,
+        // The run queue: paused or not, how many runs wait and how many execute.
+        "queue": crate::queue::health(&state),
         "version": env!("CARGO_PKG_VERSION"),
         "api_version": barca_core::outcome::API_VERSION,
         "env": cfg.env,
@@ -583,7 +587,8 @@ mod duration_tests {
                 .await
                 .is_ok()
         );
-        let held = state.run_slots.acquire().await.unwrap();
+        // Every slot taken: the run waits in the queue.
+        let held = state.run_slots.clone().try_acquire_owned().unwrap();
         let handle = crate::runs::start(
             state.clone(),
             crate::runs::RunSpec::api(
@@ -591,10 +596,13 @@ mod duration_tests {
                 vec!["target".into()],
                 vec![],
             ),
-        );
+        )
+        .await
+        .unwrap();
         assert_eq!(state.runs.get(&handle).unwrap().status, RunStatus::Pending);
         std::fs::write(&file, "from barca import asset\ndef broken(: pass\n").unwrap();
         drop(held);
+        crate::queue::dispatch(&state);
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if state.runs.get(&handle).unwrap().status == RunStatus::Failed {

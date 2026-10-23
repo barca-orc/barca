@@ -69,7 +69,7 @@ return the corresponding headers without a body.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/runs` | Start a run of `barca get` or `barca run` on the server. Body: [`RunRequest`](#starting-a-run). `202 {"run_id"}`, or `200` with the `--dry-run` JSON when `dry_run` is set. |
+| `POST` | `/runs` | Start a run of `barca get` or `barca run` on the server. Body: [`RunRequest`](#starting-a-run). `202 {"run_id", "status", "position"}` (the run joins the [run queue](#the-run-queue): `running` when it started at once, or `pending` and its place, 1 = next), or `200` with the `--dry-run` JSON when `dry_run` is set. |
 | `GET`  | `/runs/{run_id}` | The run: what started it, its status and, once finished, its [outcome](#outcomes), with its steps and captured lines. Survives a restart. |
 | `GET`  | `/runs/{run_id}/events` | Server-sent events, each with an `id:`: `run_started`, `line`, `log`, `step_finished`, `run_finished`. |
 | `DELETE` | `/runs/{run_id}` | Cancel a pending or running run. |
@@ -97,7 +97,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/sql/views?files=a.py,b.py` | Which result each `barca sql` view reads in the ledger: `{"views": [{name, node, kind, partitioned, format, files: [{path, partition, content_hash}], stale, run_hash}], "missing": [{name, node, kind, partitioned, command, keys_unknown?}], "duplicates": [{name, ids}]}`, by the function a local `barca sql` uses. The client runs the query; the server runs no SQL. |
 | `GET`  | `/materializations?limit=N&offset=M` | Step results, newest first: `{"materializations": [{node_id, partition, run_id, run_hash, status, created_at, elapsed_seconds, cpu_seconds, max_rss_bytes, attempts, format, size_bytes, artifact, content_hash, error_type, error_message}], total, limit, offset}`; `limit` defaults to 1000, at most 10000. `barca sql`'s `barca.materializations`. |
 | `GET`  | `/project` | The deployed tree: `{api_version, root, env, deployed_at, commit, files: [{path, sha256}]}` |
-| `GET`  | `/health` | Liveness (or `draining`), `api_version`, `env`, the artifact store (`store_uri`), read-only, scheduler, load diagnostics, and the cache size against its limit. |
+| `GET`  | `/health` | Liveness (or `draining`), `api_version`, `env`, the artifact store (`store_uri`), read-only, scheduler, load diagnostics, the cache size against its limit, `started_at` (changes on a restart) and `queue: {paused, queued, running, max_runs}`. |
 
 **The served graph and the UI.**
 
@@ -113,6 +113,9 @@ client prints it as it would print the local command's.
 | `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause. |
 | `POST` | `/schedule/{id}/pause` | Hold one schedule back, optionally `?until=<RFC 3339>`. |
 | `POST` | `/schedule/{id}/resume` | Let a paused schedule fire again. |
+| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...]}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at}`. |
+| `POST` | `/queue/pause` | Hold every queued run back until resumed; runs in flight go on. Kept across restarts. Answers the queue; `403` read-only. |
+| `POST` | `/queue/resume` | Let queued runs start again, in order. Answers the queue; `403` read-only. |
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
 | `GET`  | `/ui/` | The web UI, compiled into the binary. |
 
@@ -472,28 +475,51 @@ is what `barca logs` reads: a run in progress answers with its lines so far, an 
 unknown id is an empty list. A run in progress streams its lines as `log` events, each with its
 `stream` and `ts`.
 
+### The run queue
+
+Every run the server accepts (`POST /runs`, the older trigger routes, the UI, a `--server`
+client, a scheduled tick) is recorded in the metadata DB (`run_queue`) under its run id before
+the server answers. Runs start in the order they were accepted, at most `--max-runs` at once
+(`[server] max_runs`, default one per core), while the queue is neither paused nor draining; the
+others are `pending`. A run leaves the queue once it has recorded how it ended; `DELETE
+/runs/{run_id}` takes a queued run off it and records it `cancelled`.
+
+`POST /queue/pause` holds every queued run back; runs in flight finish, new runs and scheduled
+ticks still join the queue (one tick per node waits; the next are skipped as `in_flight`). The
+pause is kept in `server_state`, so a restart keeps it. `POST /queue/resume` lets them start
+again. `barca queue [pause|resume] --server` calls these routes.
+
+When the server starts it resumes the queued runs, in order and under their run ids, before its
+scheduler's catch-up (`[barca] resuming N queued runs`). A run the previous server had started
+and never finished recording (it was killed) is not started again: it is reported on startup and
+recorded as interrupted.
+
 ### Stopping: the drain
 
 The first SIGTERM or SIGINT starts a drain. Until the server exits:
 
-- `POST /runs` (except a `dry_run`), `POST /state/reset` and the older `POST /run`,
-  `POST /run/{target}` and `POST /get/{target}` return `503` with the error envelope
-  (`"error": "this server is shutting down: ..."`, `kind: infra`) and a `Retry-After` header: the drain
-  timeout in seconds, at least 1. No run is started.
+- No queued run starts. `POST /runs` and the older `POST /run`, `POST /run/{target}` and
+  `POST /get/{target}` still accept runs (`202`, `status: "pending"`): they wait in the queue
+  for the next server. `GET /queue` says `draining: true`.
+- `POST /state/reset` and `POST /ledger/runs` return `503` with the error envelope (`kind:
+  infra`) and a `Retry-After` header: the drain timeout in seconds, at least 1.
 - `GET /health` returns `200` with `"status": "draining"`.
 - The scheduler stops; a tick that falls in the drain starts no run, and the next server's
   startup catch-up fires the job once.
 - Reads, `GET /runs/{run_id}`, `/runs/{run_id}/events`, `DELETE /runs/{run_id}` and their
-  older aliases keep working, and the runs in flight
-  finish, artifact uploads included.
+  older aliases keep working, and the runs in flight finish, artifact uploads included.
 
 The drain lasts until every run in flight has finished (exit 0), for at most `--drain-timeout`
-seconds (`[server] drain_timeout` in `barca.toml`, default 30). When the deadline passes or a
-second SIGTERM or SIGINT arrives first, the runs left are cancelled as by `DELETE /run`, with
-`"error": "run cancelled: server shutdown"`, the line `[barca] run cancelled: server shutdown` in
-their logs and `barca.reason: server shutdown` on their `barca.run` span; the server exits 1. Open
-`/events` streams end once the runs are over. See [Deploying](/deploying/#what-happens-on-restart)
-for supervisor grace periods.
+seconds (`[server] drain_timeout` in `barca.toml`, default 30). When the deadline passes first,
+the runs left are stopped and put back at the head of the queue: the next server starts them
+again from the beginning under the same run ids (at least once: a step that was interrupted runs
+again), and the server exits 0. A second SIGTERM or SIGINT cancels them instead, as by `DELETE
+/runs/{run_id}`, with `"error": "run cancelled: server shutdown"`, the line `[barca] run
+cancelled: server shutdown` in their logs and `barca.reason: server shutdown` on their
+`barca.run` span; the server exits 1. The queued runs are kept either way. Open `/events` streams
+end once the runs are over, without `run_finished` for a run still queued; the CLI's clients
+reconnect to the next server. See [Deploying](/deploying/#restarting-without-losing-work) for
+supervisor grace periods.
 
 ### Read-only mode
 
@@ -704,7 +730,7 @@ request body), `404` for something that does not exist (an unknown node, run or 
 for a name that matches several nodes or a request that conflicts with a run's state
 (cancelling a finished run, the output of a run still going), and `403` for a run, cancel or
 pause asked of a `--read-only` server; `infra` is `500`, and `503`, with a `Retry-After`
-header, for a run requested of a server that is draining before it stops. A `405`, for a known path asked with the
+header, for a reset or a ledger post asked of a server that is draining before it stops. A `405`, for a known path asked with the
 wrong method, names the allowed methods in `error` and in the `Allow` header. A failed step is
 never an HTTP error: it is a run whose outcome is `failed`. The Python client raises
 `BarcaError` carrying the status and the `error` message for each of these.

@@ -49,6 +49,8 @@ pub async fn reset(State(state): State<AppState>) -> Result<Json<Reset>, ApiErro
     if let Some(pauses) = state.pauses.get() {
         pauses.write().unwrap().clear();
     }
+    state.queue.reset();
+    crate::queue::dispatch(&state);
     // The finished runs this server still remembers go with the history they were part of
     // (`GET /runs` joins them in). One admitted after the check above stays.
     state

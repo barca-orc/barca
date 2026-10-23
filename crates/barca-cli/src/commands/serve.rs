@@ -14,6 +14,7 @@ pub(crate) async fn serve_cmd(
     timezone: String,
     read_only: bool,
     drain_timeout: Option<u64>,
+    max_runs: Option<usize>,
     python: &std::path::Path,
     ctx: &crate::error::Context,
 ) -> Result<(), crate::error::CliError> {
@@ -23,6 +24,10 @@ pub(crate) async fn serve_cmd(
     // `--drain-timeout` > `[server] drain_timeout` > 30 s.
     if let Some(secs) = drain_timeout {
         resolved.drain_timeout_secs = secs;
+    }
+    // `--max-runs` > `[server] max_runs` > one per core.
+    if let Some(n) = max_runs {
+        resolved.server_max_runs = Some(n);
     }
     // `serve` prints its startup line (env, store and the metadata DB) once the database is
     // set up.
@@ -43,9 +48,11 @@ pub(crate) async fn serve_cmd(
         barca_server::ServeError::Metadata(e) => engine(e),
         e => engine(barca_core::BarcaError::Other(e.to_string())),
     })? {
-        barca_server::Stopped::Drained => Ok(()),
+        // Nothing accepted was lost: the runs in flight finished, or were put back in the queue
+        // for the next start.
+        barca_server::Stopped::Drained { .. } | barca_server::Stopped::Requeued { .. } => Ok(()),
         // Exit 1, so deploy tooling can tell a forced stop from a clean drain.
-        barca_server::Stopped::Forced { cancelled } => {
+        barca_server::Stopped::Forced { cancelled, .. } => {
             let mut error = CliError::from_prose(
                 ErrorKind::StepFailed,
                 format!(
@@ -56,9 +63,10 @@ pub(crate) async fn serve_cmd(
                 ),
             );
             error.remediation = Some(format!(
-                "Give runs longer to finish with --drain-timeout (now {secs}s) or [server] \
-                 drain_timeout in barca.toml, and the supervisor a longer stop grace period \
-                 than that. The cancelled runs are in barca history; run them again."
+                "A second SIGTERM or SIGINT cancels the runs in flight; one signal lets them \
+                 finish, and puts them back in the queue when the drain timeout (now {secs}s, \
+                 --drain-timeout or [server] drain_timeout) passes. The cancelled runs are in \
+                 barca history; run them again."
             ));
             Err(error)
         }

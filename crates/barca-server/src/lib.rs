@@ -5,8 +5,8 @@
 //! thin caller of [`serve`]. A future UI is a separate package that consumes this
 //! same HTTP API as its contract.
 //!
-//! Runs are async: `POST /runs` answers with the run's database id at once and the work
-//! happens in a background task; clients stream `GET /runs/{run_id}/events`, read
+//! Runs are async: `POST /runs` answers with the run's database id at once, the run joins the
+//! durable run queue (`queue`) and the work happens in a background task; clients stream `GET /runs/{run_id}/events`, read
 //! `GET /runs/{run_id}`, and can cancel with `DELETE /runs/{run_id}`. Core commands are
 //! async-native, so handlers `.await` them directly on the server's runtime — no
 //! `spawn_blocking`, and every run future is genuinely cancellable.
@@ -19,6 +19,7 @@ mod handlers;
 mod inspect;
 mod ledger;
 mod pause;
+mod queue;
 mod read_cache;
 mod reset;
 mod routes;
@@ -66,8 +67,8 @@ pub fn app(config: ServeConfig) -> axum::Router {
     routes::router(AppState::new(config))
 }
 
-/// [`app`] on a server that is draining (as after SIGTERM): runs are refused with `503`
-/// and `/health` says `draining`. For conformance tests; not part of the API.
+/// [`app`] on a server that is draining (as after SIGTERM): runs are queued for the next start,
+/// nothing starts, and `/health` says `draining`. For conformance tests; not part of the API.
 #[doc(hidden)]
 pub fn draining_app(config: ServeConfig) -> axum::Router {
     let state = AppState::new(config);
@@ -88,26 +89,32 @@ pub fn app_with_scheduler(
     })
 }
 
-/// How [`serve`] ended.
+/// How [`serve`] ended. `queued` is how many runs wait in the run queue for the next start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stopped {
-    /// Every run in flight finished during the drain (or there was none).
-    Drained,
-    /// The drain timeout passed, or a second SIGTERM/SIGINT came, while runs were still in
-    /// flight: that many runs were cancelled with reason `server shutdown`. `barca serve`
-    /// exits 1.
-    Forced { cancelled: usize },
+    /// Every run in flight finished during the drain (or there was none). `barca serve` exits 0.
+    Drained { queued: usize },
+    /// The drain timeout passed while runs were still in flight: that many were stopped and put
+    /// back at the head of the queue, to start again from the beginning after the restart.
+    /// Nothing accepted is lost; `barca serve` exits 0.
+    Requeued { requeued: usize, queued: usize },
+    /// A second SIGTERM/SIGINT came while runs were still in flight: that many runs were
+    /// cancelled with reason `server shutdown`. `barca serve` exits 1.
+    Forced { cancelled: usize, queued: usize },
 }
 
 /// Start the server on the caller's runtime: bind and serve until SIGTERM or SIGINT, then
 /// drain (#190).
 ///
-/// The first signal starts the drain: new runs are refused with `503` and `Retry-After`, the
-/// scheduler stops, `/health` reports `draining`, and the runs in flight finish, uploads
-/// included, for at most `[server] drain_timeout` seconds (`--drain-timeout`, 30 by default).
-/// When the deadline passes or a second signal comes first, the runs still going are
-/// cancelled (workers terminated, runs recorded `cancelled` with reason `server shutdown`)
-/// and [`Stopped::Forced`] is returned.
+/// At startup the runs the last server left queued are resumed, in order, under their ids.
+///
+/// The first signal starts the drain: the queue stops starting runs (new ones are still
+/// accepted and recorded, for the next server), the scheduler stops, `/health` reports
+/// `draining`, and the runs in flight finish, uploads included, for at most `[server]
+/// drain_timeout` seconds (`--drain-timeout`, 30 by default). When the deadline passes, the
+/// runs still going are stopped and put back in the queue ([`Stopped::Requeued`]); when a
+/// second signal comes first, they are cancelled (workers terminated, runs recorded
+/// `cancelled` with reason `server shutdown`) and [`Stopped::Forced`] is returned.
 pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // Before anything starts: an unknown zone must not become local time (#289).
     check_timezone(&config.timezone).map_err(ServeError::Timezone)?;
@@ -132,6 +139,14 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // set up stops here (exit 3), instead of serving with its scheduler off (#513).
     metadata_startup(&state).await?;
     state.loaded_dag().await?;
+    // The runs the last server accepted and did not start, in their order. Before the
+    // scheduler's catch-up, which skips a job whose node has one.
+    if !read_only {
+        queue::resume_at_startup(&state)
+            .await
+            .map_err(ServeError::Metadata)?;
+        queue::dispatch(&state);
+    }
 
     // With a store, back the metadata DB up every minute it changed (RFC-0009). Runs back up
     // at their end too.
@@ -409,25 +424,39 @@ const CONNECTION_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 /// `barca.run` span.
 pub const SHUTDOWN_REASON: &str = "server shutdown";
 
-/// Runs that have not finished: queued or executing.
+/// The reason a run the stopping server put back in the queue records on its stopped attempt.
+pub const REQUEUE_REASON: &str = "server restart (requeued)";
+
+/// Runs executing now.
 fn runs_in_flight(state: &AppState) -> usize {
     state
         .runs
         .iter()
-        .filter(|r| {
-            matches!(
-                r.status,
-                state::RunStatus::Pending | state::RunStatus::Running
-            )
-        })
+        .filter(|r| r.status == state::RunStatus::Running)
         .count()
 }
 
-/// The drain, after the first stop signal (`first`). Stop admitting runs and stop the
-/// scheduler ([`AppState::draining`]), then wait until every run task has ended, for at most
-/// the drain timeout. If the deadline passes or `again` (the next stop signal) comes first,
-/// cancel the runs still in flight with reason [`SHUTDOWN_REASON`] and wait, for at most
-/// [`RUN_STOP_LIMIT`], until they have terminated their workers and recorded themselves.
+/// Runs waiting in the queue.
+fn runs_queued(state: &AppState) -> usize {
+    // Waiting in the queue, or put back in it by this drain.
+    state
+        .runs
+        .iter()
+        .filter(|r| r.status == state::RunStatus::Pending)
+        .count()
+}
+
+fn runs(n: usize) -> String {
+    format!("{n} run{}", if n == 1 { "" } else { "s" })
+}
+
+/// The drain, after the first stop signal (`first`). Stop starting runs and stop the scheduler
+/// ([`AppState::draining`]); runs that are accepted meanwhile join the queue. Then wait until
+/// every run task has ended, for at most the drain timeout. If the deadline passes first, stop
+/// the runs still in flight and put them back in the queue ([`REQUEUE_REASON`]); if `again`
+/// (the next stop signal) comes first, cancel them ([`SHUTDOWN_REASON`]). Either way wait, for
+/// at most [`RUN_STOP_LIMIT`], until they have terminated their workers and recorded
+/// themselves.
 async fn drain_then_stop(
     state: &AppState,
     first: &str,
@@ -437,45 +466,98 @@ async fn drain_then_stop(
     state.draining.cancel();
     state.run_tasks.close();
     let in_flight = runs_in_flight(state);
+    let waiting = runs_queued(state);
+    let kept = if waiting > 0 {
+        format!("; {} queued for the next start", runs(waiting))
+    } else {
+        String::new()
+    };
     if in_flight > 0 {
         barca_core::errln!(
-            "[barca] {first} received: draining — new runs are refused; waiting up to {secs}s \
-             for {in_flight} run{} in flight (send {first} again to stop now)",
-            if in_flight == 1 { "" } else { "s" }
+            "[barca] {first} received: draining — the queue is paused and new runs are queued \
+             for the next start; waiting up to {secs}s for {} in flight (then {} back in the \
+             queue; send {first} again to cancel {} now){kept}",
+            runs(in_flight),
+            if in_flight == 1 { "it goes" } else { "they go" },
+            if in_flight == 1 { "it" } else { "them" },
         );
     } else {
-        barca_core::errln!("[barca] {first} received: no run in flight; shutting down");
+        barca_core::errln!("[barca] {first} received: no run in flight{kept}; shutting down");
     }
-    let forced_by = tokio::select! {
+    enum Stop {
+        Requeue,
+        Cancel(String),
+    }
+    let stop = tokio::select! {
         _ = state.run_tasks.wait() => None,
-        _ = tokio::time::sleep(std::time::Duration::from_secs(secs)) => {
-            Some(format!("the drain timeout ({secs}s) passed"))
-        }
-        name = again => Some(format!("{name} received again")),
+        _ = tokio::time::sleep(std::time::Duration::from_secs(secs)) => Some(Stop::Requeue),
+        name = again => Some(Stop::Cancel(format!("{name} received again"))),
     };
-    let cancelled = match forced_by {
-        None => 0,
-        Some(why) => {
-            let cancelled = runs_in_flight(state);
-            if cancelled > 0 {
+    let stopped = match stop {
+        None => {
+            if in_flight > 0 {
+                barca_core::errln!("[barca] drained: every run finished; shutting down");
+            }
+            let queued = runs_queued(state);
+            if queued > 0 {
                 barca_core::errln!(
-                    "[barca] {why}: cancelling {cancelled} run{} ({SHUTDOWN_REASON})",
-                    if cancelled == 1 { "" } else { "s" }
+                    "[barca] {} wait in the queue for the next start",
+                    runs(queued)
                 );
             }
+            return Stopped::Drained { queued };
+        }
+        Some(Stop::Requeue) => {
+            let n = runs_in_flight(state);
+            barca_core::errln!(
+                "[barca] the drain timeout ({secs}s) passed: stopping {} and putting {} back in \
+                 the queue; {} again from the beginning when the server restarts (steps \
+                 that finished are cached)",
+                runs(n),
+                if n == 1 { "it" } else { "them" },
+                if n == 1 { "it starts" } else { "they start" },
+            );
+            state
+                .queue
+                .requeue
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            state.cancel_reason.set(REQUEUE_REASON);
+            n
+        }
+        Some(Stop::Cancel(why)) => {
+            let n = runs_in_flight(state);
+            if n > 0 {
+                barca_core::errln!("[barca] {why}: cancelling {} ({SHUTDOWN_REASON})", runs(n));
+            }
             state.cancel_reason.set(SHUTDOWN_REASON);
-            state.shutdown.cancel();
-            let _ = tokio::time::timeout(RUN_STOP_LIMIT, state.run_tasks.wait()).await;
-            cancelled
+            n
         }
     };
-    if cancelled > 0 {
-        Stopped::Forced { cancelled }
-    } else {
-        if in_flight > 0 {
-            barca_core::errln!("[barca] drained: every run finished; shutting down");
+    state.shutdown.cancel();
+    let _ = tokio::time::timeout(RUN_STOP_LIMIT, state.run_tasks.wait()).await;
+    let queued = runs_queued(state);
+    if queued > 0 {
+        barca_core::errln!(
+            "[barca] {} wait in the queue for the next start",
+            runs(queued)
+        );
+    }
+    if state
+        .queue
+        .requeue
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        Stopped::Requeued {
+            requeued: stopped,
+            queued,
         }
-        Stopped::Drained
+    } else if stopped > 0 {
+        Stopped::Forced {
+            cancelled: stopped,
+            queued,
+        }
+    } else {
+        Stopped::Drained { queued }
     }
 }
 

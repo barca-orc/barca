@@ -172,6 +172,7 @@ examples.
 | `barca plan [files...]` | The execution plan as JSON, with the capacity and step weights (experimental). |
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (barca also does this after every run). |
 | `barca serve [files...]` | Cron scheduler, HTTP API and web UI; `--server` on other commands runs them there. |
+| `barca queue [pause\|resume] --server` | A server's run queue (kept across restarts); pause or resume it before a deploy. |
 | `barca state backups` / `barca state restore` / `barca state reset` | List the metadata backups, put one back in place of the local database, or start it over (experimental; nothing is deleted). |
 | `barca docs [topic]` | The manual, compiled into the binary. |
 | `barca version` | Print the version (also `barca --version`). |

@@ -87,6 +87,9 @@ pub struct ServerToml {
     /// Seconds a stopping server waits for in-flight runs before it cancels them
     /// (`--drain-timeout` overrides it). 0 cancels them at once.
     pub drain_timeout: Option<u64>,
+    /// How many runs `barca serve` executes at once (`--max-runs` overrides it); the others
+    /// wait in its run queue. At least 1; default one per core.
+    pub max_runs: Option<usize>,
 }
 
 /// How long `barca serve` waits for in-flight runs on SIGTERM or SIGINT by default: the
@@ -187,6 +190,9 @@ pub struct ResolvedConfig {
     /// `[server] drain_timeout`: seconds `barca serve` waits for in-flight runs once told to
     /// stop, before it cancels them. Only `serve` reads it.
     pub drain_timeout_secs: u64,
+    /// `[server] max_runs`: how many runs `barca serve` executes at once (`None`: one per
+    /// core). Only `serve` reads it.
+    pub server_max_runs: Option<usize>,
     /// The configured server (`BARCA_SERVER`, else `[server] url`): its ledger is what `get` and
     /// `run` use unless `--local` (RFC-0007 section 4.1). `None` when none is configured.
     pub server_url: Option<String>,
@@ -394,6 +400,13 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         .as_ref()
         .and_then(|server| server.drain_timeout)
         .unwrap_or(DEFAULT_DRAIN_TIMEOUT_SECS);
+    let server_max_runs = file.server.as_ref().and_then(|server| server.max_runs);
+    if server_max_runs == Some(0) {
+        return Err(BarcaError::Usage(
+            "[server] max_runs must be at least 1 (the runs barca serve executes at once)"
+                .to_string(),
+        ));
+    }
 
     // env name: CLI > BARCA_ENV > default_env in toml > "default"
     let (env, env_source) = match (cli_env, env_var("BARCA_ENV"), file.default_env) {
@@ -429,6 +442,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 cache_max_size,
                 cache_max_size_source,
                 drain_timeout_secs,
+                server_max_runs,
                 server_url: env_var("BARCA_SERVER").or_else(|| {
                     file.server
                         .as_ref()
@@ -534,6 +548,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         cache_max_size,
         cache_max_size_source,
         drain_timeout_secs,
+        server_max_runs,
         server_url,
         capacity,
         ledger: None,
@@ -990,6 +1005,15 @@ mod tests {
             120
         );
         unsafe { std::env::remove_var("BARCA_REMOTE") };
+        assert_eq!(resolve_in(None, dir.path()).unwrap().server_max_runs, None);
+        write_toml(dir.path(), "[server]\nmax_runs = 2\n");
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().server_max_runs,
+            Some(2)
+        );
+        write_toml(dir.path(), "[server]\nmax_runs = 0\n");
+        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        assert!(err.contains("max_runs"), "{err}");
         write_toml(dir.path(), "[server]\ndrain = 1\n");
         let err = resolve_in(None, dir.path()).unwrap_err().to_string();
         assert!(err.contains("drain"), "{err}");

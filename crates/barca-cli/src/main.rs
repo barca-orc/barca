@@ -148,7 +148,10 @@ fn main() {
             server.announce();
             sql_server = Some(server);
         }
-        (Some(server), Cli::Status { .. } | Cli::Stats { .. } | Cli::Logs { .. })
+        (
+            Some(server),
+            Cli::Status { .. } | Cli::Stats { .. } | Cli::Logs { .. } | Cli::Queue { .. },
+        )
         | (
             Some(server),
             Cli::History {
@@ -224,6 +227,7 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
         | Cli::History { server, .. }
         | Cli::Stats { server, .. }
         | Cli::Logs { server, .. }
+        | Cli::Queue { server, .. }
         | Cli::Sql { server, .. } => Some(server),
         _ => None,
     }
@@ -498,8 +502,29 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             )
             .await
         }
+        Cli::Queue {
+            action,
+            format,
+            env,
+            server: flags,
+        } => {
+            if flags.local {
+                return Err(queue_needs_a_server());
+            }
+            client::queue(server, action, is_json(format), env.as_deref()).await
+        }
         _ => unreachable!("only the commands that take --server reach here"),
     }
+}
+
+/// `barca queue` with no server: the run queue is a server's.
+fn queue_needs_a_server() -> CliError {
+    CliError::from_prose(
+        ErrorKind::Usage,
+        "error: barca queue reads a barca server's run queue, and no server is given\n\
+         Pass --server URL, set BARCA_SERVER, or add `[server] url = \"...\"` to barca.toml \
+         (barca docs server-mode). This machine's own runs have no queue.",
+    )
 }
 
 /// `barca sql` with a server (configured, or `--server`): run in the project root, so the
@@ -548,6 +573,7 @@ async fn run_cli(
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
 
     match cli {
+        Cli::Queue { .. } => Err(queue_needs_a_server()),
         Cli::Get {
             args,
             output,
@@ -870,6 +896,7 @@ async fn run_cli(
             timezone,
             read_only,
             drain_timeout,
+            max_runs,
             env,
         } => {
             serve_cmd(
@@ -882,6 +909,7 @@ async fn run_cli(
                 timezone,
                 read_only,
                 drain_timeout,
+                max_runs,
                 &python,
                 ctx,
             )

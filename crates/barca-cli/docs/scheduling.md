@@ -345,14 +345,14 @@ curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID/output      # the final artifact
 Replace the target names with functions in the deployed pipeline. `POST /runs` takes the flags
 of `barca get` and `barca run` as JSON (`targets`, `refresh`, `refresh_all`, `cascade`,
 `dry_run`, `agent`) and answers `202` with the run id at once, which is the id
-`barca history` shows. The targets are checked first, in the CLI's words: a request a local
+`barca history` shows, and the run's place in the run queue ("The run queue" below). The targets are checked first, in the CLI's words: a request a local
 command would refuse starts nothing. The event stream sends each stderr line a local run
 prints (`line`, tagged `when: agent` or `always`), each line a step writes (`log`, with its
 `stream`, `stdout` or `stderr`, and `ts`, when it was written), each step's
 result (`step_finished`, with `cached: true` for a cache hit), and `run_finished` with the
 outcome: the exact `barca get --json` body on success, the failed-run body and the error
-envelope on failure. A dropped connection is not resumed; reconnecting replays the run from its
-first event. Remote clients use the URL of the private server or its authenticating proxy in
+envelope on failure. Reconnecting replays the run from its first event (the CLI's clients skip
+what they already printed, and ride through a restart: "Clients ride through a restart" below). Remote clients use the URL of the private server or its authenticating proxy in
 place of the loopback address above. The older `POST /get/<target>`, `POST /run/<target>`,
 `POST /run`, `GET /status/<id>` and `GET /events/<id>` routes stay for one more minor release.
 
@@ -376,57 +376,159 @@ Other machines share the server's results by pointing `[server] url` (or `BARCA_
 it: their local runs read cache hits from the server's ledger and post what they compute, and
 `--server` runs a command on the server instead (`barca docs server-mode`).
 
+## The run queue
+
+Every run the server accepts joins its run queue: `POST /runs` and the older trigger routes, a
+`--server` client, the web UI, and each scheduled tick. The run is recorded in the metadata DB
+(`run_queue`) under its run id before the server answers, so a restart does not lose it. Runs
+start in the order they were accepted, at most `--max-runs` at once (`[server] max_runs` in
+`barca.toml`, default one per core); the others wait with status `pending`. `POST /runs` answers
+`202 {"run_id", "status", "position"}`: `running` when it started at once, or `pending` and its
+place in the queue (1 = next).
+
+```bash
+barca serve pipeline.py --max-runs 2           # two runs at a time; the rest wait, in order
+barca queue --server                           # the configured server's queue: running and queued runs
+barca queue --server http://127.0.0.1:8274 --json   # {paused, paused_at, draining, max_runs, running, queued}
+barca queue pause --server                     # nothing new starts; runs in flight go on
+barca queue resume --server                    # queued runs start again, in order
+```
+
+`barca queue` reads the server named by `--server`, `BARCA_SERVER` or `[server] url`; without one
+it is a usage error (exit 2). The same is `GET /queue`, `POST /queue/pause` and
+`POST /queue/resume`, and the web UI's Runs page shows the queue with a Pause / Resume button.
+`GET /health` has `queue: {paused, queued, running, max_runs}`.
+
+While the queue is paused, runs in flight finish, new runs are still accepted and wait, and a
+scheduled tick joins the queue too. The rule for a tick whose node already has a run pending or
+running holds: one tick waits, the ticks after it are skipped (`skip_reason: "in_flight"`), so a
+long pause leaves one run per scheduled node, not one per tick. The pause is kept in the metadata
+DB (`server_state`), like a schedule's pause: a server restarted while paused stays paused and
+prints `[barca] the run queue is paused (since ...)`. A `--read-only` server refuses pause and
+resume with `403` (`barca queue pause` exits 2); its `GET /queue` shows what the metadata DB
+records. `DELETE /runs/{id}` on a queued run takes it off the queue and records it `cancelled`.
+`barca state reset` (and `POST /state/reset`, refused while a run is queued) clears the pause
+with the rest of the database.
+
+When the server starts it resumes the runs it finds queued, in their order and under their run
+ids, before its scheduler catches up, and prints `[barca] resuming 3 queued runs`. A client that
+holds a run id sees the run go `pending` → `running` → `success` across the restart. A run the
+previous server had started and never finished recording (it was killed: SIGKILL, a crash, a
+supervisor's grace period that ran out) is not started again: it is reported once on startup and
+recorded as interrupted (`error` when it never wrote a row), because a run that kills its server
+would otherwise kill every server after it.
+
 ## Stopping the server
 
 SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way: the
-first one starts a drain.
+first one starts a drain, which loses nothing the server accepted.
 
 ```bash
 barca serve pipeline.py                      # on SIGTERM, runs in flight get 30 seconds
 barca serve pipeline.py --drain-timeout 300  # give them 5 minutes
-barca serve pipeline.py --drain-timeout 0    # cancel them at once
+barca serve pipeline.py --drain-timeout 0    # stop them at once and requeue them
 ```
 
 ```toml
-# barca.toml (the flag wins)
+# barca.toml (the flags win)
 [server]
 drain_timeout = 300
+max_runs = 4
 ```
 
-During the drain the server prints `[barca] SIGTERM received: draining — new runs are refused;
-waiting up to 30s for 1 run in flight (send SIGTERM again to stop now)` and:
+During the drain the server prints `[barca] SIGTERM received: draining — the queue is paused
+and new runs are queued for the next start; waiting up to 30s for 1 run in flight` and:
 
-- refuses new runs: `POST /runs` (a `dry_run` is still answered) and the older `POST /run`,
-  `POST /run/{target}` and `POST /get/{target}` answer `503`
-  with a `Retry-After` header of the drain timeout in seconds (at least 1);
+- starts no queued run, and keeps accepting new ones: `POST /runs` (and the older routes)
+  answer as usual, with `status: "pending"`, and the run waits in the queue for the next server
+  (`draining: true` in `GET /queue`);
 - stops the scheduler (`[barca] scheduler stopped: the server is draining`). A tick that falls
   in the drain starts nothing; the next server's startup catch-up fires the job once;
 - reports `"status": "draining"` on `GET /health` (still `200`);
 - keeps answering reads, `GET /runs/{id}`, its `/events` and `DELETE /runs/{id}` (and their
-  older aliases);
+  older aliases); `POST /state/reset` and ledger posts answer `503` with `Retry-After`;
 - waits for the runs in flight, their artifact uploads included, to finish and be recorded.
 
-When they have all finished it prints `[barca] drained: every run finished; shutting down`,
-ends the open `/events` streams and exits 0. With nothing in flight that takes well under a
-second.
+When they have all finished it prints `[barca] drained: every run finished; shutting down` (and
+how many runs wait in the queue), ends the open `/events` streams and exits 0. With nothing in
+flight that takes well under a second.
 
-When the drain timeout passes, or a second SIGTERM or SIGINT arrives, before the runs have
-finished, the runs still going are cancelled: their workers are stopped, the steps that finished are kept, and each run
-is recorded as `cancelled` in `barca history`, with `[barca] run cancelled: server shutdown`
-in its logs (`barca logs RUN_ID`) and `barca.reason: server shutdown` on its `barca.run`
-telemetry span. The server exits 1, after an error naming how many runs were cancelled, so a
-supervisor or deploy script can tell a forced stop from a clean drain. The cancelled runs get 10
-seconds to stop, and connections still open after that get 2 more.
+When the drain timeout passes before the runs in flight have finished, they are stopped and put
+back at the head of the queue: `[barca] the drain timeout (30s) passed: stopping 1 run and
+putting it back in the queue`. Their workers are stopped, the steps that finished are kept (and
+are cache hits on the next attempt), and the stopped attempt is not recorded as a run that ended:
+its row and lines are replaced by the next attempt's. The server exits 0, and the next server
+starts them again from the beginning, first, under the same run ids.
 
-A supervisor kills the server when its own grace period runs out, so make that longer than the
-drain timeout: Docker's default is 10 seconds (`docker stop -t`, `stop_grace_period` in
-Compose), Kubernetes' 30 (`terminationGracePeriodSeconds`), systemd's 90 (`TimeoutStopSec`).
-This also holds when barca is process 1 of a container, so a plain `docker stop` drains.
+A second SIGTERM or SIGINT during the drain cancels the runs in flight instead: each run is
+recorded as `cancelled` in `barca history`, with `[barca] run cancelled: server shutdown` in its
+logs (`barca logs RUN_ID`) and `barca.reason: server shutdown` on its `barca.run` telemetry span.
+The server exits 1, after an error naming how many runs were cancelled, so a supervisor or
+deploy script can tell a forced stop from a clean one. The queued runs are kept either way.
+Stopped runs get 10 seconds to stop their workers and record themselves, and connections still
+open after that get 2 more.
+
+### At least once
+
+A run the drain timeout requeued runs again from its start. Assets that finished are cache hits
+then, but a step that was interrupted runs again, and a task runs again from its beginning
+(including what it did before it was stopped, such as an email or an insert). So a run the server
+accepted is executed at least once, not exactly once. A task with side effects should be safe to
+repeat (an upsert, a key that makes a second send a no-op), or give the drain long enough for it
+to finish (`--drain-timeout`), or cancel it with a second signal when a repeat would be worse
+than no run.
 
 SIGHUP and SIGQUIT are not handled. Outside a container they end the process at once, and a run
 in flight is then reported as `interrupted` (`barca docs cache`); `nohup barca serve` keeps
 ignoring SIGHUP. A process that is process 1 of a container never receives them. SIGKILL cannot
-be handled by any program.
+be handled by any program: the queued runs survive it, the runs in flight are interrupted.
+
+## Restarting without losing work
+
+A deploy, a reboot or a config change restarts the server. Nothing it accepted is lost:
+
+```bash
+barca queue pause --server       # optional: let nothing new start before the restart
+systemctl restart barca          # or: docker restart barca
+barca queue --server             # after: the queue resumed (still paused if you paused it)
+barca queue resume --server      # if you paused it
+```
+
+1. Pausing first is optional. It lets the runs in flight finish while nothing new starts, so the
+   stop that follows waits only for them.
+2. The supervisor sends SIGTERM: the server drains (above), the runs in flight finish or, at the
+   drain timeout, go back to the queue, and it exits 0. Clients following a run reconnect.
+3. The new server prints `[barca] resuming N queued runs` and starts them in order.
+
+Give the supervisor a stop grace period longer than the drain timeout plus about 15 seconds
+(10 for stopped runs to record themselves, 2 for open connections, and the metadata backup with
+a store). Otherwise it kills the server mid-drain and the runs in flight are interrupted rather
+than requeued. With the default 30-second drain timeout, 45 seconds or more:
+
+| Supervisor | Setting | Default | With `drain_timeout = 30` |
+|---|---|---|---|
+| systemd | `TimeoutStopSec=` | 90 s | 90 s is enough |
+| Docker | `docker stop -t`, `stop_grace_period` in Compose | 10 s | `stop_grace_period: 45s` |
+| Kubernetes | `terminationGracePeriodSeconds` | 30 s | `45` |
+
+This also holds when barca is process 1 of a container, so a plain `docker stop` drains. Keep
+`.barca/` on persistent storage: the queue is in its metadata DB.
+
+### Clients ride through a restart
+
+A `--server` client following a run (`barca get ... --server`, `barca run ... --server`) and
+`barca logs -f --server` keep following it when the server goes away: they print `[barca] lost
+the event stream of run RUN_ID (...); waiting up to 60s for the server to come back`, ask the
+server again every half second, and once it answers follow the same run id there (`[barca] the
+server restarted; following run RUN_ID there`). A run the server stopped and requeued is shown
+again from its new start; a run that ended meanwhile is read from `GET /runs/{id}`. When the
+server does not come back within the window, the command ends as before: exit 3, naming the run
+and how to read it later. `BARCA_SERVER_RECONNECT` sets the window in seconds (0: do not wait).
+
+```bash
+BARCA_SERVER_RECONNECT=300 barca run publish --server   # wait up to 5 minutes for a restart
+BARCA_SERVER_RECONNECT=0 barca logs -f --server         # give up at once, as before 0.29.4
+```
 
 ## Containers with a memory limit
 

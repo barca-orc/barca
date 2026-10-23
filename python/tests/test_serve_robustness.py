@@ -263,7 +263,7 @@ def run_logs(cwd: Path, run_id: str) -> str:
 
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
 def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig):
-    """#190: the first signal stops admission and waits for the runs in flight. SIGTERM used
+    """#190: the first signal pauses the queue and waits for the runs in flight. SIGTERM used
     to be discarded when barca was process 1 of a container (#289), and an open /events
     stream kept a stopped server alive for ever."""
     server = serve("--no-schedule")
@@ -288,12 +288,12 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     server.proc.send_signal(sig)
     wait_for(lambda: draining(server), "/health to report draining")
 
-    # No new run is admitted, whatever the route; reads and the run in flight go on.
+    # New runs are accepted into the queue for the next start, whatever the route, and none
+    # starts; reads and the run in flight go on.
     for path in ("/run", "/get/quick", "/run/nightly"):
-        status, headers, body = server.exchange("POST", path)
-        assert status == 503, (path, body)
-        assert headers["Retry-After"] == "30", headers
-        assert "shutting down" in body["error"], body
+        status, body = server.request("POST", path)
+        assert status == 200, (path, body)
+        assert server.request("GET", f"/status/{body['run_id']}")[1]["status"] == "pending"
     assert server.request("GET", f"/status/{going}")[1]["status"] == "running"
     assert server.proc.poll() is None, "the server waits for the run"
 
@@ -308,34 +308,39 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     assert f'{{"type":"run_finished","run_id":"{going}","ok":true,' in tails[1]
     assert '"status":"success"' in tails[1], "with its outcome"
 
-    # The run finished and was recorded; the refused requests started none.
+    # The run finished and was recorded; the queued ones wait for the next server.
     assert [r["status"] for r in history(project)] == ["success", "success"]
+    assert "3 runs wait in the queue for the next start" in log, log
 
 
 @pytest.mark.parametrize("setting", ["flag", "barca.toml"])
-def test_the_drain_timeout_cancels_the_runs_left_with_reason_server_shutdown_and_exits_1(
-    project, serve, setting
-):
+def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, setting):
     if setting == "flag":
         server = serve("--no-schedule", "--drain-timeout", "1")
     else:
         (project / "barca.toml").write_text("[server]\ndrain_timeout = 1\n")
         server = serve("--no-schedule")
-    start_slow_run(server, project)
+    going = start_slow_run(server, project)
 
     started = time.monotonic()
     server.proc.send_signal(signal.SIGTERM)
-    assert server.proc.wait(timeout=WAIT) == 1, server.log.read_text()
+    assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
     assert time.monotonic() - started < 15
     log = server.log.read_text()
-    assert "the drain timeout (1s) passed: cancelling 1 run (server shutdown)" in log, log
-    assert "stopped before the runs in flight finished: 1 run cancelled (server shutdown)" in log
+    assert "the drain timeout (1s) passed: stopping 1 run and putting it back in the queue" in log
+    assert f"[barca] run {going} stopped and put back in the queue" in log, log
 
-    # Recorded `cancelled`, with the reason in its logs; the step that finished is kept.
-    (run,) = history(project)
-    assert run["status"] == "cancelled", run
-    assert "[barca] run cancelled: server shutdown" in run_logs(project, run["run_id"])
-    assert run["steps_executed"] >= 1, run
+    # Not recorded as an attempt that ended: the next server starts it again (its first step,
+    # which finished, is a cache hit then).
+    assert history(project) == []
+    (project / "release").write_text("")
+    restarted = serve("--no-schedule")
+    assert "[barca] resuming 1 queued run" in restarted.log.read_text()
+    run = wait_for(
+        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["status"] == "success" and r,
+        "the requeued run to finish",
+    )
+    assert {s["node_id"].rsplit(":", 1)[1] for s in run["steps"]} >= {"quick", "slow"}, run
 
 
 def test_a_second_signal_stops_the_drain_at_once(project, serve):

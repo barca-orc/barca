@@ -54,11 +54,46 @@ const STREAM_IDLE: Duration = Duration::from_secs(60);
 /// The whole event stream's limit; the server stops a run after 10 minutes.
 const STREAM_LIMIT: Duration = Duration::from_secs(24 * 3600);
 
+/// How long a client following a run waits for a server that went away (a restart, a
+/// deploy) to come back, by default.
+const RECONNECT_DEFAULT: Duration = Duration::from_secs(60);
+
+/// The environment variable that sets it, in seconds (0: give up at once, as before 0.29.4).
+pub(crate) const RECONNECT_ENV: &str = "BARCA_SERVER_RECONNECT";
+
+/// How long to wait for a server that went away: [`RECONNECT_ENV`], else 60 seconds. A value
+/// that is not a number of seconds is a usage error.
+pub(crate) fn reconnect_window() -> Result<Duration, CliError> {
+    match std::env::var(RECONNECT_ENV) {
+        Err(_) => Ok(RECONNECT_DEFAULT),
+        Ok(text) => text
+            .trim()
+            .parse::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|_| {
+                CliError::from_prose(
+                    ErrorKind::Usage,
+                    format!(
+                        "error: {RECONNECT_ENV}={text} is not a number of seconds\nSet it to how \
+                     long a client following a run waits for a restarting server (0: not at \
+                     all), or unset it for 60."
+                    ),
+                )
+            }),
+    }
+}
+
+/// How long a reopened stream must stay up before a later break gets a fresh window.
+const STREAM_PROVEN: Duration = Duration::from_secs(10);
+
+/// Between two attempts to reach a server that went away.
+const RECONNECT_PAUSE: Duration = Duration::from_millis(500);
+
 // ─── 1. choosing the server ─────────────────────────────────────────────────
 
 /// The commands that take `--server` and `--local`.
 pub(crate) const SERVER_COMMANDS: &[&str] = &[
-    "get", "run", "status", "list", "history", "stats", "logs", "sql", "doctor",
+    "get", "run", "status", "list", "history", "stats", "logs", "sql", "doctor", "queue",
 ];
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the
@@ -483,6 +518,7 @@ pub(crate) struct RunArgs {
 /// `barca get|run ... --server`: start the run on the server, print its lines as they come,
 /// then its outcome, and end as a local run of the same command ends.
 pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result<(), CliError> {
+    let window = reconnect_window()?;
     server.health(args.env.as_deref()).await?;
     let files = server.deployed_files(&args.files).await?;
     let request = RunRequest {
@@ -509,7 +545,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         .ok()
         .and_then(|v| v["run_id"].as_str().map(str::to_string))
         .ok_or_else(|| server.unexpected("POST /runs", "no run_id in the answer"))?;
-    let outcome = stream(server, &run_id, &args).await?;
+    let outcome = stream(server, &run_id, &args, window).await?;
     let (rendered, error) = outcome
         .render(
             args.command,
@@ -627,29 +663,25 @@ fn dropped(server: &Server, run_id: &str, why: &str) -> CliError {
 }
 
 /// Read `GET /runs/{run_id}/events` to its `run_finished`, printing `line` and `log` events as
-/// a local run prints them in this mode. Returns the run's outcome.
-async fn stream(server: &Server, run_id: &str, args: &RunArgs) -> Result<Outcome, CliError> {
+/// a local run prints them in this mode. Returns the run's outcome. A stream that breaks is
+/// followed again when the server comes back within `window` ([`Follow`]).
+async fn stream(
+    server: &Server,
+    run_id: &str,
+    args: &RunArgs,
+    window: Duration,
+) -> Result<Outcome, CliError> {
     let path = format!("/runs/{run_id}/events");
     let mut signals = stop_signals();
-    let response = server
-        .http
-        .get(server.endpoint(&path))
-        .header(reqwest::header::ACCEPT, "text/event-stream")
-        .timeout(STREAM_LIMIT)
-        .send()
-        .await
-        .map_err(|e| server.unreachable(&e))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.bytes().await.unwrap_or_default();
-        return Err(server.refusal(status, &body, &format!("GET {path}")));
+    let mut follow = Follow::new(server, run_id, window).await;
+    if !follow.open().await? {
+        // Not live: it already ended (a restart in between, or a very short run).
+        return follow.recorded_outcome().await;
     }
-    let mut response = response;
-    let mut events = SseParser::default();
     let mut cancelled = false;
     loop {
-        let chunk = tokio::select! {
-            chunk = tokio::time::timeout(STREAM_IDLE, response.chunk()) => chunk,
+        let item = tokio::select! {
+            item = follow.next() => item?,
             Some(()) = signals.recv() => {
                 if cancelled {
                     return Err(CliError::from_barca(BarcaError::Cancelled, &Context::default()));
@@ -659,54 +691,320 @@ async fn stream(server: &Server, run_id: &str, args: &RunArgs) -> Result<Outcome
                 continue;
             }
         };
-        let bytes = match chunk {
-            Err(_) => {
-                return Err(dropped(
-                    server,
-                    run_id,
-                    &format!("nothing received for {}s", STREAM_IDLE.as_secs()),
-                ));
-            }
-            Ok(Err(e)) => return Err(dropped(server, run_id, &transport_reason(&e))),
-            Ok(Ok(None)) => {
-                return Err(dropped(server, run_id, "the server closed the stream"));
-            }
-            Ok(Ok(Some(bytes))) => bytes,
+        let event = match item {
+            Followed::Event(event) => event,
+            Followed::Ended(body) => return outcome_of(server, &path, &body),
         };
-        for data in events.push(&bytes) {
-            let event = RunEvent::parse(&data)
-                .map_err(|e| server.unexpected(&format!("GET {path}"), &e.to_string()))?;
-            match event {
-                RunEvent::Line { line, when } => {
-                    if when == LineWhen::Always || args.agent {
-                        barca_core::errln!("{line}");
-                    }
+        match event {
+            RunEvent::Line { line, when } => {
+                if when == LineWhen::Always || args.agent {
+                    barca_core::errln!("{line}");
                 }
-                RunEvent::Log {
-                    node_id,
-                    line,
-                    stream,
-                    ..
-                } => {
-                    // A step's stderr stays on the server's stderr, as a local run's stays on
-                    // this machine's; it is recorded with the run either way (`barca logs`).
-                    if args.mode != barca_core::report::ResultFormat::Json
-                        && stream == barca_core::LogStream::Stdout
-                    {
-                        barca_core::errln!("[{node_id}] {line}");
-                    }
+            }
+            RunEvent::Log {
+                node_id,
+                line,
+                stream,
+                ..
+            } => {
+                // A step's stderr stays on the server's stderr, as a local run's stays on
+                // this machine's; it is recorded with the run either way (`barca logs`).
+                if args.mode != barca_core::report::ResultFormat::Json
+                    && stream == barca_core::LogStream::Stdout
+                {
+                    barca_core::errln!("[{node_id}] {line}");
                 }
-                RunEvent::RunFinished { outcome, .. } => {
-                    let outcome = outcome.ok_or_else(|| {
-                        server.unexpected(&format!("GET {path}"), "run_finished has no outcome")
-                    })?;
-                    return Outcome::from_text(outcome.get().to_string())
-                        .map_err(|e| server.unexpected(&format!("GET {path}"), &e));
-                }
-                RunEvent::RunStarted { .. } | RunEvent::StepFinished { .. } => {}
+            }
+            RunEvent::RunFinished { outcome, .. } => {
+                let outcome = outcome.ok_or_else(|| {
+                    server.unexpected(&format!("GET {path}"), "run_finished has no outcome")
+                })?;
+                return Outcome::from_text(outcome.get().to_string())
+                    .map_err(|e| server.unexpected(&format!("GET {path}"), &e));
+            }
+            RunEvent::RunStarted { .. } | RunEvent::StepFinished { .. } => {}
+        }
+    }
+}
+
+/// The outcome in a `GET /runs/{run_id}` body.
+fn outcome_of(server: &Server, path: &str, body: &Value) -> Result<Outcome, CliError> {
+    match &body["outcome"] {
+        Value::Null => {
+            Err(server.unexpected(&format!("GET {path}"), "the run ended without an outcome"))
+        }
+        outcome => Outcome::from_text(outcome.to_string())
+            .map_err(|e| server.unexpected(&format!("GET {path}"), &e)),
+    }
+}
+
+/// What following a run gives next.
+enum Followed {
+    Event(RunEvent),
+    /// The run ended while the stream was down: its `GET /runs/{run_id}` body.
+    Ended(Value),
+}
+
+/// A run's event stream that rides through a server restart. When the stream breaks (the
+/// server closed it without `run_finished`, the connection dropped, nothing came for
+/// [`STREAM_IDLE`]) it reconnects for up to the window ([`reconnect_window`]): every
+/// [`RECONNECT_PAUSE`] it asks `GET /health` and opens the stream again. The same server
+/// (`started_at` unchanged) replays the run from its first event, and the events already read
+/// are skipped; a restarted server streams the run as it runs there now (a queued run from its
+/// start, a run that was stopped and requeued from the start of its new attempt). A run that
+/// ended meanwhile is read from `GET /runs/{run_id}`. A server that does not come back within
+/// the window ends the command as before: exit 3, naming the run.
+struct Follow<'a> {
+    server: &'a Server,
+    run_id: String,
+    path: String,
+    window: Duration,
+    response: Option<reqwest::Response>,
+    events: SseParser,
+    ready: std::collections::VecDeque<RunEvent>,
+    /// Events read from the current server.
+    seen: usize,
+    /// Events still to skip after reconnecting to the same server.
+    skip: usize,
+    /// The server's `started_at` (`None`: unknown, an older server).
+    instance: Option<String>,
+    /// Why the stream broke and until when to try again, while it is down.
+    lost: Option<(String, tokio::time::Instant)>,
+    /// The deadline of the last break and when the stream was opened again: a stream that
+    /// breaks again within [`STREAM_PROVEN`] of a reconnect keeps that deadline, so a server
+    /// that keeps cutting the stream does not get a fresh window each time.
+    unproven: Option<(tokio::time::Instant, tokio::time::Instant)>,
+    /// How many times the stream was opened again on a restarted server.
+    restarts: usize,
+}
+
+impl<'a> Follow<'a> {
+    async fn new(server: &'a Server, run_id: &str, window: Duration) -> Self {
+        let instance = server.get_json("/health").await.ok().and_then(started_at);
+        Self {
+            server,
+            run_id: run_id.to_string(),
+            path: format!("/runs/{}/events", encode(run_id)),
+            window,
+            response: None,
+            events: SseParser::default(),
+            ready: Default::default(),
+            seen: 0,
+            skip: 0,
+            instance,
+            lost: None,
+            unproven: None,
+            restarts: 0,
+        }
+    }
+
+    /// Open the stream: `true` when the run is live. `false` (404) when it is not live: it
+    /// ended, or this server never ran it. A server that cannot be reached is ridden through.
+    async fn open(&mut self) -> Result<bool, CliError> {
+        match self.request().await {
+            Ok(Some(response)) => {
+                self.response = Some(response);
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(Attempt::Refused(e)) => Err(e),
+            Err(Attempt::Unreachable(why)) => {
+                self.lose(why)?;
+                Ok(true)
             }
         }
     }
+
+    /// `GET /runs/{run_id}/events`: the stream, `None` for a 404, or why not.
+    async fn request(&self) -> Result<Option<reqwest::Response>, Attempt> {
+        let response = self
+            .server
+            .http
+            .get(self.server.endpoint(&self.path))
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .timeout(STREAM_LIMIT)
+            .send()
+            .await
+            .map_err(|e| Attempt::Unreachable(transport_reason(&e)))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if status.is_success() {
+            return Ok(Some(response));
+        }
+        // A proxy in front of a server that is restarting answers 502/503/504.
+        if status.is_server_error() {
+            return Err(Attempt::Unreachable(format!("HTTP {status}")));
+        }
+        let body = response.bytes().await.unwrap_or_default();
+        Err(Attempt::Refused(self.server.refusal(
+            status,
+            &body,
+            &format!("GET {}", self.path),
+        )))
+    }
+
+    /// The stream broke for `why`: start waiting for the server, or give up when the window
+    /// is zero.
+    fn lose(&mut self, why: String) -> Result<(), CliError> {
+        self.response = None;
+        if self.window.is_zero() {
+            return Err(dropped(self.server, &self.run_id, &why));
+        }
+        if let Some((deadline, opened)) = self.unproven.take()
+            && opened.elapsed() < STREAM_PROVEN
+        {
+            self.lost = Some((why, deadline));
+            return Ok(());
+        }
+        barca_core::errln!(
+            "[barca] lost the event stream of run {} ({why}); waiting up to {}s for the server \
+             to come back",
+            self.run_id,
+            self.window.as_secs()
+        );
+        self.lost = Some((why, tokio::time::Instant::now() + self.window));
+        Ok(())
+    }
+
+    /// The next event, riding through a broken stream.
+    async fn next(&mut self) -> Result<Followed, CliError> {
+        loop {
+            if let Some(event) = self.ready.pop_front() {
+                return Ok(Followed::Event(event));
+            }
+            if self.lost.is_some() {
+                if let Some(ended) = self.reconnect().await? {
+                    return Ok(ended);
+                }
+                continue;
+            }
+            let Some(response) = self.response.as_mut() else {
+                self.lose("the stream was not open".into())?;
+                continue;
+            };
+            let bytes = match tokio::time::timeout(STREAM_IDLE, response.chunk()).await {
+                Err(_) => {
+                    self.lose(format!("nothing received for {}s", STREAM_IDLE.as_secs()))?;
+                    continue;
+                }
+                Ok(Err(e)) => {
+                    self.lose(transport_reason(&e))?;
+                    continue;
+                }
+                Ok(Ok(None)) => {
+                    self.lose("the server closed the stream".into())?;
+                    continue;
+                }
+                Ok(Ok(Some(bytes))) => bytes,
+            };
+            for data in self.events.push(&bytes) {
+                let event = RunEvent::parse(&data).map_err(|e| {
+                    self.server
+                        .unexpected(&format!("GET {}", self.path), &e.to_string())
+                })?;
+                self.seen += 1;
+                if self.skip > 0 {
+                    self.skip -= 1;
+                    continue;
+                }
+                self.ready.push_back(event);
+            }
+        }
+    }
+
+    /// Try, until the deadline, to follow the run again. `Some` when it ended meanwhile.
+    async fn reconnect(&mut self) -> Result<Option<Followed>, CliError> {
+        let Some((why, deadline)) = self.lost.clone() else {
+            return Ok(None);
+        };
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(dropped(
+                    self.server,
+                    &self.run_id,
+                    &format!(
+                        "{why}; the server did not come back within {}s ({RECONNECT_ENV})",
+                        self.window.as_secs()
+                    ),
+                ));
+            }
+            tokio::time::sleep(RECONNECT_PAUSE).await;
+            let Ok(health) = self.server.get_json("/health").await else {
+                continue;
+            };
+            let instance = started_at(health);
+            match self.request().await {
+                Err(Attempt::Unreachable(_)) => continue,
+                Err(Attempt::Refused(e)) => return Err(e),
+                Ok(None) => {
+                    let body = self.recorded().await?;
+                    if matches!(body["status"].as_str(), Some("pending" | "running")) {
+                        // Live in the history but not streamed yet: ask again.
+                        continue;
+                    }
+                    self.lost = None;
+                    if !(instance.is_some() && instance == self.instance) {
+                        self.restarts += 1;
+                    }
+                    barca_core::errln!(
+                        "[barca] the server is back; run {} ended meanwhile ({})",
+                        self.run_id,
+                        body["status"].as_str().unwrap_or("unknown")
+                    );
+                    return Ok(Some(Followed::Ended(body)));
+                }
+                Ok(Some(response)) => {
+                    let same = instance.is_some() && instance == self.instance;
+                    self.skip = if same { self.seen } else { 0 };
+                    self.seen = 0;
+                    self.events = SseParser::default();
+                    self.response = Some(response);
+                    self.lost = None;
+                    self.unproven = Some((deadline, tokio::time::Instant::now()));
+                    if same {
+                        barca_core::errln!("[barca] reconnected; following run {}", self.run_id);
+                    } else {
+                        self.restarts += 1;
+                        barca_core::errln!(
+                            "[barca] the server restarted; following run {} there (a run \
+                             that was stopped is shown again from its new start)",
+                            self.run_id
+                        );
+                    }
+                    self.instance = instance;
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    /// `GET /runs/{run_id}`.
+    async fn recorded(&self) -> Result<Value, CliError> {
+        self.server
+            .get_json(&format!("/runs/{}", encode(&self.run_id)))
+            .await
+    }
+
+    /// The outcome of a run that is not live, from `GET /runs/{run_id}`.
+    async fn recorded_outcome(&self) -> Result<Outcome, CliError> {
+        let body = self.recorded().await?;
+        outcome_of(self.server, &format!("/runs/{}", self.run_id), &body)
+    }
+}
+
+/// Why an attempt to open a run's stream failed.
+enum Attempt {
+    /// No answer, or one from a proxy whose server is away: try again.
+    Unreachable(String),
+    /// The server's answer: stop.
+    Refused(CliError),
+}
+
+/// `started_at` of a `GET /health` body.
+fn started_at(health: Value) -> Option<String> {
+    health["started_at"].as_str().map(str::to_string)
 }
 
 /// `DELETE /runs/{run_id}`. A failure is reported, not fatal: the stream still says how the
@@ -1084,6 +1382,7 @@ pub(crate) async fn logs(
     args: crate::commands::logs::LogsArgs<'_>,
 ) -> Result<(), CliError> {
     use crate::commands::logs::{follow_ended, follow_exit_code, name_run};
+    let window = reconnect_window()?;
     server.health(env).await?;
     let run_id = match run_id {
         Some(id) => id.to_string(),
@@ -1124,19 +1423,11 @@ pub(crate) async fn logs(
     };
     let engine = |e: BarcaError| CliError::from_barca(e, &Context::default());
     if args.follow {
-        let path = format!("/runs/{}/events", encode(&run_id));
-        let response = server
-            .http
-            .get(server.endpoint(&path))
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .timeout(STREAM_LIMIT)
-            .send()
-            .await
-            .map_err(|e| server.unreachable(&e))?;
-        // 404: the run is not live on the server (it ended, or it is not one the server
-        // started); its recorded lines answer.
-        if response.status() != reqwest::StatusCode::NOT_FOUND {
-            let status = follow_events(server, &run_id, &path, response, args).await?;
+        let mut follow = Follow::new(server, &run_id, window).await;
+        // Not live (404): the run ended, or it is not one the server started; its recorded
+        // lines answer.
+        if follow.open().await? {
+            let status = follow_events(&mut follow, args).await?;
             follow_ended(&run_id, &status);
             barca_core::term::exit(follow_exit_code(&status));
         }
@@ -1221,71 +1512,157 @@ async fn recorded_logs(
     Ok((status, lines))
 }
 
-/// Read a live run's event stream to its end, printing the lines `args` selects as they arrive.
-/// Returns the run's final status.
+/// Read a live run's event stream to its end, printing the lines `args` selects as they arrive,
+/// through a server restart ([`Follow`]). Returns the run's final status.
 async fn follow_events(
-    server: &Server,
-    run_id: &str,
-    path: &str,
-    response: reqwest::Response,
+    follow: &mut Follow<'_>,
     args: crate::commands::logs::LogsArgs<'_>,
 ) -> Result<String, CliError> {
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.bytes().await.unwrap_or_default();
-        return Err(server.refusal(status, &body, &format!("GET {path}")));
-    }
-    let mut response = response;
-    let mut events = SseParser::default();
     let mut seq = 0usize;
+    // Lines printed of the run as the current server runs it.
+    let mut printed = 0usize;
+    let mut restarts = 0usize;
     loop {
-        let bytes = match tokio::time::timeout(STREAM_IDLE, response.chunk()).await {
-            Err(_) => {
-                return Err(dropped(
-                    server,
-                    run_id,
-                    &format!("nothing received for {}s", STREAM_IDLE.as_secs()),
-                ));
+        let item = follow.next().await?;
+        if follow.restarts != restarts {
+            restarts = follow.restarts;
+            printed = 0;
+        }
+        match item {
+            Followed::Ended(body) => {
+                // Ended while the stream was down: the lines it printed since are recorded
+                // (on a restarted server, every line is of the attempt that ended there).
+                let status = body["status"].as_str().unwrap_or("failed").to_string();
+                let (_, lines) = recorded_logs(follow.server, &follow.run_id, args).await?;
+                let missed: Vec<_> = lines.into_iter().skip(printed).collect();
+                args.print_all(&missed)
+                    .map_err(|e| CliError::from_barca(e, &Context::default()))?;
+                return Ok(status);
             }
-            Ok(Err(e)) => return Err(dropped(server, run_id, &transport_reason(&e))),
-            Ok(Ok(None)) => return Err(dropped(server, run_id, "the server closed the stream")),
-            Ok(Ok(Some(bytes))) => bytes,
-        };
-        for data in events.push(&bytes) {
-            let event = RunEvent::parse(&data)
-                .map_err(|e| server.unexpected(&format!("GET {path}"), &e.to_string()))?;
-            match event {
-                RunEvent::Log {
+            Followed::Event(RunEvent::Log {
+                node_id,
+                line,
+                stream,
+                ts,
+            }) => {
+                let entry = barca_core::db::LogEntry {
                     node_id,
+                    seq: seq as i64,
                     line,
                     stream,
                     ts,
-                } => {
-                    let entry = barca_core::db::LogEntry {
-                        node_id,
-                        seq: seq as i64,
-                        line,
-                        stream,
-                        ts,
-                    };
-                    seq += 1;
-                    if args.selects(&entry.node_id, entry.stream) {
-                        args.print_one(&entry);
-                    }
+                };
+                seq += 1;
+                if args.selects(&entry.node_id, entry.stream) {
+                    args.print_one(&entry);
+                    printed += 1;
                 }
-                RunEvent::RunFinished { ok, outcome, .. } => {
-                    let status = outcome
-                        .and_then(|raw| Outcome::from_text(raw.get().to_string()).ok())
-                        .map(|o| o.status().as_str().to_string())
-                        .unwrap_or_else(|| if ok { "success" } else { "failed" }.to_string());
-                    return Ok(status);
-                }
-                RunEvent::RunStarted { .. }
-                | RunEvent::Line { .. }
-                | RunEvent::StepFinished { .. } => {}
             }
+            Followed::Event(RunEvent::RunFinished { ok, outcome, .. }) => {
+                let status = outcome
+                    .and_then(|raw| Outcome::from_text(raw.get().to_string()).ok())
+                    .map(|o| o.status().as_str().to_string())
+                    .unwrap_or_else(|| if ok { "success" } else { "failed" }.to_string());
+                return Ok(status);
+            }
+            Followed::Event(
+                RunEvent::RunStarted { .. } | RunEvent::Line { .. } | RunEvent::StepFinished { .. },
+            ) => {}
         }
     }
+}
+
+/// `barca queue [pause|resume]`: `GET /queue`, `POST /queue/pause` or `POST /queue/resume`, and
+/// the queue as JSON or a table.
+pub(crate) async fn queue(
+    server: &Server,
+    action: Option<crate::args::QueueAction>,
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    use crate::args::QueueAction;
+    server.health(env).await?;
+    let (path, text) = match action {
+        None => ("/queue", server.get_text("/queue").await?),
+        Some(QueueAction::Pause) => (
+            "/queue/pause",
+            server.post_json("/queue/pause", &json!({})).await?,
+        ),
+        Some(QueueAction::Resume) => (
+            "/queue/resume",
+            server.post_json("/queue/resume", &json!({})).await?,
+        ),
+    };
+    let body: Value = serde_json::from_str(&text)
+        .map_err(|e| server.unexpected(&format!("GET {path}"), &format!("not JSON: {e}")))?;
+    match action {
+        Some(QueueAction::Pause) => barca_core::errln!(
+            "[barca] run queue paused on {}: queued runs wait until `barca queue resume`",
+            server.url
+        ),
+        Some(QueueAction::Resume) => {
+            barca_core::errln!("[barca] run queue resumed on {}", server.url)
+        }
+        None => {}
+    }
+    if json {
+        barca_core::outln!(
+            "{}",
+            serde_json::to_string_pretty(&body).expect("a JSON value prints")
+        );
+    } else {
+        barca_core::term::stdout_str(&render_queue(&body));
+    }
+    Ok(())
+}
+
+/// The queue as a table: a summary line, then the running and the queued runs.
+fn render_queue(body: &Value) -> String {
+    let list = |key: &str| body[key].as_array().cloned().unwrap_or_default();
+    let (running, queued) = (list("running"), list("queued"));
+    let mut state = Vec::new();
+    if body["draining"].as_bool() == Some(true) {
+        state.push("draining (the server is stopping; the queue resumes at its next start)".into());
+    }
+    if body["paused"].as_bool() == Some(true) {
+        state.push(format!(
+            "paused since {}",
+            body["paused_at"].as_str().unwrap_or("?")
+        ));
+    }
+    if state.is_empty() {
+        state.push("open".to_string());
+    }
+    let mut out = format!(
+        "queue: {} · {} of {} running · {} queued\n",
+        state.join(", "),
+        running.len(),
+        body["max_runs"].as_u64().unwrap_or(0),
+        queued.len()
+    );
+    if running.is_empty() && queued.is_empty() {
+        return out;
+    }
+    out.push_str(&format!(
+        "\n{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {}\n",
+        "POS", "RUN_ID", "STATUS", "COMMAND", "TARGET", "TRIGGER", "QUEUED_AT"
+    ));
+    for run in running.iter().chain(queued.iter()) {
+        let target = run["target"].as_str().unwrap_or("(all)");
+        out.push_str(&format!(
+            "{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {}\n",
+            run["position"]
+                .as_u64()
+                .map_or("-".to_string(), |p| p.to_string()),
+            run["run_id"].as_str().unwrap_or(""),
+            run["status"].as_str().unwrap_or(""),
+            run["command"].as_str().unwrap_or(""),
+            target,
+            run["triggered_by"].as_str().unwrap_or(""),
+            run["queued_at"].as_str().unwrap_or(""),
+        ));
+    }
+    out
 }
 
 /// `barca stats --server`: `GET /stats/{name}`.

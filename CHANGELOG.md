@@ -8,6 +8,30 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## 0.29.4 (2026-10-22)
 
+### Breaking
+
+- `barca serve` no longer refuses or cancels work when it stops. During a drain (SIGTERM or
+  SIGINT) `POST /runs` and the older trigger routes answer `202` (`200` for the aliases) and
+  queue the run for the next start, instead of `503` with `Retry-After`. At `--drain-timeout`
+  the runs in flight are stopped and put back at the head of the queue, to start again from the
+  beginning after the restart (exit 0), instead of being recorded `cancelled` (exit 1); a second
+  signal still cancels them (exit 1). A requeued run is executed at least once: an interrupted
+  step or task runs again. A `--server` client and `barca logs -f --server` wait up to 60 seconds
+  (`BARCA_SERVER_RECONNECT`, `0` for the old behaviour) for a server whose stream broke, instead
+  of exiting 3 at once. `POST /runs` answers `{"run_id", "status", "position"}` (was
+  `{"run_id"}`); `GET /health` gains `started_at` and `queue`.
+
+### Features
+
+- A durable run queue for `barca serve`: every run it accepts (`POST /runs`, `--server`, the UI,
+  a scheduled tick) is recorded in the metadata DB before it answers, starts in order at most
+  `--max-runs` at once (`[server] max_runs`, default one per core), and survives a restart: the
+  next server prints `[barca] resuming N queued runs` and starts them under the same run ids.
+  `barca queue [pause|resume] --server` (and `GET /queue`, `POST /queue/pause`,
+  `POST /queue/resume`, a control on the UI's Runs page) shows the queue and pauses it, a pause
+  that is kept across restarts; `--read-only` refuses it. `barca docs scheduling`, "Restarting
+  without losing work", is the operator recipe, with supervisor grace periods.
+
 ### Performance
 
 - Inspection is fast at 300 assets with a 200k-key partitioned node and 2,000 runs

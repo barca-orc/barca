@@ -57,6 +57,7 @@ outside the `GENERATED` blocks is written by hand.
 | `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
 | `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL` and the Slack posts | new: the message text and layout are not a contract and may change in any release |
 | `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
+| `barca queue` and its JSON, `barca serve --max-runs`, `[server] max_runs`, `BARCA_SERVER_RECONNECT` | new in 0.29.4: the run queue (`GET /queue`, `POST /queue/pause`, `POST /queue/resume`), its JSON and table, and how long and how often a `--server` client waits for a restarting server may change after field use |
 | `undeclared_env`: the plan-warning kind, `steps[].undeclared_env` in `get`/`run` (and `--dry-run`) JSON, `nodes[].undeclared_env` in `status --json` | new in 0.29.1 (#574): which environment reads are found statically may grow |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
@@ -88,6 +89,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes are aliases until the next minor | Run a long-running HTTP server exposing the orchestrator as a JSON API |
+| `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
 | `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a named view |
@@ -264,8 +266,20 @@ default, and any aliases.
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
 | `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
 | `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
-| `--drain-timeout` | `SECONDS` | - | experimental (with the command) | Seconds to wait for runs in flight after SIGTERM or SIGINT before cancelling them (exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 cancels at once |
+| `--drain-timeout` | `SECONDS` | - | experimental (with the command) | Seconds to wait for runs in flight after SIGTERM or SIGINT before stopping them and putting them back in the run queue for the next start (exit 0; a second signal cancels them instead, exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 requeues them at once |
+| `--max-runs` | `N` | - | experimental (with the command) | How many runs execute at once; the others wait in the run queue, in order. At least 1. Default: [server] max_runs in barca.toml, else one per core. Experimental |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
+
+#### barca queue
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<ACTION>` | - | - | experimental (with the command) | pause: queued runs wait until resumed (runs in flight go on); resume: they start again. Omit to show the queue |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | The server's environment, checked against it (as for the other --server commands) |
+| `--server` | `URL` | - | experimental (with the command) | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
+| `--local` | - | default `false` | experimental (with the command) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
 
 #### barca list
 
@@ -439,6 +453,7 @@ value of its first key only.
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
 | `BARCA_UI_URL` | base URL of the web UI; Slack posts link the run id to it | experimental |
 | `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name (`barca docs telemetry`) | experimental |
+| `BARCA_SERVER_RECONNECT` | seconds a `--server` client following a run (`get`/`run --server`, `logs -f --server`) waits for a server whose stream broke to come back, and follows the same run id there (default 60; `0`: give up at once, exit 3); not a number of seconds is a usage error (exit 2) | experimental |
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 `[server] url` in `barca.toml` or `BARCA_SERVER` (experimental) points `get` and `run` at a
@@ -500,14 +515,17 @@ error `kind`, which has one code. 143, which a shell reports for a process that 
 is never barca's own exit code. SIGKILL cannot be handled: the shell reports 137 and the run is
 later reported as `interrupted` (`barca docs cache`).
 
-`barca serve` is not a run. Stopped by SIGINT or SIGTERM it drains: it refuses new runs (HTTP
-`503` with `Retry-After`) and waits for the runs in flight for up to `--drain-timeout` seconds
-(`[server] drain_timeout` in `barca.toml`, default 30). It exits 0 when they all finished. When
-the deadline passes or a second signal arrives first, it cancels the runs left (recorded as
-`cancelled`, reason `server shutdown`) and exits 1 with a `step_failed` error naming how many
-were cancelled, so deploy tooling can tell a forced stop from a clean drain (`barca docs
-scheduling`, "Stopping the server"). Exit 1 from `serve` means a forced stop, not a failed step
-of yours.
+`barca serve` is not a run. Every run it accepts is recorded in its run queue before it answers,
+and a restart resumes the queued runs in order under their ids. Stopped by SIGINT or SIGTERM it
+drains: the queue pauses (new runs are still accepted, `202` with `status: pending`, and wait for
+the next start) and it waits for the runs in flight for up to `--drain-timeout` seconds
+(`[server] drain_timeout` in `barca.toml`, default 30). It exits 0 when they all finished, and 0
+when the deadline passed and it put the runs left back in the queue, to start again from the
+beginning after the restart (at least once: `barca docs scheduling`, "At least once"). A second
+signal cancels the runs in flight instead (recorded as `cancelled`, reason `server shutdown`) and
+it exits 1 with a `step_failed` error naming how many were cancelled, so deploy tooling can tell
+a forced stop from a clean one (`barca docs scheduling`, "Stopping the server"). Exit 1 from
+`serve` means a forced stop, not a failed step of yours.
 
 A writer `barca serve` (not `--read-only`) sets its metadata DB up before it binds the port. When
 it cannot (the file is not SQLite, in a newer format or has a malformed schema, or cannot be
