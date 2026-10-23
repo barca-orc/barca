@@ -771,6 +771,8 @@ impl WorkerPool {
                                     return_type: None,
                                     kind: "task".to_string(),
                                     is_dynamic: false,
+                                    keyed_inputs: HashMap::new(),
+                                    partition_source: false,
                                 }
                             })
                             .collect();
@@ -1736,6 +1738,15 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
         );
     }
 
+    // A dict `partitions_from` source's value for this key: the worker reads `key` of the
+    // source's artifact, and passes it when the function takes the parameter.
+    for (param, (path, key)) in &item.spec.keyed_inputs {
+        inputs.insert(
+            param.clone(),
+            serde_json::json!({"_keyed": true, "path": path, "key": key}),
+        );
+    }
+
     serde_json::json!({
         "node_id": item.step_id.display(),
         "function_name": item.spec.function_name,
@@ -1757,6 +1768,8 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
         "return_type": item.spec.return_type.map(|t| t.as_str()),
         // A `parallel()` branch: its result goes back to the step that called it.
         "branch": item.group.is_some(),
+        // Read by a `partitions_from(...)` for keys: the worker checks what it returns.
+        "partition_source": item.spec.partition_source,
         // Where the branch writes that result, without the extension: the worker adds the one
         // for the format it picks.
         "branch_path": item
@@ -1992,6 +2005,8 @@ mod tests {
             return_type: None,
             kind: "asset".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         };
         let id = coord.add_item(crate::StepId::unpartitioned("f.py:a"), spec, Vec::new());
         let step = build_step_json(coord.item(id), &coord);
@@ -2031,6 +2046,8 @@ mod tests {
             return_type: Some(ValueType::Polars),
             kind: "asset".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         };
         let id = coord.add_item(
             crate::StepId::unpartitioned("f.py:downstream"),
@@ -2066,6 +2083,8 @@ mod tests {
             return_type: None,
             kind: "asset".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         };
         let id = coord.add_item(crate::StepId::unpartitioned("f.py:a"), spec, Vec::new());
         let step = build_step_json(coord.item(id), &coord);
@@ -2099,6 +2118,8 @@ mod tests {
             return_type: None,
             kind: "asset".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         };
         spec.collected_inputs.insert(
             "data".to_string(),
@@ -2222,6 +2243,8 @@ mod tests {
             return_type: None,
             kind: "task".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         };
         let parent = coord.add_item(
             crate::StepId::unpartitioned("f.py:a"),
@@ -2261,6 +2284,8 @@ mod tests {
             return_type: None,
             kind: "task".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         };
         let parent = coord.add_item(
             crate::StepId::unpartitioned("f.py:a"),
@@ -2360,6 +2385,8 @@ mod tests {
             return_type: None,
             kind: "asset".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         }
     }
 

@@ -429,7 +429,15 @@ async fn execute_started(
             .collect()
     };
     session.state.read_paths.extend(returned);
-    let mut read: Vec<String> = session.state.read_paths.iter().cloned().collect();
+    // A result read within the last hour keeps its stamp (`cache::READ_STAMP_REFRESH`).
+    let recent = &session.state.decide_state.recently_read;
+    let mut read: Vec<String> = session
+        .state
+        .read_paths
+        .iter()
+        .filter(|p| !recent.contains(*p))
+        .cloned()
+        .collect();
     read.sort();
     // Their `last_read_at` is written with the run's ledger, on its connection.
     let elapsed = record_and_publish(&mut session, &read).await?;
@@ -1106,8 +1114,12 @@ async fn select_work<'p>(
                 .flatten()
                 .map(|(_, o)| o),
             );
-            let returned: Vec<String> = returned_refs.into_iter().map(|o| o.path).collect();
-            let check: Vec<String> = session
+            let mut returned: Vec<String> = returned_refs.into_iter().map(|o| o.path).collect();
+            // A partitioned target's keys arrive through more than one of the lists above:
+            // each file is looked at once (200k keys: 600k lookups otherwise).
+            returned.sort_unstable();
+            returned.dedup();
+            let mut check: Vec<String> = session
                 .state
                 .cached_node_ids
                 .iter()
@@ -1116,6 +1128,8 @@ async fn select_work<'p>(
                 .map(|o| o.path.clone())
                 .chain(returned.iter().cloned())
                 .collect();
+            check.sort_unstable();
+            check.dedup();
             let lost = recover::lost(
                 &mut session.store,
                 &check,
@@ -1211,11 +1225,17 @@ async fn expand_and_decide(
         phase
     };
 
-    let mut expanded_phase = dispatch::expand_pending_partitions(
+    let expansion = dispatch::expand_pending_partitions(
+        &session.prepared.dag,
         phase,
         &session.state.all_outputs,
         session.prepared.pool_size,
     );
+    // A `partitions_from` source that cannot be read for keys fails the steps reading it.
+    for (base, message) in expansion.failures {
+        fail_unexpanded(session, base, message);
+    }
+    let mut expanded_phase = expansion.phase;
     if let (Some(narrowing), Some(expanded)) =
         (session.state.narrowing.as_mut(), expanded_phase.as_mut())
     {
@@ -1262,6 +1282,28 @@ async fn expand_and_decide(
         return Ok(None);
     }
     Ok(Some((decided, false)))
+}
+/// Record `base` as a failed step that never ran: its `partitions_from` source could not be read
+/// for keys (`dispatch::expand_pending_partitions`).
+fn fail_unexpanded(session: &mut RunSession<'_, '_>, base: String, message: String) {
+    if session.request.agent_mode {
+        crate::run_line!(Agent, "{}", failed_step_line(&base, &message));
+    }
+    session.state.failed_bases.insert(base.clone());
+    if session.state.step_failure.is_none() {
+        session.state.step_failure = Some((base.clone(), message.clone()));
+    }
+    session.state.all_failures.push(dispatch::StepFailure {
+        node_id: base,
+        error: dispatch::StepError {
+            error_type: "PartitionSourceError".to_string(),
+            message,
+            traceback: String::new(),
+            attempts: 1,
+            started_unix_ns: None,
+            elapsed_seconds: None,
+        },
+    });
 }
 async fn recover_phase_inputs<'p>(
     session: &mut RunSession<'_, '_>,
@@ -2421,6 +2463,24 @@ pub(crate) async fn explain_dag_with_membership(
         state.sensor_outputs = db::last_output_hashes(cache, &sensors).await?;
     }
     let mut all_outputs: HashMap<String, OutputRef> = HashMap::new();
+    // A sensor a `partitions_from(...)` reads for keys is predicted the same way: its consumers
+    // are expanded from its last recorded output, so a dict source tells which keys changed.
+    if let Some(cache) = &cache {
+        let sources = exec_plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .filter(|st| st.keyed.is_source && st.kind == crate::NodeKind::Sensor);
+        for st in sources {
+            let id = st.step_id.base_id();
+            if let Some(last) = db::latest_success(cache, id).await
+                && std::path::Path::new(&last.output.path).exists()
+            {
+                all_outputs.insert(id.to_string(), last.output);
+            }
+        }
+    }
     // Results the cache size limit evicted: predicted as `evicted` rather than missing.
     let evicted = match &cache {
         Some(cache) => db::evicted_paths(cache).await,
@@ -2714,6 +2774,37 @@ async fn predict_steps(
             report.detail = Some(format!("changed: {}", crate::changes::summary(&changed)));
             report.changed = Some(changed);
         }
+        // And per key, for the keys the report previews: a changed value of a dict
+        // `partitions_from` source, a new key (none), an edited upstream key.
+        if let (Decision::Partitioned { missing, .. }, Some(summary)) =
+            (&decision, report.partitions.as_mut())
+        {
+            let mut per_key = std::collections::BTreeMap::new();
+            for pk in missing
+                .iter()
+                .filter(|k| summary.will_run_keys.contains(&k.suffix()))
+            {
+                let id = pk.display_id(&step.step_id.base);
+                if let Some(changed) =
+                    crate::changes::since_last_success(ctx.cache, ctx.dag, ctx.state, &id).await
+                {
+                    per_key.insert(pk.suffix(), changed);
+                }
+            }
+            // The step's own `changed`: its first key that ran before, when the first key
+            // that runs is new.
+            if report.changed.is_none()
+                && let Some(changed) = per_key.values().next()
+            {
+                report.changed = Some(changed.clone());
+                if !forced {
+                    report.detail = Some(format!("changed: {}", crate::changes::summary(changed)));
+                }
+            }
+            if !per_key.is_empty() {
+                summary.changed = Some(per_key);
+            }
+        }
         if !forced && !read_sensors.is_empty() {
             let note = read_sensors
                 .iter()
@@ -2751,8 +2842,16 @@ async fn predict_steps(
                     ctx.all_outputs.insert(pdisplay, oref);
                 }
                 if !missing.is_empty() {
-                    let mut partial = step.clone();
-                    partial.partition_keys = missing;
+                    // Its run hashes, for the keys that run only; not a copy of every key.
+                    let mut partial = step.with_keys(missing);
+                    partial.run_hashes = partial
+                        .partition_keys
+                        .iter()
+                        .filter_map(|k| {
+                            let id = k.display_id(&step.step_id.base);
+                            step.run_hashes.get(&id).map(|h| (id, h.clone()))
+                        })
+                        .collect();
                     to_run.push(partial);
                 }
                 if any_cached {
@@ -2766,7 +2865,19 @@ async fn predict_steps(
 }
 async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), BarcaError> {
     let ready = expand_prediction(ctx, phase);
-    let mut expanded = dispatch::expand_pending_partitions(&ready, ctx.all_outputs, ctx.pool_size);
+    let expansion =
+        dispatch::expand_pending_partitions(ctx.dag, &ready, ctx.all_outputs, ctx.pool_size);
+    for (base, message) in expansion.failures {
+        ctx.steps.push(unknown_report(
+            ctx.dag,
+            &base,
+            "partitions_unknown",
+            message,
+        ));
+        ctx.unknown_ids.insert(base, "partitions_unknown");
+        ctx.summary.unknown += 1;
+    }
+    let mut expanded = expansion.phase;
     if let (Some(narrowing), Some(phase)) = (ctx.narrowing.as_deref_mut(), expanded.as_mut()) {
         narrowing.narrow_expanded(phase);
     }
@@ -2908,8 +3019,16 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
                     cached_node_ids.insert(pdisplay);
                 }
                 if !missing.is_empty() {
-                    let mut partial = step.clone();
-                    partial.partition_keys = missing;
+                    // Its run hashes, for the keys that run only; not a copy of every key.
+                    let mut partial = step.with_keys(missing);
+                    partial.run_hashes = partial
+                        .partition_keys
+                        .iter()
+                        .filter_map(|k| {
+                            let id = k.display_id(&step.step_id.base);
+                            step.run_hashes.get(&id).map(|h| (id, h.clone()))
+                        })
+                        .collect();
                     uncached_steps.push(partial);
                 }
                 if any_cached {

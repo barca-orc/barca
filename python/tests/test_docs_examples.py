@@ -306,6 +306,46 @@ def test_partitions_topic_selecting_keys(binary, topics, tmp_path, monkeypatch, 
     }
 
 
+def test_partitions_topic_keyed_sensor_example(binary, topics, tmp_path):
+    """ "Updating only what changed, across many partitions": one query returns every retailer's
+    version, and only the retailer whose version changed is computed again."""
+    duckdb = pytest.importorskip("duckdb")
+    (code,) = [b for b in blocks(topics["partitions"], "python") if "retailer_versions" in b]
+    (tmp_path / "pipeline.py").write_text(code)
+    db = duckdb.connect(str(tmp_path / "warehouse.duckdb"))
+    db.execute("create table orders (retailer varchar, updated_at timestamp)")
+    db.execute(
+        "insert into orders select 'r' || lpad(i::varchar, 6, '0'), timestamp '2026-10-22 09:00:00'"
+        " from range(50) t(i)"
+    )
+    db.close()
+
+    first = result(barca(binary, tmp_path, "get", "scored", "pipeline.py"))
+    assert first["steps_executed"] == 101  # the sensor, 50 keys of cleaned, 50 of scored
+    assert first["final_output"]["retailer=r000007"]["as_of"] == "2026-10-22 09:00:00"
+    again = result(barca(binary, tmp_path, "get", "scored", "pipeline.py"))
+    assert again["steps_executed"] == 1  # "the sensor runs; every key is cached"
+
+    db = duckdb.connect(str(tmp_path / "warehouse.duckdb"))
+    db.execute("insert into orders values ('r000007', timestamp '2026-10-22 09:14:03')")
+    db.close()
+    # The dry run, after the sensor saw the new value, names the key and why.
+    assert result(barca(binary, tmp_path, "get", "retailer_versions", "pipeline.py"))
+    dry = result(barca(binary, tmp_path, "get", "scored", "pipeline.py", "--dry-run", "--json"))
+    cleaned = next(s for s in dry["steps"] if s["id"] == "pipeline.py:cleaned")
+    assert cleaned["partitions"]["will_run_keys"] == ["retailer=r000007"]
+    assert cleaned["partitions"]["changed"] == {
+        "retailer=r000007": ["value pipeline.py:retailer_versions"]
+    }
+    tick = result(barca(binary, tmp_path, "get", "scored", "pipeline.py"))
+    assert tick["steps_executed"] == 3
+    assert partition_keys_run(tick) == {
+        "pipeline.py:cleaned": ["retailer=r000007"],
+        "pipeline.py:scored": ["retailer=r000007"],
+    }
+    assert tick["final_output"]["retailer=r000007"]["rows"] == 2
+
+
 def test_overview_topic_example(binary, topics, tmp_path):
     write_example(topics, "overview", tmp_path)
     nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]

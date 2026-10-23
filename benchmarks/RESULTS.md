@@ -1,10 +1,80 @@
 # Benchmark Results
 
-Latest pass: 2026-10-22, the read routes of `barca serve` and the inspection commands at 300
-assets (first section below). Latest comparison pass: 2026-10-21, barca 0.28.0 against Dagster
-1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (second section, #65). The sections after it are older passes on
+Latest passes: 2026-10-22, keyed partition sources at 10k to 200k keys (first section below),
+and the read routes of `barca serve` and the inspection commands at 300 assets (second). Latest comparison pass: 2026-10-21, barca 0.28.0 against Dagster
+1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (third section, #65). The sections after it are older passes on
 other hardware and are kept for the record. Absolute times from different machines are not
 comparable; within one pass, the ratios between frameworks are.
+
+## Keyed partitions (2026-10-22)
+
+`benchmarks/keyed_partitions`: one tick of a sensor over N retailers feeding a two-asset
+`partitions_from` chain (`versions -> cleaned -> scored`, 2N keys), with one retailer's value
+changed and everything else cached. Two ways to write the sensor:
+
+- **keyed**: one unpartitioned `@sensor()` returns `{retailer: version}` for every retailer
+  (new in 0.29.6); each key folds in its own value only.
+- **partitioned**: `@sensor(partitions={"retailer": partitions(RETAILERS)})`, one call per
+  retailer on every tick (what worked before), each call as cheap as it can be (one read of the
+  versions file per worker process).
+
+### Setup
+
+- **Machine:** AMD Ryzen AI MAX+ 395 (16 cores, 32 threads), 62 GiB RAM, Fedora 44, kernel
+  7.2.8, btrfs on NVMe. Not pinned; other agents were building and testing during the pass, and
+  the 1-minute load average ranged from 4 to 15.
+- **barca:** release builds of `feat/keyed-partition-sources`, default pool (32 workers). The
+  keyed rows are 0.29.4 plus this change; the partitioned rows ran on 0.29.2 plus this change,
+  before 0.29.4's faster key lookups (#617) were merged in, which at 200k keys took the keyed
+  tick from 8.2 s to 7.3 s.
+- **What is timed:** `barca get scored pipeline.py --json` from process start to exit
+  (`/usr/bin/time`, which also gives the coordinator's peak RSS). Medians of 3 runs; cold is one
+  run on an empty `.barca/`. `dry-run` and `status` run after the sensor recorded a new value
+  for one retailer (`barca get versions`, not timed).
+
+```bash
+KEYS="10000 50000 200000" MODES=keyed benchmarks/keyed_partitions/bench.sh
+KEYS="10000 50000" MODES=partitioned benchmarks/keyed_partitions/bench.sh
+```
+
+### Results
+
+| Keys | Sensor | Tick, 1 changed | Steps run | Tick, none changed | `--dry-run` | `status` | Peak RSS (tick) | Cold |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 10k | keyed | 0.32 s | 3 | 0.29 s | 0.13 s | 0.17 s | 98 MB | 3.0 s |
+| 10k | partitioned | 3.31 s | 10,002 | 4.46 s | 2.70 s | 2.94 s | 205 MB | 4.2 s |
+| 50k | keyed | 1.65 s | 3 | 1.64 s | 0.71 s | 0.77 s | 345 MB | 17.5 s |
+| 50k | partitioned | 15.9 s | 50,002 | 20.1 s | 17.0 s | 19.5 s | 812 MB | 26.1 s |
+| 200k | keyed | 7.25 s | 3 | 7.02 s | 2.83 s | 2.97 s | 1.24 GB | 213 s |
+
+Under `barca serve` with `freshness=Schedule(...)` on the keyed sensor, at 200k keys, the
+scheduled ticks recorded 4.3 s to 4.6 s (`elapsed_seconds` of the run, six ticks; 3 steps
+executed and 399,998 cached for the tick after the change, 1 and 400,000 for the others). A serve tick
+returns nothing to print, so it skips what `barca get` spends on the 200k paths it returns.
+
+Where a 200k-key tick goes (traced with `BARCA_TRACE_TIMING=1` and `perf`, on `barca get`):
+
+| Part | Before this change | After |
+|---|---:|---:|
+| Deciding the 400k keys: hashing, cache lookups | 8.2 s (one SQL query per key) | 2.6 s (one query per node, 0.4 s each, as 0.29.4 also does (#617); hashing on 8 threads) |
+| Stamping `last_read_at` of the results read | 18 s (200k `UPDATE`s) | 0.3 s (a key read in the last hour keeps its stamp) |
+| Checking the returned artifacts exist | about 2 s (600k lookups, each key three times) | 1.2 s (200k) |
+| The cache size check (`GROUP BY` over every recorded result) | 1.3 s | 0.7 s (unchanged; it varies with load) |
+| Returning 200k paths (`get` only) and exiting | about 3 s | about 3 s |
+| Whole tick | 31 s | 8.2 s (7.3 s with 0.29.4's key lookups) |
+
+What stands in the way of a tick of a few seconds at 200k keys:
+
+- **Per-key rows.** Every key has its own row in `materializations`, read and hashed each
+  tick: about 1 µs to read a row and 1.5 µs to decide a key. Deciding 400k keys costs 2.6 s
+  however few changed.
+- **Memory.** About 6 KB per key at peak (1.24 GB at 200k): each key's partition key (a
+  `BTreeMap`), run hash, recorded output and display id, held in several maps during the run.
+- **`barca serve` keeps each run's full outcome.** A tick's outcome lists every target's
+  output, here 400k artifacts: 82 MB of JSON written to `runs.outcome_json` per tick, and the
+  run, its events and its outcome kept in memory for an hour (the server's RSS grew by about
+  600 MB per tick, to 4.8 GB after six ticks). This is the same with a partitioned sensor and is not changed here; at this
+  key count it needs a bound on what a run's outcome keeps.
 
 ## Read routes and inspection at 300 assets (2026-10-22)
 

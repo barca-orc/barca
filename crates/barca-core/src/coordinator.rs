@@ -65,6 +65,12 @@ pub struct ItemSpec {
     pub return_type: Option<crate::model::ValueType>,
     pub kind: String,
     pub is_dynamic: bool,
+    /// A dict `partitions_from` source's value for this key (`crate::keyed`): param ->
+    /// (the source's JSON artifact, the key). The worker reads the value from the artifact.
+    pub keyed_inputs: HashMap<String, (String, String)>,
+    /// The step's output is read by a `partitions_from(...)` for keys: the worker checks it is
+    /// a list or a dict it can write as JSON (`crate::keyed`).
+    pub partition_source: bool,
 }
 
 impl ItemSpec {
@@ -89,6 +95,8 @@ impl ItemSpec {
             return_type: step.return_type,
             kind: format!("{:?}", step.kind).to_lowercase(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: step.keyed.is_source,
         }
     }
 }
@@ -767,6 +775,13 @@ impl Coordinator {
                         spec.direct_kwargs
                             .insert(k.clone(), serde_json::Value::String(v.clone()));
                     }
+                    // A dict `partitions_from` source: this key's value, read by the worker.
+                    for ks in step.keyed.direct() {
+                        if let (Some(param), Some(key)) = (&ks.param, pk.0.get(&ks.dim)) {
+                            spec.keyed_inputs
+                                .insert(param.clone(), (ks.path.clone(), key.clone()));
+                        }
+                    }
                     // Fill dag_inputs from provided (cross-phase) or
                     // rely on in-phase resolution at dispatch time via upstream_inputs.
                     for (param_name, upstream_id) in &step.inputs {
@@ -1101,6 +1116,8 @@ mod tests {
             return_type: None,
             kind: "asset".to_string(),
             is_dynamic: false,
+            keyed_inputs: HashMap::new(),
+            partition_source: false,
         }
     }
 
@@ -1617,6 +1634,7 @@ mod tests {
                 partition_keys: pks.clone(),
                 param_types: HashMap::new(),
                 return_type: None,
+                keyed: Default::default(),
             })
             .collect();
         Phase {
@@ -1811,6 +1829,7 @@ mod tests {
             partition_keys: pks,
             param_types: HashMap::new(),
             return_type: None,
+            keyed: Default::default(),
         };
 
         let phase = Phase {
@@ -1884,6 +1903,7 @@ mod tests {
             partition_keys: pks,
             param_types: HashMap::new(),
             return_type: None,
+            keyed: Default::default(),
         };
 
         let no_inputs = HashMap::new();
@@ -1976,6 +1996,7 @@ mod tests {
             partition_keys: pks,
             param_types: HashMap::new(),
             return_type: None,
+            keyed: Default::default(),
         };
 
         // Unpartitioned producer + partitioned producer + partitioned consumer of both.
@@ -2057,6 +2078,7 @@ mod tests {
             partition_keys: vec![],
             param_types: HashMap::new(),
             return_type: None,
+            keyed: Default::default(),
         };
         let phase = Phase {
             reason: PhaseReason::FanIn {
@@ -2215,6 +2237,7 @@ mod tests {
             partition_keys: vec![pk("a"), pk("b"), pk("c")],
             param_types: HashMap::new(),
             return_type: None,
+            keyed: Default::default(),
         };
         let phase = Phase {
             reason: PhaseReason::Initial,

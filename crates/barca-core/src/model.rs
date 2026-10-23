@@ -454,6 +454,12 @@ pub struct ExtractedNode {
     /// Those not in [`Self::env`] are reported; not part of any hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_reads: Vec<String>,
+    /// The `partitions_from` dimensions this node takes from a partitioned upstream (set when
+    /// the DAG is built, `crate::dag`): `partitions_from(cleaned)` where `cleaned` is itself
+    /// `partitions_from(source)`. Its keys come from `source`, but a dict `source`'s values are
+    /// passed only to the nodes that name it (`crate::keyed`). Not part of any hash.
+    #[serde(skip)]
+    pub inherited_partitions: Vec<String>,
 }
 
 fn default_weight() -> u32 {

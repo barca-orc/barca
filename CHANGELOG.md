@@ -6,6 +6,43 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Features
+
+- Keyed partition sources: `partitions_from(source)` where `source` is an unpartitioned asset
+  or sensor that returns a dict uses the dict's keys as partition keys, passes each key its own
+  value (as the parameter named after the source, or the `inputs=` key that names it), and
+  folds only that value into the key's run hash. One sensor query that returns
+  `{retailer: version}` for every retailer then decides which keys exist and which changed:
+  only a changed or new key runs, through a chain of `partitions_from` assets, on `barca get`
+  and on a `barca serve` tick. `--dry-run` and `barca status` say per key what changed
+  (`partitions.changed`, experimental, with the new `value ID` entry), and the dry run's table
+  names it. With one key changed, `barca get` of a two-asset chain takes 0.32 s at 10k keys
+  against 3.3 s with a sensor partitioned by key (which makes one call per key), and a
+  `barca serve` tick at 200k keys takes 4.3 to 4.6 s (`benchmarks/keyed_partitions`,
+  `benchmarks/RESULTS.md`). `barca docs partitions`, "Updating only what
+  changed, across many partitions".
+
+### Performance
+
+- A run over a partitioned node with many keys does less per key: the metadata DB keeps a
+  32 MiB page cache (one pass over 200k keys' rows read the same pages from disk several times:
+  2.8 s against 0.25 s), a key read within the last hour is not stamped again (a 200k-key run
+  wrote 200k rows: 18 s), each returned key's artifact is checked once instead of three times,
+  a key's run hash is computed on several threads, and a partitioned step's keys are not copied
+  for each worker chunk. With 0.29.4's key lookups, a warm `barca get` of a 200k-key chain with
+  one key changed takes 7 s (31 s before both).
+
+### Bug Fixes
+
+- An unpartitioned `@sensor()` or asset returning a dict into `partitions_from` no longer runs
+  its consumer once with no arguments (`TypeError: keyed() missing 2 required positional
+  arguments`). A source that returns anything other than a list or a dict, a dict key that is
+  not a string or an integer, or a value JSON cannot write fails the source step with an error
+  naming the key or the expected types; an empty list or dict gives no keys, and a `collect`
+  over them an empty list.
+
 ## 0.29.5 (2026-10-22)
 
 ### Breaking

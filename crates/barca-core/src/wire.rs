@@ -133,6 +133,9 @@ pub(crate) fn normalize_step(step: &Value) -> Value {
     if item.get("branch") == Some(&json!(false)) {
         item.remove("branch");
     }
+    if item.get("partition_source") == Some(&json!(false)) {
+        item.remove("partition_source");
+    }
     if item.get("timeout_seconds") == Some(&json!(0)) {
         item.remove("timeout_seconds");
     }

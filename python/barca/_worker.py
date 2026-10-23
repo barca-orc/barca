@@ -614,6 +614,123 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
     return results
 
 
+# A dict `partitions_from` source's artifact, read once per worker however many of its keys run
+# here: path -> the dict. Bounded: a run reads one version of each source.
+_KEYED_SOURCES: dict = {}
+_KEYED_SOURCES_MAX = 4
+# Whether a step function takes a parameter: (function, name) -> bool.
+_ACCEPTS: dict = {}
+
+
+def _accepts(fn, param: str) -> bool:
+    """Whether `fn` can be called with `param=` (a parameter of that name, or `**kwargs`)."""
+    key = (fn, param)
+    if key not in _ACCEPTS:
+        import inspect
+
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            _ACCEPTS[key] = True
+        else:
+            p = params.get(param)
+            _ACCEPTS[key] = (p is not None and p.kind != p.POSITIONAL_ONLY) or any(
+                q.kind == q.VAR_KEYWORD for q in params.values()
+            )
+    return _ACCEPTS[key]
+
+
+def _keyed_value(path: str, key: str):
+    """`key`'s value in the dict a `partitions_from` source wrote to `path`."""
+    source = _KEYED_SOURCES.get(path)
+    if source is None:
+        if len(_KEYED_SOURCES) >= _KEYED_SOURCES_MAX:
+            _KEYED_SOURCES.pop(next(iter(_KEYED_SOURCES)))
+        if not _storage.exists(path):
+            raise FileNotFoundError(f"Input artifact not found: {path}")
+        source = deserialize(path, "json")
+        _KEYED_SOURCES[path] = source
+    if key not in source:
+        raise KeyError(f"key {key!r} is not in the partitions_from source written to {path}")
+    value = source[key]
+    if isinstance(value, (dict, list)):
+        import copy
+
+        # The step may change what it receives; the next key of this worker must not see it.
+        value = copy.deepcopy(value)
+    return value
+
+
+_SOURCE_TYPES = "a list of keys or a dict of key -> value"
+_JSON_VALUES = "str, int, float, bool, None, and lists and dicts of them"
+
+
+def _check_partition_source(value, step):
+    """What a step that a `partitions_from(...)` reads for keys returned, made JSON-writable.
+
+    A list (or tuple) gives the keys; a dict gives the keys and passes each key's value to the
+    steps that name the source. Dict keys must be strings or integers; an integer becomes its
+    string, as JSON writes it. Values must be JSON-writable. Anything else raises naming the
+    key, or the types a source may return.
+    """
+    name = step.get("function_name", "source")
+    serializer = step.get("serializer")
+    if serializer not in (None, "json"):
+        raise TypeError(
+            f"partitions_from source '{name}' declares serializer={serializer!r}; a source is "
+            f"read for keys and must be written as JSON"
+        )
+    if isinstance(value, (list, tuple)):
+        try:
+            json.dumps(value, allow_nan=False)
+        except (TypeError, ValueError):
+            for i, item in enumerate(value):
+                try:
+                    json.dumps(item, allow_nan=False)
+                except (TypeError, ValueError) as exc:
+                    raise TypeError(
+                        f"partitions_from source '{name}' returned a list whose item {i} "
+                        f"({type(item).__name__}) cannot be written as JSON: {exc}"
+                    ) from None
+            raise
+        return list(value)
+    if not isinstance(value, dict):
+        raise TypeError(
+            f"partitions_from source '{name}' returned {type(value).__name__}; it must return "
+            f"{_SOURCE_TYPES}"
+        )
+    keys = {}
+    for k in value:
+        if isinstance(k, bool) or not isinstance(k, (str, int)):
+            raise TypeError(
+                f"partitions_from source '{name}' returned a dict with the key {k!r} "
+                f"({type(k).__name__}); keys must be strings or integers (an integer key is "
+                f"passed as its string, as JSON writes it)"
+            )
+        s = k if isinstance(k, str) else str(k)
+        if s in keys:
+            raise ValueError(
+                f"partitions_from source '{name}' returned the keys {keys[s]!r} and {k!r}, "
+                f"which are both the partition key '{s}'"
+            )
+        keys[s] = k
+    out = value if all(type(k) is str for k in value) else {s: value[k] for s, k in keys.items()}
+    try:
+        json.dumps(out, allow_nan=False)
+    except (TypeError, ValueError):
+        for s, v in out.items():
+            try:
+                json.dumps(v, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    f"partitions_from source '{name}': the value for key '{s}' "
+                    f"({type(v).__name__}) cannot be written as JSON: {exc}. A dict source's "
+                    f"values must be {_JSON_VALUES}"
+                ) from None
+        raise
+    return out
+
+
 def _execute(fn, kwargs, step):
     """Run a step function with optional timeout, unpacking sensor tuples."""
     timeout = step.get("timeout_seconds", 0)
@@ -1123,6 +1240,11 @@ def _run_daemon_step(step, modules, art_dir, lru):
                     frame_type=frame_type,
                 )
                 continue
+            # A dict `partitions_from` source: this key's value, when the function takes it.
+            if isinstance(value, dict) and value.get("_keyed"):
+                if _accepts(fn, param):
+                    kwargs[param] = _keyed_value(value["path"], value["key"])
+                continue
             if not value:
                 continue
             try:
@@ -1171,13 +1293,19 @@ def _run_daemon_step(step, modules, art_dir, lru):
 
         result = _make_serializable(result)
 
+        # Read by a `partitions_from(...)` for keys: a list, or a dict with JSON values.
+        materialize_step = step
+        if step.get("partition_source"):
+            result = _check_partition_source(result, step)
+            materialize_step = {**step, "serializer": "json"}
+
         # Serialize result to artifact (and write any declared sinks).
         try:
             artifact = _materialize(
                 result,
                 node_id,
                 art_dir,
-                step,
+                materialize_step,
                 wall,
                 elapsed_in_artifact=True,
                 timing={

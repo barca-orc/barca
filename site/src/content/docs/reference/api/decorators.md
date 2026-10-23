@@ -358,6 +358,21 @@ On an unpartitioned `upstream` that returns a list:
   report the asset as `unknown` (reason `partitions_unknown`);
 - when the list grows, only the new keys run.
 
+On an unpartitioned `upstream` that returns a dict (0.29.6):
+
+- the dict's keys are the keys, and each key is called with its own value, as the parameter
+  named after the upstream (or the `inputs=` key that names it); a function without that
+  parameter gets the key only;
+- each key's run hash folds in its own value (canonical JSON, keys sorted) and the upstream's
+  run hash, not the whole dict: when one value changes, only that key runs, and the keys of a
+  `partitions_from` chain below it;
+- keys must be strings or integers (an integer becomes its string) and values JSON-writable;
+  anything else, or a return that is neither a list nor a dict, fails the upstream step with an
+  error naming the key or the expected types;
+- `--dry-run --json` and `barca status --json` report per key what changed
+  (`partitions.changed`, `value ID` for a new value). See
+  [Only What Changed, Across Many Partitions](/patterns/09-changed-partitions/).
+
 ### `collect(upstream)`
 
 Used inside `inputs=`, it passes every key's result of a partitioned `upstream` as one list.

@@ -100,6 +100,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   | `helper FILE:NAME` | a definition the function uses, in its own file or a project module (`pipelines/common.py:bucket_ltv`); `helper FILE` for a module it uses whole |
   | `input ID` | an upstream's run hash: its code or its own inputs changed |
   | `sensor ID` | a sensor it reads returned a new value (or its code changed) |
+  | `value ID` | a dict `partitions_from` source returned a new value for this key (or its code changed; `barca docs partitions`) |
   | `env NAME` | a declared environment variable's value |
   | `kind` | the node became an asset, task or sensor |
 
@@ -111,6 +112,10 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   nothing, so it assumes the sensor returns the same value next time, and `detail` says so. If
   the sensor recorded a new value since the node last ran (for example a scheduled sensor), the
   node shows as `stale` (`barca docs cache`, "External data that changes in place").
+- A `partial` node's `partitions` has `changed` (experimental) when a key of `missing_keys`
+  ran before: key -> what changed in its run hash, in the entries above. A new key has no
+  entry. With keys from a dict sensor, `{"retailer=r2": ["value pipeline.py:versions"]}` says
+  the sensor returned a new value for that retailer.
 - `upstream_stale`: an input is itself not cached, so this node's inputs will change when it runs.
   `detail` names the input.
 - `failed`: the last attempt at exactly this code and these inputs raised; `detail` carries the

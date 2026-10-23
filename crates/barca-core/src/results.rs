@@ -264,6 +264,13 @@ pub struct PartitionSummary {
     pub will_run: usize,
     /// The keys that will (or did) run, capped at 20.
     pub will_run_keys: Vec<String>,
+    /// Dry run: for each key of `will_run_keys` that has an earlier successful
+    /// materialization, what changed in its run hash since then (the components `changed` on
+    /// the step lists). A key absent from it has no earlier result (a new key), or one
+    /// recorded before 0.29.0. Absent when no key has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub changed: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 /// What `--dry-run` reports: the same decisions a real run would make, without making them.

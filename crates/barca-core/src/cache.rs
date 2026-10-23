@@ -18,7 +18,29 @@ pub fn compute_run_hash(
     outputs: &HashMap<String, String>,
     env: Option<&str>,
 ) -> String {
-    let mut upstream_hashes: Vec<String> = Vec::new();
+    compute_run_hash_with(
+        def_hash,
+        partition_key,
+        upstream_ids,
+        cached_run_hashes,
+        outputs,
+        env,
+        Vec::new(),
+    )
+}
+
+/// [`compute_run_hash`] with `extra` upstream tokens: a key's value from a dict
+/// `partitions_from` source ([`crate::keyed::token`]).
+pub(crate) fn compute_run_hash_with(
+    def_hash: &str,
+    partition_key: Option<&str>,
+    upstream_ids: impl Iterator<Item = impl AsRef<str>>,
+    cached_run_hashes: &HashMap<String, String>,
+    outputs: &HashMap<String, String>,
+    env: Option<&str>,
+    extra: Vec<String>,
+) -> String {
+    let mut upstream_hashes: Vec<String> = extra;
     for uid in upstream_ids {
         upstream_hashes.extend(upstream_tokens(
             uid.as_ref(),
@@ -199,6 +221,56 @@ pub(crate) struct DecideState {
     pub(crate) tick: Option<String>,
     /// Under a tick: the tasks decided to run in this run (base ids). A task reading one fires.
     pub(crate) firing_tasks: HashSet<String>,
+    /// Steps whose keys receive a value from a dict `partitions_from` source (base id ->
+    /// (dimension, source id, key -> value hash)), for what changed in a key ([`crate::changes`]).
+    pub(crate) keyed: HashMap<String, Vec<KeyedHashes>>,
+    /// Artifact paths of cached keys whose `last_read_at` is within [`READ_STAMP_REFRESH`], as
+    /// the node's rows read together say ([`db::KeyRows`]): a read of them need not be stamped
+    /// again (RFC-0012).
+    pub(crate) recently_read: HashSet<String>,
+}
+
+/// How old a result's `last_read_at` may be before a read of it is stamped again, for the
+/// results of a node with many partition keys. The cache size limit evicts the least recently
+/// read results; an hour does not change that order in any way that matters, and a tick that
+/// reads 200k results does not write 200k rows.
+pub(crate) const READ_STAMP_REFRESH: &str = "-1 hour";
+
+/// One dict source's value hashes, as a step's keys fold them in ([`DecideState::keyed`]).
+#[derive(Clone, Debug)]
+pub(crate) struct KeyedHashes {
+    pub(crate) dim: String,
+    pub(crate) source_id: String,
+    pub(crate) hashes: std::sync::Arc<HashMap<String, String>>,
+}
+
+impl DecideState {
+    /// The token a dict source's value adds to the run hash of `partition` (a partition key's
+    /// dimensions) of step `base`, by source id. Empty for a step without a dict source.
+    pub(crate) fn keyed_tokens(
+        &self,
+        base: &str,
+        partition: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<(String, String)> {
+        let Some(sources) = self.keyed.get(base) else {
+            return Vec::new();
+        };
+        sources
+            .iter()
+            .filter_map(|ks| {
+                let value = ks.hashes.get(partition.get(&ks.dim)?)?;
+                let source_run_hash = self
+                    .run_hashes
+                    .get(&ks.source_id)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                Some((
+                    ks.source_id.clone(),
+                    crate::keyed::token(source_run_hash, value),
+                ))
+            })
+            .collect()
+    }
 }
 
 pub(crate) type ExpandedMembership = BTreeMap<String, BTreeSet<String>>;
@@ -313,12 +385,14 @@ pub(crate) fn record_output(
     }
 }
 
-/// The sensors `step` reads directly (base ids).
+/// The sensors `step` reads directly (base ids), a dict `partitions_from` source's value
+/// included.
 pub(crate) fn sensor_inputs<'a>(dag: &Dag, step: &'a crate::planner::StreamStep) -> Vec<&'a str> {
     let mut out: Vec<&str> = step
         .inputs
         .values()
         .map(|up| up.split('[').next().unwrap_or(up))
+        .chain(step.keyed.direct().map(|ks| ks.source_id.as_str()))
         .filter(|up| {
             dag.get_node(up)
                 .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
@@ -436,21 +510,69 @@ pub(crate) fn hash_step(
         state.run_hashes.insert(display_id.clone(), run_h.clone());
         step.run_hashes.insert(display_id.clone(), run_h);
     } else {
-        for pk in &step.partition_keys {
-            let pdisplay = pk.display_id(&step.step_id.base);
-            let run_h = compute_run_hash(
+        // A dict `partitions_from` source: each key folds in its own value (`crate::keyed`).
+        let keyed: Vec<KeyedHashes> = step
+            .keyed
+            .direct()
+            .map(|ks| KeyedHashes {
+                dim: ks.dim.clone(),
+                source_id: ks.source_id.clone(),
+                hashes: ks.hashes.clone(),
+            })
+            .collect();
+        if !keyed.is_empty() {
+            state.keyed.insert(base_id.to_string(), keyed);
+        }
+        // Each key's hash reads the state only, so many keys are hashed on a few threads.
+        let shared: &DecideState = state;
+        let hashed = par_map(&step.partition_keys, |pk| {
+            let suffix = pk.suffix();
+            let extra = shared
+                .keyed_tokens(base_id, &pk.0)
+                .into_iter()
+                .map(|(_, token)| token)
+                .collect();
+            let run_h = compute_run_hash_with(
                 def_hash,
-                Some(&pk.suffix()),
+                Some(&suffix),
                 step.inputs.values(),
-                &state.run_hashes,
-                &state.sensor_outputs,
+                &shared.run_hashes,
+                &shared.sensor_outputs,
                 env_input.as_deref(),
+                extra,
             );
+            (format!("{}[{suffix}]", step.step_id.base), run_h)
+        });
+        state.run_hashes.reserve(hashed.len());
+        step.run_hashes.reserve(hashed.len());
+        for (pdisplay, run_h) in hashed {
             state.run_hashes.insert(pdisplay.clone(), run_h.clone());
             step.run_hashes.insert(pdisplay, run_h);
         }
     }
     Ok(step)
+}
+
+/// `f` of every item, in order: in place for a few, on a few threads for many (a partitioned
+/// step's keys).
+fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    const SERIAL_BELOW: usize = 4096;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+    if items.len() < SERIAL_BELOW || threads < 2 {
+        return items.iter().map(f).collect();
+    }
+    let chunk = items.len().div_ceil(threads);
+    let f = &f;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = items
+            .chunks(chunk)
+            .map(|part| scope.spawn(move || part.iter().map(f).collect::<Vec<R>>()))
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().expect("hashing does not panic"))
+            .collect()
+    })
 }
 
 /// The run hash of every asset step of `phases` that is known before anything runs, as
@@ -527,6 +649,16 @@ pub(crate) async fn decide_step(
     step: &crate::planner::StreamStep,
 ) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
     let step = hash_step(dag, state, step)?;
+    // Its `partitions_from` source returned no key: nothing to run, nothing cached.
+    if step.keyed.no_keys {
+        return Ok((
+            step,
+            Decision::Partitioned {
+                cached: Vec::new(),
+                missing: Vec::new(),
+            },
+        ));
+    }
     // A `Manual` node read as it is: its latest result ([`hash_step`] gave it that run hash).
     if step.partition_keys.is_empty()
         && let Some(pin) = state.pinned.get(step.step_id.base_id())
@@ -638,7 +770,15 @@ pub(crate) async fn decide_step(
                 .cloned()
                 .expect("partitioned step has a precomputed run hash per key");
             let hit = match &rows {
-                Some(rows) => rows.get(&pdisplay, &run_h),
+                Some(rows) => {
+                    let hit = rows.get(&pdisplay, &run_h);
+                    if let Some(oref) = &hit
+                        && rows.recently_read(&pdisplay, &run_h)
+                    {
+                        state.recently_read.insert(oref.path.clone());
+                    }
+                    hit
+                }
                 None => lookup_in(cache, &pdisplay, &run_h).await,
             };
             match hit {
@@ -1285,7 +1425,9 @@ def report(m: list) -> int:
                 steps.any(|st| st.step_id.base_id() == "t.py:margin")
             })
             .expect("a phase with margin");
-        dispatch::expand_pending_partitions(phase, &outputs, pool_size).expect("expanded")
+        dispatch::expand_pending_partitions(dag, phase, &outputs, pool_size)
+            .phase
+            .expect("expanded")
     }
 
     /// Run hashes of every key of `sales` and `margin`, hashed in the order `order` gives.
@@ -1651,7 +1793,8 @@ def report(values: list) -> int:
             .phases
             .iter()
             .map(|phase| {
-                dispatch::expand_pending_partitions(phase, &outputs, pool)
+                dispatch::expand_pending_partitions(&dag, phase, &outputs, pool)
+                    .phase
                     .unwrap_or_else(|| phase.clone())
             })
             .collect();

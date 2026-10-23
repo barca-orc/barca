@@ -232,7 +232,12 @@ def partitions(values, /):
 
 
 def partitions_from(source, /):
-    """Derive partitions from an upstream asset."""
+    """Derive partitions from an upstream asset or sensor.
+
+    A partitioned `source` gives its keys. An unpartitioned one gives the values of the list it
+    returns, or the keys of the dict it returns: then each key receives its own value, and runs
+    again only when that value changes (`barca docs partitions`).
+    """
     return source
 
 
@@ -393,7 +398,13 @@ def __getattr__(name: str) -> Any:
 class Group:
     """Organizational metadata. Never an executable or cacheable node."""
 
-    def __init__(self, name: str, members: list[object] | tuple[object, ...], output: object, description: str):
+    def __init__(
+        self,
+        name: str,
+        members: list[object] | tuple[object, ...],
+        output: object,
+        description: str,
+    ):
         self.name = name
         self.members = members
         self.output = output

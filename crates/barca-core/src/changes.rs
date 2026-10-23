@@ -15,6 +15,8 @@
 //!   `pipeline.py:RATE` in the node's own file), or a module reached whole
 //!   (`pipelines/common.py`);
 //! - `input ID` / `sensor ID`: an upstream's run hash, or a sensor's run hash and output;
+//! - `value ID`: the value a dict `partitions_from` source `ID` returned for this key, with the
+//!   source's run hash ([`crate::keyed`]);
 //! - `env NAME`: a declared environment variable's value;
 //! - `kind`.
 //!
@@ -118,6 +120,13 @@ pub(crate) fn step_components(
             crate::hash::short_digest(tokens.join("\n").as_bytes()),
         );
     }
+    // A dict `partitions_from` source's value for this key (`crate::keyed`).
+    for (source, token) in state.keyed_tokens(step.base_id(), &step.partition.0) {
+        out.insert(
+            format!("value {source}"),
+            crate::hash::short_digest(token.as_bytes()),
+        );
+    }
     for (name, value) in crate::envdeps::resolve(&node.extracted.env) {
         let value = serde_json::to_string(&value).unwrap_or_default();
         out.insert(
@@ -160,6 +169,7 @@ fn rank(key: &str) -> usize {
         "helper ",
         "input ",
         "sensor ",
+        "value ",
         "env ",
         "kind",
     ];
@@ -232,6 +242,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         }
     }
 

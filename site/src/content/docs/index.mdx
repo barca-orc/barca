@@ -84,6 +84,11 @@ the first run.
 		`duckdb.DuckDBPyRelation` or `pl.LazyFrame` to read only what the step uses. See
 		[Large inputs](/patterns/08-large-inputs/).
 	</Card>
+	<Card title="Many partitions, few changes" icon="rocket">
+		A sensor that returns `{key: version}` feeds `partitions_from`: each key runs again only
+		when its version changes, out of 200,000 keys. See
+		[Only what changed](/patterns/09-changed-partitions/).
+	</Card>
 	<Card title="get for assets, run for tasks" icon="list-format">
 		The target comes first, then files: `barca get <asset> <files>`,
 		`barca run <task> <files>`. `get` uses the cache. A task always runs. See the

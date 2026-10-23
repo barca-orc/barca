@@ -271,6 +271,7 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
                 ));
             }
             let consumer = &mut nodes[i];
+            consumer.inherited_partitions.push(dim.clone());
             consumer.partitions.insert(dim, src_spec);
             let file = consumer.source_file.clone();
             let named = consumer.inputs.iter().any(|inp| {
@@ -899,6 +900,28 @@ impl Dag {
             .collect()
     }
 
+    /// The nodes whose output `id`'s `partitions_from(...)` reads for its keys.
+    pub fn partition_sources(&self, id: &str) -> Vec<&str> {
+        let Some(&idx) = self.index.get(id) else {
+            return vec![];
+        };
+        self.graph
+            .edges_directed(idx, Direction::Incoming)
+            .filter(|e| *e.weight() == EdgeKind::PartitionSource)
+            .map(|e| self.graph[e.source()].id.as_str())
+            .collect()
+    }
+
+    /// Whether a `partitions_from(...)` reads `id`'s output for its keys.
+    pub fn feeds_partitions(&self, id: &str) -> bool {
+        let Some(&idx) = self.index.get(id) else {
+            return false;
+        };
+        self.graph
+            .edges_directed(idx, Direction::Outgoing)
+            .any(|e| *e.weight() == EdgeKind::PartitionSource)
+    }
+
     /// Get downstream node IDs.
     pub fn downstream(&self, id: &str) -> Vec<&str> {
         let Some(&idx) = self.index.get(id) else {
@@ -997,6 +1020,7 @@ mod tests {
             env: Vec::new(),
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
+            inherited_partitions: Vec::new(),
         }
     }
 

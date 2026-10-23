@@ -382,6 +382,9 @@ How it works:
 - The `bool` in the sensor's `(update_detected, value)` return is not used for caching; only
   `value` is hashed.
 - A partitioned asset that reads a sensor re-runs every key when the sensor's output changes.
+  To re-run only the keys whose data changed, let the sensor return a dict of key -> version
+  and take the keys from it with `partitions_from(sensor)`: each key then folds in its own
+  value only (`barca docs partitions`, "Updating only what changed, across many partitions").
 - `--refresh` (with its cascade), `--no-cascade` and `--refresh-all` work on assets that read a
   sensor as on any other, on `get` and `run`.
 
@@ -844,7 +847,10 @@ limit, the check does not plan again for 10 minutes unless the size grows.
 
 **Read times.** "Least recently read" is the `last_read_at` of a result: set when a step is given
 it as an input, when `barca get` returns it, and when a `barca sql` query names its view. File
-access times are not used (most filesystems do not keep them).
+access times are not used (most filesystems do not keep them). A key of a partitioned asset
+with 256 keys or more whose `last_read_at` is less than an hour old keeps it: a run that reads
+200k cached keys does not write 200k rows, and an hour does not change which results are the
+least recently read.
 
 Known limits:
 

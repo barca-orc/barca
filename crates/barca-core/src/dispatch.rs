@@ -76,24 +76,66 @@ pub fn partition_sources<'a>(
         .collect()
 }
 
+/// What [`expand_pending_partitions`] made of a phase.
+#[derive(Debug, Default)]
+pub struct Expansion {
+    /// The phase with every step that had pending partitions expanded into its keys; `None`
+    /// when no step had any.
+    pub phase: Option<Phase>,
+    /// Steps whose `partitions_from` source could not be read for keys, as (base id, message).
+    /// They are left out of `phase`, and the caller reports them as failed steps.
+    pub failures: Vec<(String, String)>,
+}
+
+/// The node id of the `partitions_from` source `source_name` of `node` (a `PartitionSource`
+/// predecessor with that name), else the first recorded output named so.
+fn source_id_of(dag: &crate::dag::Dag, node: &str, source_name: &str) -> Option<String> {
+    dag.partition_sources(node)
+        .into_iter()
+        .find(|id| crate::targets::short_name(id) == source_name)
+        .map(str::to_string)
+}
+
 /// Expand steps with pending_partitions using materialized source outputs.
-/// Returns None if no expansion needed, or a new Phase with expanded steps.
+///
+/// A source that returned a list gives its values as keys; one that returned a dict gives its
+/// keys, and each key's value is passed to the steps that name the source
+/// ([`crate::keyed`]). A step whose source cannot be read is left out and listed in
+/// [`Expansion::failures`].
 pub fn expand_pending_partitions(
+    dag: &crate::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
-) -> Option<Phase> {
+) -> Expansion {
+    use crate::keyed::{KeyedSource, SourceKeys};
+    use std::sync::Arc;
+
     let has_pending = phase
         .streams
         .iter()
         .any(|s| s.steps.iter().any(|st| !st.pending_partitions.is_empty()));
 
     if !has_pending {
-        return None;
+        return Expansion::default();
     }
 
+    let mut failures: Vec<(String, String)> = Vec::new();
     let mut all_expanded_steps: Vec<StreamStep> = Vec::new();
     let mut passthrough_steps: Vec<StreamStep> = Vec::new();
+    // Each source is read once per phase, however many steps (and worker chunks) it feeds:
+    // source id -> its artifact and keys, or why it cannot be read.
+    type Read = Result<
+        (
+            String,
+            Arc<Vec<String>>,
+            Option<Arc<HashMap<String, String>>>,
+        ),
+        String,
+    >;
+    let mut read: HashMap<String, Read> = HashMap::new();
+    // A step's chunks are expanded once: (base id) -> the expanded step.
+    let mut seen: HashSet<String> = HashSet::new();
 
     for stream in &phase.streams {
         for step in &stream.steps {
@@ -101,76 +143,114 @@ pub fn expand_pending_partitions(
                 passthrough_steps.push(step.clone());
                 continue;
             }
+            let base = step.step_id.base_id().to_string();
+            if !seen.insert(base.clone()) {
+                continue;
+            }
+            let inherited = dag
+                .get_node(&base)
+                .map(|n| n.extracted.inherited_partitions.clone())
+                .unwrap_or_default();
 
             let mut dim_values: HashMap<String, Vec<String>> = HashMap::new();
-            for (dim, source_name) in &step.pending_partitions {
-                if let Some(oref) = find_partition_source(all_outputs, source_name) {
+            let mut keyed: Vec<KeyedSource> = Vec::new();
+            let mut inputs = step.inputs.clone();
+            let mut failure: Option<String> = None;
+            let mut dims: Vec<(&String, &String)> = step.pending_partitions.iter().collect();
+            dims.sort();
+            for (dim, source_name) in dims {
+                let source_id = source_id_of(dag, &base, source_name).or_else(|| {
+                    all_outputs
+                        .keys()
+                        .find(|k| k.ends_with(&format!(":{source_name}")) || *k == source_name)
+                        .cloned()
+                });
+                let Some(source_id) = source_id else {
+                    failure = Some(format!(
+                        "partitions_from source '{source_name}' has no output to read keys from"
+                    ));
+                    break;
+                };
+                let entry = read.entry(source_id.clone()).or_insert_with(|| {
+                    let oref = all_outputs.get(&source_id).ok_or_else(|| {
+                        format!(
+                            "partitions_from source '{source_name}' has no output to read keys \
+                             from"
+                        )
+                    })?;
                     if oref.format != "json" {
-                        crate::run_line!(
-                            Always,
-                            "[barca] error: partition source '{}' must be JSON format, got '{}'",
-                            source_name,
+                        return Err(format!(
+                            "partitions_from source '{source_name}' was written as {}, not JSON; \
+                             a source must return a list of keys or a dict of key -> value that \
+                             JSON can write",
                             oref.format
-                        );
-                        continue;
+                        ));
                     }
-                    // Read the JSON artifact file from disk (always local: a
-                    // store-backed cache hit is fetched before expansion).
-                    let json_str = match std::fs::read_to_string(&oref.path) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            crate::run_line!(
-                                Always,
-                                "[barca] error: failed to read partition artifact '{}': {e}",
-                                oref.path
-                            );
-                            continue;
+                    // Always local: a store-backed cache hit is fetched before expansion.
+                    let text = std::fs::read_to_string(&oref.path).map_err(|e| {
+                        format!(
+                            "partitions_from source '{source_name}': cannot read {}: {e}",
+                            oref.path
+                        )
+                    })?;
+                    match crate::keyed::read_source(&text) {
+                        Ok(SourceKeys::List(keys)) => Ok((oref.path.clone(), Arc::new(keys), None)),
+                        Ok(SourceKeys::Keyed(keys, hashes)) => {
+                            Ok((oref.path.clone(), Arc::new(keys), Some(Arc::new(hashes))))
                         }
-                    };
-                    let parsed: serde_json::Value =
-                        serde_json::from_str(&json_str).unwrap_or_default();
-                    let values: Vec<String> = match parsed {
-                        serde_json::Value::Array(arr) => arr
-                            .iter()
-                            .filter_map(|v| match v {
-                                serde_json::Value::String(s) => Some(s.clone()),
-                                serde_json::Value::Number(n) => Some(n.to_string()),
-                                _ => None,
-                            })
-                            .collect(),
-                        _ => {
-                            crate::run_line!(
-                                Always,
-                                "[barca] warning: partition source '{}' did not return an array",
-                                source_name
-                            );
-                            continue;
-                        }
-                    };
-                    dim_values.insert(dim.clone(), values);
-                } else {
-                    crate::run_line!(
-                        Always,
-                        "[barca] warning: partition source '{}' not found in outputs",
-                        source_name
-                    );
+                        Err(why) => Err(format!("partitions_from source '{source_name}' {why}")),
+                    }
+                });
+                match entry {
+                    Err(why) => {
+                        failure = Some(why.clone());
+                        break;
+                    }
+                    Ok((path, keys, hashes)) => {
+                        dim_values.insert(dim.clone(), keys.as_ref().clone());
+                        let Some(hashes) = hashes else { continue };
+                        let param = if inherited.contains(dim) {
+                            None
+                        } else {
+                            // The `inputs=` key that names the source receives the key's value
+                            // in place of the whole dict; else the source's name.
+                            let named: Option<String> = inputs
+                                .iter()
+                                .find(|(_, up)| **up == source_id)
+                                .map(|(p, _)| p.clone());
+                            match named {
+                                Some(p) => {
+                                    inputs.remove(&p);
+                                    Some(p)
+                                }
+                                None => Some(source_name.clone()),
+                            }
+                        };
+                        keyed.push(KeyedSource {
+                            dim: dim.clone(),
+                            source_id: source_id.clone(),
+                            path: path.clone(),
+                            param,
+                            hashes: hashes.clone(),
+                        });
+                    }
                 }
             }
-
-            if dim_values.is_empty() {
-                passthrough_steps.push(step.clone());
+            if let Some(why) = failure {
+                failures.push((base, why));
                 continue;
             }
 
             let combos = expand_partition_combos(&dim_values);
             let pks: Vec<crate::PartitionKey> =
                 combos.into_iter().map(crate::PartitionKey::from).collect();
+            let no_keys = pks.is_empty();
             all_expanded_steps.push(StreamStep {
                 step_id: crate::StepId::unpartitioned(step.step_id.base.clone()),
                 kind: step.kind,
                 function_name: step.function_name.clone(),
                 source_file: step.source_file.clone(),
-                inputs: step.inputs.clone(),
+                inputs,
                 pending_partitions: HashMap::new(),
                 serializer: step.serializer.clone(),
                 sinks: step.sinks.clone(),
@@ -182,6 +262,11 @@ pub fn expand_pending_partitions(
                 partition_keys: pks,
                 param_types: step.param_types.clone(),
                 return_type: step.return_type,
+                keyed: crate::keyed::StepKeyed {
+                    sources: (!keyed.is_empty()).then(|| Arc::new(keyed)),
+                    is_source: step.keyed.is_source,
+                    no_keys,
+                },
             });
         }
     }
@@ -192,13 +277,19 @@ pub fn expand_pending_partitions(
         work_units.push(passthrough_steps);
     }
     // Split each expanded step's partition_keys across streams.
-    for step in all_expanded_steps {
+    for mut step in all_expanded_steps {
         let total_pks = step.partition_keys.len();
         if total_pks == 0 {
             work_units.push(vec![step]);
         } else {
             let chunk_size = total_pks.div_ceil(pool_size);
-            for chunk in step.partition_keys.chunks(chunk_size) {
+            // The keys move into their chunks: no second copy of 200k keys.
+            let mut keys = std::mem::take(&mut step.partition_keys).into_iter();
+            loop {
+                let chunk: Vec<crate::PartitionKey> = keys.by_ref().take(chunk_size).collect();
+                if chunk.is_empty() {
+                    break;
+                }
                 work_units.push(vec![StreamStep {
                     step_id: step.step_id.clone(),
                     kind: step.kind,
@@ -213,9 +304,10 @@ pub fn expand_pending_partitions(
                     retries: step.retries,
                     weight: step.weight,
                     retry_backoff_seconds: step.retry_backoff_seconds,
-                    partition_keys: chunk.to_vec(),
+                    partition_keys: chunk,
                     param_types: step.param_types.clone(),
                     return_type: step.return_type,
+                    keyed: step.keyed.clone(),
                 }]);
             }
         }
@@ -257,10 +349,13 @@ pub fn expand_pending_partitions(
         })
         .collect();
 
-    Some(Phase {
-        reason: phase.reason.clone(),
-        streams: worker_streams,
-    })
+    Expansion {
+        phase: Some(Phase {
+            reason: phase.reason.clone(),
+            streams: worker_streams,
+        }),
+        failures,
+    }
 }
 
 /// A provided input — either a single artifact or a collected list of partition artifacts.
@@ -281,6 +376,14 @@ pub fn build_provided_inputs(
     all_outputs: &HashMap<String, OutputRef>,
 ) -> HashMap<String, ProvidedInput> {
     let mut provided: HashMap<String, ProvidedInput> = HashMap::new();
+    // Nodes this phase produces: a reader in the same phase gets their keys at dispatch time,
+    // never a fan-in of what is cached (a `collect()` runs in a later phase than what it reads).
+    let in_phase: HashSet<&str> = phase
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .map(|st| st.step_id.base_id())
+        .collect();
 
     for stream in &phase.streams {
         for step in &stream.steps {
@@ -328,13 +431,18 @@ pub fn build_provided_inputs(
                 }
                 // Fan-in collect(): upstream is partitioned but consumer is unpartitioned.
                 // Gather all partition-suffixed outputs for this base id.
+                if in_phase.contains(upstream_id.as_str()) {
+                    continue;
+                }
                 let prefix = format!("{upstream_id}[");
                 let mut collected: Vec<OutputRef> = all_outputs
                     .iter()
                     .filter(|(k, _)| k.starts_with(&prefix))
                     .map(|(_, v)| v.clone())
                     .collect();
-                if !collected.is_empty() {
+                // An unpartitioned reader of a node with no key at all (its `partitions_from`
+                // source returned none) gets an empty list.
+                if !collected.is_empty() || step.partition_keys.is_empty() && suffix.is_empty() {
                     collected.sort_by(|a, b| a.path.cmp(&b.path));
                     provided
                         .entry(upstream_id.clone())
@@ -379,6 +487,11 @@ mod tests {
     use crate::{NodeKind, PartitionKey, StepId};
     use std::sync::Arc;
 
+    /// A DAG without nodes: sources are found by name among the outputs.
+    fn no_dag() -> crate::dag::Dag {
+        crate::dag::Dag::build(&[]).unwrap()
+    }
+
     fn test_output_ref(path: &str, format: &str) -> OutputRef {
         OutputRef {
             path: path.to_string(),
@@ -409,6 +522,7 @@ mod tests {
                 .map(|t| HashMap::from([(param.to_string(), t)]))
                 .unwrap_or_default(),
             return_type: None,
+            keyed: Default::default(),
         }
     }
 
@@ -492,6 +606,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
@@ -529,6 +644,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
@@ -568,11 +684,14 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
         assert!(
-            expand_pending_partitions(&phase, &HashMap::<String, OutputRef>::new(), 4).is_none()
+            expand_pending_partitions(&no_dag(), &phase, &HashMap::<String, OutputRef>::new(), 4)
+                .phase
+                .is_none()
         );
     }
 
@@ -607,6 +726,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
@@ -622,7 +742,9 @@ mod tests {
             },
         );
 
-        let expanded = expand_pending_partitions(&phase, &outputs, 4).unwrap();
+        let expanded = expand_pending_partitions(&no_dag(), &phase, &outputs, 4)
+            .phase
+            .unwrap();
         // Late expansion: expanded steps have partition_keys, not individual step_ids.
         let all_pks: Vec<String> = expanded
             .streams
@@ -673,6 +795,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
@@ -682,7 +805,9 @@ mod tests {
             test_output_ref(&artifact_path.to_string_lossy(), "json"),
         );
 
-        let expanded = expand_pending_partitions(&phase, &outputs, 4).unwrap();
+        let expanded = expand_pending_partitions(&no_dag(), &phase, &outputs, 4)
+            .phase
+            .unwrap();
         let expanded_steps: Vec<&StreamStep> = expanded
             .streams
             .iter()
@@ -717,6 +842,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         }
@@ -767,6 +893,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
@@ -779,7 +906,9 @@ mod tests {
             ),
         );
 
-        let expanded = expand_pending_partitions(&phase, &outputs, 4).unwrap();
+        let expanded = expand_pending_partitions(&no_dag(), &phase, &outputs, 4)
+            .phase
+            .unwrap();
         for st in expanded.streams.iter().flat_map(|s| &s.steps) {
             assert!(
                 st.partition_keys.is_empty(),
@@ -819,6 +948,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
@@ -835,7 +965,9 @@ mod tests {
             },
         );
 
-        let expanded = expand_pending_partitions(&phase, &outputs, 4).unwrap();
+        let expanded = expand_pending_partitions(&no_dag(), &phase, &outputs, 4)
+            .phase
+            .unwrap();
         // Late expansion: expanded steps have partition_keys, not individual step_ids.
         let all_pks: Vec<String> = expanded
             .streams
@@ -876,6 +1008,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };
@@ -922,6 +1055,7 @@ mod tests {
                     partition_keys: vec![],
                     param_types: HashMap::new(),
                     return_type: None,
+                    keyed: Default::default(),
                 }],
             }],
         };

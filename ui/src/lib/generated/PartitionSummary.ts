@@ -4,4 +4,11 @@ export type PartitionSummary = { total: number, cached: number, will_run: number
 /**
  * The keys that will (or did) run, capped at 20.
  */
-will_run_keys: Array<string>, };
+will_run_keys: Array<string>,
+/**
+ * Dry run: for each key of `will_run_keys` that has an earlier successful
+ * materialization, what changed in its run hash since then (the components `changed` on
+ * the step lists). A key absent from it has no earlier result (a new key), or one
+ * recorded before 0.29.0. Absent when no key has one.
+ */
+changed?: { [key in string]: Array<string> }, };

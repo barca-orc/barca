@@ -45,6 +45,16 @@ coordinator default. Retry policy stays coordinator-owned; artifact directory is
 already hoisted into worker environment setup. Singleton `execute` uses the same
 normalized step fields without a table.
 
+Two additive item fields of protocol version 3 (0.29.6) serve keyed partition sources
+(`partitions_from` over a source that returns a dict). An `inputs` entry
+`{"_keyed": true, "path": <artifact>, "key": <key>}` asks the worker for that key's value in
+the source's JSON artifact; the worker passes it only when the function takes the parameter
+(by name, or `**kwargs`), and reads each source artifact once per process.
+`partition_source: true` (omitted when false) marks a step whose output a `partitions_from`
+reads for keys: the worker checks the value is a list, or a dict with string or integer keys
+(an integer key becomes its string) and JSON-writable values, writes it as JSON, and otherwise
+fails the step with an error naming the key or the expected types.
+
 Results are one `results` message per assigned batch (a successful prefix plus the
 failure if execution stops), or one single-row frame for singleton execution:
 
