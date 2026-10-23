@@ -35,6 +35,12 @@ pub enum ParseError {
     InvalidMaxFailures { file: String, function: String },
 
     #[error(
+        "{file}: {function}: invalid Schedule timeout_seconds — write a whole number of seconds \
+         (0 for no limit), e.g. Schedule(\"0 * * * *\", timeout_seconds=3600)"
+    )]
+    InvalidScheduleTimeout { file: String, function: String },
+
+    #[error(
         "{file}: {function}: invalid env= — {reason}. Declare environment variables as a literal \
          list of strings, e.g. env=[\"SOURCE_CSV\", \"API_TOKEN\"]"
     )]
@@ -338,9 +344,12 @@ fn try_extract_function(
         });
     }
 
-    let (freshness, max_failures) =
-        extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?
-            .unwrap_or((Freshness::default_for(kind), None));
+    let (freshness, max_failures, schedule_timeout) =
+        extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?.unwrap_or((
+            Freshness::default_for(kind),
+            None,
+            None,
+        ));
     let inputs = extract_inputs(&keywords, names);
     let partitions = extract_partitions(&keywords, source, names);
     // A dataset sink's directory levels are the asset's dimensions, in the order written.
@@ -376,6 +385,26 @@ fn try_extract_function(
             fix: "write weight= as a whole number of at least 1, e.g. @asset(weight=2) \
                   (see `barca docs assets`)"
                 .to_string(),
+        }
+    })?;
+    let deterministic = extract_deterministic(&keywords, source).map_err(|(offset, message)| {
+        ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..offset].matches('\n').count() + 1,
+            message,
+            fix: "write deterministic=False (or True, the default), e.g. \
+                  @asset(deterministic=False) (see `barca docs cache`)"
+                .to_string(),
+        }
+    })?;
+    let cutoff = extract_cutoff(&keywords, source).map_err(|(offset, message)| {
+        ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..offset].matches('\n').count() + 1,
+            message,
+            fix: "write cutoff=True or cutoff=False (see `barca docs cache`)".to_string(),
         }
     })?;
     let env = extract_env(&keywords, file_path, func.name.as_str())?;
@@ -415,12 +444,15 @@ fn try_extract_function(
         explicit_name,
         freshness,
         max_failures,
+        schedule_timeout,
         inputs,
         partitions,
         sinks,
         timeout_seconds,
         retries,
         weight,
+        deterministic,
+        cutoff,
         retry_backoff_seconds,
         description,
         tags,
@@ -584,13 +616,17 @@ pub(crate) fn match_node_decorator<'a>(
     Some((kind, keywords))
 }
 
-/// The `freshness=` argument, with `Schedule(..., max_failures=N)` when it is written.
+/// A `freshness=` argument: the policy, and `Schedule`'s `max_failures` and `timeout_seconds`.
+type FreshnessArgs = (Freshness, Option<u32>, Option<u64>);
+
+/// The `freshness=` argument, with `Schedule(..., max_failures=N, timeout_seconds=S)` when
+/// they are written.
 fn extract_freshness(
     keywords: &[&Keyword],
     file_path: &str,
     function_name: &str,
     barca: &crate::decorator_args::BarcaNames,
-) -> Result<Option<(Freshness, Option<u32>)>, ParseError> {
+) -> Result<Option<FreshnessArgs>, ParseError> {
     for kw in keywords {
         let Some(ref ident) = kw.arg else { continue };
         if ident.as_str() != "freshness" {
@@ -601,6 +637,7 @@ fn extract_freshness(
             expr => (expr, None),
         };
         let mut max_failures = None;
+        let mut timeout = None;
         let freshness = match barca.recognized(callee) {
             Some("Always") => Freshness::Always,
             Some("Manual") => Freshness::Manual,
@@ -636,11 +673,26 @@ fn extract_freshness(
                         }
                     }
                 }
+                if written.iter().any(|kw| {
+                    kw.arg
+                        .as_ref()
+                        .is_some_and(|a| a.as_str() == "timeout_seconds")
+                }) {
+                    match extract_int_kwarg(&written, "timeout_seconds") {
+                        Some(n) => timeout = Some(u64::from(n)),
+                        None => {
+                            return Err(ParseError::InvalidScheduleTimeout {
+                                file: file_path.to_string(),
+                                function: function_name.to_string(),
+                            });
+                        }
+                    }
+                }
                 Freshness::Schedule(CronExpr(cron))
             }
             _ => return Ok(None),
         };
-        return Ok(Some((freshness, max_failures)));
+        return Ok(Some((freshness, max_failures, timeout)));
     }
     Ok(None)
 }
@@ -896,6 +948,69 @@ fn extract_weight(keywords: &[&Keyword], source: &str) -> Result<u32, (usize, St
             "weight= must be a whole number of at least 1, got `{}`",
             source
                 .get(kw.value.range().start().to_usize()..kw.value.range().end().to_usize())
+                .unwrap_or("?")
+        ),
+    ))
+}
+
+/// `deterministic=False`: a `True` or `False` literal, `True` when not written (#627). Anything
+/// else is refused rather than read as `True`.
+fn extract_deterministic(keywords: &[&Keyword], source: &str) -> Result<bool, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("deterministic"))
+    else {
+        return Ok(true);
+    };
+    if let Expr::BooleanLiteral(b) = &kw.value {
+        return Ok(b.value);
+    }
+    let range = kw.value.range();
+    Err((
+        range.start().to_usize(),
+        format!(
+            "deterministic= must be True or False, got `{}`",
+            source
+                .get(range.start().to_usize()..range.end().to_usize())
+                .unwrap_or("?")
+        ),
+    ))
+}
+
+/// Whether `func` is an `@asset(cutoff=True)` (#628), read from its decorators alone: for the
+/// dependency cone (`crate::cone`, rule 8), which sees functions before nodes are extracted.
+pub(crate) fn is_cutoff_asset(
+    func: &ast::StmtFunctionDef,
+    barca: &crate::decorator_args::BarcaNames,
+) -> bool {
+    func.decorator_list.iter().any(|d| {
+        match_node_decorator(&d.expression, barca).is_some_and(|(kind, keywords)| {
+            kind == NodeKind::Asset && extract_cutoff(&keywords, "").unwrap_or(false)
+        })
+    })
+}
+
+/// `cutoff=True|False` on `@asset` (#628): a boolean literal, `False` when not written.
+/// Anything else is refused with the byte offset of the value: a cutoff that silently did
+/// nothing would rerun everything below the asset, and one read as on by mistake would change
+/// what its consumers' run hashes fold in.
+fn extract_cutoff(keywords: &[&Keyword], source: &str) -> Result<bool, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("cutoff"))
+    else {
+        return Ok(false);
+    };
+    if let Expr::BooleanLiteral(b) = &kw.value {
+        return Ok(b.value);
+    }
+    let range = kw.value.range();
+    Err((
+        range.start().to_usize(),
+        format!(
+            "cutoff= must be True or False, got `{}`",
+            source
+                .get(range.start().to_usize()..range.end().to_usize())
                 .unwrap_or("?")
         ),
     ))

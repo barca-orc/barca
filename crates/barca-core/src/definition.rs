@@ -128,6 +128,18 @@ pub const RULES: &[Rule] = &[
         reason: "decides how many steps run at once, not what the step returns",
     },
     Rule {
+        part: "deterministic",
+        counts: Counts::No,
+        reason: "silences the warning about new bytes for the same code and inputs; caching is \
+                 unchanged",
+    },
+    Rule {
+        part: "cutoff",
+        counts: Counts::No,
+        reason: "decides what the asset's consumers fold into their run hashes (its output's \
+                 bytes instead of its run hash), not what it returns",
+    },
+    Rule {
         part: "description",
         counts: Counts::No,
         reason: "documentation",
@@ -838,6 +850,7 @@ def sales(region: str, a: list, b: int) -> dict:
             "retry_backoff=2.5",
             "timeout_seconds=10",
             "weight=4",
+            "deterministic=False",
             "freshness=Manual",
             "freshness=Schedule(\"0 * * * *\")",
             "name=\"other\"",

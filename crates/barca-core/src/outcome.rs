@@ -96,6 +96,9 @@ pub struct RunOptions {
     /// The run id to use; a new one when `None`.
     pub run_id: Option<String>,
     pub trigger: Trigger,
+    /// The capacity every run of a `barca serve` shares (`[server] capacity`): the run's steps
+    /// are admitted against it as well as against the run's own (#628).
+    pub shared_capacity: Option<std::sync::Arc<crate::capacity::SharedCapacity>>,
 }
 
 /// `get` or `run`.

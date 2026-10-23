@@ -15,6 +15,8 @@ pub(crate) async fn serve_cmd(
     read_only: bool,
     drain_timeout: Option<u64>,
     max_runs: Option<usize>,
+    capacity: Option<usize>,
+    run_timeout: Option<u64>,
     python: &std::path::Path,
     ctx: &crate::error::Context,
 ) -> Result<(), crate::error::CliError> {
@@ -28,6 +30,14 @@ pub(crate) async fn serve_cmd(
     // `--max-runs` > `[server] max_runs` > one per core.
     if let Some(n) = max_runs {
         resolved.server_max_runs = Some(n);
+    }
+    // `--capacity` > `[server] capacity` > none (#628).
+    if let Some(n) = capacity {
+        resolved.server_capacity = Some((n, "--capacity"));
+    }
+    // `--run-timeout` > `[server] run_timeout_seconds` > none (#628).
+    if let Some(secs) = run_timeout {
+        resolved.server_run_timeout_secs = Some((secs, "--run-timeout"));
     }
     // `serve` prints its startup line (env, store and the metadata DB) once the database is
     // set up.

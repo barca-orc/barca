@@ -65,6 +65,8 @@ pub const RUN_COLUMNS: &[(&str, &str)] = &[
     ("schedule_id", V),
     ("client_run_id", V),
     ("failure", "STRUCT(node VARCHAR, error VARCHAR)"),
+    ("failed_node", V),
+    ("error", V),
 ];
 
 /// [`StepRow`]'s keys.
@@ -137,7 +139,11 @@ fn values<T: Serialize>(rows: &[T]) -> Vec<Value> {
 }
 
 pub fn runs(rows: Option<&[RunRecord]>) -> Table {
-    table(RUNS, RUN_COLUMNS, rows.map(values))
+    table(
+        RUNS,
+        RUN_COLUMNS,
+        rows.map(|rows| rows.iter().map(crate::report::history_json).collect()),
+    )
 }
 
 pub fn materializations(rows: Option<&[StepRow]>) -> Table {
@@ -246,8 +252,7 @@ mod tests {
             "finished_at": null, "elapsed_seconds": null
         }))
         .unwrap();
-        let keys: Vec<String> = serde_json::to_value(&run)
-            .unwrap()
+        let keys: Vec<String> = crate::report::history_json(&run)
             .as_object()
             .unwrap()
             .keys()

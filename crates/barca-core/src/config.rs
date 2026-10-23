@@ -22,6 +22,9 @@ pub const DEFAULT_ENV: &str = "default";
 #[serde(deny_unknown_fields)]
 pub struct BarcaToml {
     pub default_env: Option<String>,
+    /// Every command that reads or writes an environment must name it with `--env` or
+    /// `BARCA_ENV` (#627); `BARCA_REQUIRE_ENV` overrides it.
+    pub require_env: Option<bool>,
     pub remote: Option<RemoteToml>,
     pub discovery: Option<DiscoveryToml>,
     pub cache: Option<CacheToml>,
@@ -36,6 +39,33 @@ pub struct ExecutionToml {
     /// The most the `weight=` of the steps running at once may add up to. The pool size when
     /// not set.
     pub capacity: Option<toml::Value>,
+    /// How many worker processes a run may start (`BARCA_POOL_SIZE` wins over it). When not
+    /// set: the cores, or the capacity when that is smaller (#628).
+    pub pool_size: Option<toml::Value>,
+}
+
+/// A pool size that was set (`BARCA_POOL_SIZE` > `[execution] pool_size`), and where.
+pub type PoolSetting = Option<(usize, &'static str)>;
+
+/// `BARCA_POOL_SIZE` > `[execution] pool_size` > not set (the cores, bounded by the capacity).
+/// `BARCA_POOL_SIZE` that is not a positive whole number is ignored, as it always was; the
+/// file's value must be a whole number of at least 1.
+pub fn pool_setting(file: Option<&ExecutionToml>) -> Result<PoolSetting, BarcaError> {
+    if let Some(n) = env_var("BARCA_POOL_SIZE")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+    {
+        return Ok(Some((n, "BARCA_POOL_SIZE")));
+    }
+    match file.and_then(|e| e.pool_size.as_ref()) {
+        None => Ok(None),
+        Some(toml::Value::Integer(n)) if *n >= 1 => {
+            Ok(Some((*n as usize, "[execution] pool_size")))
+        }
+        Some(other) => Err(BarcaError::Usage(format!(
+            "[execution] pool_size: expected a whole number of at least 1, got {other}"
+        ))),
+    }
 }
 
 /// A capacity that was set (`BARCA_CAPACITY` > `[execution] capacity`), and where.
@@ -62,11 +92,14 @@ pub fn capacity_setting(file: Option<&ExecutionToml>) -> Result<CapacitySetting,
     }
 }
 
-/// The capacity setting of the project at `cwd` (its barca.toml and the environment), for
-/// commands that resolve nothing else (`barca plan`).
-pub fn capacity_in(cwd: &Path) -> Result<CapacitySetting, BarcaError> {
+/// The capacity and pool size settings of the project at `cwd` (its barca.toml and the
+/// environment), for commands that resolve nothing else (`barca plan`).
+pub fn execution_in(cwd: &Path) -> Result<(CapacitySetting, PoolSetting), BarcaError> {
     let file = load_toml(cwd)?.unwrap_or_default();
-    capacity_setting(file.execution.as_ref())
+    Ok((
+        capacity_setting(file.execution.as_ref())?,
+        pool_setting(file.execution.as_ref())?,
+    ))
 }
 
 /// `[cache]`: how much disk `.barca/` may use (RFC-0012, see `gc`).
@@ -90,6 +123,12 @@ pub struct ServerToml {
     /// How many runs `barca serve` executes at once (`--max-runs` overrides it); the others
     /// wait in its run queue. At least 1; default one per core.
     pub max_runs: Option<usize>,
+    /// The most the `weight=` of the steps running at once may add up to across every run of
+    /// `barca serve` (`--capacity` overrides it). Not set: each run has only its own (#628).
+    pub capacity: Option<toml::Value>,
+    /// Seconds a run under `barca serve` may take before it is stopped (`--run-timeout`
+    /// overrides it). 0 or not set: no limit (#628).
+    pub run_timeout_seconds: Option<toml::Value>,
 }
 
 /// How long `barca serve` waits for in-flight runs on SIGTERM or SIGINT by default: the
@@ -193,12 +232,21 @@ pub struct ResolvedConfig {
     /// `[server] max_runs`: how many runs `barca serve` executes at once (`None`: one per
     /// core). Only `serve` reads it.
     pub server_max_runs: Option<usize>,
+    /// `[server] capacity`: the weight budget every run of `barca serve` shares (`None`: each
+    /// run has only its own). Only `serve` reads it.
+    pub server_capacity: Option<(usize, &'static str)>,
+    /// `[server] run_timeout_seconds`: how long a run under `barca serve` may take (`None`:
+    /// not set; `Some(0)`: no limit). Only `serve` reads it.
+    pub server_run_timeout_secs: Option<(u64, &'static str)>,
     /// The configured server (`BARCA_SERVER`, else `[server] url`): its ledger is what `get` and
     /// `run` use unless `--local` (RFC-0007 section 4.1). `None` when none is configured.
     pub server_url: Option<String>,
     /// `BARCA_CAPACITY` > `[execution] capacity`, when set: the most the `weight=` of the steps
     /// running at once may add up to. `None` leaves it at the pool size (#436).
     pub capacity: CapacitySetting,
+    /// `BARCA_POOL_SIZE` > `[execution] pool_size`, when set: how many worker processes a run
+    /// may start. `None`: the cores, or the capacity when it is smaller (#628).
+    pub pool_size: PoolSetting,
     /// The ledger this command runs against: attached by the CLI's `get` and `run` from the
     /// configured server unless `--local`, never by `barca serve`, which is the ledger.
     pub ledger: Option<crate::ledger::Ledger>,
@@ -368,6 +416,40 @@ pub fn load_toml(cwd: &Path) -> Result<Option<BarcaToml>, BarcaError> {
     Ok(Some(parsed))
 }
 
+/// Whether `--env` (or `BARCA_ENV`) is required, and the setting that says so:
+/// `BARCA_REQUIRE_ENV` (`1`/`true`/`yes` or `0`/`false`/`no`) > `require_env` in barca.toml.
+fn require_env(file: Option<bool>) -> Result<Option<&'static str>, BarcaError> {
+    if let Some(raw) = env_var("BARCA_REQUIRE_ENV") {
+        return match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Ok(Some("BARCA_REQUIRE_ENV")),
+            "0" | "false" | "no" => Ok(None),
+            _ => Err(BarcaError::Usage(format!(
+                "invalid BARCA_REQUIRE_ENV '{raw}' (expected 1 or 0)"
+            ))),
+        };
+    }
+    Ok((file == Some(true)).then_some("require_env = true in barca.toml"))
+}
+
+/// The environments this project has data for under `cwd`: `default` when `.barca/metadata.db`
+/// exists, and every directory of `.barca/envs/`, sorted.
+pub fn known_envs(cwd: &Path) -> Vec<String> {
+    let barca = cwd.join(".barca");
+    let mut out: Vec<String> = std::fs::read_dir(barca.join("envs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| valid_env_name(name))
+        .collect();
+    if barca.join("metadata.db").is_file() && !out.iter().any(|e| e == DEFAULT_ENV) {
+        out.push(DEFAULT_ENV.to_string());
+    }
+    out.sort();
+    out
+}
+
 fn valid_env_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -407,6 +489,31 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 .to_string(),
         ));
     }
+    let server_capacity = match file.server.as_ref().and_then(|s| s.capacity.as_ref()) {
+        None => None,
+        Some(toml::Value::Integer(n)) if *n >= 1 => Some((*n as usize, "[server] capacity")),
+        Some(other) => {
+            return Err(BarcaError::Usage(format!(
+                "[server] capacity: expected a whole number of at least 1, got {other}"
+            )));
+        }
+    };
+    let server_run_timeout_secs = match file
+        .server
+        .as_ref()
+        .and_then(|s| s.run_timeout_seconds.as_ref())
+    {
+        None => None,
+        Some(toml::Value::Integer(n)) if *n >= 0 => {
+            Some((*n as u64, "[server] run_timeout_seconds"))
+        }
+        Some(other) => {
+            return Err(BarcaError::Usage(format!(
+                "[server] run_timeout_seconds: expected a whole number of seconds (0 for no \
+                 limit), got {other}"
+            )));
+        }
+    };
 
     // env name: CLI > BARCA_ENV > default_env in toml > "default"
     let (env, env_source) = match (cli_env, env_var("BARCA_ENV"), file.default_env) {
@@ -420,9 +527,41 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
             "invalid environment name '{env}' — allowed characters: A-Z a-z 0-9 . _ -"
         )));
     }
+    let chosen = matches!(env_source, EnvSource::Flag | EnvSource::EnvVar);
+    if !chosen {
+        let known = known_envs(cwd);
+        let named = |known: &[String]| {
+            if known.is_empty() {
+                "none yet".to_string()
+            } else {
+                known.join(", ")
+            }
+        };
+        if let Some(source) = require_env(file.require_env)? {
+            return Err(BarcaError::Usage(format!(
+                "no environment given, and {source} requires one: pass --env NAME or set \
+                 BARCA_ENV (environments here: {})",
+                named(&known)
+            )));
+        }
+        if known.len() > 1 {
+            static NOTED: std::sync::Once = std::sync::Once::new();
+            NOTED.call_once(|| {
+                crate::errln!(
+                    "[barca] note: no --env given, so this uses env {env} ({}); this project has \
+                     {} environments ({}). Pass --env NAME or set BARCA_ENV; require_env = true \
+                     in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required",
+                    env_source.describe(),
+                    known.len(),
+                    named(&known)
+                );
+            });
+        }
+    }
 
     let (cache_max_size, cache_max_size_source) = cache_max_size(file.cache.as_ref())?;
     let capacity = capacity_setting(file.execution.as_ref())?;
+    let pool_size = pool_setting(file.execution.as_ref())?;
     removed_settings(&remote)?;
 
     match env_var("BARCA_REMOTE").as_deref() {
@@ -443,6 +582,8 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 cache_max_size_source,
                 drain_timeout_secs,
                 server_max_runs,
+                server_capacity,
+                server_run_timeout_secs,
                 server_url: env_var("BARCA_SERVER").or_else(|| {
                     file.server
                         .as_ref()
@@ -450,6 +591,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                         .filter(|u| !u.is_empty())
                 }),
                 capacity,
+                pool_size,
                 ledger: None,
                 check_store: false,
             });
@@ -549,8 +691,11 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         cache_max_size_source,
         drain_timeout_secs,
         server_max_runs,
+        server_capacity,
+        server_run_timeout_secs,
         server_url,
         capacity,
+        pool_size,
         ledger: None,
         check_store: false,
     })
@@ -781,6 +926,8 @@ mod tests {
         "BARCA_CACHE_MAX_SIZE",
         "BARCA_SERVER",
         "BARCA_CAPACITY",
+        "BARCA_REQUIRE_ENV",
+        "BARCA_POOL_SIZE",
     ];
 
     fn clean_env() -> EnvGuard {
@@ -967,7 +1114,7 @@ mod tests {
             Some((3, "[execution] capacity"))
         );
         assert_eq!(
-            capacity_in(dir.path()).unwrap(),
+            execution_in(dir.path()).unwrap().0,
             Some((3, "[execution] capacity"))
         );
         unsafe { std::env::set_var("BARCA_CAPACITY", "5") };
@@ -1044,6 +1191,37 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
         // named env uses env-scoped local db and backups
         assert!(cfg.db_path.contains(".barca/envs/dev/"));
         assert_eq!(cfg.local_backup_dir(), Path::new(".barca/envs/dev/backups"));
+    }
+
+    #[test]
+    fn require_env_refuses_a_command_without_env_or_barca_env() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".barca/envs/prod")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".barca/envs/staging")).unwrap();
+        assert_eq!(known_envs(dir.path()), ["prod", "staging"]);
+        write_toml(
+            dir.path(),
+            "default_env = \"staging\"\nrequire_env = true\n",
+        );
+        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("require_env = true in barca.toml requires one"),
+            "{err}"
+        );
+        assert!(err.contains("environments here: prod, staging"), "{err}");
+        assert_eq!(resolve_in(Some("prod"), dir.path()).unwrap().env, "prod");
+        unsafe { std::env::set_var("BARCA_ENV", "prod") };
+        assert_eq!(resolve_in(None, dir.path()).unwrap().env, "prod");
+        unsafe { std::env::remove_var("BARCA_ENV") };
+        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "0") };
+        assert_eq!(resolve_in(None, dir.path()).unwrap().env, "staging");
+        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "sometimes") };
+        assert!(resolve_in(None, dir.path()).is_err());
+        write_toml(dir.path(), "");
+        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "1") };
+        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        assert!(err.contains("BARCA_REQUIRE_ENV requires one"), "{err}");
     }
 
     #[test]

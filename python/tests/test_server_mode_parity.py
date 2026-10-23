@@ -136,6 +136,9 @@ def _value(v, roots: list[str], key: str = ""):
         return f"<{key}>"
     if key.endswith(("seconds", "_at")):
         return "<t>" if v is not None else None
+    if key.endswith("rss_bytes"):
+        # Peak memory is measured per process, like a time.
+        return "<rss>" if v is not None else None
     if isinstance(v, str):
         return _text(v, roots)
     return v

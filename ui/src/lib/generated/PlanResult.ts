@@ -9,9 +9,16 @@ export type PlanResult = {
  */
 plan_version: number, total_steps: number,
 /**
- * Worker processes: available cores, or `BARCA_POOL_SIZE`.
+ * Worker processes a run starts at most: `BARCA_POOL_SIZE`, `[execution] pool_size`, or
+ * the cores, bounded by the capacity when one is set (#628).
  */
 pool_size: number,
+/**
+ * Where `pool_size` came from: `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the
+ * capacity setting that bounded the cores (`[execution] capacity`, `BARCA_CAPACITY`,
+ * `[server] capacity`, `--capacity`).
+ */
+pool_source: string,
 /**
  * The most the `weight=` of the steps running at once may add up to (#436).
  */

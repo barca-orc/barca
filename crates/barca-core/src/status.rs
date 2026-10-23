@@ -347,11 +347,11 @@ pub struct CacheStatus {
     /// Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`,
     /// `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
     /// `upstream_stale`, `failed`, `artifact_missing`, `evicted`, `no_record`, `partitions_missing`,
-    /// `partitions_unknown`, `sensor_output_unknown`, `task` or `sensor`.
+    /// `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"cutoff_pending\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,

@@ -282,8 +282,19 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         &json!({"node_id":"p.py:a", "run_hash":"h", "created_at":"2026-10-15 00:00:00"})
     ));
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
-    let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[],"scheduler_enabled":false,"metadata_error":null,"started_at":"2026-10-22T10:00:00.000Z","queue":{"paused":false,"queued":0,"running":0,"max_runs":4}});
+    let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[],"scheduler_enabled":false,"metadata_error":null,"started_at":"2026-10-22T10:00:00.000Z","queue":{"paused":false,"queued":0,"running":0,"max_runs":4,"capacity":null}});
     assert!(health.is_valid(&ok));
+    let mut shared = ok.clone();
+    shared["queue"]["capacity"] = json!({"total": 4, "in_use": 3, "waiting": 1});
+    assert!(health.is_valid(&shared));
+    let queue = validator(&json!({"$ref":"#/components/schemas/Queue"}));
+    let mut view = json!({"paused":false,"paused_at":null,"draining":false,"max_runs":4,"running":[],"queued":[],"capacity":null});
+    assert!(queue.is_valid(&view));
+    let capacity = barca_core::capacity::SharedCapacity::new(4, "--capacity");
+    assert!(capacity.try_acquire("r1", "p.py:a", 3));
+    assert!(!capacity.try_acquire("r2", "p.py:b", 2));
+    view["capacity"] = serde_json::to_value(capacity.snapshot()).unwrap();
+    assert!(queue.is_valid(&view), "{view}");
     let mut no_queue = ok.clone();
     no_queue.as_object_mut().unwrap().remove("queue");
     assert!(!health.is_valid(&no_queue));
@@ -1053,11 +1064,11 @@ async fn run_loader_infrastructure_failure_matches_contract() {
     std::fs::write(dir.path().join("pipeline.py"), "from barca import asset, partitions\n@asset(partitions={'x': partitions(list(range(2)))})\ndef value(x): return x\n").unwrap();
     cfg.python = dir.path().join("unavailable-python");
     let body = checked(&app(cfg), "POST", "/run", "/run", 500).await;
+    let error = body["error"].as_str().unwrap();
     assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("DAG analysis task failed")
+        error.contains("cannot evaluate partitions(list(range(2))) of ")
+            && error.contains("pipeline.py:value: cannot run"),
+        "{error}"
     );
 }
 

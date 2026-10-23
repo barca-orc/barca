@@ -31,6 +31,12 @@
 //!    as a definition (rule 2), it contributes its definition text, not its decorators as
 //!    written.
 //!
+//! 8. **Cutoff assets.** An `@asset(cutoff=True)` reached by name (a consumer's parameter named
+//!    after it, rule 2) adds a constant marker, not its definition or what it uses: what reads it
+//!    folds in the bytes it wrote instead of its run hash (`crate::cache::is_cutoff`), so its
+//!    code must not reach its consumers another way (#628). Pipelines without `cutoff=True`
+//!    hash as before.
+//!
 //! The hash is over the sorted `(label, source)` pairs collected, so it does not depend on the
 //! order definitions are visited in.
 
@@ -261,7 +267,13 @@ pub enum ModuleDef {
 pub struct Code {
     source_text: Rc<str>,
     uses: Uses,
+    /// An `@asset(cutoff=True)` (rule 8): reached by name, it adds [`CUTOFF_MARKER`] and
+    /// nothing it uses.
+    cutoff: bool,
 }
+
+/// What an `@asset(cutoff=True)` contributes where it is reached by name (rule 8).
+const CUTOFF_MARKER: &str = "<an @asset(cutoff=True): what reads it depends on its bytes>";
 
 /// What a piece of code refers to.
 #[derive(Clone, Default)]
@@ -438,6 +450,9 @@ impl Cone<'_> {
                     continue;
                 }
                 match def {
+                    ModuleDef::Function(code) if code.cutoff => {
+                        self.parts.push((site.label(name), CUTOFF_MARKER.into()));
+                    }
                     ModuleDef::Function(code)
                     | ModuleDef::Class(code)
                     | ModuleDef::Assignment(code) => {
@@ -652,6 +667,11 @@ impl Cone<'_> {
         chain: &mut Vec<(String, String)>,
     ) -> bool {
         match module.definitions().get(name) {
+            Some(ModuleDef::Function(code)) if code.cutoff => {
+                self.parts
+                    .push((format!("{}:{name}", module.name), CUTOFF_MARKER.into()));
+                true
+            }
             Some(
                 ModuleDef::Function(code) | ModuleDef::Class(code) | ModuleDef::Assignment(code),
             ) => {
@@ -746,6 +766,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     let code = |node: &dyn Ranged, uses: UseCollector| Code {
         source_text: text(node),
         uses: uses.uses,
+        cutoff: false,
     };
     let mut defs: HashMap<String, ModuleDef> = HashMap::new();
     let barca = crate::decorator_args::BarcaNames::of(&parsed.syntax().body);
@@ -796,6 +817,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
             Code {
                 source_text: source.into(),
                 uses: uses.uses,
+                cutoff: false,
             }
         })
     };
@@ -820,6 +842,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                         Code {
                             source_text: definition.text.into(),
                             uses: uses.uses,
+                            cutoff: crate::parse::is_cutoff_asset(func, &barca),
                         }
                     }
                     None => {
@@ -3238,5 +3261,29 @@ def shadowing(helpers, json):
             ),
             "a counted argument of the upstream"
         );
+    }
+
+    /// Rule 8 (#628): a consumer's parameter named after an `@asset(cutoff=True)` does not
+    /// bring that asset's code into the consumer's cone. Its consumers fold in its bytes, so
+    /// an edit that writes the same bytes must leave them cached. Without `cutoff`, rule 2.
+    #[test]
+    fn a_cutoff_asset_reached_by_name_adds_a_marker_not_its_code() {
+        let pipeline = |cutoff: &str, body: &str| {
+            format!(
+                "from barca import asset\n\ndef helper():\n    return 3\n\n\n@asset({cutoff})\ndef rates():\n    return {body}\n\n\n@asset(inputs={{\"rates\": rates}})\ndef billed(rates):\n    return rates * 2\n"
+            )
+        };
+        let hash = |cutoff: &str, body: &str| cone_hash(&pipeline(cutoff, body), "billed");
+        assert_eq!(
+            hash("cutoff=True", "1"),
+            hash("cutoff=True", "helper() - 2")
+        );
+        assert!(!hash("cutoff=True", "1").is_empty());
+        assert_ne!(hash("", "1"), hash("", "helper() - 2"));
+        assert_ne!(hash("cutoff=True", "1"), hash("", "1"));
+        assert_eq!(hash("cutoff=False", "1"), hash("", "1"));
+        // The cutoff asset's own cone still covers what it uses.
+        let own = |body: &str| cone_hash(&pipeline("cutoff=True", body), "rates");
+        assert_ne!(own("helper()"), own("1"));
     }
 }

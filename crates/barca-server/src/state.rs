@@ -410,6 +410,9 @@ pub struct AppState {
     /// parallel; the shared metadata.db is kept race-free by a process-wide DB
     /// lock in `barca-core`, not by serializing whole runs.
     pub run_slots: Arc<Semaphore>,
+    /// The capacity every run shares (`--capacity`, `[server] capacity`, #628): a step of any
+    /// run is admitted against it as well as against its run's own. `None`: not set.
+    pub capacity: Option<Arc<barca_core::capacity::SharedCapacity>>,
     /// The runs accepted and not started, in order, and whether the queue is paused.
     pub queue: Arc<crate::queue::Queue>,
     /// Cancelled when a drain ends without the runs finishing (its deadline, or a second
@@ -455,7 +458,11 @@ impl AppState {
             .unwrap_or_else(default_run_concurrency)
             .max(1);
         let now = chrono::Utc::now();
+        let capacity = config.resolved.server_capacity.map(|(total, source)| {
+            Arc::new(barca_core::capacity::SharedCapacity::new(total, source))
+        });
         Self {
+            capacity,
             loaded: Arc::new(tokio::sync::Mutex::new(None)),
             load_errors: Arc::new(RwLock::new(Vec::new())),
             config: Arc::new(config),

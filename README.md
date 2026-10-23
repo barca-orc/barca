@@ -165,13 +165,13 @@ examples.
 | `barca list [files...]` | Every asset, sensor and task, with its kind, freshness and inputs. |
 | `barca status [target] [files...]` | Per node: cached or stale and why, the last run (and its error), the artifact's rows and columns, and a schedule's state; `--problems` keeps what needs attention. |
 | `barca logs [RUN_ID]` | A run's recorded step stdout and stderr, without progress messages; the most recent run without an id, `-f` to follow a running one, from a configured server too. |
-| `barca history [RUN_ID]` | Recent runs, filtered by `--status`, `--target`, `--triggered-by` and `--since`, each failed one with its failing step and error; with a run id, its steps, errors and tracebacks. |
-| `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. |
+| `barca history [RUN_ID]` | Recent runs, filtered by `--status`, `--target`, `--triggered-by` and `--since`, each failed one with its failing step and error; with a run id, its steps, peak memory, errors, tracebacks and a failed step's last output lines. |
+| `barca stats <target> [files...]` | Timing, peak memory and re-execution statistics for one asset, with each recent run's id. |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view, barca's records are `barca.runs`, `barca.materializations` and `barca.nodes`; with a server, the team's results (experimental). |
 | `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps, and a configured server: its version, store, load errors, schedules and the runs not posted to it. |
 | `barca plan [files...]` | The execution plan as JSON, with the capacity and step weights (experimental). |
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (barca also does this after every run). |
-| `barca serve [files...]` | Cron scheduler, HTTP API and web UI; `--server` on other commands runs them there. |
+| `barca serve [files...]` | Cron scheduler, HTTP API and web UI; `--server` on other commands runs them there. `--capacity` shares one weight budget between its runs, `--run-timeout` limits how long a run takes. |
 | `barca queue [pause\|resume] --server` | A server's run queue (kept across restarts); pause or resume it before a deploy. |
 | `barca state backups` / `barca state restore` / `barca state reset` | List the metadata backups, put one back in place of the local database, or start it over (experimental; nothing is deleted). |
 | `barca docs [topic]` | The manual, compiled into the binary. |

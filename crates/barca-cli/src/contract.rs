@@ -91,6 +91,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes are aliases until the next minor",
     ),
     (
+        "serve --capacity",
+        "new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use",
+    ),
+    (
         "state reset",
         "new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use",
     ),

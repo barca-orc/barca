@@ -77,6 +77,9 @@ pub struct ScheduledJob {
     /// `Schedule(..., max_failures=N)`: consecutive failed ticks before the job is skipped and
     /// reported `failing`.
     pub max_failures: u32,
+    /// `Schedule(..., timeout_seconds=N)`: how long one of its ticks' runs may take (0: no
+    /// limit). `None`: the server's run timeout applies.
+    pub timeout_seconds: Option<u64>,
 }
 
 /// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
@@ -108,6 +111,7 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
                 cron,
                 followers: Vec::new(),
                 max_failures: crate::freshness::DEFAULT_MAX_FAILURES,
+                timeout_seconds: None,
             }),
             Err(e) => crate::errln!(
                 "[barca] skipping '{}': invalid cron {:?}: {e}",
@@ -129,6 +133,9 @@ pub fn jobs_from_dag(dag: &crate::dag::Dag) -> Vec<ScheduledJob> {
         if let Some(n) = dag.get_node(&job.id).and_then(|n| n.extracted.max_failures) {
             job.max_failures = n;
         }
+        job.timeout_seconds = dag
+            .get_node(&job.id)
+            .and_then(|n| n.extracted.schedule_timeout);
     }
     jobs
 }

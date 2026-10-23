@@ -412,6 +412,10 @@ pub struct ExtractedNode {
     /// and reported `failing`. `None` when not written (the scheduler's default applies).
     #[serde(default)]
     pub max_failures: Option<u32>,
+    /// `Schedule(..., timeout_seconds=N)`: how long a scheduled run of this node may take under
+    /// `barca serve` (0: no limit). `None` when not written (the server's setting applies).
+    #[serde(default)]
+    pub schedule_timeout: Option<u64>,
     /// Declared inputs (parameter → upstream mapping). Typically 0–4 items.
     pub inputs: SmallVec<[DeclaredInput; 4]>,
     /// Partition dimensions.
@@ -426,6 +430,16 @@ pub struct ExtractedNode {
     /// (#436). Not part of the run hash.
     #[serde(default = "default_weight")]
     pub weight: u32,
+    /// `@asset(deterministic=False)`: the asset may return other bytes for the same code and
+    /// inputs (a snapshot of an external system), so barca does not warn that it is not
+    /// deterministic (#627). Not part of the run hash and no effect on caching.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub deterministic: bool,
+    /// `@asset(cutoff=True)`: what reads it folds in the content hash of its output instead of
+    /// its run hash, so a rerun that writes the same bytes leaves them cached (#628). Not part
+    /// of its own run hash; see [`crate::cache::is_cutoff`].
+    #[serde(default)]
+    pub cutoff: bool,
     /// Base backoff in seconds between attempts; delay = `retry_backoff_seconds * attempt`.
     pub retry_backoff_seconds: f64,
     /// Human-readable description.
@@ -482,6 +496,14 @@ pub struct ExtractedNode {
 
 fn default_weight() -> u32 {
     1
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl ExtractedNode {

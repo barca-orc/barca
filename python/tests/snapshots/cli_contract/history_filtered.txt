@@ -5,6 +5,8 @@ runs[].attempts : integer
 runs[].client_run_id : null
 runs[].command : string
 runs[].elapsed_seconds : number
+runs[].error : string
+runs[].failed_node : string
 runs[].failure : object
 runs[].failure.error : string
 runs[].failure.node : string

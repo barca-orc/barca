@@ -21,7 +21,6 @@ use crate::targets::{
 };
 use crate::transfer::{ArtifactLayout, TransferClient};
 use std::collections::{HashMap, VecDeque};
-use std::env;
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -57,30 +56,83 @@ fn phase_step_count(phase: &Phase) -> usize {
         .sum()
 }
 
-/// Worker pool size: `BARCA_POOL_SIZE` overrides auto-detection when set to a
-/// positive integer. Lets benchmark harnesses (and anyone else) pin the pool
-/// to a fixed core count instead of whatever `available_parallelism()` reports
-/// on the current machine.
-pub(crate) fn default_pool_size() -> usize {
-    if let Some(n) = env::var("BARCA_POOL_SIZE")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-    {
-        return n;
-    }
+/// The cores this process may use (`available_parallelism`), 4 when unknown.
+pub(crate) fn cores() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
 }
 
-/// The capacity (#436): the most the `weight=` of the steps running at once may add up to, and
-/// where it came from. `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
-pub(crate) fn capacity(
-    setting: crate::config::CapacitySetting,
-    pool_size: usize,
-) -> (usize, &'static str) {
-    setting.unwrap_or((pool_size.max(1), "pool size"))
+/// How many workers a run starts at most and the capacity their steps' `weight=` shares, each
+/// with where it came from (#436, #628).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sizing {
+    pub pool_size: usize,
+    /// `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the capacity that bounded the
+    /// cores (`[execution] capacity`, `BARCA_CAPACITY`, `[server] capacity`, `--capacity`).
+    pub pool_source: &'static str,
+    pub capacity: usize,
+    /// `BARCA_CAPACITY`, `[execution] capacity`, or `pool size`.
+    pub capacity_source: &'static str,
+}
+
+/// The pool size and capacity of a run.
+///
+/// Pool: `BARCA_POOL_SIZE` > `[execution] pool_size` > the cores, bounded by the capacity when
+/// one is set (`server`, the capacity a `barca serve` shares between its runs, bounds it too).
+/// Every step takes a weight of at least 1, so no more than `capacity` steps ever run at once:
+/// a worker past that would start, import the project and wait. Weights above 1 lower how
+/// many run at once further, but workers start only for steps the capacity admits, so the
+/// pool is not sized from them.
+///
+/// Capacity: `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
+pub fn sizing(
+    capacity: crate::config::CapacitySetting,
+    pool: crate::config::PoolSetting,
+    server: Option<(usize, &'static str)>,
+) -> Sizing {
+    sizing_with(capacity, pool, server, cores())
+}
+
+fn sizing_with(
+    capacity: crate::config::CapacitySetting,
+    pool: crate::config::PoolSetting,
+    server: Option<(usize, &'static str)>,
+    cores: usize,
+) -> Sizing {
+    let (pool_size, pool_source) = match pool {
+        Some((n, source)) => (n.max(1), source),
+        None => {
+            let bound = [capacity, server]
+                .into_iter()
+                .flatten()
+                .min_by_key(|(n, _)| *n);
+            match bound {
+                Some((n, source)) if n < cores => (n.max(1), source),
+                _ => (cores.max(1), "cores"),
+            }
+        }
+    };
+    let (capacity, capacity_source) = capacity.unwrap_or((pool_size, "pool size"));
+    Sizing {
+        pool_size,
+        pool_source,
+        capacity: capacity.max(1),
+        capacity_source,
+    }
+}
+
+/// [`sizing`] for a run with this configuration, under `shared` when `barca serve` shares a
+/// capacity between its runs.
+pub(crate) fn sizing_for(
+    cfg: &crate::config::ResolvedConfig,
+    shared: Option<&crate::capacity::SharedCapacity>,
+) -> Sizing {
+    sizing(
+        cfg.capacity,
+        cfg.pool_size,
+        shared.map(|s| (s.total() as usize, s.source())),
+    )
 }
 
 /// The planned nodes whose `weight=` is above 1, by node id.
@@ -817,6 +869,7 @@ async fn start_workers(
         python: python.to_path_buf(),
         pool_size,
         capacity: prepared.capacity,
+        shared: request.options.shared_capacity.clone(),
         run_id: run_id.clone(),
         datadog: telemetry
             .iter()
@@ -2185,7 +2238,8 @@ async fn prepare_run(
             .join(",")
     });
 
-    let pool_size = default_pool_size();
+    let sizing = sizing_for(request.cfg, request.options.shared_capacity.as_deref());
+    let pool_size = sizing.pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
@@ -2229,8 +2283,19 @@ async fn prepare_run(
     // Plan-time warnings for the steps this command planned, before anything runs.
     let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
     crate::warnings::print(&plan_warnings);
-    let (capacity, capacity_source) = capacity(request.cfg.capacity, pool_size);
-    warn_over_capacity(&planned_weights(&exec_plan), capacity, capacity_source);
+    let capacity = sizing.capacity;
+    warn_over_capacity(
+        &planned_weights(&exec_plan),
+        capacity,
+        sizing.capacity_source,
+    );
+    if let Some(shared) = &request.options.shared_capacity {
+        warn_over_capacity(
+            &planned_weights(&exec_plan),
+            shared.total() as usize,
+            shared.source(),
+        );
+    }
 
     Ok(Prepared {
         dag,
@@ -2461,7 +2526,7 @@ pub(crate) async fn explain_dag_with_membership(
     let Planned { cone, pinned, .. } =
         pin_manual(dag, &mut targets, cfg, &policy, rules, file_args).await?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let pool_size = default_pool_size();
+    let pool_size = sizing_for(cfg, None).pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
@@ -2524,7 +2589,9 @@ pub(crate) async fn explain_dag_with_membership(
             .flat_map(|p| &p.streams)
             .flat_map(|s| &s.steps)
             .map(|st| st.step_id.base_id())
-            .filter(|id| crate::cache::folds_output(dag, id))
+            // A cutoff asset is not predicted: what reads it is decided by the bytes it wrote
+            // when it is cached, and is unknown when it would run (`cutoff_pending`, #628).
+            .filter(|id| crate::cache::folds_output(dag, id) && !crate::cache::is_cutoff(dag, id))
             .collect();
         state.sensor_outputs = db::last_output_hashes(cache, &sensors).await?;
     }
@@ -2564,6 +2631,9 @@ pub(crate) async fn explain_dag_with_membership(
     // Steps whose run hash cannot be predicted because a sensor upstream of them has no
     // recorded output (a forced step, e.g. under --refresh, is still reported as `run`).
     let mut hash_unknown: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Steps whose run hash depends on the bytes a cutoff asset that would run writes (#628),
+    // by base id, with that asset's short name.
+    let mut cutoff_unknown: HashMap<String, String> = HashMap::new();
     let mut steps: Vec<StepReport> = Vec::new();
     let mut summary = ExplainSummary::default();
 
@@ -2579,6 +2649,7 @@ pub(crate) async fn explain_dag_with_membership(
         cached_steps: &mut cached_steps,
         unknown_ids: &mut unknown_ids,
         hash_unknown: &mut hash_unknown,
+        cutoff_unknown: &mut cutoff_unknown,
         steps: &mut steps,
         summary: &mut summary,
         narrowing: narrowing.as_mut(),
@@ -2617,8 +2688,8 @@ pub(crate) async fn explain_dag_with_membership(
     for r in &mut steps {
         r.weight = weights.get(recover::base_of(&r.id)).copied();
     }
-    let (capacity, capacity_source) = capacity(cfg.capacity, pool_size);
-    warn_over_capacity(&weights, capacity, capacity_source);
+    let capacity = sizing_for(cfg, None).capacity;
+    warn_over_capacity(&weights, capacity, sizing_for(cfg, None).capacity_source);
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
         crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)
@@ -2673,6 +2744,7 @@ struct Prediction<'a> {
     cached_steps: &'a mut recover::CachedSteps,
     unknown_ids: &'a mut HashMap<String, &'static str>,
     hash_unknown: &'a mut std::collections::HashSet<String>,
+    cutoff_unknown: &'a mut HashMap<String, String>,
     steps: &'a mut Vec<StepReport>,
     summary: &'a mut ExplainSummary,
     narrowing: Option<&'a mut crate::selection::Narrowing>,
@@ -2783,6 +2855,14 @@ async fn predict_steps(
             .values()
             .find(|up| ctx.hash_unknown.contains(&up_base(up)))
             .cloned();
+        // The first input that is (or depends on) a cutoff asset that would run, and that
+        // asset (short names).
+        let cutoff_dep = step.inputs.values().find_map(|up| {
+            let up = up_base(up);
+            ctx.cutoff_unknown
+                .get(&up)
+                .map(|root| (short_name(&up).to_string(), root.clone()))
+        });
 
         let (step, decision) = decide_step(ctx.dag, ctx.policy, ctx.cache, ctx.state, step).await?;
         // Forced to run whatever the cache holds (task, sensor, refresh).
@@ -2820,6 +2900,41 @@ async fn predict_steps(
                 ctx.summary.unknown += step.partition_keys.len().max(1);
                 continue;
             }
+        }
+        // It reads a cutoff asset that would run, or depends on one (#628): whether it runs
+        // depends on the bytes that asset writes, which only running it tells.
+        if let Some((up, root)) = cutoff_dep {
+            ctx.cutoff_unknown.insert(base.to_string(), root.clone());
+            if !forced {
+                let detail = if up == root {
+                    format!(
+                        "reads '{root}' (cutoff=True), which would run first: this step runs \
+                         only if it writes different bytes"
+                    )
+                } else {
+                    format!(
+                        "depends on '{up}', which runs only if '{root}' (cutoff=True) writes \
+                         different bytes"
+                    )
+                };
+                if !ctx.steps.iter().any(|r| r.id == base) {
+                    ctx.steps
+                        .push(unknown_report(ctx.dag, base, "cutoff_pending", detail));
+                }
+                ctx.unknown_ids.insert(base.to_string(), "cutoff_pending");
+                ctx.summary.unknown += step.partition_keys.len().max(1);
+                continue;
+            }
+        }
+        // A cutoff asset that would run: what reads it is unknown until it has (#628).
+        let runs_any = match &decision {
+            Decision::Run(_) => true,
+            Decision::Partitioned { missing, .. } => !missing.is_empty(),
+            Decision::Cached { .. } => false,
+        };
+        if runs_any && crate::cache::is_cutoff(ctx.dag, base) {
+            ctx.cutoff_unknown
+                .insert(base.to_string(), short_name(base).to_string());
         }
 
         let mut report = report_for(ctx.dag, &step, &decision, true);

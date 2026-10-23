@@ -50,7 +50,7 @@ barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since 
                                                Show recent runs, or one run's steps and errors
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
-barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
                                                Run the HTTP API server
 barca queue [pause|resume] [--server [URL]] [--json]  A server's run queue; pause or resume it (experimental)
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
@@ -253,6 +253,12 @@ new value, the asset and everything downstream of it re-run. `--dry-run` predict
 sensor's last recorded value and says so in `detail`; before the sensor has ever run, its
 consumers are `unknown` (`reason: "sensor_output_unknown"`).
 
+An asset that reads an `@asset(cutoff=True)` is cached against the bytes that asset wrote, not
+its run hash: when it reruns and writes the same bytes, what reads it stays cached. A dry run
+cannot know those bytes before it runs, so its consumers are `unknown`
+(`reason: "cutoff_pending"`) until it has; see
+[Early cutoff](/reference/api/decorators/#early-cutoff-cutofftrue).
+
 Each entry in the result's `steps` array says what happened to that step. A node that declares
 environment variables with `env=[...]` also carries `env`, the values the step was hashed with
 (`null` when unset, `<redacted>` for names like `*_TOKEN`), and its `--agent` progress line ends
@@ -318,7 +324,8 @@ The document includes `plan_version: 1`, independent of the package and database
 Consumers of saved plans should reject unsupported versions.
 
 Parse the source files and print the execution plan as JSON, without running anything.
-The pool size matches execution: available cores, or a positive `BARCA_POOL_SIZE`.
+The pool size matches execution: a positive `BARCA_POOL_SIZE`, else `[execution] pool_size`, else
+the available cores, or the capacity when it is smaller; `pool_size` and `pool_source` say which.
 Experimental: the layout follows the planner and may change between releases. Each phase's
 `reason` is `{"type": "initial"}` or `{"type": "fan_in", "node_id": "..."}`. Planning reads no
 state, so `plan` takes no `--env` and does not say what is cached; use `--dry-run` or
@@ -432,7 +439,8 @@ Filters combine with AND, and `--limit`, `total` and `truncated` count the runs 
 left out), `--triggered-by` (comma-separated: `manual`, `api`, `schedule`, `client`) and
 `--since` (`30m`, `24h`, `7d`, `2w`, an RFC 3339 time or a UTC date). A failed run's row ends
 with its first failed step and the first line of its error; JSON runs carry it as
-`failure: {node, error}` (`null` otherwise).
+`failure: {node, error}` and as the flat `failed_node` and `error` (`null` otherwise), so
+`--fields run_id,failed_node,error` needs no nesting.
 
 ```bash
 barca history --status failed --since 24h
@@ -442,8 +450,12 @@ barca history 836fdca186c8 --json   # {run, steps: [...], hint?}
 ```
 
 `barca history RUN_ID` prints the run's fields, the steps it recorded (status, attempts, time,
-run hash, artifact path, format and size), and for each failed step its error, traceback and,
-when the worker died, how it ended (`worker exit: SIGKILL (possibly the OOM killer)`). A hint on
+peak memory, run hash, artifact path, format and size), and for each failed step its error,
+traceback, when the worker died how it ended (`worker exit: SIGKILL (possibly the OOM
+killer)`), and the last 20 lines it printed (`output_tail` in JSON, without the traceback).
+Each step's JSON has `max_rss_bytes`, the worker process's peak resident memory while the step
+ran (on Linux the step's own; elsewhere only when the step raised the worker's peak), and
+`cpu_seconds`. Bytes DuckDB spilled to disk are not recorded: DuckDB keeps no total of them. A hint on
 stderr names `barca logs RUN_ID --step STEP --stream stderr`. Cached steps are counted in
 `steps_cached`, not listed: a run records no row for them. With a server configured, both
 forms answer from the server; a run only this machine has is an error whose remediation is
@@ -534,12 +546,15 @@ A cache hit executes nothing, so it is not counted here; `barca history` counts 
 run. In the JSON the re-execution share is `cache_hit_rate` (the key keeps its name).
 
 The JSON has `id`, `total_runs`, `cache_hit_rate`, `avg_elapsed_seconds`,
-`median_elapsed_seconds`, `p95_elapsed_seconds`, `max_elapsed_seconds` and `recent_runs` (each
-`elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`).
+`median_elapsed_seconds`, `p95_elapsed_seconds`, `max_elapsed_seconds`, `max_rss_bytes` and
+`median_max_rss_bytes` (peak memory over the recorded executions) and `recent_runs` (each
+`elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`,
+`max_rss_bytes`). `run_id` names the run, whose every step `barca history RUN_ID` lists.
 
 ```bash
 barca stats summary pipeline.py --json     # one JSON object; the node id is `id`
 barca stats summary pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+barca stats summary --fields run_id,elapsed_seconds,max_rss_bytes   # each recent run's id, time and peak memory
 ```
 
 ## serve
@@ -554,6 +569,8 @@ barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no 
 barca serve --timezone utc              # every file in the project; cron evaluated in UTC
 barca serve pipeline.py --drain-timeout 120   # on SIGTERM, runs in flight get 2 minutes
 barca serve pipeline.py --max-runs 2    # at most 2 runs at once; the others wait in the queue
+barca serve pipeline.py --capacity 4    # the weight= of every run's running steps adds up to at most 4
+barca serve pipeline.py --run-timeout 3600   # stop a run that takes longer than an hour
 ```
 
 | Flag | Default | Meaning |
@@ -566,6 +583,8 @@ barca serve pipeline.py --max-runs 2    # at most 2 runs at once; the others wai
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
 | `--drain-timeout <SECONDS>` | `[server] drain_timeout`, else `30` | On SIGTERM or SIGINT, how long runs in flight get to finish before they are put back in the run queue for the next start. `0` requeues them at once. |
 | `--max-runs <N>` | `[server] max_runs`, else one per core | How many runs execute at once; the others wait in the run queue, in order (experimental). |
+| `--capacity <N>` | `[server] capacity`, else none | The most the `weight=` of the running steps of every run may add up to, admitted first come, first served across runs; `GET /queue` shows it (experimental). |
+| `--run-timeout <SECONDS>` | `[server] run_timeout_seconds`, else none | Stop a run that takes longer, recorded as an error naming the setting. `0` is no limit; `Schedule(..., timeout_seconds=N)` wins for its ticks. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
 
 Every accepted run is recorded in the run queue before the server answers, and a restart resumes

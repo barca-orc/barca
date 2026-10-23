@@ -151,12 +151,14 @@ every database from before 0.29.2 (#629):
   ignore them. A node's partition-key rows (`<node>[...]`) are read as the range `node_id >=
   '<node>[' AND node_id < '<node>\'` of `idx_mat_node_run`.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
-  `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`
-  or `running`; `spec` is the server's description of the run (JSON: command, targets, nodes,
+  `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,
+  `running`, or `draining` (0.31.0: in flight when the server was told to stop); `spec` is the server's description of the run (JSON: command, targets, nodes,
   files, cache policy, trigger, partition selection, freshness rules, accepted time);
   `queued_at` is RFC 3339 UTC. A run leaves the table when it has recorded its outcome. A server
   that starts resumes the `queued` rows in order and records a `running` row (its server was
-  killed) as interrupted. Only `barca serve` writes it; readers of a database without it find the
+  killed) as interrupted; a `draining` row (its server was killed during its drain) is put back
+  in the queue once, counted in `spec.kill_requeues`, and interrupted the next time. Older
+  binaries read `draining` as `queued`. Only `barca serve` writes it; readers of a database without it find the
   queue empty, and older binaries ignore it.
 - `server_state (key, value)` (0.29.4), primary key `key`: settings `barca serve` keeps across
   restarts. `queue_paused_at` (unix seconds) is present while the run queue is paused.

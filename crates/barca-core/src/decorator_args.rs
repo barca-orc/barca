@@ -77,6 +77,8 @@ pub const SIGNATURES: &[Signature] = &[
             "tags",
             "env",
             "weight",
+            "deterministic",
+            "cutoff",
         ],
         deferred: &[],
         usage: "@asset(inputs={\"param\": upstream}, ...)",
@@ -175,7 +177,7 @@ pub const SIGNATURES: &[Signature] = &[
         name: "Schedule",
         decorator: false,
         positional: &["cron"],
-        keywords: &["max_failures"],
+        keywords: &["max_failures", "timeout_seconds"],
         deferred: &[],
         usage: "Schedule(\"0 5 * * *\")",
         topic: "scheduling",
@@ -1140,16 +1142,26 @@ mod tests {
             name: "partitions",
             passing: Passing::Keyword
         }));
-        // What the parser reads on one node kind it reads on all three; `inputs` on a sensor
-        // is the one difference, and it is an error of its own.
+        // What the parser reads on one node kind it reads on all three, apart from
+        // `deterministic`, which only an asset has (only an asset's bytes are checked), and
+        // `cutoff`, also an asset's only (a sensor's output already counts below it, and a task
+        // is never served from cache, #628), and `inputs` on a sensor, an error of its own.
         let keywords = |call: &str| -> Vec<&str> {
             all.iter()
                 .filter(|a| a.call == call)
                 .map(|a| a.name)
+                .filter(|name| *name != "deterministic" || call != "asset")
                 .collect()
         };
-        assert_eq!(keywords("asset"), keywords("task"));
-        let mut sensor = keywords("asset");
+        assert!(all.contains(&Argument {
+            call: "asset",
+            name: "deterministic",
+            passing: Passing::Keyword
+        }));
+        let mut asset = keywords("asset");
+        asset.retain(|k| *k != "cutoff");
+        assert_eq!(asset, keywords("task"));
+        let mut sensor = asset.clone();
         sensor.retain(|k| *k != "inputs");
         assert_eq!(keywords("sensor"), sensor);
     }

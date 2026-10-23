@@ -8,6 +8,89 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- `barca serve` no longer stops a run after 600 seconds. That limit was fixed and undocumented,
+  and it cancelled long partitioned rebuilds; runs now have no time limit by default.
+  `barca serve --run-timeout 600` (or `[server] run_timeout_seconds = 600`) restores it (#628).
+- A run of `barca serve` that times out is recorded with status `error` and the outcome `run
+  timed out after Ns (<setting>)`; up to 0.30 it was recorded as `cancelled`. Automation that
+  read `cancelled` as a timeout can match the outcome instead; a run cancelled with `DELETE
+  /runs/{id}` is still `cancelled` (#628).
+- A `partitions(<expression>)` that raises is a load error: `barca list`, `status`, `get`,
+  `plan` and `doctor` exit 2 naming the node with the traceback, and `barca serve` reports it in
+  `load_errors` and serves the rest of the project. Up to 0.30 it printed a warning and the node
+  had no partition keys. Fix the expression, or make it return `[]` when there are no keys
+  (#628).
+
+### Features
+
+- Production feedback from a pipeline under `barca serve` (#627, #628). Why a run failed is one
+  field away: `barca history --json` runs gain the flat `failed_node` and `error` (beside
+  `failure`), so `--fields run_id,failed_node,error` works, and `barca history RUN_ID` shows the
+  last 20 lines a failed step printed (`steps[].output_tail`, without the traceback it already
+  shows). Per-step memory: the worker resets the kernel's peak counter when a step starts, so
+  `max_rss_bytes` is the step's own peak, not the worker's peak over every step it ran (Linux;
+  elsewhere it is recorded only when a step raised the worker's peak), measured up to the end of
+  writing the result, so a returned DuckDB relation counts. It is in `barca history RUN_ID`
+  (`PEAK_RSS`, `steps[].max_rss_bytes` and `cpu_seconds`), in `barca stats` (`max_rss_bytes` and
+  `median_max_rss_bytes`, and each `recent_runs` entry's `max_rss_bytes` and `cpu_seconds`) and
+  in `barca.materializations`. Bytes DuckDB spilled are not recorded (DuckDB keeps no total).
+  `barca stats` `recent_runs` entries gain `run_id`. A project setting makes `--env` required:
+  `require_env = true` in `barca.toml` or `BARCA_REQUIRE_ENV=1`, and a command that touches an
+  environment without `--env` or `BARCA_ENV` exits 2 naming the environments there are; without
+  it, a command that names none in a project with several environments prints one note on
+  stderr saying which it uses. `@asset(deterministic=False)` silences the "not deterministic"
+  warning for an asset expected to return new bytes (caching and the run hash are unchanged);
+  sensors never had it. `barca plan` accepts `--json` and `--pretty`, which change nothing (the
+  plan is always JSON). OpenAPI specification 12: `GET /runs/{run_id}` steps gain `cpu_seconds`,
+  `max_rss_bytes` and `output_tail`, `GET /stats/{name}` the memory keys and `run_id`, and `GET
+  /history` runs `failed_node` and `error`.
+
+- The worker pool follows the capacity (#628): without `BARCA_POOL_SIZE`, a run starts at most
+  the cores or the capacity, whichever is smaller, so `[execution] capacity = 1` starts one
+  worker, not one per core. `[execution] pool_size` in barca.toml sets the pool
+  (`BARCA_POOL_SIZE` wins over it). `barca plan` adds `pool_source` beside `pool_size`, and
+  `barca doctor`'s `capacity` check names the pool size and where it came from.
+- A capacity shared by every run of `barca serve` (experimental, #628): `--capacity N` or
+  `[server] capacity = N` admits the `weight=` of the steps of all runs against one budget, first
+  come, first served across runs with the head reserved, so a light run proceeds beside a heavy
+  rebuild while the heavy steps stay serialized, and a heavy step is never starved by light ones.
+  `GET /queue` (`barca queue --json`) has `capacity: {total, source, in_use, runs, waiting}`,
+  `GET /health` has `queue.capacity`, and the web UI's Runs page shows the weight in use and the
+  waiting steps.
+- The run timeout of `barca serve` is configurable (#628): `--run-timeout SECONDS`, `[server]
+  run_timeout_seconds`, and per schedule `Schedule(cron, timeout_seconds=N)`, which wins for its
+  ticks; 0 is no limit. A run that times out is recorded as `error` with `run timed out after Ns
+  (<setting>)`.
+- Under a supervisor (process 1 of a container, systemd, Kubernetes) `barca serve` prints the
+  stop grace period it needs at startup: `[barca] stop grace: ... must allow at least Ns between
+  SIGTERM and SIGKILL (drain timeout ...)`. With a drain timeout under 10 seconds the time it
+  takes after the drain shrinks with it (half the drain timeout for stopped runs, at least 2 s;
+  1 s for connections), so `drain_timeout = 5` needs 9 seconds and fits Docker's default of 10
+  (#628).
+- A run that was in flight when a supervisor killed the server during its drain (SIGKILL after
+  SIGTERM) is put back in the queue by the next server instead of being recorded as interrupted,
+  once per run. A server that dies without a stop signal (the OOM killer, a crash) still records
+  its runs as interrupted, so a run that kills its server cannot loop (#628).
+- `@asset(cutoff=True)` (experimental): what reads the asset folds in the SHA-256 of the bytes
+  it wrote instead of its run hash, so when it reruns and writes the same bytes, everything
+  below it stays cached. A global step that reruns with unchanged output no longer reruns every
+  partition key below it; per key on a partitioned asset; a cutoff dict `partitions_from` source
+  gives each key its own value. Its consumers are decided after it runs; until then `--dry-run`
+  and `barca status` report them `unknown` with the new reason `cutoff_pending` (also in the
+  `Cache` reason enum of OpenAPI specification 12). A `--refresh`
+  cascade stops at a cutoff asset. Turning `cutoff` on or off reruns what reads the asset once
+  (`barca docs cache`, "Early cutoff") (#628).
+
+### Bug Fixes
+
+- `partitions(<expression>)` imports the asset's module the way a worker does, with the project
+  root on `sys.path`, so an expression that reads a project module from a file in a
+  subdirectory works (#628). An expression that raises is a load error naming the node, with the
+  traceback, in `barca list`, `barca status`, `get`, `GET /health` and `barca doctor`; up to
+  0.30 the node silently got no partition keys.
+
 ## 0.30.2 (2026-10-23)
 
 ### Breaking

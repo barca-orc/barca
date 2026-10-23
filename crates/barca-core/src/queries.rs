@@ -23,29 +23,28 @@ pub async fn plan(
     dag.check_imports(dag.graph.node_weights().map(|n| n.id.as_str()))?;
     let cwd = std::env::current_dir()
         .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
-    let result = plan_selected(&dag, crate::config::capacity_in(&cwd)?, partition)?;
+    let (capacity, pool) = crate::config::execution_in(&cwd)?;
+    let sizing = crate::execution::sizing(capacity, pool, None);
+    let result = plan_selected(&dag, sizing, partition)?;
     crate::warnings::print(&result.warnings);
     crate::execution::warn_over_capacity(&result.weights, result.capacity, &result.capacity_source);
     Ok(result)
 }
 
-/// Render a previously validated graph using the same planner as strict commands. `capacity`
-/// is the configured capacity, if any (`ResolvedConfig::capacity`); the pool size otherwise.
-pub fn plan_from_dag(
-    dag: &crate::dag::Dag,
-    capacity: crate::config::CapacitySetting,
-) -> PlanResult {
-    plan_selected(dag, capacity, None).expect("a plan without a selection")
+/// Render a previously validated graph using the same planner as strict commands, for a pool
+/// and capacity of `sizing` ([`crate::execution::sizing`]).
+pub fn plan_from_dag(dag: &crate::dag::Dag, sizing: crate::execution::Sizing) -> PlanResult {
+    plan_selected(dag, sizing, None).expect("a plan without a selection")
 }
 
 /// [`plan_from_dag`] narrowed to `partition` (`barca plan --partition`), as a `get` with no
 /// target narrows its plan; a usage error as for `get`.
 pub fn plan_selected(
     dag: &crate::dag::Dag,
-    capacity: crate::config::CapacitySetting,
+    sizing: crate::execution::Sizing,
     partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<PlanResult, BarcaError> {
-    let pool_size = crate::execution::default_pool_size();
+    let pool_size = sizing.pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
@@ -58,15 +57,15 @@ pub fn plan_selected(
     if let Some(note) = narrowing.as_ref().and_then(|n| n.note()) {
         crate::errln!("{note}");
     }
-    let (capacity, capacity_source) = crate::execution::capacity(capacity, pool_size);
 
     let warnings = crate::warnings::for_plan(dag, &plan);
     Ok(PlanResult {
         plan_version: crate::results::PLAN_VERSION,
         warnings,
         pool_size,
-        capacity,
-        capacity_source: capacity_source.to_string(),
+        pool_source: sizing.pool_source.to_string(),
+        capacity: sizing.capacity,
+        capacity_source: sizing.capacity_source.to_string(),
         weights: crate::execution::planned_weights(&plan),
         total_steps: plan.total_steps,
         phases: plan

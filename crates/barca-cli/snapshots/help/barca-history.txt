@@ -15,7 +15,7 @@ Options:
       --all                           Show every recorded run (no limit); with a RUN_ID, every step it recorded
       --json                          Emit JSON on stdout (the default when stdout is not a terminal)
       --pretty                        Emit human-readable output (the default when stdout is a terminal)
-      --fields <FIELDS>               Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure]
+      --fields <FIELDS>               Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure, failed_node, error]
       --env <ENV>                     Environment name (separates cache/state per environment)
       --server [<URL>]                Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here)
       --local                         Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server
@@ -43,6 +43,7 @@ Examples:
   barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}
   barca history 7f30b3e9 --limit 50   # one run's first 50 recorded steps (failed steps always listed)
   barca history 7f30b3e9 --all --json # every step the run recorded
+  barca history --status failed --json --fields run_id,failed_node,error   # why each run failed
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -55,11 +56,13 @@ run without targets), cut at 24 characters with `…`; JSON `job` holds it in fu
 resolved node ids sorted and comma-separated (null for runs recorded before 0.29.0).
 JSON returns every item unless --limit is given; human tables keep their default bound.
 A failed run's row ends with its first failed step and the first line of its error; JSON has it
-as `failure: {node, error}` (null otherwise). Filters combine with AND, and --limit, `total`
-and `truncated` count the runs they keep. With a RUN_ID, the run in detail: the steps it
-executed or that failed (cached steps are counted, not listed), each failed step's traceback,
-and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. A run of many partition keys
-records a step per key it computed: the first 1000 are listed, failed ones always, and
-`steps_page` gives the `total` and whether the list is `truncated` (a note on stderr in the
-table). Replace the example id with a run_id from barca history.
+as `failure: {node, error}` and as the flat `failed_node` and `error` (null otherwise).
+Filters combine with AND, and --limit, `total` and `truncated` count the runs they keep. With a
+RUN_ID, the run in detail: the steps it executed or that failed (cached steps are counted, not
+listed) with their peak memory (PEAK_RSS, `max_rss_bytes`), each failed step's traceback and
+the last 20 lines it printed (`output_tail`), and a hint naming `barca logs RUN_ID --step STEP
+--stream stderr`. A run of many partition keys records a step per key it computed: the first
+1000 are listed, failed ones always (with their output tail), and `steps_page` gives the
+`total` and whether the list is `truncated` (a note on stderr in the table). Replace the example
+id with a run_id from barca history.
 More: barca docs agents, barca docs cache

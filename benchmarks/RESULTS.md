@@ -1,10 +1,62 @@
 # Benchmark Results
 
-Latest passes: 2026-10-23, bounded run records under `barca serve` at 200k keys (first section
-below); 2026-10-22, keyed partition sources at 10k to 200k keys (second), and the read routes of `barca serve` and the inspection commands at 300 assets (second). Latest comparison pass: 2026-10-21, barca 0.28.0 against Dagster
-1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (third section, #65). The sections after it are older passes on
-other hardware and are kept for the record. Absolute times from different machines are not
-comparable; within one pass, the ratios between frameworks are.
+Latest passes: 2026-10-23, early cutoff for assets at 10k and 200k keys (first section below)
+and bounded run records under `barca serve` at 200k keys (second); 2026-10-22, keyed partition
+sources at 10k to 200k keys (third section), and the read routes of `barca serve` and the
+inspection commands at 300 assets (fourth). Latest comparison pass: 2026-10-21, barca 0.28.0
+against Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (fifth section,
+#65). The sections after it are older passes on other hardware and are kept for the record.
+Absolute times from different machines are not comparable; within one pass, the ratios between
+frameworks are.
+
+## Early cutoff for assets (2026-10-23)
+
+`benchmarks/asset_cutoff`: a sensor `feed`, a global asset `rates` that reads it and rounds it,
+and a two-asset chain partitioned by customer (`billed`, `invoice`, 2N keys, keys from
+`partitions_from(customers)`). The feed moves by 0.001, so `rates` reruns and writes the same
+bytes. **cutoff** has `@asset(cutoff=True)` on `rates` (#628); **plain** does not.
+
+### Setup
+
+- **Machine:** AMD Ryzen AI MAX+ 395 (16 cores, 32 threads), 62 GiB RAM, Fedora 44, kernel
+  7.2.8, btrfs on NVMe. Not pinned; other agents were building and testing during the pass (1-minute
+  load average 11 to 20), so differences under about 20% are noise.
+- **barca:** release build of `feat/asset-cutoff` (0.30.0 plus this change), default pool (32
+  workers).
+- **What is timed:** `barca get invoice pipeline.py --json` from process start to exit
+  (`/usr/bin/time`, which also gives the coordinator's peak RSS). Medians of 3 runs at 10k, one
+  run at 200k. `dry-run` and `status` run after the sensor recorded a moved feed
+  (`barca get feed`, not timed): with cutoff, `rates` would run and its consumers are `unknown`
+  (`cutoff_pending`); without, they are `run`.
+
+```bash
+KEYS=10000 MODES="cutoff plain" benchmarks/asset_cutoff/bench.sh
+RUNS=1 KEYS=200000 MODES="cutoff plain" benchmarks/asset_cutoff/bench.sh
+```
+
+### Results
+
+| Keys | `rates` | Plan phases | `rates` reran, same bytes | Steps run | Nothing changed | `--dry-run` | `status` | Peak RSS (rerun) | Cold |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10k | cutoff | 3 | 0.40 s | 2 | 0.51 s | 0.12 s | 0.22 s | 95 MB | 2.8 s |
+| 10k | plain | 3 | 6.50 s | 20,002 | 0.59 s | 0.18 s | 0.24 s | 238 MB | 3.7 s |
+| 200k | cutoff | 3 | 12.7 s | 2 | 8.9 s | 2.6 s | 2.8 s | 1.25 GB | 224 s |
+| 200k | plain | 3 | 246 s | 400,002 | 11.2 s | 3.6 s | 3.7 s | 3.3 GB | 217 s |
+
+- **Planning cost.** None measurable. The plan has the same phases with and without cutoff
+  here: a partitioned consumer of an unpartitioned asset is in a phase of its own already. In
+  an unpartitioned chain `a -> b -> c`, `cutoff=True` on `a` splits one phase into two (`a`,
+  then `b` and `c`); it adds one phase boundary, not a phase per key. A consumer's run hash
+  folds in a 64-hex digest instead of a 64-hex run hash, so deciding the keys costs the same:
+  the cutoff tick with nothing changed (8.9 s at 200k) and the plain one (11.2 s) are within
+  the load's noise.
+- **The rerun.** With cutoff, `rates` reran and every one of the 400k keys was decided and
+  served from cache: 12.7 s at 200k, against 246 s to recompute them all. The 12.7 s is the
+  2.6 s of deciding 400k keys that every tick pays ("Keyed partitions" below), stamping their
+  reads, checking the returned artifacts and returning 200k paths, plus running `rates` and
+  recording it.
+- **Dry run and status.** Cheaper with cutoff when `rates` would run: its consumers are
+  reported `unknown` without being hashed or looked up.
 
 ## Bounded run records under serve (2026-10-23)
 

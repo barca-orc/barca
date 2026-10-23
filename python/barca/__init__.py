@@ -61,11 +61,23 @@ class Schedule:
     `max_failures` caps consecutive failed ticks (default 5): past it the
     schedule is skipped and reported `failing` until an explicit request or a
     change in its inputs.
+
+    `timeout_seconds` limits how long one of its ticks' runs may take under
+    `barca serve` (0: no limit); without it the server's run timeout applies
+    (`--run-timeout`, `[server] run_timeout_seconds`, none by default).
     """
 
-    def __init__(self, cron: str, /, *, max_failures: int = 5) -> None:
+    def __init__(
+        self,
+        cron: str,
+        /,
+        *,
+        max_failures: int = 5,
+        timeout_seconds: int | None = None,
+    ) -> None:
         self.cron = cron
         self.max_failures = max_failures
+        self.timeout_seconds = timeout_seconds
 
 
 # ─── Decorators ───────────────────────────────────────────────────────────────
@@ -87,6 +99,8 @@ def asset(
     tags=None,
     env: list[str] | None = None,
     weight: int = 1,
+    deterministic: bool = True,
+    cutoff: bool = False,
 ):
     """Declare a cached asset node.
 
@@ -111,6 +125,16 @@ def asset(
     pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it). Give a step
     that needs a lot of memory a higher weight so fewer run beside it. It does not
     count toward the run hash. Experimental.
+
+    `deterministic=False` declares that the asset may return other bytes for the same
+    code and inputs (a snapshot of an external system), so barca does not warn that it
+    is not deterministic. It does not change caching and does not count toward the run
+    hash.
+
+    `cutoff=True` makes what reads the asset depend on the bytes it writes instead of
+    on its run hash: when it reruns and writes the same bytes, its consumers stay
+    cached. Its consumers are decided after it runs. A literal `True` or `False`; not
+    part of its own run hash. Experimental (see `barca docs cache`, "Early cutoff").
 
     `retries` is the total number of attempts on failure (1 = no retry).
     `retry_backoff` is the base delay in seconds between attempts (delay grows

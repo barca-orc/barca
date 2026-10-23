@@ -29,11 +29,17 @@ pub(crate) const CREATE_SERVER_STATE: &str = "CREATE TABLE IF NOT EXISTS server_
 /// The `server_state` key of a paused queue; its value is when it was paused (unix seconds).
 const PAUSED_AT: &str = "queue_paused_at";
 
-/// Where a queued run is: waiting to start, or started (until it records how it ended).
+/// Where a queued run is: waiting to start, or started (until it records how it ended), or
+/// started and in flight when its server began to drain (#628).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueueState {
     Queued,
     Running,
+    /// In flight when the server was told to stop (SIGTERM or SIGINT). A row still in this state
+    /// when the next server starts was killed during the drain by whatever sent the signal (a
+    /// supervisor whose grace period ran out), not by a crash of its own: it is put back in the
+    /// queue, once.
+    Draining,
 }
 
 impl QueueState {
@@ -41,6 +47,7 @@ impl QueueState {
         match self {
             QueueState::Queued => "queued",
             QueueState::Running => "running",
+            QueueState::Draining => "draining",
         }
     }
 }
@@ -160,6 +167,7 @@ pub async fn list(db_path: &str) -> Result<Vec<QueuedRun>, BarcaError> {
             seq: row.get::<i64>(1).unwrap_or_default(),
             state: match row.get::<String>(2).unwrap_or_default().as_str() {
                 "running" => QueueState::Running,
+                "draining" => QueueState::Draining,
                 _ => QueueState::Queued,
             },
             spec: row.get::<String>(3).unwrap_or_default(),
@@ -169,22 +177,42 @@ pub async fn list(db_path: &str) -> Result<Vec<QueuedRun>, BarcaError> {
     Ok(out)
 }
 
-/// Mark `run_id` started.
+/// Mark `run_id` started. A run the drain already marked `draining` (it was leaving the queue
+/// as the drain began) stays so.
 pub async fn mark_running(db_path: &str, run_id: &str) -> Result<(), BarcaError> {
-    set_state(db_path, run_id, QueueState::Running).await
-}
-
-async fn set_state(db_path: &str, run_id: &str, state: QueueState) -> Result<(), BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
     conn.execute(
-        "UPDATE run_queue SET state = ?2 WHERE run_id = ?1",
-        [run_id.to_string(), state.as_str().to_string()],
+        "UPDATE run_queue SET state = 'running' WHERE run_id = ?1 AND state = 'queued'",
+        [run_id],
     )
     .await
     .map_err(failed("marking a run"))?;
     Ok(())
+}
+
+/// Mark the runs in flight `draining`: the server was told to stop (#628). One that is still
+/// so when the next server starts was killed during the drain.
+pub async fn mark_draining(db_path: &str, run_ids: &[String]) -> Result<(), BarcaError> {
+    if run_ids.is_empty() {
+        return Ok(());
+    }
+    let _g = db::db_guard().await;
+    let (_db, conn) = db::open_conn(db_path).await?;
+    ensure(&conn).await?;
+    db::with_tx(&conn, "BEGIN IMMEDIATE", "run queue drain", async {
+        for run_id in run_ids {
+            conn.execute(
+                "UPDATE run_queue SET state = 'draining' WHERE run_id = ?1",
+                [run_id.as_str()],
+            )
+            .await
+            .map_err(failed("marking a run draining"))?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Take `run_id` off the queue: it finished (or was cancelled before it started).
@@ -204,7 +232,10 @@ pub async fn remove(db_path: &str, run_id: &str) -> Result<(), BarcaError> {
 /// the same run id: the stopping server stopped it. Its `runs` row and recorded lines are
 /// removed, so the next attempt records them afresh; the steps it finished keep their
 /// `materializations` rows (the cache the next attempt reads them from).
-pub async fn requeue(db_path: &str, run_id: &str) -> Result<(), BarcaError> {
+///
+/// `spec`, when given, replaces the row's description (the server counts there how often a
+/// run was put back after a drain was killed).
+pub async fn requeue(db_path: &str, run_id: &str, spec: Option<&str>) -> Result<(), BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
@@ -215,6 +246,14 @@ pub async fn requeue(db_path: &str, run_id: &str) -> Result<(), BarcaError> {
         )
         .await
         .map_err(failed("requeueing a run"))?;
+        if let Some(spec) = spec {
+            conn.execute(
+                "UPDATE run_queue SET spec = ?2 WHERE run_id = ?1",
+                [run_id, spec],
+            )
+            .await
+            .map_err(failed("requeueing a run"))?;
+        }
         conn.execute("DELETE FROM runs WHERE run_id = ?1", [run_id])
             .await
             .map_err(failed("forgetting the stopped attempt"))?;
@@ -315,6 +354,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_drain_marks_runs_in_flight_and_a_late_start_does_not_unmark_them() {
+        let (_dir, path) = fresh().await;
+        push(&path, "a", "{}", "t").await.unwrap();
+        push(&path, "b", "{}", "t").await.unwrap();
+        mark_running(&path, "a").await.unwrap();
+        // b left the queue as the drain began: marked before it marks itself running.
+        mark_draining(&path, &["a".into(), "b".into()])
+            .await
+            .unwrap();
+        mark_running(&path, "b").await.unwrap();
+        let states: Vec<_> = list(&path).await.unwrap().iter().map(|r| r.state).collect();
+        assert_eq!(states, [QueueState::Draining, QueueState::Draining]);
+    }
+
+    #[tokio::test]
     async fn a_requeued_run_keeps_its_place_and_forgets_its_stopped_attempt() {
         let (_dir, path) = fresh().await;
         push(&path, "first", "{}", "t").await.unwrap();
@@ -335,10 +389,13 @@ mod tests {
         )
         .await
         .unwrap();
-        requeue(&path, "first").await.unwrap();
+        requeue(&path, "first", Some("{\"again\":1}"))
+            .await
+            .unwrap();
         let rows = list(&path).await.unwrap();
         assert_eq!(rows[0].run_id, "first");
         assert_eq!(rows[0].state, QueueState::Queued);
+        assert_eq!(rows[0].spec, "{\"again\":1}");
         assert!(db::get_run(&path, "first").await.unwrap().is_none());
         assert!(db::get_logs(&path, "first").await.unwrap().is_empty());
     }

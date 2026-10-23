@@ -85,7 +85,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
-| `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, or an asset reading a sensor with no recorded output (and what depends on either) | `partitions_unknown`, `sensor_output_unknown` |
+| `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, an asset reading a sensor with no recorded output, or an asset reading an `@asset(cutoff=True)` that would run first (and what depends on any of them) | `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending` |
 | `always_runs` | tasks and sensors are never cached | `task`, `sensor` |
 
 - `changed`: the run hash differs from the last successful materialization. `cache.changed` lists
@@ -402,25 +402,41 @@ barca history --json --fields run_id,triggered_by,scheduled_at,schedule_id
   RFC 3339 time or a UTC date (`2026-10-22`).
 
 A failed run's row ends with its first failed step and the first line of its error, and JSON
-carries it as `failure: {node, error}` (`null` for every other run, and for a run that failed
-before any step did, such as a file that does not parse).
+carries it as `failure: {node, error}` and again as the flat `failed_node` and `error` (`null`
+for every other run, and for a run that failed before any step did, such as a file that does
+not parse), so `--fields run_id,failed_node,error` needs no nesting.
 
 ```bash
 barca history --status failed --since 24h
 barca history --status failed --target clean --json --fields run_id,started_at,failure
+barca history --status failed --json --fields run_id,failed_node,error
 barca history --triggered-by schedule --status failed,interrupted
 ```
 
 `barca history RUN_ID` shows one run: its own fields (status, target, job, timing, attempts,
 what started it, the schedule tick and `client_run_id` when it has them), then each step it
-recorded with its status, attempts, time, run hash and artifact (path, format and size), then
-each failed step's error, its full traceback and, when its worker died, how the process ended
-(`worker exit: SIGKILL (possibly the OOM killer)`, another signal, an exit code). A hint on
-stderr names the command that prints the failed step's stderr. JSON is `{run, steps, hint?}`:
-`run` is the run as `barca history --json` lists it, and each step has `node_id`,
-`partition_key`, `status` (`success` or `failed`), `attempts`, `elapsed_seconds`, `run_hash`,
-`artifact_path`, `artifact_format`, `artifact_size_bytes`, `error` (as recorded), `error_type`,
-`error_message`, `error_traceback` and `worker_exit`.
+recorded with its status, attempts, time, peak memory (`PEAK_RSS`), run hash and artifact
+(path, format and size), then each failed step's error, its full traceback, when its worker
+died how the process ended (`worker exit: SIGKILL (possibly the OOM killer)`, another signal,
+an exit code), and the last 20 lines the step printed before it failed (stdout and stderr in
+the order they were written, without the traceback). A hint on stderr names the command that
+prints all of the failed step's stderr. JSON is `{run, steps, hint?}`: `run` is the run as
+`barca history --json` lists it, and each step has `node_id`, `partition_key`, `status`
+(`success` or `failed`), `attempts`, `elapsed_seconds`, `cpu_seconds`, `max_rss_bytes`,
+`run_hash`, `artifact_path`, `artifact_format`, `artifact_size_bytes`, `error` (as recorded),
+`error_type`, `error_message`, `error_traceback`, `worker_exit` and `output_tail` (a failed
+step's last lines, `null` for the others).
+
+`max_rss_bytes` is the peak resident memory of the worker process while the step ran, from the
+start of the step to the end of writing its result, so a returned DuckDB relation that does
+its work while it is written is counted. It includes what the worker already held (Python,
+imported modules, a DuckDB connection's buffers). On Linux each step's peak is its own (barca
+resets the kernel's peak counter, `VmHWM`, when a step starts); elsewhere it is known only for
+a step that raised the worker's peak, and is `null` otherwise. A failed step has none. Rows
+recorded before 0.31 hold the worker's peak over every step it had run, not the step's own.
+Bytes DuckDB spilled to disk are not recorded: DuckDB keeps no total or peak of them, and its
+temporary files are gone when the query ends, so only sampling during the step could find
+them.
 
 ```bash
 barca history 7f30b3e9

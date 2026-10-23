@@ -98,11 +98,19 @@ max_size = "20GB"
 drain_timeout = 30
 # How many runs `barca serve` executes at once; the others wait in its run queue (experimental).
 max_runs = 4
+# The most the weight= of the steps of every run of `barca serve` may add up to (experimental).
+# Default: none (each run has only its own capacity).
+capacity = 4
+# Seconds a run under `barca serve` may take before it is stopped. Default: 0, no limit.
+run_timeout_seconds = 3600
 
 [execution]
 # The most the weight= of the steps running at once may add up to (experimental).
 # Default: the pool size. See "Heavy steps" on the Decorators page.
 capacity = 4
+# How many worker processes a run starts at most. Default: the cores, or the capacity when
+# it is smaller. BARCA_POOL_SIZE wins over it.
+pool_size = 4
 
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
@@ -130,11 +138,15 @@ url = "https://barca.internal.example.com"
 | Key | Default | Meaning |
 |---|---|---|
 | `default_env` | `default` | Environment name when `--env` and `BARCA_ENV` are absent. |
+| `require_env` | `false` | `true`: a command that reads or writes an environment exits 2 unless `--env` or `BARCA_ENV` names it, even with `default_env` set. See [Environments](#environments---env). |
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
 | `[execution].capacity` | the pool size | Experimental. The most the `weight=` of the steps running at once may add up to; a whole number of at least 1. A step heavier than it runs alone. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight). |
 | `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it puts them back at the head of its run queue (they start again after the restart) and exits 0. `0` requeues at once; a second signal cancels them instead. `--drain-timeout` overrides it. |
+| `[execution].pool_size` | the cores, or the capacity when smaller | How many worker processes a run starts at most; a whole number of at least 1. Without it a run starts no more workers than its capacity (every step weighs at least 1). `BARCA_POOL_SIZE` overrides it. `barca plan` (`pool_source`) and `barca doctor` say which applied. |
+| `[server].capacity` | none | Experimental. The most the `weight=` of the steps of every run of `barca serve` may add up to, admitted first come, first served across runs (a heavy step is not overtaken by lighter ones). Bounds each run's pool too. `--capacity` overrides it. See [Scheduling](/scheduling/). |
+| `[server].run_timeout_seconds` | `0` (no limit) | Seconds a run under `barca serve` may take, from when it leaves the queue; a run that takes longer is stopped and recorded as an error naming the setting. `--run-timeout` overrides it; `Schedule(..., timeout_seconds=N)` wins for its ticks. Before 0.31.0 the limit was a fixed 600 s. |
 | `[server].max_runs` | one per core | Experimental. How many runs `barca serve` executes at once; the others wait in its run queue, in order. At least 1. `--max-runs` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
@@ -148,7 +160,7 @@ valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`, `server`, `execution`
+unknown field `defualt_env`, expected one of `default_env`, `require_env`, `remote`, `discovery`, `cache`, `server`, `execution`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.
@@ -206,6 +218,7 @@ Variables that override `barca.toml`:
 | Variable | Overrides | Notes |
 |---|---|---|
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
+| `BARCA_REQUIRE_ENV` | `require_env` | `1` (or `true`, `yes`) requires `--env` or `BARCA_ENV`; `0` (or `false`, `no`) does not; anything else exits 2. |
 | `BARCA_CAPACITY` | `[execution].capacity` | Experimental. A whole number of at least 1; anything else exits 2. |
 | `BARCA_SERVER_RECONNECT` | none | Experimental. Seconds a `--server` client following a run (and `logs -f --server`) waits for a restarting server to come back (default 60; `0` gives up at once). Not a number of seconds exits 2. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |
@@ -229,7 +242,7 @@ Variables with no `barca.toml` key:
 |---|---|
 | `BARCA_OUTPUT` | `json` or `pretty`: the output format when no flag is given. Any other value exits 2. |
 | `BARCA_PROGRESS_SECS` | Seconds between `still running` lines on stderr (default 15; `0` turns them off). |
-| `BARCA_POOL_SIZE` | Number of Python worker processes (default: the available cores). |
+| `BARCA_POOL_SIZE` | Number of Python worker processes (default: `[execution].pool_size`, else the available cores, or the capacity when it is smaller). |
 | `BARCA_TRACE_TIMING` | When set, prints a timing breakdown on stderr. |
 | `BARCA_TELEMETRY` | `datadog` sends finished runs to Datadog. See [Telemetry](/reference/telemetry/) for it and the `DD_*` variables. |
 | `BARCA_COMM_COST_SECONDS` | The scheduler's estimate of the cost of dispatching one step. |
@@ -295,6 +308,22 @@ default`; credentials and signed URI queries are redacted. The line is never on 
 `--json` output is unchanged. `barca serve` always prints it, with the metadata DB and its
 format added: `...; metadata .barca/envs/prod/metadata.db (db format 1)` (see
 [Deploying](/deploying/)).
+
+On a machine with more than one environment (`.barca/metadata.db` for `default`, and each
+directory of `.barca/envs/`), a command that names none with `--env` or `BARCA_ENV` prints one
+note on stderr naming the environment it uses and the ones there are, in every output mode
+(stdout and `--json` are unchanged):
+
+```
+[barca] note: no --env given, so this uses env staging (default_env in barca.toml); this project has 2 environments (prod, staging). Pass --env NAME or set BARCA_ENV; require_env = true in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required
+```
+
+`require_env = true` at the top level of `barca.toml` (or `BARCA_REQUIRE_ENV=1`, which beats
+it; `BARCA_REQUIRE_ENV=0` turns it off) makes the environment required: every command that
+reads or writes one (`get`, `run`, `status`, `history`, `logs`, `stats`, `sql`, `gc`, `state`
+and `serve`) exits 2 without `--env` or `BARCA_ENV`, naming the environments there are, even
+when `default_env` is set, and `barca doctor` reports it as a failed `environment` check.
+`plan`, `list` and `docs` read no environment and are not affected.
 
 | | env = `default` | named env `<e>` |
 |---|---|---|

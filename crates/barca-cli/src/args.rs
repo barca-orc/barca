@@ -285,8 +285,9 @@ Examples:
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
   barca plan pipeline.py --partition region=emea   # only the emea keys; skipped fan-ins listed
+  barca plan pipeline.py --json       # the same JSON: --json and --pretty are accepted and change nothing
 
-Output: always pretty-printed JSON {plan_version, total_steps, pool_size, capacity, capacity_source,
+Output: always pretty-printed JSON, with or without --json / --pretty {plan_version, total_steps, pool_size, capacity, capacity_source,
 weights, phases: [{reason, streams: [{stream_id, steps}]}], warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
 plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
 stderr (barca docs assets, \"Unused inputs\").
@@ -373,6 +374,7 @@ Examples:
   barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}
   barca history 7f30b3e9 --limit 50   # one run's first 50 recorded steps (failed steps always listed)
   barca history 7f30b3e9 --all --json # every step the run recorded
+  barca history --status failed --json --fields run_id,failed_node,error   # why each run failed
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -385,13 +387,15 @@ run without targets), cut at 24 characters with `…`; JSON `job` holds it in fu
 resolved node ids sorted and comma-separated (null for runs recorded before 0.29.0).
 JSON returns every item unless --limit is given; human tables keep their default bound.
 A failed run's row ends with its first failed step and the first line of its error; JSON has it
-as `failure: {node, error}` (null otherwise). Filters combine with AND, and --limit, `total`
-and `truncated` count the runs they keep. With a RUN_ID, the run in detail: the steps it
-executed or that failed (cached steps are counted, not listed), each failed step's traceback,
-and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. A run of many partition keys
-records a step per key it computed: the first 1000 are listed, failed ones always, and
-`steps_page` gives the `total` and whether the list is `truncated` (a note on stderr in the
-table). Replace the example id with a run_id from barca history.
+as `failure: {node, error}` and as the flat `failed_node` and `error` (null otherwise).
+Filters combine with AND, and --limit, `total` and `truncated` count the runs they keep. With a
+RUN_ID, the run in detail: the steps it executed or that failed (cached steps are counted, not
+listed) with their peak memory (PEAK_RSS, `max_rss_bytes`), each failed step's traceback and
+the last 20 lines it printed (`output_tail`), and a hint naming `barca logs RUN_ID --step STEP
+--stream stderr`. A run of many partition keys records a step per key it computed: the first
+1000 are listed, failed ones always (with their output tail), and `steps_page` gives the
+`total` and whether the list is `truncated` (a note on stderr in the table). Replace the example
+id with a run_id from barca history.
 More: barca docs agents, barca docs cache";
 
 const GC_HELP: &str = "\
@@ -414,10 +418,11 @@ More: barca docs cache (\"Disk use\")";
 const STATS_HELP: &str = "\
 Examples:
   barca stats total                         # find `total` anywhere in the project
-  barca stats total pipeline.py             # timing percentiles and re-executions
+  barca stats total pipeline.py             # timing and peak memory (RSS) percentiles, re-executions
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped
   barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+  barca stats total --fields run_id,elapsed_seconds,max_rss_bytes   # each recent run's id, time and peak memory
   barca stats total --server                # timings recorded on the configured barca server
   barca stats total --local                 # timings recorded on this machine, even with a server configured
 
@@ -439,6 +444,9 @@ Examples:
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
   barca serve pipeline.py --drain-timeout 120   # on SIGTERM, give runs in flight 2 minutes
   barca serve pipeline.py --max-runs 2       # at most 2 runs at once; the others wait in the queue
+  barca serve pipeline.py --capacity 4       # the weight= of every run's running steps adds up to at most 4
+  barca serve pipeline.py --run-timeout 3600 # stop a run that takes longer than an hour
+  barca serve pipeline.py --run-timeout 0    # no run timeout (the default)
   barca serve pipeline.py --env prod         # .barca/envs/prod/metadata.db, named on the startup line
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
@@ -466,7 +474,15 @@ start), the scheduler stops, /health says draining, and runs in flight finish (u
 for up to --drain-timeout seconds (default 30, [server] drain_timeout in barca.toml). Exit 0
 when they all finished. At the deadline the rest are stopped and put back at the head of the
 queue, to start again from the beginning after the restart: exit 0. A second signal cancels
-them instead, with reason \"server shutdown\": exit 1.
+them instead, with reason \"server shutdown\": exit 1. Under a supervisor (process 1 of a
+container, systemd, Kubernetes) the startup prints the stop grace period it needs:
+[barca] stop grace: allow at least N s between SIGTERM and SIGKILL (...).
+--capacity N ([server] capacity) admits the weight= of the steps of every run against one budget,
+first come first served across runs: a light run proceeds beside a heavy one, and a heavy step
+is never overtaken by lighter ones. /health and /queue show it (capacity: in_use, waiting).
+--run-timeout SECONDS ([server] run_timeout_seconds, Schedule(..., timeout_seconds=N) per
+schedule) stops a run that takes longer; none by default. The run is recorded as an error:
+run timed out after Ns (<setting>).
 Lines go to stderr as text; BARCA_LOG=json writes them to stdout as JSON (barca docs telemetry).
 More: barca docs scheduling";
 
@@ -819,6 +835,14 @@ pub(crate) enum Cli {
         /// the selected keys, and fan-ins over them are left out (listed in partition_selection)
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
         partition: Option<String>,
+        /// Accepted for symmetry with the other commands: the plan is always pretty-printed
+        /// JSON, so this changes nothing
+        #[arg(long)]
+        json: bool,
+        /// Accepted for symmetry with the other commands: the plan is always pretty-printed
+        /// JSON, so this changes nothing (there is no table form)
+        #[arg(long)]
+        pretty: bool,
     },
     /// Diagnose project prerequisites without running pipeline steps
     #[command(after_help = DOCTOR_HELP)]
@@ -993,6 +1017,16 @@ pub(crate) enum Cli {
         /// 1. Default: [server] max_runs in barca.toml, else one per core. Experimental
         #[arg(long, value_name = "N", value_parser = parse_max_runs)]
         max_runs: Option<usize>,
+        /// The most the weight= of the steps running at once may add up to across every run
+        /// of this server, admitted first come, first served. At least 1. Default: [server]
+        /// capacity in barca.toml, else none (each run has only its own). Experimental
+        #[arg(long, value_name = "N", value_parser = parse_capacity)]
+        capacity: Option<usize>,
+        /// Seconds a run may take before the server stops it (recorded as an error, steps that
+        /// finished stay cached). 0: no limit. Default: [server] run_timeout_seconds in
+        /// barca.toml, else no limit; Schedule(..., timeout_seconds=N) wins for its ticks
+        #[arg(long, value_name = "SECONDS")]
+        run_timeout: Option<u64>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
@@ -1198,6 +1232,16 @@ fn parse_max_runs(value: &str) -> Result<usize, String> {
         Ok(n) if n >= 1 => Ok(n),
         _ => Err(format!(
             "'{value}' is not a number of runs: give 1 or more (how many runs execute at once)"
+        )),
+    }
+}
+
+fn parse_capacity(value: &str) -> Result<usize, String> {
+    match value.parse::<usize>() {
+        Ok(n) if n >= 1 => Ok(n),
+        _ => Err(format!(
+            "'{value}' is not a capacity: give 1 or more (the most the weight= of the steps \
+             running at once may add up to)"
         )),
     }
 }

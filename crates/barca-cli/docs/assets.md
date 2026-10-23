@@ -68,7 +68,7 @@ Star-import dependency hashing remains conservative.
 |---|---|
 | `inputs={"param": upstream}` | Wire upstream nodes to parameters. The param name must match a function parameter; barca checks this when it reads the file ("Inputs and parameters" below). |
 | `name="..."` | Explicit node name (the default is the function name). |
-| `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>", max_failures=5)`. See `barca docs scheduling`. |
+| `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>", max_failures=5, timeout_seconds=3600)`. See `barca docs scheduling`. |
 | `serializer=` | Force `"json"`, `"pickle"`, `"parquet"` or `"csv"`. See `barca docs types`. |
 | `partitions=` | Fan one asset out over keys. See `barca docs partitions`. |
 | `timeout_seconds=` | Per-attempt time limit (default 300). |
@@ -76,6 +76,8 @@ Star-import dependency hashing remains conservative.
 | `retry_backoff=` | Base delay in seconds; the delay grows linearly with the attempt number. |
 | `env=["NAME", ...]` | Environment variables the function reads. Their values are part of the cache key and are reported per step. See below. |
 | `weight=` | How much of the pool's capacity the step takes while it runs (default 1). Experimental. See "Heavy steps" below. |
+| `deterministic=False` | `@asset` only: new bytes for the same code and inputs are expected, so barca does not warn that the function is not deterministic. Caching is unchanged. See `barca docs cache`, "Recompute byte checks". |
+| `cutoff=True` | What reads the asset depends on the bytes it wrote, not its run hash: a rerun that writes the same bytes leaves everything below it cached. `@asset` only. Experimental. See `barca docs cache`, "Early cutoff". |
 | `description=`, `tags=` | Metadata. |
 
 Stacked under `@asset`, `@sink("path")` writes the output to a file as well, and
@@ -103,7 +105,7 @@ These are all the arguments barca's decorators and helpers take:
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `group()` | one | `members`, `output`, `description` |
-| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic`, `cutoff` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
@@ -111,7 +113,7 @@ These are all the arguments barca's decorators and helpers take:
 | `partitions_from()` | one | none |
 | `collect()` | one | none |
 | `asset_ref()` | one | none |
-| `Schedule()` | one | `max_failures` |
+| `Schedule()` | one | `max_failures`, `timeout_seconds` |
 
 Every argument in the table does something, on each decorator it is listed for: on `@task` and
 `@sensor`, `partitions=` runs the function once per key and `serializer=` forces the format its
@@ -132,7 +134,7 @@ def report(raw: dict) -> int:
 
 ```
 $ barca list pipeline.py --pretty
-Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight
+Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight, deterministic, cutoff
 Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 ```
 
@@ -317,9 +319,16 @@ def embed_c() -> dict:
 ```
 
 - The weights of the steps running at once add up to at most the **capacity**. It is the pool
-  size (available cores, or `BARCA_POOL_SIZE`) unless `[execution] capacity` in barca.toml or
-  `BARCA_CAPACITY` sets it; the environment variable wins. With a capacity of 4, the three steps
-  above run two at a time, and two weight-1 steps can run beside one of them.
+  size unless `[execution] capacity` in barca.toml or `BARCA_CAPACITY` sets it; the environment
+  variable wins. With a capacity of 4, the three steps above run two at a time, and two
+  weight-1 steps can run beside one of them.
+- The **pool size** is how many worker processes a run starts at most: `BARCA_POOL_SIZE`, else
+  `[execution] pool_size` in barca.toml, else the available cores, or the capacity when it is
+  smaller (every step weighs at least 1, so no more than `capacity` steps ever run at once, and
+  a worker past that would only start and import the project). Under `barca serve` with a
+  server capacity (below), that bounds it too. Weights above 1 do not shrink the pool further:
+  workers start only for the steps the capacity admits. With `capacity = 1` and nothing else
+  set, a run starts one worker.
 - `weight=` is a whole number of at least 1; anything else is a parse error (exit 2). It is
   accepted on `@asset`, `@task` and `@sensor`. It is not part of the run hash: changing it
   re-runs nothing and outputs and cache decisions are the same at any weight or capacity.
@@ -334,11 +343,22 @@ def embed_c() -> dict:
   step waits for its branches it is not counted (the branches carry its weight), so its own
   memory is not limited then.
 - The capacity is per run: each run has its own pool of workers. Two runs at the same time
-  (two `barca get` commands, or `barca serve` running two schedules at once) each fill their
-  own capacity.
-- `barca plan --json` shows `capacity`, `capacity_source` and `weights` (the planned nodes with a
-  weight above 1); `--dry-run` shows `capacity` and a `weight` on each such step; `barca doctor`
-  has a `capacity` check.
+  (two `barca get` commands) each fill their own capacity. Under `barca serve`, `--capacity N`
+  or `[server] capacity = N` adds one capacity that every run of the server shares (experimental,
+  `barca docs scheduling`, "A capacity shared by every run"): a step starts only when it fits
+  both its run's capacity and the server's.
+- `barca plan` shows `pool_size` and `pool_source` (where the pool size came from:
+  `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the capacity setting that bounded the
+  cores), `capacity`, `capacity_source` and `weights` (the planned nodes with a weight above 1);
+  `--dry-run` shows `capacity` and a `weight` on each such step; `barca doctor` has a `capacity`
+  check naming both, and a `server_capacity` check when `[server] capacity` is set.
+
+```toml
+# barca.toml
+[execution]
+capacity = 1     # one step at a time: the pool is one worker
+pool_size = 2    # or set the pool yourself (BARCA_POOL_SIZE wins over it)
+```
 
 ```bash
 barca plan pipeline.py

@@ -25,7 +25,14 @@ def summary(all_sales: list[dict]) -> dict:
 ```
 
 - `partitions([...])` declares keys. A literal list is read statically; any other expression
-  (a list comprehension, a function call) is evaluated by the Python runtime at plan time.
+  (a list comprehension, a function call) is evaluated by the Python runtime at plan time. It
+  imports the asset's module the way a worker does, with the module's directory and the project
+  root on `sys.path`, so a helper module beside it or a package of the project imports. An
+  expression that raises (or a module that fails to import) is a load error naming the node,
+  with the traceback, in `barca list`, `barca status`, `get` (exit 2 when it is the target),
+  `GET /health` `load_errors` and `barca doctor`; the node and what reads it are left out of
+  the plan, as for a file that does not parse. Up to 0.30 such a node got no keys, with only a
+  warning.
 - The partition key is passed to the function as the parameter named in `partitions={...}`. A
   dimension that is not a parameter of the function is an error when the file is read, exit 2
   (`barca docs assets`, "Inputs and parameters").
@@ -181,6 +188,10 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.
   float.
 - Editing the source's code (its query) changes its run hash, and every key runs again, as for
   anything that reads a sensor (`barca docs cache`). Its `freshness=` does not count.
+- The source may be an asset instead of a sensor. With `@asset(cutoff=True)` on it, each key
+  folds in its own value only, not the source's run hash, so when the asset reruns (an upstream
+  changed) only the keys whose value changed run. Without `cutoff`, every rerun of the asset
+  reruns every key.
 - A removed key runs nothing; `barca get scored` returns the remaining keys. A new key runs
   that key only. A `collect(scored)` downstream runs whenever a key is added, removed or
   recomputed, since its inputs changed.
@@ -198,6 +209,16 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.
   its outcome lists the keys it computed and counts the others ("Many keys" below). At 200k
   keys with one key changing per tick, the metadata DB grows by about 50 KB per tick and
   the server's memory stays flat (`benchmarks/RESULTS.md`, "Bounded run records").
+
+### A global step every key reads
+
+An unpartitioned asset that every key reads (a rate table, a dimension, a model) reruns every
+key below it whenever it reruns, even when it wrote the same bytes. Mark it
+`@asset(cutoff=True)` and what reads it folds in the bytes it wrote instead of its run hash: a
+rerun that writes the same bytes leaves every key cached, new bytes rerun all of them. Before
+it runs, a dry run reports the keys below it `unknown` (reason `cutoff_pending`). On a
+partitioned asset, `cutoff=True` applies per key. `barca docs cache`, "Early cutoff", has the
+details.
 
 ## Getting partitions
 

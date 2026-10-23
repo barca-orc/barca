@@ -521,10 +521,20 @@ impl Dag {
         nodes: &[ExtractedNode],
         failed_files: &[String],
     ) -> (Self, Vec<(String, String)>) {
+        Self::isolate_with(nodes, failed_files, Vec::new())
+    }
+
+    /// [`Self::isolate`], with nodes already known to be broken: `failed` (node id, error)
+    /// are left out with their error, and so is everything downstream of them.
+    pub(crate) fn isolate_with(
+        nodes: &[ExtractedNode],
+        failed_files: &[String],
+        failed: Vec<(String, String)>,
+    ) -> (Self, Vec<(String, String)>) {
         use std::collections::HashSet;
         let refs = Resolver::new(nodes);
         let mut edges = Vec::new();
-        let mut failures = Vec::new();
+        let mut failures = failed;
         for node in nodes {
             let id = node.continuity_key();
             let inputs = node
@@ -998,12 +1008,15 @@ mod tests {
             explicit_name: None,
             freshness: crate::model::Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: smallvec::SmallVec::new(),
             partitions: HashMap::new(),
             sinks: smallvec::SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            cutoff: false,
             weight: 1,
+            deterministic: true,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),

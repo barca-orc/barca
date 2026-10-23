@@ -7,7 +7,7 @@
 import { match } from 'ts-pattern'
 import { runHref } from './running'
 import { runTime, triggeredByLabel } from './runs'
-import type { HealthQueue, QueueEntry, QueueView } from './types'
+import type { CapacitySnapshot, HealthQueue, QueueEntry, QueueView } from './types'
 
 /** `/queue` poll interval while anything runs or waits, and otherwise. */
 export const QUEUE_POLL_BUSY_MS = 2_000
@@ -41,6 +41,38 @@ export function queueStateLabel(state: QueueState, formatTime: (value: string | 
 /** `1 of 4 running`. */
 export function capacityLabel(running: number, maxRuns: number): string {
   return `${running} of ${maxRuns} running`
+}
+
+/**
+ * The capacity every run shares (`--capacity`): `weight 3 of 4 in use`, with how many steps
+ * wait for it; null when the server has none.
+ */
+export function sharedCapacityLabel(capacity: CapacitySnapshot | null | undefined): string | null {
+  if (!capacity) return null
+  const used = `weight ${capacity.in_use} of ${capacity.total} in use`
+  const n = capacity.waiting.length
+  return n === 0 ? used : `${used} · ${n} step${n === 1 ? '' : 's'} waiting`
+}
+
+/** One step waiting for the shared capacity, in admission order. */
+export interface WaitingRow {
+  position: string
+  node: string
+  runId: string
+  weight: number
+  waited: string
+  href: string
+}
+
+export function waitingRows(capacity: CapacitySnapshot | null | undefined): WaitingRow[] {
+  return (capacity?.waiting ?? []).map((w, at) => ({
+    position: `#${at + 1}`,
+    node: w.node,
+    runId: w.run_id,
+    weight: w.weight,
+    waited: `${Math.round(w.waiting_seconds)}s`,
+    href: runHref(w.run_id),
+  }))
 }
 
 /** `3 queued`, or `nothing queued`. */
