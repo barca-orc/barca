@@ -127,6 +127,12 @@ const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
         "b",
         "a",
     ),
+    // `partition_by=` on a file sink is a usage error (#621).
+    (
+        "python/tests/test_dataset_sinks.py",
+        "exported",
+        "partition_by=",
+    ),
 ];
 
 fn repo_root() -> PathBuf {

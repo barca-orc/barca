@@ -78,6 +78,11 @@ Star-import dependency hashing remains conservative.
 | `weight=` | How much of the pool's capacity the step takes while it runs (default 1). Experimental. See "Heavy steps" below. |
 | `description=`, `tags=` | Metadata. |
 
+Stacked under `@asset`, `@sink("path")` writes the output to a file as well, and
+`@sink("prefix/", partition_by=[...], rows_per_file=N)` (a path ending in `/`) writes it as a
+Hive-partitioned dataset with one directory level per partition dimension of the asset. A sink
+that fails fails the step. See `barca docs sinks`.
+
 `inputs=`, `serializer=` and the dimension names in `partitions=` are part of the asset's run
 hash: changing one runs the asset again. The other options, the partition keys and the
 formatting of the decorator are not: editing them re-runs nothing. `barca docs cache` ("Which
@@ -101,7 +106,7 @@ These are all the arguments barca's decorators and helpers take:
 | `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
-| `@sink` | one | `serializer` |
+| `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
 | `partitions()` | one | none |
 | `partitions_from()` | one | none |
 | `collect()` | one | none |
@@ -145,6 +150,9 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
   Before, these were read as "no keys", "no input", "an empty cron" and "no sink". A call with
   none or with two (`@sink()`, `partitions(a, b)`, `@sink("out.txt", "json")`: write
   `serializer="json"`) is rejected too; Python refuses those calls as well.
+- `@sink`'s `partition_by=` (a list of column names) and `rows_per_file=` (a whole number)
+  apply to a dataset sink, a path ending in `/`; on a file sink, or written as anything but
+  literals, they are rejected when the file is read, exit 2 (`barca docs sinks`).
 - `@asset`, `@sensor` and `@task` take keyword arguments only. `@asset(**options)`,
   `@asset(*args)` and `@asset("x")` are rejected: barca reads the arguments from the source
   without running it and cannot see what a `**` or `*` holds.

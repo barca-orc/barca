@@ -157,9 +157,8 @@ def clean_staging() -> None:
             if entry.is_dir():
                 if not entry.name.isdigit() or _pid_alive(int(entry.name)):
                     continue
-                for tmp in entry.iterdir():
-                    tmp.unlink()
-                entry.rmdir()
+                # A dataset sink stages a directory per write (`barca._sinks`).
+                shutil.rmtree(entry)
             elif entry.suffix == ".tmp":
                 if now - entry.stat().st_mtime > _LEGACY_TEMP_MAX_AGE_SECONDS:
                     entry.unlink()

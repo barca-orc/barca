@@ -204,12 +204,24 @@ def task(
     return decorator
 
 
-def sink(path: str, /, *, serializer: str | None = None):
+def sink(
+    path: str,
+    /,
+    *,
+    serializer: str | None = None,
+    partition_by: "list[str] | tuple[str, ...] | None" = None,
+    rows_per_file: int | None = None,
+):
     """Declare a sink output (stacked on @asset).
 
     path may be local or a remote URI (abfss://, s3://, gs://). serializer
     overrides the format ("json", "pickle", "parquet", "csv"); it defaults to the
     path extension, then the parent asset's artifact format.
+
+    A path ending in "/" is a dataset sink: a Hive-partitioned dataset with one
+    directory level per partition dimension of the asset, then one per
+    ``partition_by`` column of the returned table. ``rows_per_file`` caps the rows
+    of each parquet file. See ``barca docs sinks``.
     """
 
     def decorator(f):

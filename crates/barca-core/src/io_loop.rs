@@ -1993,10 +1993,12 @@ mod tests {
                 crate::model::SinkDecl {
                     path: "abfss://cont@acct.dfs.core.windows.net/exports/a.parquet".to_string(),
                     serializer: Some(crate::model::SerializerKind::Parquet),
+                    ..Default::default()
                 },
                 crate::model::SinkDecl {
                     path: "exports/a.pkl".to_string(),
                     serializer: None,
+                    ..Default::default()
                 },
             ],
             upstream_inputs: HashMap::new(),

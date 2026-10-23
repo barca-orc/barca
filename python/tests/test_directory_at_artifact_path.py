@@ -292,7 +292,17 @@ def exported() -> dict:
 """
 
 
-def test_a_directory_at_a_sink_path_fails_the_sink_and_is_never_moved(tmp_path):
+def sink_failed(proc: subprocess.CompletedProcess) -> str:
+    """A failed sink fails its step (0.30.0): exit 1, a step_failed envelope naming it."""
+    assert proc.returncode == 1, proc.stderr
+    envelope = json.loads([line for line in proc.stderr.splitlines() if line.startswith("{")][-1])
+    assert envelope["kind"] == "step_failed", envelope
+    assert envelope["node"] == "pipeline.py:exported", envelope
+    assert "SinkError: sink ./exports/out.json" in envelope["error"], envelope
+    return envelope["error"]
+
+
+def test_a_directory_at_a_sink_path_fails_the_step_and_is_never_moved(tmp_path):
     root = tmp_path / "sinks"
     out = root / "exports" / "out.json"
     (out / "inner").mkdir(parents=True)
@@ -301,9 +311,7 @@ def test_a_directory_at_a_sink_path_fails_the_sink_and_is_never_moved(tmp_path):
 
     proc = cli(root, "get", "exported", "-o", "value", "--json")
 
-    assert ok(proc)["final_output"] == {"v": 1}  # the asset itself succeeds
-    assert "[barca] SINK FAILED: pipeline.py:exported" in proc.stderr, proc.stderr
-    assert "IsADirectoryError" in proc.stderr, proc.stderr
+    assert "IsADirectoryError" in sink_failed(proc)
     assert sorted(p.name for p in out.parent.iterdir()) == ["out.json"]
     assert (out / "inner" / "x").read_text() == "mine"
 
@@ -322,13 +330,13 @@ def test_a_symlink_at_a_sink_path_is_written_through_and_stays_a_link(tmp_path):
     proc = cli(root, "get", "exported", "-o", "value", "--json")
 
     assert ok(proc)["final_output"] == {"v": 1}
-    assert "SINK FAILED" not in proc.stderr, proc.stderr
+    assert "SinkError" not in proc.stderr, proc.stderr
     assert link.is_symlink() and os.readlink(link) == str(target)
     assert json.loads(target.read_text()) == {"v": 1}
     assert sorted(p.name for p in target.parent.iterdir()) == ["real.json"]
 
 
-def test_a_symlink_to_a_directory_at_a_sink_path_fails_the_sink_and_stays(tmp_path):
+def test_a_symlink_to_a_directory_at_a_sink_path_fails_the_step_and_stays(tmp_path):
     root = tmp_path / "sinks"
     (root / "exports").mkdir(parents=True)
     target = tmp_path / "shared"
@@ -339,8 +347,7 @@ def test_a_symlink_to_a_directory_at_a_sink_path_fails_the_sink_and_stays(tmp_pa
 
     proc = cli(root, "get", "exported", "-o", "value", "--json")
 
-    assert ok(proc)["final_output"] == {"v": 1}
-    assert "[barca] SINK FAILED: pipeline.py:exported" in proc.stderr, proc.stderr
+    sink_failed(proc)
     assert link.is_symlink() and sorted(p.name for p in target.iterdir()) == ["theirs"]
 
 

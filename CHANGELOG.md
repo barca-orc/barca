@@ -8,6 +8,30 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- A sink that cannot be written now fails its step, for every `@sink`: the step's error is a
+  `SinkError` naming the sink, the run exits 1 with a `step_failed` envelope, and the step is not
+  recorded, so the next run tries it again. Up to 0.29 a failed sink printed
+  `[barca] SINK FAILED: ...` on stderr and the asset succeeded; automation that grepped stderr
+  for that line can rely on the exit code instead (#621).
+
+### Features
+
+- Dataset sinks (#621): a `@sink` path ending in `/` writes a Hive-partitioned dataset, one
+  directory level per partition dimension of the asset (`scored/retailer=r1/part-0.parquet`),
+  that DuckDB and pyarrow read as one table
+  (`read_parquet('scored/**/*.parquet', hive_partitioning = true)`). `partition_by=[...]` adds
+  levels from columns of the returned table, `rows_per_file=` caps the rows of each parquet file,
+  and `serializer="csv"` or `"json"` (JSON Lines) write one file per partition. DuckDB writes a
+  returned relation (streaming), polars a polars frame and pyarrow a pandas frame or Arrow table,
+  all with the same layout. A cached key writes nothing; a key that runs is staged and swapped in
+  for its own directory; a key the asset no longer has is deleted after the run. The sink owns
+  its prefix (`_barca_sink.json`) and refuses one holding files barca did not write, and a write
+  that makes many directories or small files prints a warning. Works on local paths and on
+  `s3://`, `gs://` and `abfs://`. `barca docs sinks`, "Dataset sinks" and "How to choose
+  partition columns".
+
 ## 0.29.6 (2026-10-23)
 
 ### Features

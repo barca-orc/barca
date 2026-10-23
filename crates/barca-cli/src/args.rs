@@ -145,6 +145,7 @@ Examples:
   barca get total pipeline.py -o url --expires 7d   # a link that works for 7 days (the maximum)
   barca get sales pipeline.py -o url --partition region=emea --expires 30m   # one key's link
   barca get sales pipeline.py              # a partitioned target: one path per key
+  barca get scored pipeline.py             # with @sink(\"exports/scored/\"): writes the keys that ran as a Hive dataset (barca docs sinks)
   barca get sales pipeline.py --partition region=emea,amer   # only these keys: computed and returned
   barca get margin pipeline.py --partition region=apac   # upstream partitioned assets compute apac only
   barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only that key
@@ -223,7 +224,9 @@ plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 
 status \"failed\" and failed_node. Stderr ends with the failed step, its first error line,
 and the count of skipped downstream nodes.
 A required history-write failure exits 3 and preserves previously committed history.
-More: barca docs cache, barca docs partitions, barca docs types, barca docs agents";
+A @sink that cannot be written fails its step (exit 1, a SinkError); a dataset sink (a path ending
+in /) deletes the keys its asset no longer has after the run (barca docs sinks).
+More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents";
 
 const RUN_HELP: &str = "\
 Examples:

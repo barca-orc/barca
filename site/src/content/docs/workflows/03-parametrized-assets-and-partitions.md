@@ -417,7 +417,9 @@ per key, not what your functions cost.
 - **`--partition` skips fan-ins.** A `collect()` over a narrowed asset, and what is below it, is
   not run under a selection (reason `partition_selection`); a partitioned asset on another
   dimension keeps every key. Up to 0.29.2 `--partition` narrowed only the target.
-- With `@sink`, each key writes its own file: `barca docs sinks`.
+- With `@sink("out.parquet")`, each key writes its own file; with a path ending in `/`,
+  `@sink("out/")` writes one Hive-partitioned dataset with a `retailer=r1/` directory per key:
+  `barca docs sinks`.
 - To fan work out at run time from inside a task, without caching, see
   [Parallel Tasks](/patterns/04-parallel-tasks/).
 

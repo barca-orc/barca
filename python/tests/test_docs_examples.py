@@ -851,27 +851,57 @@ def test_sinks_topic_example(binary, topics, tmp_path):
     assert json.loads((tmp_path / "exports" / "summary.json").read_text()) == {"orders": 2}
 
 
-def test_a_parquet_sink_of_a_non_frame_fails_the_sink_not_the_asset(binary, tmp_path):
+def test_sinks_topic_dataset_example(binary, topics, tmp_path):
+    """"Dataset sinks": the example writes exactly the layout shown, and the query shown reads
+    it back as one table."""
+    duckdb = pytest.importorskip("duckdb")
+    body = topics["sinks"]
+    code = next(b for b in blocks(body, "python") if "partition_by=" in b)
+    (tmp_path / "pipeline.py").write_text(code)
+    result(barca(binary, tmp_path, "get", "scored", "pipeline.py"))
+    shown = next(b for b in blocks(body, "") if b.startswith("exports/scored/_barca_sink.json"))
+    written = sorted(
+        p.relative_to(tmp_path).as_posix() for p in (tmp_path / "exports").rglob("*") if p.is_file()
+    )
+    assert written == shown.strip().splitlines()
+    query = next(b for b in blocks(body, "sql") if "hive_partitioning" in b)
+    rows = duckdb.connect().sql(query.replace("exports/", f"{tmp_path}/exports/")).fetchall()
+    assert sorted((r[0], str(r[1]), r[2]) for r in rows) == [
+        ("r1", "2026-10-21", 1.0),
+        ("r1", "2026-10-22", 5.0),
+        ("r2", "2026-10-21", 1.0),
+        ("r2", "2026-10-22", 5.0),
+    ]
+
+
+def sink_failure(run: subprocess.CompletedProcess) -> dict:
+    """`barca docs sinks`: a sink that fails fails its step, exit 1, a step_failed envelope."""
+    assert run.returncode == 1, run.stderr
+    envelope = json.loads([line for line in run.stderr.splitlines() if line.startswith("{")][-1])
+    assert envelope["kind"] == "step_failed" and envelope["node"] == "pipeline.py:banana"
+    assert "SinkError: sink " in envelope["error"], envelope
+    return envelope
+
+
+def test_a_parquet_sink_of_a_non_frame_fails_the_step(binary, tmp_path):
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset, sink\n\n\n"
         "@asset()\n@sink('./exports/banana.parquet')\n"
         "def banana() -> dict:\n    return {'a': 1}\n"
     )
     run = barca(binary, tmp_path, "get", "banana", "pipeline.py")
-    assert result(run)["final_output"] == {"a": 1}
-    assert "[barca] SINK FAILED" in run.stderr and "cannot be written as parquet" in run.stderr
+    assert "cannot be written as parquet" in sink_failure(run)["error"]
     assert not (tmp_path / "exports" / "banana.parquet").exists()
 
 
-def test_a_failing_sink_does_not_fail_its_asset(binary, tmp_path):
+def test_a_failing_sink_fails_its_step(binary, tmp_path):
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset, sink\n\n\n"
         "@asset()\n@sink('nosuchscheme://bucket/x.json')\n"
         "def banana() -> dict:\n    return {'a': 1}\n"
     )
     run = barca(binary, tmp_path, "get", "banana", "pipeline.py")
-    assert result(run)["final_output"] == {"a": 1}
-    assert "[barca] SINK FAILED" in run.stderr
+    assert "nosuchscheme://bucket/x.json" in sink_failure(run)["error"]
 
 
 def test_partitioned_sinks_insert_the_key_before_the_extension(binary, tmp_path):

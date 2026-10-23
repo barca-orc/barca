@@ -328,6 +328,8 @@ struct RunState {
     read_paths: std::collections::HashSet<String>,
     /// `--partition`: the plan's narrowing, with the counts of keys known once a source ran.
     narrowing: Option<crate::selection::Narrowing>,
+    /// Every key of each partitioned asset with a dataset sink, for deleting removed keys.
+    dataset_keys: HashMap<String, crate::dataset_sinks::DatasetKeys>,
 }
 // Fields drop in the same order as the original run locals: recorder, workers, store.
 struct RunSession<'a, 'r> {
@@ -413,6 +415,7 @@ async fn execute_started(
     let mut session = open_run(&request, &prepared, started).await?;
     session.state.pin = Some(pin);
     drive_phases(&mut session).await?;
+    prune_dataset_sinks(&mut session).await;
     note_stale_pins(&mut session).await?;
     // What the run read (its inputs, and the outputs it returns) gets its `last_read_at` before
     // the run is recorded, so that the run's backup carries it and nothing is written locally
@@ -453,6 +456,28 @@ async fn execute_started(
         crate::errln!("[trace] metadata db opens {}", db::opens());
     }
     Ok(executed)
+}
+
+/// Delete the keys that assets with a dataset sink no longer have (`crate::dataset_sinks`).
+/// Not after a cancelled or broken run: its key sets may be incomplete.
+async fn prune_dataset_sinks(session: &mut RunSession<'_, '_>) {
+    let datasets = std::mem::take(&mut session.state.dataset_keys);
+    if datasets.is_empty()
+        || session.started.cancel.is_cancelled()
+        || session.state.phase_error.is_some()
+        || session.state.transfer_error.is_some()
+    {
+        return;
+    }
+    let lines = crate::dataset_sinks::prune(
+        datasets,
+        session.request.python,
+        session.request.cfg.storage_options_json.as_deref(),
+    )
+    .await;
+    for line in lines {
+        note(&session.pb, &line);
+    }
 }
 
 /// What a run protects from the cache size limit: everything it produced, read or returns (as
@@ -1242,6 +1267,15 @@ async fn expand_and_decide(
         narrowing.narrow_expanded(expanded);
     }
     let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
+    // The whole key set of each asset with a dataset sink, before the cache drops the keys
+    // that do not run.
+    crate::dataset_sinks::collect(&mut session.state.dataset_keys, phase_ref, |base| {
+        session
+            .state
+            .narrowing
+            .as_ref()
+            .is_some_and(|n| n.nodes.contains_key(base))
+    });
 
     // Dynamic partitions (`partitions_from`) are a single placeholder step
     // in the plan-time count but expand to their real per-key count here —
@@ -3149,20 +3183,14 @@ async fn dispatch_phase(
                     ),
                 );
             }
-            // Sink failures never fail the asset — surface them prominently.
+            // A sink that failed failed the step (the worker reports it as the step's error).
+            // A dataset sink's size warning: a partition column with too many values.
             if let Some(sinks) = artifact.get("sinks").and_then(|v| v.as_array()) {
-                for s in sinks {
-                    if s.get("status").and_then(|v| v.as_str()) == Some("error") {
-                        let msg = format!(
-                            "[barca] SINK FAILED: {} -> {}: {}",
-                            node_id,
-                            s.get("path").and_then(|v| v.as_str()).unwrap_or("?"),
-                            s.get("error")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown error"),
-                        );
-                        note(pb, &msg);
-                    }
+                for warning in sinks
+                    .iter()
+                    .filter_map(|s| s.get("warning").and_then(|v| v.as_str()))
+                {
+                    note(pb, &format!("[barca] warning: {warning}"));
                 }
             }
             // Upload plan-step artifacts in the background while the run

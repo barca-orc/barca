@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from barca import _duckdb, _storage
+from barca import _duckdb, _sinks, _storage
 from barca._artifacts import (
     _FORMAT_EXTENSIONS,
     LAZY_FRAME_TYPES,
@@ -777,42 +777,57 @@ def _through_symlink(dest: str) -> str:
     return dest
 
 
+def _partition_values(step, node_id):
+    """The partition key of the step being written, by dimension name."""
+    values = dict(step.get("partition") or {})
+    values.update(step.get("direct_kwargs") or {})
+    bracket = node_id.find("[")
+    if bracket >= 0 and node_id.endswith("]"):
+        for pair in node_id[bracket + 1 : -1].split(","):
+            name, sep, value = pair.partition("=")
+            if sep:
+                values.setdefault(name, value)
+    return values
+
+
+def _write_sink(result, sink, step, node_id, primary_fmt):
+    dest = sink.get("path", "")
+    if _sinks.is_dataset(dest):
+        base = node_id.split("[", 1)[0]
+        return _sinks.write(result, sink, _partition_values(step, node_id), base)
+    fmt = sink.get("serializer") or _EXT_FORMATS.get(_storage.suffix(dest)) or primary_fmt
+    if fmt not in ("json", "pickle", "parquet", "csv"):
+        raise ValueError(
+            f"sink serializer '{fmt}' is not supported yet (supported: json, pickle, parquet, csv)"
+        )
+    if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
+        # An artifact may fall back to pickle (barca picks its file name), but a sink's
+        # path is the user's promise to another system: never write pickle bytes there.
+        raise ValueError(
+            f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
+            "Arrow table or DuckDB relation, or sink it as json or pickle"
+        )
+    dest = _sink_dest(dest, node_id)
+    size = serialize(result, _through_symlink(dest), fmt)
+    return {"path": str(dest), "status": "ok", "size_bytes": size}
+
+
 def _write_sinks(result, step, node_id, primary_fmt):
-    """Write each @sink declared on the step. Error-isolated: a sink failure
-    never fails the parent asset — it is logged and reported in the outcome."""
+    """Write each @sink declared on the step.
+
+    Every sink is attempted. If any failed, the step fails with a `SinkError` naming each
+    failed sink: a missing export must not pass unnoticed in automation.
+    """
     outcomes = []
+    failures = []
     for sink in step.get("sinks") or []:
         dest = sink.get("path", "")
         try:
-            fmt = sink.get("serializer") or _EXT_FORMATS.get(_storage.suffix(dest)) or primary_fmt
-            if fmt not in ("json", "pickle", "parquet", "csv"):
-                raise ValueError(
-                    f"sink serializer '{fmt}' is not supported yet "
-                    "(supported: json, pickle, parquet, csv)"
-                )
-            if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
-                # An artifact may fall back to pickle (barca picks its file name), but a sink's
-                # path is the user's promise to another system: never write pickle bytes there.
-                raise ValueError(
-                    f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
-                    "Arrow table or DuckDB relation, or sink it as json or pickle"
-                )
-            dest = _sink_dest(dest, node_id)
-            size = serialize(result, _through_symlink(dest), fmt)
-            outcomes.append({"path": str(dest), "status": "ok", "size_bytes": size})
+            outcomes.append(_write_sink(result, sink, step, node_id, primary_fmt))
         except Exception as exc:
-            print(
-                f"[barca] SINK FAILED: {node_id} -> {dest}: {type(exc).__name__}: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
-            outcomes.append(
-                {
-                    "path": str(dest),
-                    "status": "error",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
+            failures.append(f"sink {dest}: {type(exc).__name__}: {exc}")
+    if failures:
+        raise _sinks.SinkError("; ".join(_storage.safe_error(f) for f in failures))
     return outcomes
 
 
@@ -996,8 +1011,13 @@ def run_batch(batch):
                     _emit_error(full_node_id, exc)
                     continue
 
+                try:
+                    _materialize(result, full_node_id, art_dir, step, elapsed)
+                except _sinks.SinkError as exc:
+                    unavailable.add(full_node_id)
+                    _emit_error(full_node_id, exc)
+                    continue
                 cache[full_node_id] = result
-                _materialize(result, full_node_id, art_dir, step, elapsed)
         else:
             node_id = step["node_id"]
 
@@ -1057,8 +1077,13 @@ def run_batch(batch):
                 _emit_error(node_id, exc)
                 continue
 
+            try:
+                _materialize(result, node_id, art_dir, step, elapsed)
+            except _sinks.SinkError as exc:
+                unavailable.add(node_id)
+                _emit_error(node_id, exc)
+                continue
             cache[node_id] = result
-            _materialize(result, node_id, art_dir, step, elapsed)
 
 
 # What a worker does with Ctrl-C (SIGINT). The terminal sends it to every process of the job,

@@ -105,6 +105,10 @@ entity Sink {
     node: Node
     path: String
     serializer: SerializerKind?
+    -- A path ending in "/" is a dataset sink (0.30.0): Hive levels from the node's
+    -- partition dimensions, then partition_by columns; rows_per_file caps parquet files.
+    partition_by: Sequence<String>
+    rows_per_file: Integer?
 }
 
 entity Dag {

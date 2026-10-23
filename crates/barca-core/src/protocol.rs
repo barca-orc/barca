@@ -161,8 +161,8 @@ pub struct ArtifactRef {
     pub frame_type: Option<String>,
 }
 
-/// Outcome of a single `@sink` write. Sink failures never fail the parent
-/// asset — they are reported here and surfaced in logs.
+/// Outcome of a single `@sink` write. A sink that fails fails its step (0.30.0), so a
+/// current worker reports only successes; "error" is what workers before 0.30.0 sent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SinkOutcome {
     pub path: String,
@@ -172,6 +172,12 @@ pub struct SinkOutcome {
     pub size_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A dataset sink: how many files the write created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<u64>,
+    /// A dataset sink's size warning (too many directories, or files that are too small).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 // ─── Coordinator → Worker ────────────────────────────────────────────────────
@@ -645,12 +651,16 @@ mod tests {
                         status: "ok".to_string(),
                         size_bytes: Some(42),
                         error: None,
+                        files: None,
+                        warning: None,
                     },
                     SinkOutcome {
                         path: "s3://b/x.pkl".to_string(),
                         status: "error".to_string(),
                         size_bytes: None,
                         error: Some("ImportError: s3fs".to_string()),
+                        files: None,
+                        warning: None,
                     },
                 ],
             },

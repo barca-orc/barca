@@ -105,7 +105,7 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
         (
             "@asset()\n@sink(path='out.json')",
             "`path` is passed by keyword to @sink, which takes it by position only. "
-            "@sink accepts: serializer",
+            "@sink accepts: serializer, partition_by, rows_per_file",
             "Pass the value as the first argument, without `path=`, like "
             '`@sink("path/to/file.json", serializer="json")`. See `barca docs sinks`.',
         ),

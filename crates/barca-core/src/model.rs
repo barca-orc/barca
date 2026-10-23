@@ -343,12 +343,30 @@ impl NodeRef {
 // ─── Sink declaration ────────────────────────────────────────────────────────
 
 /// A `@sink` decorator stacked on an `@asset`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SinkDecl {
-    /// Output path (local, s3://, gs://, etc.).
+    /// Output path (local, s3://, gs://, etc.). A path ending in `/` is a dataset sink.
     pub path: String,
     /// Serializer kind override.
     pub serializer: Option<SerializerKind>,
+    /// `partition_by=[...]`: columns of the returned table that add Hive levels below the
+    /// asset's own dimensions (dataset sinks only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partition_by: Vec<String>,
+    /// `rows_per_file=`: the most rows one file of a dataset sink holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows_per_file: Option<u64>,
+    /// The asset's partition dimensions in declared order: the Hive levels of a dataset sink.
+    /// Filled from the `@asset` decorator, not written in `@sink`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dims: Vec<String>,
+}
+
+impl SinkDecl {
+    /// A path ending in `/` is a dataset prefix, written as a Hive-partitioned dataset.
+    pub fn is_dataset(&self) -> bool {
+        self.path.ends_with('/')
+    }
 }
 
 /// Supported serializer types.

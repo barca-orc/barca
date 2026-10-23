@@ -668,8 +668,9 @@ class TestSinkExecution:
         result = pd.read_parquet(sink_path)
         assert list(result["a"]) == [1, 2, 3]
 
-    def test_sink_failure_does_not_fail_asset(self, tmp_path):
-        """A sink with an unusable destination fails loudly but the asset succeeds."""
+    def test_sink_failure_fails_the_step(self, tmp_path):
+        """A sink with an unusable destination fails the step (0.30.0; it used to be a
+        warning while the asset succeeded)."""
         artifact_dir = tmp_path / "artifacts"
         src = _write_module(
             tmp_path,
@@ -690,15 +691,13 @@ class TestSinkExecution:
             ],
             artifact_dir=artifact_dir,
         )
-        msgs, errors = _run_batch_capture_protocol(batch)
+        msgs, _ = _run_batch_capture_protocol(batch)
 
-        assert msgs[0]["type"] == "result"  # asset still succeeds
-        outcome = msgs[0]["artifact"]["sinks"][0]
-        assert outcome["status"] == "error"
-        assert "error" in outcome
-        assert any("SINK FAILED" in line for line in errors)
+        assert msgs[0]["type"] == "error"
+        assert msgs[0]["error_type"] == "SinkError"
+        assert "ftp://nowhere/out.json" in msgs[0]["message"]
 
-    def test_unsupported_serializer_is_isolated_error(self, tmp_path):
+    def test_unsupported_serializer_fails_the_step(self, tmp_path):
         artifact_dir = tmp_path / "artifacts"
         src = _write_module(
             tmp_path,
@@ -720,10 +719,9 @@ class TestSinkExecution:
             artifact_dir=artifact_dir,
         )
         msgs, _ = _run_batch_capture_protocol(batch)
-        assert msgs[0]["type"] == "result"
-        outcome = msgs[0]["artifact"]["sinks"][0]
-        assert outcome["status"] == "error"
-        assert "not supported yet" in outcome["error"]
+        assert msgs[0]["type"] == "error"
+        assert msgs[0]["error_type"] == "SinkError"
+        assert "not supported yet" in msgs[0]["message"]
 
     def test_memory_uri_sink(self, tmp_path, _memory_fs):
         artifact_dir = tmp_path / "artifacts"
