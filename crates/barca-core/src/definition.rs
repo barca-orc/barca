@@ -140,6 +140,12 @@ pub const RULES: &[Rule] = &[
                  bytes instead of its run hash), not what it returns",
     },
     Rule {
+        part: "batch",
+        counts: Counts::No,
+        reason: "decides how many keys one call of the function computes, not what each key's \
+                 result is; each key keeps its own run hash",
+    },
+    Rule {
         part: "description",
         counts: Counts::No,
         reason: "documentation",

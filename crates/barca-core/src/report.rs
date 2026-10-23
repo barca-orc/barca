@@ -60,7 +60,11 @@ pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> Str
                         })
                         .collect::<Vec<_>>()
                         .join(", ")
-                ),
+                ) + &s
+                    .batch
+                    .as_ref()
+                    .map(|b| format!("; {}", crate::batch::grouping_line(b)))
+                    .unwrap_or_default(),
                 (Some(p), Some(d)) => format!("{} keys; {d}", p.total),
                 (None, Some(d)) => d.clone(),
                 (Some(p), None) => format!("{} keys cached", p.total),

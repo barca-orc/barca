@@ -883,8 +883,14 @@ def _materialize(
     elapsed_in_artifact=False,
     timing=None,
     before_emit=None,
+    prewritten=None,
+    extra=None,
 ):
     """Serialize a result to its artifact and emit a `result` protocol message.
+
+    `prewritten` is a parquet file already holding the result (one key of a batched call that
+    DuckDB split, RFC-0013): it is moved into place instead of `result` being written. `extra`
+    is added to the artifact dict (a batched call's `batch` id).
 
     `timing` (cpu_seconds, max_rss_bytes) rides on the artifact dict — the
     completion message does triple duty: closes the lease, carries the output
@@ -896,7 +902,10 @@ def _materialize(
     majority of a step's real wall time and was previously invisible).
     """
     explicit_fmt = step.get("serializer")
-    fmt = resolve_format(result, detect_format(result, explicit=explicit_fmt))
+    if prewritten is not None:
+        fmt = "parquet"
+    else:
+        fmt = resolve_format(result, detect_format(result, explicit=explicit_fmt))
     # Run-hash layout when the coordinator supplies a run hash.
     # Batch mode's legacy partitioned loop reuses the step-level hash only for
     # unpartitioned steps (a per-step hash is wrong per-partition; the daemon
@@ -919,7 +928,17 @@ def _materialize(
     if local is not None:
         _storage.make_way(local)
     snapshot_prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
-    if snapshot_prefix and not step.get("branch"):
+    if prewritten is not None:
+        from barca._artifacts import publish_file
+
+        size, content_hash, upload_snapshot = publish_file(
+            prewritten, path, want_hash=True, snapshot_prefix=snapshot_prefix
+        )
+        if step.get("sinks"):
+            import duckdb  # ty: ignore[unresolved-import]
+
+            result = duckdb.read_parquet(str(path))
+    elif snapshot_prefix and not step.get("branch"):
         size, content_hash, upload_snapshot = serialize_for_upload(
             result, path, fmt, snapshot_prefix, want_hash=True
         )
@@ -946,6 +965,8 @@ def _materialize(
         from barca import _branches
 
         artifact["frame_type"] = _branches.frame_type(result, fmt)
+    if extra:
+        artifact.update(extra)
     if elapsed_in_artifact:
         artifact["elapsed_seconds"] = elapsed
     if timing:
@@ -1458,6 +1479,238 @@ def _run_daemon_step(step, modules, art_dir, lru):
         _duckdb.unbind_inputs(bound_views)
 
 
+def _run_daemon_call(steps, call, modules, art_dir, lru):
+    """Run the keys of one batched call (RFC-0013): one call of the function for all of them,
+    then each key written and reported on its own (`barca/_batch.py`).
+
+    Returns True when this worker may go on, as `_run_daemon_step` does.
+    """
+    from barca import _batch, _runtime
+    from barca._telemetry import Execution
+
+    first = steps[0]
+    dims = _batch.key_dims(steps)
+    keys = [_batch.key_of(st, dims) for st in steps]
+    texts = [_batch.key_text(k, dims) for k in keys]
+    base = first.get("node_id", "unknown").split("[", 1)[0]
+    call_id = call.get("id", "")
+    # The call's own output goes to the log under `<node>[batch=<id>]`: recorded once, and
+    # found from each of its keys (`barca logs --step 'node[key]'`).
+    log_id = f"{base}[batch={call_id}]"
+    tracing = Execution(first)
+    if tracing.span is not None:
+        try:
+            tracing.span.set_metric("barca.batch.keys", len(steps))
+            tracing.span.set_tag("barca.batch", call_id)
+        except Exception:
+            pass
+    t0 = time.perf_counter()
+    c0 = time.process_time()
+    rss_window = _start_rss_window()
+    import_seconds = None
+    imported = False
+    reported = set()
+    n = len(steps)
+    bound_views: list[str] = []
+
+    def fail_all(exc, survives, wall):
+        """Report every key of the call not yet reported as failed with `exc`."""
+        message = str(exc)
+        if isinstance(exc, SystemExit):
+            message = (
+                f"{message} (the step called sys.exit(); a step must return a value or raise "
+                "an exception, and barca reports any sys.exit() as a failure)"
+            )
+        traceback = _user_traceback(exc)
+        left = [st for st in steps if st["node_id"] not in reported]
+        for i, st in enumerate(left):
+            reported.add(st["node_id"])
+            _runtime.emit_step_error(
+                node_id=st["node_id"],
+                error_type=type(exc).__name__,
+                message=message,
+                traceback=traceback,
+                elapsed=wall / max(n, 1),
+                import_seconds=import_seconds if import_seconds and import_seconds > 1 else None,
+                # The coordinator stops an unsound worker at the first report that says so:
+                # every key is reported before that.
+                worker_continues=survives or i < len(left) - 1,
+            )
+
+    try:
+        source = str(Path(first["source_file"]).resolve())
+        activate_source_path(source)
+        emitter = _stdout_for_step(log_id)
+        err_emitter = _stderr_for_step(log_id)
+        if source not in modules:
+            if os.environ.get("BARCA_WORKER_AGENT") == "1":
+                print(f"[barca] importing {source}", file=sys.stderr, flush=True)
+            import_start = time.perf_counter()
+            try:
+                with _captured(emitter, err_emitter):
+                    modules[source] = load_module(source)
+            finally:
+                import_seconds = time.perf_counter() - import_start
+        fn = getattr(modules[source], first["function_name"])
+        imported = True
+        _ctrl_c_interrupts_the_step()
+
+        param_types = first.get("param_types") or {}
+        kwargs = {d: [st["direct_kwargs"][d] for st in steps] for d in dims}
+        aligned = set(first.get("aligned_inputs") or [])
+        params = []
+        for st in steps:
+            for p in st.get("inputs") or {}:
+                if p not in params:
+                    params.append(p)
+        for param in params:
+            frame_type = param_types.get(param)
+            if param.startswith("_"):
+                kwargs[param] = None
+                continue
+            value = (first.get("inputs") or {}).get(param)
+            if isinstance(value, dict) and value.get("_collected"):
+                kwargs[param] = _load_collected_artifacts(
+                    value.get("artifacts", []), lru, param=param, frame_type=frame_type
+                )
+                continue
+            if isinstance(value, dict) and value.get("_keyed"):
+                if _accepts(fn, param):
+                    kwargs[param] = {
+                        k: _keyed_value(st["inputs"][param]["path"], st["inputs"][param]["key"])
+                        for k, st in zip(keys, steps)
+                    }
+                continue
+            if param not in aligned:
+                if value:
+                    kwargs[param] = _load_artifact(value, lru, frame_type=frame_type)
+                continue
+            paths = []
+            for k, st in zip(texts, steps):
+                path = (st.get("inputs") or {}).get(param)
+                if not path:
+                    raise FileNotFoundError(
+                        f"Input artifact for parameter '{param}' of {k} was not produced"
+                    )
+                paths.append(path)
+            if frame_type in _batch.LAZY_TYPES:
+                if len(dims) != 1:
+                    raise TypeError(
+                        f"the input '{param}' is annotated as a lazy table, which a batched "
+                        f"call of several dimensions does not support yet; annotate it "
+                        f"dict[tuple, T]"
+                    )
+                kwargs[param] = _batch.lazy_table(
+                    param, frame_type, dims[0], keys, paths, texts
+                )
+            else:
+                kwargs[param] = {
+                    k: _load_artifact(path, lru, frame_type=frame_type)
+                    for k, path in zip(keys, paths)
+                }
+
+        bound_views.extend(_duckdb.bind_inputs(kwargs, param_types))
+        activate_source_path(source)
+        timeout = first.get("timeout_seconds", 0)
+        with _captured(emitter, err_emitter):
+            if timeout and timeout > 0:
+                result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=log_id)
+            else:
+                result = fn(**kwargs)
+
+        staging = Path(art_dir if not _storage.is_remote(art_dir) else ".barca") / (
+            f".batch-{os.getpid()}-{call_id}"
+        )
+        explicit = first.get("serializer")
+        values = _batch.split(result, keys, dims, staging)
+    except BaseException as exc:
+        _ctrl_c_does_nothing()
+        survives = _worker_survives(exc, imported)
+        tracing.finish(exc)
+        _duckdb.unbind_inputs(bound_views)
+        _batch.unbind()
+        fail_all(exc, survives, time.perf_counter() - t0)
+        return survives
+
+    # The call ran: write and report each key. Its time and memory are the call's, shared.
+    wall = time.perf_counter() - t0
+    cpu = time.process_time() - c0
+    share = wall / max(n, 1)
+    ok = True
+    try:
+        for k, text, st in zip(keys, texts, steps):
+            node_id = st["node_id"]
+            n_key = _batch._norm(k, dims)
+            try:
+                if n_key not in values:
+                    raise _batch.BatchFailed(f"batch returned no result for {text}")
+                value = values[n_key]
+                if isinstance(value, _batch.Failed):
+                    raise _batch.BatchFailed(value.reason or f"{text} failed")
+                prewritten = None
+                if isinstance(value, tuple) and len(value) == 2 and value[0] == "parquet":
+                    files = value[1]
+                    if len(files) == 1 and Path(files[0]).name != "__empty.parquet" and (
+                        explicit in (None, "parquet")
+                    ):
+                        prewritten = files[0]
+                        value = None
+                    else:
+                        import duckdb  # ty: ignore[unresolved-import]
+
+                        value = duckdb.read_parquet(files)
+                _materialize(
+                    value,
+                    node_id,
+                    art_dir,
+                    st,
+                    share,
+                    elapsed_in_artifact=True,
+                    timing={
+                        "cpu_seconds": cpu / max(n, 1),
+                        "rss_window": rss_window,
+                    },
+                    prewritten=prewritten,
+                    extra={"batch": call_id, "batch_keys": n},
+                )
+                reported.add(node_id)
+            except (BrokenPipeError, ConnectionResetError):
+                raise
+            except Exception as exc:
+                reported.add(node_id)
+                if isinstance(exc, _batch.BatchFailed):
+                    error_type, traceback = "BatchKeyFailed", ""
+                else:
+                    error_type, traceback = type(exc).__name__, _user_traceback(exc)
+                _runtime.emit_step_error(
+                    node_id=node_id,
+                    error_type=error_type,
+                    message=str(exc),
+                    traceback=traceback,
+                    elapsed=share,
+                    worker_continues=True,
+                )
+    except BaseException as exc:
+        _ctrl_c_does_nothing()
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            raise
+        ok = _worker_survives(exc, True)
+        fail_all(exc, ok, time.perf_counter() - t0)
+    finally:
+        _ctrl_c_does_nothing()
+        tracing.finish()
+        _duckdb.unbind_inputs(bound_views)
+        _batch.unbind()
+        import shutil
+
+        shutil.rmtree(
+            Path(art_dir if not _storage.is_remote(art_dir) else ".barca")
+            / f".batch-{os.getpid()}-{call_id}",
+            ignore_errors=True,
+        )
+    return ok
+
+
 def run_daemon():
     """Daemon mode: read execute commands from socket, run each step, send results."""
     global _use_socket
@@ -1530,9 +1783,12 @@ def run_daemon():
 
         try:
             with _runtime.result_batch(msg.get("result_journal")):
-                for step in steps:
-                    if not _run_daemon_step(step, modules, art_dir, lru):
-                        break
+                if msg.get("call"):
+                    _run_daemon_call(steps, msg["call"], modules, art_dir, lru)
+                else:
+                    for step in steps:
+                        if not _run_daemon_step(step, modules, art_dir, lru):
+                            break
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Socket was closed (e.g. replacement worker killed) — exit cleanly.
             break

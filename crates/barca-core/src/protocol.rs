@@ -159,6 +159,11 @@ pub struct ArtifactRef {
     /// none for the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_type: Option<String>,
+    /// The batched call (RFC-0013) that computed this key, and how many keys it computed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_keys: Option<u64>,
 }
 
 /// Outcome of a single `@sink` write. A sink that fails fails its step (0.30.0), so a
@@ -563,6 +568,8 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
+                batch: None,
+                batch_keys: None,
 
                 sinks: Vec::new(),
             },
@@ -644,6 +651,8 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
+                batch: None,
+                batch_keys: None,
 
                 sinks: vec![
                     SinkOutcome {
@@ -834,6 +843,8 @@ mod tests {
                     finished_at: None,
                     wall_seconds: None,
                     frame_type: None,
+                    batch: None,
+                    batch_keys: None,
 
                     sinks: Vec::new(),
                 },

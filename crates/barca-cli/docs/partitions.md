@@ -220,6 +220,210 @@ it runs, a dry run reports the keys below it `unknown` (reason `cutoff_pending`)
 partitioned asset, `cutoff=True` applies per key. `barca docs cache`, "Early cutoff", has the
 details.
 
+## Processing many keys per call
+
+A partitioned step runs once per key by default. `batch=` groups the keys that need to run into
+fewer calls of the function (experimental, 0.32.0, RFC-0013). The function then receives the
+list of its call's keys, so the same code serves one key, a batch of 20, or every key:
+
+```python
+import json
+import pathlib
+
+import duckdb
+from barca import asset, partitions_from, sensor
+
+
+@sensor()
+def retailer_versions() -> tuple[bool, dict]:
+    # {"r01": "2026-10-22 09:14:03", ...}: one version per retailer, from one query
+    return True, json.loads(pathlib.Path("versions.json").read_text())
+
+
+@asset(partitions={"retailer": partitions_from(retailer_versions)}, batch="all")
+def orders(retailer: list[str]) -> duckdb.DuckDBPyRelation:
+    # One scan for every retailer of the call; barca splits the result by `retailer`.
+    print(f"reading orders of {len(retailer)} retailers")
+    return duckdb.sql(f"select * from 'orders.csv' where list_contains({retailer!r}, retailer)")
+
+
+@asset(partitions={"retailer": partitions_from(orders)}, batch="all")
+def scored(retailer: list[str], orders: duckdb.DuckDBPyRelation) -> duckdb.DuckDBPyRelation:
+    # `orders` is one lazy table over the call's keys, with the `retailer` column.
+    return orders.aggregate("retailer, sum(amount) AS total, count(*) AS n")
+```
+
+```bash
+barca get scored pipeline.py                     # first run: every retailer, one call per asset
+barca get scored pipeline.py --dry-run           # which keys run, and in how many calls
+barca get scored pipeline.py --batch none        # one key per call, to find the retailer that fails
+barca get scored pipeline.py --batch 2           # at most 2 keys per call, this run only
+barca get scored pipeline.py --batch scored=all --batch orders=100   # per node
+```
+
+A tick where 3 of 20 retailers changed (real output; the first run made one call of 20 keys per
+asset):
+
+```
+$ barca get scored pipeline.py --dry-run
+Dry run: barca get scored (nothing executed, nothing written)
+
+STATUS    WHY                                                                     STEP
+will run  sensors always re-run                                                   pipeline.py:retailer_versions
+partial   17 of 20 keys cached; will run: retailer=r03 (value pipeline.py:retailer_versions changed), retailer=r11 (value pipeline.py:retailer_versions changed), retailer=r17 (value pipeline.py:retailer_versions changed); 3 keys in 1 call (batch=all)  pipeline.py:orders
+partial   17 of 20 keys cached; will run: retailer=r03 (input pipeline.py:orders changed), retailer=r11 (input pipeline.py:orders changed), retailer=r17 (input pipeline.py:orders changed); 3 keys in 1 call (batch=all)  pipeline.py:scored
+
+7 will run, 34 cached, 0 unknown
+
+$ barca get scored pipeline.py
+[pipeline.py:orders[batch=b1]] reading orders of 3 retailers
+[barca] 7/41 steps | done in 0.3s
+Run 3bc29e9a2595 | got 'scored' in 0.277s (7 steps, 2 phases)
+...
+
+$ barca history 3bc29e9a2595
+...
+STEP                                STATUS   ATTEMPTS  TIME  PEAK_RSS  RUN_HASH      ARTIFACT
+pipeline.py:retailer_versions       success  1         0.0s  61.3 MB   63866cd5003e  .barca/artifacts/pipeline.py--retailer_versions/63866cd5....json (json, 600 B)
+pipeline.py:scored[3 keys]          success  1         0.2s  189 MB    -             batch b2
+  pipeline.py:scored[retailer=r03]  success  1         0.1s  -         00e495e3007e  .barca/artifacts/pipeline.py--scored_retailer_r03/00e495e3....parquet (parquet, 404 B)
+  ...
+```
+
+### Choosing the grouping
+
+| `batch=` | Keys per call |
+|---|---|
+| omitted / `None` | one; the function takes a single key (the default) |
+| `20` | at most 20, in key order |
+| `"all"` | every key that needs to run, in one call |
+| `batches([["r1", "r2"], ["r3", "r4", "r5"]])` | the groups named; a key in no group runs alone |
+| `batches([...], strict=True)` | the same, and a key in no group fails the node (a `BatchError`, exit 1) |
+| `batches_by(region_of)` | keys with the same label (`region_of("r1") == "emea"`) share a call |
+| `batches_by(region_of, max_size=20)` | the same, each label's keys split into calls of at most 20 |
+
+- **Key order** is the declared order: a `partitions([...])` list's order, a keyed source's dict
+  order, the upstream's order for `partitions_from(<partitioned asset>)`. Grouping is stable
+  from run to run. A node of several dimensions orders its keys by their dimension names.
+- **Only keys that need to run are grouped.** With a keyed sensor where 3 of 200k retailers
+  changed, `batch="all"` makes one call with 3 keys; a call whose keys are all cached makes no
+  step, and a partly cached group runs its stale keys together.
+- **`batches(<expression>)`**: a literal list is read without importing anything; any other
+  expression is evaluated when barca loads the pipeline, with the project importable, as for
+  `partitions(<expression>)`; one that raises is a load error naming the node (exit 2; under
+  `serve`, an entry in `/health` `load_errors`). `batches_by(fn)` is checked the same way when
+  the pipeline loads, then called on the keys that run: a function that raises on a key, or a
+  label that is not a string or an integer, fails the node before any of its keys runs (a
+  `BatchError` naming it, exit 1), and what reads it in the run is skipped. With several
+  dimensions, `fn` receives the key as a dict of dimension to value.
+- **Where it is allowed:** a partitioned `@asset` or `@task`. On an unpartitioned step it is exit
+  2; `@sensor` does not take it. `batch=0`, a negative number, any other string, an empty group,
+  a key in two groups, and a partition parameter annotated as a scalar (`retailer: str`) are exit
+  2, naming the fix.
+- **For one run:** `--batch none|all|N` on `get` and `run` replaces `batch=` of every node that
+  declares one; `--batch NODE=V` (repeatable) of the nodes named. A node without `batch=` takes a
+  single key and is never batched by an override; naming one is exit 2. The same override is
+  `RunRequest.batch` over HTTP (`["all"]`, `["scored=20"]`), `barca.get(..., batch="all")` or
+  `batch={"scored": 20}` in Python, and `Schedule("0 * * * *", batch="all")` for the ticks of a
+  schedule under `barca serve`.
+
+### Writing a batch function
+
+The partition parameter is the list of the call's keys. Each input reads by where it comes from:
+
+| Input | Annotation | The function receives |
+|---|---|---|
+| partitioned upstream, same dimension | `dict[str, T]` or none | key to that key's value |
+| partitioned upstream, same dimension | `duckdb.DuckDBPyRelation`, `polars.LazyFrame`, `pyarrow.dataset.Dataset` | one lazy table over the call's keys' artifacts, with the dimension as a column; nothing is read until it is queried |
+| keyed source (a dict-returning `partitions_from` source) | none, or a dict | key to that key's value |
+| unpartitioned upstream, `collect(...)` | as usual | the whole value, once per call |
+
+The function returns either:
+
+- **a dict of key to value**: each value is written as that key's artifact, by the usual type
+  rules (`barca docs types`);
+- **a table with the dimension as a column**: a pandas, polars or Arrow table, or a DuckDB
+  relation. barca splits it into one table per key; a key with no rows gets an empty table with
+  the schema. DuckDB relations, polars and Arrow tables stream through DuckDB's
+  `COPY ... PARTITION_BY`, so the result is not held in Python memory; pandas is split in memory.
+
+```python
+import pandas as pd
+from barca import Failed, asset, partitions, partitions_from
+
+
+@asset(partitions={"retailer": partitions(["r1", "r2", "r3"])})
+def cleaned(retailer: str) -> pd.DataFrame:
+    return pd.DataFrame({"retailer": [retailer], "amount": [len(retailer)]})
+
+
+@asset(partitions={"retailer": partitions_from(cleaned)}, batch=20)
+def scored(retailer: list[str], cleaned: dict[str, pd.DataFrame]) -> dict:
+    out = {}
+    for r in retailer:
+        if cleaned[r].empty:
+            out[r] = Failed(f"{r} has no rows")    # fails this key alone
+        else:
+            out[r] = {"retailer": r, "score": int(cleaned[r]["amount"].sum())}
+    return out
+```
+
+- **Missing key:** a key of the call with no result fails ("batch returned no result for
+  retailer=r7"); the other keys succeed.
+- **Extra key:** a dict key or a table row whose key is not one of the call's (matched by its
+  string form: `1` is the key `"1"`) fails the whole call.
+- **`barca.Failed("reason")`** as a key's value fails that key alone (`BatchKeyFailed` in
+  history); the other keys succeed and are cached.
+- **Lazy tables need tabular artifacts:** parquet, CSV, or a JSON list of records (CSV and
+  parquet only for `pyarrow.dataset.Dataset`). Any other artifact (a pickle, a JSON object) is a
+  step error naming `dict[str, T]` as the fix; nothing is converted.
+
+### What stays the same
+
+- **Caching is per key.** Each key has the run hash, artifact and materialization it has without
+  batching. `batch=` and the grouping are not part of any hash, so a key computed in a call of
+  1000 is a cache hit for `--batch none`, and the other way round. Changing a function to the
+  batch form (a list instead of a scalar) is a code change: its keys run once more.
+- **Per key:** `barca status`, `--partition` (it narrows first, then groups), `--refresh`,
+  keyed sources (they decide which keys run; batching groups those), `cutoff=True` (each key's
+  bytes are hashed), sinks (a dataset sink writes one directory per key), `collect` (it reads
+  every key's artifact), and a server's ledger (lookups and posts per key).
+- **One call is one step to run:** it runs in one worker; the calls of a node run in parallel up
+  to the pool and the capacity. `weight=` applies per call (`batch="all"` with `weight=8` holds 8
+  for the call), as does one admission against a server's shared capacity. `retries=`,
+  `retry_backoff=` and `timeout_seconds=` apply per call; a retry reruns only the keys that
+  failed, together.
+- **A call that raises fails all its keys.** Keys are not split and retried one at a time:
+  `--batch none` is the debugging tool.
+
+### Seeing calls
+
+- **History:** `barca history RUN_ID` lists a call as `scored[N keys]` with its total time and the
+  call's peak memory, its keys under it (the first 10; `--json` lists every key, each with the
+  call's id in `batch`).
+- **Logs:** a call's stdout and stderr are recorded once, under `scored[batch=<id>]`, and found
+  from any of its keys: `barca logs RUN_ID --step 'scored[retailer=r7]'`. A failed key's
+  `output_tail` is its call's output.
+- **Dry run:** a batched step gains `batch` `{grouping, keys, calls}` in JSON and "3 keys in 1
+  call (batch=all)" in its WHY column. `calls` is `null` for `batches(...)`/`batches_by(...)` over
+  more keys than the dry run lists (20).
+- **Peak memory** is measured per call (each key of a call reports the call's peak), to tune `N`.
+- **Telemetry:** with `BARCA_TELEMETRY=datadog` and ddtrace in the worker, one `barca.execute`
+  span per call, with `barca.batch.keys`; the coordinator's spans stay per node and per key.
+
+### Known limits
+
+- **Memory:** `"all"` has no automatic cap; `batch=N` is the cap. A call returning a pandas frame
+  is split in memory.
+- **Several dimensions:** a call's keys are tuples of values (in the order of the dimension
+  names, sorted) in dicts and returned dicts; a lazy table input supports one dimension only.
+- **Progress lines** stay per key (`--agent` prints a `completed` line per key), and a call's
+  time is shared evenly between its keys in `elapsed_seconds`.
+- **A `batches_by` function** runs in a separate Python process when the keys that run are
+  known, once per batched node per phase (about 50 ms plus the module's import).
+- **The dry run** counts calls from the keys it lists: for `batches(...)` and `batches_by(...)`
+  over more than 20 keys, `calls` is `null`.
+
 ## Getting partitions
 
 `barca get` on a partitioned asset returns every key, sorted by key: one artifact path per key,

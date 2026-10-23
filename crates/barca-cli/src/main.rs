@@ -258,6 +258,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             expires,
             format,
             partition,
+            batch,
             refresh,
             no_cascade,
             refresh_all,
@@ -307,6 +308,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                     mode: format,
                     values: mode.values,
                     partition,
+                    batch: parse_batch(&batch)?.to_flags(),
                     fields,
                     env,
                 },
@@ -322,6 +324,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             no_cascade,
             refresh_all,
             partition,
+            batch,
             dry_run,
             agent,
             fields,
@@ -359,6 +362,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                     mode: mode.into(),
                     values: false,
                     partition,
+                    batch: parse_batch(&batch)?.to_flags(),
                     fields,
                     env,
                 },
@@ -581,6 +585,7 @@ async fn run_cli(
             expires,
             format,
             partition,
+            batch,
             refresh,
             no_cascade,
             refresh_all,
@@ -616,6 +621,7 @@ async fn run_cli(
                 output,
                 policy,
                 partition,
+                parse_batch(&batch)?,
                 dry_run,
                 agent,
                 fields.as_deref(),
@@ -630,6 +636,7 @@ async fn run_cli(
             no_cascade,
             refresh_all,
             partition,
+            batch,
             dry_run,
             output,
             format,
@@ -669,6 +676,7 @@ async fn run_cli(
                 fields.as_deref(),
                 ledger,
                 partition,
+                parse_batch(&batch)?,
             )
             .await
             .map_err(|e| get_run_error(e, ctx, &hint_files))
@@ -937,6 +945,13 @@ async fn run_cli(
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+/// `--batch`, parsed (RFC-0013); a usage error naming the accepted forms when it does not parse.
+#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
+fn parse_batch(values: &[String]) -> Result<barca_core::batch::BatchOverride, CliError> {
+    barca_core::batch::BatchOverride::parse(values)
+        .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
+}
 
 /// `--partition`, parsed; a usage error naming the accepted forms when it does not parse.
 #[allow(clippy::result_large_err)] // cold path: built once, right before exiting

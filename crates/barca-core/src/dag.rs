@@ -1034,6 +1034,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         }
     }
 

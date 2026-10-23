@@ -24,6 +24,9 @@ __all__ = [
     "Schedule",
     "partitions",
     "partitions_from",
+    "batches",
+    "batches_by",
+    "Failed",
     "collect",
     "asset_ref",
     "parallel",
@@ -65,6 +68,9 @@ class Schedule:
     `timeout_seconds` limits how long one of its ticks' runs may take under
     `barca serve` (0: no limit); without it the server's run timeout applies
     (`--run-timeout`, `[server] run_timeout_seconds`, none by default).
+
+    `batch` is the `--batch` override its ticks run with: `"all"`, a whole number,
+    `None` (as declared), or `"none"` for one key per call. Experimental.
     """
 
     def __init__(
@@ -74,10 +80,12 @@ class Schedule:
         *,
         max_failures: int = 5,
         timeout_seconds: int | None = None,
+        batch: "int | str | None" = None,
     ) -> None:
         self.cron = cron
         self.max_failures = max_failures
         self.timeout_seconds = timeout_seconds
+        self.batch = batch
 
 
 # ─── Decorators ───────────────────────────────────────────────────────────────
@@ -101,6 +109,7 @@ def asset(
     weight: int = 1,
     deterministic: bool = True,
     cutoff: bool = False,
+    batch: "int | str | None" = None,
 ):
     """Declare a cached asset node.
 
@@ -135,6 +144,14 @@ def asset(
     on its run hash: when it reruns and writes the same bytes, its consumers stay
     cached. Its consumers are decided after it runs. A literal `True` or `False`; not
     part of its own run hash. Experimental (see `barca docs cache`, "Early cutoff").
+
+    `batch` (on a partitioned asset) groups the keys that need to run into fewer calls:
+    `batch=20` (at most 20 keys per call), `batch="all"`, `batches([...])` or
+    `batches_by(fn, max_size=N)`. The partition parameter then receives the list of the
+    call's keys, a partitioned input a dict of key to value (or one lazy table), and the
+    function returns a dict of key to value or a table with the dimension as a column. Each
+    key keeps its own run hash and artifact. Not part of the run hash. Experimental (see
+    `barca docs partitions`, "Processing many keys per call").
 
     `retries` is the total number of attempts on failure (1 = no retry).
     `retry_backoff` is the base delay in seconds between attempts (delay grows
@@ -202,6 +219,7 @@ def task(
     tags=None,
     env: list[str] | None = None,
     weight: int = 1,
+    batch: "int | str | None" = None,
 ):
     """Declare a task node (always re-runs; never cached).
 
@@ -217,7 +235,8 @@ def task(
 
     `partitions` runs the task once per key, with the key passed as the parameter
     named in the dict, as on `asset`. `serializer` forces the format its return
-    value is stored in ("json", "pickle", "parquet" or "csv").
+    value is stored in ("json", "pickle", "parquet" or "csv"). `batch` groups the keys
+    into fewer calls, as on `asset`.
     """
     if fn is not None:
         return fn
@@ -277,6 +296,25 @@ def partitions_from(source, /):
     return source
 
 
+def batches(groups, /, *, strict: bool = False):
+    """``batch=batches([["r1", "r2"], ["r3"]])``: the keys of each group run in one call.
+
+    A key in no group runs alone, or is an error with ``strict=True``. A literal list is read
+    without importing; any other expression is evaluated when barca plans.
+    """
+    return groups
+
+
+def batches_by(fn, /, *, max_size: int | None = None):
+    """``batch=batches_by(region_of, max_size=20)``: keys with the same label share a call.
+
+    ``fn`` receives a key (a dict of dimension to value for a node of several dimensions) and
+    returns a string or integer label; ``max_size`` splits a label's keys into calls of at
+    most that many.
+    """
+    return fn
+
+
 def collect(asset_fn, /):
     """Aggregate all partitions of an upstream asset."""
     return asset_fn
@@ -286,6 +324,8 @@ def asset_ref(ref_string: str, /) -> str:
     """Canonical asset reference."""
     return ref_string
 
+
+from barca._batch import Failed  # noqa: E402
 
 # ─── Parallel primitives ─────────────────────────────────────────────────────
 

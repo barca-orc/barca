@@ -206,7 +206,15 @@ pub async fn run_log_lines(
 /// partition key), or its function name.
 pub fn step_matches(id: &str, step: &str) -> bool {
     let parsed = crate::StepId::parse(id);
-    id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step)
+    if id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step)
+    {
+        return true;
+    }
+    // One key by function name: `scored[retailer=r7]`.
+    let wanted = crate::StepId::parse(step);
+    !wanted.partition.is_empty()
+        && wanted.partition == parsed.partition
+        && parsed.base_id().rsplit(':').next() == Some(wanted.base_id())
 }
 
 /// The node ids `--step <step>` selects among a run's recorded lines and steps. A usage error
@@ -274,7 +282,18 @@ pub async fn logs_at(
     let mut logs = run_log_lines(db_path, read_path, run_id).await?;
     if let Some(step) = step {
         let recorded = db::get_run_steps(read_path, run_id).await?;
-        let matches = select_step(&logs, &recorded, run_id, step)?;
+        let mut matches = select_step(&logs, &recorded, run_id, step)?;
+        // A key of a batched call (RFC-0013): its call's output, recorded once for the call.
+        for row in &recorded {
+            if let Some(b) = &row.batch
+                && matches.contains(&row.node_id)
+            {
+                matches.insert(format!(
+                    "{}[batch={b}]",
+                    crate::StepId::parse(&row.node_id).base_id()
+                ));
+            }
+        }
         logs.retain(|line| matches.contains(&line.node_id));
     }
     if let Some(stream) = stream {
@@ -448,8 +467,10 @@ pub async fn explain(
     policy: CachePolicy,
     command_label: &str,
     partition: Option<&crate::selection::PartitionSelection>,
+    batch: &crate::batch::BatchOverride,
 ) -> Result<ExplainResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
+    batch.check(&dag).map_err(BarcaError::Usage)?;
     if command_label == "get"
         && target_names.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
@@ -466,6 +487,8 @@ pub async fn explain(
         file_args,
     )
     .await?;
+    let mut result = result;
+    crate::batch::annotate(&dag, &mut result.steps, batch, python);
     if let Some(note) = crate::selection::explain_note(&result) {
         crate::errln!("{note}");
     }

@@ -91,6 +91,9 @@ struct WorkerHandle {
     /// Items leased to this worker, in execution order (front = in-flight).
     leases: VecDeque<ItemId>,
     batch_open: bool,
+    /// The leases are the keys of one batched call (RFC-0013): they all run at once, so a
+    /// worker that dies fails all of them.
+    call: bool,
     /// When the current front lease became the in-flight item (assignment or the previous
     /// completion). Drives the "still running" progress report.
     front_since: std::time::Instant,
@@ -926,11 +929,21 @@ impl WorkerPool {
                     // Worker crashed — its in-flight item failed; unstarted
                     // leases return to the queue for another worker.
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
-                        if let Some(in_flight) = handle.leases.pop_front() {
+                        // A batched call runs all its keys at once: a dead worker fails each.
+                        let in_flight_items: Vec<ItemId> = if handle.call {
+                            handle.leases.drain(..).collect()
+                        } else {
+                            handle.leases.pop_front().into_iter().collect()
+                        };
+                        let status = if in_flight_items.is_empty() {
+                            None
+                        } else {
+                            Some(reap_briefly(&mut handle.child).await)
+                        };
+                        for in_flight in in_flight_items {
                             let ran_for = handle.front_since.elapsed();
                             let node_id = coord.item(in_flight).step_id.display();
-                            let status = reap_briefly(&mut handle.child).await;
-                            let error = disconnect_message(&node_id, status, false);
+                            let error = disconnect_message(&node_id, status.flatten(), false);
                             if let Some(ref mut ev) = on_event {
                                 ev(RunEvent::StepFinished {
                                     node_id,
@@ -1207,7 +1220,17 @@ impl WorkerPool {
                 .map(|_| coord.next_ready().expect("batch_len counts ready items"))
                 .collect();
 
-            let msg = if batch.len() == 1 {
+            let call = coord.call_id(batch[0]).map(str::to_string);
+            let msg = if let Some(call) = &call {
+                // A batched call (RFC-0013): its keys go together, as one call of the function.
+                let steps: Vec<serde_json::Value> = batch
+                    .iter()
+                    .map(|&iid| self.traced_step(coord.item(iid), coord))
+                    .collect();
+                let mut msg = crate::wire::encode_steps(&steps);
+                msg["call"] = serde_json::json!({"id": call});
+                msg
+            } else if batch.len() == 1 {
                 let step = self.traced_step(coord.item(batch[0]), coord);
                 serde_json::json!({"type": "execute", "step": crate::wire::normalize_step(&step)})
             } else {
@@ -1248,7 +1271,8 @@ impl WorkerPool {
                 }
                 continue;
             }
-            handle.batch_open = batch.len() > 1;
+            handle.batch_open = batch.len() > 1 || call.is_some();
+            handle.call = call.is_some();
             handle.leases = batch.into_iter().collect();
             handle.front_since = std::time::Instant::now();
             // The admitted weight is the leased step's now (`running_weight` counts it).
@@ -1424,6 +1448,19 @@ impl WorkerPool {
         let Some(first) = ready.next() else {
             return 0;
         };
+        // The keys of a batched call are leased together and alone (RFC-0013): they were
+        // queued together once all of them were ready.
+        if coord.call_id(first).is_some() {
+            let mut len = 1;
+            while let Some(&id) = ready.peek() {
+                if !coord.same_call(first, id) {
+                    break;
+                }
+                ready.next();
+                len += 1;
+            }
+            return len;
+        }
         // A step with a weight above 1 is leased on its own, and none is leased behind a
         // lighter one, so a worker's weight is the weight of the step it is running (#436).
         if coord.item(first).spec.weight > 1 {
@@ -1591,6 +1628,7 @@ impl WorkerPool {
                 cmd_tx,
                 _task: task,
                 leases: VecDeque::new(),
+                call: false,
                 batch_open: false,
                 front_since: std::time::Instant::now(),
             },
@@ -1693,6 +1731,7 @@ impl WorkerPool {
                         // Still executing the parent task, with the rest of its batch
                         // behind it.
                         leases: std::iter::once(fw.parent_item).chain(fw.rest).collect(),
+                        call: false,
                         batch_open: fw.batch_open,
                         front_since: std::time::Instant::now(),
                     },
@@ -1917,7 +1956,22 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
         );
     }
 
-    serde_json::json!({
+    // A key of a batched call (RFC-0013): which inputs come from the same key of a partitioned
+    // upstream, so the call passes them as a dict of key to value (or a lazy table).
+    let aligned: Vec<&String> = if coord.call_id(item.id).is_some() {
+        let mut a: Vec<&String> = item
+            .spec
+            .upstream_inputs
+            .iter()
+            .filter(|(p, id)| !p.starts_with('_') && id.contains('['))
+            .map(|(p, _)| p)
+            .collect();
+        a.sort();
+        a
+    } else {
+        Vec::new()
+    };
+    let mut step = serde_json::json!({
         "node_id": item.step_id.display(),
         "function_name": item.spec.function_name,
         "source_file": item.spec.source_file,
@@ -1946,7 +2000,11 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
             .group
             .and_then(|g| coord.group(g).result_dir.as_ref())
             .map(|dir| dir.join(item.id.0.to_string())),
-    })
+    });
+    if coord.call_id(item.id).is_some() {
+        step["aligned_inputs"] = serde_json::json!(aligned);
+    }
+    step
 }
 
 /// What the step that called `parallel()` is told about one branch.
@@ -2790,6 +2848,7 @@ mod tests {
                         cmd_tx,
                         _task: tokio::spawn(async {}),
                         leases: VecDeque::new(),
+                        call: false,
                         batch_open: false,
                         front_since: std::time::Instant::now(),
                     },

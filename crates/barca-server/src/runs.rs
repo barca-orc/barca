@@ -66,6 +66,8 @@ pub(crate) struct RunSpec {
     pub values: bool,
     /// `get --partition`.
     pub partition: Option<barca_core::selection::PartitionSelection>,
+    /// `--batch` (RFC-0013), each as the flag takes it.
+    pub batch: Vec<String>,
     /// The freshness rules (RFC-0008): a `Manual` node read as it is (`POST /runs`, as the CLI
     /// does), and whether this is a scheduled tick.
     pub rules: barca_core::freshness::RunRules,
@@ -89,6 +91,7 @@ impl RunSpec {
             trigger: Trigger::api(),
             values: false,
             partition: None,
+            batch: Vec::new(),
             // The older trigger routes compute what they are asked for, as before RFC-0008.
             rules: barca_core::freshness::RunRules::default(),
             timeout: None,
@@ -273,6 +276,7 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
         ));
     }
     let partition = partition_of(&request)?;
+    batch_of(&request)?;
     if request.dry_run {
         return dry_run(&state, &request, &files).await;
     }
@@ -296,6 +300,7 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
             trigger: Trigger::api(),
             values: request.values,
             partition,
+            batch: request.batch.clone(),
             // The run contract runs what `barca get` / `barca run` would run here.
             rules: barca_core::freshness::RunRules::request(),
             timeout: None,
@@ -315,6 +320,12 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
 }
 
 /// `partition`, parsed as `--partition` is; `400` when it does not parse.
+/// `RunRequest.batch`, checked (RFC-0013): a bad value is `400`.
+fn batch_of(request: &RunRequest) -> Result<barca_core::batch::BatchOverride, ApiError> {
+    barca_core::batch::BatchOverride::parse(&request.batch)
+        .map_err(|msg| ApiError::BadRequest(format!("error: {msg}")))
+}
+
 fn partition_of(
     request: &RunRequest,
 ) -> Result<Option<barca_core::selection::PartitionSelection>, ApiError> {
@@ -341,6 +352,7 @@ async fn dry_run(
         request.policy(),
         request.command.as_str(),
         partition_of(request)?.as_ref(),
+        &batch_of(request)?,
     )
     .await
     .map_err(|e| ApiError::run(e, context(request.command, files)))?;
@@ -513,6 +525,8 @@ async fn execute(
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
                     shared_capacity: state.capacity.clone(),
+                    batch: barca_core::batch::BatchOverride::parse(&spec.batch)
+                        .unwrap_or_default(),
                 },
                 partition: spec.partition.clone(),
                 rules: spec.rules.clone(),

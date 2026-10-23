@@ -528,6 +528,30 @@ fn resolve_dynamic_partitions(
             node.partitions
                 .insert(dim, crate::model::PartitionSpec::Static { values });
         }
+        // `batches(<expression>)` and `batches_by(<function>)` (RFC-0013): evaluated with the
+        // project importable, like the keys above; an error is a load error naming the node.
+        let mut dims: Vec<String> = node.partitions.keys().cloned().collect();
+        dims.sort();
+        match node.batch.clone() {
+            Some(crate::model::BatchSpec::GroupsExpr {
+                source_text,
+                strict,
+            }) => match crate::batch::evaluate_groups(python, &node.source_file, &source_text, &dims)
+            {
+                Ok(groups) => {
+                    node.batch = Some(crate::model::BatchSpec::Groups { groups, strict });
+                }
+                Err(error) => failures.push((node.continuity_key(), error)),
+            },
+            Some(crate::model::BatchSpec::By { source_text, .. }) => {
+                if let Err(error) =
+                    crate::batch::check_label_function(python, &node.source_file, &source_text)
+                {
+                    failures.push((node.continuity_key(), error));
+                }
+            }
+            _ => {}
+        }
     }
     Ok(failures)
 }

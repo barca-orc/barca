@@ -115,6 +115,14 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule)",
     ),
     (
+        "get --batch",
+        "new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use",
+    ),
+    (
+        "run --batch",
+        "new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use",
+    ),
+    (
         "get --server",
         "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
     ),

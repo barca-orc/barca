@@ -13,10 +13,12 @@ pub(crate) async fn explain_cmd(
     mode: OutputMode,
     fields: Option<&[String]>,
     partition: Option<&barca_core::selection::PartitionSelection>,
+    batch: &barca_core::batch::BatchOverride,
 ) -> Result<(), barca_core::BarcaError> {
-    let result =
-        barca_core::queries::explain(cfg, targets, file_args, python, policy, label, partition)
-            .await?;
+    let result = barca_core::queries::explain(
+        cfg, targets, file_args, python, policy, label, partition, batch,
+    )
+    .await?;
     super::emit(barca_core::report::render_explain(
         &result,
         label,

@@ -274,9 +274,36 @@ pub struct Coordinator {
     /// Item id of the latest recorded output for each display id, so dispatch resolves an
     /// in-phase upstream in one lookup instead of scanning every output (#345).
     output_by_display: HashMap<String, ItemId>,
+    /// Batched calls (RFC-0013): the call each item belongs to, and each call's state.
+    call_of: HashMap<ItemId, usize>,
+    calls: Vec<Call>,
+    /// Calls assigned before the phase is loaded: display id -> call index.
+    call_assign: HashMap<String, usize>,
     /// ID generators.
     next_item_id: u64,
     next_group_id: u64,
+}
+
+/// One call of a batched node's function (RFC-0013): keys that are leased to one worker
+/// together and computed by one call. The call is released to the ready queue once every key
+/// of it is ready (or will never run); a retry releases the keys that failed together.
+#[derive(Debug, Default)]
+struct Call {
+    /// The call's id, unique in the run (`batch` on its keys' materializations).
+    id: String,
+    /// Its keys, in key order.
+    members: Vec<ItemId>,
+    /// How many members are not yet ready (nor terminal).
+    unreleased: usize,
+    /// Members counted off `unreleased`.
+    counted: HashSet<ItemId>,
+    /// Ready members waiting for the rest.
+    held: Vec<ItemId>,
+    /// Members leased and not yet reported.
+    outstanding: usize,
+    /// Members that failed an attempt and will be tried again, released together once the
+    /// attempt is over and no backoff is pending.
+    retry: Vec<ItemId>,
 }
 
 impl Default for Coordinator {
@@ -306,6 +333,9 @@ impl Coordinator {
             gates: HashMap::new(),
             member_gates: HashMap::new(),
             output_by_display: HashMap::new(),
+            call_of: HashMap::new(),
+            calls: Vec::new(),
+            call_assign: HashMap::new(),
             next_item_id: 0,
             next_group_id: 0,
         }
@@ -340,6 +370,10 @@ impl Coordinator {
         spec: ItemSpec,
         deps: Vec<Dep>,
     ) {
+        if let Some(&call) = self.call_assign.get(&step_id.display()) {
+            self.call_of.insert(id, call);
+            self.calls[call].members.push(id);
+        }
         let item = Item {
             id,
             step_id,
@@ -379,11 +413,134 @@ impl Coordinator {
             });
             if should_skip {
                 self.skipped.insert(id);
+                self.count_off_call(id);
             } else {
-                self.ready.push_back(id);
+                self.mark_ready(id);
             }
         } else {
             self.pending.insert(id, unsatisfied);
+        }
+    }
+
+    // ─── Batched calls (RFC-0013) ──────────────────────────────────────────
+
+    /// Group the items this phase will load into calls, before [`Self::load_phase`]: each call
+    /// is `(its id, the display ids of its keys in key order)`. An item of a call is leased
+    /// with the rest of its call, once every one of them is ready.
+    pub fn assign_calls(&mut self, calls: Vec<(String, Vec<String>)>) {
+        for (id, members) in calls {
+            let index = self.calls.len();
+            self.calls.push(Call {
+                id,
+                unreleased: members.len(),
+                ..Default::default()
+            });
+            for m in members {
+                self.call_assign.insert(m, index);
+            }
+        }
+    }
+
+    /// After loading: a call whose keys were not all loaded waits only for the ones that were.
+    fn settle_calls(&mut self) {
+        for c in 0..self.calls.len() {
+            let loaded = self.calls[c].members.len();
+            let call = &mut self.calls[c];
+            let missing = call.unreleased.saturating_sub(loaded.saturating_sub(call.counted.len()));
+            if missing > 0 {
+                call.unreleased -= missing;
+                if call.unreleased == 0 {
+                    self.release_call(c);
+                }
+            }
+        }
+        self.call_assign.clear();
+    }
+
+    /// The id of the call `item` belongs to, if it is a key of a batched call.
+    pub fn call_id(&self, item: ItemId) -> Option<&str> {
+        self.call_of
+            .get(&item)
+            .map(|&c| self.calls[c].id.as_str())
+    }
+
+    /// Whether two items are keys of the same call.
+    pub fn same_call(&self, a: ItemId, b: ItemId) -> bool {
+        match (self.call_of.get(&a), self.call_of.get(&b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
+    }
+
+    /// `id` can run: queued now, or held until the rest of its call can run too.
+    fn mark_ready(&mut self, id: ItemId) {
+        let Some(&c) = self.call_of.get(&id) else {
+            self.ready.push_back(id);
+            return;
+        };
+        let call = &mut self.calls[c];
+        if call.counted.insert(id) {
+            call.held.push(id);
+            call.unreleased = call.unreleased.saturating_sub(1);
+            if call.unreleased == 0 {
+                self.release_call(c);
+            }
+        } else {
+            self.ready.push_back(id);
+        }
+    }
+
+    /// `id` will never run (its upstream failed): its call does not wait for it.
+    fn count_off_call(&mut self, id: ItemId) {
+        let Some(&c) = self.call_of.get(&id) else {
+            return;
+        };
+        let call = &mut self.calls[c];
+        if call.counted.insert(id) {
+            call.unreleased = call.unreleased.saturating_sub(1);
+            if call.unreleased == 0 {
+                self.release_call(c);
+            }
+        }
+    }
+
+    /// Queue the held keys of call `c` together, in key order.
+    fn release_call(&mut self, c: usize) {
+        let mut held = std::mem::take(&mut self.calls[c].held);
+        let order: HashMap<ItemId, usize> = self.calls[c]
+            .members
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (*m, i))
+            .collect();
+        held.sort_by_key(|m| order.get(m).copied().unwrap_or(usize::MAX));
+        for m in held {
+            self.ready.push_back(m);
+        }
+    }
+
+    /// A key of a call was reported (or returned unstarted): one fewer outstanding, and the
+    /// keys to retry go back together once the attempt is over.
+    fn call_reported(&mut self, id: ItemId) {
+        let Some(&c) = self.call_of.get(&id) else {
+            return;
+        };
+        let call = &mut self.calls[c];
+        call.outstanding = call.outstanding.saturating_sub(1);
+        self.release_retries(c);
+    }
+
+    fn release_retries(&mut self, c: usize) {
+        let call = &self.calls[c];
+        if call.outstanding > 0
+            || call.retry.is_empty()
+            || call.retry.iter().any(|m| self.waiting_retry.contains(m))
+        {
+            return;
+        }
+        let retry = std::mem::take(&mut self.calls[c].retry);
+        for m in retry {
+            self.ready.push_back(m);
         }
     }
 
@@ -394,6 +551,9 @@ impl Coordinator {
     pub fn next_ready(&mut self) -> Option<ItemId> {
         let id = self.ready.pop_front()?;
         self.executing.insert(id);
+        if let Some(&c) = self.call_of.get(&id) {
+            self.calls[c].outstanding += 1;
+        }
         if let Some(item) = self.items.get_mut(&id) {
             item.attempts += 1;
         }
@@ -403,7 +563,10 @@ impl Coordinator {
     /// Move an item parked by a `RetryAfter` decision back to the ready queue.
     pub fn requeue(&mut self, item_id: ItemId) {
         if self.waiting_retry.remove(&item_id) {
-            self.ready.push_back(item_id);
+            match self.call_of.get(&item_id) {
+                Some(&c) => self.release_retries(c),
+                None => self.ready.push_back(item_id),
+            }
         }
     }
 
@@ -417,6 +580,10 @@ impl Coordinator {
         if self.executing.remove(&item_id) {
             if let Some(item) = self.items.get_mut(&item_id) {
                 item.attempts = item.attempts.saturating_sub(1);
+            }
+            if let Some(&c) = self.call_of.get(&item_id) {
+                let call = &mut self.calls[c];
+                call.outstanding = call.outstanding.saturating_sub(1);
             }
             self.ready.push_front(item_id);
         }
@@ -459,6 +626,7 @@ impl Coordinator {
     pub fn on_item_completed(&mut self, item_id: ItemId) {
         self.executing.remove(&item_id);
         self.done.insert(item_id);
+        self.call_reported(item_id);
 
         // Check if item belongs to a parallel group
         if let Some(group_id) = self.items[&item_id].group {
@@ -491,6 +659,19 @@ impl Coordinator {
 
         if item.attempts < item.spec.retries {
             let backoff = item.spec.retry_backoff_seconds * item.attempts as f64;
+            if let Some(&c) = self.call_of.get(&item_id) {
+                // A key of a call: tried again with the call's other failed keys, once every
+                // key of this attempt is reported.
+                self.calls[c].retry.push(item_id);
+                let action = if backoff > 0.0 {
+                    self.waiting_retry.insert(item_id);
+                    FailureAction::RetryAfter(std::time::Duration::from_secs_f64(backoff))
+                } else {
+                    FailureAction::RetryNow
+                };
+                self.call_reported(item_id);
+                return action;
+            }
             if backoff > 0.0 {
                 self.waiting_retry.insert(item_id);
                 FailureAction::RetryAfter(std::time::Duration::from_secs_f64(backoff))
@@ -499,6 +680,7 @@ impl Coordinator {
                 FailureAction::RetryNow
             }
         } else {
+            self.call_reported(item_id);
             // Permanent failure
             self.failed.insert(item_id, error);
             self.failure_clocks.insert(
@@ -833,6 +1015,7 @@ impl Coordinator {
                 }
             }
         }
+        self.settle_calls();
 
         count
     }
@@ -1028,6 +1211,7 @@ impl Coordinator {
                     self.skipped.insert(dep_id);
                     self.pending.remove(&dep_id);
                     self.ready.remove(dep_id);
+                    self.count_off_call(dep_id);
                     self.cascade_failure(dep_id);
                 }
                 Some(DepKind::Ordering) => {
@@ -1042,9 +1226,10 @@ impl Coordinator {
                             });
                             if should_skip {
                                 self.skipped.insert(dep_id);
+                                self.count_off_call(dep_id);
                                 self.cascade_failure(dep_id);
                             } else {
-                                self.ready.push_back(dep_id);
+                                self.mark_ready(dep_id);
                             }
                         }
                     }
@@ -1078,9 +1263,10 @@ impl Coordinator {
                     });
                     if should_skip {
                         self.skipped.insert(dep_id);
+                        self.count_off_call(dep_id);
                         self.cascade_failure(dep_id);
                     } else {
-                        self.ready.push_back(dep_id);
+                        self.mark_ready(dep_id);
                     }
                 }
             }
@@ -1656,6 +1842,95 @@ mod tests {
             .find(|it| it.step_id.display() == display)
             .unwrap_or_else(|| panic!("{display} not loaded"))
             .id
+    }
+
+    /// Two streams: `f:a` and `f:b`, `f:b[k]` reading `f:a[k]`; `f:b`'s keys in one call.
+    fn call_phase(n: usize, retries: u32, backoff: f64) -> (Coordinator, Vec<String>) {
+        let ks = keys(n);
+        let mut phase = partition_stream(&ks, &[("f:a", None)]);
+        let mut b = partition_stream(&ks, &[("f:b", Some("f:a"))]);
+        for st in &mut b.streams[0].steps {
+            st.retries = retries;
+            st.retry_backoff_seconds = backoff;
+        }
+        b.streams[0].stream_id = "w1".to_string();
+        phase.streams.push(b.streams.remove(0));
+        let mut c = Coordinator::new();
+        let members: Vec<String> = ks.iter().map(|k| format!("f:b[k={k}]")).collect();
+        c.assign_calls(vec![("b1".to_string(), members.clone())]);
+        c.load_phase(&phase, &HashMap::new());
+        (c, members)
+    }
+
+    fn drain(c: &mut Coordinator) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Some(id) = c.next_ready() {
+            out.push(c.item(id).step_id.display());
+        }
+        out
+    }
+
+    /// RFC-0013: the keys of a call are queued together, once every one of them can run.
+    #[test]
+    fn a_call_is_released_when_all_its_keys_are_ready() {
+        let (mut c, members) = call_phase(3, 1, 0.0);
+        let a: Vec<String> = drain(&mut c);
+        assert_eq!(a.len(), 3);
+        assert!(a.iter().all(|d| d.starts_with("f:a")));
+        for (i, d) in a.iter().enumerate() {
+            let id = id_of(&c, d);
+            c.on_item_completed(id);
+            if i < 2 {
+                assert_eq!(c.ready_count(), 0, "released before every key was ready");
+            }
+        }
+        let b = drain(&mut c);
+        assert_eq!(b, members);
+        assert_eq!(c.call_id(id_of(&c, &b[0])), Some("b1"));
+        assert!(c.same_call(id_of(&c, &b[0]), id_of(&c, &b[2])));
+    }
+
+    #[test]
+    fn a_key_that_will_never_run_does_not_hold_back_its_call() {
+        let (mut c, _) = call_phase(3, 1, 0.0);
+        let a = drain(&mut c);
+        let first = id_of(&c, &a[0]);
+        assert_eq!(
+            c.on_item_failed(first, "boom".into(), std::time::Duration::ZERO),
+            FailureAction::Failed
+        );
+        for d in &a[1..] {
+            let id = id_of(&c, d);
+            c.on_item_completed(id);
+        }
+        assert_eq!(drain(&mut c), ["f:b[k=00001]", "f:b[k=00002]"]);
+    }
+
+    /// A retry reruns only the keys that failed, together, once the attempt is over.
+    #[test]
+    fn the_failed_keys_of_a_call_are_retried_together() {
+        for backoff in [0.0, 1.0] {
+            let (mut c, members) = call_phase(3, 2, backoff);
+            for d in drain(&mut c) {
+                let id = id_of(&c, &d);
+                c.on_item_completed(id);
+            }
+            let b = drain(&mut c);
+            assert_eq!(b, members);
+            let ids: Vec<ItemId> = b.iter().map(|d| id_of(&c, d)).collect();
+            let action = c.on_item_failed(ids[0], "x".into(), std::time::Duration::ZERO);
+            assert_eq!(c.ready_count(), 0, "retried before the attempt was over");
+            c.on_item_completed(ids[1]);
+            c.on_item_failed(ids[2], "x".into(), std::time::Duration::ZERO);
+            if backoff > 0.0 {
+                assert!(matches!(action, FailureAction::RetryAfter(_)));
+                assert_eq!(c.ready_count(), 0);
+                c.requeue(ids[0]);
+                assert_eq!(c.ready_count(), 0, "retried before every backoff passed");
+                c.requeue(ids[2]);
+            }
+            assert_eq!(drain(&mut c), [members[0].clone(), members[2].clone()]);
+        }
     }
 
     /// #345: each key of a step used to wait on every key of the step before it in its stream

@@ -882,6 +882,8 @@ mod tests {
                     unused_inputs: Vec::new(),
                     env_reads: Vec::new(),
                     inherited_partitions: Vec::new(),
+                    batch: None,
+                    schedule_batch: None,
                 }
             })
             .collect();
@@ -946,6 +948,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         extracted.sinks.push(SinkDecl {
             path: "exports/out.parquet".to_string(),
@@ -1384,6 +1388,8 @@ mod tests {
                 unused_inputs: Vec::new(),
                 env_reads: Vec::new(),
                 inherited_partitions: Vec::new(),
+                batch: None,
+                schedule_batch: None,
             })
             .collect();
         let dag = Dag::build(&extracted).unwrap();
@@ -1535,6 +1541,8 @@ mod tests {
                     unused_inputs: Vec::new(),
                     env_reads: Vec::new(),
                     inherited_partitions: Vec::new(),
+                    batch: None,
+                    schedule_batch: None,
                 }
             })
             .collect();
@@ -1827,6 +1835,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let collector = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1864,6 +1874,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         Dag::build(&[producer, collector]).unwrap()
     }
@@ -1952,6 +1964,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let fetch_prices = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1990,6 +2004,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let aggregate = ExtractedNode {
             kind: NodeKind::Asset,
@@ -2027,6 +2043,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let dag = Dag::build(&[tickers, fetch_prices, aggregate]).unwrap();
         let p = plan_from_dag(&dag, &cfg(10));

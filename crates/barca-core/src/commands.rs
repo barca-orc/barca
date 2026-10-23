@@ -112,6 +112,7 @@ pub async fn get_streaming(
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
     partition: Option<crate::selection::PartitionSelection>,
+    batch: crate::batch::BatchOverride,
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(ExecuteRequest {
@@ -126,7 +127,10 @@ pub async fn get_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: Default::default(),
+        options: crate::outcome::RunOptions {
+            batch,
+            ..Default::default()
+        },
         rules: crate::freshness::RunRules::request(),
     })
     .await?
@@ -145,6 +149,7 @@ pub async fn run_streaming(
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
     partition: Option<crate::selection::PartitionSelection>,
+    batch: crate::batch::BatchOverride,
 ) -> Result<GetResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -158,7 +163,10 @@ pub async fn run_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: Default::default(),
+        options: crate::outcome::RunOptions {
+            batch,
+            ..Default::default()
+        },
         rules: crate::freshness::RunRules::request(),
     })
     .await?
@@ -187,6 +195,7 @@ pub async fn get_many(
         cancel,
         None,
         None,
+        Default::default(),
     )
     .await
 }
@@ -203,6 +212,7 @@ pub async fn get_many_streaming(
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
     partition: Option<crate::selection::PartitionSelection>,
+    batch: crate::batch::BatchOverride,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -216,7 +226,10 @@ pub async fn get_many_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: Default::default(),
+        options: crate::outcome::RunOptions {
+            batch,
+            ..Default::default()
+        },
         rules: crate::freshness::RunRules::request(),
     })
     .await
@@ -236,6 +249,7 @@ pub async fn run_many_streaming(
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
     partition: Option<crate::selection::PartitionSelection>,
+    batch: crate::batch::BatchOverride,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -249,7 +263,10 @@ pub async fn run_many_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: Default::default(),
+        options: crate::outcome::RunOptions {
+            batch,
+            ..Default::default()
+        },
         rules: crate::freshness::RunRules::request(),
     })
     .await

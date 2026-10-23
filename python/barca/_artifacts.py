@@ -167,7 +167,7 @@ def clean_staging() -> None:
 
 
 # Frame types whose value reads its parquet file when queried, not when it is loaded.
-LAZY_FRAME_TYPES = frozenset({"duckdb", "polars_lazy"})
+LAZY_FRAME_TYPES = frozenset({"duckdb", "polars_lazy", "pyarrow_dataset"})
 
 # Range-read filesystems registered on barca's duckdb connection, by protocol name.
 _duckdb_registered: dict[str, Any] = {}
@@ -286,6 +286,40 @@ def _serialize(
         if snapshot is not None:
             _pin_file(tmp, snapshot)
     return size, digest
+
+
+def publish_file(
+    source: "str | Path",
+    path: "Path | str",
+    *,
+    want_hash: bool,
+    snapshot_prefix: "str | None" = None,
+) -> tuple[int, str | None, str | None]:
+    """Install a file already written (a batched call's per-key parquet, RFC-0013) as the
+    artifact at ``path``, as :func:`serialize_hashed` / :func:`serialize_for_upload` would have
+    written it: atomically, with its size, its SHA-256 and a pinned upload snapshot."""
+    snapshot = None
+    if snapshot_prefix:
+        prefix_path = Path(snapshot_prefix)
+        snapshot = _make_temp(prefix_path.parent, prefix=prefix_path.name)
+    digest = None
+    try:
+        with _staged_write(path) as tmp:
+            shutil.move(str(source), str(tmp))
+            size = tmp.stat().st_size
+            if want_hash:
+                h = hashlib.sha256()
+                with open(tmp, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+                digest = h.hexdigest()
+            if snapshot is not None:
+                _pin_file(tmp, snapshot)
+    except BaseException:
+        if snapshot is not None:
+            snapshot.unlink(missing_ok=True)
+        raise
+    return size, digest, (str(snapshot) if snapshot is not None else None)
 
 
 def _write_csv(value: Any, path: Path) -> None:
@@ -476,6 +510,11 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
         import duckdb  # ty: ignore[unresolved-import]
 
         return duckdb.read_parquet(str(path))
+
+    if frame_type == "pyarrow_dataset":
+        import pyarrow.dataset as ds
+
+        return ds.dataset(str(path), format="parquet")
 
     if frame_type == "pandas":
         import pandas as pd

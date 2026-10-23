@@ -472,6 +472,7 @@ async fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<Str
             trigger: barca_core::outcome::Trigger::schedule(&job.id, epoch),
             values: false,
             partition: None,
+            batch: job.batch.iter().cloned().collect(),
             rules: barca_core::freshness::RunRules::tick(&job.id),
             timeout: job.timeout_seconds,
             kill_requeues: 0,
