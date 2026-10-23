@@ -73,6 +73,26 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     "components TEXT",
 ];
 
+/// Every table's columns added within format 1, by table. The one list that the pre-migration
+/// check ([`crate::state_validate::Schema::columns_fit`]), [`additions_missing_in`] and the
+/// additive migration all read, so a column added to one of the lists above is accepted as
+/// missing, detected and added together (#629: `logs` was left out of the check, so a database
+/// from before 0.29.2 was refused before its `stream` and `ts` columns could be added).
+pub(crate) const ADDED_COLUMNS: &[(&str, &[&str])] = &[
+    ("materializations", MATERIALIZATION_COLUMNS),
+    ("runs", RUN_COLUMNS),
+    ("schedule_state", SCHEDULE_STATE_COLUMNS),
+    ("logs", LOG_COLUMNS),
+];
+
+/// The columns of `table` added within format 1 (none for a table not in [`ADDED_COLUMNS`]).
+pub(crate) fn added_columns(table: &str) -> &'static [&'static str] {
+    ADDED_COLUMNS
+        .iter()
+        .find(|(name, _)| *name == table)
+        .map_or(&[], |(_, columns)| columns)
+}
+
 /// Columns of `materializations` that describe this machine's disk, not the result: shared
 /// history is not required to have them, so `state_validate::STEP_COLUMNS` leaves them out.
 #[cfg(test)]
@@ -193,12 +213,7 @@ pub(crate) async fn additions_missing(conn: &Connection) -> Result<bool, BarcaEr
 
 /// [`additions_missing`], judged from a schema already read.
 pub(crate) fn additions_missing_in(schema: &crate::state_validate::Schema) -> bool {
-    for (table, definitions) in [
-        ("materializations", MATERIALIZATION_COLUMNS),
-        ("runs", RUN_COLUMNS),
-        ("schedule_state", SCHEDULE_STATE_COLUMNS),
-        ("logs", LOG_COLUMNS),
-    ] {
+    for (table, definitions) in ADDED_COLUMNS {
         let missing = definitions.iter().any(|definition| {
             let name = definition.split_whitespace().next().unwrap_or_default();
             !schema.columns(table).any(|column| column == name)
@@ -459,6 +474,53 @@ mod tests {
         assert_eq!(
             scalar(&conn, "SELECT COUNT(*) FROM schedule_failures").await,
             0
+        );
+    }
+
+    /// A format-1 database written before 0.29.2 has a `logs` table without `stream` and `ts`
+    /// (#629). Writers, the read-only probe and the backup check open it: it gains the columns in
+    /// place, and its lines read as stdout with no time. 0.29.2-0.30.0 refused it.
+    #[tokio::test]
+    async fn a_format_1_database_from_before_log_streams_gains_them_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.db").display().to_string();
+        db::init_db(&fresh).await.unwrap();
+        let path = dir.path().join("format1.db").display().to_string();
+        populated(&path, "saved").await;
+        {
+            let (_db, conn) = raw(&path).await;
+            for statement in [
+                "ALTER TABLE logs DROP COLUMN stream",
+                "ALTER TABLE logs DROP COLUMN ts",
+            ] {
+                conn.execute(statement, ()).await.unwrap();
+            }
+            assert!(additions_missing(&conn).await.unwrap());
+            db::checkpoint(&conn).await.unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(db::probe_metadata(&path).await.unwrap(), Some(VERSION));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "the probe writes nothing"
+        );
+        let logs = db::get_logs(&path, "saved").await.unwrap();
+        assert_eq!(logs[0].line, "keep me");
+        assert_eq!(logs[0].stream, crate::LogStream::Stdout);
+        db::init_db(&path).await.unwrap();
+        db::init_db(&path).await.unwrap();
+        assert_eq!(schema_of(&path).await, schema_of(&fresh).await);
+        let logs = db::get_logs(&path, "saved").await.unwrap();
+        assert_eq!(
+            (logs[0].line.as_str(), logs[0].stream, logs[0].ts.clone()),
+            ("keep me", crate::LogStream::Stdout, None)
+        );
+        let (_db, conn) = raw(&path).await;
+        assert!(!additions_missing(&conn).await.unwrap());
+        assert_eq!(
+            scalar(&conn, "SELECT COUNT(*) FROM logs WHERE stream IS NULL").await,
+            1
         );
     }
 

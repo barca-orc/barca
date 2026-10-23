@@ -382,12 +382,7 @@ impl Schema {
             }
             // The additive migration adds these, so a database may lack them before it runs.
             let additions = if legacy {
-                match *table {
-                    "runs" => crate::db_schema::RUN_COLUMNS,
-                    "materializations" => crate::db_schema::MATERIALIZATION_COLUMNS,
-                    "schedule_state" => crate::db_schema::SCHEDULE_STATE_COLUMNS,
-                    _ => &[],
-                }
+                crate::db_schema::added_columns(table)
             } else {
                 &[]
             };

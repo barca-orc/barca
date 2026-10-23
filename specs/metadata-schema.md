@@ -85,8 +85,11 @@ tables alone. A backup being restored is accepted on the same terms before it is
 `barca status`, which reads the newer columns, completes the schema first.
 
 What format 1 gained since it first shipped, all listed in `db_schema.rs`
-(`MATERIALIZATION_COLUMNS`, `RUN_COLUMNS`, `SCHEDULE_STATE_COLUMNS`, `INDEXES`, `ADDED_TABLES`), which both `init_db` and the
-additive migration (`additions_missing` / `add_to_current_schema`) read:
+(`ADDED_COLUMNS`, which lists `MATERIALIZATION_COLUMNS`, `RUN_COLUMNS`, `SCHEDULE_STATE_COLUMNS`
+and `LOG_COLUMNS` by table; `INDEXES`; `ADDED_TABLES`), which `init_db`, the check that runs
+before the migration (`Schema::columns_fit`) and the additive migration (`additions_missing` /
+`add_to_current_schema`) all read. 0.29.2 to 0.30.0 left `logs` out of that check, so they refused
+every database from before 0.29.2 (#629):
 
 - `materializations.bytes_changed` (0.24.0), the first such addition; 0.24.0 to 0.24.2 refused
   format-1 databases without it.
@@ -154,13 +157,20 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
   queue empty, and older binaries ignore it.
 - `server_state (key, value)` (0.29.4), primary key `key`: settings `barca serve` keeps across
   restarts. `queue_paused_at` (unix seconds) is present while the run queue is paused.
+- `logs.stream` (`stdout` / `stderr`) and `logs.ts` (RFC 3339 UTC, milliseconds), both TEXT,
+  nullable (0.29.2): which stream a recorded line came from and when it arrived. Lines recorded
+  before keep `NULL` in both and read as stdout with no time (`barca logs --stream stdout`
+  includes them).
 
 Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` and
 `a_format_1_database_from_0_24_3_gains_everything_added_since` and
 `a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_rows` in `db_schema.rs`,
 `the_table_list_is_exactly_the_schema_init_db_creates` in `state_validate.rs`, the job history
 tests in `crates/barca-core/src/telemetry/history.rs`, and
-`python/tests/test_upgrade_format1_columns.py`.
+`python/tests/test_upgrade_format1_columns.py`, and `python/tests/test_metadata_compat.py`, which
+opens a database written by a release of every minor from 0.20 (legacy format 0) to the newest
+(committed fixtures, rebuilt by `scripts/make-metadata-fixtures.py`) with `barca serve
+--read-only`, `history`, `logs`, `status`, a cached `get` and `barca serve`.
 
 ## Cache size limit columns (RFC-0012)
 

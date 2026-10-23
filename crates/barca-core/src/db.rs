@@ -1169,20 +1169,9 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
 /// was. The format stays version 1 (see `specs/metadata-schema.md`).
 async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
-        crate::db_schema::add_columns(
-            conn,
-            "materializations",
-            crate::db_schema::MATERIALIZATION_COLUMNS,
-        )
-        .await?;
-        crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
-        crate::db_schema::add_columns(
-            conn,
-            "schedule_state",
-            crate::db_schema::SCHEDULE_STATE_COLUMNS,
-        )
-        .await?;
-        crate::db_schema::add_columns(conn, "logs", crate::db_schema::LOG_COLUMNS).await?;
+        for (table, definitions) in crate::db_schema::ADDED_COLUMNS {
+            crate::db_schema::add_columns(conn, table, definitions).await?;
+        }
         crate::db_schema::add_tables(conn).await?;
         for index in crate::db_schema::INDEXES {
             conn.execute(index, ())
