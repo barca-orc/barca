@@ -1053,11 +1053,11 @@ async fn run_loader_infrastructure_failure_matches_contract() {
     std::fs::write(dir.path().join("pipeline.py"), "from barca import asset, partitions\n@asset(partitions={'x': partitions(list(range(2)))})\ndef value(x): return x\n").unwrap();
     cfg.python = dir.path().join("unavailable-python");
     let body = checked(&app(cfg), "POST", "/run", "/run", 500).await;
+    let error = body["error"].as_str().unwrap();
     assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("DAG analysis task failed")
+        error.contains("cannot evaluate partitions(list(range(2))) of ")
+            && error.contains("pipeline.py:value: cannot run"),
+        "{error}"
     );
 }
 

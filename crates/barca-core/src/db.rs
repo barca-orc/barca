@@ -234,6 +234,16 @@ pub struct AssetStats {
     /// The share of executions that repeated an earlier execution's run hash (not cache hits,
     /// which execute nothing and are not recorded per asset).
     pub cache_hit_rate: f64,
+    /// The largest peak RSS any recorded execution of this node reached, in bytes (#627): the
+    /// worker process's peak while the step ran. `null` when none was recorded.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub max_rss_bytes: Option<i64>,
+    /// The median of the recorded executions' peak RSS, in bytes. `null` when none was
+    /// recorded.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub median_max_rss_bytes: Option<i64>,
     pub recent_runs: Vec<AssetRunEntry>,
 }
 
@@ -249,6 +259,17 @@ pub struct AssetRunEntry {
     /// Number of attempts made.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub attempts: i64,
+    /// The run that recorded this execution (`barca history RUN_ID`); `null` on rows from
+    /// before barca recorded it.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// CPU seconds the step used (user and system, the worker process's own).
+    #[serde(default)]
+    pub cpu_seconds: Option<f64>,
+    /// The worker process's peak RSS while the step ran, in bytes; `null` when not recorded.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub max_rss_bytes: Option<i64>,
 }
 
 /// Local filesystem locations for one environment.
@@ -3030,7 +3051,24 @@ pub struct RunStep {
     /// killer)`, another signal, `code N`, or `disconnected`. `null` for a step that raised.
     #[serde(default)]
     pub worker_exit: Option<String>,
+    /// CPU seconds the step used (the worker process's user and system time).
+    #[serde(default)]
+    pub cpu_seconds: Option<f64>,
+    /// The worker process's peak RSS while the step ran, in bytes (#627). `null` when not
+    /// recorded (a failed step, a row from an older barca, or a platform that cannot tell).
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub max_rss_bytes: Option<i64>,
+    /// A failed step's last lines of output, stdout and stderr in the order they were written,
+    /// without the traceback barca already shows (at most [`OUTPUT_TAIL_LINES`]; `barca logs
+    /// RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it
+    /// printed nothing.
+    #[serde(default)]
+    pub output_tail: Option<Vec<String>>,
 }
+
+/// How many lines of a failed step's output `barca history RUN_ID` shows ([`RunStep::output_tail`]).
+pub const OUTPUT_TAIL_LINES: usize = 20;
 
 /// How the worker ended, read from the error barca recorded when a worker died
 /// (`worker for <node> exited with <how>`, or `worker disconnected`).
@@ -3054,16 +3092,16 @@ pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, 
     let (_db, conn) = open_conn(db_path).await?;
     // Read-only snapshots of older databases may lack later columns: those read as null.
     let mut columns = Vec::new();
-    for name in ["attempts", "error_type"] {
+    for name in ["attempts", "error_type", "cpu_seconds", "max_rss_bytes"] {
         columns.push(if has_column(&conn, "materializations", name).await? {
             name
         } else {
             "NULL"
         });
     }
-    let (attempts, error_type) = (columns[0], columns[1]);
+    let (attempts, error_type, cpu, rss) = (columns[0], columns[1], columns[2], columns[3]);
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback FROM materializations WHERE run_id = ?1 ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss} FROM materializations WHERE run_id = ?1 ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &turso::Row, i: usize| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -3103,10 +3141,67 @@ pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, 
             error_message,
             error_traceback,
             error: raw_error,
+            cpu_seconds: row.get::<f64>(11).ok(),
+            max_rss_bytes: row.get::<i64>(12).ok().filter(|rss| *rss > 0),
+            output_tail: None,
             node_id,
         });
     }
+    drop(rows);
+    if steps.iter().any(|s| s.status == "failed") {
+        let lines = output_lines(&conn, run_id).await?;
+        for step in steps.iter_mut().filter(|s| s.status == "failed") {
+            step.output_tail = Some(output_tail(&lines, &step.node_id));
+        }
+    }
     Ok(steps)
+}
+
+/// The recorded lines of `run_id`, (node id, line), in the order they were written. Empty on a
+/// database without a `logs` table.
+async fn output_lines(
+    conn: &turso::Connection,
+    run_id: &str,
+) -> Result<Vec<(String, String)>, BarcaError> {
+    let Ok(mut rows) = conn
+        .query(
+            "SELECT node_id, line FROM logs WHERE run_id = ?1 ORDER BY seq ASC",
+            [run_id],
+        )
+        .await
+    else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read log row: {e}")))?
+    {
+        out.push((
+            row.get::<String>(0).unwrap_or_default(),
+            row.get::<String>(1).unwrap_or_default(),
+        ));
+    }
+    Ok(out)
+}
+
+/// The last [`OUTPUT_TAIL_LINES`] lines `node_id` wrote, up to the traceback of its last
+/// failed attempt (the run detail prints the traceback on its own).
+fn output_tail(lines: &[(String, String)], node_id: &str) -> Vec<String> {
+    let mut own: Vec<&str> = lines
+        .iter()
+        .filter(|(node, _)| node == node_id)
+        .map(|(_, line)| line.as_str())
+        .collect();
+    if let Some(at) = own
+        .iter()
+        .rposition(|line| line.trim_start() == "Traceback (most recent call last):")
+    {
+        own.truncate(at);
+    }
+    let from = own.len().saturating_sub(OUTPUT_TAIL_LINES);
+    own[from..].iter().map(|line| line.to_string()).collect()
 }
 
 /// One step result as `barca sql` shows it in `barca.materializations` and `GET
@@ -3319,10 +3414,33 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
         0.0
     };
 
+    // Peak RSS per execution, for the largest and the median (#627).
+    let mut all_rss: Vec<i64> = Vec::new();
+    {
+        let mut rows = conn
+            .query(
+                "SELECT max_rss_bytes FROM materializations WHERE node_id = ?1 AND max_rss_bytes > 0 ORDER BY max_rss_bytes",
+                [node_id.to_string()],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to query peak memory: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+        {
+            if let Ok(rss) = row.get::<i64>(0) {
+                all_rss.push(rss);
+            }
+        }
+    }
+    let max_rss_bytes = all_rss.last().copied();
+    let median_max_rss_bytes = (!all_rss.is_empty()).then(|| all_rss[(all_rss.len() - 1) / 2]);
+
     // Recent runs (last 10).
     let mut rows = conn
         .query(
-            "SELECT elapsed_seconds, status, created_at, error_message, attempts FROM materializations WHERE node_id = ?1 ORDER BY id DESC LIMIT 10",
+            "SELECT elapsed_seconds, status, created_at, error_message, attempts, run_id, cpu_seconds, max_rss_bytes FROM materializations WHERE node_id = ?1 ORDER BY id DESC LIMIT 10",
             [node_id.to_string()],
         )
         .await
@@ -3341,6 +3459,9 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
             created_at: row.get::<String>(2).unwrap_or_default(),
             error_message: row.get::<String>(3).ok(),
             attempts: row.get::<i64>(4).unwrap_or(1),
+            run_id: row.get::<String>(5).ok().filter(|id| !id.is_empty()),
+            cpu_seconds: row.get::<f64>(6).ok(),
+            max_rss_bytes: row.get::<i64>(7).ok().filter(|rss| *rss > 0),
         });
     }
 
@@ -3352,6 +3473,8 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
         max_elapsed_seconds: max_elapsed,
         p95_elapsed_seconds: p95_elapsed,
         cache_hit_rate,
+        max_rss_bytes,
+        median_max_rss_bytes,
         recent_runs,
     })
 }
@@ -5443,5 +5566,26 @@ mod duration_tests {
         assert_eq!(d["p.py:f"], f, "the latest 20 key rows, newest first");
         assert_eq!(d["p.py:g"], vec![7.0], "found below 3000 other rows");
         assert!(!d.contains_key("p.py:missing"));
+    }
+}
+
+#[cfg(test)]
+mod output_tail_tests {
+    use super::{OUTPUT_TAIL_LINES, output_tail};
+
+    #[test]
+    fn the_tail_is_the_steps_own_last_lines_before_its_traceback() {
+        let mut lines: Vec<(String, String)> = (0..30)
+            .map(|i| ("p.py:a".to_string(), format!("line {i}")))
+            .collect();
+        lines.insert(3, ("p.py:b".to_string(), "other step".to_string()));
+        lines.push(("p.py:a".into(), "Traceback (most recent call last):".into()));
+        lines.push(("p.py:a".into(), "  File \"p.py\", line 3, in a".into()));
+        lines.push(("p.py:a".into(), "ValueError: no".into()));
+        let tail = output_tail(&lines, "p.py:a");
+        assert_eq!(tail.len(), OUTPUT_TAIL_LINES);
+        assert_eq!(tail.first().unwrap(), "line 10");
+        assert_eq!(tail.last().unwrap(), "line 29");
+        assert!(output_tail(&lines, "p.py:c").is_empty());
     }
 }

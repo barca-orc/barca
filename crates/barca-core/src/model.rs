@@ -426,6 +426,11 @@ pub struct ExtractedNode {
     /// (#436). Not part of the run hash.
     #[serde(default = "default_weight")]
     pub weight: u32,
+    /// `@asset(deterministic=False)`: the asset may return other bytes for the same code and
+    /// inputs (a snapshot of an external system), so barca does not warn that it is not
+    /// deterministic (#627). Not part of the run hash and no effect on caching.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub deterministic: bool,
     /// Base backoff in seconds between attempts; delay = `retry_backoff_seconds * attempt`.
     pub retry_backoff_seconds: f64,
     /// Human-readable description.
@@ -482,6 +487,14 @@ pub struct ExtractedNode {
 
 fn default_weight() -> u32 {
     1
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl ExtractedNode {

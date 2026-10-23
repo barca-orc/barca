@@ -75,6 +75,9 @@ outside the `GENERATED` blocks is written by hand.
 | `weight=` on `@asset`, `@task` and `@sensor`, `[execution] capacity`, `BARCA_CAPACITY`, `capacity` / `capacity_source` / `pool_size` / `weights` in `barca plan`, `capacity` and `steps[].weight` in `--dry-run`, the `capacity` doctor check | new in 0.29 (#436): how steps are admitted under the capacity, and whether a step waiting in `parallel()` counts, may change after field use |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
 | dataset sinks: `@sink("prefix/")`, its `partition_by=` and `rows_per_file=`, the `_barca_sink.json` marker, the deletion of removed keys and the size warnings | new in 0.30.0 (#621): the marker's keys, the warning thresholds and how a key is swapped in on an object store may change after field use |
+| `require_env` in `barca.toml`, `BARCA_REQUIRE_ENV` and the `[barca] note: no --env given, ...` line | new in 0.31 (#627): which commands count as touching an environment, and when the note is printed, may change after field use |
+| `@asset(deterministic=False)` | new in 0.31 (#627): may be extended to other decorators |
+| `max_rss_bytes` and `median_max_rss_bytes` in `barca stats`, `steps[].max_rss_bytes` and `steps[].output_tail` in `barca history RUN_ID` | new in 0.31 (#627): what the peak covers (the worker's baseline is included) and how many lines the tail keeps may change |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 ### Accepted exceptions
@@ -197,6 +200,8 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | experimental (with the command) | Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep the selected keys, and fan-ins over them are left out (listed in partition_selection) |
+| `--json` | - | default `false` | experimental (with the command) | Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing |
+| `--pretty` | - | default `false` | experimental (with the command) | Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing (there is no table form) |
 
 #### barca doctor
 
@@ -238,7 +243,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -261,7 +266,7 @@ default, and any aliases.
 | `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`, `max_rss_bytes` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -446,6 +451,7 @@ value of its first key only.
 |---|---|---|
 | `BARCA_OUTPUT` | `json` or `pretty`: output format when no flag is given; any other value is a usage error (exit 2) | stable |
 | `BARCA_ENV` | environment name when `--env` is not given (beats `default_env` in `barca.toml`) | stable |
+| `BARCA_REQUIRE_ENV` | `1` makes `--env` or `BARCA_ENV` required for every command that reads or writes an environment (exit 2 without it); `0` turns `require_env = true` in `barca.toml` off; anything else exits 2 | experimental |
 | `BARCA_REMOTE` | `off` disables remote artifacts and history backups for this process; unset/empty retains normal config; other values are usage errors | stable |
 | `BARCA_REMOTE_URI` | remote root for artifacts and metadata backups (`[remote].uri`) | stable |
 | `BARCA_TRANSFER_CONCURRENCY` | positive integer: concurrent artifact transfers (`[remote].transfer_concurrency`, default 4); invalid values exit 3 | stable |
@@ -1930,6 +1936,8 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
+| `runs[].error` | string | always |
+| `runs[].failed_node` | string | always |
 | `runs[].failure` | object | always |
 | `runs[].failure.error` | string | always |
 | `runs[].failure.node` | string | always |
@@ -1962,6 +1970,8 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
+| `runs[].error` | string | always |
+| `runs[].failed_node` | string | always |
 | `runs[].failure` | object | always |
 | `runs[].failure.error` | string | always |
 | `runs[].failure.node` | string | always |
@@ -2017,12 +2027,15 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `steps[].artifact_path` | null \| string | always |
 | `steps[].artifact_size_bytes` | integer \| null | always |
 | `steps[].attempts` | integer | always |
+| `steps[].cpu_seconds` | null \| number | always |
 | `steps[].elapsed_seconds` | null \| number | always |
 | `steps[].error` | null \| string | always |
 | `steps[].error_message` | null \| string | always |
 | `steps[].error_traceback` | null \| string | always |
 | `steps[].error_type` | null \| string | always |
+| `steps[].max_rss_bytes` | integer \| null | always |
 | `steps[].node_id` | string | always |
+| `steps[].output_tail` | array \| null | always |
 | `steps[].partition_key` | null | always |
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
@@ -2054,6 +2067,8 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | null | always |
+| `runs[].error` | null | always |
+| `runs[].failed_node` | null | always |
 | `runs[].failure` | null | always |
 | `runs[].files` | array | always |
 | `runs[].finished_at` | null | always |
@@ -2081,14 +2096,19 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `cache_hit_rate` | number | always |
 | `id` | string | always |
 | `max_elapsed_seconds` | number | always |
+| `max_rss_bytes` | integer | always |
 | `median_elapsed_seconds` | number | always |
+| `median_max_rss_bytes` | integer | always |
 | `p95_elapsed_seconds` | number | always |
 | `recent_runs` | array | always |
 | `recent_runs[]` | object | always |
 | `recent_runs[].attempts` | integer | always |
+| `recent_runs[].cpu_seconds` | number | always |
 | `recent_runs[].created_at` | string | always |
 | `recent_runs[].elapsed_seconds` | number | always |
 | `recent_runs[].error_message` | null | always |
+| `recent_runs[].max_rss_bytes` | integer | always |
+| `recent_runs[].run_id` | string | always |
 | `recent_runs[].status` | string | always |
 | `total_runs` | integer | always |
 <!-- END GENERATED schema stats -->
@@ -2102,6 +2122,13 @@ evicted result). A cache hit executes nothing and is not recorded per asset; `ba
 counts cache hits per run (`steps_cached`). The human report labels it "Re-executed with
 unchanged inputs". Until 0.27.0 it counted every execution whose run hash appeared more than once,
 the first included.
+
+Since 0.31, each `recent_runs` entry has `run_id` (the run that recorded it: `barca history
+RUN_ID` lists every step of that run), `cpu_seconds` and `max_rss_bytes` (the worker process's
+peak resident memory while the step ran; `null` for a failed step, a platform that cannot tell,
+or a row from before barca recorded it), and the report has `max_rss_bytes` and
+`median_max_rss_bytes` over the node's recorded executions (`null` when none has one). Rows
+recorded before 0.31 hold the worker's peak over every step it had run, not the step's own.
 
 ### gc (experimental)
 
@@ -2416,6 +2443,7 @@ placeholders:
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` ([`barca docs remote`](/reference/remote-storage/), "Ctrl-C") | stable |
 | `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get` and `run` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>)` | once at startup of `serve`, always, after its metadata DB is set up: the line above plus the database and its format (`PRAGMA user_version`). `(unusable)` in place of `(db format <n>)` when it cannot be used (a writer then exits 3), `(not created yet)` when there is no database yet (the first run creates it) | experimental |
+| `[barca] note: no --env given, so this uses env <env> (<source>); this project has <n> environments (<names>). Pass --env NAME or set BARCA_ENV; require_env = true in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required` | once per command that reads or writes an environment (every mode), when neither `--env` nor `BARCA_ENV` names one and the project has more than one (`.barca/metadata.db` and the directories of `.barca/envs/`) | experimental |
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs, except within 5 minutes of a successful check of the same store, environment and storage options when the run does not refresh, is not `get -o url` and has no pending uploads: such a run prints it before its first fetch, if it fetches ([`barca docs remote`](/reference/remote-storage/), "How often the store is checked"); requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
 | `[barca] uploading <n> pending results to <store> from an earlier run` | before workers start, when results an earlier run could not upload are retried (every mode); followed by `[barca] uploaded <n> pending results` or `[barca] <n> pending results still not uploaded (<k> uploaded): <why>` | experimental |

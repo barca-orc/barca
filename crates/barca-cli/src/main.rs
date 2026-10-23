@@ -672,7 +672,9 @@ async fn run_cli(
             .await
             .map_err(|e| get_run_error(e, ctx, &hint_files))
         }
-        Cli::Plan { files, partition } => {
+        Cli::Plan {
+            files, partition, ..
+        } => {
             let partition = parse_partition(partition.as_deref())?;
             plan_cmd(files, &python, partition).await.map_err(engine)
         }

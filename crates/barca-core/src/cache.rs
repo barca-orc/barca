@@ -362,8 +362,14 @@ pub(crate) fn folds_output(dag: &Dag, id: &str) -> bool {
 /// a new value under the same run hash whenever the data it watches changes and a task runs
 /// every time; a `Manual` asset is pinned and refreshed by hand with the same code and inputs
 /// precisely to pick up new data, and what reads it is already stale by its bytes (#548).
+///
+/// An asset declared `@asset(deterministic=False)` says the same: it may return new bytes for
+/// the same code and inputs (#627). Caching is unchanged; only the warning and the
+/// `bytes_changed` / `last_bytes_change` reports are left out.
 pub(crate) fn checks_bytes(node: &crate::model::DagNode) -> bool {
-    node.kind() == crate::NodeKind::Asset && node.extracted.freshness != crate::Freshness::Manual
+    node.kind() == crate::NodeKind::Asset
+        && node.extracted.freshness != crate::Freshness::Manual
+        && node.extracted.deterministic
 }
 
 /// Record the output of `display_id` for its consumers' run hashes when its node folds its

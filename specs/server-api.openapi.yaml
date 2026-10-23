@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '11'
-  description: 'Normative current wire contract; specification version 11 is independent of package versions.
+  version: '12'
+  description: 'Normative current wire contract; specification version 12 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
@@ -3558,6 +3558,9 @@ components:
       - created_at
       - error_message
       - attempts
+      - run_id
+      - cpu_seconds
+      - max_rss_bytes
       properties:
         elapsed_seconds:
           anyOf:
@@ -3570,6 +3573,20 @@ components:
           - *id003
           - type: 'null'
         attempts: *id054
+        run_id:
+          anyOf:
+          - *id003
+          - type: 'null'
+          description: The run that recorded this execution; null on rows from before barca recorded it.
+        cpu_seconds:
+          anyOf:
+          - *id045
+          - type: 'null'
+        max_rss_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: The worker process's peak RSS while the step ran, in bytes; null when not recorded.
     Stats:
       type: object
       additionalProperties: false
@@ -3581,6 +3598,8 @@ components:
       - max_elapsed_seconds
       - p95_elapsed_seconds
       - cache_hit_rate
+      - max_rss_bytes
+      - median_max_rss_bytes
       - recent_runs
       properties:
         id: *id003
@@ -3593,6 +3612,16 @@ components:
         max_elapsed_seconds: *id055
         p95_elapsed_seconds: *id055
         cache_hit_rate: *id045
+        max_rss_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: The largest peak RSS a recorded execution reached, in bytes.
+        median_max_rss_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: The median of the recorded executions' peak RSS, in bytes.
         recent_runs:
           type: array
           items:
@@ -3857,6 +3886,9 @@ components:
       - error_message
       - error_traceback
       - worker_exit
+      - cpu_seconds
+      - max_rss_bytes
+      - output_tail
       properties:
         node_id: *id003
         status:
@@ -3921,6 +3953,25 @@ components:
           - type: 'null'
           description: How a dead worker ended (SIGKILL (possibly the OOM killer), another signal, code N,
             disconnected); null for a step that raised.
+        cpu_seconds:
+          anyOf:
+          - type: number
+          - type: 'null'
+          description: CPU seconds the step used (the worker process's user and system time).
+        max_rss_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: The worker process's peak RSS while the step ran, in bytes; null for a failed step,
+            a row from an older barca or a platform that cannot tell.
+        output_tail:
+          anyOf:
+          - type: array
+            items:
+              type: string
+          - type: 'null'
+          description: A failed step's last lines of output (at most 20, stdout and stderr in order, without
+            the traceback); null for a step that did not fail.
     RunFailure:
       type: object
       additionalProperties: false
@@ -4538,6 +4589,8 @@ components:
       - schedule_id
       - client_run_id
       - failure
+      - failed_node
+      - error
       properties:
         run_id: *id005
         command: *id005
@@ -4573,6 +4626,16 @@ components:
           - $ref: '#/components/schemas/RunFailure'
           - type: 'null'
           description: The first failed step and its error; null for a run with no failed step.
+        failed_node:
+          type:
+          - string
+          - 'null'
+          description: failure.node, flat for --fields.
+        error:
+          type:
+          - string
+          - 'null'
+          description: failure.error, flat for --fields.
     SqlCatalog:
       type: object
       additionalProperties: false

@@ -8,6 +8,10 @@ Arguments:
 Options:
       --partition <KEY=VALUE[,VALUE]|JSON>
           Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep the selected keys, and fan-ins over them are left out (listed in partition_selection)
+      --json
+          Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing
+      --pretty
+          Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing (there is no table form)
   -h, --help
           Print help
 
@@ -16,8 +20,9 @@ Examples:
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
   barca plan pipeline.py --partition region=emea   # only the emea keys; skipped fan-ins listed
+  barca plan pipeline.py --json       # the same JSON: --json and --pretty are accepted and change nothing
 
-Output: always pretty-printed JSON {plan_version, total_steps, pool_size, capacity, capacity_source,
+Output: always pretty-printed JSON, with or without --json / --pretty {plan_version, total_steps, pool_size, capacity, capacity_source,
 weights, phases: [{reason, streams: [{stream_id, steps}]}], warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
 plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
 stderr (barca docs assets, "Unused inputs").

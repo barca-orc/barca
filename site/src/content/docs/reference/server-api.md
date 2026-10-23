@@ -541,8 +541,9 @@ GET /assets/{name}     → { "asset": ListNode, "stats": Stats, "running": NodeR
 cron expression in `schedule` and the next fire time in `next_fire` (local time). `{name}`
 matches by function name or full node id; an unknown name returns `404`. `Stats` is the
 `barca stats --json` body: `{ id, total_runs, cache_hit_rate, avg_elapsed_seconds,
-median_elapsed_seconds, p95_elapsed_seconds, max_elapsed_seconds, recent_runs }`; the timings
-are `null` until the node has run.
+median_elapsed_seconds, p95_elapsed_seconds, max_elapsed_seconds, max_rss_bytes,
+median_max_rss_bytes, recent_runs }`, each recent run with its `run_id`, `cpu_seconds` and
+`max_rss_bytes`; the timings are `null` until the node has run.
 
 ### Plan
 

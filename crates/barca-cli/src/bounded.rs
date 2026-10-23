@@ -58,6 +58,8 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "schedule_id",
     "client_run_id",
     "failure",
+    "failed_node",
+    "error",
 ];
 
 /// Item fields of `steps[]` in `get`/`run` JSON (real and `--dry-run`). Optional fields only
@@ -91,6 +93,9 @@ pub const STATS_FIELDS: &[&str] = &[
     "created_at",
     "error_message",
     "attempts",
+    "run_id",
+    "cpu_seconds",
+    "max_rss_bytes",
 ];
 
 /// Item fields of `barca status --json` (`nodes[]`). `partitions` appears only on partitioned
@@ -198,7 +203,7 @@ mod tests {
             failure: None,
         };
         assert_eq!(
-            keys(&serde_json::to_value(run).unwrap()),
+            keys(&barca_core::report::history_json(&run)),
             set(HISTORY_FIELDS)
         );
     }
@@ -238,6 +243,9 @@ mod tests {
             created_at: String::new(),
             error_message: None,
             attempts: 0,
+            run_id: None,
+            cpu_seconds: None,
+            max_rss_bytes: None,
         };
         assert_eq!(keys(&serde_json::to_value(e).unwrap()), set(STATS_FIELDS));
     }

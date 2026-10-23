@@ -194,6 +194,7 @@ re-run, never a stale result.
 | `retry_backoff=` | no | decides how long to wait between attempts, not what the step returns |
 | `timeout_seconds=` | no | decides how long the step may take, not what it returns |
 | `weight=` | no | decides how many steps run at once, not what the step returns |
+| `deterministic=` | no | silences the warning about new bytes for the same code and inputs; caching is unchanged |
 | `description=` | no | documentation |
 | `tags=` | no | labels for people and tools |
 | `@unsafe` | no | a marker barca reads and does not act on |
@@ -586,6 +587,22 @@ new data, so new bytes are what the refresh is for: no warning, no `bytes_change
 `last_bytes_change`. What reads it is stale after such a refresh, since its bytes count in their
 run hashes (`barca docs scheduling`).
 
+An asset that is expected to return new bytes for the same code and inputs, such as a snapshot
+of an external system, can say so with `@asset(deterministic=False)`: barca then neither warns
+nor sets `bytes_changed` or `last_bytes_change` for it. Nothing else changes. Its result is
+cached under its run hash like any asset's (it is not recomputed more often), what reads it is
+hashed with its run hash as before (new bytes alone do not make them stale; make the external
+data an input, a sensor or `freshness=Manual` for that), and the argument is not part of the run
+hash, so adding or removing it recomputes nothing.
+
+```python
+from barca import asset
+
+@asset(deterministic=False)
+def exchange_rates() -> dict:
+    return fetch_rates()   # an external snapshot: new bytes are expected
+```
+
 `barca status` shows the last such event even after a later unchanged recompute: its JSON has
 `last_bytes_change` (node id, run hash, digest, UTC timestamp) and
 `last_materialization.content_hash` when a digest was recorded. The boundary is specified in
@@ -881,6 +898,26 @@ default`. Credentials and signed URI queries are redacted. The line is never on 
 `--json` output is unchanged. With neither setting, nothing is printed. `serve` always prints
 the line, with `; metadata <path> (db format <n>)` added (`barca docs scheduling`, "The metadata
 DB at startup").
+
+On a machine with more than one environment (`.barca/metadata.db` for `default`, and each
+directory of `.barca/envs/`), a command that names none with `--env` or `BARCA_ENV` prints one
+note on stderr naming the environment it uses and the ones there are, in every output mode
+(stdout and `--json` are unchanged):
+
+```
+[barca] note: no --env given, so this uses env staging (default_env in barca.toml); this project has 2 environments (prod, staging). Pass --env NAME or set BARCA_ENV; require_env = true in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required
+```
+
+`require_env = true` at the top level of `barca.toml` (or `BARCA_REQUIRE_ENV=1`, which beats
+it; `BARCA_REQUIRE_ENV=0` turns it off) makes the environment required: every command that
+reads or writes one (`get`, `run`, `status`, `history`, `logs`, `stats`, `sql`, `gc`, `state`
+and `serve`) exits 2 without `--env` or `BARCA_ENV`, naming the environments there are, even
+when `default_env` is set, and `barca doctor` reports it as a failed `environment` check.
+`plan`, `list` and `docs` read no environment and are not affected.
+
+```bash
+BARCA_REQUIRE_ENV=1 barca history --env prod   # what a box that requires --env accepts
+```
 
 ## Concurrent runs
 

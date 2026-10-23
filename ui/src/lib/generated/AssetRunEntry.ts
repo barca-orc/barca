@@ -11,4 +11,17 @@ error_message: string | null,
 /**
  * Number of attempts made.
  */
-attempts: number, };
+attempts: number,
+/**
+ * The run that recorded this execution (`barca history RUN_ID`); `null` on rows from
+ * before barca recorded it.
+ */
+run_id: string | null,
+/**
+ * CPU seconds the step used (user and system, the worker process's own).
+ */
+cpu_seconds: number | null,
+/**
+ * The worker process's peak RSS while the step ran, in bytes; `null` when not recorded.
+ */
+max_rss_bytes: number | null, };

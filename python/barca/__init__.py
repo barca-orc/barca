@@ -87,6 +87,7 @@ def asset(
     tags=None,
     env: list[str] | None = None,
     weight: int = 1,
+    deterministic: bool = True,
 ):
     """Declare a cached asset node.
 
@@ -111,6 +112,11 @@ def asset(
     pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it). Give a step
     that needs a lot of memory a higher weight so fewer run beside it. It does not
     count toward the run hash. Experimental.
+
+    `deterministic=False` declares that the asset may return other bytes for the same
+    code and inputs (a snapshot of an external system), so barca does not warn that it
+    is not deterministic. It does not change caching and does not count toward the run
+    hash.
 
     `retries` is the total number of attempts on failure (1 = no retry).
     `retry_backoff` is the base delay in seconds between attempts (delay grows

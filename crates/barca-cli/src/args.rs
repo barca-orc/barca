@@ -282,8 +282,9 @@ Examples:
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
   barca plan pipeline.py --partition region=emea   # only the emea keys; skipped fan-ins listed
+  barca plan pipeline.py --json       # the same JSON: --json and --pretty are accepted and change nothing
 
-Output: always pretty-printed JSON {plan_version, total_steps, pool_size, capacity, capacity_source,
+Output: always pretty-printed JSON, with or without --json / --pretty {plan_version, total_steps, pool_size, capacity, capacity_source,
 weights, phases: [{reason, streams: [{stream_id, steps}]}], warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
 plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
 stderr (barca docs assets, \"Unused inputs\").
@@ -368,6 +369,7 @@ Examples:
   barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
   barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
   barca history 7f30b3e9 --json   # {run, steps: [...], hint?}
+  barca history --status failed --json --fields run_id,failed_node,error   # why each run failed
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -380,10 +382,11 @@ run without targets), cut at 24 characters with `…`; JSON `job` holds it in fu
 resolved node ids sorted and comma-separated (null for runs recorded before 0.29.0).
 JSON returns every item unless --limit is given; human tables keep their default bound.
 A failed run's row ends with its first failed step and the first line of its error; JSON has it
-as `failure: {node, error}` (null otherwise). Filters combine with AND, and --limit, `total`
-and `truncated` count the runs they keep. With a RUN_ID, the run in detail: the steps it
-executed or that failed (cached steps are counted, not listed), each failed step's traceback,
-and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. Replace the example id
+as `failure: {node, error}` and as the flat `failed_node` and `error` (null otherwise).
+Filters combine with AND, and --limit, `total` and `truncated` count the runs they keep. With a
+RUN_ID, the run in detail: the steps it executed or that failed (cached steps are counted, not
+listed) with their peak memory (PEAK_RSS, `max_rss_bytes`), each failed step's traceback and
+the last 20 lines it printed (`output_tail`), and a hint naming `barca logs RUN_ID --step STEP --stream stderr`. Replace the example id
 with a run_id from barca history.
 More: barca docs agents, barca docs cache";
 
@@ -407,10 +410,11 @@ More: barca docs cache (\"Disk use\")";
 const STATS_HELP: &str = "\
 Examples:
   barca stats total                         # find `total` anywhere in the project
-  barca stats total pipeline.py             # timing percentiles and re-executions
+  barca stats total pipeline.py             # timing and peak memory (RSS) percentiles, re-executions
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped
   barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+  barca stats total --fields run_id,elapsed_seconds,max_rss_bytes   # each recent run's id, time and peak memory
   barca stats total --server                # timings recorded on the configured barca server
   barca stats total --local                 # timings recorded on this machine, even with a server configured
 
@@ -812,6 +816,14 @@ pub(crate) enum Cli {
         /// the selected keys, and fan-ins over them are left out (listed in partition_selection)
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
         partition: Option<String>,
+        /// Accepted for symmetry with the other commands: the plan is always pretty-printed
+        /// JSON, so this changes nothing
+        #[arg(long)]
+        json: bool,
+        /// Accepted for symmetry with the other commands: the plan is always pretty-printed
+        /// JSON, so this changes nothing (there is no table form)
+        #[arg(long)]
+        pretty: bool,
     },
     /// Diagnose project prerequisites without running pipeline steps
     #[command(after_help = DOCTOR_HELP)]

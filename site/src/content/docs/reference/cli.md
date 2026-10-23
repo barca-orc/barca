@@ -414,7 +414,8 @@ Filters combine with AND, and `--limit`, `total` and `truncated` count the runs 
 left out), `--triggered-by` (comma-separated: `manual`, `api`, `schedule`, `client`) and
 `--since` (`30m`, `24h`, `7d`, `2w`, an RFC 3339 time or a UTC date). A failed run's row ends
 with its first failed step and the first line of its error; JSON runs carry it as
-`failure: {node, error}` (`null` otherwise).
+`failure: {node, error}` and as the flat `failed_node` and `error` (`null` otherwise), so
+`--fields run_id,failed_node,error` needs no nesting.
 
 ```bash
 barca history --status failed --since 24h
@@ -424,8 +425,12 @@ barca history 836fdca186c8 --json   # {run, steps: [...], hint?}
 ```
 
 `barca history RUN_ID` prints the run's fields, the steps it recorded (status, attempts, time,
-run hash, artifact path, format and size), and for each failed step its error, traceback and,
-when the worker died, how it ended (`worker exit: SIGKILL (possibly the OOM killer)`). A hint on
+peak memory, run hash, artifact path, format and size), and for each failed step its error,
+traceback, when the worker died how it ended (`worker exit: SIGKILL (possibly the OOM
+killer)`), and the last 20 lines it printed (`output_tail` in JSON, without the traceback).
+Each step's JSON has `max_rss_bytes`, the worker process's peak resident memory while the step
+ran (on Linux the step's own; elsewhere only when the step raised the worker's peak), and
+`cpu_seconds`. Bytes DuckDB spilled to disk are not recorded: DuckDB keeps no total of them. A hint on
 stderr names `barca logs RUN_ID --step STEP --stream stderr`. Cached steps are counted in
 `steps_cached`, not listed: a run records no row for them. With a server configured, both
 forms answer from the server; a run only this machine has is an error whose remediation is
@@ -516,12 +521,15 @@ A cache hit executes nothing, so it is not counted here; `barca history` counts 
 run. In the JSON the re-execution share is `cache_hit_rate` (the key keeps its name).
 
 The JSON has `id`, `total_runs`, `cache_hit_rate`, `avg_elapsed_seconds`,
-`median_elapsed_seconds`, `p95_elapsed_seconds`, `max_elapsed_seconds` and `recent_runs` (each
-`elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`).
+`median_elapsed_seconds`, `p95_elapsed_seconds`, `max_elapsed_seconds`, `max_rss_bytes` and
+`median_max_rss_bytes` (peak memory over the recorded executions) and `recent_runs` (each
+`elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`,
+`max_rss_bytes`). `run_id` names the run, whose every step `barca history RUN_ID` lists.
 
 ```bash
 barca stats summary pipeline.py --json     # one JSON object; the node id is `id`
 barca stats summary pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+barca stats summary --fields run_id,elapsed_seconds,max_rss_bytes   # each recent run's id, time and peak memory
 ```
 
 ## serve
