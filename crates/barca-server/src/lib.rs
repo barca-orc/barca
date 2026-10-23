@@ -511,11 +511,11 @@ async fn drain_then_stop(
             let n = runs_in_flight(state);
             barca_core::errln!(
                 "[barca] the drain timeout ({secs}s) passed: stopping {} and putting {} back in \
-                 the queue; {} start again from the beginning when the server restarts (steps \
+                 the queue; {} again from the beginning when the server restarts (steps \
                  that finished are cached)",
                 runs(n),
                 if n == 1 { "it" } else { "them" },
-                if n == 1 { "it" } else { "they" },
+                if n == 1 { "it starts" } else { "they start" },
             );
             state
                 .queue
