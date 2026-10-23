@@ -80,8 +80,14 @@ def api_version(machine: Machine, version: int) -> str:
     `REGISTRY_API_URL` that serves it."""
     api = json.loads((machine.root / "registry_api.json").read_text())
     api["version"] = version
-    for row in api["registries"]["launch"]:
+    rows = api["registries"]["launch"]
+    for row in rows:
         row["rate"] = round(row["rate"] + version / 100, 3)
+    # One row per version that no driver reads (no item): each version's artifact has its own
+    # size. An object store gives no checksum, so `barca status` takes a store copy of the
+    # recorded size to be the recorded one (`barca docs remote`); two versions of one size
+    # would hide the very overwrite these tests look for.
+    rows += [{**rows[0], "item_id": None, "kind": "unused"} for _ in range(version)]
     (machine.root / f"api_v{version}.json").write_text(json.dumps(api))
     return f"file:api_v{version}.json"
 
@@ -122,7 +128,9 @@ def settle(machine: Machine) -> None:
     run's row, or a run was killed between its upload and its row), the store's copy wins:
     `get` fetches it, warns once, and records its digest. When this machine's copy is the
     recorded one and the store's differs, `get` uploads this machine's copy with the
-    changed-bytes warning (`barca docs remote`). Otherwise there is nothing to do."""
+    changed-bytes warning (`barca docs remote`). When the store's copy is the recorded one and
+    this machine's differs (another run's worker wrote it last), `get` fetches the store's.
+    Otherwise there is nothing to do."""
     node = machine.status()[REGISTRY]
     if node["cache"]["state"] == "cached":
         return
@@ -135,6 +143,12 @@ def settle(machine: Machine) -> None:
     if recorded == sha(local):
         assert f"{REGISTRY} produced different bytes for the same code and inputs" in proc.stderr
         kept = local
+    elif recorded == sha(stored):
+        # Overlapping runs: the store holds the recorded bytes and this machine's copy is the
+        # other run's. `get` fetches the recorded copy back from the store, with nothing to warn
+        # about: the record and the store agree.
+        assert "fetched 1 cached artifact" in proc.stderr, proc.stderr
+        kept = stored
     else:
         assert proc.stderr.count(MISMATCH) == 1, proc.stderr
         kept = stored
