@@ -1,6 +1,6 @@
 ---
 title: "Workflow: Parametrized Assets and Partitions"
-description: One asset definition run once per key, each key cached on its own. What runs when keys, code or a sensor change, how to look at the results, and the limits on 0.18.0.
+description: One asset definition run once per key, each key cached on its own. What runs when keys, code or a sensor change, how to look at the results, and the limits on 0.30.2.
 ---
 
 A partitioned asset is one function that barca runs once per key. Each key is a step of its
@@ -14,8 +14,9 @@ hit. Valid hashes and cache decisions remain independent of worker pool size.
 
 An earlier version of this page was a design document (identity model, proposed
 `materialize()` and `list_partitions()` helpers, a `.barcafiles/` layout). This page
-describes the shipped workflow. The examples were first verified with 0.18.0;
-`barca docs partitions` is the current behavior reference.
+describes the shipped workflow. The examples were first verified with 0.18.0 and re-run with
+0.30.2, which printed the output shown below; `barca docs partitions` is the current behavior
+reference.
 
 ## Example
 
@@ -79,8 +80,8 @@ The first run executes eight steps: the sensor, three keys of `prices`, three ke
 `signal`, and `report`.
 
 ```
-[barca] 8/8 steps | done in 0.0s
-Run 5251655353a8 | got 'report' in 0.139s (8 steps, 3 phases)
+[barca] 8/8 steps | done in 0.1s
+Run 48cfd3d36539 | got 'report' in 0.104s (8 steps, 3 phases)
 
 .barca/artifacts/pipeline.py--report/....json
   {
@@ -96,8 +97,9 @@ The second run executes one step, the sensor. It returned the same value, so eve
 the report are served from cache:
 
 ```
-[barca] 1/8 steps | done in 0.0s
-Run 52517c66a848 | got 'report' in 0.047s (1 step, 3 phases)
+[barca] 1/8 steps | done in 0.1s
+Run 48cfa7c2a607 | got 'report' in 0.083s (1 step, 3 phases)
+...
 ```
 
 ## Looking at the results
@@ -125,7 +127,8 @@ ticker=MSFT  true
 
 `barca status` shows one row per asset. A partitioned asset is `cached` when every key is,
 and `partial` when some are (see "When a key fails" below). With `--json` the node carries
-counts: `"partitions": {"cached": 3, "missing": 0, "missing_keys": [], "total": 3}`.
+counts: `"partitions": {"cached": 3, "missing": 0, "missing_keys": [], "total": 3}`. The sensor
+counts as `always run` in the last line.
 
 ```
 NAME          KIND    STATE        WHY           LAST RUN                               SHAPE          DEPS
@@ -133,6 +136,8 @@ feed_version  sensor  always-runs  sensor        success 2026-10-21 21:07:49 UTC
 prices        asset   cached       materialized  success 2026-10-21 21:07:49 UTC 0.00s  dict (3 keys)  feed_version
 signal        asset   cached       materialized  success 2026-10-21 21:07:49 UTC 0.00s  dict (2 keys)  prices
 report        asset   cached       materialized  success 2026-10-21 21:07:49 UTC 0.00s  dict (2 keys)  signal
+
+3 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
 
 SHAPE describes one key's artifact (a dict with three fields), not the number of partitions.
@@ -140,12 +145,12 @@ SHAPE describes one key's artifact (a dict with three fields), not the number of
 Each key has its own artifact directory, named `<file>--<asset>_<dimension>_<key>`:
 
 ```
-.barca/artifacts/pipeline.py--prices_ticker_AAPL/607006b4….json
-.barca/artifacts/pipeline.py--prices_ticker_GOOG/a713b4f3….json
-.barca/artifacts/pipeline.py--prices_ticker_MSFT/e403d2f9….json
-.barca/artifacts/pipeline.py--signal_ticker_AAPL/c0260fbd….json
+.barca/artifacts/pipeline.py--prices_ticker_AAPL/d37beb5c….json
+.barca/artifacts/pipeline.py--prices_ticker_GOOG/255be79e….json
+.barca/artifacts/pipeline.py--prices_ticker_MSFT/084bc3e2….json
+.barca/artifacts/pipeline.py--signal_ticker_AAPL/c900daf8….json
 ...
-.barca/artifacts/pipeline.py--report/a7cdcfcb….json
+.barca/artifacts/pipeline.py--report/ebe291c9….json
 ```
 
 You do not need to read these by hand; `barca sql` reads them.
@@ -161,6 +166,7 @@ barca get report pipeline.py --agent
 ```
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:feed_version completed 0.0s (1/8)
 [barca] step:pipeline.py:prices[ticker=AAPL] completed 0.0s (2/8)
 [barca] step:pipeline.py:prices[ticker=MSFT] completed 0.0s (3/8)
@@ -169,8 +175,12 @@ barca get report pipeline.py --agent
 [barca] step:pipeline.py:signal[ticker=MSFT] completed 0.0s (6/8)
 [barca] step:pipeline.py:signal[ticker=GOOG] completed 0.0s (7/8)
 [barca] step:pipeline.py:report completed 0.0s (8/8)
-[barca] 8/8 steps | done in 0.0s
+[barca] 8/8 steps | done in 0.1s
 ```
+
+`[barca] importing` is printed by each worker process that loads the file to run a step, so a
+run can print it more than once. It names the file's absolute path, shortened to `pipeline.py`
+on this page.
 
 A sensor's value is one value for the whole asset. There is no per-key sensor: if only one
 ticker's data changed, all keys still run. The same is true of any unpartitioned input.
@@ -179,6 +189,8 @@ ticker's data changed, all keys still run. The same is true of any unpartitioned
 recorded value and reported everything as cached:
 
 ```
+Dry run: barca get report (nothing executed, nothing written)
+
 STATUS    WHY                                                                     STEP
 will run  sensors always re-run                                                   pipeline.py:feed_version
 cached    3 keys; assumes sensor 'feed_version' returns the same value as its last run  pipeline.py:prices
@@ -197,9 +209,9 @@ Removing a key or reordering them runs no key. The keys are not part of the func
 definition, so editing them never changes the run hash of a key that is already cached
 (`barca docs cache`, "Which decorator arguments count").
 
-This section was run with 0.19. Up to 0.18 it held only when the keys were written outside
-the decorator: adding a key to a literal list inside it re-ran every key of the asset and
-everything downstream, because the decorator's text was part of every key's hash
+This section was run with 0.19 and re-run with 0.30.2. Up to 0.18 it held only when the keys
+were written outside the decorator: adding a key to a literal list inside it re-ran every key of
+the asset and everything downstream, because the decorator's text was part of every key's hash
 ([#283](https://github.com/barca-orc/barca/issues/283)).
 
 ### A literal list in the decorator
@@ -224,11 +236,12 @@ will run  changed: input pipeline.py:signal          pipeline.py:report
 
 ```
 $ barca get report pipeline.py --agent
+[barca] importing pipeline.py
 [barca] step:pipeline.py:feed_version completed 0.0s (1/10)
 [barca] step:pipeline.py:prices[ticker=NVDA] completed 0.0s (2/10)
 [barca] step:pipeline.py:signal[ticker=NVDA] completed 0.0s (3/10)
 [barca] step:pipeline.py:report completed 0.0s (4/10)
-[barca] 4/10 steps | done in 0.0s
+[barca] 4/10 steps | done in 0.1s
 ```
 
 The sensor always runs. `prices` and `signal` ran for `NVDA` only, and `report` ran because
@@ -255,9 +268,10 @@ def summary(all_sales: list[dict]) -> dict:
 After adding `"latam"` to `REGIONS`:
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:sales[region=latam] completed 0.0s (1/5)
 [barca] step:pipeline.py:summary completed 0.0s (2/5)
-[barca] 2/5 steps | done in 0.0s
+[barca] 2/5 steps | done in 0.2s
 ```
 
 After removing `"amer"` from `REGIONS`, only `summary` ran (`1/4 steps`).
@@ -289,11 +303,12 @@ def sales(region: str) -> dict:
 After appending `latam` to `regions.txt`:
 
 ```
+[barca] importing pipeline.py
 [barca] step:pipeline.py:region_list completed 0.0s (1/4)
 [barca] step:pipeline.py:regions completed 0.0s (2/4)
 [barca] step:pipeline.py:sales[region=latam] completed 0.0s (3/7)
 [barca] step:pipeline.py:summary completed 0.0s (4/7)
-[barca] 4/7 steps | done in 0.0s
+[barca] 4/7 steps | done in 0.1s
 ```
 
 After removing `amer` from the file, `regions` and `summary` ran and no key of `sales` did.
@@ -308,23 +323,22 @@ The keys are known only after `regions` has run. Before its first run, `--dry-ru
 the output of 'regions', which is not available until it runs"). The list itself is not
 passed to `sales`.
 
-### A removed key stays in `barca sql`
+### A removed key leaves `barca sql`, not the disk
 
-A removed key's artifact is not deleted, and the `barca sql` view still includes it. After
-removing `amer` (in both of the last two examples):
+A removed key's artifact is not deleted, but the `barca sql` view covers only the current keys.
+After removing `amer` (in both of the last two examples):
 
 ```
 $ barca sql "select * from sales"
 partition     region  revenue
-region=amer   amer    40
 region=apac   apac    40
 region=emea   emea    40
 region=latam  latam   50
 ```
 
-`summary`, which uses `collect(sales)`, received the three current keys
-(`{'regions': 3, 'total': 130}`). To query only current keys, filter on `partition` yourself
-or query an asset built with `collect`.
+`summary`, which uses `collect(sales)`, received the same three keys
+(`{"regions": 3, "total": 130}`). Putting `amer` back in the list ran no step: its result and
+the four-key `summary` were still cached. `barca docs sql` describes which keys a view covers.
 
 ## Selecting keys with `--partition`
 
@@ -335,8 +349,12 @@ The selection applies to the whole run, upstream and downstream:
 $ barca get 'sales[region=emea]' pipeline.py
 Asset 'sales[region=emea]' not found. Available: pipeline.py:sales, pipeline.py:summary
 
+Run `barca list pipeline.py` to see available assets and tasks.
+
 $ barca get summary pipeline.py --refresh 'sales[region=emea]'
 --refresh: no upstream asset named 'sales[region=emea]' in the cone of 'summary'.
+Upstream assets you can refresh: sales, summary
+Pass several as a comma-separated list: --refresh sales,summary
 ```
 
 - `barca get sales pipeline.py` brings every key up to date.
@@ -359,34 +377,44 @@ Keys are independent. With one key raising, the others complete and are cached, 
 does not run, and the command exits 1:
 
 ```
+[barca] importing pipeline.py
+[barca] importing pipeline.py
 [barca] step:pipeline.py:sales[region=emea] completed 0.0s (1/4)
+[barca] importing pipeline.py
 [barca] step:pipeline.py:sales[region=apac] completed 0.0s (2/4)
 [barca] step:pipeline.py:sales[region=amer] failed: RuntimeError: amer feed not ready
 [barca] 2/4 steps | failed in 0.1s
+[barca] run failed: step 'pipeline.py:sales[region=amer]' failed: RuntimeError: amer feed not ready; 1 downstream steps skipped (exit 1)
 ```
 
 ```
 $ barca status pipeline.py
-NAME     KIND   STATE      WHY                                     LAST RUN                        SHAPE  DEPS
-sales    asset  partial    2 of 3 keys cached; partitions_missing  failed 2026-10-21 21:07:49 UTC  -      -
-summary  asset  never-run  no_record                               -                               -      sales
+NAME     KIND   STATE      WHY                                                                                         LAST RUN                        SHAPE  DEPS
+sales    asset  partial    2 of 3 keys cached; partitions_missing; last run failed: RuntimeError: amer feed not ready  failed 2026-10-21 21:07:49 UTC  -      -
+summary  asset  never-run  no_record                                                                                   -                               -      sales
+
+0 cached, 0 stale, 1 never run, 1 partial, 0 unknown, 0 always run
 ```
 
-The next run executes only the failed key and the fan-in (`2/4 steps`).
+Once the cause is fixed outside the code (here, the feed became ready), the next run executes
+only the failed key and the fan-in (`2/4 steps`). A fix that edits the function's code changes
+every key's run hash, so every key runs again.
 
 ## With a remote store
 
 With `BARCA_REMOTE_URI` set, every key's result is uploaded to the store, one directory per
 key, laid out as it is locally. The store is this machine's backup and read-through cache: with
 the local copies of both keys of a `sales` deleted, the next `barca get sales` ran no step and
-printed `[barca] fetched 2 cached artifacts`. Another machine reuses those keys only through a
+printed `[barca] fetched 2 cached artifacts (66 B) in 0.0s`. This was run with a `file://` store;
+a cloud store was not tried for this page. Another machine reuses those keys only through a
 server they both point at (`barca docs server-mode`).
 
 ## A few thousand keys
 
-Measured once with barca 0.18.0 on an Apple M4 Max (16 cores) that was busy with other work
-(load average about 9), with `KEYS = [f"k{i:04d}" for i in range(2000)]`, a function that
-returns a small dict, and a `collect` fan-in. Wall-clock time of the whole command:
+Measured once with barca 0.18.0, and not re-measured since, on an Apple M4 Max (16 cores) that
+was busy with other work (load average about 9), with `KEYS = [f"k{i:04d}" for i in range(2000)]`,
+a function that returns a small dict, and a `collect` fan-in. Wall-clock time of the whole
+command:
 
 | Command | Steps run | Time |
 |---|---|---|
@@ -409,8 +437,8 @@ per key, not what your functions cost.
   dimension name re-runs every key.
 - **Any change to the function's code, or to an unpartitioned input or sensor it reads,
   re-runs every key.**
-- **A removed key's results remain** on disk (until the cache size limit evicts them) and in the
-  `barca sql` view.
+- **A removed key's results remain** on disk (until the cache size limit evicts them), though the
+  `barca sql` view leaves them out.
 - **`partitions_from(upstream)` on a partitioned upstream** must be the asset's only dimension
   and must keep the upstream's dimension name; anything else is a usage error (exit 2).
 - **A partitioned asset in a plain `inputs=`** of an unpartitioned asset, without `collect()`,

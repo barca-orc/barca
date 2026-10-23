@@ -15,6 +15,9 @@ concurrency:
 jobs:
   test:
     runs-on: depot-ubuntu-latest
+    # A hung test fails the job instead of holding it for hours (#637). A green run takes
+    # about 7 minutes with a warm cache.
+    timeout-minutes: 45
     env:
       # Cargo must build on local disk: builds on the shared cache volume
       # produced corrupt .rlib/.rmeta files, even with a target dir per PR.
@@ -63,6 +66,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run unit tests
+        # Includes building the test binaries; the tests themselves take about a minute.
+        timeout-minutes: 20
         run: cargo test
 
       - name: Install Python
@@ -109,6 +114,8 @@ jobs:
     # the S3 API — and therefore Cloudflare R2's code path — fake-gcs-server
     # covers GCS generation-match, Azurite covers Azure ETag If-Match.
     runs-on: depot-ubuntu-latest
+    # See the test job (#637). A green run takes about 15 minutes with a warm cache.
+    timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: target
       PIP_CACHE_DIR: /mnt/cache/backends/pip
@@ -197,6 +204,7 @@ jobs:
           for i in $(seq 1 60); do curl -s http://localhost:9210/devstoreaccount1 >/dev/null && break; sleep 1; done
 
       - name: Run full Python suite (incl. backend conformance and transfer fault tests)
+        timeout-minutes: 30
         env:
           BARCA_TEST_S3_ENDPOINT: http://localhost:9100
           BARCA_TEST_GCS_ENDPOINT: http://localhost:9200

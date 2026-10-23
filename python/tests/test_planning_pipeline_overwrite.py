@@ -36,6 +36,13 @@ pytest.importorskip("pandas")
 
 REGISTRY = "launch_registry"
 DRIVER = "driver_launch_item"
+# While this file exists in the project, the driver's step waits (`hold_the_driver`).
+HOLD = ".hold_driver"
+DRIVER_DEF = """def driver_launch_item(
+    registry: duckdb.DuckDBPyRelation,
+    forecast_item: duckdb.DuckDBPyRelation,
+) -> duckdb.DuckDBPyRelation:
+"""
 
 
 @pytest.fixture(scope="module")
@@ -45,9 +52,25 @@ def bucket():
     b.remove()
 
 
+def hold_the_driver(root) -> None:
+    """Make the driver's step wait while the project holds `HOLD`: a test that kills a run
+    then always kills it mid-run, never after it finished (#616). Done before the first run,
+    so every run of the module computes the same code."""
+    assets = root / "assets.py"
+    source = assets.read_text()
+    assert source.count(DRIVER_DEF) == 1
+    wait = (
+        "    import time\n\n"
+        f"    while (Path(__file__).parent / {HOLD!r}).exists():\n"
+        "        time.sleep(0.05)\n"
+    )
+    assets.write_text(source.replace(DRIVER_DEF, DRIVER_DEF + wait))
+
+
 @pytest.fixture(scope="module")
 def machine(tmp_path_factory, bucket) -> Machine:
     m, _ = new_machine(tmp_path_factory.mktemp("overwrite") / "project", "store", bucket)
+    hold_the_driver(m.root)
     m.ok("get", DRIVER, "assets.py", "--json")
     return m
 
@@ -57,8 +80,14 @@ def api_version(machine: Machine, version: int) -> str:
     `REGISTRY_API_URL` that serves it."""
     api = json.loads((machine.root / "registry_api.json").read_text())
     api["version"] = version
-    for row in api["registries"]["launch"]:
+    rows = api["registries"]["launch"]
+    for row in rows:
         row["rate"] = round(row["rate"] + version / 100, 3)
+    # One row per version that no driver reads (no item): each version's artifact has its own
+    # size. An object store gives no checksum, so `barca status` takes a store copy of the
+    # recorded size to be the recorded one (`barca docs remote`); two versions of one size
+    # would hide the very overwrite these tests look for.
+    rows += [{**rows[0], "item_id": None, "kind": "unused"} for _ in range(version)]
     (machine.root / f"api_v{version}.json").write_text(json.dumps(api))
     return f"file:api_v{version}.json"
 
@@ -99,7 +128,9 @@ def settle(machine: Machine) -> None:
     run's row, or a run was killed between its upload and its row), the store's copy wins:
     `get` fetches it, warns once, and records its digest. When this machine's copy is the
     recorded one and the store's differs, `get` uploads this machine's copy with the
-    changed-bytes warning (`barca docs remote`). Otherwise there is nothing to do."""
+    changed-bytes warning (`barca docs remote`). When the store's copy is the recorded one and
+    this machine's differs (another run's worker wrote it last), `get` fetches the store's.
+    Otherwise there is nothing to do."""
     node = machine.status()[REGISTRY]
     if node["cache"]["state"] == "cached":
         return
@@ -112,6 +143,12 @@ def settle(machine: Machine) -> None:
     if recorded == sha(local):
         assert f"{REGISTRY} produced different bytes for the same code and inputs" in proc.stderr
         kept = local
+    elif recorded == sha(stored):
+        # Overlapping runs: the store holds the recorded bytes and this machine's copy is the
+        # other run's. `get` fetches the recorded copy back from the store, with nothing to warn
+        # about: the record and the store agree.
+        assert "fetched 1 cached artifact" in proc.stderr, proc.stderr
+        kept = stored
     else:
         assert proc.stderr.count(MISMATCH) == 1, proc.stderr
         kept = stored
@@ -154,18 +191,27 @@ def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):
     """Killed between its upload and its row (most attempts), the store and this machine hold
     the new bytes and the record names the old ones; the next `get` that returns or reads the
     registry records the new ones (`settle`, #576). When the kill lands after the row instead,
-    nothing is left to repair."""
+    nothing is left to repair.
+
+    The driver's step, downstream of the registry, waits until the kill (`hold_the_driver`):
+    the run is always in flight when it is killed, however soon it would otherwise finish."""
     node = machine.status()[REGISTRY]
     artifact = node["cache"]["artifact"]
     before = machine.bucket.cat(artifact)
-    run = refresh(machine, 4, target=DRIVER)
-    deadline = time.monotonic() + 120
-    while machine.bucket.cat(artifact) == before:
-        assert run.poll() is None, "the refresh ended before its upload was seen"
-        assert time.monotonic() < deadline, "the refreshed registry never reached the store"
-        time.sleep(0.02)
-    os.killpg(run.pid, signal.SIGKILL)
-    run.communicate()
+    hold = machine.root / HOLD
+    hold.touch()
+    try:
+        run = refresh(machine, 4, target=DRIVER)
+        deadline = time.monotonic() + 120
+        while machine.bucket.cat(artifact) == before:
+            assert run.poll() is None, "the refresh ended before its upload was seen"
+            assert time.monotonic() < deadline, "the refreshed registry never reached the store"
+            time.sleep(0.02)
+        assert run.poll() is None, "the refresh ended while its driver step was held"
+        os.killpg(run.pid, signal.SIGKILL)
+        run.communicate(timeout=60)
+    finally:
+        hold.unlink(missing_ok=True)
 
     history = machine.ok("history", "--json", "--limit", "1")["runs"][0]
     assert history["status"] == "interrupted", history
