@@ -8,6 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- A metadata DB written before 0.29.2 opens again (#629): 0.29.2 to 0.30.0 refused it with exit 3
+  ("its `logs` table has no `stream` column") on every command, `barca serve` included,
+  because the check that runs before the in-place migration did not know the `logs.stream` and
+  `logs.ts` columns that migration adds. Opening it now adds them in place and keeps every row;
+  lines recorded before read as stdout with no time. No `barca state reset` is needed. A test
+  now opens a database written by a release of every minor from 0.20 with the current build.
+
 ## 0.30.0 (2026-10-23)
 
 ### Breaking
