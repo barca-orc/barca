@@ -1898,6 +1898,19 @@ paths:
         schema:
           type: string
         description: The database run id.
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: The most steps to list (default 1000).
+      - name: all
+        in: query
+        required: false
+        schema:
+          type: boolean
+        description: List every step.
     head:
       summary: One run, with its outcome once finished (headers only)
       operationId: head_runs_run_id
@@ -4154,7 +4167,10 @@ components:
           steps_executed: *id056
           phases: *id056
           final_output:
-            description: 'Single target: the value, or an artifact pointer for binary formats.'
+            description: 'Single target: the value, or an artifact pointer for binary formats. A
+              partitioned target: an object keyed by partition key; past 1000 keys with no partition
+              selection, {"_barca_partitions": {keys, computed, cached, outputs, truncated, hint}},
+              where outputs holds only the keys the run computed (at most 1000).'
           partition_selection:
             $ref: '#/components/schemas/PartitionSelection'
           targets:
@@ -4226,6 +4242,7 @@ components:
       - outcome
       - error
       - steps
+      - steps_page
       - logs
       properties:
         run_id: *id005
@@ -4293,8 +4310,20 @@ components:
         error: *id042
         steps:
           type: array
+          description: At most ?limit=N steps (default 1000; failed recorded steps are kept first),
+            every one with ?all=true.
           items:
             $ref: '#/components/schemas/RunStep'
+        steps_page:
+          type: object
+          additionalProperties: false
+          required:
+          - total
+          - truncated
+          description: How many steps the run has, and whether steps lists fewer.
+          properties:
+            total: *id056
+            truncated: *id059
         logs:
           type: array
           items:

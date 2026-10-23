@@ -204,10 +204,13 @@ pub struct Returned {
     pub values: bool,
     /// The returned artifacts, one per key.
     pub shown: Vec<Shown>,
+    /// A partitioned target with more keys than are listed: the counts (#623); `shown` then
+    /// holds only the keys the run computed.
+    pub key_summary: Option<crate::results::KeySummary>,
 }
 
-fn shown_lines(rendered: &mut RenderedOutput, shown: &[Shown], shape: GetShape) {
-    for s in shown {
+fn shown_lines(rendered: &mut RenderedOutput, returned: &Returned, shape: GetShape) {
+    for s in &returned.shown {
         match (shape, &s.key) {
             (GetShape::Pretty, Some(key)) => line!(rendered, "{key}: {}", s.path),
             _ => line!(rendered, "{}", s.path),
@@ -219,6 +222,13 @@ fn shown_lines(rendered: &mut RenderedOutput, shown: &[Shown], shape: GetShape) 
                 line!(rendered, "  {l}");
             }
         }
+    }
+    if let Some(summary) = &returned.key_summary {
+        note!(
+            rendered,
+            "[barca] {}",
+            crate::report::key_summary_note(summary)
+        );
     }
 }
 
@@ -255,7 +265,7 @@ pub fn render_get_body(
                 line!(rendered, "{}", serde_json::to_string_pretty(val).unwrap());
             }
         }
-        GetShape::Bare => shown_lines(&mut rendered, &returned.shown, shape),
+        GetShape::Bare => shown_lines(&mut rendered, returned, shape),
         GetShape::Pretty => {
             let count = |key: &str| body[key].as_u64().unwrap_or(0);
             let (steps, phases) = (count("steps_executed"), count("phases"));
@@ -280,7 +290,7 @@ pub fn render_get_body(
                 }
             } else if !returned.shown.is_empty() {
                 line!(rendered, "");
-                shown_lines(&mut rendered, &returned.shown, shape);
+                shown_lines(&mut rendered, returned, shape);
             }
         }
     }
@@ -291,7 +301,14 @@ pub fn render_get_body(
 /// pointer, or an object of them keyed by partition key): the paths to print.
 pub fn returned_from_pointers(final_output: Option<&Value>) -> Returned {
     let path = |v: &Value| v["_barca_artifact"]["path"].as_str().map(str::to_string);
-    let shown = match final_output {
+    let key_summary = final_output.and_then(crate::report::parse_key_summary);
+    let listed = match (&key_summary, final_output) {
+        (Some(_), Some(v)) => v[crate::report::KEY_SUMMARY]
+            .get("outputs")
+            .or(Some(&Value::Null)),
+        _ => final_output,
+    };
+    let shown = match listed {
         Some(Value::Object(map)) if !map.contains_key("_barca_artifact") => map
             .iter()
             .filter_map(|(key, v)| {
@@ -316,6 +333,7 @@ pub fn returned_from_pointers(final_output: Option<&Value>) -> Returned {
         final_output: final_output.filter(|v| !v.is_null()).cloned(),
         values: false,
         shown,
+        key_summary,
     }
 }
 
@@ -376,7 +394,7 @@ pub fn render_get_multi_parts(
         }
         GetShape::Bare => {
             for i in 0..per_target.len() {
-                shown_lines(&mut rendered, &each(i).shown, shape);
+                shown_lines(&mut rendered, each(i), shape);
             }
         }
         GetShape::Pretty => {
@@ -409,7 +427,7 @@ pub fn render_get_multi_parts(
                         line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
                     }
                 } else {
-                    shown_lines(&mut rendered, &r.shown, shape);
+                    shown_lines(&mut rendered, r, shape);
                 }
             }
         }
@@ -470,7 +488,7 @@ pub fn render_failed_get_returned(r: &Returned, shape: GetShape) -> RenderedOutp
             line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
         }
     } else {
-        shown_lines(&mut rendered, &r.shown, shape);
+        shown_lines(&mut rendered, r, shape);
     }
     rendered
 }
@@ -651,7 +669,11 @@ pub fn render_run_detail(
     let mut rendered = RenderedOutput::default();
     let hint = run_detail_hint(detail, select);
     if json {
-        let mut out = serde_json::json!({ "run": detail.run, "steps": detail.steps });
+        let mut out = serde_json::json!({
+            "run": detail.run,
+            "steps": detail.steps,
+            "steps_page": detail.steps_page,
+        });
         if let Some(hint) = &hint {
             out["hint"] = hint.clone().into();
         }
@@ -765,6 +787,12 @@ pub fn render_run_detail(
         line!(rendered, "{}", fmt_row(header));
         for row in &rows {
             line!(rendered, "{}", fmt_row(row.each_ref().map(String::as_str)));
+        }
+    }
+    if detail.steps_page.truncated {
+        let page = crate::report::Page::new(detail.steps.len(), detail.steps_page.total);
+        if let Some(note) = page.note(detail.steps.len(), "steps") {
+            note!(rendered, "{note}; failed steps are always listed");
         }
     }
     for step in detail.steps.iter().filter(|s| s.status == "failed") {
@@ -1216,6 +1244,7 @@ pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
                     steps: result.steps.clone(),
                     warnings: result.warnings.clone(),
                     partitions: t.partitions.clone(),
+                    key_summary: t.key_summary.clone(),
                 })),
             },
         )));
@@ -1477,7 +1506,11 @@ mod run_detail_tests {
             "WorkerError",
             "ZeroDivisionError: division by zero\n  File \"p.py\", line 3, in clean",
         ));
-        crate::queries::RunDetail { run, steps }
+        crate::queries::RunDetail {
+            run,
+            steps,
+            steps_page: Default::default(),
+        }
     }
 
     fn text(out: &RenderedOutput) -> (String, String) {

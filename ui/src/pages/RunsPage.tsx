@@ -60,6 +60,7 @@ function RunPanel({ id, onClose, onResolved }: { id: string; onClose: () => void
                 </li>)}
               </ul>
             )}
+            {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length} of {data.steps_page.total} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
           </Section>
           <Section title="Logs">
             <LogViewer lines={data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts }))} live={runIsLive(data.status)} height={280} />

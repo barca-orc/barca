@@ -327,6 +327,21 @@ records a new run. The same inspection is available through `GET /runs?limit=100
 `GET /runs/{run_id}`, which read private DB snapshots. A run the server started keeps its full
 outcome in the DB, so `GET /runs/{run_id}` gives the same answer after a restart.
 
+What a run keeps is bounded by what it computed, not by how many keys it served from cache
+(0.30.1, #623):
+
+- Its outcome lists at most 1000 keys of a partitioned target; past that, the keys it
+  computed and a count of the others (`barca docs partitions`, "Many keys").
+- `GET /runs/{run_id}` lists at most 1000 of its recorded steps (`?limit=N` for another
+  number, `?all=true` for every one; failed steps are kept first), with `steps_page: {total,
+  truncated}`; `barca history RUN_ID` takes `--limit N` and `--all` the same way. A run records
+  a step per key it computed, never per cached key.
+- The server keeps a finished run's outcome and event stream in memory for an hour, and at most
+  64 MB of them: past that the oldest finished runs are dropped first (their record stays in the
+  DB, where `GET /runs/{run_id}` reads it; `GET /runs/{run_id}/events` is then `404`). The run
+  that finished last is always kept. After each run the server hands the memory the run freed
+  back to the system, so its resident size returns to its idle size between ticks.
+
 ## Calling the server
 
 Deploy the project code and its Python dependencies on the server, keep `.barca/` on

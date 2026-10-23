@@ -27,6 +27,11 @@ pub struct GetResult {
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub partitions: Option<Vec<(String, OutputRef)>>,
+    /// Set when `partitions` holds more than [`LISTED_KEYS`] keys and no `--partition` selected
+    /// them: `final_output` then summarizes them ([`KeySummary`]).
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub key_summary: Option<KeySummary>,
     /// Present when the check after the run found `.barca/` over its size limit (RFC-0012):
     /// what it evicted, and the size after.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,6 +46,81 @@ pub struct GetResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub partition_selection: Option<PartitionSelectionReport>,
+}
+
+/// The most partition keys a run lists in `final_output` (#623). A partitioned target that
+/// returns more, with no `--partition` selecting them, lists only the keys the run computed (at
+/// most this many) and counts the others: `{"_barca_partitions": {...}}` (`barca docs
+/// partitions`, "Many keys"). `--partition` returns every key it selects, however many.
+pub const LISTED_KEYS: usize = 1000;
+
+/// What `final_output` says of a partitioned target that returned more than [`LISTED_KEYS`]
+/// keys: how many, how many this run computed, and those keys' artifacts.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct KeySummary {
+    /// How many keys the target returned.
+    pub keys: usize,
+    /// How many of them this run computed; the others were served from cache.
+    pub computed: usize,
+    /// The computed keys and their artifacts, sorted by key, at most [`LISTED_KEYS`].
+    pub listed: Vec<(String, OutputRef)>,
+}
+
+impl KeySummary {
+    /// The summary of `keys`, the sorted keys `node` returned, when there are more than
+    /// [`LISTED_KEYS`] and no selection named them; `cached` holds the step ids (`node[key]`)
+    /// served from cache in this run. `None` otherwise: every key is listed.
+    pub fn of(
+        node: &str,
+        keys: &[(String, OutputRef)],
+        selected: bool,
+        cached: &std::collections::HashSet<String>,
+    ) -> Option<Self> {
+        if selected || keys.len() <= LISTED_KEYS {
+            return None;
+        }
+        let mut id = String::with_capacity(node.len() + 32);
+        let mut computed = 0;
+        let mut listed = Vec::new();
+        for (key, oref) in keys {
+            id.clear();
+            id.push_str(node);
+            id.push('[');
+            id.push_str(key);
+            id.push(']');
+            if !cached.contains(&id) {
+                computed += 1;
+                if listed.len() < LISTED_KEYS {
+                    listed.push((key.clone(), oref.clone()));
+                }
+            }
+        }
+        Some(Self {
+            keys: keys.len(),
+            computed,
+            listed,
+        })
+    }
+
+    /// The keys to list: the summary's, or every key when there is no summary.
+    pub fn listed<'a>(
+        summary: Option<&'a KeySummary>,
+        keys: Option<&'a [(String, OutputRef)]>,
+    ) -> Option<&'a [(String, OutputRef)]> {
+        match summary {
+            Some(s) => Some(&s.listed),
+            None => keys,
+        }
+    }
+
+    /// The same counts without the listed artifacts (what a printed note needs).
+    pub fn counts(&self) -> Self {
+        Self {
+            keys: self.keys,
+            computed: self.computed,
+            listed: Vec::new(),
+        }
+    }
 }
 
 /// `partition_selection` in the JSON results of a run, a dry run and `barca plan` under
@@ -178,6 +258,9 @@ pub struct TargetOutcome {
     /// on a failed target, the keys that succeeded.
     #[serde(skip)]
     pub partitions: Option<Vec<(String, OutputRef)>>,
+    /// See [`GetResult::key_summary`].
+    #[serde(skip)]
+    pub key_summary: Option<KeySummary>,
 }
 
 impl TargetOutcome {
@@ -597,6 +680,52 @@ mod wire_tests {
                 .unwrap_err()
                 .to_string()
                 .contains("duplicate target 'z'")
+        );
+    }
+}
+
+#[cfg(test)]
+mod key_summary_tests {
+    use super::*;
+
+    fn oref(key: &str) -> OutputRef {
+        OutputRef {
+            path: format!("{key}.json"),
+            format: "json".into(),
+            size_bytes: 1,
+            elapsed_seconds: None,
+            content_hash: None,
+        }
+    }
+
+    #[test]
+    fn a_target_of_many_keys_lists_only_the_keys_it_computed() {
+        let keys: Vec<(String, OutputRef)> = (0..LISTED_KEYS + 1)
+            .map(|i| {
+                let k = format!("k={i:05}");
+                let o = oref(&k);
+                (k, o)
+            })
+            .collect();
+        // Every key but two was served from cache.
+        let cached: std::collections::HashSet<String> = keys
+            .iter()
+            .filter(|(k, _)| k != "k=00007" && k != "k=00900")
+            .map(|(k, _)| format!("p.py:t[{k}]"))
+            .collect();
+        let s = KeySummary::of("p.py:t", &keys, false, &cached).unwrap();
+        assert_eq!((s.keys, s.computed), (LISTED_KEYS + 1, 2));
+        let listed: Vec<&str> = s.listed.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(listed, ["k=00007", "k=00900"]);
+        // At the limit, or selected with --partition, every key is listed.
+        assert!(KeySummary::of("p.py:t", &keys[..LISTED_KEYS], false, &cached).is_none());
+        assert!(KeySummary::of("p.py:t", &keys, true, &cached).is_none());
+        // A cold run computed them all: the first LISTED_KEYS are listed, all are counted.
+        let none = std::collections::HashSet::new();
+        let cold = KeySummary::of("p.py:t", &keys, false, &none).unwrap();
+        assert_eq!(
+            (cold.computed, cold.listed.len()),
+            (LISTED_KEYS + 1, LISTED_KEYS)
         );
     }
 }

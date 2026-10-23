@@ -413,20 +413,96 @@ pub fn artifact_metadata(oref: &crate::dispatch::OutputRef) -> serde_json::Value
 }
 
 /// What `barca get --json` returns by default (#404): the artifact pointer, or for a
-/// partitioned target an object of pointers keyed by partition key. `None` when the run
-/// returned nothing (a `get` of every asset).
+/// partitioned target an object of pointers keyed by partition key ([`keyed_output`]). `None`
+/// when the run returned nothing (a `get` of every asset).
 pub fn pointer_output(
     single: Option<&crate::dispatch::OutputRef>,
     keys: Option<&[(String, crate::dispatch::OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
 ) -> Option<serde_json::Value> {
-    match keys {
-        Some(keys) => Some(serde_json::Value::Object(
+    match crate::results::KeySummary::listed(summary, keys) {
+        Some(keys) => Some(keyed_output(
             keys.iter()
                 .map(|(key, oref)| (key.clone(), artifact_metadata(oref)))
                 .collect(),
+            summary,
         )),
         None => single.map(artifact_metadata),
     }
+}
+
+/// The key of a summarized partitioned `final_output` (#623).
+pub const KEY_SUMMARY: &str = "_barca_partitions";
+
+/// A partitioned target's `final_output`: `entries` (key to pointer or value) as they are, or,
+/// with a summary (more than [`crate::results::LISTED_KEYS`] keys), `{"_barca_partitions":
+/// {"keys", "computed", "cached", "outputs", "truncated", "hint"}}`, where `outputs` holds the
+/// entries of the keys the run computed.
+pub fn keyed_output(
+    entries: serde_json::Map<String, serde_json::Value>,
+    summary: Option<&crate::results::KeySummary>,
+) -> serde_json::Value {
+    let Some(s) = summary else {
+        return serde_json::Value::Object(entries);
+    };
+    let truncated = entries.len() < s.computed;
+    serde_json::json!({
+        KEY_SUMMARY: {
+            "keys": s.keys,
+            "computed": s.computed,
+            "cached": s.keys - s.computed,
+            "outputs": entries,
+            "truncated": truncated,
+            "hint": key_summary_hint(s),
+        }
+    })
+}
+
+/// Why a partitioned output is summarized, and how to see the keys it leaves out.
+fn key_summary_hint(s: &crate::results::KeySummary) -> String {
+    format!(
+        "{} keys, more than {}: outputs lists only the keys this run computed{}; select keys \
+         with --partition to list their paths, or read every key with barca sql",
+        s.keys,
+        crate::results::LISTED_KEYS,
+        if s.computed > crate::results::LISTED_KEYS {
+            format!(" (the first {})", crate::results::LISTED_KEYS)
+        } else {
+            String::new()
+        }
+    )
+}
+
+/// The stderr note under the paths of a summarized partitioned output.
+pub fn key_summary_note(s: &crate::results::KeySummary) -> String {
+    format!(
+        "{} of {} keys not listed ({} cached{}): more than {} keys; select keys with \
+         --partition to list their paths",
+        s.keys - s.computed.min(crate::results::LISTED_KEYS),
+        s.keys,
+        s.keys - s.computed,
+        match s.computed.saturating_sub(crate::results::LISTED_KEYS) {
+            0 => String::new(),
+            n => format!(", {n} computed"),
+        },
+        crate::results::LISTED_KEYS
+    )
+}
+
+/// The counts of a summarized partitioned `final_output` ([`keyed_output`]); `None` for any
+/// other value.
+pub fn parse_key_summary(output: &serde_json::Value) -> Option<crate::results::KeySummary> {
+    let s = output.get(KEY_SUMMARY)?;
+    let n = |k: &str| {
+        s.get(k)
+            .and_then(serde_json::Value::as_u64)
+            .map(|n| n as usize)
+    };
+    Some(crate::results::KeySummary {
+        keys: n("keys")?,
+        computed: n("computed")?,
+        listed: Vec::new(),
+    })
 }
 
 /// Read an artifact for display: a JSON artifact's value inline, metadata for binary formats.
@@ -825,5 +901,60 @@ mod utc_tests {
         assert_eq!(utc_cell("2026-10-21 02:04:05"), "2026-10-21 02:04:05 UTC");
         assert_eq!(utc_cell("2026-10-21T02:04:05Z"), "2026-10-21 02:04:05 UTC");
         assert_eq!(utc_cell(""), "");
+    }
+}
+
+#[cfg(test)]
+mod key_summary_output_tests {
+    use crate::dispatch::OutputRef;
+    use crate::results::{KeySummary, LISTED_KEYS};
+
+    #[test]
+    fn a_summarized_output_lists_the_computed_keys_and_reads_back() {
+        let oref = OutputRef {
+            path: "a.json".into(),
+            format: "json".into(),
+            size_bytes: 3,
+            elapsed_seconds: None,
+            content_hash: None,
+        };
+        let keys = vec![("k=a".to_string(), oref.clone())];
+        // Few keys: an object keyed by partition key, as before.
+        let small = super::pointer_output(None, Some(&keys), None).unwrap();
+        assert_eq!(small["k=a"]["_barca_artifact"]["path"], "a.json");
+        let summary = KeySummary {
+            keys: 5000,
+            computed: 1,
+            listed: keys.clone(),
+        };
+        let out = super::pointer_output(None, Some(&keys), Some(&summary)).unwrap();
+        let s = &out[super::KEY_SUMMARY];
+        assert_eq!(s["keys"], 5000);
+        assert_eq!(s["computed"], 1);
+        assert_eq!(s["cached"], 4999);
+        assert_eq!(s["truncated"], false);
+        assert_eq!(s["outputs"]["k=a"]["_barca_artifact"]["path"], "a.json");
+        assert!(s["hint"].as_str().unwrap().contains("--partition"));
+        // A client prints the listed paths and the note from the JSON alone.
+        let returned = crate::report::returned_from_pointers(Some(&out));
+        assert_eq!(returned.shown.len(), 1);
+        assert_eq!(returned.shown[0].key.as_deref(), Some("k=a"));
+        assert_eq!(returned.key_summary, Some(summary.counts()));
+        let note = super::key_summary_note(&summary);
+        assert!(
+            note.starts_with("4999 of 5000 keys not listed (4999 cached)"),
+            "{note}"
+        );
+        // More computed keys than are listed: truncated.
+        let cold = KeySummary {
+            keys: 5000,
+            computed: 5000,
+            listed: keys,
+        };
+        let out = super::pointer_output(None, None, Some(&cold)).unwrap();
+        assert_eq!(out[super::KEY_SUMMARY]["truncated"], true);
+        assert!(
+            super::key_summary_note(&cold).contains(&format!("{} computed", 5000 - LISTED_KEYS))
+        );
     }
 }

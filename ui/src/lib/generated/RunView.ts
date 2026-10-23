@@ -2,6 +2,7 @@
 import type { LogEntry } from "./LogEntry";
 import type { RunFailure } from "./RunFailure";
 import type { RunStep } from "./RunStep";
+import type { StepsPage } from "./StepsPage";
 import type { TriggeredBy } from "./TriggeredBy";
 
 /**
@@ -61,9 +62,15 @@ outcome: Record<string, unknown> | null,
  */
 error: string | null,
 /**
- * Each step the run recorded, then each step it streamed and has not recorded yet.
+ * Each step the run recorded, then each step it streamed and has not recorded yet: at
+ * most `?limit=N` of them (default 1000, failed recorded steps first), every one with
+ * `?all=true`.
  */
 steps: Array<RunStep>,
+/**
+ * How many steps there are in all, and whether `steps` lists fewer (#623).
+ */
+steps_page: StepsPage,
 /**
  * The lines the run's steps printed.
  */

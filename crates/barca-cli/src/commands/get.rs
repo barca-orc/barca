@@ -85,6 +85,7 @@ pub(crate) async fn get_cmd(
                         Some(name.as_str()),
                         t.final_output.as_ref(),
                         t.partitions.as_deref(),
+                        t.key_summary.as_ref(),
                     )
                     .await?,
             );
@@ -122,7 +123,12 @@ pub(crate) async fn get_cmd(
                         // A link that cannot be signed is left out: the run's own failure is
                         // what this command reports.
                         Some(keys) => reader
-                            .returned(target.as_deref(), None, Some(keys))
+                            .returned(
+                                target.as_deref(),
+                                None,
+                                Some(keys),
+                                f.run.as_ref().and_then(|r| r.key_summary.as_ref()),
+                            )
                             .await
                             .ok(),
                         None => None,
@@ -143,6 +149,7 @@ pub(crate) async fn get_cmd(
             target.as_deref(),
             result.final_output.as_ref(),
             result.partitions.as_deref(),
+            result.key_summary.as_ref(),
         )
         .await?;
     super::emit(barca_core::report::render_get(
@@ -170,7 +177,9 @@ impl Reader<'_> {
         target: Option<&str>,
         single: Option<&OutputRef>,
         keys: Option<&[(String, OutputRef)]>,
+        summary: Option<&barca_core::results::KeySummary>,
     ) -> Result<Returned, barca_core::BarcaError> {
+        let keys = barca_core::results::KeySummary::listed(summary, keys);
         let items: Vec<(Option<&str>, &OutputRef)> = match keys {
             Some(keys) => keys.iter().map(|(k, o)| (Some(k.as_str()), o)).collect(),
             None => single.into_iter().map(|o| (None, o)).collect(),
@@ -229,12 +238,13 @@ impl Reader<'_> {
             })
             .collect();
         let final_output = match keys {
-            Some(_) => Some(Value::Object(
+            Some(_) => Some(barca_core::report::keyed_output(
                 items
                     .iter()
                     .zip(shown_values)
                     .map(|((key, _), v)| (key.unwrap_or_default().to_string(), v))
                     .collect(),
+                summary,
             )),
             None => shown_values.into_iter().next(),
         };
@@ -242,6 +252,7 @@ impl Reader<'_> {
             final_output,
             values: self.mode.values,
             shown,
+            key_summary: summary.map(barca_core::results::KeySummary::counts),
         })
     }
 

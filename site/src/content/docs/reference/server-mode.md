@@ -182,7 +182,8 @@ on stderr when this machine's newest run is newer than the server's.
 the server (`GET /history?status=...&target=...&triggered_by=...&since=...`; a relative
 `--since` counts back from the server's clock), and `barca history RUN_ID` reads
 `GET /runs/{run_id}`: the run, its steps with their attempts, run hashes, artifacts, errors and
-tracebacks. A run only this machine has (a failed run against the ledger is never posted) fails
+tracebacks (at most 1000 steps unless `--limit N` or `--all` asks for more; `steps_page` says how
+many there are). A run only this machine has (a failed run against the ledger is never posted) fails
 (exit 2) with the remediation `this run is on this machine: barca history RUN_ID --local`.
 
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`

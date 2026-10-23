@@ -228,14 +228,14 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<RUN_ID>` | - | - | experimental: new in 0.29.3: the run detail's step keys and human layout may change after field use | One run in detail: its fields, every step it recorded, and each failed step's error, traceback and how its worker ended |
+| `<RUN_ID>` | - | - | experimental: new in 0.29.3: the run detail's step keys and human layout may change after field use | One run in detail: its fields, the steps it recorded (the first 1000, failed steps always; --limit and --all change it), and each failed step's error, traceback and how its worker ended |
 | `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
 | `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted |
 | `--target` | `NAME` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out |
 | `--triggered-by` | `TRIGGER[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started this way (comma-separated): manual, api, schedule, client |
 | `--since` | `WHEN` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22) |
-| `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table) |
-| `--all` | - | default `false` | stable | Show every recorded run (no limit) |
+| `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table); with a RUN_ID, the most steps listed (default 1000) |
+| `--all` | - | default `false` | stable | Show every recorded run (no limit); with a RUN_ID, every step it recorded |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
@@ -428,7 +428,11 @@ A partitioned target returns every key, or the keys `--partition` selects
 (`DIMENSION=VALUE[,VALUE...]`, or a JSON object of dimension to value or list of values). Its
 `final_output` is an object keyed by partition key (`dim=value`, dimensions sorted and joined
 with `,`), sorted, each a pointer or (under `-o value`) a value; `-o path` prints one line per
-key in the same order. `--partition` narrows every partitioned node of the run with a named
+key in the same order. Past 1000 keys with no `--partition` (0.30.1, #623), `final_output` is
+`{"_barca_partitions": {keys, computed, cached, outputs, truncated, hint}}` instead: `outputs` is
+that object for the keys the run computed only (at most 1000, `truncated` when there are
+more), `keys` and `cached` count the rest, and `-o path` prints the computed keys with a note on
+stderr (`barca docs partitions`, "Many keys"). `--partition` returns every key it selects. `--partition` narrows every partitioned node of the run with a named
 dimension, with or without a target, on `get`, `run` and `plan`; the result then carries
 `partition_selection` (`selection`, `nodes[]` with `id`, `selected`, `skipped`, and
 `skipped_nodes`), and a node it does not run is a step with status (dry run: action) `skipped`
@@ -863,7 +867,7 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists 
 <!-- END GENERATED schema get_partitioned -->
 
 A partitioned target (`get per_key`) returns every key: `final_output` is an object keyed by
-partition key, each a pointer.
+partition key, each a pointer (past 1000 keys, the `_barca_partitions` summary above).
 
 <!-- BEGIN GENERATED schema get_partition_keys -->
 | Key | Type | Present |
@@ -1903,8 +1907,10 @@ value is a usage error (exit 2) naming the valid ones. Against a server they are
 parameters `status`, `target`, `triggered_by` and `since` of `GET /history` (a 400 for an
 unknown value).
 
-Experimental `barca history RUN_ID` (0.29.3) prints one run as `{run, steps, hint?}`. `run` is
-one `runs[]` entry. `steps[]` are the steps the run recorded, in the order it recorded them:
+Experimental `barca history RUN_ID` (0.29.3) prints one run as `{run, steps, steps_page,
+hint?}`. `run` is one `runs[]` entry. `steps[]` are the steps the run recorded, in the order it
+recorded them, at most 1000 of them (`--limit N` sets the number, `--all` lists every one;
+past the limit failed steps are kept first; 0.30.1, #623):
 `node_id`, `partition_key` (`k=v` pairs joined by `,`, or `null`), `status` (`success` or
 `failed`; `cached` only for a step a live server run has reported), `attempts`,
 `elapsed_seconds`, `run_hash`, `artifact_path` (this machine's path or the store location),
@@ -1912,12 +1918,14 @@ one `runs[]` entry. `steps[]` are the steps the run recorded, in the order it re
 exception `Type: message` and the frames), `error_type`, `error_message` (the message alone),
 `error_traceback` and `worker_exit` (how a dead worker ended: `SIGKILL (possibly the OOM
 killer)`, another signal name, `code N` or `disconnected`; `null` for a step that raised).
-Cached steps are not listed: `run.steps_cached` counts them. `hint`, present when a step
+Cached steps are not listed: `run.steps_cached` counts them. `steps_page` is `{total,
+truncated}`: how many steps the run recorded and whether `steps` lists fewer (the table
+prints a note on stderr). `hint`, present when a step
 failed, is the `barca logs RUN_ID --step STEP --stream stderr` command for the first failed
 step, with the `--server`, `--local` and `--env` this command was given. An unknown run id is
 exit 2; against a server, one only this machine has adds the remediation `this run is on this
-machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the filters,
-`--limit`, `--all` and `--fields`.
+machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the filters and
+`--fields`.
 
 
 <!-- BEGIN GENERATED schema history -->
@@ -2027,6 +2035,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps[].worker_exit` | null | always |
+| `steps_page` | object | always |
+| `steps_page.total` | integer | always |
+| `steps_page.truncated` | boolean | always |
 <!-- END GENERATED schema history_run -->
 
 Newest first. `files` is an array of the `.py` files the run was given. `target`,

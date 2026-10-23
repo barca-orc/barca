@@ -6,7 +6,7 @@ mod args;
 mod input;
 use input::*;
 mod bounded;
-use bounded::inspection_limit;
+use bounded::{inspection_limit, steps_limit};
 mod client;
 mod commands;
 use args::*;
@@ -458,6 +458,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 return client::run_detail(
                     server,
                     &run_id,
+                    steps_limit(limit, all),
                     is_json(format),
                     &select,
                     env.as_deref(),
@@ -751,9 +752,15 @@ async fn run_cli(
         } => {
             if let Some(run_id) = run_id {
                 let select = same_history(&server, env.as_deref());
-                return run_detail_cmd(env.as_deref(), &run_id, is_json(format), &select)
-                    .await
-                    .map_err(engine);
+                return run_detail_cmd(
+                    env.as_deref(),
+                    &run_id,
+                    steps_limit(limit, all),
+                    is_json(format),
+                    &select,
+                )
+                .await
+                .map_err(engine);
             }
             let filter = history_filter(
                 status.as_deref(),

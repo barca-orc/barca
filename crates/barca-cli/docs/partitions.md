@@ -190,13 +190,14 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.
 - The cost of a tick grows with the number of keys even when one changed: each key is hashed
   and looked up. Measured on one loaded machine (`benchmarks/RESULTS.md`, "Keyed
   partitions"), `barca get` of the chain with one key changed: 0.32 s at 10k keys, 1.7 s at 50k,
-  7 s at 200k (it also returns 200k paths and checks each artifact is there); a `barca serve`
+  7 s at 200k (it also checks each returned artifact is there); a `barca serve`
   tick at 200k: 4.3 to 4.6 s. A sensor that runs once per key
   (`@sensor(partitions={"retailer": partitions(KEYS)})`) makes one call per key on every
   tick instead: 3.3 s at 10k keys, 16 s at 50k.
-- Known limit under `barca serve`: a run keeps its full outcome, which lists every output of
-  its targets. At 200k keys a tick records about 80 MB of JSON in the metadata DB
-  (`runs.outcome_json`) and the server holds each finished run in memory for an hour.
+- Under `barca serve`, what a tick keeps does not grow with the keys it served from cache:
+  its outcome lists the keys it computed and counts the others ("Many keys" below). At 200k
+  keys with one key changing per tick, the metadata DB grows by a few kilobytes per tick and
+  the server's memory stays flat (`benchmarks/RESULTS.md`, "Bounded run records").
 
 ## Getting partitions
 
@@ -213,6 +214,32 @@ barca get margin pipeline.py --partition '{"region":"apac"}'           # a JSON 
 
 - When some keys fail, the run fails (exit 1, `failed_node` names the key). The keys that
   succeeded are returned; a failed key has no artifact and runs again on the next `get`.
+- Past 1000 keys, without `--partition`, only the keys the run computed are listed (below).
+
+### Many keys
+
+A run lists at most 1000 keys. When a partitioned target returns more and no `--partition`
+selected them, `final_output` lists the keys this run computed and counts the ones it served
+from cache:
+
+```json
+{"_barca_partitions": {
+  "keys": 200000, "computed": 1, "cached": 199999, "truncated": false,
+  "outputs": {"retailer=r000042": {"_barca_artifact": {"path": "...", "format": "json", "size_bytes": 49}}},
+  "hint": "200000 keys, more than 1000: outputs lists only the keys this run computed; ..."}}
+```
+
+- `outputs` holds what the 1000-key object would hold for those keys: pointers, values under
+  `-o value`, links under `-o url`. A cold run computes every key: `outputs` lists the first
+  1000 by key and `truncated` is `true`.
+- The table and `-o path` print the computed keys' paths, then a note on stderr
+  (`199999 of 200000 keys not listed (199999 cached): ...`).
+- `--partition` returns every key it selects, however many: name the keys whose paths you
+  need. `barca sql "select * from scored"` reads every current key's rows.
+- `barca.get()` in Python raises `BarcaError` for such a target; pass `partition=`.
+- The run's outcome under `barca serve` (`GET /runs/{run_id}`, the `run_finished` event, the
+  metadata DB) holds the same object, so a tick that recomputed one key of 200k records a few
+  kilobytes. Runs recorded before 0.30.1 keep the outcome they stored, every key included.
 
 ## Selecting keys
 

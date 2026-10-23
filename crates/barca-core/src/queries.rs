@@ -126,12 +126,17 @@ pub async fn history_at(
 pub struct RunDetail {
     pub run: db::RunRecord,
     pub steps: Vec<db::RunStep>,
+    /// How many steps the run recorded, and whether `steps` lists fewer.
+    #[serde(default)]
+    pub steps_page: db::StepsPage,
 }
 
 /// [`RunDetail`] of `run_id` in this environment; a usage error when it is not recorded.
+/// At most `limit` of its recorded steps (every one with `None`).
 pub async fn run_detail(
     cfg: &crate::config::ResolvedConfig,
     run_id: &str,
+    limit: Option<usize>,
 ) -> Result<RunDetail, BarcaError> {
     db::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
@@ -140,8 +145,12 @@ pub async fn run_detail(
             "run '{run_id}' was not found; use barca history --json to find a run id"
         )));
     };
-    let steps = db::get_run_steps(&cfg.db_path, run_id).await?;
-    Ok(RunDetail { run, steps })
+    let (steps, steps_page) = db::get_run_steps_page(&cfg.db_path, run_id, limit).await?;
+    Ok(RunDetail {
+        run,
+        steps,
+        steps_page,
+    })
 }
 
 /// Record a running row as interrupted after the operator has verified it stopped.

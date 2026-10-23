@@ -66,7 +66,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   consumers are `unknown` (reason `sensor_output_unknown`). See `barca docs cache`.
 - Several targets: the result has `targets` (per name: `status`, then `final_output`, or
   `failed_node` and `error`) instead of `final_output`. Every target runs even if another fails.
-- A partitioned target returns every key. `--partition region=emea,amer` (a JSON object for
+- A partitioned target returns every key; past 1000 keys `final_output` is a
+  `_barca_partitions` summary listing only the keys the run computed. `--partition region=emea,amer` (a JSON object for
   compound keys) computes only those keys in every partitioned node of the run, returns them, and
   scopes `--refresh`; a `collect()` fan-in over them is skipped (`partition_selection`).
 

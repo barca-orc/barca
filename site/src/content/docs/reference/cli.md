@@ -187,6 +187,24 @@ fails (exit 1, `failed_node` names the key) and `final_output` in the result lin
 keys that succeeded; how a partial failure is reported may still change
 (`barca docs partitions`).
 
+#### Many partition keys
+
+A run lists at most 1000 keys (0.30.1). When a partitioned target returns more and no
+`--partition` selected them, `final_output` lists the keys this run computed and counts the
+ones it served from cache, so a tick that recomputed one key of 200k returns one path:
+
+```json
+{"_barca_partitions": {"keys": 200000, "computed": 1, "cached": 199999, "truncated": false,
+  "outputs": {"retailer=r000042": {"_barca_artifact": {"path": "...", "format": "json", "size_bytes": 49}}},
+  "hint": "..."}}
+```
+
+`outputs` holds pointers, values under `-o value` or links under `-o url`, for at most 1000
+computed keys (`truncated` when a cold run computed more). `-o path` and the table print those
+paths and a note on stderr. `--partition` returns every key it selects, however many, and
+`barca sql` reads every current key's rows. `barca.get()` raises for such a target; pass
+`partition=`. The same object is the outcome `barca serve` records for the run.
+
 With no target (`barca get pipeline.py`, or `barca get`), barca gets every asset and sensor and
 returns the last asset's artifact. Tasks are skipped, and stderr names them and the `barca run`
 command. A sensor nothing depends on still runs. A file with only tasks gets nothing: exit 0,
@@ -928,6 +946,7 @@ on stderr when `default_env` or an artifact store is in effect. See
 - From 0.25.0: `get` prints artifact paths by default. `final_output` in the JSON is always a
   pointer, and a terminal shows the path with a small json value previewed under it; `-o value`
   prints the value. A partitioned target returns every key, and `--partition` selects keys.
+  (From 0.30.1, past 1000 keys only the keys a run computed are listed.)
   `.barca/` has a size limit (`[cache] max_size`, default 10% of the filesystem) and is evicted
   past it.
 - From 0.26.0: a remote store fails soft once the steps are done: an upload that fails after
