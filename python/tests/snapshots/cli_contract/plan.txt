@@ -13,6 +13,7 @@ phases[].streams[].steps[] : string
 phases[].streams[].stream_id : string
 plan_version : integer
 pool_size : integer
+pool_source : string
 total_steps : integer
 warnings : array
 warnings[] : object

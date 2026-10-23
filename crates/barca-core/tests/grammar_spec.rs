@@ -1273,7 +1273,7 @@ fn the_helpers_take_their_argument_by_position_only() {
     ));
     assert!(
         err.contains(
-            "`timezone` is not an argument of Schedule(). Schedule() accepts: max_failures"
+            "`timezone` is not an argument of Schedule(). Schedule() accepts: max_failures, timeout_seconds"
         ),
         "{err}"
     );

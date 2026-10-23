@@ -2705,6 +2705,7 @@ components:
       - queued
       - running
       - max_runs
+      - capacity
       properties:
         paused:
           type: boolean
@@ -2717,6 +2718,27 @@ components:
         max_runs:
           type: integer
           minimum: 1
+        capacity:
+          description: The capacity every run shares (--capacity, [server] capacity); null without one. Experimental.
+          anyOf:
+          - type: 'null'
+          - type: object
+            additionalProperties: false
+            required:
+            - total
+            - in_use
+            - waiting
+            properties:
+              total:
+                type: integer
+                minimum: 1
+              in_use:
+                type: integer
+                minimum: 0
+              waiting:
+                type: integer
+                minimum: 0
+                description: Steps waiting for capacity.
     RunAccepted:
       type: object
       additionalProperties: false
@@ -2792,6 +2814,7 @@ components:
       - max_runs
       - running
       - queued
+      - capacity
       properties:
         paused:
           type: boolean
@@ -2817,6 +2840,70 @@ components:
           description: Next first.
           items:
             $ref: '#/components/schemas/QueueEntry'
+        capacity:
+          description: The capacity every run shares (--capacity, [server] capacity); null without one.
+            Steps are admitted first come, first served across runs; a waiting step is not overtaken.
+            Experimental.
+          anyOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/SharedCapacity'
+    SharedCapacity:
+      type: object
+      additionalProperties: false
+      required:
+      - total
+      - source
+      - in_use
+      - runs
+      - waiting
+      properties:
+        total:
+          type: integer
+          minimum: 1
+        source:
+          type: string
+          description: --capacity or [server] capacity.
+        in_use:
+          type: integer
+          minimum: 0
+          description: The weight the running steps of every run take together.
+        runs:
+          type: array
+          description: The weight each run holds.
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - run_id
+            - weight
+            properties:
+              run_id:
+                type: string
+              weight:
+                type: integer
+                minimum: 1
+        waiting:
+          type: array
+          description: The steps waiting for capacity, in the order they are admitted.
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - run_id
+            - node
+            - weight
+            - waiting_seconds
+            properties:
+              run_id:
+                type: string
+              node:
+                type: string
+              weight:
+                type: integer
+                minimum: 1
+              waiting_seconds:
+                type: number
+                minimum: 0
     RunHandle:
       type: object
       additionalProperties: false
@@ -2971,7 +3058,12 @@ components:
         pool_size:
           type: integer
           minimum: 0
-          description: Worker processes (available cores, or BARCA_POOL_SIZE). Experimental.
+          description: Worker processes a run starts at most (BARCA_POOL_SIZE, [execution] pool_size, else
+            the cores bounded by the capacity). Experimental.
+        pool_source:
+          type: string
+          description: Where pool_size came from, BARCA_POOL_SIZE, [execution] pool_size, cores, or the
+            capacity setting that bounded the cores. Experimental.
         capacity:
           type: integer
           minimum: 0

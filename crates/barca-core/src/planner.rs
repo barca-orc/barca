@@ -856,6 +856,7 @@ mod tests {
                         Freshness::Always
                     },
                     max_failures: None,
+                    schedule_timeout: None,
                     inputs,
                     partitions: HashMap::new(),
                     sinks: SmallVec::new(),
@@ -918,6 +919,7 @@ mod tests {
             explicit_name: None,
             freshness: Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: SmallVec::new(),
             partitions: HashMap::new(),
             sinks: SmallVec::new(),
@@ -1354,6 +1356,7 @@ mod tests {
                 explicit_name: None,
                 freshness: Freshness::Always,
                 max_failures: None,
+                schedule_timeout: None,
                 inputs: SmallVec::new(),
                 partitions: HashMap::new(),
                 sinks: SmallVec::new(),
@@ -1503,6 +1506,7 @@ mod tests {
                     explicit_name: None,
                     freshness: Freshness::Always,
                     max_failures: None,
+                    schedule_timeout: None,
                     inputs,
                     partitions: partition_map,
                     sinks: SmallVec::new(),
@@ -1785,6 +1789,7 @@ mod tests {
             explicit_name: None,
             freshness: Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: SmallVec::new(),
             partitions: HashMap::from([(
                 "key".to_string(),
@@ -1824,6 +1829,7 @@ mod tests {
             explicit_name: None,
             freshness: Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: SmallVec::from_vec(vec![DeclaredInput {
                 param_name: "data".to_string(),
                 upstream: NodeRef::FunctionName("source".to_string()),
@@ -1914,6 +1920,7 @@ mod tests {
             explicit_name: None,
             freshness: Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: SmallVec::new(),
             partitions: HashMap::new(),
             sinks: SmallVec::new(),
@@ -1945,6 +1952,7 @@ mod tests {
             explicit_name: None,
             freshness: Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: SmallVec::new(),
             partitions: HashMap::from([(
                 "ticker".to_string(),
@@ -1981,6 +1989,7 @@ mod tests {
             explicit_name: None,
             freshness: Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: SmallVec::from_vec(vec![DeclaredInput {
                 param_name: "reports".to_string(),
                 upstream: NodeRef::FunctionName("fetch_prices".to_string()),

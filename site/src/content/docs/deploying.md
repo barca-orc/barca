@@ -119,9 +119,22 @@ A requeued run starts again from its beginning, so a run is executed at least on
 finished are cache hits, but an interrupted step or task runs again. Make tasks with side
 effects safe to repeat, or give them a longer drain timeout.
 
-The supervisor's grace period must be longer than the drain timeout plus about 15 seconds, or it
-kills the server mid-drain and the runs in flight are interrupted instead of requeued (the queued
-ones survive even that):
+The supervisor's grace period must cover the drain timeout plus what the server takes after it:
+12 seconds with a drain timeout of 10 or more (10 for stopped runs to record themselves, 2 for
+open connections), plus up to 31 for the last metadata backup with a store and 3 for the
+telemetry flush with `BARCA_TELEMETRY`. With a drain timeout under 10 seconds these shrink: half
+the drain timeout (at least 2 s) for the runs, 1 s for connections, the drain timeout (at least
+5 s) for the backup. So `drain_timeout = 5` without a store needs 9 seconds and fits Docker's
+default of 10. Under a supervisor (process 1 of a container, systemd, Kubernetes) `barca serve`
+prints the number at startup:
+
+```text
+[barca] stop grace: the container runtime must allow at least 9s between SIGTERM and SIGKILL (drain timeout 5s + 4s for stopping runs and closing connections); set docker stop -t or stop_grace_period (Docker's default is 10s)
+```
+
+A supervisor that kills the server mid-drain costs the runs in flight the time the drain gave
+them: the next server puts them back in the queue (once per run; a run in flight through two
+killed drains in a row is recorded as interrupted). The queued runs survive it too.
 
 | Supervisor | Setting | Default | With the default 30 s drain timeout |
 |---|---|---|---|
@@ -232,7 +245,8 @@ What each part is for:
 - **`stop_grace_period`.** On `docker compose stop` (and on a redeploy) barca drains: runs in
   flight get up to 30 seconds to finish (`--drain-timeout`, `[server] drain_timeout`), then go
   back to the run queue. Docker kills the container after 10 seconds unless told otherwise, so
-  give it the drain timeout plus about 15 seconds. With `docker stop` that is `-t 45`; in
+  give it at least the number the startup line prints (`[barca] stop grace: ...`): 42 seconds
+  with the default drain timeout and no store, so `45s`. With `docker stop` that is `-t 45`; in
   Kubernetes, `terminationGracePeriodSeconds` (default 30) should be 45 too.
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
   While it drains it still returns 200, with `"status": "draining"`. Alert on

@@ -52,6 +52,9 @@ pub struct IoConfig {
     /// The most the weights of the steps running at once may add up to (#436): the pool size
     /// unless `[execution] capacity` or `BARCA_CAPACITY` sets it.
     pub capacity: usize,
+    /// The capacity every run of a `barca serve` shares (`[server] capacity`, #628): a step is
+    /// leased only once this admits it too ([`crate::capacity`]).
+    pub shared: Option<std::sync::Arc<crate::capacity::SharedCapacity>>,
     pub run_id: String,
     /// Present only when the Datadog integration successfully configured.
     pub datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
@@ -147,6 +150,41 @@ struct Acceptor(JoinHandle<()>);
 impl Drop for Acceptor {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+/// This run's part of a capacity the server's runs share ([`crate::capacity`]).
+///
+/// `held` is what the run has taken from it: the weight of the steps its workers have leased
+/// (as [`WorkerPool::running_weight`] counts them, against the shared capacity) plus `grant`,
+/// the weight admitted for the head of the ready queue while a worker starts to take it. It is
+/// brought back in line with what the run is running after every event
+/// ([`WorkerPool::sync_share`]); everything is given back when the run's pool goes.
+struct Share {
+    capacity: std::sync::Arc<crate::capacity::SharedCapacity>,
+    changed: tokio::sync::watch::Receiver<u64>,
+    run_id: String,
+    held: u32,
+    grant: Option<u32>,
+    /// The run's head step waits in the shared capacity's line.
+    waiting: bool,
+}
+
+impl Drop for Share {
+    fn drop(&mut self) {
+        self.capacity.leave(&self.run_id);
+    }
+}
+
+/// Wait until the shared capacity changes, when the run waits in its line; never otherwise.
+async fn share_changed(share: &mut Option<Share>) {
+    match share {
+        Some(s) if s.waiting => {
+            if s.changed.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+        _ => std::future::pending::<()>().await,
     }
 }
 
@@ -336,6 +374,8 @@ pub struct WorkerPool {
     /// worker and re-send the rest of its batch, so with many failures this grew with keys
     /// × batch size (#523).
     steps_dispatched: usize,
+    /// Under a capacity the server's runs share: this run's part of it.
+    share: Option<Share>,
 }
 
 /// The directory that holds branch results, under the project's `.barca`.
@@ -408,6 +448,14 @@ impl WorkerPool {
         sweep_branch_results(&branch_results_parent());
         let branch_root = branch_results_root(&config.run_id);
         let acceptor = Acceptor(tokio::spawn(accept_connections(listener, event_tx.clone())));
+        let share = config.shared.clone().map(|capacity| Share {
+            changed: capacity.subscribe(),
+            capacity,
+            run_id: config.run_id.clone(),
+            held: 0,
+            grant: None,
+            waiting: false,
+        });
         Ok(Self {
             config,
             socket_path,
@@ -433,6 +481,7 @@ impl WorkerPool {
             branch_dirs: HashMap::new(),
             failures_survived: 0,
             steps_dispatched: 0,
+            share,
         })
     }
 
@@ -530,10 +579,14 @@ impl WorkerPool {
             if cancel.is_cancelled() {
                 return Err("run cancelled".to_string());
             }
+            // Give the shared capacity back what the last event ended.
+            self.sync_share(coord);
+            let waiting_for_share = self.share.as_ref().is_some_and(|s| s.waiting);
             if self.workers.is_empty()
                 && self.pending.is_empty()
                 && self.frozen.is_empty()
                 && coord.ready_count() > 0
+                && !waiting_for_share
             {
                 // Ready work exists but spawning failed — nothing will ever
                 // produce a completion event.
@@ -552,6 +605,12 @@ impl WorkerPool {
                 },
                 // A worker that is starting fails when its process exits or its deadline
                 // passes, whichever comes first.
+                // The capacity the server's runs share moved: the step this run waits with may
+                // be admitted now.
+                _ = share_changed(&mut self.share), if waiting_for_share => {
+                    self.assign_ready(coord, cost, cancel).await;
+                    continue;
+                }
                 _ = start_watch.tick(), if !self.pending.is_empty() => {
                     // Not started again here: a worker that cannot start would be started
                     // over and over. With no worker left, the check above ends the phase.
@@ -1107,14 +1166,22 @@ impl WorkerPool {
         cancel: &CancellationToken,
     ) {
         self.retire_surplus();
+        self.sync_share(coord);
         loop {
             // A cancelled run starts nothing more: no worker, no step.
             if coord.ready_count() == 0 || cancel.is_cancelled() {
+                self.leave_line(coord);
                 return;
             }
             // The capacity is full for the step next in line: nothing starts until enough of
             // what is running finishes, and nothing queued behind it goes first (#436).
             if !coord.head_fits(self.running_weight(coord), self.capacity()) {
+                self.leave_line(coord);
+                return;
+            }
+            // And the capacity the server's runs share, when there is one (#628): the step
+            // waits in its line until it is admitted.
+            if !self.admit_head(coord) {
                 return;
             }
 
@@ -1184,7 +1251,89 @@ impl WorkerPool {
             handle.batch_open = batch.len() > 1;
             handle.leases = batch.into_iter().collect();
             handle.front_since = std::time::Instant::now();
+            // The admitted weight is the leased step's now (`running_weight` counts it).
+            if let Some(share) = self.share.as_mut() {
+                share.grant = None;
+            }
         }
+    }
+
+    /// The weight the head of the ready queue counts for against the shared capacity.
+    fn head_share_weight(&self, coord: &Coordinator) -> Option<(u32, String)> {
+        let share = self.share.as_ref()?;
+        let head = coord.ready_items().next()?;
+        let item = coord.item(head);
+        Some((
+            share.capacity.weight_of(item.spec.weight),
+            item.step_id.display(),
+        ))
+    }
+
+    /// Whether the head of the ready queue is admitted by the capacity the server's runs share
+    /// (always, without one). Admitted, its weight is held as `grant` until a worker leases
+    /// it; not admitted, the run waits in the line and tries again when the capacity changes.
+    fn admit_head(&mut self, coord: &Coordinator) -> bool {
+        let Some((weight, node)) = self.head_share_weight(coord) else {
+            return true;
+        };
+        let share = self.share.as_mut().expect("head_share_weight found one");
+        match share.grant {
+            Some(granted) if granted == weight => return true,
+            // The head changed since it was admitted (a step returned to the front): give the
+            // weight back and ask for the new head's.
+            Some(granted) => {
+                share.capacity.release(&share.run_id, granted);
+                share.held = share.held.saturating_sub(granted);
+                share.grant = None;
+            }
+            None => {}
+        }
+        // Seen before asking, so a change after this is not missed by `share_changed`.
+        share.changed.borrow_and_update();
+        if share.capacity.try_acquire(&share.run_id, &node, weight) {
+            share.held += weight;
+            share.grant = Some(weight);
+            share.waiting = false;
+            true
+        } else {
+            share.waiting = true;
+            false
+        }
+    }
+
+    /// The head of the ready queue does not wait for the shared capacity any more (nothing is
+    /// ready, the run is cancelled, or the step does not fit the run's own capacity): leave the
+    /// line, and give back weight admitted for a head that is not going to be leased.
+    fn leave_line(&mut self, coord: &Coordinator) {
+        let Some(share) = self.share.as_mut() else {
+            return;
+        };
+        if share.waiting {
+            share.capacity.withdraw(&share.run_id);
+            share.waiting = false;
+        }
+        if share.grant.take().is_some() {
+            self.sync_share(coord);
+        }
+    }
+
+    /// Bring what this run holds of the shared capacity in line with what it runs: the weight
+    /// of its leased steps (against the shared capacity) and the weight admitted for its head.
+    /// Ended steps give their weight back here; a step resumed after its `parallel()` branches
+    /// takes its weight back here ([`crate::capacity::SharedCapacity::force`]).
+    fn sync_share(&mut self, coord: &Coordinator) {
+        let Some(total) = self.share.as_ref().map(|s| s.capacity.total()) else {
+            return;
+        };
+        let running = self.weight_against(coord, total);
+        let share = self.share.as_mut().expect("checked above");
+        let wanted = running + share.grant.unwrap_or(0);
+        if wanted < share.held {
+            share.capacity.release(&share.run_id, share.held - wanted);
+        } else if wanted > share.held {
+            share.capacity.force(&share.run_id, wanted - share.held);
+        }
+        share.held = wanted;
     }
 
     /// The capacity as a weight, at least 1.
@@ -1198,7 +1347,11 @@ impl WorkerPool {
     /// weight (`Coordinator::on_parallel_requested`): counting both, a step could never get
     /// its branches started.
     fn running_weight(&self, coord: &Coordinator) -> u32 {
-        let capacity = self.capacity();
+        self.weight_against(coord, self.capacity())
+    }
+
+    /// [`Self::running_weight`], each step's weight at most `capacity`.
+    fn weight_against(&self, coord: &Coordinator, capacity: u32) -> u32 {
         self.workers
             .values()
             .map(|w| {
@@ -1322,6 +1475,15 @@ impl WorkerPool {
         // sit idle (#436).
         let capacity = self.capacity();
         let mut running = self.running_weight(coord);
+        // Under a shared capacity, no more than it has room for beside what this run holds:
+        // the head's admitted weight and what is free (#628).
+        let mut shared_room = self.share.as_ref().map(|s| {
+            let free = s
+                .capacity
+                .total()
+                .saturating_sub(s.capacity.snapshot().in_use);
+            s.grant.unwrap_or(0) + free
+        });
         let mut ready = coord.ready_items().peekable();
         let mut taken = 0;
         let mut batches = 0;
@@ -1332,6 +1494,14 @@ impl WorkerPool {
             let weight = coord.item(head).spec.weight;
             if !crate::coordinator::fits(running, weight, capacity) {
                 break;
+            }
+            if let (Some(left), Some(share)) = (shared_room.as_mut(), self.share.as_ref()) {
+                let w = share.capacity.weight_of(weight);
+                // The head was admitted, so its worker always starts.
+                if batches > 0 && w > *left {
+                    break;
+                }
+                *left = left.saturating_sub(w);
             }
             running += crate::coordinator::effective_weight(weight, capacity);
             taken += self.batch_len(coord, cost, &mut ready, coord.ready_count() - taken);
@@ -2398,6 +2568,7 @@ mod tests {
             python: PathBuf::from("python3"),
             pool_size,
             capacity: pool_size,
+            shared: None,
             run_id: format!("{run_id}-{}", std::process::id()),
             datadog: None,
             artifact_root: ".".to_string(),
@@ -2658,6 +2829,7 @@ mod tests {
                     python: PathBuf::from("python3"),
                     pool_size: n,
                     capacity: n,
+                    shared: None,
                     run_id: "test-shutdown".to_string(),
                     datadog: None,
                     artifact_root: ".".to_string(),
@@ -2682,6 +2854,7 @@ mod tests {
                 branch_dirs: HashMap::new(),
                 failures_survived: 0,
                 steps_dispatched: 0,
+                share: None,
             };
 
             let start = std::time::Instant::now();

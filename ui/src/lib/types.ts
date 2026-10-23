@@ -44,6 +44,8 @@ export type { PartitionProgress } from './generated/PartitionProgress'
 export type { ActiveStep } from './generated/ActiveStep'
 export type { QueueView } from './generated/QueueView'
 export type { QueueEntry } from './generated/QueueEntry'
+export type { CapacitySnapshot } from './generated/CapacitySnapshot'
+export type { WaitingStep } from './generated/WaitingStep'
 
 import type { LoadError } from './generated/LoadError'
 
@@ -85,6 +87,8 @@ export interface HealthQueue {
   queued: number
   running: number
   max_runs: number
+  /** The capacity every run shares (`--capacity`); null when the server has none. */
+  capacity?: { total: number; in_use: number; waiting: number } | null
 }
 
 /**

@@ -21,7 +21,6 @@ use crate::targets::{
 };
 use crate::transfer::{ArtifactLayout, TransferClient};
 use std::collections::{HashMap, VecDeque};
-use std::env;
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -57,30 +56,83 @@ fn phase_step_count(phase: &Phase) -> usize {
         .sum()
 }
 
-/// Worker pool size: `BARCA_POOL_SIZE` overrides auto-detection when set to a
-/// positive integer. Lets benchmark harnesses (and anyone else) pin the pool
-/// to a fixed core count instead of whatever `available_parallelism()` reports
-/// on the current machine.
-pub(crate) fn default_pool_size() -> usize {
-    if let Some(n) = env::var("BARCA_POOL_SIZE")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-    {
-        return n;
-    }
+/// The cores this process may use (`available_parallelism`), 4 when unknown.
+pub(crate) fn cores() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
 }
 
-/// The capacity (#436): the most the `weight=` of the steps running at once may add up to, and
-/// where it came from. `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
-pub(crate) fn capacity(
-    setting: crate::config::CapacitySetting,
-    pool_size: usize,
-) -> (usize, &'static str) {
-    setting.unwrap_or((pool_size.max(1), "pool size"))
+/// How many workers a run starts at most and the capacity their steps' `weight=` shares, each
+/// with where it came from (#436, #628).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sizing {
+    pub pool_size: usize,
+    /// `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the capacity that bounded the
+    /// cores (`[execution] capacity`, `BARCA_CAPACITY`, `[server] capacity`, `--capacity`).
+    pub pool_source: &'static str,
+    pub capacity: usize,
+    /// `BARCA_CAPACITY`, `[execution] capacity`, or `pool size`.
+    pub capacity_source: &'static str,
+}
+
+/// The pool size and capacity of a run.
+///
+/// Pool: `BARCA_POOL_SIZE` > `[execution] pool_size` > the cores, bounded by the capacity when
+/// one is set (`server`, the capacity a `barca serve` shares between its runs, bounds it too).
+/// Every step takes a weight of at least 1, so no more than `capacity` steps ever run at once:
+/// a worker past that would start, import the project and wait. Weights above 1 lower how
+/// many run at once further, but workers start only for steps the capacity admits, so the
+/// pool is not sized from them.
+///
+/// Capacity: `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
+pub fn sizing(
+    capacity: crate::config::CapacitySetting,
+    pool: crate::config::PoolSetting,
+    server: Option<(usize, &'static str)>,
+) -> Sizing {
+    sizing_with(capacity, pool, server, cores())
+}
+
+fn sizing_with(
+    capacity: crate::config::CapacitySetting,
+    pool: crate::config::PoolSetting,
+    server: Option<(usize, &'static str)>,
+    cores: usize,
+) -> Sizing {
+    let (pool_size, pool_source) = match pool {
+        Some((n, source)) => (n.max(1), source),
+        None => {
+            let bound = [capacity, server]
+                .into_iter()
+                .flatten()
+                .min_by_key(|(n, _)| *n);
+            match bound {
+                Some((n, source)) if n < cores => (n.max(1), source),
+                _ => (cores.max(1), "cores"),
+            }
+        }
+    };
+    let (capacity, capacity_source) = capacity.unwrap_or((pool_size, "pool size"));
+    Sizing {
+        pool_size,
+        pool_source,
+        capacity: capacity.max(1),
+        capacity_source,
+    }
+}
+
+/// [`sizing`] for a run with this configuration, under `shared` when `barca serve` shares a
+/// capacity between its runs.
+pub(crate) fn sizing_for(
+    cfg: &crate::config::ResolvedConfig,
+    shared: Option<&crate::capacity::SharedCapacity>,
+) -> Sizing {
+    sizing(
+        cfg.capacity,
+        cfg.pool_size,
+        shared.map(|s| (s.total() as usize, s.source())),
+    )
 }
 
 /// The planned nodes whose `weight=` is above 1, by node id.
@@ -817,6 +869,7 @@ async fn start_workers(
         python: python.to_path_buf(),
         pool_size,
         capacity: prepared.capacity,
+        shared: request.options.shared_capacity.clone(),
         run_id: run_id.clone(),
         datadog: telemetry
             .iter()
@@ -2185,7 +2238,8 @@ async fn prepare_run(
             .join(",")
     });
 
-    let pool_size = default_pool_size();
+    let sizing = sizing_for(request.cfg, request.options.shared_capacity.as_deref());
+    let pool_size = sizing.pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
@@ -2229,8 +2283,19 @@ async fn prepare_run(
     // Plan-time warnings for the steps this command planned, before anything runs.
     let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
     crate::warnings::print(&plan_warnings);
-    let (capacity, capacity_source) = capacity(request.cfg.capacity, pool_size);
-    warn_over_capacity(&planned_weights(&exec_plan), capacity, capacity_source);
+    let capacity = sizing.capacity;
+    warn_over_capacity(
+        &planned_weights(&exec_plan),
+        capacity,
+        sizing.capacity_source,
+    );
+    if let Some(shared) = &request.options.shared_capacity {
+        warn_over_capacity(
+            &planned_weights(&exec_plan),
+            shared.total() as usize,
+            shared.source(),
+        );
+    }
 
     Ok(Prepared {
         dag,
@@ -2461,7 +2526,7 @@ pub(crate) async fn explain_dag_with_membership(
     let Planned { cone, pinned, .. } =
         pin_manual(dag, &mut targets, cfg, &policy, rules, file_args).await?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let pool_size = default_pool_size();
+    let pool_size = sizing_for(cfg, None).pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
@@ -2617,8 +2682,8 @@ pub(crate) async fn explain_dag_with_membership(
     for r in &mut steps {
         r.weight = weights.get(recover::base_of(&r.id)).copied();
     }
-    let (capacity, capacity_source) = capacity(cfg.capacity, pool_size);
-    warn_over_capacity(&weights, capacity, capacity_source);
+    let capacity = sizing_for(cfg, None).capacity;
+    warn_over_capacity(&weights, capacity, sizing_for(cfg, None).capacity_source);
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
         crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)

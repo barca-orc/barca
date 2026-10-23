@@ -1,10 +1,14 @@
 //! Owned, best-effort lifecycle telemetry. No inspection or run-history writes.
 use crate::state::AppState;
+
 use barca_core::{
     CancellationToken,
     telemetry::{self, Integration, ServerPhase, ServerReport},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// How long a stopping server waits for its telemetry to flush.
+pub(crate) const FINISH_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 const HEARTBEAT: Duration = Duration::from_secs(300);
 
@@ -26,7 +30,7 @@ impl ServerTelemetry {
     pub(crate) async fn finish(&mut self) {
         // Delivery is already timeout-bounded in core. A total bound also handles
         // future integrations without extending server shutdown indefinitely.
-        let _ = tokio::time::timeout(Duration::from_secs(3), &mut self.task).await;
+        let _ = tokio::time::timeout(FINISH_LIMIT, &mut self.task).await;
     }
 }
 

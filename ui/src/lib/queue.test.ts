@@ -11,6 +11,8 @@ import {
   queueState,
   queueStateLabel,
   queuedLabel,
+  sharedCapacityLabel,
+  waitingRows,
 } from './queue'
 
 function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
@@ -28,8 +30,29 @@ function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
 }
 
 function view(over: Partial<QueueView> = {}): QueueView {
-  return { paused: false, paused_at: null, draining: false, max_runs: 4, running: [], queued: [], ...over }
+  return { paused: false, paused_at: null, draining: false, max_runs: 4, running: [], queued: [], capacity: null, ...over }
 }
+
+describe('shared capacity', () => {
+  const capacity = {
+    total: 4,
+    source: '--capacity',
+    in_use: 3,
+    runs: [{ run_id: 'r1', weight: 3 }],
+    waiting: [{ run_id: 'r2', node: 'p.py:big', weight: 3, waiting_seconds: 12.4 }],
+  }
+  it('says nothing without one', () => {
+    expect(sharedCapacityLabel(null)).toBeNull()
+    expect(waitingRows(null)).toEqual([])
+  })
+  it('shows the weight in use and the steps waiting, in order', () => {
+    expect(sharedCapacityLabel(capacity)).toBe('weight 3 of 4 in use · 1 step waiting')
+    expect(sharedCapacityLabel({ ...capacity, waiting: [] })).toBe('weight 3 of 4 in use')
+    expect(waitingRows(capacity)).toEqual([
+      { position: '#1', node: 'p.py:big', runId: 'r2', weight: 3, waited: '12s', href: expect.stringContaining('r2') },
+    ])
+  })
+})
 
 const iso = (value: string | null) => value ?? '–'
 

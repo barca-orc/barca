@@ -50,7 +50,7 @@ barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since 
                                                Show recent runs, or one run's steps and errors
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
-barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
                                                Run the HTTP API server
 barca queue [pause|resume] [--server [URL]] [--json]  A server's run queue; pause or resume it (experimental)
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
@@ -318,7 +318,8 @@ The document includes `plan_version: 1`, independent of the package and database
 Consumers of saved plans should reject unsupported versions.
 
 Parse the source files and print the execution plan as JSON, without running anything.
-The pool size matches execution: available cores, or a positive `BARCA_POOL_SIZE`.
+The pool size matches execution: a positive `BARCA_POOL_SIZE`, else `[execution] pool_size`, else
+the available cores, or the capacity when it is smaller; `pool_size` and `pool_source` say which.
 Experimental: the layout follows the planner and may change between releases. Each phase's
 `reason` is `{"type": "initial"}` or `{"type": "fan_in", "node_id": "..."}`. Planning reads no
 state, so `plan` takes no `--env` and does not say what is cached; use `--dry-run` or
@@ -562,6 +563,8 @@ barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no 
 barca serve --timezone utc              # every file in the project; cron evaluated in UTC
 barca serve pipeline.py --drain-timeout 120   # on SIGTERM, runs in flight get 2 minutes
 barca serve pipeline.py --max-runs 2    # at most 2 runs at once; the others wait in the queue
+barca serve pipeline.py --capacity 4    # the weight= of every run's running steps adds up to at most 4
+barca serve pipeline.py --run-timeout 3600   # stop a run that takes longer than an hour
 ```
 
 | Flag | Default | Meaning |
@@ -574,6 +577,8 @@ barca serve pipeline.py --max-runs 2    # at most 2 runs at once; the others wai
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
 | `--drain-timeout <SECONDS>` | `[server] drain_timeout`, else `30` | On SIGTERM or SIGINT, how long runs in flight get to finish before they are put back in the run queue for the next start. `0` requeues them at once. |
 | `--max-runs <N>` | `[server] max_runs`, else one per core | How many runs execute at once; the others wait in the run queue, in order (experimental). |
+| `--capacity <N>` | `[server] capacity`, else none | The most the `weight=` of the running steps of every run may add up to, admitted first come, first served across runs; `GET /queue` shows it (experimental). |
+| `--run-timeout <SECONDS>` | `[server] run_timeout_seconds`, else none | Stop a run that takes longer, recorded as an error naming the setting. `0` is no limit; `Schedule(..., timeout_seconds=N)` wins for its ticks. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
 
 Every accepted run is recorded in the run queue before the server answers, and a restart resumes

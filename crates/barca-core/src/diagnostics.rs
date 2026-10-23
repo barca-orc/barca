@@ -106,17 +106,47 @@ fn cache_size(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
 /// How many workers a run starts and the capacity their steps' `weight=` shares (#436).
 /// Informational.
 fn capacity(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
-    let pool_size = crate::execution::default_pool_size();
-    let (capacity, source) = crate::execution::capacity(cfg.capacity, pool_size);
+    let sizing = crate::execution::sizing_for(cfg, None);
+    let (capacity, source, pool_size, pool_source) = (
+        sizing.capacity,
+        sizing.capacity_source,
+        sizing.pool_size,
+        sizing.pool_source,
+    );
     report.add(
         "capacity",
         true,
         format!(
-            "steps running at once total at most weight {capacity} ({source}); pool of {pool_size} worker{}",
+            "steps running at once total at most weight {capacity} ({source}); pool of {pool_size} worker{} ({pool_source})",
             if pool_size == 1 { "" } else { "s" }
         ),
-        json!({"capacity": capacity, "pool_size": pool_size, "source": source}),
+        json!({
+            "capacity": capacity,
+            "pool_size": pool_size,
+            "source": source,
+            "pool_source": pool_source,
+        }),
     );
+    // What a run under `barca serve` gets, when the server shares a capacity between its runs.
+    if let Some((total, source)) = cfg.server_capacity {
+        let served = crate::execution::sizing(cfg.capacity, cfg.pool_size, Some((total, source)));
+        report.add(
+            "server_capacity",
+            true,
+            format!(
+                "under barca serve, the steps of every run together total at most weight \
+                 {total} ({source}); each run's pool is {} worker{} ({})",
+                served.pool_size,
+                if served.pool_size == 1 { "" } else { "s" },
+                served.pool_source
+            ),
+            json!({
+                "capacity": total,
+                "pool_size": served.pool_size,
+                "pool_source": served.pool_source,
+            }),
+        );
+    }
 }
 
 pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> DoctorReport {

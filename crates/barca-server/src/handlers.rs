@@ -260,7 +260,16 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 /// `GET /plan` — execution plan for the server's files (cache-aware).
 pub async fn plan(State(state): State<AppState>) -> Result<Json<PlanResult>, ApiError> {
     let dag = state.loaded_dag().await?;
-    let result = queries::plan_from_dag(&dag, state.config.resolved.capacity);
+    let cfg = &state.config.resolved;
+    let sizing = barca_core::sizing(
+        cfg.capacity,
+        cfg.pool_size,
+        state
+            .capacity
+            .as_ref()
+            .map(|c| (c.total() as usize, c.source())),
+    );
+    let result = queries::plan_from_dag(&dag, sizing);
     state.cache.write().unwrap().plan = Some(result.clone());
     Ok(Json(result))
 }

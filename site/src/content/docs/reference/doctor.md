@@ -19,8 +19,9 @@ barca doctor src/ --env local --pretty
 `doctor` reports the project root and how it was found, selected environment, parsed
 configuration, actual Python executable and package version, local cache writability,
 metadata integrity, the capacity steps share (`capacity`: how much `weight=` may run at once,
-the pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it; `barca docs assets`,
-"Heavy steps"), discovered source files and parse errors. It checks configured artifact
+the pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it, and the pool size with
+where it came from, `pool_source`; with `[server] capacity`, a `server_capacity` check with what a
+run under `barca serve` gets; `barca docs assets`, "Heavy steps"), discovered source files and parse errors. It checks configured artifact
 and shared-state stores with read/list operations. It runs no steps, imports no pipeline
 modules and does not evaluate dynamic partition expressions. Source checks are syntax and
 decorator extraction checks, not a complete execution plan.

@@ -3,7 +3,7 @@ import { match } from 'ts-pattern'
 import { Button, StatusDot, Tag } from '@/components'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { ApiError } from '@/lib/api'
-import { capacityLabel, queueControl, queuedLabel, queueRows, queueState, queueStateLabel } from '@/lib/queue'
+import { capacityLabel, queueControl, queuedLabel, queueRows, queueState, queueStateLabel, sharedCapacityLabel, waitingRows } from '@/lib/queue'
 
 /**
  * The run queue on the Runs page: how many run of the server's limit, how many wait, whether
@@ -17,6 +17,8 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
   const stateLabel = state ? queueStateLabel(state) : null
   const control = data ? queueControl(data, readOnly) : { kind: 'hidden' as const }
   const rows = data ? queueRows(data.queued) : []
+  const shared = data ? sharedCapacityLabel(data.capacity) : null
+  const waiting = data ? waitingRows(data.capacity) : []
   const toggleError = toggle.error instanceof ApiError ? toggle.error : null
   return (
     <section className="barca-queue" aria-label="Queue">
@@ -31,6 +33,7 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
             {capacityLabel(data.running.length, data.max_runs)}
           </span>
           <span className="barca-queue-count">{queuedLabel(data.queued.length)}</span>
+          {shared && <span className="barca-queue-count" title="The capacity every run of this server shares (--capacity)">{shared}</span>}
           {state && stateLabel && match(state)
             .with({ kind: 'open' }, () => null)
             .with({ kind: 'paused' }, () => <Tag tone="bare">{stateLabel}</Tag>)
@@ -55,6 +58,20 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
           Can't {toggle.variables ? 'pause' : 'resume'} the queue: {toggle.error.message}
           {toggleError?.remediation && <> {toggleError.remediation}</>}
         </p>
+      )}
+      {waiting.length > 0 && (
+        <table className="barca-table barca-queue-table" aria-label="Steps waiting for capacity">
+          <thead><tr><th className="num">#</th><th>Waiting step</th><th>Run</th><th className="num">Weight</th><th>Waiting</th></tr></thead>
+          <tbody>{waiting.map(row => (
+            <tr key={row.runId}>
+              <td className="num">{row.position}</td>
+              <td><code className="barca-run-target" title={row.node}>{row.node}</code></td>
+              <td><Link className="barca-run-link" to={row.href}>{row.runId}</Link></td>
+              <td className="num">{row.weight}</td>
+              <td>{row.waited}</td>
+            </tr>
+          ))}</tbody>
+        </table>
       )}
       {rows.length > 0 && (
         <table className="barca-table barca-queue-table">

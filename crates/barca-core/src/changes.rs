@@ -217,6 +217,7 @@ mod tests {
             explicit_name: None,
             freshness: crate::Freshness::Always,
             max_failures: None,
+            schedule_timeout: None,
             inputs: Default::default(),
             partitions: Default::default(),
             sinks: Default::default(),
