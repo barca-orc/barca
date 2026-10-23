@@ -6,7 +6,7 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
-## 0.29.4 (2026-10-22)
+## 0.29.5 (2026-10-22)
 
 ### Breaking
 
@@ -31,6 +31,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   `POST /queue/resume`, a control on the UI's Runs page) shows the queue and pauses it, a pause
   that is kept across restarts; `--read-only` refuses it. `barca docs scheduling`, "Restarting
   without losing work", is the operator recipe, with supervisor grace periods.
+
+## 0.29.4 (2026-10-22)
 
 ### Performance
 
