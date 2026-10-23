@@ -108,7 +108,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "get --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
     ),
     (
         "run --server",
@@ -116,7 +116,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "run --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
     ),
     (
         "status --server",
@@ -124,7 +124,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "status --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
     ),
     (
         "list --server",
@@ -132,7 +132,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "list --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
     ),
     (
         "history --server",
@@ -140,7 +140,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "history --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
     ),
     (
         "stats --server",
@@ -148,7 +148,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "stats --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
     ),
     (
         "logs --server",
@@ -156,7 +156,15 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "logs --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history, stats and logs)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+    ),
+    (
+        "sql --server",
+        "new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use",
+    ),
+    (
+        "sql --local",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
     ),
     (
         "logs --follow",

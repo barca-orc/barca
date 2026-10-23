@@ -167,7 +167,7 @@ examples.
 | `barca logs [RUN_ID]` | A run's recorded step stdout and stderr, without progress messages; the most recent run without an id, `-f` to follow a running one, from a configured server too. |
 | `barca history [RUN_ID]` | Recent runs, filtered by `--status`, `--target`, `--triggered-by` and `--since`, each failed one with its failing step and error; with a run id, its steps, errors and tracebacks. |
 | `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. |
-| `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (experimental). |
+| `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view, barca's records are `barca.runs`, `barca.materializations` and `barca.nodes`; with a server, the team's results (experimental). |
 | `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps. |
 | `barca plan [files...]` | The execution plan as JSON, with the capacity and step weights (experimental). |
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (barca also does this after every run). |

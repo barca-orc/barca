@@ -126,6 +126,72 @@ pub async fn history(
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }
 
+#[derive(Default, Deserialize)]
+pub struct SqlViewsQuery {
+    /// Comma-separated deployed files (root-relative); absent: every deployed file.
+    pub files: Option<String>,
+}
+
+/// `GET /sql/views?files=a.py,b.py` — which result each `barca sql` view reads in the
+/// server's ledger ([`barca_core::sql::Catalog`]): the client runs the query on its own machine
+/// over those store paths. The server runs no SQL.
+pub async fn sql_views(
+    State(state): State<AppState>,
+    Query(query): Query<SqlViewsQuery>,
+) -> Result<Json<barca_core::sql::Catalog>, ApiError> {
+    let files: Vec<String> = query
+        .files
+        .iter()
+        .flat_map(|t| t.split(','))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect();
+    let dag = state.current_dag().await?;
+    let snapshot = snapshot_db(&state).await?;
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = snapshot.path.clone();
+    let catalog =
+        barca_core::sql::catalog_from_dag(&cfg, &dag, &state.config.python, |id: &str| {
+            files.is_empty()
+                || id
+                    .split_once(':')
+                    .is_some_and(|(file, _)| files.iter().any(|f| f == file))
+        })
+        .await
+        .map_err(|e| ApiError::run(e, context("sql", &state)))?;
+    Ok(Json(catalog))
+}
+
+/// Most rows `GET /materializations` returns at once.
+pub const MATERIALIZATIONS_MAX: usize = 10_000;
+
+#[derive(Default, Deserialize)]
+pub struct MaterializationsQuery {
+    /// Rows to return (default 1000, at most [`MATERIALIZATIONS_MAX`]).
+    pub limit: Option<usize>,
+    /// Rows to skip, newest first.
+    pub offset: Option<usize>,
+}
+
+/// `GET /materializations?limit=N&offset=M` — step results, newest first, one page at a time:
+/// `barca sql`'s `barca.materializations`.
+pub async fn materializations(
+    State(state): State<AppState>,
+    Query(query): Query<MaterializationsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let limit = query.limit.unwrap_or(1000).min(MATERIALIZATIONS_MAX);
+    let offset = query.offset.unwrap_or(0);
+    let snapshot = snapshot_db(&state).await?;
+    let (rows, total) = barca_core::db::read_step_rows(&snapshot.path, limit, offset).await?;
+    Ok(Json(json!({
+        "materializations": rows,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })))
+}
+
 /// `GET /stats/{name}` — `barca stats --json`.
 pub async fn stats(
     State(state): State<AppState>,

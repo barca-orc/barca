@@ -56,8 +56,9 @@ const STREAM_LIMIT: Duration = Duration::from_secs(24 * 3600);
 // ─── 1. choosing the server ─────────────────────────────────────────────────
 
 /// The commands that take `--server` and `--local`.
-pub(crate) const SERVER_COMMANDS: &[&str] =
-    &["get", "run", "status", "list", "history", "stats", "logs"];
+pub(crate) const SERVER_COMMANDS: &[&str] = &[
+    "get", "run", "status", "list", "history", "stats", "logs", "sql",
+];
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the
 /// configured server (`BARCA_SERVER`, then `[server] url`) and is a usage error when none is
@@ -147,8 +148,8 @@ pub(crate) fn refuse_on_local_commands(args: &[String]) -> Option<CliError> {
         ErrorKind::Usage,
         format!(
             "error: `barca {sub}` always runs on this machine; it does not take {flag}\n\
-             --server and --local apply to get, run, status, list, history, stats and logs \
-             (barca docs server-mode)."
+             --server and --local apply to get, run, status, list, history, stats, logs and \
+             sql (barca docs server-mode)."
         ),
     ))
 }
@@ -975,21 +976,7 @@ impl Server {
             cfg.local_artifact_dir.clone(),
             &cfg.artifact_root,
         );
-        let pending: Vec<barca_core::status::PendingPost> = if Path::new(&cfg.db_path).exists() {
-            barca_core::ledger::posts::unsynced(&cfg.db_path, &self.url)
-                .await
-                .map_err(here)?
-                .into_iter()
-                .flat_map(|post| post.steps)
-                .map(|step| barca_core::status::PendingPost {
-                    node_id: step.node_id,
-                    run_hash: step.run_hash,
-                    error: None,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let pending = pending_posts(&cfg, &self.url).await.map_err(here)?;
         for node in &mut result.nodes {
             // The server's `store_only` (RFC-0009) is about the server's own disk: its result is
             // in the ledger and its object in the store, which is `cached` for this machine,
@@ -1320,6 +1307,121 @@ pub(crate) async fn stats(
     Ok(())
 }
 
+/// `barca sql` with a server: the views resolved from the server's ledger (`GET /sql/views`),
+/// barca's tables from its records (`GET /history`, `GET /materializations`, `GET /nodes`), and
+/// the query run on this machine (the server runs no SQL). The artifacts are read from the
+/// store this project shares with the server, as a local `barca sql` reads them.
+pub(crate) async fn sql(
+    server: &Server,
+    query: &str,
+    files: &[PathBuf],
+    limit: Option<usize>,
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    use barca_core::sql::tables;
+    let here = |e: BarcaError| CliError::from_barca(e, &Context::default());
+    let health = server.health(env).await?;
+    let cfg = barca_core::config::resolve(env).map_err(here)?;
+    let instead = if server.implicit {
+        "pass --local to query this machine's own results"
+    } else {
+        "leave out --server to query this machine's own results"
+    };
+    barca_core::ledger::same_store(&cfg, &server.url, health["store_uri"].as_str(), instead)
+        .map_err(here)?;
+    let files = server.deployed_files(files).await?;
+    let mut path = "/sql/views".to_string();
+    if !files.is_empty() {
+        path.push_str(&format!("?files={}", encode(&files.join(","))));
+    }
+    let body = server.get_json(&path).await?;
+    let catalog: barca_core::sql::Catalog = serde_json::from_value(body)
+        .map_err(|e| server.unexpected("GET /sql/views", &e.to_string()))?;
+
+    let pending = if server.implicit {
+        pending_posts(&cfg, &server.url).await.map_err(here)?
+    } else {
+        Vec::new()
+    };
+    let cap = tables::SERVER_ROWS;
+    let mut runs = tables::runs(None);
+    if tables::named(query, tables::RUNS) {
+        let route = format!("/history?limit={cap}");
+        let body = server.get_json(&route).await?;
+        let rows: Vec<barca_core::db::RunRecord> = serde_json::from_value(body["runs"].clone())
+            .map_err(|e| server.unexpected("GET /history", &e.to_string()))?;
+        let total = body["total"].as_u64().map_or(rows.len(), |t| t as usize);
+        runs = tables::runs(Some(&rows));
+        runs.note = tables::truncated_note(tables::RUNS, rows.len(), total, &server.url);
+    }
+    let mut steps = tables::materializations(None);
+    if tables::named(query, tables::MATERIALIZATIONS) {
+        let route = format!("/materializations?limit={cap}");
+        let body = server.get_json(&route).await?;
+        let rows: Vec<barca_core::db::StepRow> =
+            serde_json::from_value(body["materializations"].clone())
+                .map_err(|e| server.unexpected("GET /materializations", &e.to_string()))?;
+        let total = body["total"].as_u64().map_or(rows.len(), |t| t as usize);
+        steps = tables::materializations(Some(&rows));
+        steps.note =
+            tables::truncated_note(tables::MATERIALIZATIONS, rows.len(), total, &server.url);
+    }
+    let mut nodes = tables::nodes(None);
+    if tables::named(query, tables::NODES) {
+        let body = server.get_json("/nodes?sample=0").await?;
+        let mut result: barca_core::status::StatusResult = serde_json::from_value(body)
+            .map_err(|e| server.unexpected("GET /nodes", &e.to_string()))?;
+        if !files.is_empty() {
+            result.nodes.retain(|n| in_files(&n.id, &files));
+        }
+        if server.implicit {
+            server.annotate_here(&mut result, env).await?;
+        }
+        nodes = tables::nodes(Some(&result.nodes));
+    }
+
+    let python = barca_core::commands::find_python();
+    let origin = barca_core::sql::Origin::Server {
+        url: server.url.clone(),
+        pending,
+    };
+    let result = barca_core::sql::run(
+        &cfg,
+        query,
+        limit,
+        catalog,
+        vec![runs, steps, nodes],
+        Vec::new(),
+        &python,
+        &origin,
+    )
+    .await
+    .map_err(here)?;
+    crate::commands::emit(barca_core::report::render_sql(result, json));
+    Ok(())
+}
+
+/// This machine's results whose post to the server at `url` is pending (`unsynced`).
+async fn pending_posts(
+    cfg: &barca_core::config::ResolvedConfig,
+    url: &str,
+) -> Result<Vec<barca_core::status::PendingPost>, BarcaError> {
+    if !Path::new(&cfg.db_path).exists() {
+        return Ok(Vec::new());
+    }
+    Ok(barca_core::ledger::posts::unsynced(&cfg.db_path, url)
+        .await?
+        .into_iter()
+        .flat_map(|post| post.steps)
+        .map(|step| barca_core::status::PendingPost {
+            node_id: step.node_id,
+            run_hash: step.run_hash,
+            error: None,
+        })
+        .collect())
+}
+
 /// Percent-encode a query value or path segment (node ids may hold `/`, `:` and `[`).
 fn encode(text: &str) -> String {
     text.bytes()
@@ -1373,7 +1475,7 @@ mod tests {
         for line in [
             "barca serve p.py --server",
             "barca plan --server=http://h",
-            "barca sql q --local",
+            "barca plan p.py --local",
             "barca docs --server",
             "barca version --server",
         ] {
@@ -1384,6 +1486,8 @@ mod tests {
         for line in [
             "barca get x --server",
             "barca status --local",
+            "barca sql q --local",
+            "barca sql q --server",
             "barca p.py --server",
             "barca serve p.py",
         ] {

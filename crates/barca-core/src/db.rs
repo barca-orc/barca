@@ -2791,6 +2791,124 @@ pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, 
     Ok(steps)
 }
 
+/// One step result as `barca sql` shows it in `barca.materializations` and `GET
+/// /materializations` returns it: a row of `materializations` without the columns that describe
+/// one machine's disk (`evicted_at`, `last_read_at`) or that are large (`error_traceback`,
+/// `output_json`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StepRow {
+    /// Node id, with the partition suffix for a partitioned step (`p.py:daily[day=d1]`).
+    pub node_id: String,
+    /// The partition key (`day=d1`), or `null`.
+    pub partition: Option<String>,
+    pub run_id: Option<String>,
+    pub run_hash: Option<String>,
+    /// `success` or `failed`.
+    pub status: String,
+    /// When it was recorded (UTC, `YYYY-MM-DD HH:MM:SS`).
+    pub created_at: String,
+    pub elapsed_seconds: Option<f64>,
+    pub cpu_seconds: Option<f64>,
+    pub max_rss_bytes: Option<i64>,
+    pub attempts: Option<i64>,
+    /// `json`, `parquet`, `csv` or `pickle`.
+    pub format: Option<String>,
+    pub size_bytes: Option<i64>,
+    /// Where the result is stored (a store path with a remote store).
+    pub artifact: Option<String>,
+    /// SHA-256 of the artifact's bytes.
+    pub content_hash: Option<String>,
+    pub error_type: Option<String>,
+    pub error_message: Option<String>,
+}
+
+/// Step results, newest first: at most `limit` rows from `offset`, and how many there are in
+/// all. Read-only; columns an older database lacks are `null`.
+pub async fn read_step_rows(
+    db_path: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<(Vec<StepRow>, usize), BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut select = Vec::new();
+    for column in [
+        "node_id",
+        "run_id",
+        "run_hash",
+        "status",
+        "created_at",
+        "elapsed_seconds",
+        "cpu_seconds",
+        "max_rss_bytes",
+        "attempts",
+        "artifact_format",
+        "artifact_size_bytes",
+        "artifact_path",
+        "output_hash",
+        "error_type",
+        "error_message",
+    ] {
+        if has_column(&conn, "materializations", column).await? {
+            select.push(column.to_string());
+        } else {
+            select.push(format!("NULL AS {column}"));
+        }
+    }
+    let failed = |e: turso::Error| BarcaError::Db(format!("failed to query materializations: {e}"));
+    let mut rows = conn
+        .query("SELECT COUNT(*) FROM materializations", ())
+        .await
+        .map_err(failed)?;
+    let total = rows
+        .next()
+        .await
+        .map_err(failed)?
+        .map_or(0, |r| r.get::<i64>(0).unwrap_or(0).max(0) as usize);
+    drop(rows);
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT {} FROM materializations ORDER BY id DESC LIMIT ?1 OFFSET ?2",
+                select.join(", ")
+            ),
+            [
+                limit.min(i64::MAX as usize) as i64,
+                offset.min(i64::MAX as usize) as i64,
+            ],
+        )
+        .await
+        .map_err(failed)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        let text = |i: usize| row.get::<String>(i).ok().filter(|s| !s.is_empty());
+        let node_id = row.get::<String>(0).unwrap_or_default();
+        let partition = node_id
+            .split_once('[')
+            .and_then(|(_, key)| key.strip_suffix(']'))
+            .map(str::to_string);
+        out.push(StepRow {
+            partition,
+            node_id,
+            run_id: text(1),
+            run_hash: text(2),
+            status: text(3).unwrap_or_else(|| "success".to_string()),
+            created_at: row.get::<String>(4).unwrap_or_default(),
+            elapsed_seconds: row.get::<f64>(5).ok(),
+            cpu_seconds: row.get::<f64>(6).ok(),
+            max_rss_bytes: row.get::<i64>(7).ok(),
+            attempts: row.get::<i64>(8).ok(),
+            format: text(9),
+            size_bytes: row.get::<i64>(10).ok(),
+            artifact: text(11),
+            content_hash: text(12),
+            error_type: text(13),
+            error_message: text(14),
+        });
+    }
+    Ok((out, total))
+}
+
 /// Total number of recorded runs (for `barca history` truncation reporting).
 pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
     let _g = db_guard().await;
@@ -3091,10 +3209,20 @@ pub async fn node_histories(
     Ok(out)
 }
 
+/// The latest successful result of one key of a partitioned node.
+#[derive(Debug, Clone)]
+pub(crate) struct PartitionArtifact {
+    /// `<base>[key]`.
+    pub node_id: String,
+    pub path: String,
+    pub format: String,
+    pub content_hash: Option<String>,
+}
+
 pub(crate) async fn partition_artifacts_for_config(
     cfg: &crate::config::ResolvedConfig,
     base_id: &str,
-) -> Result<Vec<(String, String, String)>, BarcaError> {
+) -> Result<Vec<PartitionArtifact>, BarcaError> {
     latest_partition_artifacts_scoped(
         &cfg.db_path,
         base_id,
@@ -3107,13 +3235,13 @@ async fn latest_partition_artifacts_scoped(
     db_path: &str,
     base_id: &str,
     local_dir: Option<&str>,
-) -> Result<Vec<(String, String, String)>, BarcaError> {
+) -> Result<Vec<PartitionArtifact>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     let prefix = format!("{base_id}[");
     let mut rows = conn
         .query(
-            "SELECT node_id, artifact_path, artifact_format FROM materializations \
+            "SELECT node_id, artifact_path, artifact_format, output_hash FROM materializations \
              WHERE substr(node_id, 1, length(?1)) = ?1 AND status = 'success' \
              AND artifact_path IS NOT NULL AND artifact_path != '' ORDER BY id DESC",
             [prefix],
@@ -3132,14 +3260,17 @@ async fn latest_partition_artifacts_scoped(
             continue;
         }
         let node_id = row.get::<String>(0).unwrap_or_default();
-        seen.entry(node_id).or_insert_with(|| {
-            (
-                row.get::<String>(1).unwrap_or_default(),
-                row.get::<String>(2).unwrap_or_default(),
-            )
+        seen.entry(node_id).or_insert_with(|| PartitionArtifact {
+            node_id: String::new(),
+            path: row.get::<String>(1).unwrap_or_default(),
+            format: row.get::<String>(2).unwrap_or_default(),
+            content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
         });
     }
-    Ok(seen.into_iter().map(|(k, (p, f))| (k, p, f)).collect())
+    Ok(seen
+        .into_iter()
+        .map(|(node_id, a)| PartitionArtifact { node_id, ..a })
+        .collect())
 }
 
 /// Compute the p-th percentile from a sorted slice of values.

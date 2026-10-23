@@ -345,22 +345,12 @@ impl Ledger {
                 )));
             }
         }
-        let theirs = health.store_uri.as_deref().map(normalize_uri);
-        let ours = normalize_uri(&cfg.artifact_root);
-        if theirs.as_deref() != Some(ours.as_str()) {
-            return Err(BarcaError::Usage(format!(
-                "the barca server at {url} writes artifacts to {}, this project to {}: a \
-                 result one of them records could not be read by the other\n\
-                 Point [remote] uri at the server's store (and use the same environment), or \
-                 pass --local to keep this run on this machine.",
-                health
-                    .store_uri
-                    .as_deref()
-                    .map_or("no store".to_string(), crate::transfer::diagnostic_uri),
-                crate::transfer::diagnostic_uri(&cfg.artifact_root),
-            )));
-        }
-        Ok(())
+        same_store(
+            cfg,
+            url,
+            health.store_uri.as_deref(),
+            "pass --local to keep this run on this machine",
+        )
     }
 
     /// Ask the ledger about every pair in `keys` it has not been asked about yet, in one
@@ -612,6 +602,37 @@ pub(crate) fn bytes_changed_warning(node: &str) -> String {
         "[barca] warning: {node} produced different bytes for the same code and inputs; the \
          function is not deterministic"
     )
+}
+
+/// The server at `url`, whose `GET /health` reports `store_uri`, writes to this project's store:
+/// what one records, the other can read. `instead` ends the remediation (`pass --local to ...`).
+pub fn same_store(
+    cfg: &crate::config::ResolvedConfig,
+    url: &str,
+    store_uri: Option<&str>,
+    instead: &str,
+) -> Result<(), BarcaError> {
+    if !cfg.remote_artifacts() {
+        return Err(BarcaError::Usage(format!(
+            "a server is configured ({url}) but this project has no artifact store: the \
+             server never moves artifact bytes, so results are shared through the store\n\
+             Add a [remote] section with the uri the server uses (its GET /health \
+             reports it as store_uri), or {instead}."
+        )));
+    }
+    let theirs = store_uri.map(normalize_uri);
+    let ours = normalize_uri(&cfg.artifact_root);
+    if theirs.as_deref() != Some(ours.as_str()) {
+        return Err(BarcaError::Usage(format!(
+            "the barca server at {url} writes artifacts to {}, this project to {}: a \
+             result one of them records could not be read by the other\n\
+             Point [remote] uri at the server's store (and use the same environment), or \
+             {instead}.",
+            store_uri.map_or("no store".to_string(), crate::transfer::diagnostic_uri),
+            crate::transfer::diagnostic_uri(&cfg.artifact_root),
+        )));
+    }
+    Ok(())
 }
 
 /// A store URI compared as text, without a trailing `/` or `file://`.

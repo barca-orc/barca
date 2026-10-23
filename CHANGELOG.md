@@ -26,6 +26,20 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   RUN_ID --local`. Cached steps are counted, not listed (`barca docs status`, "Finding and
   reading a failed run").
 
+- `barca sql` works with server mode. With a server configured (`[server] url`,
+  `BARCA_SERVER`) or `--server <url>`, the server says which result each view reads from its
+  ledger (the new `GET /sql/views`: the current result per node, its store path, format and
+  digest, and a partitioned asset's current keys) and the query runs on this machine over the
+  store, so a teammate queries results another laptop computed. View names, stale results and
+  partition rules are a local `barca sql`'s; `--local` queries this machine's own records; an
+  unreachable server exits 3 naming `--local`, with no fallback; a result this machine has not
+  posted yet (unsynced) is named, not mixed in. barca's own records are queryable as
+  `barca.runs` (`barca history --json`), `barca.materializations` (one row per step result; with
+  a server, the new paginated `GET /materializations`) and `barca.nodes` (`barca status --json`,
+  flattened), locally and from a server (at most 10000 rows of each, with a note), and `show
+  tables` lists them. The server never runs SQL: DuckDB reads and writes files and the API has
+  no authentication (`barca docs sql`, "With a server" and "barca's own tables").
+
 ## 0.29.2 (2026-10-22)
 
 ### Features
