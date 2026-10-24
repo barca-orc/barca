@@ -121,6 +121,8 @@ pub(crate) const INDEXES: &[&str] = &[
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
 /// Created by `init_db`, and by the additive migration in a version-1 database that lacks one.
 pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
+    // Derived per-node freshness witnesses; never a second ledger.
+    ("freshness_proofs", crate::incremental::CREATE),
     // Results whose upload failed after their step succeeded (#390).
     ("pending_uploads", crate::pending_uploads::CREATE),
     // The last post a notification integration (Slack) made about a job, so a job that keeps

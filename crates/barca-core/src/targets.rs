@@ -1,7 +1,6 @@
 //! Target resolution, cone selection, and per-target outcomes.
 use crate::dispatch;
 use crate::planner::{self, ExecutionPlan, ResourceConfig};
-use crate::queries::filter_plan_to_subgraph;
 use crate::recover;
 use crate::{BarcaError, dag::Dag, dispatch::OutputRef, results::TargetOutcome};
 use std::collections::HashMap;
@@ -119,11 +118,23 @@ fn dag_nodes(dag: &Dag) -> impl Iterator<Item = (&str, crate::NodeKind)> {
         .filter_map(|id| dag.get_node(id).map(|node| (id, node.kind())))
 }
 
+fn candidates<'a>(dag: &'a Dag, name: &str) -> Vec<(&'a str, crate::NodeKind)> {
+    let nodes = dag.named(name);
+    if nodes.is_empty() {
+        dag_nodes(dag).collect()
+    } else {
+        nodes
+            .into_iter()
+            .map(|n| (n.id.as_str(), n.kind()))
+            .collect()
+    }
+}
+
 /// The single node a target name identifies, whatever its kind. No match is `AssetNotFound`;
 /// several matches (the same function name in two files) is a usage error that lists the full
 /// ids to choose from.
 pub fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
-    Ok(resolve_target_among(dag_nodes(dag), name, "")?)
+    Ok(resolve_target_among(candidates(dag, name), name, "")?)
 }
 
 /// The node a command's target names, checked for its kind: `barca get`
@@ -135,7 +146,7 @@ pub(crate) fn resolve_target(
 ) -> Result<Option<String>, BarcaError> {
     match target_name {
         Some(name) => Ok(Some(resolve_target_among(
-            dag_nodes(dag),
+            candidates(dag, name),
             name,
             command_label,
         )?)),
@@ -173,9 +184,8 @@ pub(crate) fn plan_for_targets(
     command_label: &str,
     selection: Option<&crate::selection::PartitionSelection>,
 ) -> ExecutionPlan {
-    let full_plan = planner::plan_from_dag_narrowed(dag, config, selection);
     if !target_ids.is_empty() {
-        filter_plan_to_subgraph(full_plan, &dag.subgraph_many(target_ids))
+        planner::plan_for_nodes(dag, &dag.subgraph_many(target_ids), config, selection)
     } else if command_label == "get" {
         // A task is never upstream of an asset or sensor, so this is closed under upstream.
         let gettable: Vec<&str> = dag
@@ -183,9 +193,9 @@ pub(crate) fn plan_for_targets(
             .into_iter()
             .filter(|id| !is_task(dag, id))
             .collect();
-        filter_plan_to_subgraph(full_plan, &gettable)
+        planner::plan_for_nodes(dag, &gettable, config, selection)
     } else {
-        full_plan
+        planner::plan_from_dag_narrowed(dag, config, selection)
     }
 }
 

@@ -418,6 +418,7 @@ fn skip_report(
     epoch: i64,
 ) -> barca_core::telemetry::RunReport {
     barca_core::telemetry::RunReport {
+        cached_partitions: Default::default(),
         run_id: db::generate_run_id(),
         command: match job.kind {
             NodeKind::Task => "run",

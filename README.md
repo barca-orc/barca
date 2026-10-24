@@ -111,6 +111,9 @@ Run dc8c75a5f03a | got 'summary' in 0.034s (1 step, 1 phase)
 ...
 ```
 
+For partitioned chains, a changed key also limits planning to the affected keys after
+sensor discovery. No batching setting is required.
+
 Only `summary` runs again; `raw_data` comes from the cache. To recompute by hand, name the
 assets: `barca get summary --refresh raw_data` (and everything downstream of it), or
 `--refresh-all`. Do not delete files under `.barca/` to force a recompute.

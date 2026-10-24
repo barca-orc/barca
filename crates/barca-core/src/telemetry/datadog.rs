@@ -678,7 +678,15 @@ impl Datadog {
             .filter(|k| k.outcome == StepOutcome::Failed)
             .collect();
         let count = |outcome| keys.iter().filter(|k| k.outcome == outcome).count();
-        let (ran, cached) = (count(StepOutcome::Ran), count(StepOutcome::Cached));
+        let extra_cached = run
+            .cached_partitions
+            .get(&node.base_id)
+            .copied()
+            .unwrap_or(0);
+        let (ran, cached) = (
+            count(StepOutcome::Ran),
+            count(StepOutcome::Cached) + extra_cached,
+        );
         let outcome = if !failed.is_empty() {
             StepOutcome::Failed
         } else if ran > 0 {
@@ -736,7 +744,10 @@ impl Datadog {
         }
         let mut metrics = Map::new();
         metrics.insert("_dd.measured".into(), json!(1));
-        metrics.insert("barca.partitions.total".into(), json!(keys.len()));
+        metrics.insert(
+            "barca.partitions.total".into(),
+            json!(keys.len() + extra_cached),
+        );
         metrics.insert("barca.partitions.executed".into(), json!(ran));
         metrics.insert("barca.partitions.cached".into(), json!(cached));
         metrics.insert("barca.partitions.failed".into(), json!(failed.len()));
@@ -1085,6 +1096,7 @@ mod tests {
 
     fn run(status: &str, steps: Vec<StepReport>) -> RunReport {
         RunReport {
+            cached_partitions: Default::default(),
             run_id: "r1".to_string(),
             command: "run".to_string(),
             target: Some("publish".to_string()),

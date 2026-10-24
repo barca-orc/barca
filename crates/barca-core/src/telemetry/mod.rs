@@ -189,6 +189,8 @@ pub struct StepReport {
 /// A finished run. Times are Unix nanoseconds.
 #[derive(Debug, Clone)]
 pub struct RunReport {
+    /// Cached partition keys represented by counts rather than per-key reports.
+    pub cached_partitions: std::collections::HashMap<String, usize>,
     pub run_id: String,
     /// `get` or `run`.
     pub command: String,

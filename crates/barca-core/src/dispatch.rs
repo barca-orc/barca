@@ -79,6 +79,8 @@ pub fn partition_sources<'a>(
 /// What [`expand_pending_partitions`] made of a phase.
 #[derive(Debug, Default)]
 pub struct Expansion {
+    /// Complete membership counts before an execution-time key filter.
+    pub(crate) key_counts: HashMap<String, usize>,
     /// The phase with every step that had pending partitions expanded into its keys; `None`
     /// when no step had any.
     pub phase: Option<Phase>,
@@ -108,6 +110,16 @@ pub fn expand_pending_partitions(
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
 ) -> Expansion {
+    expand_pending_partitions_filtered(dag, phase, all_outputs, pool_size, |_, _| {})
+}
+
+pub(crate) fn expand_pending_partitions_filtered(
+    dag: &crate::dag::Dag,
+    phase: &Phase,
+    all_outputs: &HashMap<String, OutputRef>,
+    pool_size: usize,
+    filter: impl Fn(&str, &mut HashMap<String, Vec<String>>),
+) -> Expansion {
     use crate::keyed::{KeyedSource, SourceKeys};
     use std::sync::Arc;
 
@@ -120,6 +132,7 @@ pub fn expand_pending_partitions(
         return Expansion::default();
     }
 
+    let mut key_counts = HashMap::new();
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut all_expanded_steps: Vec<StreamStep> = Vec::new();
     let mut passthrough_steps: Vec<StreamStep> = Vec::new();
@@ -241,6 +254,13 @@ pub fn expand_pending_partitions(
                 continue;
             }
 
+            key_counts.insert(
+                base.clone(),
+                dim_values
+                    .values()
+                    .fold(1usize, |n, values| n.saturating_mul(values.len())),
+            );
+            filter(&base, &mut dim_values);
             let combos = expand_partition_combos(&dim_values);
             let pks: Vec<crate::PartitionKey> =
                 combos.into_iter().map(crate::PartitionKey::from).collect();
@@ -358,6 +378,7 @@ pub fn expand_pending_partitions(
         .collect();
 
     Expansion {
+        key_counts,
         phase: Some(Phase {
             reason: phase.reason.clone(),
             streams: worker_streams,

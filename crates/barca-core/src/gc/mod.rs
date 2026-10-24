@@ -1056,6 +1056,8 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
 pub(crate) struct Own {
     pub recorded: HashSet<String>,
     pub run_hashes: HashSet<String>,
+    /// Current results proven fresh without materializing each key's cache state.
+    pub nodes: HashSet<String>,
     pub manual: HashSet<String>,
     /// The command added nothing to `.barca/`: no step ran and nothing was fetched from a
     /// store. Its check is skipped when the last check, under the same limit, found the cache
@@ -1167,7 +1169,7 @@ async fn protections(
             .chain(&pinned.run_hashes)
             .cloned()
             .collect(),
-        nodes: pinned.nodes.clone(),
+        nodes: pinned.nodes.iter().chain(&own.nodes).cloned().collect(),
         manual_known: manual.is_some(),
         manual: manual
             .unwrap_or_default()

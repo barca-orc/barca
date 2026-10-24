@@ -36,6 +36,17 @@ test a recoverable backup before it is accepted; this policy does not authorize
 one. Unsupported versions are refused in place and are never automatically
 restored, downgraded or reset. Upgrade to a compatible Barca release to open them.
 
+## Rebuildable freshness proofs
+
+Format 1 adds `freshness_proofs(id TEXT PRIMARY KEY, generation INTEGER NOT NULL,
+snapshot TEXT NOT NULL)` through the registered additive table migration. IDs include a
+private payload version, artifact-layout hash and logical node ID; snapshots are JSON.
+Generation is the maximum materialization ID validated by that proof. Old generations are
+removed when a successful run publishes new proofs. Missing or malformed payloads cause
+normal cache validation, never loss of history. The table is disposable acceleration data;
+older format-1 binaries ignore it and invalidate its generation when they write new
+materializations. This addition changes neither `user_version` nor public JSON contracts.
+
 ## Backups, restore and older binaries
 
 The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).

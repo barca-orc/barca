@@ -8,6 +8,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Performance
+
+- Default DAG runs reuse validated freshness per node before expanding partition keys.
+  A changed key schedules only its affected chain; fresh keys keep their cache and history
+  counts without coordinator objects for every key. Target selection also plans only its
+  dependency cone. Sensors still discover their keys, and changed fan-ins read all inputs.
+
+
 ## 0.32.0 (2026-10-24)
 
 ### Breaking

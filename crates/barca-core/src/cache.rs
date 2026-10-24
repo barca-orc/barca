@@ -307,6 +307,25 @@ impl DecideState {
 pub(crate) type ExpandedMembership = BTreeMap<String, BTreeSet<String>>;
 
 impl DecideState {
+    pub(crate) fn seed_fresh(
+        &mut self,
+        dag: &Dag,
+        step: &crate::planner::StreamStep,
+        id: &str,
+        hash: String,
+        content: Option<&String>,
+    ) {
+        let phase = Phase {
+            reason: crate::planner::PhaseReason::Initial,
+            streams: vec![crate::planner::WorkerStream {
+                stream_id: "fresh".into(),
+                steps: vec![step.clone()],
+            }],
+        };
+        self.register_phase(&phase);
+        self.run_hashes.insert(id.to_owned(), hash);
+        record_output(dag, self, id, content);
+    }
     pub(crate) fn into_membership(self) -> ExpandedMembership {
         self.expected_steps
     }
@@ -488,7 +507,13 @@ pub(crate) fn in_dependency_order<'p>(
     phase: &'p Phase,
 ) -> Vec<(usize, &'p crate::planner::StreamStep)> {
     let rank: HashMap<&str, usize> = dag
-        .topo_order()
+        .order_for(
+            phase
+                .streams
+                .iter()
+                .flat_map(|s| &s.steps)
+                .map(|s| s.step_id.base_id()),
+        )
         .into_iter()
         .enumerate()
         .map(|(i, id)| (id, i))

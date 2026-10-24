@@ -159,7 +159,11 @@ pub struct Chain {
 
 /// Decompose a DAG into its topological structure (chains + relationships).
 pub fn decompose(dag: &Dag) -> Topology {
-    let chains = detect_chains(dag);
+    decompose_ordered(dag, dag.topo_order())
+}
+
+fn decompose_ordered(dag: &Dag, order: Vec<&str>) -> Topology {
+    let chains = detect_chains(dag, &order);
 
     // Build node → chain lookup.
     let mut node_to_chain: HashMap<String, usize> = HashMap::new();
@@ -175,7 +179,9 @@ pub fn decompose(dag: &Dag) -> Topology {
         let mut deps = HashSet::new();
         for node_id in &chain.nodes {
             for upstream_id in dag.upstream(node_id) {
-                let upstream_chain = node_to_chain[upstream_id];
+                let Some(&upstream_chain) = node_to_chain.get(upstream_id) else {
+                    continue;
+                };
                 if upstream_chain != idx {
                     deps.insert(upstream_chain);
                 }
@@ -198,12 +204,23 @@ fn is_partitioned(dag: &Dag, id: &str) -> bool {
 }
 
 /// Detect all maximal chains. Every node belongs to exactly one chain.
-fn detect_chains(dag: &Dag) -> Vec<Chain> {
+fn detect_chains(dag: &Dag, topo: &[&str]) -> Vec<Chain> {
+    let allowed: HashSet<&str> = topo.iter().copied().collect();
+    let mut successors: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut predecessors: HashMap<&str, usize> = HashMap::new();
+    for &id in topo {
+        for up in dag
+            .execution_upstream(id)
+            .into_iter()
+            .filter(|up| allowed.contains(up))
+        {
+            successors.entry(up).or_default().push(id);
+            *predecessors.entry(id).or_default() += 1;
+        }
+    }
     let mut visited: HashSet<String> = HashSet::new();
     let mut chains = Vec::new();
-    let topo = dag.topo_order();
-
-    for node_id in topo {
+    for &node_id in topo {
         if visited.contains(node_id) {
             continue;
         }
@@ -215,12 +232,15 @@ fn detect_chains(dag: &Dag) -> Vec<Chain> {
         // PartitionSource edges are excluded — they force phase breaks.
         let mut current = node_id.to_string();
         loop {
-            let succs = dag.execution_downstream(&current);
+            let succs = successors
+                .get(current.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             if succs.len() != 1 {
                 break;
             }
             let next = succs[0];
-            if dag.execution_upstream(next).len() != 1 {
+            if predecessors.get(next).copied().unwrap_or(0) != 1 {
                 break;
             }
             if visited.contains(next) {
@@ -811,6 +831,17 @@ pub fn plan_from_dag_narrowed(
     selection: Option<&crate::selection::PartitionSelection>,
 ) -> ExecutionPlan {
     let topology = decompose(dag);
+    plan_narrowed(dag, &topology, config, selection)
+}
+
+/// Plan only a dependency-closed set of nodes; unrelated partition sets are never expanded.
+pub(crate) fn plan_for_nodes(
+    dag: &Dag,
+    nodes: &[&str],
+    config: &ResourceConfig,
+    selection: Option<&crate::selection::PartitionSelection>,
+) -> ExecutionPlan {
+    let topology = decompose_ordered(dag, dag.order_for(nodes.iter().copied()));
     plan_narrowed(dag, &topology, config, selection)
 }
 

@@ -1,6 +1,6 @@
 # Cache decisions and run records
 
-Specification version: 1. Status: implemented. This boundary covers what a cache decision may
+Specification version: 2. Status: implemented. This boundary covers what a cache decision may
 rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -27,6 +27,40 @@ early cutoff in [cache.rs](../crates/barca-core/src/cache.rs) (`cutoff_tests`),
 persistence tests in [persist.rs](../crates/barca-core/src/persist.rs),
 run owners in [run_owner.rs](../crates/barca-core/src/run_owner.rs) and
 [reconciliation](../python/tests/test_history_reconcile.py).
+
+## Validated freshness before expansion
+
+Default cache-aware execution may omit proven-fresh work before per-key expansion. Proofs
+are private, rebuildable metadata, scoped to each requested logical node and artifact layout.
+They contain the node's structural signature (definition, bindings, freshness, sinks,
+partition specs, declared environment and upstream signatures), its validated key count,
+and source observations or an unpartitioned output reference. Cutoff and Manual upstreams
+retain their output-based freshness semantics. Tasks and sensors still use normal decisions;
+Manual assets and compound partition nodes validate through the normal cache engine.
+
+A proof is usable only at the current materialization generation (maximum row id). A
+successful run can publish updated proofs only when no other run has materialized work
+since its opening generation. Failed, interrupted and cancelled runs publish no proof.
+Explicit refresh, partition selection and local execution using a remote server ledger
+use normal decisions; their writes invalidate old generations. Missing or malformed proof
+payloads fall back to validation. Database failures remain infrastructure errors.
+
+Only changed same-dimension source keys propagate into aligned partition consumers.
+Inherited membership edges do not turn a keyed value change into whole-source invalidation;
+explicit whole-dictionary inputs do. Key additions/removals update membership and dataset
+sink pruning. Fresh keys are represented by counts; artifact references and recovery
+steps are loaded only when active inputs or returned values require them. A cached status
+therefore does not assert the existence of an unused artifact. Missing needed artifacts
+still recover through the existing dependency repair path. Cache eviction after a command
+protects current results of proven-fresh nodes in its cone without loading each key.
+
+Source discovery/comparison can be linear in source keys; changed fan-ins necessarily load
+all collected inputs. No constant-time claim applies to those operations. The normal complete
+hash requirement below applies to all affected work, including lazily loaded fresh inputs.
+
+Conformance: [incremental DAG regressions](../python/tests/test_incremental_dag.py),
+[missing artifact recovery](../python/tests/test_missing_artifact.py), dataset sink,
+cutoff, telemetry and startup suites; [benchmark](../benchmarks/incremental_dag/bench.py).
 
 ## Complete upstream hashes
 

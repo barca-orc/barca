@@ -590,6 +590,7 @@ pub(crate) fn telemetry_report(
     targets.dedup();
 
     RunReport {
+        cached_partitions: Default::default(),
         run_id: l.run_id.to_string(),
         command: l.command.to_string(),
         target: l.target.map(str::to_string),

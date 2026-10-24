@@ -4,6 +4,24 @@ Barca skips a step when it has already computed the same thing. This topic cover
 same" means (the run hash), what the hash does and does not see, the states a cached result
 can be in, how to force a recompute, the cache size limit, and where everything is stored.
 
+## Incremental runs
+
+A normal `get` or `run` reuses previously validated freshness before expanding partition
+keys. When one sensor key changes, only that key's affected chain needs new cache decisions;
+unchanged keys remain cached. Target selection plans only the target's dependency cone.
+This works with the usual DAG workflow and needs no flag or batching setting.
+
+The first run validates the full requested graph. Code, declared environment, partition
+membership and upstream changes invalidate the affected evidence; refreshes and writes from
+another run force normal validation. Missing artifacts needed by active work or returned
+values are recovered through the usual cache path. Freshness does not promise that unused
+artifact files still exist.
+
+A sensor returning every key still discovers and compares every key. A changed `collect`
+consumer still reads all its inputs, and returning every small partition value requires
+loading those values. Compound partition changes and local execution against a remote
+server's ledger use normal validation. Batching controls function calls independently.
+
 ## What is cached
 
 Each asset step has a **run hash**: a hash of the function's definition, its inputs' run hashes,

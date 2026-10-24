@@ -255,7 +255,10 @@ More: `barca docs big-inputs`, `barca docs types`.
 ## 7. Partitions
 
 Partitions run one asset once per key. The keys run in parallel, and each key is cached on
-its own.
+its own. After the first successful run, ordinary DAG runs reuse validated freshness
+before expanding keys: one changed key schedules only its affected chain. Sensors that
+return all keys still discover them all; a changed `collect` consumer still reads all its
+inputs. Batching is independent and needs no special setting for incremental planning.
 
 ```python
 from barca import asset, collect, partitions, partitions_from

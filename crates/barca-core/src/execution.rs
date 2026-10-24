@@ -214,7 +214,7 @@ impl Executed {
 }
 
 pub(crate) struct ExecuteRequest<'a> {
-    pub(crate) dag: Option<Dag>,
+    pub(crate) dag: Option<std::sync::Arc<Dag>>,
     pub(crate) cfg: &'a crate::config::ResolvedConfig,
     pub(crate) target_names: &'a [String],
     pub(crate) file_args: &'a [String],
@@ -345,6 +345,7 @@ impl RunStart {
 }
 #[derive(Default)]
 struct RunState {
+    incremental: Option<crate::incremental::Incremental>,
     cached_node_ids: std::collections::HashSet<String>,
     decide_state: DecideState,
     step_reports: Vec<StepReport>,
@@ -480,6 +481,11 @@ async fn execute_started(
     let mut session = open_run(&request, &prepared, started).await?;
     session.state.pin = Some(pin);
     drive_phases(&mut session).await?;
+    trace_point!(
+        session.started.trace,
+        "incremental identities {}",
+        session.state.decide_state.run_hashes().len()
+    );
     prune_dataset_sinks(&mut session).await;
     note_stale_pins(&mut session).await?;
     // What the run read (its inputs, and the outputs it returns) gets its `last_read_at` before
@@ -513,6 +519,21 @@ async fn execute_started(
         return Err(BarcaError::Usage(error));
     }
     let mut executed = return_outputs(&mut session, elapsed).await?;
+    if session.state.phase_error.is_none()
+        && session.state.step_failure.is_none()
+        && session.state.transfer_error.is_none()
+        && !session.started.cancel.is_cancelled()
+        && executed.step_failure.is_none()
+        && let Some(incremental) = &session.state.incremental
+    {
+        incremental
+            .save(
+                request.cfg,
+                &executed.result.run_id,
+                executed.result.steps_executed > 0,
+            )
+            .await?;
+    }
     let own = cache_check_inputs(&session, &executed);
     let pin = session.state.pin.take();
     let cfg = request.cfg;
@@ -574,6 +595,12 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
     read.sort();
     read.dedup();
     crate::gc::Own {
+        nodes: session
+            .state
+            .incremental
+            .as_ref()
+            .map(|i| i.cached.keys().cloned().collect())
+            .unwrap_or_default(),
         recorded: read
             .into_iter()
             .chain(session.state.all_outputs.values().map(|o| o.path.clone()))
@@ -1137,6 +1164,14 @@ async fn open_run<'a, 'r>(
         &request.cfg.db_path,
         &started.run_id,
     ));
+    state.incremental = crate::incremental::Incremental::open(
+        &prepared.dag,
+        &prepared.exec_plan,
+        request.cfg,
+        &request.policy,
+        request.partition.is_some(),
+    )
+    .await?;
     state.decide_state.pinned = prepared.pinned.clone();
     state.decide_state.tick = request.rules.tick.clone();
     Ok(RunSession {
@@ -1176,6 +1211,7 @@ async fn select_work<'p>(
             }
         }
         Work::Returned => {
+            seed_fresh_targets(session, requested).await?;
             // The output this command hands back is read by whoever ran it: what it
             // prints is made local, and every part of it must be on disk or in the store.
             let mut returned_refs: Vec<OutputRef> = final_output_of(
@@ -1251,48 +1287,113 @@ async fn select_work<'p>(
             return Ok(None);
         }
         Work::Planned(phase) => {
-            // `partitions_from` sources are read from disk during expansion.
-            let sources: Vec<String> =
-                dispatch::partition_sources(phase, &session.state.all_outputs)
-                    .into_iter()
-                    .map(|o| o.path.clone())
-                    .collect();
-            let lost = recover::lost(
-                &mut session.store,
-                &sources,
-                &sources,
-                session.pb.as_ref(),
-                &session.state.all_outputs,
-                &session.state.cached_node_ids,
-                &mut session.state.cached_steps,
-            )
-            .await;
-            match lost {
-                Ok(lost) if lost.is_empty() => {}
-                Ok(lost) => {
-                    queue.push_front(Work::Planned(phase));
-                    queue.push_front(Work::Recompute(
-                        session.state.cached_steps.first_layer(&lost),
-                    ));
-                    return Ok(None);
-                }
-                Err(e) => {
-                    session.state.transfer_error = Some(e);
-                    return Ok(None);
-                }
-            }
-
-            return expand_and_decide(session, phase, phase_idx).await;
+            return expand_and_decide(session, phase, phase_idx, queue).await;
         }
     };
 
+    seed_fresh_inputs(session, &selected.0).await?;
     Ok(Some(selected))
 }
-async fn expand_and_decide(
+async fn seed_fresh_inputs(
     session: &mut RunSession<'_, '_>,
     phase: &Phase,
+) -> Result<(), BarcaError> {
+    let Some(incremental) = &mut session.state.incremental else {
+        return Ok(());
+    };
+    let dag = &session.prepared.dag;
+    let mut needed = Vec::new();
+    for step in phase.streams.iter().flat_map(|s| &s.steps) {
+        let keys = match incremental.filters.get(step.step_id.base_id()) {
+            Some((dim, keys)) if step.partition_keys.is_empty() => keys
+                .iter()
+                .map(|v| {
+                    crate::PartitionKey(std::collections::BTreeMap::from([(
+                        dim.clone(),
+                        v.clone(),
+                    )]))
+                })
+                .collect(),
+            _ => step.partition_keys.clone(),
+        };
+        for up in step
+            .inputs
+            .values()
+            .map(String::as_str)
+            .chain(dag.partition_sources(step.step_id.base_id()))
+        {
+            if dag
+                .get_node(up)
+                .is_some_and(|n| n.extracted.partitions.is_empty())
+            {
+                needed.push((up.to_owned(), None));
+            } else if dag
+                .get_node(step.step_id.base_id())
+                .is_some_and(|n| n.resolved_collected.values().any(|id| id == up))
+            {
+                if let Some(all) = incremental.target_keys(dag, up) {
+                    needed.extend(all.into_iter().map(|key| (up.to_owned(), Some(key))));
+                }
+            } else {
+                needed.extend(keys.iter().cloned().map(|key| (up.to_owned(), Some(key))));
+            }
+        }
+    }
+    incremental
+        .seed(
+            dag,
+            session.request.cfg,
+            needed,
+            &mut session.state.decide_state,
+            &mut session.state.all_outputs,
+            &mut session.state.cached_node_ids,
+            &mut session.state.cached_steps,
+            &mut session.store,
+        )
+        .await
+}
+async fn seed_fresh_targets(
+    session: &mut RunSession<'_, '_>,
+    targets: &std::collections::HashSet<String>,
+) -> Result<(), BarcaError> {
+    let Some(incremental) = &mut session.state.incremental else {
+        return Ok(());
+    };
+    let dag = &session.prepared.dag;
+    let mut needed = Vec::new();
+    for target in targets {
+        if dag
+            .get_node(target)
+            .is_some_and(|n| n.extracted.partitions.is_empty())
+        {
+            needed.push((target.clone(), None));
+        } else if incremental.count_for(target) <= crate::results::LISTED_KEYS
+            && let Some(keys) = incremental.target_keys(dag, target)
+        {
+            needed.extend(keys.into_iter().map(|key| (target.clone(), Some(key))));
+        }
+    }
+    incremental
+        .seed(
+            dag,
+            session.request.cfg,
+            needed,
+            &mut session.state.decide_state,
+            &mut session.state.all_outputs,
+            &mut session.state.cached_node_ids,
+            &mut session.state.cached_steps,
+            &mut session.store,
+        )
+        .await
+}
+
+async fn expand_and_decide<'p>(
+    session: &mut RunSession<'_, '_>,
+    phase: &'p Phase,
     phase_idx: usize,
+    queue: &mut VecDeque<Work<'p>>,
 ) -> Result<Option<(Phase, bool)>, BarcaError> {
+    let planned_phase = phase;
     // Multi-target run after a failure: drop the steps that depend on a failed
     // step before they are decided; the rest of the phase still runs.
     let unblocked_phase;
@@ -1320,11 +1421,86 @@ async fn expand_and_decide(
         phase
     };
 
-    let expansion = dispatch::expand_pending_partitions(
+    let original_phase = phase;
+    let incremental_phase;
+    let omitted;
+    let incremental_reports;
+    let phase = if let Some(incremental) = &mut session.state.incremental {
+        let (p, reports, cached) = incremental.prune(&session.prepared.dag, phase);
+        incremental_reports = reports;
+        incremental_phase = p;
+        omitted = cached;
+        &incremental_phase
+    } else {
+        omitted = 0;
+        incremental_reports = Vec::new();
+        phase
+    };
+    seed_fresh_inputs(session, phase).await?;
+    // Membership artifacts remain necessary even when every member is fresh.
+    // Seed only these sources, without loading a fresh fan-in's collected inputs.
+    let mut membership_phase = original_phase.clone();
+    for step in membership_phase
+        .streams
+        .iter_mut()
+        .flat_map(|s| &mut s.steps)
+    {
+        step.inputs.clear();
+    }
+    seed_fresh_inputs(session, &membership_phase).await?;
+    // `partitions_from` sources are read from disk during expansion.
+    let sources: Vec<String> =
+        dispatch::partition_sources(original_phase, &session.state.all_outputs)
+            .into_iter()
+            .map(|o| o.path.clone())
+            .collect();
+    let lost = recover::lost(
+        &mut session.store,
+        &sources,
+        &sources,
+        session.pb.as_ref(),
+        &session.state.all_outputs,
+        &session.state.cached_node_ids,
+        &mut session.state.cached_steps,
+    )
+    .await;
+    match lost {
+        Ok(lost) if lost.is_empty() => {}
+        Ok(lost) => {
+            queue.push_front(Work::Planned(planned_phase));
+            queue.push_front(Work::Recompute(
+                session.state.cached_steps.first_layer(&lost),
+            ));
+            return Ok(None);
+        }
+        Err(e) => {
+            session.state.transfer_error = Some(e);
+            return Ok(None);
+        }
+    }
+
+    if session.request.agent_mode {
+        session.state.held_cached_lines.extend(
+            incremental_reports
+                .iter()
+                .filter(|r| r.partitions.is_none())
+                .map(|r| r.id.clone()),
+        );
+    }
+    session.state.step_reports.extend(incremental_reports);
+    let expansion = dispatch::expand_pending_partitions_filtered(
         &session.prepared.dag,
         phase,
         &session.state.all_outputs,
         session.prepared.pool_size,
+        |base, dims| {
+            if let Some(incremental) = &session.state.incremental {
+                incremental.filter(base, dims);
+            }
+            if let Some(selection) = &session.request.partition {
+                selection.prefilter(dims);
+            }
+        },
     );
     // A `partitions_from` source that cannot be read for keys fails the steps reading it.
     for (base, message) in expansion.failures {
@@ -1335,25 +1511,51 @@ async fn expand_and_decide(
         (session.state.narrowing.as_mut(), expanded_phase.as_mut())
     {
         narrowing.narrow_expanded(expanded);
+        for (base, total) in &expansion.key_counts {
+            if let Some(Some(counts)) = narrowing.nodes.get_mut(base) {
+                counts.skipped = total.saturating_sub(counts.selected);
+            }
+        }
     }
     let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
     // The whole key set of each asset with a dataset sink, before the cache drops the keys
     // that do not run.
+    if let Some(incremental) = &session.state.incremental {
+        for base in incremental.cached.keys() {
+            if let Some(node) = session.prepared.dag.get_node(base)
+                && node.extracted.sinks.iter().any(|s| s.is_dataset())
+                && incremental.membership_changed(&session.prepared.dag, base)
+                && let Some(keys) = incremental.target_keys(&session.prepared.dag, base)
+            {
+                crate::dataset_sinks::collect_membership(
+                    &mut session.state.dataset_keys,
+                    base,
+                    &node.extracted.sinks,
+                    keys,
+                );
+            }
+        }
+    }
     crate::dataset_sinks::collect(&mut session.state.dataset_keys, phase_ref, |base| {
         session
             .state
-            .narrowing
+            .incremental
             .as_ref()
-            .is_some_and(|n| n.nodes.contains_key(base))
+            .is_some_and(|i| i.cached.contains_key(base))
+            || session
+                .state
+                .narrowing
+                .as_ref()
+                .is_some_and(|n| n.nodes.contains_key(base))
     });
 
     // Dynamic partitions (`partitions_from`) are a single placeholder step
     // in the plan-time count but expand to their real per-key count here —
     // reconcile `total_steps` so the ETA math below can't underflow and
     // the printed summary reflects what actually ran.
-    if expanded_phase.is_some() {
-        let expanded_count = phase_step_count(phase_ref);
-        let planned_count = phase_step_count(phase);
+    if expanded_phase.is_some() || omitted > 0 {
+        let expanded_count = phase_step_count(phase_ref) + omitted;
+        let planned_count = phase_step_count(original_phase);
         if expanded_count > planned_count {
             session.state.total_steps += expanded_count - planned_count;
             if let Some(bar) = session.pb.as_ref() {
@@ -1362,6 +1564,11 @@ async fn expand_and_decide(
         }
     }
 
+    if phase_ref.streams.is_empty() {
+        trace_point!(session.started.trace, "phase{phase_idx}_cache_check_done");
+        return Ok(None);
+    }
+    seed_fresh_inputs(session, phase_ref).await?;
     let decided = decide_phase(DecidePhase {
         dag: &session.prepared.dag,
         policy: &session.request.policy,
@@ -1381,6 +1588,16 @@ async fn expand_and_decide(
     trace_point!(session.started.trace, "phase{phase_idx}_cache_check_done");
     if let Some(pin) = &session.state.pin {
         pin.run_hashes(session.state.decide_state.run_hashes().values());
+    }
+    // Cache hits removed from `decided` still contribute validated references,
+    // including when another step in this phase must execute.
+    if let Some(incremental) = &mut session.state.incremental {
+        incremental.observe(
+            &session.prepared.dag,
+            phase,
+            &session.state.all_outputs,
+            session.state.decide_state.run_hashes(),
+        );
     }
     if decided.streams.is_empty() {
         return Ok(None);
@@ -1807,7 +2024,14 @@ fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>
     // A cached step whose `cached` line was held back and that was not computed again after
     // all is announced now.
     for id in std::mem::take(&mut session.state.held_cached_lines) {
-        if session.state.cached_node_ids.contains(&id) {
+        if session.state.cached_node_ids.contains(&id)
+            || (session
+                .state
+                .incremental
+                .as_ref()
+                .is_some_and(|i| i.unseeded_fresh(&id))
+                && !session.state.all_attempts.contains_key(&id))
+        {
             crate::run_line!(Agent, "{}", cached_step_line(&session.prepared.dag, &id));
             crate::lines::Lines::current().cached_step(&id);
         }
@@ -1982,6 +2206,14 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         let phase_outputs = collect_outputs(session, &coord);
         collect_failures(session, &coord).await;
         merge_outputs(session, &phase_outputs);
+        if let Some(incremental) = &mut session.state.incremental {
+            incremental.observe(
+                &prepared.dag,
+                &phase,
+                &session.state.all_outputs,
+                session.state.decide_state.run_hashes(),
+            );
+        }
         if session.state.phase_error.is_some()
             || session.state.transfer_error.is_some()
             || (session.state.step_failure.is_some() && !prepared.keep_going)
@@ -2003,6 +2235,12 @@ async fn record_and_publish(
             recorder: session.recorder.take().expect("recorder started"),
             pb: &session.pb,
             agent_mode: session.request.agent_mode,
+            incremental: session.state.incremental.as_ref(),
+            proven_cached: session
+                .state
+                .incremental
+                .as_ref()
+                .map_or(0, |i| i.unseeded_cached()),
             steps_executed: session.state.steps_executed,
             completed_steps: session.state.completed_steps,
             total_steps: session.state.total_steps,
@@ -2022,7 +2260,6 @@ async fn record_and_publish(
             command_label: session.request.command_label,
             file_args: session.request.file_args,
             target_label: &session.prepared.target_label,
-            exec_plan: &session.prepared.exec_plan,
             all_sinks: &session.state.all_sinks,
             all_attempts: &session.state.all_attempts,
             all_timings: &session.state.all_timings,
@@ -2053,29 +2290,63 @@ async fn return_outputs(
     session: &mut RunSession<'_, '_>,
     elapsed: f64,
 ) -> Result<Executed, BarcaError> {
-    let (mut step_reports, outcomes, final_output, partitions, key_summary) = finalize_outputs(
-        &session.prepared.dag,
-        &session.prepared.targets,
-        &session.prepared.exec_plan,
-        session.prepared.keep_going,
-        session.request.partition.as_ref(),
-        &session.state.all_outputs,
-        &session.state.all_failures,
-        std::mem::take(&mut session.state.step_reports),
-        &session.state.failed_bases,
-        &session.state.skipped_bases,
-        &session.state.cached_node_ids,
-        &mut session.store,
-        &session.started.cancel,
-        // With a server, its ledger holds the record (#576).
-        session
-            .request
-            .cfg
-            .ledger
-            .is_none()
-            .then_some(session.request.cfg.db_path.as_str()),
-    )
-    .await?;
+    let (mut step_reports, mut outcomes, final_output, mut partitions, mut key_summary) =
+        finalize_outputs(
+            &session.prepared.dag,
+            &session.prepared.targets,
+            &session.prepared.exec_plan,
+            session.prepared.keep_going,
+            session.request.partition.as_ref(),
+            &session.state.all_outputs,
+            &session.state.all_failures,
+            std::mem::take(&mut session.state.step_reports),
+            &session.state.failed_bases,
+            &session.state.skipped_bases,
+            &session.state.cached_node_ids,
+            &mut session.store,
+            &session.started.cancel,
+            // With a server, its ledger holds the record (#576).
+            session
+                .request
+                .cfg
+                .ledger
+                .is_none()
+                .then_some(session.request.cfg.db_path.as_str()),
+        )
+        .await?;
+
+    if let Some(incremental) = &session.state.incremental {
+        let ids: Vec<&str> = session
+            .prepared
+            .targets
+            .iter()
+            .map(|(_, id)| id.as_str())
+            .collect();
+        if let Some(node) = returned_node(
+            &session.prepared.exec_plan,
+            &ids,
+            session.prepared.keep_going,
+        ) && let Some(summary) =
+            incremental.summary(&node, partitions.as_deref(), &session.state.cached_node_ids)
+        {
+            key_summary = Some(summary);
+            partitions.get_or_insert_with(Vec::new);
+        }
+        for ((_, id), (_, outcome)) in session.prepared.targets.iter().zip(outcomes.iter_mut()) {
+            if let Some(summary) = incremental.summary(
+                id,
+                outcome.partitions.as_deref(),
+                &session.state.cached_node_ids,
+            ) {
+                if outcome.error.as_deref() == Some("did not run") {
+                    outcome.status = "success".into();
+                    outcome.error = None;
+                }
+                outcome.key_summary = Some(summary);
+                outcome.partitions.get_or_insert_with(Vec::new);
+            }
+        }
+    }
 
     let mut attempts_by_base: HashMap<String, u32> = HashMap::new();
     for (node, attempts) in &session.state.all_attempts {
@@ -2186,7 +2457,7 @@ async fn return_outputs(
 }
 
 struct Prepared {
-    dag: Dag,
+    dag: std::sync::Arc<Dag>,
     targets: Vec<(String, String)>,
     job_name: String,
     keep_going: bool,
@@ -2321,7 +2592,7 @@ async fn pin_manual<'a>(
 
 #[allow(clippy::too_many_arguments)]
 async fn prepare_run(
-    supplied_dag: Option<Dag>,
+    supplied_dag: Option<std::sync::Arc<Dag>>,
     request: &ExecuteRequest<'_>,
     trace: impl Fn(&str),
 ) -> Result<Prepared, BarcaError> {
@@ -2335,7 +2606,7 @@ async fn prepare_run(
     );
     let dag = match supplied_dag {
         Some(dag) => dag,
-        None => build_dag(file_args, python).await?,
+        None => std::sync::Arc::new(build_dag(file_args, python).await?),
     };
     trace("dag_built");
 
@@ -2394,10 +2665,7 @@ async fn prepare_run(
     let mut exec_plan = match &cone {
         Some(cone) => {
             let cone: Vec<&str> = cone.iter().map(String::as_str).collect();
-            crate::queries::filter_plan_to_subgraph(
-                crate::planner::plan_from_dag_narrowed(&dag, &config, partition),
-                &cone,
-            )
+            crate::planner::plan_for_nodes(&dag, &cone, &config, partition)
         }
         None => plan_for_targets(&dag, &target_ids, &config, command_label, partition),
     };
@@ -3652,6 +3920,8 @@ async fn dispatch_phase(
 }
 
 struct FinalizeRun<'a> {
+    incremental: Option<&'a crate::incremental::Incremental>,
+    proven_cached: usize,
     /// What the run read ([`crate::persist::RunLedger::touched`]).
     touched: &'a [String],
     pool: crate::io_loop::WorkerPool,
@@ -3677,7 +3947,6 @@ struct FinalizeRun<'a> {
     command_label: &'a str,
     file_args: &'a [String],
     target_label: &'a Option<String>,
-    exec_plan: &'a ExecutionPlan,
     all_sinks: &'a HashMap<String, String>,
     all_attempts: &'a HashMap<String, u32>,
     all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
@@ -3703,6 +3972,8 @@ struct FinalizeRun<'a> {
 
 async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64, BarcaError> {
     let FinalizeRun {
+        incremental,
+        proven_cached,
         touched,
         pool,
         recorder,
@@ -3727,7 +3998,6 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         command_label,
         file_args,
         target_label,
-        exec_plan,
         all_sinks,
         all_attempts,
         all_timings,
@@ -3826,7 +4096,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         crate::gc::forget_store_check(cfg);
     }
 
-    let steps_cached = cached_node_ids.len();
+    let steps_cached = cached_node_ids.len() + proven_cached;
     let elapsed = t0.elapsed().as_secs_f64();
 
     // Stop the step recorder before persistence: the ledger below writes whatever it had not
@@ -3861,7 +4131,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         files: db::encode_files(file_args),
         target: target_label.as_deref(),
         job: job_name,
-        steps_total: exec_plan.total_steps,
+        steps_total: total_steps,
         steps_executed,
         steps_cached,
         elapsed,
@@ -3916,6 +4186,9 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
                 env: Some(&cfg.env),
             },
         );
+        if let Some(incremental) = incremental {
+            incremental.telemetry(dag, &mut report);
+        }
         if report.reason.is_none() {
             report.reason = cancel_reason;
         }
