@@ -14,6 +14,9 @@ acknowledges `{"type":"hello","role":"coordinator","protocol_version":4}`.
 A missing/mismatched version or role gets `protocol_error` with `message` and the
 expected version, then connection refusal. The error says to reinstall matching
 Barca packages. Connection and negotiation share the ten-second startup deadline.
+Rejected helper processes are killed and reaped before the run returns. Worker cleanup
+that runs off the event loop is joined at pool shutdown, including rejected starts
+already removed from the pending-worker map.
 Rejected, exited and cancelled helpers are reaped; no work precedes acknowledgement.
 
 A worker's hello also carries `worker_id`, the integer from its `BARCA_WORKER_ID`
@@ -201,7 +204,9 @@ publication of receipts before their own stdout frames.
 multi-item result frames and prove crash/exception retry accounting without replaying
 earlier side effects. [parallel tests](../python/tests/test_parallel_results.py) cover
 nested handoff and file-only values; [handshake tests](../python/tests/test_protocol_handshake.py)
-cover wrong versions, cancellation and reaping. Runtime framing tests cover size limits.
+cover wrong versions, cancellation and reaping. The worker-pool shutdown test in
+[io_loop.rs](../crates/barca-core/src/io_loop.rs) holds a kill/wait job behind a gate
+and requires shutdown to wait for it. Runtime framing tests cover size limits.
 
 Plan documents independently carry `plan_version:1` on CLI and HTTP output. Consumers
 should reject unsupported versions; absence identifies an older unversioned document.
