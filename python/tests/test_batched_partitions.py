@@ -160,6 +160,10 @@ def test_only_stale_keys_are_grouped(keys5):
         ('batches([["r5", "r1"], ["r2", "r3"]])', [["r1", "r5"], ["r2", "r3"], ["r4"]]),
         ("batches_by(region_of)", [["r1", "r3", "r5"], ["r2", "r4"]]),
         ("batches_by(region_of, max_size=2)", [["r1", "r3"], ["r5"], ["r2", "r4"]]),
+        (
+            'batches_by(lambda r: 1 if r in ["r1", "r2"] else "1")',
+            [["r1", "r2"], ["r3", "r4", "r5"]],
+        ),
     ],
 )
 def test_batching_never_changes_a_cached_result(tmp_path, batch, groups):
@@ -403,7 +407,7 @@ def test_strict_groups_and_evaluated_groups(keys5, group_expression):
     assert proc.returncode == 2
     assert "strict=True" in proc.stderr and "retailer=r3" in proc.stderr
     last = json.loads(run(keys5, "history", "--limit", "1", "--json").stdout)["runs"][0]
-    assert last["status"] == "error"
+    assert last["status"] == "failed"
 
 
 def test_a_grouping_that_cannot_be_evaluated_is_a_load_error_naming_the_node(keys5):

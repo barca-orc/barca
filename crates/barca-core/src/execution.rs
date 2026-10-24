@@ -349,6 +349,7 @@ struct RunState {
     decide_state: DecideState,
     step_reports: Vec<StepReport>,
     phase_error: Option<String>,
+    usage_error: Option<String>,
     step_failure: Option<(String, String)>,
     failed_bases: std::collections::HashSet<String>,
     skipped_bases: std::collections::HashSet<String>,
@@ -508,6 +509,9 @@ async fn execute_started(
     read.sort();
     // Their `last_read_at` is written with the run's ledger, on its connection.
     let elapsed = record_and_publish(&mut session, &read).await?;
+    if let Some(error) = session.state.usage_error.take() {
+        return Err(BarcaError::Usage(error));
+    }
     let mut executed = return_outputs(&mut session, elapsed).await?;
     let own = cache_check_inputs(&session, &executed);
     let pin = session.state.pin.take();
@@ -529,6 +533,7 @@ async fn prune_dataset_sinks(session: &mut RunSession<'_, '_>) {
     if datasets.is_empty()
         || session.started.cancel.is_cancelled()
         || session.state.phase_error.is_some()
+        || session.state.usage_error.is_some()
         || session.state.transfer_error.is_some()
     {
         return;
@@ -1942,7 +1947,11 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
             &mut session.state.next_call,
         );
         if let Some((base, message)) = ungrouped.first() {
-            return Err(BarcaError::Usage(format!("{base}: {message}")));
+            session.state.usage_error = Some(format!("{base}: {message}"));
+            for (base, message) in ungrouped {
+                fail_step(session, base, message, "BatchError");
+            }
+            break;
         }
         session.state.calls.extend(
             calls

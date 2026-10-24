@@ -618,7 +618,7 @@ else:
         label = value(arg)
         if isinstance(label, bool) or not isinstance(label, (str, int)):
             raise TypeError(f"batches_by({req['expr']}) returned {label!r} ({type(label).__name__}) for the key {arg!r}; a label must be a string or an integer")
-        labels.append(str(label))
+        labels.append(json.dumps(label))
     print(json.dumps(labels))
 "#;
 
