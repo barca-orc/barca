@@ -100,6 +100,9 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
 /// called with an argument it does not define (#284): the tests and the documentation of that
 /// check. Every other pipeline in the repository must plan.
 const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
+    // Batched functions require list annotations; sensors cannot declare batch=.
+    ("python/tests/test_batched_partitions.py", "polled", "batch"),
+    ("python/tests/test_batched_partitions.py", "scored", "str"),
     // RFC-0013 shows the proposed `batch=` argument before it is implemented (#643); the
     // implementation removes this entry.
     (

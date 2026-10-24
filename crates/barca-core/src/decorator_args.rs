@@ -1182,7 +1182,7 @@ mod tests {
         asset.retain(|k| *k != "cutoff");
         assert_eq!(asset, keywords("task"));
         let mut sensor = asset.clone();
-        sensor.retain(|k| *k != "inputs");
+        sensor.retain(|k| *k != "inputs" && *k != "batch");
         assert_eq!(keywords("sensor"), sensor);
     }
 
@@ -1216,7 +1216,7 @@ mod tests {
             params.vararg.is_none() && params.kwarg.is_none(),
             "the stub `{name}` takes *args or **kwargs: it would accept arguments barca rejects"
         );
-        let own = |n: &str| n != "self" && n != "fn";
+        let own = |n: &str| n != "self" && (n != "fn" || name == "batches_by");
         let positional = params
             .posonlyargs
             .iter()

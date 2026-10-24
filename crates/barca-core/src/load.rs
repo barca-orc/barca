@@ -536,13 +536,15 @@ fn resolve_dynamic_partitions(
             Some(crate::model::BatchSpec::GroupsExpr {
                 source_text,
                 strict,
-            }) => match crate::batch::evaluate_groups(python, &node.source_file, &source_text, &dims)
-            {
-                Ok(groups) => {
-                    node.batch = Some(crate::model::BatchSpec::Groups { groups, strict });
+            }) => {
+                match crate::batch::evaluate_groups(python, &node.source_file, &source_text, &dims)
+                {
+                    Ok(groups) => {
+                        node.batch = Some(crate::model::BatchSpec::Groups { groups, strict });
+                    }
+                    Err(error) => failures.push((node.continuity_key(), error)),
                 }
-                Err(error) => failures.push((node.continuity_key(), error)),
-            },
+            }
             Some(crate::model::BatchSpec::By { source_text, .. }) => {
                 if let Err(error) =
                     crate::batch::check_label_function(python, &node.source_file, &source_text)

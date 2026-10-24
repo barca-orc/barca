@@ -8,6 +8,26 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- Batched partitions (experimental, RFC-0013, #643): `batch=N`, `batch="all"`, `batches([...])`
+  and `batches_by(fn, max_size=N)` on partitioned assets and tasks group stale keys into
+  fewer function calls. Each key keeps its own run hash, artifact, cutoff and sinks.
+  A batch function receives lists of keys and keyed inputs, and returns a keyed dict or
+  a table split by its partition columns; `barca.Failed("reason")` fails one key alone.
+  `--batch` on `get` and `run`, `barca.get(batch=)`, run requests and schedules override
+  grouping. History groups the keys of each call, and dry runs describe the grouping.
+
+### Bug Fixes
+
+- Reading a large metadata database no longer prints internal `WHOPPER_FIND_FRAME_PROBE`
+  diagnostics on stderr. Update the Turso dependency to 0.7.0-pre.19 (#645).
+
+### Documentation
+
+- Retain deprecated HTTP route aliases for the public Python `Client`; remove the expired
+  promise to delete them after one minor release. New integrations should use `/runs` (#606).
+
 ## 0.31.0 (2026-10-23)
 
 ### Breaking

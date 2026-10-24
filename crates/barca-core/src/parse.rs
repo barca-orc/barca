@@ -1061,10 +1061,7 @@ fn extract_batch(
         if !partitions.contains_key(name) {
             continue;
         }
-        if let Some(scalar) = arg
-            .annotation()
-            .and_then(crate::batch::scalar_annotation)
-        {
+        if let Some(scalar) = arg.annotation().and_then(crate::batch::scalar_annotation) {
             return Err((
                 arg.range().start().to_usize(),
                 format!(

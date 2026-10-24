@@ -53,6 +53,7 @@ VERSIONS = [
     "0.29.4",
     "0.29.6",
     "0.30.0",
+    "0.31.0",
 ]
 
 # What each version runs, in order. Exit codes are checked: 0 for these, 1 for the failure.

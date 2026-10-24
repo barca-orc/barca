@@ -178,6 +178,7 @@ examples.
 | `barca version` | Print the version (also `barca --version`). |
 
 Common flags on `get` and `run`: `--refresh a,b`, `--no-cascade`, `--refresh-all`,
+`--batch all` / `--batch 1000` / `--batch scored=none` (override calls of nodes declaring `batch=`),
 `--dry-run`, `--env <name>` (a separate cache and history), `--partition key=value` (only those
 keys, across the whole run; also on `barca plan`).
 

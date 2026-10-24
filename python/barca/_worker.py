@@ -1594,14 +1594,8 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                     )
                 paths.append(path)
             if frame_type in _batch.LAZY_TYPES:
-                if len(dims) != 1:
-                    raise TypeError(
-                        f"the input '{param}' is annotated as a lazy table, which a batched "
-                        f"call of several dimensions does not support yet; annotate it "
-                        f"dict[tuple, T]"
-                    )
                 kwargs[param] = _batch.lazy_table(
-                    param, frame_type, dims[0], keys, paths, texts
+                    param, frame_type, dims, keys, paths, texts
                 )
             else:
                 kwargs[param] = {

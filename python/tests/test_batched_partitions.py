@@ -376,11 +376,13 @@ def test_a_lazy_input_over_a_non_tabular_upstream_names_the_dict_form(tables):
 # ─── Priority 4: groups ──────────────────────────────────────────────────────
 
 
-def test_strict_groups_and_evaluated_groups(keys5):
+@pytest.mark.parametrize("group_expression", ["GROUPS", '[[FIRST, "r2"], ["r3"]]'])
+def test_strict_groups_and_evaluated_groups(keys5, group_expression):
     write(
         keys5,
         """
         GROUPS = [["r1", "r2"], ["r3"]]
+        FIRST = "r1"
 
         @asset(partitions={"retailer": partitions_from(cleaned)}, batch=batches(GROUPS))
         def evaluated(retailer: list[str], cleaned: dict) -> dict:
@@ -393,15 +395,15 @@ def test_strict_groups_and_evaluated_groups(keys5):
         )
         def strict(retailer: list[str], cleaned: dict) -> dict:
             return {r: r for r in retailer}
-        """,
+        """.replace("batches(GROUPS)", f"batches({group_expression})"),
     )
     get(keys5, "evaluated")
     assert sorted(k for _, k in calls(keys5)) == [["r1", "r2"], ["r3"], ["r4"], ["r5"]]
     proc = run(keys5, "get", "strict", "pipeline.py")
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert "strict=True" in proc.stderr and "retailer=r3" in proc.stderr
     last = json.loads(run(keys5, "history", "--limit", "1", "--json").stdout)["runs"][0]
-    assert last["status"] == "failed"
+    assert last["status"] == "error"
 
 
 def test_a_grouping_that_cannot_be_evaluated_is_a_load_error_naming_the_node(keys5):
@@ -432,7 +434,7 @@ def test_a_grouping_that_cannot_be_evaluated_is_a_load_error_naming_the_node(key
         """,
     )
     proc = run(keys5, "get", "scored", "pipeline.py")
-    assert proc.returncode == 1
+    assert proc.returncode == 2
     assert "a label must be a string or an integer" in proc.stderr
 
 
@@ -606,6 +608,7 @@ def scored(retailer: list[str], versions: dict[str, str]) -> dict:
 
 def test_under_serve_a_schedule_and_a_run_request_override_the_grouping(tmp_path):
     from . import served
+    from .test_http_openapi_client import validate
 
     (tmp_path / "pipeline.py").write_text(SCHEDULED)
     set_versions(tmp_path, {f"r{i}": "a" for i in range(1, 6)})
@@ -631,10 +634,22 @@ def test_under_serve_a_schedule_and_a_run_request_override_the_grouping(tmp_path
         )
         view = serve.finished(answer["run_id"])
         assert view["status"] == "success", view
+        validate({"$ref": "#/components/schemas/RunView"}, view)
         made = [c for c in calls(tmp_path) if c[1] == ["r1", "r2", "r3", "r4", "r5"]]
         assert made, "the refresh ran as one call"
         keys = [s for s in view["steps"] if s["node_id"].startswith("pipeline.py:scored[")]
         assert len(keys) == 5 and len({s["batch"] for s in keys}) == 1
+        request = {
+            "command": "get",
+            "targets": ["scored"],
+            "refresh": ["scored"],
+            "batch": ["2"],
+            "dry_run": True,
+        }
+        validate({"$ref": "#/components/schemas/RunRequest"}, request)
+        predicted = serve.post("/runs", request)
+        validate({"$ref": "#/components/schemas/Explain"}, predicted)
+        assert step(predicted, "scored")["batch"]["grouping"] == "batch=2"
         # A bad value is a 400.
         import urllib.error
 
@@ -679,3 +694,125 @@ def test_with_a_server_the_ledger_stays_per_key(tmp_path):
         assert step(result, "scored")["partitions"]["cached"] == 4
     finally:
         server.stop()
+
+
+def test_compound_keys_receive_aligned_lists_and_return_tuple_keys(tmp_path):
+    (tmp_path / "pipeline.py").write_text("""
+from barca import asset, partitions, batches_by
+
+def region(key):
+    return key["region"]
+
+@asset(partitions={"region": partitions(["eu", "us"]),
+                   "month": partitions(["jan", "feb"])}, batch=batches_by(region))
+def scored(region: list[str], month: list[str]):
+    assert len(set(region)) == 1
+    return {(m, r): m + ":" + r for m, r in zip(month, region)}
+""")
+    assert value(tmp_path, "scored") == {
+        "month=jan,region=eu": "jan:eu",
+        "month=feb,region=eu": "feb:eu",
+        "month=jan,region=us": "jan:us",
+        "month=feb,region=us": "feb:us",
+    }
+    result = get(tmp_path, "scored", "--batch", "none")
+    assert result["steps_executed"] == 0
+
+
+def test_table_keys_preserve_reserved_looking_and_escaped_values(tmp_path):
+    (tmp_path / "pipeline.py").write_text("""
+import duckdb
+from barca import asset, partitions
+
+@asset(partitions={"retailer": partitions(["NULL", "a/b", "r=1", "café"])}, batch="all")
+def scored(retailer: list[str]):
+    return duckdb.sql("SELECT unnest(?) AS retailer", params=[retailer])
+""")
+    result = value(tmp_path, "scored")
+    assert {k: rows[0]["retailer"] for k, rows in result.items()} == {
+        f"retailer={k}": k for k in ["NULL", "a/b", "r=1", "café"]
+    }
+
+
+@pytest.mark.parametrize("kind", ["duckdb", "polars", "arrow"])
+def test_compound_lazy_inputs_keep_every_dimension(tmp_path, kind):
+    annotation, body = {
+        "duckdb": ("duckdb.DuckDBPyRelation", "return cleaned"),
+        "polars": ("pl.LazyFrame", "return cleaned.collect()"),
+        "arrow": ("ds.Dataset", "return cleaned.to_table()"),
+    }[kind]
+    (tmp_path / "pipeline.py").write_text(f"""
+import duckdb
+import pandas as pd
+import polars as pl
+import pyarrow.dataset as ds
+from barca import asset, partitions
+
+@asset(partitions={{"region": partitions(["eu", "us"]), "month": partitions(["jan", "feb"])}})
+def cleaned(region, month):
+    return pd.DataFrame({{"amount": [len(region + month)]}})
+
+@asset(inputs={{{"cleaned"!r}: cleaned}}, partitions={{"region": partitions(["eu", "us"]), "month": partitions(["jan", "feb"])}}, batch="all")
+def scored(region: list[str], month: list[str], cleaned: {annotation}):
+    {body}
+""")
+    result = value(tmp_path, "scored")
+    assert len(result) == 4
+    for key, rows in result.items():
+        assert len(rows) == 1
+        row = rows[0]
+        assert key == f"month={row['month']},region={row['region']}"
+        assert row["amount"] == 5
+
+
+def test_worker_death_retries_every_unfinished_key_of_the_call(keys5):
+    write(
+        keys5,
+        """
+        import os
+
+        @asset(partitions={"retailer": partitions_from(cleaned)}, batch="all", retries=2)
+        def scored(retailer: list[str], cleaned: dict):
+            _called("scored", retailer)
+            marker = HERE / "died"
+            if not marker.exists():
+                marker.touch()
+                os._exit(7)
+            return {r: cleaned[r] for r in retailer}
+    """,
+    )
+    result = get(keys5, "scored")
+    assert calls(keys5) == [["scored", ["r1", "r2", "r3", "r4", "r5"]]] * 2
+    assert step(result, "scored")["attempts"] == 2
+    assert len(result["final_output"]) == 5
+
+
+def test_weight_is_charged_per_call_and_limits_parallel_calls(tmp_path):
+    (tmp_path / "barca.toml").write_text("[execution]\ncapacity = 2\npool_size = 2\n")
+    (tmp_path / "pipeline.py").write_text("""
+import fcntl
+import json
+import time
+from pathlib import Path
+from barca import asset, partitions
+
+def record(delta):
+    with Path("concurrency").open("a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        active, peak = json.loads(f.read() or "[0, 0]")
+        active += delta
+        f.seek(0)
+        f.truncate()
+        f.write(json.dumps([active, max(peak, active)]))
+
+@asset(partitions={"retailer": partitions(["a", "b", "c", "d"])}, batch=2, weight=2)
+def scored(retailer: list[str]):
+    record(1)
+    time.sleep(0.2)
+    record(-1)
+    return {r: r for r in retailer}
+""")
+    result = get(tmp_path, "scored")
+    assert len(result["final_output"]) == 4
+    assert json.loads((tmp_path / "concurrency").read_text()) == [0, 1]

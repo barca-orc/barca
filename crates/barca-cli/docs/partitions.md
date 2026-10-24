@@ -298,7 +298,7 @@ pipeline.py:scored[3 keys]          success  1         0.2s  189 MB    -        
 | `20` | at most 20, in key order |
 | `"all"` | every key that needs to run, in one call |
 | `batches([["r1", "r2"], ["r3", "r4", "r5"]])` | the groups named; a key in no group runs alone |
-| `batches([...], strict=True)` | the same, and a key in no group fails the node (a `BatchError`, exit 1) |
+| `batches([...], strict=True)` | the same, and a key in no group is a usage error (exit 2) |
 | `batches_by(region_of)` | keys with the same label (`region_of("r1") == "emea"`) share a call |
 | `batches_by(region_of, max_size=20)` | the same, each label's keys split into calls of at most 20 |
 
@@ -313,8 +313,8 @@ pipeline.py:scored[3 keys]          success  1         0.2s  189 MB    -        
   `partitions(<expression>)`; one that raises is a load error naming the node (exit 2; under
   `serve`, an entry in `/health` `load_errors`). `batches_by(fn)` is checked the same way when
   the pipeline loads, then called on the keys that run: a function that raises on a key, or a
-  label that is not a string or an integer, fails the node before any of its keys runs (a
-  `BatchError` naming it, exit 1), and what reads it in the run is skipped. With several
+  label that is not a string or an integer, is a usage error naming the node (exit 2),
+  before any of its keys runs. Derived keys are checked once their source has run. With several
   dimensions, `fn` receives the key as a dict of dimension to value.
 - **Where it is allowed:** a partitioned `@asset` or `@task`. On an unpartitioned step it is exit
   2; `@sensor` does not take it. `batch=0`, a negative number, any other string, an empty group,
@@ -416,7 +416,8 @@ def scored(retailer: list[str], cleaned: dict[str, pd.DataFrame]) -> dict:
 - **Memory:** `"all"` has no automatic cap; `batch=N` is the cap. A call returning a pandas frame
   is split in memory.
 - **Several dimensions:** a call's keys are tuples of values (in the order of the dimension
-  names, sorted) in dicts and returned dicts; a lazy table input supports one dimension only.
+  names, sorted) in dicts and returned dicts. Lazy table inputs carry every partition dimension
+  as a column.
 - **Progress lines** stay per key (`--agent` prints a `completed` line per key), and a call's
   time is shared evenly between its keys in `elapsed_seconds`.
 - **A `batches_by` function** runs in a separate Python process when the keys that run are

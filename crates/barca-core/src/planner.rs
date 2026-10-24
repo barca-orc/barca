@@ -697,7 +697,9 @@ pub fn expand_partition_combos(
     dims: &HashMap<String, Vec<String>>,
 ) -> Vec<HashMap<String, String>> {
     let mut combos = vec![HashMap::new()];
-    for (dim, values) in dims {
+    let mut ordered: Vec<_> = dims.iter().collect();
+    ordered.sort_by_key(|(dim, _)| *dim);
+    for (dim, values) in ordered {
         let mut new_combos = Vec::new();
         for combo in &combos {
             for val in values {

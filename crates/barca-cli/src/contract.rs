@@ -88,7 +88,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "serve",
-        "the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes are aliases until the next minor",
+        "the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility",
     ),
     (
         "serve --capacity",

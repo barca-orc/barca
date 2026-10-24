@@ -1,6 +1,6 @@
 # Worker and transfer protocol
 
-Specification 3; protocol version 3. Implemented on this branch; not released.
+Specification 4; protocol version 3. Implemented on this branch; not released.
 
 ## Framing and negotiation
 
@@ -44,6 +44,16 @@ No-input/argument/type/sink empties, null optional fields, `branch:false` and ze
 coordinator default. Retry policy stays coordinator-owned; artifact directory is
 already hoisted into worker environment setup. Singleton `execute` uses the same
 normalized step fields without a table.
+
+In 0.32.0 (RFC-0013), `execute_batch` may also carry `call: {id: string}`. Its items
+are the keys of one function call, rather than separate invocations: partition arguments
+become lists, and `aligned_inputs` names upstream inputs assembled as keyed dicts or lazy
+tables. The worker reports each key separately through the existing result journal;
+successful artifacts additionally carry `batch` (the call id) and `batch_keys` (the call's
+key count). A worker dying during a call fails every unfinished key in it. Weight and
+retry admission apply once per call. Frames without `call` retain sequential execution.
+Conformance: `python/tests/test_batched_partitions.py` exercises the real worker, per-key
+cache identities, failures and retries, and server execution.
 
 Two additive item fields of protocol version 3 (0.29.6) serve keyed partition sources
 (`partitions_from` over a source that returns a dict). An `inputs` entry

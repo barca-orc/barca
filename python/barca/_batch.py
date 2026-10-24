@@ -106,7 +106,7 @@ def _not_tabular(param: str, frame_type: str, key: str, path: str) -> TypeError:
     )
 
 
-def lazy_table(param: str, frame_type: str, dim: str, keys: list, paths: list[str], texts):
+def lazy_table(param: str, frame_type: str, dims: list[str], keys: list, paths: list[str], texts):
     """One lazy table over ``paths`` (one artifact per key) with the column ``dim`` holding
     each row's key. Nothing is loaded until the table is queried."""
     formats = set()
@@ -123,26 +123,26 @@ def lazy_table(param: str, frame_type: str, dim: str, keys: list, paths: list[st
             f"({', '.join(sorted(formats))}); a lazy table reads one format"
         )
     fmt = formats.pop() if formats else "parquet"
-    keys = [str(k) for k in keys]
+    columns = {d: [str(k if len(dims) == 1 else k[i]) for k in keys] for i, d in enumerate(dims)}
     if frame_type == "duckdb":
-        return _duckdb_table(param, fmt, dim, keys, paths)
+        return _duckdb_table(param, fmt, columns, paths)
     if frame_type == "polars_lazy":
-        return _polars_table(fmt, dim, keys, paths)
-    return _arrow_dataset(fmt, dim, keys, paths)
+        return _polars_table(fmt, columns, paths)
+    return _arrow_dataset(fmt, columns, paths)
 
 
 # Views bound for the lazy duckdb inputs of the call in progress; dropped after it is written.
 _bound: list[str] = []
 
 
-def _duckdb_table(param: str, fmt: str, dim: str, keys: list[str], paths: list[str]):
+def _duckdb_table(param: str, fmt: str, dimensions: dict, paths: list[str]):
     import pyarrow as pa
 
     from barca import _duckdb
 
     con = _duckdb.connection()
     mapping = f"__barca_keys_{param}"
-    con.register(mapping, pa.table({"__barca_file": paths, dim: keys}))
+    con.register(mapping, pa.table({"__barca_file": paths, **dimensions}))
     _bound.append(mapping)
     q = _duckdb._quote
     if fmt == "parquet":
@@ -155,18 +155,19 @@ def _duckdb_table(param: str, fmt: str, dim: str, keys: list[str], paths: list[s
     reader.create_view(source, replace=True)
     _bound.append(source)
     columns = [c for c in reader.columns if c != "filename"]
-    keep = ", ".join(f"f.{q(c)}" for c in columns if c != dim)
+    keep = ", ".join(f"f.{q(c)}" for c in columns if c not in dimensions)
     select = f"{keep}, " if keep else ""
     return con.sql(
-        f"SELECT {select}m.{q(dim)} FROM {q(source)} f JOIN {q(mapping)} m "
+        f"SELECT {select}{', '.join(f'm.{q(d)}' for d in dimensions)} "
+        f"FROM {q(source)} f JOIN {q(mapping)} m "
         f"ON f.filename = m.__barca_file"
     )
 
 
-def _polars_table(fmt: str, dim: str, keys: list[str], paths: list[str]):
+def _polars_table(fmt: str, dimensions: dict, paths: list[str]):
     import polars as pl
 
-    mapping = pl.LazyFrame({"__barca_file": paths, dim: keys})
+    mapping = pl.LazyFrame({"__barca_file": paths, **dimensions})
     if fmt == "parquet":
         lf = pl.scan_parquet(paths, include_file_paths="__barca_file")
     elif fmt == "csv":
@@ -176,12 +177,12 @@ def _polars_table(fmt: str, dim: str, keys: list[str], paths: list[str]):
         for p in paths:
             frames.append(pl.read_json(p).with_columns(pl.lit(p).alias("__barca_file")))
         lf = pl.concat(frames, how="diagonal_relaxed").lazy()
-    if dim in lf.collect_schema().names():
-        lf = lf.drop(dim)
+    present = lf.collect_schema().names()
+    lf = lf.drop([d for d in dimensions if d in present])
     return lf.join(mapping, on="__barca_file", how="inner").drop("__barca_file")
 
 
-def _arrow_dataset(fmt: str, dim: str, keys: list[str], paths: list[str]):
+def _arrow_dataset(fmt: str, dimensions: dict, paths: list[str]):
     import pyarrow as pa
     import pyarrow.dataset as ds
     import pyarrow.fs as pafs
@@ -192,9 +193,15 @@ def _arrow_dataset(fmt: str, dim: str, keys: list[str], paths: list[str]):
         schema = ds.dataset(paths[0], format=file_format, filesystem=filesystem).schema
     else:
         schema = pa.schema([])
-    if dim not in schema.names:
-        schema = schema.append(pa.field(dim, pa.string()))
-    partitions = [ds.field(dim) == pa.scalar(k) for k in keys]
+    for dim in dimensions:
+        if dim not in schema.names:
+            schema = schema.append(pa.field(dim, pa.string()))
+    partitions = []
+    for i in range(len(paths)):
+        expression = ds.scalar(True)
+        for dim, values in dimensions.items():
+            expression = expression & (ds.field(dim) == pa.scalar(values[i]))
+        partitions.append(expression)
     return ds.FileSystemDataset.from_paths(
         [str(Path(p).resolve()) for p in paths],
         schema=schema,
@@ -350,7 +357,7 @@ def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path
                 values[unquote(d)] = unquote(v)
             if len(dims) == 1:
                 n = values.get(dims[0])
-                if n == "NULL" or n is None:
+                if n is None:
                     raise ValueError(
                         f"the batched call returned rows with no {dims[0]} (null); every row "
                         f"needs a key"
@@ -363,9 +370,7 @@ def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path
         if len(out) < len(wanted):
             # A key with no rows: an empty table with the schema.
             empty = staging / "__empty.parquet"
-            con.execute(
-                f"COPY (SELECT * FROM {q(name)} LIMIT 0) TO '{empty}' (FORMAT parquet)"
-            )
+            con.execute(f"COPY (SELECT * FROM {q(name)} LIMIT 0) TO '{empty}' (FORMAT parquet)")
             for n in wanted:
                 out.setdefault(n, ("parquet", [str(empty)]))
         return out

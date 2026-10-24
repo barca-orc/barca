@@ -6,8 +6,7 @@
 //!
 //! `GET /runs` lists durable history joined with this server's live runs. The older trigger
 //! routes (`POST /run`, `POST /run/{target}`, `POST /get/{target}`, `GET /status/{run_id}`,
-//! `GET /events/{run_id}`, `DELETE /run/{run_id}`) are aliases on the same functions for one
-//! minor release.
+//! `GET /events/{run_id}`, `DELETE /run/{run_id}`) are deprecated aliases retained for Python Client compatibility.
 
 use crate::error::ApiError;
 use crate::handlers::snapshot_db;
@@ -525,8 +524,7 @@ async fn execute(
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
                     shared_capacity: state.capacity.clone(),
-                    batch: barca_core::batch::BatchOverride::parse(&spec.batch)
-                        .unwrap_or_default(),
+                    batch: barca_core::batch::BatchOverride::parse(&spec.batch).unwrap_or_default(),
                 },
                 partition: spec.partition.clone(),
                 rules: spec.rules.clone(),

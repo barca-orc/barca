@@ -81,6 +81,27 @@ def _format(project: Path) -> int:
         return db.execute("PRAGMA user_version").fetchone()[0]
 
 
+def test_reading_a_large_database_does_not_print_internal_wal_probes(tmp_path):
+    """#645: Turso pre.18 prints a probe whenever it reads page 12075.
+
+    Use real log overflow pages to reach that page in seconds, without needing thousands
+    of pipeline runs. SQLite writes a compatible checkpointed file; barca reads it.
+    """
+    project = _project(tmp_path, "0.30.0")
+    with closing(sqlite3.connect(project / ".barca/metadata.db")) as db:
+        run_id = db.execute("SELECT run_id FROM logs LIMIT 1").fetchone()[0]
+        db.execute("DELETE FROM logs")
+        db.executemany(
+            "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?, 'pipeline.py:job', ?, ?)",
+            ((run_id, i, "x" * 8000) for i in range(6500)),
+        )
+        db.commit()
+        assert db.execute("PRAGMA page_count").fetchone()[0] > 12075
+    result = _barca(project, "logs", run_id, "--json")
+    assert result.returncode == 0, result.stderr
+    assert "WHOPPER_FIND_FRAME_PROBE" not in result.stderr, result.stderr
+
+
 @pytest.mark.parametrize("version", VERSIONS)
 def test_a_database_written_by_an_older_release_opens(tmp_path, version):
     project = _project(tmp_path, version)

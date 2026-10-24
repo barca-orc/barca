@@ -110,6 +110,23 @@ fn member(expr: &Expr, dims: &[String], source: &str) -> Result<String, (usize, 
     ))
 }
 
+fn is_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::StringLiteral(_)
+        | Expr::NumberLiteral(_)
+        | Expr::BooleanLiteral(_)
+        | Expr::NoneLiteral(_) => true,
+        Expr::Dict(d) => d
+            .items
+            .iter()
+            .all(|item| item.key.as_ref().is_some_and(is_literal) && is_literal(&item.value)),
+        Expr::List(l) => l.elts.iter().all(is_literal),
+        Expr::Tuple(t) => t.elts.iter().all(is_literal),
+        Expr::UnaryOp(u) => is_literal(&u.operand),
+        _ => false,
+    }
+}
+
 /// The groups of a literal `batches([[...], ...])`, checked: no empty group, no key in two.
 fn literal_groups(
     list: &ast::ExprList,
@@ -131,6 +148,9 @@ fn literal_groups(
         }
         let mut keys = Vec::new();
         for m in &members.elts {
+            if !is_literal(m) {
+                return Ok(None);
+            }
             let key = member(m, dims, source)?;
             if !seen.insert(key.clone()) {
                 return Err((
@@ -640,8 +660,7 @@ fn run_python(
             .to_string();
         return Err(last);
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("did not give JSON on stdout: {e}"))
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("did not give JSON on stdout: {e}"))
 }
 
 /// Evaluate `batches(<expression>)` of `node` when its pipeline is loaded.
@@ -698,9 +717,12 @@ pub fn evaluate_labels(
     let parsed: Vec<serde_json::Map<String, serde_json::Value>> = keys
         .iter()
         .map(|k| {
-            k.split(',')
-                .filter_map(|pair| pair.split_once('='))
-                .map(|(d, v)| (d.to_string(), serde_json::Value::String(v.to_string())))
+            let id = format!("node[{k}]");
+            crate::model::PartitionKey::parse_from_id(&id)
+                .1
+                .0
+                .into_iter()
+                .map(|(d, v)| (d, serde_json::Value::String(v)))
                 .collect()
         })
         .collect();
@@ -754,7 +776,7 @@ pub fn annotate(
     steps: &mut [crate::results::StepReport],
     over: &BatchOverride,
     python: &std::path::Path,
-) {
+) -> Result<(), crate::BarcaError> {
     for step in steps.iter_mut() {
         let Some(node) = dag.get_node(&step.id) else {
             continue;
@@ -772,16 +794,21 @@ pub fn annotate(
         let mut calls = calls_for(n, &grouping);
         if calls.is_none() && parts.will_run_keys.len() == n {
             let labels = match &grouping {
-                Grouping::By { source_text, .. } => {
-                    evaluate_labels(python, &node.extracted.source_file, source_text, &parts.will_run_keys).ok()
-                }
+                Grouping::By { source_text, .. } => evaluate_labels(
+                    python,
+                    &node.extracted.source_file,
+                    source_text,
+                    &parts.will_run_keys,
+                )
+                .map(Some)
+                .map_err(|e| crate::BarcaError::Usage(format!("{}: {e}", step.id)))?,
                 _ => None,
             };
-            if !matches!(grouping, Grouping::By { .. }) || labels.is_some() {
-                calls = group_keys(&parts.will_run_keys, &grouping, labels.as_deref())
-                    .ok()
-                    .map(|g| g.len());
-            }
+            calls = Some(
+                group_keys(&parts.will_run_keys, &grouping, labels.as_deref())
+                    .map_err(|e| crate::BarcaError::Usage(format!("{}: {e}", step.id)))?
+                    .len(),
+            );
         }
         let plan = crate::results::BatchPlan {
             grouping: grouping.describe(),
@@ -795,6 +822,7 @@ pub fn annotate(
         });
         step.batch = Some(plan);
     }
+    Ok(())
 }
 
 #[cfg(test)]

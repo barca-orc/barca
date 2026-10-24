@@ -45,26 +45,28 @@ pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> Str
                 (_, v) => v,
             };
             let why = match (&s.partitions, &s.detail) {
-                (Some(p), _) if verdict == "partial" => format!(
-                    "{} of {} keys cached; will run: {}",
-                    p.cached,
-                    p.total,
-                    p.will_run_keys
-                        .iter()
-                        // What changed in a key that ran before (a dict source's new value).
-                        .map(|k| match p.changed.as_ref().and_then(|c| c.get(k)) {
-                            Some(changed) => {
-                                format!("{k} ({} changed)", crate::changes::summary(changed))
-                            }
-                            None => k.clone(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ) + &s
-                    .batch
-                    .as_ref()
-                    .map(|b| format!("; {}", crate::batch::grouping_line(b)))
-                    .unwrap_or_default(),
+                (Some(p), _) if verdict == "partial" => {
+                    format!(
+                        "{} of {} keys cached; will run: {}",
+                        p.cached,
+                        p.total,
+                        p.will_run_keys
+                            .iter()
+                            // What changed in a key that ran before (a dict source's new value).
+                            .map(|k| match p.changed.as_ref().and_then(|c| c.get(k)) {
+                                Some(changed) => {
+                                    format!("{k} ({} changed)", crate::changes::summary(changed))
+                                }
+                                None => k.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ) + &s
+                        .batch
+                        .as_ref()
+                        .map(|b| format!("; {}", crate::batch::grouping_line(b)))
+                        .unwrap_or_default()
+                }
                 (Some(p), Some(d)) => format!("{} keys; {d}", p.total),
                 (None, Some(d)) => d.clone(),
                 (Some(p), None) => format!("{} keys cached", p.total),

@@ -2,13 +2,13 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '12'
-  description: 'Normative current wire contract; specification version 12 is independent of package versions.
+  version: '13'
+  description: 'Normative current wire contract; specification version 13 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
     /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset, and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
-    envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
+    envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases retained for Python Client compatibility. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
@@ -1353,7 +1353,7 @@ paths:
       description: 'Bodyless trigger; tasks are skipped. Returns HTTP 200 immediately with the run id
         for the healthy selected graph. An entirely unloaded graph or a graph containing only tasks returns
         400; inspect /health load_errors for source diagnostics. Deprecated alias of POST /runs {"command":
-        "get"}, kept for one minor release.'
+        "get"}, retained for Python Client compatibility.'
       deprecated: true
   /run/{target}:
     post:
@@ -1410,7 +1410,7 @@ paths:
               description: Methods accepted by this route
       description: 'Bodyless trigger. Target may be a bare function name or full node ID. This catch-all
         path accepts embedded slashes (encoded or unencoded). Deprecated alias of POST /runs {"command":
-        "run"} and DELETE /runs/{run_id}, kept for one minor release; run_id is the database run id.'
+        "run"} and DELETE /runs/{run_id}, retained for Python Client compatibility; run_id is the database run id.'
       parameters:
       - name: target
         in: path
@@ -1525,7 +1525,7 @@ paths:
               schema: *id003
               description: Methods accepted by this route
       description: 'Bodyless trigger. Same catch-all target encoding as POST /run/{target}; tasks are
-        rejected. Deprecated alias of POST /runs {"command": "get"}, kept for one minor release; run_id
+        rejected. Deprecated alias of POST /runs {"command": "get"}, retained for Python Client compatibility; run_id
         is the database run id.'
       parameters:
       - name: target
@@ -1591,7 +1591,7 @@ paths:
           description: Invalid request
       parameters: *id022
       deprecated: true
-      description: ' Deprecated alias of GET /runs/{run_id}, kept for one minor release; run_id is the
+      description: ' Deprecated alias of GET /runs/{run_id}, retained for Python Client compatibility; run_id is the
         database run id.'
   /ledger/lookup:
     post:
@@ -2326,7 +2326,7 @@ paths:
               schema: *id003
       description: SSE data frames contain RunEvent JSON (x-event-schema). Backlog then live delivery;
         no event names/IDs. Keepalive comments every 15 seconds. Handle-only, no durable replay after
-        restart. Deprecated alias of GET /runs/{run_id}/events, kept for one minor release; run_id is
+        restart. Deprecated alias of GET /runs/{run_id}/events, retained for Python Client compatibility; run_id is
         the database run id.
       parameters: &id036
       - name: run_id
@@ -2351,7 +2351,7 @@ paths:
           description: Invalid request
       parameters: *id036
       deprecated: true
-      description: ' Deprecated alias of GET /runs/{run_id}/events, kept for one minor release; run_id
+      description: ' Deprecated alias of GET /runs/{run_id}/events, retained for Python Client compatibility; run_id
         is the database run id.'
   /:
     get:
@@ -3108,6 +3108,8 @@ components:
       - id
       - kind
       properties:
+        batch:
+          $ref: '#/components/schemas/BatchPlan'
         id: *id003
         kind:
           type: string
@@ -3996,6 +3998,9 @@ components:
       - max_rss_bytes
       - output_tail
       properties:
+        batch:
+          type: [string, "null"]
+          description: Run-local call id linking this key to the other keys of its batched call; null for unbatched steps.
         node_id: *id003
         status:
           type: string
@@ -4224,6 +4229,19 @@ components:
       - manual
       description: 'What started a run: a cron tick, an HTTP request, a laptop posting to the ledger,
         or a command typed on a machine.'
+    BatchPlan:
+      type: object
+      additionalProperties: false
+      required: [grouping, keys, calls]
+      properties:
+        grouping:
+          type: string
+        keys:
+          type: integer
+          minimum: 0
+        calls:
+          type: [integer, "null"]
+          minimum: 0
     RunRequest:
       type: object
       additionalProperties: false
@@ -4265,6 +4283,11 @@ components:
           type: boolean
           description: get -o value. The outcome's final_output holds the values, read on the server as
             barca get -o value --json prints them, instead of the artifact pointers.
+        batch:
+          type: array
+          items:
+            type: string
+          description: Repeatable --batch overrides (all, none, N or NODE=VALUE). Only nodes declaring batch= are affected.
         partition:
           type: string
           description: --partition of get or run, as the flag takes it (region=emea,amer, or a JSON object

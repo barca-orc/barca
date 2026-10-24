@@ -206,8 +206,7 @@ pub async fn run_log_lines(
 /// partition key), or its function name.
 pub fn step_matches(id: &str, step: &str) -> bool {
     let parsed = crate::StepId::parse(id);
-    if id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step)
-    {
+    if id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step) {
         return true;
     }
     // One key by function name: `scored[retailer=r7]`.
@@ -459,6 +458,7 @@ use crate::{cache::CachePolicy, results::ExplainResult};
 /// what a sensor will return: a step reading a sensor is predicted from the sensor's last
 /// recorded output, and is `unknown` when there is none. Those steps (and anything depending on
 /// them) are reported as `unknown`.
+#[allow(clippy::too_many_arguments)] // Mirrors the execution request, including per-run overrides.
 pub async fn explain(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
@@ -488,7 +488,7 @@ pub async fn explain(
     )
     .await?;
     let mut result = result;
-    crate::batch::annotate(&dag, &mut result.steps, batch, python);
+    crate::batch::annotate(&dag, &mut result.steps, batch, python)?;
     if let Some(note) = crate::selection::explain_note(&result) {
         crate::errln!("{note}");
     }

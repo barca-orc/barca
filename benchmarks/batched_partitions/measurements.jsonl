@@ -1,0 +1,12 @@
+{"keys": 10000, "mode": "none", "case": "cold", "seconds": 2.621, "coordinator_peak_kib": 215040, "steps": 20001, "calls": 20001}
+{"keys": 10000, "mode": "none", "case": "one_key", "seconds": 0.315, "coordinator_peak_kib": 100364, "steps": 3, "calls": 3}
+{"keys": 10000, "mode": "1000", "case": "cold", "seconds": 2.523, "coordinator_peak_kib": 247800, "steps": 20001, "calls": 21}
+{"keys": 10000, "mode": "1000", "case": "one_key", "seconds": 0.313, "coordinator_peak_kib": 99868, "steps": 3, "calls": 3}
+{"keys": 10000, "mode": "\"all\"", "case": "cold", "seconds": 3.861, "coordinator_peak_kib": 308168, "steps": 20001, "calls": 3}
+{"keys": 10000, "mode": "\"all\"", "case": "one_key", "seconds": 0.353, "coordinator_peak_kib": 99564, "steps": 3, "calls": 3}
+{"keys": 200000, "mode": "none", "case": "cold", "seconds": 212.99, "coordinator_peak_kib": 3045164, "steps": 400001, "calls": 400001}
+{"keys": 200000, "mode": "none", "case": "one_key", "seconds": 6.938, "coordinator_peak_kib": 1238072, "steps": 3, "calls": 3}
+{"keys": 200000, "mode": "1000", "case": "cold", "seconds": 206.794, "coordinator_peak_kib": 3776812, "steps": 400001, "calls": 401}
+{"keys": 200000, "mode": "1000", "case": "one_key", "seconds": 6.742, "coordinator_peak_kib": 1242452, "steps": 3, "calls": 3}
+{"keys": 200000, "mode": "\"all\"", "case": "cold", "seconds": 124.806, "coordinator_peak_kib": 5112148, "steps": 400001, "calls": 3}
+{"keys": 200000, "mode": "\"all\"", "case": "one_key", "seconds": 6.814, "coordinator_peak_kib": 1244892, "steps": 3, "calls": 3}

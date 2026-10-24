@@ -21,6 +21,9 @@ Options:
       --partition <KEY=VALUE[,VALUE]|JSON>
           Select partition keys across the task's cone, as for `barca get --partition`: every partitioned node with a named dimension computes only those keys
 
+      --batch <[NODE=]none|all|N>
+          Override `batch=` for this run, as for `barca get --batch`. Experimental
+
       --dry-run
           Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run
 
@@ -44,7 +47,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight]
+          [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight, batch]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -68,6 +71,7 @@ Examples:
   barca run deploy pipeline.py --refresh-all           # re-materialize every upstream asset
   barca run deploy pipeline.py --dry-run --refresh fetch   # preview: which steps run, which are cached
   barca run notify pipeline.py --partition region=emea   # the task's cone, for the emea keys only
+  barca run notify pipeline.py --batch all             # override batch= of the cone's batched nodes for this run
   barca run deploy pipeline.py --json                  # JSON even in a terminal (the default when piped)
   barca run deploy pipeline.py --pretty                # summary for humans (the default in a terminal)
   barca run deploy pipeline.py --fields id,status,reason   # JSON with each entry of `steps` trimmed

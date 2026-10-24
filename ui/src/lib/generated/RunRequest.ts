@@ -44,4 +44,9 @@ values?: boolean,
  * `--partition` of `get` or `run`: the partition keys the run computes across its cone, as
  * the flag takes them (`"region=emea,amer"`, or a JSON object for compound keys).
  */
-partition?: string, };
+partition?: string,
+/**
+ * `--batch` of `get` or `run` (RFC-0013), each as the flag takes it: `"all"`, `"none"`,
+ * `"20"`, or `"scored=all"` for one node. Experimental.
+ */
+batch?: Array<string>, };

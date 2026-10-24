@@ -310,7 +310,7 @@ def test_partitions_topic_keyed_sensor_example(binary, topics, tmp_path):
     """ "Updating only what changed, across many partitions": one query returns every retailer's
     version, and only the retailer whose version changed is computed again."""
     duckdb = pytest.importorskip("duckdb")
-    (code,) = [b for b in blocks(topics["partitions"], "python") if "retailer_versions" in b]
+    (code,) = [b for b in blocks(topics["partitions"], "python") if "def retailer_versions" in b]
     (tmp_path / "pipeline.py").write_text(code)
     db = duckdb.connect(str(tmp_path / "warehouse.duckdb"))
     db.execute("create table orders (retailer varchar, updated_at timestamp)")
@@ -396,12 +396,12 @@ def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
     rows = re.findall(r"^\| `@?(\w+)(?:\(\))?` \| (\w+) \| (.*) \|$", body, re.M)
     assert [r[0] for r in rows] == [
         "group", "asset", "sensor", "task", "sink",
-        "partitions", "partitions_from", "collect", "asset_ref", "Schedule",
+        "partitions", "partitions_from", "batches", "batches_by", "collect", "asset_ref", "Schedule",
     ]  # fmt: skip
     for name, positional, keywords in rows:
         params = inspect.signature(getattr(stubs, name)).parameters.values()
         by_keyword = [p.name for p in params if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)]
-        by_position = [p.name for p in params if p.kind == p.POSITIONAL_ONLY and p.name != "fn"]
+        by_position = [p.name for p in params if p.kind == p.POSITIONAL_ONLY and (p.name != "fn" or name == "batches_by")]
         assert by_keyword == ([] if keywords == "none" else re.findall(r"`(\w+)`", keywords)), name
         assert len(by_position) == {"none": 0, "one": 1}[positional], name
 

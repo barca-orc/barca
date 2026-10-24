@@ -446,7 +446,9 @@ impl Coordinator {
         for c in 0..self.calls.len() {
             let loaded = self.calls[c].members.len();
             let call = &mut self.calls[c];
-            let missing = call.unreleased.saturating_sub(loaded.saturating_sub(call.counted.len()));
+            let missing = call
+                .unreleased
+                .saturating_sub(loaded.saturating_sub(call.counted.len()));
             if missing > 0 {
                 call.unreleased -= missing;
                 if call.unreleased == 0 {
@@ -459,9 +461,7 @@ impl Coordinator {
 
     /// The id of the call `item` belongs to, if it is a key of a batched call.
     pub fn call_id(&self, item: ItemId) -> Option<&str> {
-        self.call_of
-            .get(&item)
-            .map(|&c| self.calls[c].id.as_str())
+        self.call_of.get(&item).map(|&c| self.calls[c].id.as_str())
     }
 
     /// Whether two items are keys of the same call.

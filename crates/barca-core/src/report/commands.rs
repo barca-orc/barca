@@ -827,35 +827,35 @@ pub fn render_run_detail(
     line!(rendered, "steps: {counts}");
     if !detail.steps.is_empty() {
         let step_row = |s: &crate::db::RunStep| {
-                let artifact = match (&s.artifact_path, &s.artifact_format) {
-                    (Some(path), format) => {
-                        let mut about: Vec<String> = format.iter().cloned().collect();
-                        if let Some(size) = s.artifact_size_bytes {
-                            about.push(crate::gc::size::human(size.max(0) as u64));
-                        }
-                        if about.is_empty() {
-                            path.clone()
-                        } else {
-                            format!("{path} ({})", about.join(", "))
-                        }
+            let artifact = match (&s.artifact_path, &s.artifact_format) {
+                (Some(path), format) => {
+                    let mut about: Vec<String> = format.iter().cloned().collect();
+                    if let Some(size) = s.artifact_size_bytes {
+                        about.push(crate::gc::size::human(size.max(0) as u64));
                     }
-                    (None, _) => "-".to_string(),
-                };
-                [
-                    s.node_id.clone(),
-                    s.status.clone(),
-                    s.attempts
-                        .map_or_else(|| "-".to_string(), |n| n.to_string()),
-                    secs(s.elapsed_seconds),
-                    s.max_rss_bytes.map_or_else(
-                        || "-".to_string(),
-                        |b| crate::gc::size::human(b.max(0) as u64),
-                    ),
-                    s.run_hash
-                        .as_deref()
-                        .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
-                    artifact,
-                ]
+                    if about.is_empty() {
+                        path.clone()
+                    } else {
+                        format!("{path} ({})", about.join(", "))
+                    }
+                }
+                (None, _) => "-".to_string(),
+            };
+            [
+                s.node_id.clone(),
+                s.status.clone(),
+                s.attempts
+                    .map_or_else(|| "-".to_string(), |n| n.to_string()),
+                secs(s.elapsed_seconds),
+                s.max_rss_bytes.map_or_else(
+                    || "-".to_string(),
+                    |b| crate::gc::size::human(b.max(0) as u64),
+                ),
+                s.run_hash
+                    .as_deref()
+                    .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
+                artifact,
+            ]
         };
         let rows = history_rows(&detail.steps, step_row, secs);
         let header = [

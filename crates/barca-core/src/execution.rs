@@ -1389,12 +1389,7 @@ fn fail_unexpanded(session: &mut RunSession<'_, '_>, base: String, message: Stri
 }
 
 /// Record `base` as a failed step that never ran, with `error_type`.
-fn fail_step(
-    session: &mut RunSession<'_, '_>,
-    base: String,
-    message: String,
-    error_type: &str,
-) {
+fn fail_step(session: &mut RunSession<'_, '_>, base: String, message: String, error_type: &str) {
     if session.request.agent_mode {
         crate::run_line!(Agent, "{}", failed_step_line(&base, &message));
     }
@@ -1813,6 +1808,11 @@ fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>
         }
     }
 }
+struct PlannedCalls {
+    calls: Vec<(String, Vec<String>)>,
+    errors: Vec<(String, String)>,
+}
+
 /// Group the keys of each batched node in `phase` into calls (RFC-0013): `(call id, the
 /// display ids of its keys in key order)`. Only the keys that run are in the phase, so only
 /// those are grouped. A node whose grouping cannot be made (a `batches_by` function that
@@ -1823,7 +1823,7 @@ fn plan_calls(
     phase: &Phase,
     python: &std::path::Path,
     next_call: &mut u64,
-) -> (Vec<(String, Vec<String>)>, Vec<(String, String)>) {
+) -> PlannedCalls {
     let mut keys_of: Vec<(String, Vec<String>)> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for step in phase.streams.iter().flat_map(|s| &s.steps) {
@@ -1887,7 +1887,7 @@ fn plan_calls(
             ));
         }
     }
-    (calls, errors)
+    PlannedCalls { calls, errors }
 }
 
 async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError> {
@@ -1931,31 +1931,18 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         let Some((phase, provided)) = recovered else {
             continue;
         };
-        let (calls, ungrouped) = plan_calls(
+        let PlannedCalls {
+            calls,
+            errors: ungrouped,
+        } = plan_calls(
             &prepared.dag,
             &session.request.options.batch,
             &phase,
             session.request.python,
             &mut session.state.next_call,
         );
-        let mut phase = phase;
-        if !ungrouped.is_empty() {
-            // A node whose keys cannot be grouped fails, with what is below it in this phase.
-            let failed: std::collections::HashSet<String> =
-                ungrouped.iter().map(|(base, _)| base.clone()).collect();
-            for (base, message) in ungrouped {
-                fail_step(session, base, message, "BatchError");
-            }
-            recover::drop_blocked(
-                &mut phase,
-                |base| {
-                    failed
-                        .get(base)
-                        .map(String::as_str)
-                        .or_else(|| blocking_failure(&prepared.dag, base, &failed))
-                },
-                |_, _| {},
-            );
+        if let Some((base, message)) = ungrouped.first() {
+            return Err(BarcaError::Usage(format!("{base}: {message}")));
         }
         session.state.calls.extend(
             calls
