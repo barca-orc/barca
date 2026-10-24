@@ -329,6 +329,43 @@ def test_only_changed_keys_rewrite_and_removed_keys_are_deleted(tmp_path):
     assert "deleted" not in proc.stderr
 
 
+@pytest.mark.parametrize("boundary", ["scan", "mkdir"])
+def test_finishing_writer_cannot_remove_another_writers_stage_parent(tmp_path, monkeypatch, boundary):
+    from barca import _sinks
+
+    finishing = _sinks._LocalTarget(str(tmp_path / "out"))
+    starting = _sinks._LocalTarget(str(tmp_path / "out"))
+    previous = finishing.new_stage()
+    interrupted = False
+    original_scan = _sinks._clean_dead_stages
+    original_mkdir = Path.mkdir
+
+    def finish():
+        nonlocal interrupted
+        interrupted = True
+        finishing.drop_stage(previous)
+        assert not finishing.staging.exists()
+
+    def scan(path):
+        if boundary == "scan" and not interrupted:
+            finish()
+        return original_scan(path)
+
+    def mkdir(path, *args, **kwargs):
+        if boundary == "mkdir" and path.parent == starting.staging and not interrupted:
+            finish()
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(_sinks, "_clean_dead_stages", scan)
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    stage = starting.new_stage()
+    assert interrupted
+    (stage / "data.json").write_text('{"value": 1}')
+    assert (stage / "data.json").read_text() == '{"value": 1}'
+    starting.drop_stage(stage)
+    assert not starting.staging.exists()
+
+
 def test_a_narrowed_run_deletes_no_key(tmp_path):
     write_keyed(tmp_path, ["r1", "r2"], {"r1": 1, "r2": 1})
     get(tmp_path, "scored")

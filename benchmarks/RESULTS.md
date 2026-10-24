@@ -29,12 +29,12 @@ BARCA_BIN="$PWD/.venv/bin/barca" .venv/bin/python benchmarks/batched_partitions/
 
 | Keys | Batch | Cold | Calls | Coordinator peak RSS | One key changed |
 |---:|---|---:|---:|---:|---:|
-| 10k | none | 2.62 s | 20,001 | 210 MiB | 0.315 s |
-| 10k | 1000 | 2.52 s | 21 | 242 MiB | 0.313 s |
-| 10k | all | 3.86 s | 3 | 301 MiB | 0.353 s |
-| 200k | none | 213.0 s | 400,001 | 2,974 MiB | 6.94 s |
-| 200k | 1000 | 206.8 s | 401 | 3,688 MiB | 6.74 s |
-| 200k | all | 124.8 s | 3 | 4,992 MiB | 6.81 s |
+| 10k | none | 3.73 s | 20,001 | 206 MiB | 0.537 s |
+| 10k | 1000 | 2.95 s | 21 | 241 MiB | 0.411 s |
+| 10k | all | 4.17 s | 3 | 312 MiB | 0.298 s |
+| 200k | none | 213.46 s | 400,001 | 2,964 MiB | 6.826 s |
+| 200k | 1000 | 180.18 s | 401 | 3,798 MiB | 6.917 s |
+| 200k | all | 82.83 s | 3 | 5,439 MiB | 6.548 s |
 
 Every one-key update executes exactly three calls: the sensor and one key of each asset.
 The harness asserts this. Per-key artifacts and materializations remain, so batching does

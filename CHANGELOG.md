@@ -10,6 +10,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- Worker and transfer helpers now negotiate protocol 4. Protocol 3 helpers cannot execute
+  a whole batch in one call and are refused before work starts, with an error asking to
+  reinstall matching barca packages. The standalone stderr protocol stays at version 2.
+
 - `barca run` and `barca.run()` on a partitioned task now return every key's value in a
   dict keyed by partition key, with tables as JSON rows, on the server too. Previously they
   returned only the first key's value. This also applies to a single `--partition` selection:
@@ -27,6 +31,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   grouping. History groups the keys of each call, and dry runs describe the grouping.
 
 ### Bug Fixes
+
+- Concurrent dataset sink writers no longer fail when another writer removes the empty
+  shared staging directory while a new key starts writing.
 
 - Reading a large metadata database no longer prints internal `WHOPPER_FIND_FRAME_PROBE`
   diagnostics on stderr. Update the Turso dependency to 0.7.0-pre.19 (#645).

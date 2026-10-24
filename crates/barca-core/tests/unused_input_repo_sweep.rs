@@ -103,13 +103,6 @@ const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
     // Batched functions require list annotations; sensors cannot declare batch=.
     ("python/tests/test_batched_partitions.py", "polled", "batch"),
     ("python/tests/test_batched_partitions.py", "scored", "str"),
-    // RFC-0013 shows the proposed `batch=` argument before it is implemented (#643); the
-    // implementation removes this entry.
-    (
-        "site/src/content/docs/rfcs/0013-batched-partitions.md",
-        "scored",
-        "cleaned",
-    ),
     // `cutoff=` takes only `True` or `False` (#628).
     ("python/tests/test_asset_cutoff.py", "a", "1"),
     // An imported alias receives the original Barca decorator's argument check (#316).

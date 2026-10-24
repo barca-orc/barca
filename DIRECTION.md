@@ -31,10 +31,11 @@ The four priorities set at the 2026-10-20 re-triage have shipped, in 0.24.2 to 0
 3. **Server mode.** Shipped in 0.27.0: the server is the ledger (RFC-0007), with drain on shutdown (#190), one run contract over HTTP (#393) with pause and resume for a schedule (#435), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
 4. **Freshness under serve.** Shipped in 0.28.0: `Always` and `Manual` have their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
 
-Next: **0.32.0**, batched partitions (RFC-0013, #643): fewer calls over large key sets,
-with per-key caching unchanged. Finish the docs leftovers (#606), including the decision to
-retain the deprecated HTTP aliases for Python `Client` compatibility. The production debug
-output report (#645) is also open and needs a verified database-dependency fix.
+**0.32.0** is the batched-partition release (RFC-0013, #643): fewer calls over large key sets,
+with per-key caching unchanged. It also resolves the docs leftovers (#606), including the decision to
+retain the deprecated HTTP aliases for Python `Client` compatibility. It removes the production debug
+output (#645) with a database-dependency update checked against older database fixtures.
+The next work is the cleanup checklist below; no new capability priority has been set.
 DuckDB 2 (#567) remains deferred until after 2.0.1; the current pin stays below 2.
 
 ### Release sequence
@@ -61,7 +62,7 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.30.1 | 2026-10-23 | Older metadata DB compatibility | #629, #630 |
 | 0.30.2 | 2026-10-23 | Bounded outcomes and memory over many partition keys | #623 |
 | 0.31.0 | 2026-10-23 | Production diagnostics, shared capacity, timeout, drain recovery and cutoff | #627, #628, #616, #637 |
-| 0.32.0 | next | Batched partitions and remaining documentation | #643, #606 |
+| 0.32.0 | [release status](https://github.com/barca-orc/barca/releases/tag/v0.32.0) | Batched partitions and remaining documentation | #643, #606 |
 
 An open issue with no milestone is unscheduled on purpose (#567); it is scheduled when it becomes the next most important thing.
 

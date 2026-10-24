@@ -2044,7 +2044,7 @@ fn branch_result(
     if !artifact_results || artifact.is_some_and(|a| a.get("json").is_some()) {
         return ParallelResult::Error {
             error:
-                "branch results require artifact file references in protocol v3; reinstall barca"
+                "branch results require artifact file references in the worker protocol; reinstall barca"
                     .into(),
         };
     }
