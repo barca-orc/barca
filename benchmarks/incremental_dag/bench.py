@@ -63,11 +63,13 @@ def measure(binary, project, count, implementation, case):
     if case == "one_key":
         assert row["steps"] == 3, row
         if implementation == "incremental":
-            assert row["identities"] == 3, row
+            # Small targets return every artifact reference, so those references
+            # must enter coordinator state too. Large targets return a summary.
+            assert row["identities"] == (count + 2 if count <= 1000 else 3), row
     if case == "unchanged":
         assert row["steps"] == 1, row
         if implementation == "incremental":
-            assert row["identities"] == 1, row
+            assert row["identities"] == (count + 1 if count <= 1000 else 1), row
     return row
 
 

@@ -1,14 +1,56 @@
 # Benchmark Results
 
-Latest passes: 2026-10-24, batched partitions at 10k and 200k keys (first section);
-2026-10-23, early cutoff for assets at 10k and 200k keys
-and bounded run records under `barca serve` at 200k keys; 2026-10-22, keyed partition
-sources at 10k to 200k keys (fourth section), and the read routes of `barca serve` and the
-inspection commands at 300 assets (fifth). Latest comparison pass: 2026-10-21, barca 0.28.0
-against Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (sixth section,
-#65). The sections after it are older passes on other hardware and are kept for the record.
-Absolute times from different machines are not comparable; within one pass, the ratios between
-frameworks are.
+Latest passes: 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
+early cutoff and bounded server run records; 2026-10-22, keyed sources and server read routes.
+The latest framework comparison is 2026-10-21 (barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0
+and Airflow 3.3.2, #65). Older passes on other hardware are kept below. Absolute times from
+different machines are not comparable; within one pass, the ratios between frameworks are.
+
+## Incremental DAG planning (2026-10-24)
+
+`benchmarks/incremental_dag/bench.py`: the same keyed sensor and two-asset chain as the
+batching fixture, `versions -> cleaned -> scored`, with batches of 1000. Each warm update
+changes only `r0`. The ordinary cache-aware DAG workflow reuses validated freshness before
+expanding keys; no new mode or flag is involved. Execution grouping is independent.
+
+Published 0.32.0 wheel versus this PR's release build, using the same 0.32.0 Python helpers
+(protocol 4), on the AMD Ryzen AI MAX+ 395, 32 threads, 62 GiB RAM, Fedora 44 kernel 7.2.8,
+NVMe. Three warm updates per size: elapsed time is their median and RSS is their maximum,
+measured by `/usr/bin/time`. RSS describes the coordinator, not summed worker memory.
+Runs were not CPU-pinned; no local build or test suite ran during the measured warm updates.
+The 1k and 50k caches were reused; 200k was seeded once. Seed timings are excluded.
+
+```bash
+PATH="/path/to/matching/helpers/bin:$PATH" \
+BASELINE_BIN="/path/to/published-0.32.0/barca" \
+BARCA_BIN="$PWD/target-local/release/barca" KEYS=1000,50000,200000 \
+.venv/bin/python benchmarks/incremental_dag/bench.py
+```
+
+| Keys | 0.32.0 one-key update | Incremental update | 0.32.0 peak RSS | Incremental peak RSS | Registered identities |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | 0.089 s | 0.083 s | 36.0 MiB | 31.7 MiB | 1,002 |
+| 50,000 | 1.552 s | 0.491 s | 351.8 MiB | 96.7 MiB | 3 |
+| 200,000 | 6.843 s | 2.162 s | 1258.5 MiB | 220.4 MiB | 3 |
+
+Every update executes exactly three steps: the sensor and one key of each asset. At 50k
+and 200k, exactly three identities enter cache/coordinator state; an unchanged run executes
+only its sensor and registers one identity. The harness asserts these counts. At 1k, the
+output includes every artifact reference, so the update registers 1,002 identities and an
+unchanged run registers 1,001. Needed references are read in bounded SQL groups; recent
+reads keep their existing one-hour timestamp refresh policy.
+
+Sensor discovery and comparison still process its full key list. A changed fan-in still
+loads all its inputs, and the initial validation of a requested warm cache uses normal
+per-key decisions. A reference pass before the final lookup optimization measured that
+one-time 200k validation at 7.223 s and 1,265.4 MiB, with 400,001 identities. Those are
+separate from subsequent warm updates. Large outputs use the existing bounded summary;
+small outputs still return every reference.
+
+Raw final comparison: [incremental_dag/measurements.jsonl](incremental_dag/measurements.jsonl).
+The final incremental pass reused valid proofs; its `seed` and `proof` cases are warm-ups.
+The earlier first-validation reference is in
+[incremental_dag/initial-validation.jsonl](incremental_dag/initial-validation.jsonl).
 
 ## Batched partitions (2026-10-24)
 

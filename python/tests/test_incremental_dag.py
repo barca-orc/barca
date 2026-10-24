@@ -278,3 +278,37 @@ def leaf(value): return value + 2
         result, _ = run(tmp_path, "get", "leaf", "pipeline.py", "-o", "value")
         assert result["steps_executed"] == 1
         assert result["final_output"] == 11 + extra
+
+
+def test_small_target_returns_every_cached_value_across_lookup_groups(tmp_path):
+    project(tmp_path, 501)
+    get(tmp_path)
+    with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        db.execute(
+            "UPDATE materializations SET last_read_at = datetime('now', '-10 minutes') WHERE node_id LIKE 'pipeline.py:report[%'"
+        )
+        recent = db.execute(
+            "SELECT last_read_at FROM materializations WHERE node_id LIKE 'pipeline.py:report[%' LIMIT 1"
+        ).fetchone()[0]
+        db.commit()
+    result, trace = get(tmp_path, "-o", "value")
+    assert result["steps_executed"] == 1
+    assert identities(trace) == 502
+    assert len(result["final_output"]) == 501
+    assert all(value == {"score": 2} for value in result["final_output"].values())
+    with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        stamps = db.execute(
+            "SELECT DISTINCT last_read_at FROM materializations WHERE node_id LIKE 'pipeline.py:report[%'"
+        ).fetchall()
+    assert stamps == [(recent,)]  # Recent reads retain the existing one-hour stamp policy.
+    with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        db.execute(
+            "UPDATE materializations SET last_read_at = '2000-01-01 00:00:00' WHERE node_id LIKE 'pipeline.py:report[%'"
+        )
+        db.commit()
+    get(tmp_path, "-o", "value")
+    with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        stamps = db.execute(
+            "SELECT DISTINCT last_read_at FROM materializations WHERE node_id LIKE 'pipeline.py:report[%'"
+        ).fetchall()
+    assert all(stamp > recent for (stamp,) in stamps)

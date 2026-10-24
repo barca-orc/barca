@@ -544,6 +544,20 @@ impl Incremental {
         } else {
             None
         };
+        let mut rows = match &cache {
+            Some(cache) => {
+                let needed: Vec<_> = ids
+                    .iter()
+                    .filter(|(_, key)| cfg.remote_artifacts() || key.is_some())
+                    .map(|(base, key)| {
+                        key.as_ref()
+                            .map_or_else(|| base.clone(), |key| key.display_id(base))
+                    })
+                    .collect();
+                latest_many(cache, &needed, self.generation, &mut state.recently_read).await?
+            }
+            None => HashMap::new(),
+        };
         for (base, key) in ids {
             let display = key
                 .as_ref()
@@ -569,10 +583,7 @@ impl Incremental {
                 });
             let Some((run_hash, output)) = (match known {
                 Some(v) => Some(v),
-                None => match &cache {
-                    Some(cache) => latest(cache, &display, self.generation).await?,
-                    None => None,
-                },
+                None => rows.remove(&display),
             }) else {
                 continue;
             };
@@ -773,27 +784,49 @@ async fn generation(conn: &turso::Connection) -> Result<i64, BarcaError> {
         .get::<i64>(0)
         .map_err(db_error)
 }
-async fn latest(
+/// Fetch only needed identities, in bounded SQL calls rather than one call per returned key.
+async fn latest_many(
     cache: &db::CacheReader,
-    id: &str,
+    ids: &[String],
     through: i64,
-) -> Result<Option<(String, OutputRef)>, BarcaError> {
-    let mut rows = cache.conn().query("SELECT run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash FROM materializations WHERE node_id = ?1 AND id <= ?2 AND status = 'success' AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1", (id.to_owned(), through)).await.map_err(db_error)?;
-    let Some(row) = rows.next().await.map_err(db_error)? else {
-        return Ok(None);
-    };
-    let path = row.get::<String>(1).map_err(db_error)?;
-    if !cache.allows_artifact(&path) {
-        return Ok(None);
+    recently_read: &mut HashSet<String>,
+) -> Result<HashMap<String, (String, OutputRef)>, BarcaError> {
+    let mut found = HashMap::new();
+    for chunk in ids.chunks(500) {
+        let wanted = (2..chunk.len() + 2)
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(id) FROM materializations INDEXED BY idx_mat_node_run WHERE node_id IN ({wanted}) AND id <= ?1 AND status = 'success' AND artifact_path IS NOT NULL GROUP BY node_id)",
+            crate::cache::READ_STAMP_REFRESH
+        );
+        let params = std::iter::once(turso::Value::Integer(through))
+            .chain(chunk.iter().cloned().map(turso::Value::Text))
+            .collect::<Vec<_>>();
+        let mut rows = cache.conn().query(&sql, params).await.map_err(db_error)?;
+        while let Some(row) = rows.next().await.map_err(db_error)? {
+            let path = row.get::<String>(2).map_err(db_error)?;
+            if !cache.allows_artifact(&path) {
+                continue;
+            }
+            if row.get::<i64>(6).ok() == Some(1) {
+                recently_read.insert(path.clone());
+            }
+            found.insert(
+                row.get::<String>(0).map_err(db_error)?,
+                (
+                    row.get::<String>(1).map_err(db_error)?,
+                    OutputRef {
+                        path,
+                        format: row.get::<String>(3).map_err(db_error)?,
+                        size_bytes: row.get::<i64>(4).map_err(db_error)? as u64,
+                        elapsed_seconds: None,
+                        content_hash: row.get::<String>(5).ok(),
+                    },
+                ),
+            );
+        }
     }
-    Ok(Some((
-        row.get::<String>(0).map_err(db_error)?,
-        OutputRef {
-            path,
-            format: row.get::<String>(2).map_err(db_error)?,
-            size_bytes: row.get::<i64>(3).map_err(db_error)? as u64,
-            elapsed_seconds: None,
-            content_hash: row.get::<String>(4).ok(),
-        },
-    )))
+    Ok(found)
 }
