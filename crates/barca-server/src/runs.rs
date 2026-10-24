@@ -599,27 +599,48 @@ async fn execute(
         )
     };
     let outcome = match result {
-        Ok(RunResult::Single(r)) if values => {
-            let output = returned_values(
-                r.final_output.as_ref(),
-                r.partitions.as_deref(),
-                r.key_summary.as_ref(),
-            )
-            .await;
+        Ok(RunResult::Single(r)) if values || spec.command == RunCommand::Run => {
+            let output = if spec.command == RunCommand::Run {
+                barca_core::values::task_output(
+                    &state.config.python,
+                    &state.config.resolved,
+                    r.final_output.as_ref(),
+                    r.partitions.as_deref(),
+                    r.key_summary.as_ref(),
+                )
+                .await
+            } else {
+                returned_values(
+                    r.final_output.as_ref(),
+                    r.partitions.as_deref(),
+                    r.key_summary.as_ref(),
+                )
+                .await
+            };
             Outcome::success_with(&r, output)
         }
         Ok(RunResult::Single(r)) => Outcome::success(&r, spec.command),
-        Ok(RunResult::Multi(m)) if values => {
+        Ok(RunResult::Multi(m)) if values || spec.command == RunCommand::Run => {
             let mut outputs = Vec::with_capacity(m.targets.len());
             for (_, t) in &m.targets {
-                outputs.push(
+                let output = if spec.command == RunCommand::Run {
+                    barca_core::values::task_output(
+                        &state.config.python,
+                        &state.config.resolved,
+                        t.final_output.as_ref(),
+                        t.partitions.as_deref(),
+                        t.key_summary.as_ref(),
+                    )
+                    .await
+                } else {
                     returned_values(
                         t.final_output.as_ref(),
                         t.partitions.as_deref(),
                         t.key_summary.as_ref(),
                     )
-                    .await,
-                );
+                    .await
+                };
+                outputs.push(output);
             }
             Outcome::multi_with(&m, &outputs, &ctx)
         }

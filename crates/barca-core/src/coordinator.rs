@@ -278,7 +278,7 @@ pub struct Coordinator {
     call_of: HashMap<ItemId, usize>,
     calls: Vec<Call>,
     /// Calls assigned before the phase is loaded: display id -> call index.
-    call_assign: HashMap<String, usize>,
+    call_assign: HashMap<String, (usize, usize)>,
     /// ID generators.
     next_item_id: u64,
     next_group_id: u64,
@@ -292,7 +292,7 @@ struct Call {
     /// The call's id, unique in the run (`batch` on its keys' materializations).
     id: String,
     /// Its keys, in key order.
-    members: Vec<ItemId>,
+    members: Vec<Option<ItemId>>,
     /// How many members are not yet ready (nor terminal).
     unreleased: usize,
     /// Members counted off `unreleased`.
@@ -370,9 +370,9 @@ impl Coordinator {
         spec: ItemSpec,
         deps: Vec<Dep>,
     ) {
-        if let Some(&call) = self.call_assign.get(&step_id.display()) {
+        if let Some(&(call, position)) = self.call_assign.get(&step_id.display()) {
             self.call_of.insert(id, call);
-            self.calls[call].members.push(id);
+            self.calls[call].members[position] = Some(id);
         }
         let item = Item {
             id,
@@ -433,10 +433,11 @@ impl Coordinator {
             self.calls.push(Call {
                 id,
                 unreleased: members.len(),
+                members: vec![None; members.len()],
                 ..Default::default()
             });
-            for m in members {
-                self.call_assign.insert(m, index);
+            for (position, m) in members.into_iter().enumerate() {
+                self.call_assign.insert(m, (index, position));
             }
         }
     }
@@ -444,7 +445,7 @@ impl Coordinator {
     /// After loading: a call whose keys were not all loaded waits only for the ones that were.
     fn settle_calls(&mut self) {
         for c in 0..self.calls.len() {
-            let loaded = self.calls[c].members.len();
+            let loaded = self.calls[c].members.iter().flatten().count();
             let call = &mut self.calls[c];
             let missing = call
                 .unreleased
@@ -506,16 +507,13 @@ impl Coordinator {
 
     /// Queue the held keys of call `c` together, in key order.
     fn release_call(&mut self, c: usize) {
-        let mut held = std::mem::take(&mut self.calls[c].held);
-        let order: HashMap<ItemId, usize> = self.calls[c]
-            .members
-            .iter()
-            .enumerate()
-            .map(|(i, m)| (*m, i))
+        let held: HashSet<ItemId> = std::mem::take(&mut self.calls[c].held)
+            .into_iter()
             .collect();
-        held.sort_by_key(|m| order.get(m).copied().unwrap_or(usize::MAX));
-        for m in held {
-            self.ready.push_back(m);
+        for &m in self.calls[c].members.iter().flatten() {
+            if held.contains(&m) {
+                self.ready.push_back(m);
+            }
         }
     }
 

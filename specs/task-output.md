@@ -1,14 +1,19 @@
 # Task output and recorded output
 
-Status: implemented. Specification version: 3 (2: `RUN_ID` is optional; 3: stderr, `stream`,
-`ts`, `--follow`, reading from a server, the per-run cap).
+Status: implemented. Specification version: 4 (2: `RUN_ID` is optional; 3: stderr, `stream`,
+`ts`, `--follow`, reading from a server, the per-run cap; 4: keyed partitioned task results).
 Scope: local CLI get/run stdout routing and recorded-log inspection.
 Conformance: `python/tests/test_task_logs.py`, `python/tests/test_live_logs.py`, CLI
 contract/help snapshots, log transaction tests in `crates/barca-core/src/db.rs`,
 `crates/barca-core/src/run_logs.rs`.
 
-Task return values follow the existing asset output contract, including format-specific CLI
-artifact references. A returned dict appears under JSON `final_output`, `-o value` and
+Unpartitioned task return values retain format-specific CLI artifact references.
+From 0.32.0 a partitioned task returns an object keyed by partition key, including a single
+selected key: each value is that key's result, with tables as JSON rows. This applies to
+local and server runs, batched and unbatched, and each target of a multi-target run. More
+than 1000 keys use the bounded partition summary unless keys are explicitly selected.
+The Python API rejects a summary and asks for `partition=`. Conformance includes
+`python/tests/test_batched_partitions.py` and the `run_partitioned` CLI snapshot. A returned dict appears under JSON `final_output`, `-o value` and
 `barca.run(...)`; the Python API also reads binary/tabular references. Prints are independent. Run stdout
 contains only the selected result. JSON mode suppresses captured step stdout on stderr.
 Other modes render each captured stdout line on stderr as `[<node_id>] <line>`. Framework

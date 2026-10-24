@@ -35,17 +35,27 @@ pub(crate) async fn explain_cmd(
 /// `{"status": "failed", "failed_node": ..., "error": ...}`.
 /// Print a multi-target result. When any target failed this returns the first failure as a
 /// step failure (exit 1, and the error envelope on stderr), after the full result was printed.
-pub(crate) fn print_multi(
+pub(crate) async fn print_multi(
     result: &barca_core::results::MultiResult,
     mode: OutputMode,
     verb: &str,
     fields: Option<&[String]>,
+    cfg: &barca_core::config::ResolvedConfig,
+    python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
-    let values: Vec<_> = result
-        .targets
-        .iter()
-        .map(|(_, target)| target.final_output.as_ref().map(read_final_output))
-        .collect();
+    let mut values = Vec::with_capacity(result.targets.len());
+    for (_, target) in &result.targets {
+        values.push(
+            barca_core::values::task_output(
+                python,
+                cfg,
+                target.final_output.as_ref(),
+                target.partitions.as_deref(),
+                target.key_summary.as_ref(),
+            )
+            .await,
+        );
+    }
     super::emit(barca_core::report::render_multi(
         result,
         &values,
@@ -94,8 +104,6 @@ pub(crate) fn cancel_on_ctrl_c() -> barca_core::interrupt::Interrupt {
     }
     interrupt
 }
-
-pub(crate) use barca_core::report::read_final_output;
 
 /// Drain streamed events through completion; stdout remains exclusively the command result.
 pub(crate) fn user_logs(

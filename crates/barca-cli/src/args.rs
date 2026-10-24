@@ -268,6 +268,7 @@ skips only what depends on it); exit 1 if any failed. JSON output then carries `
 target, instead of `final_output` (see barca get --help, barca docs agents).
 `warnings` is always an array, as on `barca get`: plan-time warnings for the steps in the cone, such
 as an input a step never uses (barca docs assets); [] when there are none.
+A partitioned task returns every key in final_output, keyed by partition key, with tables as JSON rows.
 --partition selects partition keys across the task's cone as on `barca get` (barca docs
 partitions, \"Selecting keys\"); a task the selection would skip is exit 2.
 

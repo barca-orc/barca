@@ -1818,6 +1818,11 @@ struct PlannedCalls {
     errors: Vec<(String, String)>,
 }
 
+struct BatchKeys {
+    base: String,
+    ordered: Vec<(usize, String)>,
+}
+
 /// Group the keys of each batched node in `phase` into calls (RFC-0013): `(call id, the
 /// display ids of its keys in key order)`. Only the keys that run are in the phase, so only
 /// those are grouped. A node whose grouping cannot be made (a `batches_by` function that
@@ -1829,7 +1834,7 @@ fn plan_calls(
     python: &std::path::Path,
     next_call: &mut u64,
 ) -> PlannedCalls {
-    let mut keys_of: Vec<(String, Vec<String>)> = Vec::new();
+    let mut keys_of: Vec<BatchKeys> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for step in phase.streams.iter().flat_map(|s| &s.steps) {
         if step.partition_keys.is_empty() {
@@ -1843,16 +1848,31 @@ fn plan_calls(
             continue;
         }
         let i = *index.entry(base.to_string()).or_insert_with(|| {
-            keys_of.push((base.to_string(), Vec::new()));
+            keys_of.push(BatchKeys {
+                base: base.to_string(),
+                ordered: Vec::new(),
+            });
             keys_of.len() - 1
         });
         keys_of[i]
-            .1
-            .extend(step.partition_keys.iter().map(|pk| pk.suffix()));
+            .ordered
+            .extend(step.partition_keys.iter().map(|pk| {
+                let key = pk.suffix();
+                let position = step
+                    .keyed
+                    .order
+                    .as_ref()
+                    .and_then(|order| order.get(&key))
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                (position, key)
+            }));
     }
     let mut calls = Vec::new();
     let mut errors = Vec::new();
-    for (base, keys) in keys_of {
+    for BatchKeys { base, mut ordered } in keys_of {
+        ordered.sort_by_key(|(position, _)| *position);
+        let keys: Vec<String> = ordered.into_iter().map(|(_, key)| key).collect();
         let node = dag.get_node(&base).expect("found above");
         let Some(grouping) = crate::batch::effective(node, over) else {
             continue;

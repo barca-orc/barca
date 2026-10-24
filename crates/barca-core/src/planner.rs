@@ -580,7 +580,8 @@ fn chain_to_steps(
         let return_type = node.extracted.return_type;
         // An unpartitioned node a `partitions_from(...)` reads: the worker checks what it
         // returns can be read for keys (a list, or a dict with JSON values).
-        let keyed = crate::keyed::StepKeyed {
+        let mut keyed = crate::keyed::StepKeyed {
+            order: None,
             sources: None,
             is_source: node.extracted.partitions.is_empty() && dag.feeds_partitions(node_id),
             no_keys: false,
@@ -589,6 +590,9 @@ fn chain_to_steps(
         if !static_partitions.is_empty() {
             let combos = expand_partition_combos(&static_partitions);
             let pks: Vec<PartitionKey> = combos.into_iter().map(PartitionKey::from).collect();
+            if node.extracted.batch.is_some() {
+                keyed.remember_order(&pks);
+            }
             steps.push(StreamStep {
                 step_id: StepId::unpartitioned(node_id.as_str()),
                 kind: node.kind(),

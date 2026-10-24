@@ -249,7 +249,12 @@ def test_serve_ticks_over_many_keys_keep_the_db_and_memory_bounded(tmp_path):
             scored = targets[next(t for t in targets if t.endswith("scored"))]
             s = summary_of(scored["final_output"])
             assert s["keys"] == keys and s["computed"] <= 2, s
+            # A finished tick can be followed immediately by the next one. Sample the idle
+            # footprint, not a coincident run's temporary buffers (seen on busy CI runners).
+            serve.post("/queue/pause", {})
+            serve.wait("idle for the RSS sample", lambda: not serve.get("/queue")["running"])
             rss.append(_rss_mb(serve.proc.pid))
+            serve.post("/queue/resume", {})
         db_growth = _db_bytes(tmp_path) - db_before
 
     assert max(outcome_bytes) < 20_000, outcome_bytes

@@ -8,6 +8,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- `barca run` and `barca.run()` on a partitioned task now return every key's value in a
+  dict keyed by partition key, with tables as JSON rows, on the server too. Previously they
+  returned only the first key's value. This also applies to a single `--partition` selection:
+  read its value from the keyed dict. More than 1000 keys use the same bounded summary as
+  `get`; select keys explicitly to read them all. Unpartitioned task output is unchanged (#643).
+
 ### Features
 
 - Batched partitions (experimental, RFC-0013, #643): `batch=N`, `batch="all"`, `batches([...])`

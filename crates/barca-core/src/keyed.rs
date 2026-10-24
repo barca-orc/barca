@@ -26,7 +26,7 @@
 use serde_json::Value;
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// One dict source a partitioned step expanded from.
@@ -49,6 +49,9 @@ pub struct KeyedSource {
 /// What a planned step has to do with keyed sources.
 #[derive(Debug, Clone, Default)]
 pub struct StepKeyed {
+    /// Original key positions for a batched node, before worker bin-packing and cache
+    /// filtering. Shared by its chunks so batch boundaries do not depend on pool size.
+    pub order: Option<Arc<HashMap<String, usize>>>,
     /// The dict sources this step's keys were expanded from, once expanded.
     pub sources: Option<Arc<Vec<KeyedSource>>>,
     /// The step is an unpartitioned node that a `partitions_from(...)` reads: the worker checks
@@ -60,6 +63,15 @@ pub struct StepKeyed {
 }
 
 impl StepKeyed {
+    pub(crate) fn remember_order(&mut self, keys: &[crate::PartitionKey]) {
+        self.order = Some(Arc::new(
+            keys.iter()
+                .enumerate()
+                .map(|(i, key)| (key.suffix(), i))
+                .collect(),
+        ));
+    }
+
     /// The sources whose value this step receives (and whose value its run hash folds in).
     pub fn direct(&self) -> impl Iterator<Item = &KeyedSource> {
         self.sources
@@ -74,8 +86,32 @@ impl StepKeyed {
 pub enum SourceKeys {
     /// A list: its values are the keys (strings, and numbers in their JSON form).
     List(Vec<String>),
-    /// A dict: its keys, sorted, and each key's value hash.
+    /// A dict: its keys in artifact order, and each key's value hash.
     Keyed(Vec<String>, HashMap<String, String>),
+}
+
+/// Read a dict without sorting its keys. Values still use the same canonical hashes;
+/// only scheduling order follows the producer's declaration (RFC-0013).
+struct OrderedSource;
+impl<'de> serde::de::Visitor<'de> for OrderedSource {
+    type Value = SourceKeys;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a dict of partition key to value")
+    }
+
+    fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<SourceKeys, M::Error> {
+        let mut keys = Vec::new();
+        let mut hashes = HashMap::new();
+        while let Some((key, raw)) = map.next_entry::<String, Box<RawValue>>()? {
+            let hash = raw_value_hash(&raw).map_err(serde::de::Error::custom)?;
+            if !hashes.contains_key(&key) {
+                keys.push(key.clone());
+            }
+            hashes.insert(key, hash);
+        }
+        Ok(SourceKeys::Keyed(keys, hashes))
+    }
 }
 
 /// Read a source's JSON artifact text: a list of keys, or a dict of key -> value. Anything else
@@ -97,15 +133,13 @@ pub fn read_source(text: &str) -> Result<SourceKeys, String> {
             ))
         }
         Some(b'{') => {
-            let map: BTreeMap<String, Box<RawValue>> =
-                serde_json::from_str(text).map_err(|e| format!("its JSON cannot be read: {e}"))?;
-            let mut hashes = HashMap::with_capacity(map.len());
-            let mut keys = Vec::with_capacity(map.len());
-            for (key, raw) in map {
-                hashes.insert(key.clone(), raw_value_hash(&raw)?);
-                keys.push(key);
-            }
-            Ok(SourceKeys::Keyed(keys, hashes))
+            let mut parser = serde_json::Deserializer::from_str(text);
+            let source = serde::Deserializer::deserialize_map(&mut parser, OrderedSource)
+                .map_err(|e| format!("its JSON cannot be read: {e}"))?;
+            parser
+                .end()
+                .map_err(|e| format!("its JSON cannot be read: {e}"))?;
+            Ok(source)
         }
         _ => {
             let what = match serde_json::from_str::<Value>(text) {
@@ -194,9 +228,9 @@ mod tests {
     }
 
     #[test]
-    fn a_dict_gives_its_keys_sorted_and_one_hash_per_value() {
+    fn a_dict_preserves_its_key_order_and_one_hash_per_value() {
         let (keys, hashes) = keyed(r#"{"r2": "b", "r1": "a", "r3": "a"}"#);
-        assert_eq!(keys, ["r1", "r2", "r3"]);
+        assert_eq!(keys, ["r2", "r1", "r3"]);
         assert_eq!(hashes["r1"], hashes["r3"], "equal values hash alike");
         assert_ne!(hashes["r1"], hashes["r2"]);
     }

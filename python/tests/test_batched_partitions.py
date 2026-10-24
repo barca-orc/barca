@@ -45,7 +45,11 @@ def cleaned(retailer: str, versions: str) -> dict:
 
 
 def env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    # Five keys over three workers make unequal chunks; grouping must not follow the
+    # bin-packer's stream order (the production CI pool exposed this).
+    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)} | {
+        "BARCA_POOL_SIZE": "3"
+    }
 
 
 def run(project: Path, *args: str) -> subprocess.CompletedProcess:
@@ -150,6 +154,21 @@ def test_only_stale_keys_are_grouped(keys5):
     # Nothing changed: no call at all.
     get(keys5, "scored")
     assert calls(keys5) == []
+
+
+@pytest.mark.parametrize("source", ["static", "dict"])
+def test_batch_boundaries_follow_declared_order_across_worker_chunks(keys5, source):
+    order = ["r5", "r1", "r4", "r2", "r3"]
+    set_versions(keys5, dict.fromkeys(order, "a"))
+    declaration = f"partitions({order!r})" if source == "static" else "partitions_from(cleaned)"
+    write(keys5, f'''
+        @asset(partitions={{"retailer": {declaration}}}, batch=2)
+        def scored(retailer: list[str], cleaned: dict = None):
+            _called("scored", retailer)
+            return {{r: cleaned[r] if cleaned else r for r in retailer}}
+    ''')
+    get(keys5, "scored")
+    assert sorted(keys for _, keys in calls(keys5)) == sorted([order[:2], order[2:4], order[4:]])
 
 
 @pytest.mark.parametrize(
@@ -494,7 +513,7 @@ def test_the_per_run_override(keys5):
     get(keys5, "scored", "--batch", "all", "--refresh", "scored")
     assert calls(keys5) == [["scored", ["r1", "r2", "r3", "r4", "r5"]]]
     get(keys5, "scored", "--batch", "scored=3", "--refresh", "scored")
-    assert [k for _, k in calls(keys5)] == [["r1", "r2", "r3"], ["r4", "r5"]]
+    assert sorted(k for _, k in calls(keys5)) == [["r1", "r2", "r3"], ["r4", "r5"]]
     get(keys5, "scored", "--batch", "all", "--batch", "scored=none", "--refresh", "scored")
     assert len(calls(keys5)) == 5
 
@@ -625,7 +644,7 @@ def test_under_serve_a_schedule_and_a_run_request_override_the_grouping(tmp_path
         serve.wait("the first tick", lambda: scored_keys() >= 5)
         serve.settle(2)
         # Schedule(..., batch=2) overrides batch="all" for its ticks.
-        assert [k for _, k in calls(tmp_path)] == [["r1", "r2"], ["r3", "r4"], ["r5"]]
+        assert sorted(k for _, k in calls(tmp_path)) == [["r1", "r2"], ["r3", "r4"], ["r5"]]
         set_versions(tmp_path, {**{f"r{i}": "a" for i in range(1, 6)}, "r4": "b"})
         serve.wait("the tick after the change", lambda: scored_keys() >= 6)
         serve.settle(2)
@@ -820,3 +839,41 @@ def scored(retailer: list[str]):
     result = get(tmp_path, "scored")
     assert len(result["final_output"]) == 4
     assert json.loads((tmp_path / "concurrency").read_text()) == [0, 1]
+
+
+@pytest.mark.parametrize("table", [False, True])
+def test_batched_tasks_work_through_run_python_and_server_capacity(tmp_path, monkeypatch, table):
+    import barca
+    from .served import Serve
+
+    (tmp_path / "pipeline.py").write_text(
+        """
+import pandas as pd
+from barca import task, partitions
+
+@task(partitions={"retailer": partitions(["a", "b", "c"])}, batch="all")
+def job(retailer: list[str]):
+    return {r: r.upper() for r in retailer}
+""".replace(
+            "return {r: r.upper() for r in retailer}",
+            'return pd.DataFrame({"retailer": retailer, "value": [r.upper() for r in retailer]})'
+            if table
+            else "return {r: r.upper() for r in retailer}",
+        )
+    )
+    cli = run(tmp_path, "run", "job", "pipeline.py", "--json")
+    assert cli.returncode == 0, cli.stderr
+    assert len(json.loads(cli.stdout)["final_output"]) == 3
+    monkeypatch.chdir(tmp_path)
+    expected = {
+        f"retailer={k}": ([{"retailer": k, "value": k.upper()}] if table else k.upper())
+        for k in ("a", "b", "c")
+    }
+    assert barca.run("job", "pipeline.py", batch={"job": 1}) == expected
+    with Serve(tmp_path, "--no-schedule", "--capacity", "1", env=env()) as serve:
+        serve.ready()
+        # Three keys need only one capacity admission: the call is the unit of weight.
+        assert (
+            barca.run("job", "pipeline.py", batch="all", server=f"http://127.0.0.1:{serve.port}")
+            == expected
+        )

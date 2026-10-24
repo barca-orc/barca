@@ -245,6 +245,18 @@ pub fn expand_pending_partitions(
             let pks: Vec<crate::PartitionKey> =
                 combos.into_iter().map(crate::PartitionKey::from).collect();
             let no_keys = pks.is_empty();
+            let mut step_keyed = crate::keyed::StepKeyed {
+                sources: (!keyed.is_empty()).then(|| Arc::new(keyed)),
+                is_source: step.keyed.is_source,
+                no_keys,
+                order: None,
+            };
+            if dag
+                .get_node(&base)
+                .is_some_and(|n| n.extracted.batch.is_some())
+            {
+                step_keyed.remember_order(&pks);
+            }
             all_expanded_steps.push(StreamStep {
                 step_id: crate::StepId::unpartitioned(step.step_id.base.clone()),
                 kind: step.kind,
@@ -262,11 +274,7 @@ pub fn expand_pending_partitions(
                 partition_keys: pks,
                 param_types: step.param_types.clone(),
                 return_type: step.return_type,
-                keyed: crate::keyed::StepKeyed {
-                    sources: (!keyed.is_empty()).then(|| Arc::new(keyed)),
-                    is_source: step.keyed.is_source,
-                    no_keys,
-                },
+                keyed: step_keyed,
             });
         }
     }

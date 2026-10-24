@@ -425,7 +425,9 @@ what `final_output` holds, and with `--pretty` they add the human summary. Witho
 rule above chooses between the JSON result and the summary, and paths are returned. In a
 terminal the summary previews a small json value (at most 10 lines) under its path; the preview
 is human output, not contract. `run` keeps `-o value`, the task's value, and prints a task's
-value in `final_output` as before.
+value in `final_output`. From 0.32.0, a partitioned task returns an object of partition key
+to value (tables as JSON rows), including a single selected key; unpartitioned task output
+is unchanged. The bounded partition summary below applies to tasks too.
 
 | Invocation | stdout |
 |---|---|
@@ -1063,6 +1065,36 @@ and the skipped fan-in in `steps` and `skipped_nodes` (the dry run has the same 
 | `warnings[].node` | string | always |
 | `warnings[].param` | string | always |
 <!-- END GENERATED schema run -->
+
+A partitioned task returns keyed values:
+
+<!-- BEGIN GENERATED schema run_partitioned -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output.<key>` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].partitions` | object | always |
+| `steps[].partitions.cached` | integer | always |
+| `steps[].partitions.total` | integer | always |
+| `steps[].partitions.will_run` | integer | always |
+| `steps[].partitions.will_run_keys` | array | always |
+| `steps[].partitions.will_run_keys[]` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema run_partitioned -->
 
 ### get and run: a failed step
 

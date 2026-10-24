@@ -150,6 +150,9 @@ Content-Type: application/json
 }
 ```
 
+A partitioned `run` returns every key's value in `outcome.final_output`, keyed by partition
+key, with tables as JSON rows. The same bounded summary as `get` applies above 1000 keys.
+
 Only `command` is required. The fields are the flags of `barca get` and `barca run`
 (`--refresh`, `--refresh-all`, `--no-cascade` is `"cascade": false`, `--dry-run`, `--agent`).
 The optional `batch` array takes repeatable `--batch` values (`all`, `none`, a positive

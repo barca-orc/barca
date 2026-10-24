@@ -426,14 +426,33 @@ pub fn pointer_output(
     keys: Option<&[(String, crate::dispatch::OutputRef)]>,
     summary: Option<&crate::results::KeySummary>,
 ) -> Option<serde_json::Value> {
+    output_with(single, keys, summary, artifact_metadata)
+}
+
+/// A task's JSON results, preserving its keys; binary formats remain artifact references.
+/// The command layer reads tabular partition values with `values::task_output`.
+pub fn read_task_output(
+    single: Option<&crate::dispatch::OutputRef>,
+    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
+) -> Option<serde_json::Value> {
+    output_with(single, keys, summary, read_final_output)
+}
+
+fn output_with(
+    single: Option<&crate::dispatch::OutputRef>,
+    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
+    read: impl Fn(&crate::dispatch::OutputRef) -> serde_json::Value,
+) -> Option<serde_json::Value> {
     match crate::results::KeySummary::listed(summary, keys) {
         Some(keys) => Some(keyed_output(
             keys.iter()
-                .map(|(key, oref)| (key.clone(), artifact_metadata(oref)))
+                .map(|(key, oref)| (key.clone(), read(oref)))
                 .collect(),
             summary,
         )),
-        None => single.map(artifact_metadata),
+        None => single.map(read),
     }
 }
 

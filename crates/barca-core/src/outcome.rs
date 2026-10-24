@@ -318,7 +318,11 @@ impl Outcome {
                 result.partitions.as_deref(),
                 result.key_summary.as_ref(),
             ),
-            RunCommand::Run => result.final_output.as_ref().map(report::read_final_output),
+            RunCommand::Run => report::read_task_output(
+                result.final_output.as_ref(),
+                result.partitions.as_deref(),
+                result.key_summary.as_ref(),
+            ),
         };
         Self::success_with(result, output)
     }
@@ -340,7 +344,11 @@ impl Outcome {
                     t.partitions.as_deref(),
                     t.key_summary.as_ref(),
                 ),
-                RunCommand::Run => t.final_output.as_ref().map(report::read_final_output),
+                RunCommand::Run => report::read_task_output(
+                    t.final_output.as_ref(),
+                    t.partitions.as_deref(),
+                    t.key_summary.as_ref(),
+                ),
             })
             .collect();
         Self::multi_with(result, &values, ctx)

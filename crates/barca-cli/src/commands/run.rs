@@ -1,8 +1,6 @@
 //! Run command implementation.
 
-use super::execute::{
-    cancel_on_ctrl_c, explain_cmd, print_failed_run, print_multi, read_final_output,
-};
+use super::execute::{cancel_on_ctrl_c, explain_cmd, print_failed_run, print_multi};
 use crate::args::OutputMode;
 use std::path::PathBuf;
 
@@ -62,7 +60,7 @@ pub(crate) async fn run_cmd(
         .await;
         let _ = log_task.await;
         let result = result?;
-        return print_multi(&result, mode, "ran", fields);
+        return print_multi(&result, mode, "ran", fields, &cfg, python).await;
     }
     let target = targets.into_iter().next().unwrap_or_default();
     let result = barca_core::commands::run_streaming(
@@ -80,10 +78,18 @@ pub(crate) async fn run_cmd(
     .await;
     let _ = log_task.await;
     let result = result.inspect_err(|e| print_failed_run(e, mode))?;
+    let output = barca_core::values::task_output(
+        python,
+        &cfg,
+        result.final_output.as_ref(),
+        result.partitions.as_deref(),
+        result.key_summary.as_ref(),
+    )
+    .await;
     super::emit(barca_core::report::render_run(
         &result,
         &target,
-        result.final_output.as_ref().map(read_final_output),
+        output,
         mode.into(),
         fields,
     ));

@@ -332,7 +332,9 @@ def run(
     keys across the task's cone, as for :func:`get` (``--partition``). ``server=`` runs it
     on a barca server, and ``batch=`` overrides ``batch=``, as for :func:`get`.
 
-    Returns the deserialized value of the target task directly (or ``None``).
+    A partitioned task returns a dict of partition key to value (tables as JSON rows),
+    as ``get`` does. A large partition summary requires selecting keys with ``partition=``.
+    Returns the value of the target task, or its keyed values when partitioned.
     """
     args: list[str] = ["run", target, *files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
@@ -343,7 +345,7 @@ def run(
     result = _exec(args)
     output = result.get("final_output")
     if output is not None:
-        return _read_output(output, server, result.get("run_id"))
+        return _read_final_output(output, server, result.get("run_id"))
     return output
 
 

@@ -232,7 +232,8 @@ CHANGED_CASES: list[tuple[str, list[str], str, int]] = [
     ("status_changed", ["status", "pipeline.py", "--json"], "stdout", 0),
     ("get_dry_run_changed", ["get", "total", "pipeline.py", "--dry-run", "--json"], "stdout", 0),
 ]
-ALL_CASES = CASES + SETUP_CASES + UPLOAD_CASES + [TIMING_CASE, CACHE_CASE] + CHANGED_CASES
+PARTITION_RUN_CASE = ("run_partitioned", ["run", "per_key", "pipeline.py", "--json"], "stdout", 0)
+ALL_CASES = CASES + SETUP_CASES + UPLOAD_CASES + [TIMING_CASE, CACHE_CASE] + CHANGED_CASES + [PARTITION_RUN_CASE]
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
 USER_VALUES = {
@@ -558,6 +559,21 @@ def runs(tmp_path_factory) -> dict:
             if line.startswith("[barca] "):
                 agent.add(normalize_agent_line(line))
     out["agent_lines"] = sorted(agent)
+    task_case = tmp_path_factory.mktemp("contract_partitioned_task")
+    (task_case / "pipeline.py").write_text(
+        "from barca import task, partitions\n"
+        "@task(partitions={'k': partitions(['a', 'b'])})\n"
+        "def per_key(k: str):\n    return {'key': k}\n"
+    )
+    case, argv, stream, code = PARTITION_RUN_CASE
+    task_proc = subprocess.run(
+        [binary, *argv], cwd=task_case, env=env, capture_output=True, text=True, timeout=60
+    )
+    assert task_proc.returncode == code, task_proc.stderr
+    task_doc = json.loads(task_proc.stdout)
+    assert task_doc["final_output"] == {"k=a": {"key": "a"}, "k=b": {"key": "b"}}
+    s = command_schema(task_doc)
+    out[case] = (s, render_snapshot(argv, stream, code, s), task_proc)
     return out
 
 

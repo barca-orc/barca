@@ -58,6 +58,12 @@ asset is an error.
 and prints the skipped tasks and the `barca run` command on stderr. A deploy or notify task fires
 only when you name it with `barca run`. (Previously a bare `barca get` ran tasks too.)
 
+A partitioned task returns a dict keyed by partition key in `final_output` and from
+`barca.run(...)`, including when `--partition` selects one key. Each value is that key's
+result; tables are JSON rows. A task returning `None` produces a null value for each key.
+This applies with and without `batch=`. More than 1000 keys use the bounded partition summary
+unless `--partition` selects the keys (`barca docs partitions`, "Many keys").
+
 ## Several tasks in one run
 
 Name several tasks as one comma-separated list (no spaces). A validation sweep is the typical
