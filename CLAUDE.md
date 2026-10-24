@@ -92,9 +92,10 @@ priorities; the pinned Direction issue on GitHub mirrors it. Check a new feature
 filing an issue.
 
 1. **Invisible** — the orchestrator should add zero perceptible overhead
-2. **Static analysis** — extract source without imports. The existing resolver imports user
-   modules to evaluate nonliteral partition key expressions; literal key lists need no import.
-   Add no other planning imports.
+2. **Static analysis** — extract source without imports. The resolver evaluates nonliteral
+   partition key expressions and computed batch groups in an importable project subprocess
+   (RFC-0013); literal keys and groups are read statically. Evaluate `batches_by` only for
+   keys that need to run. Keep planning imports within these documented resolver operations.
 3. **Rust for planning, Python for execution** — each does what it's best at
 4. **Single install** — `uv add barca` gives users everything
 5. **Turso for persistence** — Rust owns the DB; Python has no DB access

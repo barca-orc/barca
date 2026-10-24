@@ -197,6 +197,7 @@ re-run, never a stale result.
 | `weight=` | no | decides how many steps run at once, not what the step returns |
 | `deterministic=` | no | silences the warning about new bytes for the same code and inputs; caching is unchanged |
 | `cutoff=` | no | decides what the asset's consumers fold into their run hashes (its output's bytes instead of its run hash), not what it returns |
+| `batch=` | no | decides how many keys one call of the function computes, not what each key's result is; each key keeps its own run hash |
 | `description=` | no | documentation |
 | `tags=` | no | labels for people and tools |
 | `@unsafe` | no | a marker barca reads and does not act on |

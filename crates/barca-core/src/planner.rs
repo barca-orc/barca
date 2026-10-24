@@ -580,7 +580,8 @@ fn chain_to_steps(
         let return_type = node.extracted.return_type;
         // An unpartitioned node a `partitions_from(...)` reads: the worker checks what it
         // returns can be read for keys (a list, or a dict with JSON values).
-        let keyed = crate::keyed::StepKeyed {
+        let mut keyed = crate::keyed::StepKeyed {
+            order: None,
             sources: None,
             is_source: node.extracted.partitions.is_empty() && dag.feeds_partitions(node_id),
             no_keys: false,
@@ -589,6 +590,9 @@ fn chain_to_steps(
         if !static_partitions.is_empty() {
             let combos = expand_partition_combos(&static_partitions);
             let pks: Vec<PartitionKey> = combos.into_iter().map(PartitionKey::from).collect();
+            if node.extracted.batch.is_some() {
+                keyed.remember_order(&pks);
+            }
             steps.push(StreamStep {
                 step_id: StepId::unpartitioned(node_id.as_str()),
                 kind: node.kind(),
@@ -697,7 +701,9 @@ pub fn expand_partition_combos(
     dims: &HashMap<String, Vec<String>>,
 ) -> Vec<HashMap<String, String>> {
     let mut combos = vec![HashMap::new()];
-    for (dim, values) in dims {
+    let mut ordered: Vec<_> = dims.iter().collect();
+    ordered.sort_by_key(|(dim, _)| *dim);
+    for (dim, values) in ordered {
         let mut new_combos = Vec::new();
         for combo in &combos {
             for val in values {
@@ -882,6 +888,8 @@ mod tests {
                     unused_inputs: Vec::new(),
                     env_reads: Vec::new(),
                     inherited_partitions: Vec::new(),
+                    batch: None,
+                    schedule_batch: None,
                 }
             })
             .collect();
@@ -946,6 +954,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         extracted.sinks.push(SinkDecl {
             path: "exports/out.parquet".to_string(),
@@ -1384,6 +1394,8 @@ mod tests {
                 unused_inputs: Vec::new(),
                 env_reads: Vec::new(),
                 inherited_partitions: Vec::new(),
+                batch: None,
+                schedule_batch: None,
             })
             .collect();
         let dag = Dag::build(&extracted).unwrap();
@@ -1535,6 +1547,8 @@ mod tests {
                     unused_inputs: Vec::new(),
                     env_reads: Vec::new(),
                     inherited_partitions: Vec::new(),
+                    batch: None,
+                    schedule_batch: None,
                 }
             })
             .collect();
@@ -1827,6 +1841,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let collector = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1864,6 +1880,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         Dag::build(&[producer, collector]).unwrap()
     }
@@ -1952,6 +1970,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let fetch_prices = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1990,6 +2010,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let aggregate = ExtractedNode {
             kind: NodeKind::Asset,
@@ -2027,6 +2049,8 @@ mod tests {
             unused_inputs: Vec::new(),
             env_reads: Vec::new(),
             inherited_partitions: Vec::new(),
+            batch: None,
+            schedule_batch: None,
         };
         let dag = Dag::build(&[tickers, fetch_prices, aggregate]).unwrap();
         let p = plan_from_dag(&dag, &cfg(10));

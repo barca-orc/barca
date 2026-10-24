@@ -137,6 +137,9 @@ every database from before 0.29.2 (#629):
   `env NAME`, `kind`), which `barca status` and `--dry-run` compare to say what changed. Never
   part of a cache key. Older rows, failed rows and rows a server's ledger receives from a client
   keep `NULL`, and their nodes report a plain `changed`.
+- `materializations.batch_id` (TEXT, nullable, 0.32.0, RFC-0013): the run-local call id
+  shared by the keys computed in one batched function call. History groups these rows for
+  display; cache lookup and run hashes remain per key. Unbatched and older rows have NULL.
 - `schedule_failures (node_id, failures, failed_nodes, mark)` (0.28.0, RFC-0008 rule 9), primary
   key `node_id`: the consecutive failed ticks of one scheduled node, the nodes that failed in the
   last counted tick (a JSON array), and the highest `materializations.id` when it was counted. A

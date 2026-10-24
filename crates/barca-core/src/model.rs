@@ -282,6 +282,8 @@ pub enum ValueType {
     /// `pl.LazyFrame`: the worker hands the step a scan, so only what its query uses is read.
     PolarsLazy,
     PyArrow,
+    /// `pyarrow.dataset.Dataset`: a dataset over the artifact's file, read lazily.
+    PyArrowDataset,
     DuckDB,
 }
 
@@ -292,13 +294,17 @@ impl ValueType {
             ValueType::Polars => "polars",
             ValueType::PolarsLazy => "polars_lazy",
             ValueType::PyArrow => "pyarrow",
+            ValueType::PyArrowDataset => "pyarrow_dataset",
             ValueType::DuckDB => "duckdb",
         }
     }
 
     /// True for types whose reader fetches only what the step's query uses.
     pub fn is_lazy(self) -> bool {
-        matches!(self, ValueType::PolarsLazy | ValueType::DuckDB)
+        matches!(
+            self,
+            ValueType::PolarsLazy | ValueType::DuckDB | ValueType::PyArrowDataset
+        )
     }
 }
 
@@ -492,6 +498,62 @@ pub struct ExtractedNode {
     /// passed only to the nodes that name it (`crate::keyed`). Not part of any hash.
     #[serde(skip)]
     pub inherited_partitions: Vec<String>,
+    /// `batch=` (RFC-0013): how the keys that run are grouped into calls. `None` when not
+    /// declared (or `batch=None`): one key per call, and the function takes a single key.
+    /// Scheduling only: not part of any hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<BatchSpec>,
+    /// `Schedule(..., batch=V)`: the per-run `--batch` override a scheduled tick of this node
+    /// runs with (as the flag takes it: `all`, `none`, `20`, `scored=all`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_batch: Option<String>,
+}
+
+/// `batch=` of a partitioned `@asset` or `@task` (RFC-0013): how the keys that need to run
+/// are grouped into calls of the function, which then receives the list of its call's keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BatchSpec {
+    /// `batch=N`: at most N keys per call, in key order.
+    Size { size: u32 },
+    /// `batch="all"`: every key that needs to run, in one call.
+    All,
+    /// `batches([[...], [...]])`: the groups named, each as the keys' inner display form
+    /// (`retailer=r1`, or `month=2026-10,retailer=r1`). A key in no group runs alone, or is an
+    /// error with `strict`.
+    Groups {
+        groups: Vec<Vec<String>>,
+        #[serde(default)]
+        strict: bool,
+    },
+    /// `batches(<expression>)`: evaluated when the pipeline is loaded, into [`Self::Groups`].
+    GroupsExpr {
+        source_text: String,
+        #[serde(default)]
+        strict: bool,
+    },
+    /// `batches_by(<function>, max_size=N)`: keys whose label is the same share a call,
+    /// split into calls of at most `max_size`. The function is evaluated by Python when the
+    /// keys that run are known.
+    By {
+        source_text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_size: Option<u32>,
+    },
+}
+
+impl BatchSpec {
+    /// How the decorator wrote it, for messages and the dry run (`batch=all`, `batch=20`).
+    pub fn describe(&self) -> String {
+        match self {
+            BatchSpec::Size { size } => format!("batch={size}"),
+            BatchSpec::All => "batch=all".to_string(),
+            BatchSpec::Groups { .. } | BatchSpec::GroupsExpr { .. } => {
+                "batch=batches(...)".to_string()
+            }
+            BatchSpec::By { source_text, .. } => format!("batch=batches_by({source_text})"),
+        }
+    }
 }
 
 fn default_weight() -> u32 {

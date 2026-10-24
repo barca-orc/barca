@@ -310,7 +310,7 @@ def test_partitions_topic_keyed_sensor_example(binary, topics, tmp_path):
     """ "Updating only what changed, across many partitions": one query returns every retailer's
     version, and only the retailer whose version changed is computed again."""
     duckdb = pytest.importorskip("duckdb")
-    (code,) = [b for b in blocks(topics["partitions"], "python") if "retailer_versions" in b]
+    (code,) = [b for b in blocks(topics["partitions"], "python") if "warehouse.duckdb" in b]
     (tmp_path / "pipeline.py").write_text(code)
     db = duckdb.connect(str(tmp_path / "warehouse.duckdb"))
     db.execute("create table orders (retailer varchar, updated_at timestamp)")
@@ -344,6 +344,33 @@ def test_partitions_topic_keyed_sensor_example(binary, topics, tmp_path):
         "pipeline.py:scored": ["retailer=r000007"],
     }
     assert tick["final_output"]["retailer=r000007"]["rows"] == 2
+
+
+def test_partitions_topic_batched_example(binary, topics, tmp_path):
+    """The manual's 20-key set-based example reruns just three changed keys per asset."""
+    code = next(b for b in blocks(topics["partitions"], "python") if "reading orders of" in b)
+    (tmp_path / "pipeline.py").write_text(code)
+    versions = {f"r{i:02}": "a" for i in range(20)}
+    (tmp_path / "versions.json").write_text(json.dumps(versions))
+    (tmp_path / "orders.csv").write_text(
+        "retailer,amount\n" + "".join(f"r{i:02},{i}\nr{i:02},1\n" for i in range(20))
+    )
+    first = result(barca(binary, tmp_path, "get", "scored", "pipeline.py"))
+    assert first["steps_executed"] == 41
+    assert first["final_output"]["retailer=r03"] == [{"retailer": "r03", "total": 4, "n": 2}]
+    for key in ("r03", "r11", "r17"):
+        versions[key] = "b"
+    (tmp_path / "versions.json").write_text(json.dumps(versions))
+    result(barca(binary, tmp_path, "get", "retailer_versions", "pipeline.py"))
+    dry = result(barca(binary, tmp_path, "get", "scored", "pipeline.py", "--dry-run", "--json"))
+    for name in ("orders", "scored"):
+        step = next(s for s in dry["steps"] if s["id"] == f"pipeline.py:{name}")
+        assert step["batch"] == {"grouping": "batch=all", "keys": 3, "calls": 1}
+    proc = barca(binary, tmp_path, "get", "scored", "pipeline.py")
+    tick = result(proc)
+    assert tick["steps_executed"] == 7
+    logs = result(barca(binary, tmp_path, "logs", tick["run_id"], "--json"))
+    assert "reading orders of 3 retailers" in [line["line"] for line in logs]
 
 
 def test_overview_topic_example(binary, topics, tmp_path):
@@ -396,12 +423,12 @@ def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
     rows = re.findall(r"^\| `@?(\w+)(?:\(\))?` \| (\w+) \| (.*) \|$", body, re.M)
     assert [r[0] for r in rows] == [
         "group", "asset", "sensor", "task", "sink",
-        "partitions", "partitions_from", "collect", "asset_ref", "Schedule",
+        "partitions", "partitions_from", "batches", "batches_by", "collect", "asset_ref", "Schedule",
     ]  # fmt: skip
     for name, positional, keywords in rows:
         params = inspect.signature(getattr(stubs, name)).parameters.values()
         by_keyword = [p.name for p in params if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)]
-        by_position = [p.name for p in params if p.kind == p.POSITIONAL_ONLY and p.name != "fn"]
+        by_position = [p.name for p in params if p.kind == p.POSITIONAL_ONLY and (p.name != "fn" or name == "batches_by")]
         assert by_keyword == ([] if keywords == "none" else re.findall(r"`(\w+)`", keywords)), name
         assert len(by_position) == {"none": 0, "one": 1}[positional], name
 

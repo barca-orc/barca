@@ -106,6 +106,7 @@ PLANNING_TABLE: list[tuple[str, list[str]]] = [
 
 RUN_ID = re.compile(r"\b[0-9a-f]{12}\b")
 DURATION = re.compile(r"\b\d+(\.\d+)?(ms|s)\b")
+BYTES = re.compile(r"\b\d+(?:\.\d+)? (?:B|KB|MB|GB|TB)\b")
 TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?")
 
 
@@ -118,6 +119,9 @@ def _text(s: str, roots: list[str]) -> str:
     s = TRIGGER.sub("triggered by <trigger>", s)
     s = TIMESTAMP.sub("<t>", s)
     s = RUN_ID.sub("<run_id>", s)
+    # Pretty memory measurements vary per process just like JSON *_rss_bytes; sizes of
+    # independently serialized artifacts may vary too, as `_value` already allows.
+    s = BYTES.sub("<bytes>", s)
     return DURATION.sub("<n>s", s)
 
 

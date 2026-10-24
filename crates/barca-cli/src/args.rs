@@ -151,6 +151,11 @@ Examples:
   barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only that key
   barca get pipeline.py --partition region=emea   # no target: every asset and sensor, for emea only
   barca get pipeline.py --partition region=emea --dry-run   # what runs for emea, which fan-ins are skipped
+  barca get scored pipeline.py --batch all       # a backfill: every key that needs to run in one call (batch= nodes only)
+  barca get scored pipeline.py --batch 20        # at most 20 keys per call, in key order
+  barca get scored pipeline.py --batch none      # one key per call, to find the key that fails
+  barca get scored pipeline.py --batch scored=all --batch cleaned=100   # per node; repeatable
+  barca get scored pipeline.py --dry-run --batch 20   # \"500 keys in 25 calls (batch=20)\" in the WHY column
   barca get total pipeline.py --agent      # plain progress lines on stderr
   barca get total pipeline.py --env dev    # separate cache and state per environment
   barca list pipeline.py                   # not sure of the name? list assets and tasks first
@@ -187,6 +192,12 @@ one note on stderr), nor is anything below it; it does not change the exit code.
 partition_selection {selection, nodes: [{id, selected, skipped}], skipped_nodes}. A value no node
 with that dimension has, a dimension no node in the cone has, or a target --partition would skip
 is exit 2 (barca docs partitions, \"Selecting keys\").
+--batch overrides batch= (RFC-0013, experimental) for this run: `none`, `all` or N for every node
+that declares batch=, `NODE=V` (repeatable) for one. A node without batch= is never batched (its
+function takes one key); naming one, or an unknown node, is exit 2. Batching groups only the keys
+that need to run and never changes a run hash: a key computed in a call of 1000 is a cache hit for
+--batch none. The dry run adds `batch` {grouping, keys, calls} to such a step and \"N keys in M
+calls (batch=V)\" to its WHY (barca docs partitions, \"Processing many keys per call\").
 JSON is one line on stdout with status (\"success\"), run_id,
 steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
 (ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
@@ -242,6 +253,7 @@ Examples:
   barca run deploy pipeline.py --refresh-all           # re-materialize every upstream asset
   barca run deploy pipeline.py --dry-run --refresh fetch   # preview: which steps run, which are cached
   barca run notify pipeline.py --partition region=emea   # the task's cone, for the emea keys only
+  barca run notify pipeline.py --batch all             # override batch= of the cone's batched nodes for this run
   barca run deploy pipeline.py --json                  # JSON even in a terminal (the default when piped)
   barca run deploy pipeline.py --pretty                # summary for humans (the default in a terminal)
   barca run deploy pipeline.py --fields id,status,reason   # JSON with each entry of `steps` trimmed
@@ -256,6 +268,7 @@ skips only what depends on it); exit 1 if any failed. JSON output then carries `
 target, instead of `final_output` (see barca get --help, barca docs agents).
 `warnings` is always an array, as on `barca get`: plan-time warnings for the steps in the cone, such
 as an input a step never uses (barca docs assets); [] when there are none.
+A partitioned task returns every key in final_output, keyed by partition key, with tables as JSON rows.
 --partition selects partition keys across the task's cone as on `barca get` (barca docs
 partitions, \"Selecting keys\"); a task the selection would skip is exit 2.
 
@@ -747,6 +760,11 @@ pub(crate) enum Cli {
         /// is skipped. Works without a target
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
         partition: Option<String>,
+        /// Override `batch=` for this run: `none` (one key per call), `all` or a whole number,
+        /// for every node that declares `batch=`; `NODE=V` (repeatable) for one node only.
+        /// Nodes without `batch=` are never batched. Experimental
+        #[arg(long, value_name = "[NODE=]none|all|N")]
+        batch: Vec<String>,
         /// Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not
         /// `--refresh a b`); the target itself may be named. Every asset downstream of them in
         /// the target's cone re-materializes too (see --no-cascade)
@@ -804,6 +822,9 @@ pub(crate) enum Cli {
         /// partitioned node with a named dimension computes only those keys
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
         partition: Option<String>,
+        /// Override `batch=` for this run, as for `barca get --batch`. Experimental
+        #[arg(long, value_name = "[NODE=]none|all|N")]
+        batch: Vec<String>,
         /// Show what this command would do (each step cached or will-run, and why) without
         /// executing steps or recording a run
         #[arg(long)]

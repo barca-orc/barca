@@ -337,6 +337,26 @@ pub struct StepReport {
     /// Dry run only: the node's `weight=` when it is above 1 (#436). Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight: Option<u32>,
+    /// Dry run of a node with `batch=` (RFC-0013): how the keys that will run are grouped into
+    /// calls. Absent for a node without `batch=`, or when no key will run. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub batch: Option<BatchPlan>,
+}
+
+/// How a dry run groups a batched node's keys into calls (RFC-0013).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct BatchPlan {
+    /// The grouping in effect, as written: `batch=all`, `batch=20`, `batch=none`,
+    /// `batch=batches(...)`, `batch=batches_by(fn)`.
+    pub grouping: String,
+    /// The keys that will run.
+    pub keys: usize,
+    /// How many calls they make; `null` when the dry run cannot tell (`batches(...)` or
+    /// `batches_by(...)` over more keys than it lists).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub calls: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

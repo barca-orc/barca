@@ -57,4 +57,10 @@ max_rss_bytes: number | null,
  * RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it
  * printed nothing.
  */
-output_tail: Array<string> | null, };
+output_tail: Array<string> | null,
+/**
+ * The batched call (RFC-0013) that computed this key: the keys of one call share it, and
+ * its output is recorded once under `<node>[batch=<id>]`. `null` for a step that ran on
+ * its own. Experimental.
+ */
+batch: string | null, };

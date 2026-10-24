@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
 /// Negotiated worker/transfer wire version, independent of package and DB versions.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Negotiate before a helper can receive work. The caller bounds this together
 /// with connection startup and owns reaping the child on every error path.
@@ -159,6 +159,11 @@ pub struct ArtifactRef {
     /// none for the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_type: Option<String>,
+    /// The batched call (RFC-0013) that computed this key, and how many keys it computed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_keys: Option<u64>,
 }
 
 /// Outcome of a single `@sink` write. A sink that fails fails its step (0.30.0), so a
@@ -563,6 +568,8 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
+                batch: None,
+                batch_keys: None,
 
                 sinks: Vec::new(),
             },
@@ -644,6 +651,8 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
+                batch: None,
+                batch_keys: None,
 
                 sinks: vec![
                     SinkOutcome {
@@ -834,6 +843,8 @@ mod tests {
                     finished_at: None,
                     wall_seconds: None,
                     frame_type: None,
+                    batch: None,
+                    batch_keys: None,
 
                     sinks: Vec::new(),
                 },
@@ -1203,9 +1214,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pre_batch_helpers_are_refused_before_receiving_work() {
+        for role in ["worker", "transfer"] {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            write_frame(
+                &mut client,
+                &serde_json::json!({
+                    "type": "hello", "role": role, "protocol_version": 3
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(
+                accept_hello(&mut server, role).await.is_err(),
+                "protocol 3 helpers cannot execute the new one-call batch semantics"
+            );
+            let response: serde_json::Value = read_frame(&mut client).await.unwrap().unwrap();
+            assert_eq!(response["type"], "protocol_error");
+            assert!(
+                response["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reinstall barca")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn helper_hello_requires_matching_version_and_role() {
         for role in ["worker", "transfer"] {
-            for version in [0, 2, PROTOCOL_VERSION, PROTOCOL_VERSION + 1] {
+            for version in [0, 2, 3, PROTOCOL_VERSION, PROTOCOL_VERSION + 1] {
                 let (mut client, mut server) = tokio::io::duplex(4096);
                 write_frame(&mut client, &serde_json::json!({"type": "hello", "role": role, "protocol_version": version})).await.unwrap();
                 let accepted = accept_hello(&mut server, role).await;

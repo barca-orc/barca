@@ -71,6 +71,9 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // `barca status` and `--dry-run` compare to say what changed. NULL on older rows, failed
     // rows and rows a server's ledger received from a client.
     "components TEXT",
+    // The batched call (RFC-0013, 0.32.0) that computed the key: the keys of one call share it.
+    // NULL for a step that ran on its own.
+    "batch_id TEXT",
 ];
 
 /// Every table's columns added within format 1, by table. The one list that the pre-migration

@@ -119,9 +119,10 @@ client prints it as it would print the local command's.
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
 | `GET`  | `/ui/` | The web UI, compiled into the binary. |
 
-**Older routes, kept as aliases for one minor release.** They run on the same functions as the
-routes above, and the `run_id` they answer with is the database run id. Move to the new routes;
-the aliases are removed in the cleanup release after this one.
+**Older routes, retained for Python `Client` compatibility.** They run on the same functions as
+the routes above, and the `run_id` they answer with is the database run id. New integrations
+should use `/runs`. The aliases remain deprecated, with no scheduled removal; removing them
+requires migrating `Client` first and announcing the breaking change in a minor release.
 
 | Method | Path | Use instead |
 |--------|------|-------------|
@@ -144,12 +145,21 @@ Content-Type: application/json
   "files": [],                  // deployed files, as typed relative to the root; the run reads only these. [] means all of them
   "refresh": [], "refresh_all": false, "cascade": true,
   "dry_run": false,
+  "batch": ["scored=1000"],     // optional --batch overrides for nodes declaring batch=
   "agent": true                 // which stderr lines the client will print
 }
 ```
 
+A partitioned `run` returns every key's value in `outcome.final_output`, keyed by partition
+key, with tables as JSON rows. The same bounded summary as `get` applies above 1000 keys.
+
 Only `command` is required. The fields are the flags of `barca get` and `barca run`
 (`--refresh`, `--refresh-all`, `--no-cascade` is `"cascade": false`, `--dry-run`, `--agent`).
+The optional `batch` array takes repeatable `--batch` values (`all`, `none`, a positive
+integer, or `NODE=VALUE`). It overrides grouping only for nodes that declare `batch=`.
+Invalid values or names are `400` before a run starts. A dry run adds `{grouping, keys, calls}`
+to each affected step.
+
 The command runs on the server with its deployed code. A file that is not one of the deployed
 files is a `400` naming them.
 
@@ -708,7 +718,7 @@ for job in c.schedules():         # GET /schedule
 `/events` or `/logs`. `barca.get`, `barca.run` and the other functions in `barca.api` are
 separate: they start the `barca` binary for one command and do not talk to a server.
 
-`Client` still talks to the older routes, which remain as aliases for one minor release; its
+`Client` still talks to the older routes, retained as deprecated compatibility aliases; its
 statuses are those of `GET /status/{run_id}` (`complete`, not `success`).
 
 ## Errors

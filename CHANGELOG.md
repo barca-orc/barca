@@ -8,6 +8,41 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Worker and transfer helpers now negotiate protocol 4. Protocol 3 helpers cannot execute
+  a whole batch in one call and are refused before work starts, with an error asking to
+  reinstall matching barca packages. The standalone stderr protocol stays at version 2.
+
+- `barca run` and `barca.run()` on a partitioned task now return every key's value in a
+  dict keyed by partition key, with tables as JSON rows, on the server too. Previously they
+  returned only the first key's value. This also applies to a single `--partition` selection:
+  read its value from the keyed dict. More than 1000 keys use the same bounded summary as
+  `get`; select keys explicitly to read them all. Unpartitioned task output is unchanged (#643).
+
+### Features
+
+- Batched partitions (experimental, RFC-0013, #643): `batch=N`, `batch="all"`, `batches([...])`
+  and `batches_by(fn, max_size=N)` on partitioned assets and tasks group stale keys into
+  fewer function calls. Each key keeps its own run hash, artifact, cutoff and sinks.
+  A batch function receives lists of keys and keyed inputs, and returns a keyed dict or
+  a table split by its partition columns; `barca.Failed("reason")` fails one key alone.
+  `--batch` on `get` and `run`, `barca.get(batch=)`, run requests and schedules override
+  grouping. History groups the keys of each call, and dry runs describe the grouping.
+
+### Bug Fixes
+
+- Concurrent dataset sink writers no longer fail when another writer removes the empty
+  shared staging directory while a new key starts writing.
+
+- Reading a large metadata database no longer prints internal `WHOPPER_FIND_FRAME_PROBE`
+  diagnostics on stderr. Update the Turso dependency to 0.7.0-pre.19 (#645).
+
+### Documentation
+
+- Retain deprecated HTTP route aliases for the public Python `Client`; remove the expired
+  promise to delete them after one minor release. New integrations should use `/runs` (#606).
+
 ## 0.31.0 (2026-10-23)
 
 ### Breaking

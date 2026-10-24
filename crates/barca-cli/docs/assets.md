@@ -78,6 +78,7 @@ Star-import dependency hashing remains conservative.
 | `weight=` | How much of the pool's capacity the step takes while it runs (default 1). Experimental. See "Heavy steps" below. |
 | `deterministic=False` | `@asset` only: new bytes for the same code and inputs are expected, so barca does not warn that the function is not deterministic. Caching is unchanged. See `barca docs cache`, "Recompute byte checks". |
 | `cutoff=True` | What reads the asset depends on the bytes it wrote, not its run hash: a rerun that writes the same bytes leaves everything below it cached. `@asset` only. Experimental. See `barca docs cache`, "Early cutoff". |
+| `batch=` | On partitioned assets and tasks, group stale keys into calls: a positive integer, `"all"`, `batches([...])` or `batches_by(fn)`. The function receives lists of keys; caching stays per key. See `barca docs partitions`, "Processing many keys per call". |
 | `description=`, `tags=` | Metadata. |
 
 Stacked under `@asset`, `@sink("path")` writes the output to a file as well, and
@@ -105,15 +106,17 @@ These are all the arguments barca's decorators and helpers take:
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `group()` | one | `members`, `output`, `description` |
-| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic`, `cutoff` |
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic`, `cutoff`, `batch` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
-| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
+| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `batch` |
 | `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
 | `partitions()` | one | none |
 | `partitions_from()` | one | none |
+| `batches()` | one | `strict` |
+| `batches_by()` | one | `max_size` |
 | `collect()` | one | none |
 | `asset_ref()` | one | none |
-| `Schedule()` | one | `max_failures`, `timeout_seconds` |
+| `Schedule()` | one | `max_failures`, `timeout_seconds`, `batch` |
 
 Every argument in the table does something, on each decorator it is listed for: on `@task` and
 `@sensor`, `partitions=` runs the function once per key and `serializer=` forces the format its
@@ -134,7 +137,7 @@ def report(raw: dict) -> int:
 
 ```
 $ barca list pipeline.py --pretty
-Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight, deterministic, cutoff
+Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight, deterministic, cutoff, batch
 Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 ```
 

@@ -22,6 +22,7 @@ pub(crate) async fn get_cmd(
     mode: GetMode,
     policy: barca_core::cache::CachePolicy,
     partition: Option<PartitionSelection>,
+    batch: barca_core::batch::BatchOverride,
     dry_run: bool,
     agent: bool,
     fields: Option<&[String]>,
@@ -53,6 +54,7 @@ pub(crate) async fn get_cmd(
             mode.explain_mode(),
             fields,
             partition.as_ref(),
+            &batch,
         )
         .await;
     }
@@ -73,6 +75,7 @@ pub(crate) async fn get_cmd(
             cancel_on_ctrl_c(),
             Some(events),
             partition,
+            batch.clone(),
         )
         .await;
         let _ = log_task.await;
@@ -109,6 +112,7 @@ pub(crate) async fn get_cmd(
         cancel_on_ctrl_c(),
         Some(events),
         partition,
+        batch,
     )
     .await;
     let _ = log_task.await;

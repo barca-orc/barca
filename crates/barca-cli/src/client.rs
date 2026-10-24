@@ -511,6 +511,8 @@ pub(crate) struct RunArgs {
     pub(crate) values: bool,
     /// `get --partition`, as typed.
     pub(crate) partition: Option<String>,
+    /// `--batch`, as typed (each `V` or `NODE=V`).
+    pub(crate) batch: Vec<String>,
     pub(crate) fields: Option<Vec<String>>,
     pub(crate) env: Option<String>,
 }
@@ -532,6 +534,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         agent: args.agent,
         values: args.values,
         partition: args.partition.clone(),
+        batch: args.batch.clone(),
     };
     let body = serde_json::to_value(&request).expect("a run request is JSON");
     let answer = server

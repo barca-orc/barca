@@ -3090,6 +3090,11 @@ pub struct RunStep {
     /// printed nothing.
     #[serde(default)]
     pub output_tail: Option<Vec<String>>,
+    /// The batched call (RFC-0013) that computed this key: the keys of one call share it, and
+    /// its output is recorded once under `<node>[batch=<id>]`. `null` for a step that ran on
+    /// its own. Experimental.
+    #[serde(default)]
+    pub batch: Option<String>,
 }
 
 /// How many lines of a failed step's output `barca history RUN_ID` shows ([`RunStep::output_tail`]).
@@ -3142,14 +3147,21 @@ pub async fn get_run_steps_page(
     let (_db, conn) = open_conn(db_path).await?;
     // Read-only snapshots of older databases may lack later columns: those read as null.
     let mut columns = Vec::new();
-    for name in ["attempts", "error_type", "cpu_seconds", "max_rss_bytes"] {
+    for name in [
+        "attempts",
+        "error_type",
+        "cpu_seconds",
+        "max_rss_bytes",
+        "batch_id",
+    ] {
         columns.push(if has_column(&conn, "materializations", name).await? {
             name
         } else {
             "NULL"
         });
     }
-    let (attempts, error_type, cpu, rss) = (columns[0], columns[1], columns[2], columns[3]);
+    let (attempts, error_type, cpu, rss, batch) =
+        (columns[0], columns[1], columns[2], columns[3], columns[4]);
     let total = match limit {
         None => None,
         Some(_) => {
@@ -3175,7 +3187,7 @@ pub async fn get_run_steps_page(
         _ => String::new(),
     };
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &turso::Row, i: usize| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -3218,21 +3230,27 @@ pub async fn get_run_steps_page(
             cpu_seconds: row.get::<f64>(11).ok(),
             max_rss_bytes: row.get::<i64>(12).ok().filter(|rss| *rss > 0),
             output_tail: None,
+            batch: text(&row, 13),
             node_id,
         });
     }
     drop(rows);
     // A failed step's last lines (#627). Failed steps are kept first in a page (#623), so every
     // failed step listed has its tail; only the listed failed steps' lines are read.
+    // A key of a batched call: its call's output, recorded once for the call.
+    let log_id = |s: &RunStep| match &s.batch {
+        Some(b) => format!("{}[batch={b}]", crate::StepId::parse(&s.node_id).base_id()),
+        None => s.node_id.clone(),
+    };
     let failed: std::collections::HashSet<String> = steps
         .iter()
         .filter(|s| s.status == "failed")
-        .map(|s| s.node_id.clone())
+        .map(log_id)
         .collect();
     if !failed.is_empty() {
         let lines = output_lines(&conn, run_id, &failed).await?;
         for step in steps.iter_mut().filter(|s| s.status == "failed") {
-            step.output_tail = Some(output_tail(&lines, &step.node_id));
+            step.output_tail = Some(output_tail(&lines, &log_id(step)));
         }
     }
     let total = total.unwrap_or(steps.len());

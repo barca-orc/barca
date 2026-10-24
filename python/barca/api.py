@@ -240,6 +240,19 @@ def _refresh_args(refresh: list[str] | None, refresh_all: bool, cascade: bool) -
     return []
 
 
+def _batch_args(batch) -> list[str]:
+    """``--batch`` for ``batch=``: a value for every node that declares ``batch=``, or a dict
+    of node name to value."""
+    if batch is None:
+        return []
+    if isinstance(batch, dict):
+        out: list[str] = []
+        for node, value in batch.items():
+            out += ["--batch", f"{node}={'none' if value is None else value}"]
+        return out
+    return ["--batch", str(batch)]
+
+
 def get(
     target_or_file: str,
     *extra_files: str,
@@ -248,6 +261,7 @@ def get(
     cascade: bool = True,
     partition: "str | dict[str, Any] | None" = None,
     server: bool | str = False,
+    batch: "str | int | dict[str, str | int] | None" = None,
 ) -> Any:
     """Get asset value(s).
 
@@ -276,10 +290,15 @@ def get(
     ``[server] url``), ``server="https://..."`` on that one (``barca get --server``); files
     are then optional. The value is the same as a local run's.
 
+    ``batch=`` overrides the ``batch=`` of the nodes that declare one for this run
+    (``--batch``): ``"all"``, ``"none"`` or a whole number for every such node, or a dict
+    ``{"scored": "all"}`` for the nodes named. Experimental.
+
     Returns the deserialized value of the target asset directly.
     """
     args: list[str] = ["get", target_or_file, *extra_files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
+    args += _batch_args(batch)
     if partition is not None:
         args += ["--partition", partition if isinstance(partition, str) else json.dumps(partition)]
         if server:
@@ -301,6 +320,7 @@ def run(
     cascade: bool = True,
     partition: "str | dict[str, Any] | None" = None,
     server: bool | str = False,
+    batch: "str | int | dict[str, str | int] | None" = None,
 ) -> Any:
     """Run a task (and its cone). The task always re-runs.
 
@@ -310,19 +330,22 @@ def run(
     (``--no-cascade``) to re-materialize only the named assets. Pass
     ``refresh_all=True`` to refresh every upstream asset. ``partition=`` selects partition
     keys across the task's cone, as for :func:`get` (``--partition``). ``server=`` runs it
-    on a barca server, as for :func:`get`.
+    on a barca server, and ``batch=`` overrides ``batch=``, as for :func:`get`.
 
-    Returns the deserialized value of the target task directly (or ``None``).
+    A partitioned task returns a dict of partition key to value (tables as JSON rows),
+    as ``get`` does. A large partition summary requires selecting keys with ``partition=``.
+    Returns the value of the target task, or its keyed values when partitioned.
     """
     args: list[str] = ["run", target, *files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
+    args += _batch_args(batch)
     if partition is not None:
         args += ["--partition", partition if isinstance(partition, str) else json.dumps(partition)]
     args += _server_args(server)
     result = _exec(args)
     output = result.get("final_output")
     if output is not None:
-        return _read_output(output, server, result.get("run_id"))
+        return _read_final_output(output, server, result.get("run_id"))
     return output
 
 

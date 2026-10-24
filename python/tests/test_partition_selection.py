@@ -369,6 +369,6 @@ def test_the_python_api_carries_the_selection(project, monkeypatch):
     }
     # No target: the value of the last asset planned.
     barca.get("pipeline.py", partition="retailer=r4")
-    assert barca.run("notify", "pipeline.py", partition="retailer=r4") is None
+    assert barca.run("notify", "pipeline.py", partition="retailer=r4") == {"retailer=r4": None}
     with pytest.raises(barca.BarcaError, match="retailer=r8"):
         barca.get("revenue", "pipeline.py", partition="retailer=r8")

@@ -99,6 +99,8 @@ pub struct RunOptions {
     /// The capacity every run of a `barca serve` shares (`[server] capacity`): the run's steps
     /// are admitted against it as well as against the run's own (#628).
     pub shared_capacity: Option<std::sync::Arc<crate::capacity::SharedCapacity>>,
+    /// `--batch` (RFC-0013): the run's override of the `batch=` of the nodes that declare one.
+    pub batch: crate::batch::BatchOverride,
 }
 
 /// `get` or `run`.
@@ -169,6 +171,11 @@ pub struct RunRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub partition: Option<String>,
+    /// `--batch` of `get` or `run` (RFC-0013), each as the flag takes it: `"all"`, `"none"`,
+    /// `"20"`, or `"scored=all"` for one node. Experimental.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
+    pub batch: Vec<String>,
 }
 
 impl RunRequest {
@@ -192,6 +199,7 @@ impl RunRequest {
             agent: false,
             values: false,
             partition: None,
+            batch: Vec::new(),
         }
     }
 
@@ -310,7 +318,11 @@ impl Outcome {
                 result.partitions.as_deref(),
                 result.key_summary.as_ref(),
             ),
-            RunCommand::Run => result.final_output.as_ref().map(report::read_final_output),
+            RunCommand::Run => report::read_task_output(
+                result.final_output.as_ref(),
+                result.partitions.as_deref(),
+                result.key_summary.as_ref(),
+            ),
         };
         Self::success_with(result, output)
     }
@@ -332,7 +344,11 @@ impl Outcome {
                     t.partitions.as_deref(),
                     t.key_summary.as_ref(),
                 ),
-                RunCommand::Run => t.final_output.as_ref().map(report::read_final_output),
+                RunCommand::Run => report::read_task_output(
+                    t.final_output.as_ref(),
+                    t.partitions.as_deref(),
+                    t.key_summary.as_ref(),
+                ),
             })
             .collect();
         Self::multi_with(result, &values, ctx)

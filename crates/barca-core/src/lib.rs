@@ -3,6 +3,7 @@
 
 #[doc(hidden)]
 pub mod backup;
+pub mod batch;
 pub mod cache;
 pub mod capacity;
 pub mod changes;

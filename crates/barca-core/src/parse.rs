@@ -407,6 +407,27 @@ fn try_extract_function(
             fix: "write cutoff=True or cutoff=False (see `barca docs cache`)".to_string(),
         }
     })?;
+    let batch = extract_batch(func, &keywords, source, &names.barca, &partitions).map_err(
+        |(offset, message)| ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..offset].matches('\n').count() + 1,
+            message,
+            fix: crate::batch::FIX.to_string(),
+        },
+    )?;
+    let schedule_batch =
+        extract_schedule_batch(&keywords, &names.barca).map_err(|(offset, message)| {
+            ParseError::InvalidArguments {
+                file: file_path.to_string(),
+                function: func.name.to_string(),
+                line: source[..offset].matches('\n').count() + 1,
+                message,
+                fix: "write Schedule(\"<cron>\", batch=\"all\"), batch=N or batch=\"none\" (see \
+                      `barca docs scheduling`)"
+                    .to_string(),
+            }
+        })?;
     let env = extract_env(&keywords, file_path, func.name.as_str())?;
     let artifact_serializer = keywords
         .iter()
@@ -470,6 +491,8 @@ fn try_extract_function(
         unused_inputs,
         env_reads,
         inherited_partitions: Vec::new(),
+        batch,
+        schedule_batch,
     }))
 }
 
@@ -504,12 +527,19 @@ fn parse_value_type_expr(expr: &Expr) -> Option<ValueType> {
             // list[pl.DataFrame] from collect() fan-in params.
             if is_list_annotation(sub.value.as_ref()) {
                 parse_value_type_expr(&sub.slice)
+            } else if let (Expr::Name(n), Expr::Tuple(t)) = (sub.value.as_ref(), sub.slice.as_ref())
+                && matches!(n.id.as_str(), "dict" | "Dict" | "Mapping")
+                && t.elts.len() == 2
+            {
+                // dict[str, pl.DataFrame]: a batched call's input, key to each key's value
+                // (RFC-0013); each value is read as the value type.
+                parse_value_type_expr(&t.elts[1])
             } else {
                 None
             }
         }
         Expr::Attribute(attr) => {
-            let module = expr_to_name(attr.value.as_ref())?;
+            let module = dotted_expr(attr.value.as_ref())?;
             parse_type_path(&format!("{module}.{}", attr.attr))
         }
         Expr::Name(name) => parse_type_path(&name.id),
@@ -519,13 +549,6 @@ fn parse_value_type_expr(expr: &Expr) -> Option<ValueType> {
 
 fn is_list_annotation(expr: &Expr) -> bool {
     matches!(expr, Expr::Name(n) if n.id.as_str() == "list")
-}
-
-fn expr_to_name(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::Name(n) => Some(n.id.to_string()),
-        _ => None,
-    }
 }
 
 fn parse_type_path(path: &str) -> Option<ValueType> {
@@ -543,6 +566,9 @@ fn classify_type(module: &str, name: &str) -> Option<ValueType> {
         ("pl" | "polars", "LazyFrame") => Some(ValueType::PolarsLazy),
         ("pd" | "pandas", "DataFrame") => Some(ValueType::Pandas),
         ("pyarrow", "Table") => Some(ValueType::PyArrow),
+        ("ds" | "pads" | "pyarrow.dataset" | "pa.dataset", "Dataset") => {
+            Some(ValueType::PyArrowDataset)
+        }
         ("duckdb", "DuckDBPyRelation") => Some(ValueType::DuckDB),
         _ => None,
     }
@@ -994,6 +1020,101 @@ pub(crate) fn is_cutoff_asset(
 /// Anything else is refused with the byte offset of the value: a cutoff that silently did
 /// nothing would rerun everything below the asset, and one read as on by mistake would change
 /// what its consumers' run hashes fold in.
+/// `batch=` (RFC-0013), checked against the node: only a partitioned node takes it, and its
+/// partition parameter receives a list, so it cannot be annotated as a scalar.
+fn extract_batch(
+    func: &ast::StmtFunctionDef,
+    keywords: &[&Keyword],
+    source: &str,
+    barca: &crate::decorator_args::BarcaNames,
+    partitions: &HashMap<String, PartitionSpec>,
+) -> Result<Option<crate::model::BatchSpec>, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("batch"))
+    else {
+        return Ok(None);
+    };
+    let mut dims: Vec<String> = partitions.keys().cloned().collect();
+    dims.sort();
+    let spec = crate::batch::extract(&kw.value, source, barca, &dims)?;
+    if spec.is_none() {
+        return Ok(None);
+    }
+    let at = kw.range().start().to_usize();
+    if partitions.is_empty() {
+        return Err((
+            at,
+            "batch= groups the partition keys of a partitioned step into calls, and this step \
+             declares no partitions="
+                .to_string(),
+        ));
+    }
+    let params = &func.parameters;
+    for arg in params
+        .posonlyargs
+        .iter()
+        .chain(&params.args)
+        .chain(&params.kwonlyargs)
+    {
+        let name = arg.name().id.as_str();
+        if !partitions.contains_key(name) {
+            continue;
+        }
+        if let Some(scalar) = arg.annotation().and_then(crate::batch::scalar_annotation) {
+            return Err((
+                arg.range().start().to_usize(),
+                format!(
+                    "with batch= the parameter '{name}' receives the list of the call's keys, \
+                     but it is annotated `{scalar}`; annotate it `list[{scalar}]`"
+                ),
+            ));
+        }
+    }
+    Ok(spec)
+}
+
+/// `Schedule(..., batch=V)`: the `--batch` value a scheduled tick runs with, as the flag
+/// takes it. `None` when not written.
+fn extract_schedule_batch(
+    keywords: &[&Keyword],
+    barca: &crate::decorator_args::BarcaNames,
+) -> Result<Option<String>, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("freshness"))
+    else {
+        return Ok(None);
+    };
+    let Expr::Call(call) = &kw.value else {
+        return Ok(None);
+    };
+    if barca.recognized(&call.func) != Some("Schedule") {
+        return Ok(None);
+    }
+    let Some(b) = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|a| a.as_str() == "batch"))
+    else {
+        return Ok(None);
+    };
+    let at = b.value.range().start().to_usize();
+    let value = match &b.value {
+        Expr::NoneLiteral(_) => return Ok(None),
+        Expr::StringLiteral(s) => s.value.to_string(),
+        Expr::NumberLiteral(n) => match &n.value {
+            ast::Number::Int(i) => i.to_string(),
+            _ => String::new(),
+        },
+        _ => String::new(),
+    };
+    crate::batch::BatchOverride::parse(std::slice::from_ref(&value))
+        .map_err(|e| (at, format!("Schedule(batch=): {e}")))?;
+    Ok(Some(value))
+}
+
 fn extract_cutoff(keywords: &[&Keyword], source: &str) -> Result<bool, (usize, String)> {
     let Some(kw) = keywords
         .iter()

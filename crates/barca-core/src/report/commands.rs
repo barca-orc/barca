@@ -670,6 +670,89 @@ pub fn run_detail_hint(detail: &crate::queries::RunDetail, select: &str) -> Opti
 
 /// `barca history RUN_ID`: the run's own fields, a row per recorded step, and for each failed
 /// step its error, traceback and how its worker ended. JSON: `{run, steps, hint?}`.
+/// How many keys of one batched call `barca history RUN_ID` lists under the call's row; the
+/// JSON lists every recorded key.
+pub const CALL_KEYS_SHOWN: usize = 10;
+
+/// The rows of `barca history RUN_ID`: one per step, except that the keys of a batched call
+/// (RFC-0013) are listed under one row for the call, `node[N keys]`, with its total time and
+/// its peak memory (the call's, shared by its keys).
+fn history_rows(
+    steps: &[crate::db::RunStep],
+    step_row: impl Fn(&crate::db::RunStep) -> [String; 7],
+    secs: impl Fn(Option<f64>) -> String,
+) -> Vec<[String; 7]> {
+    let mut members: std::collections::HashMap<&str, Vec<&crate::db::RunStep>> =
+        std::collections::HashMap::new();
+    for s in steps {
+        if let Some(b) = &s.batch {
+            members.entry(b.as_str()).or_default().push(s);
+        }
+    }
+    for keys in members.values_mut() {
+        keys.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    }
+    let mut rows = Vec::new();
+    let mut shown = std::collections::HashSet::new();
+    for s in steps {
+        let Some(b) = s.batch.as_deref() else {
+            rows.push(step_row(s));
+            continue;
+        };
+        if !shown.insert(b) {
+            continue;
+        }
+        let keys = &members[b];
+        let failed = keys.iter().filter(|k| k.status == "failed").count();
+        let status = match failed {
+            0 => "success".to_string(),
+            n if n == keys.len() => "failed".to_string(),
+            n => format!("partial ({n} failed)"),
+        };
+        let total: f64 = keys.iter().filter_map(|k| k.elapsed_seconds).sum();
+        let peak = keys.iter().filter_map(|k| k.max_rss_bytes).max();
+        let attempts = keys.iter().filter_map(|k| k.attempts).max();
+        let base = crate::StepId::parse(&s.node_id).base_id().to_string();
+        rows.push([
+            format!(
+                "{base}[{} key{}]",
+                keys.len(),
+                if keys.len() == 1 { "" } else { "s" }
+            ),
+            status,
+            attempts.map_or_else(|| "-".to_string(), |n| n.to_string()),
+            secs(Some(total)),
+            peak.map_or_else(
+                || "-".to_string(),
+                |b| crate::gc::size::human(b.max(0) as u64),
+            ),
+            "-".to_string(),
+            format!("batch {b}"),
+        ]);
+        for k in keys.iter().take(CALL_KEYS_SHOWN) {
+            let mut row = step_row(k);
+            row[0] = format!("  {}", row[0]);
+            row[4] = "-".to_string();
+            rows.push(row);
+        }
+        if keys.len() > CALL_KEYS_SHOWN {
+            rows.push([
+                format!(
+                    "  ... {} more keys (--json lists them)",
+                    keys.len() - CALL_KEYS_SHOWN
+                ),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]);
+        }
+    }
+    rows
+}
+
 pub fn render_run_detail(
     detail: &crate::queries::RunDetail,
     json: bool,
@@ -743,41 +826,38 @@ pub fn render_run_detail(
     }
     line!(rendered, "steps: {counts}");
     if !detail.steps.is_empty() {
-        let rows: Vec<[String; 7]> = detail
-            .steps
-            .iter()
-            .map(|s| {
-                let artifact = match (&s.artifact_path, &s.artifact_format) {
-                    (Some(path), format) => {
-                        let mut about: Vec<String> = format.iter().cloned().collect();
-                        if let Some(size) = s.artifact_size_bytes {
-                            about.push(crate::gc::size::human(size.max(0) as u64));
-                        }
-                        if about.is_empty() {
-                            path.clone()
-                        } else {
-                            format!("{path} ({})", about.join(", "))
-                        }
+        let step_row = |s: &crate::db::RunStep| {
+            let artifact = match (&s.artifact_path, &s.artifact_format) {
+                (Some(path), format) => {
+                    let mut about: Vec<String> = format.iter().cloned().collect();
+                    if let Some(size) = s.artifact_size_bytes {
+                        about.push(crate::gc::size::human(size.max(0) as u64));
                     }
-                    (None, _) => "-".to_string(),
-                };
-                [
-                    s.node_id.clone(),
-                    s.status.clone(),
-                    s.attempts
-                        .map_or_else(|| "-".to_string(), |n| n.to_string()),
-                    secs(s.elapsed_seconds),
-                    s.max_rss_bytes.map_or_else(
-                        || "-".to_string(),
-                        |b| crate::gc::size::human(b.max(0) as u64),
-                    ),
-                    s.run_hash
-                        .as_deref()
-                        .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
-                    artifact,
-                ]
-            })
-            .collect();
+                    if about.is_empty() {
+                        path.clone()
+                    } else {
+                        format!("{path} ({})", about.join(", "))
+                    }
+                }
+                (None, _) => "-".to_string(),
+            };
+            [
+                s.node_id.clone(),
+                s.status.clone(),
+                s.attempts
+                    .map_or_else(|| "-".to_string(), |n| n.to_string()),
+                secs(s.elapsed_seconds),
+                s.max_rss_bytes.map_or_else(
+                    || "-".to_string(),
+                    |b| crate::gc::size::human(b.max(0) as u64),
+                ),
+                s.run_hash
+                    .as_deref()
+                    .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
+                artifact,
+            ]
+        };
+        let rows = history_rows(&detail.steps, step_row, secs);
         let header = [
             "STEP", "STATUS", "ATTEMPTS", "TIME", "PEAK_RSS", "RUN_HASH", "ARTIFACT",
         ];

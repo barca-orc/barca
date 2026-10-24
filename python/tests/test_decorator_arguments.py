@@ -23,7 +23,7 @@ from barca.api import _find_binary
 
 ASSET_ACCEPTS = (
     "@asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, "
-    "retries, retry_backoff, description, tags, env, weight, deterministic, cutoff"
+    "retries, retry_backoff, description, tags, env, weight, deterministic, cutoff, batch"
 )
 
 GOOD = """
@@ -70,7 +70,7 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
         (
             "@task(when='always')",
             "`when` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, "
-            "timeout_seconds, retries, retry_backoff, description, tags, env, weight",
+            "timeout_seconds, retries, retry_backoff, description, tags, env, weight, batch",
             "Remove `when`, or replace it with an argument @task accepts. See `barca docs tasks`.",
         ),
         (
@@ -112,7 +112,7 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
         (
             "@asset(freshness=Schedule(cron='0 5 * * *'))",
             "`cron` is passed by keyword to Schedule(), which takes it by position only. "
-            "Schedule() accepts: max_failures, timeout_seconds",
+            "Schedule() accepts: max_failures, timeout_seconds, batch",
             'Pass the value as the first argument, without `cron=`, like `Schedule("0 5 * * *")`. '
             "See `barca docs scheduling`.",
         ),

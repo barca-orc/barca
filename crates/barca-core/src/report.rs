@@ -45,22 +45,28 @@ pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> Str
                 (_, v) => v,
             };
             let why = match (&s.partitions, &s.detail) {
-                (Some(p), _) if verdict == "partial" => format!(
-                    "{} of {} keys cached; will run: {}",
-                    p.cached,
-                    p.total,
-                    p.will_run_keys
-                        .iter()
-                        // What changed in a key that ran before (a dict source's new value).
-                        .map(|k| match p.changed.as_ref().and_then(|c| c.get(k)) {
-                            Some(changed) => {
-                                format!("{k} ({} changed)", crate::changes::summary(changed))
-                            }
-                            None => k.clone(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
+                (Some(p), _) if verdict == "partial" => {
+                    format!(
+                        "{} of {} keys cached; will run: {}",
+                        p.cached,
+                        p.total,
+                        p.will_run_keys
+                            .iter()
+                            // What changed in a key that ran before (a dict source's new value).
+                            .map(|k| match p.changed.as_ref().and_then(|c| c.get(k)) {
+                                Some(changed) => {
+                                    format!("{k} ({} changed)", crate::changes::summary(changed))
+                                }
+                                None => k.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ) + &s
+                        .batch
+                        .as_ref()
+                        .map(|b| format!("; {}", crate::batch::grouping_line(b)))
+                        .unwrap_or_default()
+                }
                 (Some(p), Some(d)) => format!("{} keys; {d}", p.total),
                 (None, Some(d)) => d.clone(),
                 (Some(p), None) => format!("{} keys cached", p.total),
@@ -420,14 +426,33 @@ pub fn pointer_output(
     keys: Option<&[(String, crate::dispatch::OutputRef)]>,
     summary: Option<&crate::results::KeySummary>,
 ) -> Option<serde_json::Value> {
+    output_with(single, keys, summary, artifact_metadata)
+}
+
+/// A task's JSON results, preserving its keys; binary formats remain artifact references.
+/// The command layer reads tabular partition values with `values::task_output`.
+pub fn read_task_output(
+    single: Option<&crate::dispatch::OutputRef>,
+    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
+) -> Option<serde_json::Value> {
+    output_with(single, keys, summary, read_final_output)
+}
+
+fn output_with(
+    single: Option<&crate::dispatch::OutputRef>,
+    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
+    read: impl Fn(&crate::dispatch::OutputRef) -> serde_json::Value,
+) -> Option<serde_json::Value> {
     match crate::results::KeySummary::listed(summary, keys) {
         Some(keys) => Some(keyed_output(
             keys.iter()
-                .map(|(key, oref)| (key.clone(), artifact_metadata(oref)))
+                .map(|(key, oref)| (key.clone(), read(oref)))
                 .collect(),
             summary,
         )),
-        None => single.map(artifact_metadata),
+        None => single.map(read),
     }
 }
 

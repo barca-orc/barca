@@ -126,7 +126,8 @@ def test_a_worker_names_itself_in_its_hello(tmp_path, monkeypatch, role):
 
 
 @pytest.mark.parametrize("helper", ["worker", "transfer"])
-def test_coordinator_rejects_and_reaps_wrong_version_helper(tmp_path, helper):
+@pytest.mark.parametrize("version", [3, 99])
+def test_coordinator_rejects_and_reaps_wrong_version_helper(tmp_path, helper, version):
     import os
     import signal
     import subprocess
@@ -141,7 +142,7 @@ from pathlib import Path
 Path("helper-pid").write_text(str(os.getpid()))
 s = socket.socket(socket.AF_UNIX)
 s.connect(os.environ["BARCA_SOCKET"])
-data = json.dumps({{"type": "hello", "role": {helper!r}, "protocol_version": 99}}).encode()
+data = json.dumps({{"type": "hello", "role": {helper!r}, "protocol_version": {version}}}).encode()
 s.sendall(struct.pack(">I", len(data)) + data)
 time.sleep(60)
 """)
@@ -162,7 +163,7 @@ time.sleep(60)
         timeout=30,
     )
     assert result.returncode == 3, result.stderr
-    assert f"{helper} protocol v99, coordinator expects v3" in result.stderr
+    assert f"{helper} protocol v{version}, coordinator expects v{_runtime.PROTOCOL_VERSION}" in result.stderr
     assert "reinstall barca" in result.stderr
     assert not (tmp_path / "step-ran").exists()
     pid = int((tmp_path / "helper-pid").read_text())

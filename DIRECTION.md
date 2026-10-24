@@ -1,6 +1,8 @@
 # Direction
 
-Last reset: 2026-10-10, at v0.22.0; re-triaged 2026-10-20 at v0.24.1, re-planned the same day at v0.24.2 for three new requests, and brought up to date on 2026-10-21 at v0.29.1, when everything planned had shipped. The pinned [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced the roadmap issue (#344) and the adoption tracker (#108).
+Last updated: 2026-10-24, after v0.31.0. The pinned
+[Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
+the roadmap issue (#344) and the adoption tracker (#108).
 
 ## What barca is
 
@@ -29,7 +31,12 @@ The four priorities set at the 2026-10-20 re-triage have shipped, in 0.24.2 to 0
 3. **Server mode.** Shipped in 0.27.0: the server is the ledger (RFC-0007), with drain on shutdown (#190), one run contract over HTTP (#393) with pause and resume for a schedule (#435), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
 4. **Freshness under serve.** Shipped in 0.28.0: `Always` and `Manual` have their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
 
-Next: the 0.29.2 patch (below). No new priority has been set; the next one is chosen at the next re-triage. Known work without a release yet: removing the route aliases #393 kept (see "Open questions"), and duckdb 2 (#567).
+**0.32.0** is the batched-partition release (RFC-0013, #643): fewer calls over large key sets,
+with per-key caching unchanged. It also resolves the docs leftovers (#606), including the decision to
+retain the deprecated HTTP aliases for Python `Client` compatibility. It removes the production debug
+output (#645) with a database-dependency update checked against older database fixtures.
+The next work is the cleanup checklist below; no new capability priority has been set.
+DuckDB 2 (#567) remains deferred until after 2.0.1; the current pin stays below 2.
 
 ### Release sequence
 
@@ -50,7 +57,12 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.28.1 cleanup (shipped as 0.28.3) | 2026-10-21 | Docs and site, new-user fixes, faster start-up, running state in the UI | #495 to #499, #502, #504, #529, #534, #560, #65 |
 | 0.29.0 | 2026-10-21 | Breaking: parameters checked at planning, retries in the same worker; heavy-step capacity; what changed | #549, #523, #436, #558, #555, #553, #250 and others |
 | 0.29.1 | 2026-10-21 | Store and env fixes from the realistic fixture | #574, #575, #576, #577, #593, #595 |
-| 0.29.2 | next | Bookkeeping and stale output samples | #503 |
+| 0.29.2 to 0.29.6 | 2026-10-21 to 2026-10-22 | Bookkeeping, inspection, keyed partition sources and selection | #503, #614, #617, #622 |
+| 0.30.0 | 2026-10-23 | Partitioned dataset sinks; sink failure fails the step | #621 |
+| 0.30.1 | 2026-10-23 | Older metadata DB compatibility | #629, #630 |
+| 0.30.2 | 2026-10-23 | Bounded outcomes and memory over many partition keys | #623 |
+| 0.31.0 | 2026-10-23 | Production diagnostics, shared capacity, timeout, drain recovery and cutoff | #627, #628, #616, #637 |
+| 0.32.0 | [release status](https://github.com/barca-orc/barca/releases/tag/v0.32.0) | Batched partitions and remaining documentation | #643, #606 |
 
 An open issue with no milestone is unscheduled on purpose (#567); it is scheduled when it becomes the next most important thing.
 
@@ -70,11 +82,18 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- **Route aliases and resume** (#393): 0.27.0 kept `POST /run`, `POST /run/{target}`, `POST /get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}` and `GET /events/{run_id}` as aliases "for one minor release", and 0.29.1 still serves them. Their removal is breaking, so it needs a minor; when, and whether `Last-Event-ID` resume replaces the drop-is-infra-error rule, is undecided. By 0.30.0.
+- **Event stream resume:** whether `Last-Event-ID` resume should replace the current
+  drop-is-infra-error rule remains unscheduled. Route alias retention is decided below.
 
 Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s, exit 1 after a forced stop; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
 
 ## Decided, October 2026
+
+**HTTP aliases (0.32.0, #606).** Keep the deprecated `POST /run`, `POST /run/{target}`,
+`POST /get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}` and
+`GET /events/{run_id}` routes: the public Python `Client` still uses them. New integrations
+use `/runs`. There is no scheduled removal; a future removal must migrate `Client` first
+and announce the breaking change in a minor release.
 
 The design decisions behind items 2 to 4, settled on 2026-10-14. The RFCs carry the detail; this is the list to check a proposal against.
 

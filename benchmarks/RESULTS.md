@@ -1,13 +1,48 @@
 # Benchmark Results
 
-Latest passes: 2026-10-23, early cutoff for assets at 10k and 200k keys (first section below)
-and bounded run records under `barca serve` at 200k keys (second); 2026-10-22, keyed partition
-sources at 10k to 200k keys (third section), and the read routes of `barca serve` and the
-inspection commands at 300 assets (fourth). Latest comparison pass: 2026-10-21, barca 0.28.0
-against Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (fifth section,
+Latest passes: 2026-10-24, batched partitions at 10k and 200k keys (first section);
+2026-10-23, early cutoff for assets at 10k and 200k keys
+and bounded run records under `barca serve` at 200k keys; 2026-10-22, keyed partition
+sources at 10k to 200k keys (fourth section), and the read routes of `barca serve` and the
+inspection commands at 300 assets (fifth). Latest comparison pass: 2026-10-21, barca 0.28.0
+against Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (sixth section,
 #65). The sections after it are older passes on other hardware and are kept for the record.
 Absolute times from different machines are not comparable; within one pass, the ratios between
 frameworks are.
+
+## Batched partitions (2026-10-24)
+
+`benchmarks/batched_partitions/bench.py`: a keyed sensor followed by two partitioned assets,
+`versions -> cleaned -> scored`, at 10k and 200k keys. Each asset returns a small dict. The
+same keys and values are computed per key, in calls of 1000, or in one call per asset.
+
+Release builds of the 0.32.0 implementation branch (package version still 0.31.0), on the
+AMD Ryzen AI MAX+ 395, 32 threads, 62 GiB RAM, Fedora 44 kernel 7.2.8, NVMe. One sample per
+case, not CPU-pinned; Rust builds and the Python suite ran concurrently, so small timing
+differences are noise. Peak RSS is the coordinator only, measured by `/usr/bin/time`, not
+aggregate worker memory. Every variant uses the default worker pool. Calls are counted from
+materializations, grouping `batch_id`, and include the sensor.
+
+```bash
+BARCA_BIN="$PWD/.venv/bin/barca" .venv/bin/python benchmarks/batched_partitions/bench.py
+```
+
+| Keys | Batch | Cold | Calls | Coordinator peak RSS | One key changed |
+|---:|---|---:|---:|---:|---:|
+| 10k | none | 3.73 s | 20,001 | 206 MiB | 0.537 s |
+| 10k | 1000 | 2.95 s | 21 | 241 MiB | 0.411 s |
+| 10k | all | 4.17 s | 3 | 312 MiB | 0.298 s |
+| 200k | none | 213.46 s | 400,001 | 2,964 MiB | 6.826 s |
+| 200k | 1000 | 180.18 s | 401 | 3,798 MiB | 6.917 s |
+| 200k | all | 82.83 s | 3 | 5,439 MiB | 6.548 s |
+
+Every one-key update executes exactly three calls: the sensor and one key of each asset.
+The harness asserts this. Per-key artifacts and materializations remain, so batching does
+not remove their serialization or database cost. This cheap-work fixture shows the call
+reduction rather than the potential gain from replacing repeated heavy SQL queries with one
+set-based query. `all` trades more memory and less parallelism for fewer calls; use `batch=N`
+to bound a call. Raw measurements are in
+[batched_partitions/measurements.jsonl](batched_partitions/measurements.jsonl).
 
 ## Early cutoff for assets (2026-10-23)
 

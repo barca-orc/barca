@@ -349,6 +349,7 @@ struct RunState {
     decide_state: DecideState,
     step_reports: Vec<StepReport>,
     phase_error: Option<String>,
+    usage_error: Option<String>,
     step_failure: Option<(String, String)>,
     failed_bases: std::collections::HashSet<String>,
     skipped_bases: std::collections::HashSet<String>,
@@ -383,6 +384,10 @@ struct RunState {
     narrowing: Option<crate::selection::Narrowing>,
     /// Every key of each partitioned asset with a dataset sink, for deleting removed keys.
     dataset_keys: HashMap<String, crate::dataset_sinks::DatasetKeys>,
+    /// Batched calls (RFC-0013): the next call's number, and the call of each key that ran in
+    /// one (display id -> call id).
+    next_call: u64,
+    calls: HashMap<String, String>,
 }
 // Fields drop in the same order as the original run locals: recorder, workers, store.
 struct RunSession<'a, 'r> {
@@ -466,6 +471,12 @@ async fn execute_started(
             .await?;
         trace_point!(started.trace, "ledger_lookup");
     }
+    // `--batch NODE=V` names nodes that declare batch= (RFC-0013), checked before the run starts.
+    request
+        .options
+        .batch
+        .check(&prepared.dag)
+        .map_err(BarcaError::Usage)?;
     let mut session = open_run(&request, &prepared, started).await?;
     session.state.pin = Some(pin);
     drive_phases(&mut session).await?;
@@ -498,6 +509,9 @@ async fn execute_started(
     read.sort();
     // Their `last_read_at` is written with the run's ledger, on its connection.
     let elapsed = record_and_publish(&mut session, &read).await?;
+    if let Some(error) = session.state.usage_error.take() {
+        return Err(BarcaError::Usage(error));
+    }
     let mut executed = return_outputs(&mut session, elapsed).await?;
     let own = cache_check_inputs(&session, &executed);
     let pin = session.state.pin.take();
@@ -519,6 +533,7 @@ async fn prune_dataset_sinks(session: &mut RunSession<'_, '_>) {
     if datasets.is_empty()
         || session.started.cancel.is_cancelled()
         || session.state.phase_error.is_some()
+        || session.state.usage_error.is_some()
         || session.state.transfer_error.is_some()
     {
         return;
@@ -1375,6 +1390,11 @@ async fn expand_and_decide(
 /// Record `base` as a failed step that never ran: its `partitions_from` source could not be read
 /// for keys (`dispatch::expand_pending_partitions`).
 fn fail_unexpanded(session: &mut RunSession<'_, '_>, base: String, message: String) {
+    fail_step(session, base, message, "PartitionSourceError");
+}
+
+/// Record `base` as a failed step that never ran, with `error_type`.
+fn fail_step(session: &mut RunSession<'_, '_>, base: String, message: String, error_type: &str) {
     if session.request.agent_mode {
         crate::run_line!(Agent, "{}", failed_step_line(&base, &message));
     }
@@ -1385,7 +1405,7 @@ fn fail_unexpanded(session: &mut RunSession<'_, '_>, base: String, message: Stri
     session.state.all_failures.push(dispatch::StepFailure {
         node_id: base,
         error: dispatch::StepError {
-            error_type: "PartitionSourceError".to_string(),
+            error_type: error_type.to_string(),
             message,
             traceback: String::new(),
             attempts: 1,
@@ -1521,6 +1541,7 @@ async fn dispatch_ready(
     filtered_phase: &Phase,
     provided: &HashMap<String, dispatch::ProvidedInput>,
     phase_idx: usize,
+    calls: Vec<(String, Vec<String>)>,
 ) -> crate::coordinator::Coordinator {
     session.state.steps_executed += phase_step_count(filtered_phase);
 
@@ -1528,6 +1549,7 @@ async fn dispatch_ready(
         dispatch_phase(DispatchPhase {
             filtered_phase,
             provided,
+            calls,
             pool: session.pool.as_mut().expect("workers started"),
             cost_model: &mut session.cost_model,
             decide_state: &session.state.decide_state,
@@ -1791,6 +1813,108 @@ fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>
         }
     }
 }
+struct PlannedCalls {
+    calls: Vec<(String, Vec<String>)>,
+    errors: Vec<(String, String)>,
+}
+
+struct BatchKeys {
+    base: String,
+    ordered: Vec<(usize, String)>,
+}
+
+/// Group the keys of each batched node in `phase` into calls (RFC-0013): `(call id, the
+/// display ids of its keys in key order)`. Only the keys that run are in the phase, so only
+/// those are grouped. A node whose grouping cannot be made (a `batches_by` function that
+/// raises, `strict=True` with a key in no group) is returned with why, to be failed.
+fn plan_calls(
+    dag: &Dag,
+    over: &crate::batch::BatchOverride,
+    phase: &Phase,
+    python: &std::path::Path,
+    next_call: &mut u64,
+) -> PlannedCalls {
+    let mut keys_of: Vec<BatchKeys> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for step in phase.streams.iter().flat_map(|s| &s.steps) {
+        if step.partition_keys.is_empty() {
+            continue;
+        }
+        let base = step.step_id.base_id();
+        let Some(node) = dag.get_node(base) else {
+            continue;
+        };
+        if node.extracted.batch.is_none() {
+            continue;
+        }
+        let i = *index.entry(base.to_string()).or_insert_with(|| {
+            keys_of.push(BatchKeys {
+                base: base.to_string(),
+                ordered: Vec::new(),
+            });
+            keys_of.len() - 1
+        });
+        keys_of[i]
+            .ordered
+            .extend(step.partition_keys.iter().map(|pk| {
+                let key = pk.suffix();
+                let position = step
+                    .keyed
+                    .order
+                    .as_ref()
+                    .and_then(|order| order.get(&key))
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                (position, key)
+            }));
+    }
+    let mut calls = Vec::new();
+    let mut errors = Vec::new();
+    for BatchKeys { base, mut ordered } in keys_of {
+        ordered.sort_by_key(|(position, _)| *position);
+        let keys: Vec<String> = ordered.into_iter().map(|(_, key)| key).collect();
+        let node = dag.get_node(&base).expect("found above");
+        let Some(grouping) = crate::batch::effective(node, over) else {
+            continue;
+        };
+        let labels = match &grouping {
+            crate::batch::Grouping::By { source_text, .. } => {
+                match crate::batch::evaluate_labels(
+                    python,
+                    &node.extracted.source_file,
+                    source_text,
+                    &keys,
+                ) {
+                    Ok(labels) => Some(labels),
+                    Err(e) => {
+                        errors.push((base.clone(), format!("could not group the keys: {e}")));
+                        continue;
+                    }
+                }
+            }
+            _ => None,
+        };
+        let groups = match crate::batch::group_keys(&keys, &grouping, labels.as_deref()) {
+            Ok(groups) => groups,
+            Err(e) => {
+                errors.push((base.clone(), format!("could not group the keys: {e}")));
+                continue;
+            }
+        };
+        for group in groups {
+            *next_call += 1;
+            calls.push((
+                format!("b{next_call}"),
+                group
+                    .into_iter()
+                    .map(|i| format!("{base}[{}]", keys[i]))
+                    .collect(),
+            ));
+        }
+    }
+    PlannedCalls { calls, errors }
+}
+
 async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError> {
     let prepared = session.prepared;
     let target_ids: Vec<&str> = prepared.targets.iter().map(|(_, id)| id.as_str()).collect();
@@ -1832,7 +1956,29 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         let Some((phase, provided)) = recovered else {
             continue;
         };
-        let coord = dispatch_ready(session, &phase, &provided, phase_idx).await;
+        let PlannedCalls {
+            calls,
+            errors: ungrouped,
+        } = plan_calls(
+            &prepared.dag,
+            &session.request.options.batch,
+            &phase,
+            session.request.python,
+            &mut session.state.next_call,
+        );
+        if let Some((base, message)) = ungrouped.first() {
+            session.state.usage_error = Some(format!("{base}: {message}"));
+            for (base, message) in ungrouped {
+                fail_step(session, base, message, "BatchError");
+            }
+            break;
+        }
+        session.state.calls.extend(
+            calls
+                .iter()
+                .flat_map(|(id, keys)| keys.iter().map(move |k| (k.clone(), id.clone()))),
+        );
+        let coord = dispatch_ready(session, &phase, &provided, phase_idx, calls).await;
         let phase_outputs = collect_outputs(session, &coord);
         collect_failures(session, &coord).await;
         merge_outputs(session, &phase_outputs);
@@ -1880,6 +2026,7 @@ async fn record_and_publish(
             all_sinks: &session.state.all_sinks,
             all_attempts: &session.state.all_attempts,
             all_timings: &session.state.all_timings,
+            calls: &session.state.calls,
             decide_state: &session.state.decide_state,
             db_path: &session.request.cfg.db_path,
             logs_buffer: &mut session.state.logs_buffer,
@@ -3244,6 +3391,8 @@ pub(crate) fn note(pb: &Option<indicatif::ProgressBar>, msg: &str) {
 
 struct DispatchPhase<'a> {
     filtered_phase: &'a Phase,
+    /// The batched calls of this phase (RFC-0013), as [`plan_calls`] made them.
+    calls: Vec<(String, Vec<String>)>,
     provided: &'a HashMap<String, dispatch::ProvidedInput>,
     pool: &'a mut crate::io_loop::WorkerPool,
     cost_model: &'a mut crate::cost::CostModel,
@@ -3276,6 +3425,7 @@ async fn dispatch_phase(
     let DispatchPhase {
         filtered_phase,
         provided,
+        calls,
         pool,
         cost_model,
         decide_state,
@@ -3295,6 +3445,7 @@ async fn dispatch_phase(
         cancel,
     } = ctx;
     let mut coord = crate::coordinator::Coordinator::new();
+    coord.assign_calls(calls);
     let loaded = coord.load_phase(filtered_phase, provided);
     let expected: usize = filtered_phase
         .streams
@@ -3530,6 +3681,8 @@ struct FinalizeRun<'a> {
     all_sinks: &'a HashMap<String, String>,
     all_attempts: &'a HashMap<String, u32>,
     all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
+    /// The batched call of each key that ran in one (RFC-0013).
+    calls: &'a HashMap<String, String>,
     decide_state: &'a DecideState,
     db_path: &'a str,
     logs_buffer: &'a mut crate::run_logs::Recorder,
@@ -3578,6 +3731,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         all_sinks,
         all_attempts,
         all_timings,
+        calls,
         decide_state,
         db_path,
         logs_buffer,
@@ -3716,6 +3870,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         all_sinks,
         all_attempts,
         all_timings,
+        batches: calls,
         cached_node_ids,
         run_hashes: decide_state.run_hashes(),
         components: &components,
@@ -4372,6 +4527,7 @@ mod store_tests {
             all_sinks: &HashMap::new(),
             all_attempts: &all_attempts,
             all_timings: &HashMap::new(),
+            batches: &HashMap::new(),
             cached_node_ids: &std::collections::HashSet::new(),
             run_hashes: &run_hashes,
             components: &HashMap::new(),
@@ -4430,6 +4586,7 @@ mod store_tests {
             all_sinks: &HashMap::new(),
             all_attempts: &HashMap::new(),
             all_timings: &HashMap::new(),
+            batches: &HashMap::new(),
             cached_node_ids: &std::collections::HashSet::new(),
             run_hashes: &run_hashes,
             components: &HashMap::new(),

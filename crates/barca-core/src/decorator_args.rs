@@ -79,6 +79,7 @@ pub const SIGNATURES: &[Signature] = &[
             "weight",
             "deterministic",
             "cutoff",
+            "batch",
         ],
         deferred: &[],
         usage: "@asset(inputs={\"param\": upstream}, ...)",
@@ -123,6 +124,7 @@ pub const SIGNATURES: &[Signature] = &[
             "tags",
             "env",
             "weight",
+            "batch",
         ],
         deferred: &[],
         usage: "@task(inputs={\"param\": upstream}, ...)",
@@ -156,6 +158,24 @@ pub const SIGNATURES: &[Signature] = &[
         topic: "partitions",
     },
     Signature {
+        name: "batches",
+        decorator: false,
+        positional: &["groups"],
+        keywords: &["strict"],
+        deferred: &[],
+        usage: "batches([[\"r1\", \"r2\"], [\"r3\"]])",
+        topic: "partitions",
+    },
+    Signature {
+        name: "batches_by",
+        decorator: false,
+        positional: &["fn"],
+        keywords: &["max_size"],
+        deferred: &[],
+        usage: "batches_by(region_of, max_size=20)",
+        topic: "partitions",
+    },
+    Signature {
         name: "collect",
         decorator: false,
         positional: &["asset_fn"],
@@ -177,7 +197,7 @@ pub const SIGNATURES: &[Signature] = &[
         name: "Schedule",
         decorator: false,
         positional: &["cron"],
-        keywords: &["max_failures", "timeout_seconds"],
+        keywords: &["max_failures", "timeout_seconds", "batch"],
         deferred: &[],
         usage: "Schedule(\"0 5 * * *\")",
         topic: "scheduling",
@@ -1162,7 +1182,7 @@ mod tests {
         asset.retain(|k| *k != "cutoff");
         assert_eq!(asset, keywords("task"));
         let mut sensor = asset.clone();
-        sensor.retain(|k| *k != "inputs");
+        sensor.retain(|k| *k != "inputs" && *k != "batch");
         assert_eq!(keywords("sensor"), sensor);
     }
 
@@ -1196,7 +1216,7 @@ mod tests {
             params.vararg.is_none() && params.kwarg.is_none(),
             "the stub `{name}` takes *args or **kwargs: it would accept arguments barca rejects"
         );
-        let own = |n: &str| n != "self" && n != "fn";
+        let own = |n: &str| n != "self" && (n != "fn" || name == "batches_by");
         let positional = params
             .posonlyargs
             .iter()

@@ -1,6 +1,6 @@
 # Worker and transfer protocol
 
-Specification 3; protocol version 3. Implemented on this branch; not released.
+Specification 4; protocol version 4. Batched calls are implemented for 0.32.0.
 
 ## Framing and negotiation
 
@@ -8,9 +8,9 @@ Each frame is a four-byte unsigned big-endian length followed by UTF-8 JSON.
 Readers reject payload lengths greater than 256 MiB before allocation. Python's
 stdlib suffices; optional orjson changes encoding speed, not the wire layout.
 
-The helper first sends `{"type":"hello","role":"worker","protocol_version":3}`
+The helper first sends `{"type":"hello","role":"worker","protocol_version":4}`
 (or role `transfer`). The coordinator validates the role and integer version and
-acknowledges `{"type":"hello","role":"coordinator","protocol_version":3}`.
+acknowledges `{"type":"hello","role":"coordinator","protocol_version":4}`.
 A missing/mismatched version or role gets `protocol_error` with `message` and the
 expected version, then connection refusal. The error says to reinstall matching
 Barca packages. Connection and negotiation share the ten-second startup deadline.
@@ -22,7 +22,9 @@ before waiting on any, and workers connect in whatever order they finish startin
 the id pairs each connection with the process the coordinator started (the
 peer's process id, `SO_PEERCRED`, when a hello has none). A connection that
 matches no worker still starting is closed. A coordinator ignores unknown hello
-fields, so the key is additive within version 3.
+fields, so the key is additive within each protocol version.
+Version 4 requires helpers that understand a one-call batch. Version 3 helpers are refused
+before receiving work, with a reinstall message; matching barca packages are required.
 The historical standalone stderr batch protocol is independently version 2.
 
 ## Compact tables
@@ -44,6 +46,16 @@ No-input/argument/type/sink empties, null optional fields, `branch:false` and ze
 coordinator default. Retry policy stays coordinator-owned; artifact directory is
 already hoisted into worker environment setup. Singleton `execute` uses the same
 normalized step fields without a table.
+
+In 0.32.0 (RFC-0013), `execute_batch` may also carry `call: {id: string}`. Its items
+are the keys of one function call, rather than separate invocations: partition arguments
+become lists, and `aligned_inputs` names upstream inputs assembled as keyed dicts or lazy
+tables. The worker reports each key separately through the existing result journal;
+successful artifacts additionally carry `batch` (the call id) and `batch_keys` (the call's
+key count). A worker dying during a call fails every unfinished key in it. Weight and
+retry admission apply once per call. Frames without `call` retain sequential execution.
+Conformance: `python/tests/test_batched_partitions.py` exercises the real worker, per-key
+cache identities, failures and retries, and server execution.
 
 Two additive item fields of protocol version 3 (0.29.6) serve keyed partition sources
 (`partitions_from` over a source that returns a dict). An `inputs` entry
@@ -108,7 +120,7 @@ Completion artifact metadata and error details optionally include `import_second
 when loading the module took longer than one second. Missing means no slow import was
 reported; module reuse adds none. It is included in the existing elapsed duration,
 not added on top. Compact tables and checkpoint receipts preserve the field. This
-additive optional metadata retains protocol version 3. Timeouts identify the step id.
+additive optional metadata was introduced within version 3 and remains in version 4. Timeouts identify the step id.
 [Timing conformance](../python/tests/test_run_step_timing.py) exercises retries,
 slow imports, timeout identity and worker disconnects; protocol tests cover optional
 error metadata.
@@ -124,7 +136,7 @@ while its module was imported or its function was looked up, `SystemExit`,
 unfinished `parallel()` exchange), the worker stops executing its batch, and the coordinator
 stops it, returns its unstarted leases to the queue front and starts a fresh worker when ready
 work needs one. A worker that dies is reported as before, with its exit status. The field is
-additive optional metadata and retains protocol version 3.
+additive optional metadata introduced within version 3 and retained in version 4.
 [Conformance](../python/tests/test_worker_survives_exceptions.py) counts worker starts and
 dispatched steps from the coordinator's `BARCA_TRACE_TIMING` summary.
 

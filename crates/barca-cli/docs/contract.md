@@ -93,7 +93,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes are aliases until the next minor | Run a long-running HTTP server exposing the orchestrator as a JSON API |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility | Run a long-running HTTP server exposing the orchestrator as a JSON API |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
@@ -156,12 +156,13 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select partition keys across the cone: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Every partitioned node with a named dimension computes only those keys (--refresh too); a fan-in over them is skipped. Works without a target |
+| `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use | Override `batch=` for this run: `none` (one key per call), `all` or a whole number, for every node that declares `batch=`; `NODE=V` (repeatable) for one node only. Nodes without `batch=` are never batched. Experimental |
 | `--refresh` | comma-separated names | - | stable | Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -175,12 +176,13 @@ default, and any aliases.
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select partition keys across the task's cone, as for `barca get --partition`: every partitioned node with a named dimension computes only those keys |
+| `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use | Override `batch=` for this run, as for `barca get --batch`. Experimental |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -413,7 +415,9 @@ what `final_output` holds, and with `--pretty` they add the human summary. Witho
 rule above chooses between the JSON result and the summary, and paths are returned. In a
 terminal the summary previews a small json value (at most 10 lines) under its path; the preview
 is human output, not contract. `run` keeps `-o value`, the task's value, and prints a task's
-value in `final_output` as before.
+value in `final_output`. From 0.32.0, a partitioned task returns an object of partition key
+to value (tables as JSON rows), including a single selected key; unpartitioned task output
+is unchanged. The bounded partition summary below applies to tasks too.
 
 | Invocation | stdout |
 |---|---|
@@ -1051,6 +1055,36 @@ and the skipped fan-in in `steps` and `skipped_nodes` (the dry run has the same 
 | `warnings[].node` | string | always |
 | `warnings[].param` | string | always |
 <!-- END GENERATED schema run -->
+
+A partitioned task returns keyed values:
+
+<!-- BEGIN GENERATED schema run_partitioned -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output.<key>` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].partitions` | object | always |
+| `steps[].partitions.cached` | integer | always |
+| `steps[].partitions.total` | integer | always |
+| `steps[].partitions.will_run` | integer | always |
+| `steps[].partitions.will_run_keys` | array | always |
+| `steps[].partitions.will_run_keys[]` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema run_partitioned -->
 
 ### get and run: a failed step
 
@@ -2030,6 +2064,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `steps[].artifact_path` | null \| string | always |
 | `steps[].artifact_size_bytes` | integer \| null | always |
 | `steps[].attempts` | integer | always |
+| `steps[].batch` | null | always |
 | `steps[].cpu_seconds` | null \| number | always |
 | `steps[].elapsed_seconds` | null \| number | always |
 | `steps[].error` | null \| string | always |

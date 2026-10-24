@@ -91,6 +91,22 @@ pub async fn returned_values(
     }
 }
 
+/// A task's returned value, preserving every partition key. Unpartitioned tasks retain
+/// their existing JSON-or-artifact representation; partitioned tasks return keyed values.
+pub async fn task_output(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    single: Option<&OutputRef>,
+    keys: Option<&[(String, OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
+) -> Option<Value> {
+    if keys.is_some() {
+        returned_values(python, cfg, single, keys, summary).await
+    } else {
+        single.map(crate::report::read_final_output)
+    }
+}
+
 /// `python -m barca._value`, with the resolved storage options (reads and signing alike).
 fn helper(
     python: &std::path::Path,

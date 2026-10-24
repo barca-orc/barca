@@ -93,6 +93,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "env",
     "undeclared_env",
     "weight",
+    "batch",
 ];
 
 /// Item fields of `recent_runs[]` in `barca stats --json`.
@@ -240,6 +241,7 @@ mod tests {
             env: Some(Default::default()),
             undeclared_env: Some(vec![String::new()]),
             weight: Some(2),
+            batch: Some(Default::default()),
         };
         assert_eq!(keys(&serde_json::to_value(step).unwrap()), set(STEP_FIELDS));
     }

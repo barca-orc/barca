@@ -28,6 +28,7 @@ steps[].artifact_format : null|string
 steps[].artifact_path : null|string
 steps[].artifact_size_bytes : integer|null
 steps[].attempts : integer
+steps[].batch : null
 steps[].cpu_seconds : null|number
 steps[].elapsed_seconds : null|number
 steps[].error : null|string

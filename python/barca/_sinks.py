@@ -437,11 +437,18 @@ class _LocalTarget:
             tmp.unlink(missing_ok=True)
 
     def new_stage(self) -> Path:
-        self.staging.mkdir(parents=True, exist_ok=True)
-        _clean_dead_stages(self.staging)
-        stage = self.staging / f"{os.getpid()}-{uuid.uuid4().hex}"
-        stage.mkdir()
-        return stage
+        while True:
+            self.staging.mkdir(parents=True, exist_ok=True)
+            try:
+                _clean_dead_stages(self.staging)
+                stage = self.staging / f"{os.getpid()}-{uuid.uuid4().hex}"
+                stage.mkdir()
+                return stage
+            except FileNotFoundError:
+                # A finishing writer can remove the empty shared parent between
+                # mkdir and the scan or child mkdir. Once our child exists, its
+                # parent's rmdir cannot succeed until we drop that child.
+                continue
 
     def drop_stage(self, stage: Path) -> None:
         shutil.rmtree(stage, ignore_errors=True)

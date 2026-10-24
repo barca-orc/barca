@@ -47,15 +47,17 @@ check in the binary equal), so a type checker and an IDE know them too.
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `group()` | one | `members`, `output`, `description` |
-| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic`, `cutoff` |
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `deterministic`, `cutoff`, `batch` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
-| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
+| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight`, `batch` |
 | `@sink` | one | `serializer`, `partition_by`, `rows_per_file` |
 | `partitions()` | one | none |
 | `partitions_from()` | one | none |
+| `batches()` | one | `strict` |
+| `batches_by()` | one | `max_size` |
 | `collect()` | one | none |
 | `asset_ref()` | one | none |
-| `Schedule()` | one | `max_failures`, `timeout_seconds` |
+| `Schedule()` | one | `max_failures`, `timeout_seconds`, `batch` |
 
 Any other argument is an error when barca reads the file, before anything runs (exit 2, `kind`
 `usage`). Up to 0.18.1 it was ignored without a message: `@asset(after=other)`,

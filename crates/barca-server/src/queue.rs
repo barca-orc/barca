@@ -108,6 +108,9 @@ struct Stored {
     values: bool,
     #[serde(default)]
     partition: Option<BTreeMap<String, BTreeSet<String>>>,
+    /// `--batch` (RFC-0013).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    batch: Vec<String>,
     #[serde(default)]
     pin_manual: bool,
     #[serde(default)]
@@ -147,6 +150,7 @@ fn store(spec: &RunSpec, accepted_at: f64) -> String {
         trigger: spec.trigger.clone(),
         values: spec.values,
         partition: spec.partition.as_ref().map(|p| p.0.clone()),
+        batch: spec.batch.clone(),
         pin_manual: spec.rules.pin_manual,
         tick: spec.rules.tick.clone(),
         timeout: spec.timeout,
@@ -175,6 +179,7 @@ fn load(text: &str) -> Result<(RunSpec, f64), String> {
         partition: stored
             .partition
             .map(barca_core::selection::PartitionSelection),
+        batch: stored.batch,
         rules: barca_core::freshness::RunRules {
             pin_manual: stored.pin_manual,
             tick: stored.tick,
@@ -749,6 +754,7 @@ mod tests {
             trigger: Trigger::schedule("p.py:report", 1_760_000_000),
             values: true,
             partition: Some(barca_core::selection::PartitionSelection(selection)),
+            batch: vec!["all".into()],
             rules: barca_core::freshness::RunRules::tick("p.py:report"),
             timeout: None,
             kill_requeues: 0,
