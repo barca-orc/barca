@@ -32,6 +32,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Await kill/wait jobs for rejected and disconnected worker starts before shutdown
+  returns, preventing a fast CLI failure from leaving its helper alive.
+
 - Concurrent dataset sink writers no longer fail when another writer removes the empty
   shared staging directory while a new key starts writing.
 

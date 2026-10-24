@@ -355,6 +355,8 @@ pub struct WorkerPool {
     /// Workers started and not connected yet, by worker id.
     pending: HashMap<usize, PendingWorker>,
     frozen: Vec<FrozenWorker>,
+    /// Workers removed from the pool whose kill/wait jobs are still running.
+    reaping: Vec<tokio::task::JoinHandle<()>>,
     next_worker_id: usize,
     trace_start: std::time::Instant,
     trace_on: bool,
@@ -468,6 +470,7 @@ impl WorkerPool {
             workers: HashMap::new(),
             pending: HashMap::new(),
             frozen: Vec::new(),
+            reaping: Vec::new(),
             next_worker_id: 0,
             trace_start: std::time::Instant::now(),
             trace_on: std::env::var("BARCA_TRACE_TIMING").is_ok(),
@@ -1127,6 +1130,11 @@ impl WorkerPool {
             }
         });
         let _ = kill_task.await;
+        // Rejected starts have already left `pending`. Their off-loop kill/wait
+        // jobs still belong to this pool, including when the CLI is about to exit.
+        for task in self.reaping {
+            let _ = task.await;
+        }
         // Every worker is gone, so nothing writes or reads a branch result any more: the
         // run's directory goes, whatever way the run ended.
         let branch_root = self.branch_root;
@@ -1609,7 +1617,7 @@ impl WorkerPool {
             Ok(stream) => stream,
             Err(e) => {
                 crate::errln!("[barca] failed to spawn worker: worker {wid} {e}");
-                Self::reap(pending.child);
+                self.reap(pending.child);
                 return false;
             }
         };
@@ -1665,7 +1673,7 @@ impl WorkerPool {
             .map(|(wid, why)| {
                 crate::errln!("[barca] failed to spawn worker: {why}");
                 if let Some(p) = self.pending.remove(&wid) {
-                    Self::reap(p.child);
+                    self.reap(p.child);
                 }
                 why
             })
@@ -1673,11 +1681,12 @@ impl WorkerPool {
     }
 
     /// Kill and reap a worker that is not part of the pool, off the event loop.
-    fn reap(mut child: Child) {
-        tokio::task::spawn_blocking(move || {
+    fn reap(&mut self, mut child: Child) {
+        self.reaping.retain(|task| !task.is_finished());
+        self.reaping.push(tokio::task::spawn_blocking(move || {
             let _ = child.kill();
             let _ = child.wait();
-        });
+        }));
     }
 
     /// Resume frozen workers whose parallel groups completed.
@@ -2798,6 +2807,41 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_waits_for_workers_already_removed_from_the_pool() {
+        let mut pool = WorkerPool::start(test_config("reaping-at-shutdown", 1)).unwrap();
+        let mut child = crate::helper_proc::spawn_std(&mut sh("exec sleep 60")).unwrap();
+        let pid = child.id();
+        let (release, wait) = std::sync::mpsc::channel();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (reaped, gone) = tokio::sync::oneshot::channel();
+        // A rejected worker has left `pending`, but its blocking kill/wait job
+        // may not finish before the rest of shutdown. Hold that exact boundary.
+        pool.reaping.push(tokio::task::spawn_blocking(move || {
+            started.send(()).ok();
+            wait.recv().ok();
+            child.kill().ok();
+            child.wait().ok();
+            reaped.send(()).ok();
+        }));
+        ready.await.unwrap();
+        let mut shutdown = tokio::spawn(pool.shutdown());
+        let returned_early = tokio::time::timeout(Duration::from_millis(50), &mut shutdown)
+            .await
+            .is_ok();
+        release.send(()).unwrap();
+        gone.await.unwrap();
+        if !returned_early {
+            shutdown.await.unwrap();
+        }
+        assert!(
+            !returned_early,
+            "shutdown returned while a rejected worker was still alive"
+        );
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+    }
+
     /// Regression test for the pool_size*200ms shutdown bug: `shutdown()`
     /// used to call `graceful_kill()` (SIGTERM, then an unconditional 200ms
     /// sleep before the first liveness check) once per worker in a plain
@@ -2902,6 +2946,7 @@ mod tests {
                 workers,
                 pending: HashMap::new(),
                 frozen: Vec::new(),
+                reaping: Vec::new(),
                 next_worker_id: n,
                 trace_start: std::time::Instant::now(),
                 trace_on: false,
