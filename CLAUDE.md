@@ -115,8 +115,10 @@ filing an issue.
 The CLI must be usable by humans **and** AI agents without leaving the terminal. Any change to a
 command, flag, decorator, output format, or caching behavior ships with all of:
 
-1. **`--help` examples** — the subcommand's `after_help` in `crates/barca-cli/src/args.rs`
-   (runnable `barca ...` example lines; a new flag gets an example).
+1. **Concise help and complete examples** — keep subcommand `--help` to syntax, concise flag
+   descriptions, up to three common examples and manual pointers. Put the full runnable example collection
+   behind `--examples` (`after_long_help` in `crates/barca-cli/src/args.rs`); a new flag gets
+   an example there. Put detailed semantics and output contracts in the matching manual topic.
 2. **The manual** — the matching topic in `crates/barca-cli/docs/*.md`, embedded by
    `crates/barca-cli/src/docs.rs`. New topics go in `TOPICS` and must be linked from
    `overview.md` (or `examples.md`). The files live inside the crate so they ship in the sdist.
@@ -127,7 +129,8 @@ command, flag, decorator, output format, or caching behavior ships with all of:
 5. **The CLI contract** — `crates/barca-cli/docs/contract.md` (`barca docs contract`) and its
    snapshots. A change to the surface (a command, flag, environment variable, exit code, JSON
    output key or type, the stderr error envelope, an `--agent` line) updates, in the same PR, the
-   snapshots (`scripts/update-cli-snapshots.sh`: `--help` in `crates/barca-cli/snapshots/help/`,
+   snapshots (`scripts/update-cli-snapshots.sh`: `--help` in `crates/barca-cli/snapshots/help/`
+   and `--examples` in `crates/barca-cli/snapshots/examples/`,
    JSON schemas in `python/tests/snapshots/cli_contract/`, and the generated tables in
    `contract.md`) and the hand-written parts of `contract.md` (stable vs experimental; a new
    experimental flag or command also goes in `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs`).
@@ -138,7 +141,7 @@ command, flag, decorator, output format, or caching behavior ships with all of:
      deprecated flag keeps working for at least one minor release and prints a warning on stderr
      naming its replacement.
 
-CI guards these: `cargo test -p barca` parses every `barca ...` line in `--help` examples and
+CI guards these: `cargo test -p barca` parses every `barca ...` line in concise help, `--examples` and
 manual topics against the real CLI, and requires help text on every flag and examples on every
 documented command; `python/tests/test_docs_examples.py` executes the manual's example pipelines
 and asserts what the text claims. `cargo test -p barca` (`crates/barca-cli/src/contract.rs`) and

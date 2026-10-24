@@ -6,20 +6,14 @@ Options:
   -y, --yes        Do not ask: required when stdin is not a terminal
       --json       Emit JSON on stdout (the default when stdout is not a terminal)
       --pretty     Emit human-readable output (the default when stdout is a terminal)
-      --env <ENV>  Environment name (separates cache/state per environment)
-  -h, --help       Print help
+      --env <ENV>  Use a separate cache and history for this environment
+  -h, --help       Show concise command help
+      --examples   Show all command examples without running anything
 
 Examples:
   barca state reset                    # asks first in a terminal
   barca state reset --yes              # no question (scripts, agents)
   barca state reset --yes --json       # {database, moved_to, moved, undo}
-  barca state reset --yes --env dev    # another environment's database
 
-Moves .barca/metadata.db and its -wal and -shm aside to metadata.db.reset-<UTC> in the same
-directory and creates an empty database in its place: run history, cache records, partition
-keys and schedule pauses start over. Nothing is deleted and artifacts are left alone (the cache
-limit evicts what nothing references). Undo: barca state restore --from <the moved file>.
-For a database that cannot be opened (corrupt, or a format this barca does not read) too.
-Without --yes and not in a terminal: exit 2. Exit 3: a run is in progress, or barca serve is
-using the environment (reset from its UI, or POST /state/reset).
+All examples: barca state reset --examples
 More: barca docs remote

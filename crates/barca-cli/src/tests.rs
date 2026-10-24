@@ -1,16 +1,84 @@
 use super::*;
 use clap::CommandFactory;
 
-/// Subcommands that must carry runnable examples in their `--help`.
+/// Subcommands that must carry runnable examples in help or --examples.
 const DOCUMENTED: &[&str] = &[
-    "get", "run", "plan", "history", "stats", "serve", "list", "status", "state", "docs",
+    "get", "run", "plan", "doctor", "logs", "history", "gc", "stats", "serve", "queue", "list",
+    "status", "sql", "state", "docs",
 ];
 
 fn after_help(cmd: &clap::Command) -> String {
-    cmd.get_after_help()
-        .or_else(|| cmd.get_after_long_help())
-        .map(|s| s.to_string())
-        .unwrap_or_default()
+    [cmd.get_after_help(), cmd.get_after_long_help()]
+        .into_iter()
+        .flatten()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn help_is_concise_and_all_examples_remain_discoverable() {
+    fn check(path: Vec<String>, cmd: &clap::Command) {
+        let mut argv = vec!["barca".to_owned()];
+        argv.extend(path.iter().cloned());
+        let render = |flag: &str| {
+            let mut args = argv.clone();
+            args.push(flag.to_owned());
+            let err = Cli::command().try_get_matches_from(args).unwrap_err();
+            assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+            assert!(!err.use_stderr());
+            err.to_string()
+        };
+        let short = render("--help");
+        assert_eq!(short, render("-h"));
+        assert!(
+            short.lines().count() <= 80,
+            "{} help is too long: {} lines",
+            argv.join(" "),
+            short.lines().count()
+        );
+        assert!(
+            short.split_whitespace().count() <= 600,
+            "{} help exceeds 600 words",
+            argv.join(" ")
+        );
+        assert!(
+            short.contains("--examples"),
+            "missing examples pointer: {}",
+            argv.join(" ")
+        );
+        if let Some(examples) = cmd.get_after_long_help() {
+            let full = render("--examples");
+            assert!(
+                full.contains(&examples.to_string()),
+                "examples missing: {}",
+                argv.join(" ")
+            );
+            for line in command_lines(&examples.to_string(), false) {
+                assert_parses(&line, "--examples");
+            }
+        }
+        for sub in cmd.get_subcommands().filter(|s| s.get_name() != "help") {
+            let mut next = path.clone();
+            next.push(sub.get_name().to_owned());
+            check(next, sub);
+        }
+    }
+    let root = Cli::command();
+    check(vec![], &root);
+    let text = root
+        .clone()
+        .try_get_matches_from(["barca", "--help"])
+        .unwrap_err()
+        .to_string();
+    for sub in root.get_subcommands() {
+        assert!(
+            text.lines()
+                .any(|line| line.split_whitespace().next() == Some(sub.get_name())),
+            "root help omits {}",
+            sub.get_name()
+        );
+    }
 }
 
 /// `barca ...` command lines found in `text`: indented example lines in help text, or
@@ -21,6 +89,18 @@ fn command_lines(text: &str, only_in_bash_fences: bool) -> Vec<String> {
     let mut in_bash = false;
     for line in text.lines() {
         let t = line.trim();
+        // Environment-prefixed examples exercise the same parser after their assignments.
+        let t = if t.starts_with("BARCA_")
+            && t.split_whitespace().next().is_some_and(|v| v.contains('='))
+        {
+            t.split_once(" barca ")
+                .map(|(_, args)| args)
+                .map(|args| format!("barca {args}"))
+        } else {
+            None
+        }
+        .unwrap_or_else(|| t.to_owned());
+        let t = t.as_str();
         if only_in_bash_fences {
             if t.starts_with("```") {
                 in_bash = t == "```bash";
@@ -372,12 +452,13 @@ fn list_hint_names_the_files_or_a_placeholder() {
 }
 
 #[test]
-fn top_level_description_names_barca_list() {
-    let cmd = Cli::command();
-    for text in [cmd.get_about(), cmd.get_long_about()] {
-        let text = text.map(|s| s.to_string()).unwrap_or_default();
-        assert!(text.contains("barca list"), "{text}");
-    }
+fn top_level_help_explains_discovery() {
+    let text = Cli::command()
+        .try_get_matches_from(["barca", "--help"])
+        .unwrap_err()
+        .to_string();
+    assert!(text.contains("list      Discover assets, tasks and dependencies"));
+    assert!(text.contains("barca docs <topic>"));
 }
 
 #[test]

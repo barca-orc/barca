@@ -1,0 +1,42 @@
+Show a barca server's run queue, or pause or resume it (experimental)
+
+Usage: barca queue [OPTIONS] [ACTION]
+
+Arguments:
+  [ACTION]
+          pause: queued runs wait until resumed (runs in flight go on); resume: they start again. Omit to show the queue
+
+          Possible values:
+          - pause:  Hold every queued run back until resumed
+          - resume: Let queued runs start again, in order
+
+Options:
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Use independent local state; ignore the configured server
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca queue --server                 # the configured server's run queue: running and queued runs
+  barca queue --server http://barca.internal:8274 --json  # {paused, paused_at, draining, max_runs, running, queued}
+  barca queue pause --server           # queued runs wait (runs in flight go on); kept across restarts
+  barca queue resume --server          # queued runs start again, in order
+  barca queue                          # the server in BARCA_SERVER or [server] url
+
+More: barca docs scheduling

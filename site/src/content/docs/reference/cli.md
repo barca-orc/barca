@@ -8,6 +8,11 @@ in the environment's `bin/`. The output on this page was captured from a termina
 current release, with long paths shortened. `barca <command> --help` and `barca docs` describe
 the version you have installed.
 
+Use `barca --help` to discover commands by purpose, `barca <command> --help` for concise
+usage, and `barca <command> --examples` for the complete runnable example collection.
+For detailed behavior, load one topic with `barca docs <topic>`; `barca docs --json` lists
+available topics for scripts and agents. Help and examples never load a project or run work.
+
 ## Command shape
 
 The target comes first, then the files:

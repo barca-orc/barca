@@ -1,0 +1,49 @@
+Show execution statistics for an asset
+
+Usage: barca stats [OPTIONS] <TARGET> [FILES]...
+
+Arguments:
+  <TARGET>
+          Target asset function name
+
+  [FILES]...
+          Python files or directories; default: discover the project
+
+Options:
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --fields <FIELDS>
+          Select JSON fields as a comma-separated list; implies --json
+
+          [possible values: elapsed_seconds, status, created_at, error_message, attempts, run_id, cpu_seconds, max_rss_bytes]
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Use independent local state; ignore the configured server
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca stats total                         # find `total` anywhere in the project
+  barca stats total pipeline.py             # timing and peak memory (RSS) percentiles, re-executions
+  barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
+  barca stats total pipeline.py --pretty    # the text report, even when piped
+  barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+  barca stats total --fields run_id,elapsed_seconds,max_rss_bytes   # each recent run's id, time and peak memory
+  barca stats total --server                # timings recorded on the configured barca server
+  barca stats total --local                 # timings recorded on this machine, even with a server configured
+
+More: barca docs cache

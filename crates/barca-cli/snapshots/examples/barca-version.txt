@@ -1,0 +1,7 @@
+Print version information
+
+Usage: barca version
+
+Options:
+  -h, --help      Show concise command help
+      --examples  Show all command examples without running anything

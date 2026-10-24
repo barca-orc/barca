@@ -1,0 +1,117 @@
+Get assets; reuse unchanged results and print their artifact paths
+
+Usage: barca get [OPTIONS] [ARGS]...
+
+Arguments:
+  [ARGS]...
+          Target(s), then optional files/directories; omit files to discover the project
+
+Options:
+  -o, --output <OUTPUT>
+          Choose the result output mode (see possible values)
+
+          Possible values:
+          - path:   Artifact paths, one per line (one per selected partition key); the default
+          - value:  The value, pretty-printed (a mapping of key to value for a partitioned target)
+          - url:    A signed HTTPS URL to each artifact in the store, one per line (experimental)
+          - json:   One-line JSON, as --json
+          - pretty: Summary and paths for people, as --pretty
+
+      --expires <DURATION>
+          Signed URL lifetime: 30m, 12h, 7d or seconds (default: 1h; maximum: 7d)
+
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --partition <KEY=VALUE[,VALUE]|JSON>
+          Select keys, e.g. customer=acme; affected collect() fan-ins are skipped
+
+      --batch <[NODE=]none|all|N>
+          Override declared batching: none, all, N or NODE=N (experimental)
+
+      --refresh <REFRESH>
+          Recompute named assets and their downstream dependents: --refresh a,b
+
+      --no-cascade
+          Refresh only named assets; cached downstream results may be outdated
+
+      --refresh-all
+          Recompute every asset needed by the target
+
+      --dry-run
+          Preview cached and planned work; execute nothing and record no run
+
+      --agent
+          Print plain structured progress on stderr
+
+      --fields <FIELDS>
+          Select JSON fields as a comma-separated list; implies --json
+
+          [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight, batch]
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Use independent local state; ignore the configured server
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
+  barca get total                          # find `total` anywhere in the project and get it
+  barca get total pipeline.py --json --fields id,status,elapsed_seconds,attempts   # timing and retries
+  barca get total pipelines/               # only read files under pipelines/
+  barca get                                # every asset and sensor in the project, never tasks
+  barca get pipeline.py                    # every asset and sensor, never tasks; prints the last asset's path
+  barca get total pipeline.py              # one target and only its upstream cone
+  barca get total,orders pipeline.py       # several targets in one run; shared upstream runs once
+  barca get total pipeline.py other.py     # target defined across several files
+  barca get orders pipeline.py --refresh orders --json  # check recomputed artifact bytes
+  barca get total pipeline.py --refresh-all        # recompute everything in that cone
+  barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
+  barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
+  barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
+  barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store
+  barca get scored pipeline.py --dry-run --json  # partitions.changed: per key, what changed (a dict sensor's new value)
+  barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
+  barca get total pipeline.py --pretty     # summary and artifact path for humans (the default in a terminal)
+  barca get total pipeline.py -o path      # only the artifact path, one per line (pipe it to xargs cat)
+  barca get total pipeline.py -o value     # only the value, pretty-printed (json, parquet, CSV, pickle)
+  barca get total pipeline.py -o value --json   # the JSON result with the value in final_output
+  barca get total pipeline.py -o url       # a signed HTTPS link to the result in the store (1 hour)
+  barca get total pipeline.py -o url --expires 7d   # a link that works for 7 days (the maximum)
+  barca get sales pipeline.py -o url --partition region=emea --expires 30m   # one key's link
+  barca get sales pipeline.py              # a partitioned target: one path per key
+  barca get scored pipeline.py             # with @sink("exports/scored/"): writes the keys that ran as a Hive dataset (barca docs sinks)
+  barca get sales pipeline.py --partition region=emea,amer   # only these keys: computed and returned
+  barca get margin pipeline.py --partition region=apac   # upstream partitioned assets compute apac only
+  barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only that key
+  barca get pipeline.py --partition region=emea   # no target: every asset and sensor, for emea only
+  barca get pipeline.py --partition region=emea --dry-run   # what runs for emea, which fan-ins are skipped
+  barca get scored pipeline.py --batch all       # a backfill: every key that needs to run in one call (batch= nodes only)
+  barca get scored pipeline.py --batch 20        # at most 20 keys per call, in key order
+  barca get scored pipeline.py --batch none      # one key per call, to find the key that fails
+  barca get scored pipeline.py --batch scored=all --batch cleaned=100   # per node; repeatable
+  barca get scored pipeline.py --dry-run --batch 20   # "500 keys in 25 calls (batch=20)" in the WHY column
+  barca get total pipeline.py --agent      # plain progress lines on stderr
+  barca get total pipeline.py --env dev    # separate cache and state per environment
+  barca list pipeline.py                   # not sure of the name? list assets and tasks first
+  BARCA_OUTPUT=json barca get total pipeline.py   # env override for CI; a flag still wins
+  barca get total pipeline.py --fields id,status   # JSON with each entry of `steps` trimmed to these keys
+  barca get total --server                 # run it on the configured barca server; prints here as a local run
+  barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
+  barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
+  barca get --examples                     # the complete example collection; runs nothing
+
+More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents
