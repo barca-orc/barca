@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.32.0 (2026-10-24)
+
 ### Breaking
 
 - Worker and transfer helpers now negotiate protocol 4. Protocol 3 helpers cannot execute
