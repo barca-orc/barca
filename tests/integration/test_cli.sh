@@ -194,9 +194,12 @@ SENSOR_VAL=$(final "$OUTPUT" | python3 -c "import json,sys; print(json.load(sys.
 # ─── Test: help works ────────────────────────────────────────────────────────
 echo "=== Help ==="
 
-$BARCA -h 2>&1 | grep -q "Invisible asset orchestrator" && pass "barca -h works" || fail "no short help"
-$BARCA --help 2>&1 | grep -q "fully materialized" && pass "barca --help works" || fail "no help"
-$BARCA get --help 2>&1 | grep -q "cache-aware" && pass "barca get --help works" || fail "no get help"
+$BARCA -h 2>&1 | grep -q "Usage: barca" && pass "barca -h works" || fail "no short help"
+$BARCA --help 2>&1 | grep -q "Run:" && pass "barca --help works" || fail "no help"
+$BARCA get --help 2>&1 | grep -q "All examples: barca get --examples" && pass "barca get --help works" || fail "no get help"
+
+$BARCA get --examples 2>&1 | grep -q -- "-o url" && pass "full get examples remain available" || fail "no get examples"
+$BARCA state restore --examples 2>&1 | grep -q -- "barca state restore --from" && pass "nested examples work" || fail "no nested examples"
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 echo ""
