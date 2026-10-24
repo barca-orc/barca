@@ -8,6 +8,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Documentation
+
+- Simplify first-use documentation around cached assets, tasks, partitions and remote
+  execution. Start with the base install; make SQL and shared-store setup optional, and
+  distinguish server execution from local computation against shared server state.
+
 ### Bug Fixes
 
 - Server URL userinfo is omitted from CLI errors and announcements, ledger warnings, stream

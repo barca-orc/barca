@@ -1,5 +1,19 @@
 # Server mode: one ledger for a team, and running commands on it
 
+To execute a deployed project remotely, start `barca serve` there and use an explicit URL:
+
+```bash
+barca get daily_report --server http://barca.internal:8274
+barca run deploy --server http://barca.internal:8274
+barca history --server http://barca.internal:8274
+```
+
+This runs the server's code and keeps history there; it does not upload local edits.
+No shared artifact store is needed for this path. Keep the server on a private network
+or behind an authenticating proxy (https://barca.sh/deploying/).
+
+## Local computation with shared results
+
 Sharing results between machines means one `barca serve` that everyone points at. **The server
 is the ledger**: it holds the one record of which results exist (run hashes, artifact paths, run
 history) and it is the only process that writes it. The artifact bytes stay in the store
