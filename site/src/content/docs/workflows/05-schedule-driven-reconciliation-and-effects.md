@@ -26,8 +26,8 @@ from barca import Manual, Schedule, asset, sensor, task
 
 
 @sensor(freshness=Schedule("*/5 * * * *"))   # the only schedule
-def prices() -> tuple[bool, str]:
-    return True, Path("prices.txt").read_text()
+def prices() -> str:
+    return Path("prices.txt").read_text()
 
 
 @asset(inputs={"etag": prices}, freshness=Manual)

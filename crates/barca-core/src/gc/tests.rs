@@ -843,3 +843,55 @@ async fn a_survey_keeps_the_store_checks_and_each_store_has_its_own() {
     assert_eq!(left.len(), 1);
     assert!(left[0].same_store(&StoreCheck::of(&cfg, 0)));
 }
+
+#[tokio::test]
+async fn routine_estimates_advance_only_over_new_rows_and_surveys_correct_reused_paths() {
+    let f = Fixture::new().await;
+    f.result("p.py:sensor", "same", 100, "2026-10-01").await;
+    f.total().await;
+    let environments = envs(&f.project);
+    estimate(&f.project, &environments, &read_state(&f.project).unwrap())
+        .await
+        .unwrap();
+    let first = read_state(&f.project).unwrap();
+    let recorded = first.recorded.get(&f.db).unwrap();
+    assert_eq!((recorded.through, recorded.bytes), (1, 100));
+    f.result("p.py:sensor", "same", 150, "2026-10-02").await;
+    estimate(&f.project, &environments, &read_state(&f.project).unwrap())
+        .await
+        .unwrap();
+    let second = read_state(&f.project).unwrap();
+    let recorded = second.recorded.get(&f.db).unwrap();
+    assert_eq!((recorded.through, recorded.bytes), (2, 250));
+    estimate(&f.project, &environments, &second).await.unwrap();
+    assert_eq!(
+        read_state(&f.project)
+            .unwrap()
+            .recorded
+            .get(&f.db)
+            .unwrap()
+            .bytes,
+        250
+    );
+    f.total().await;
+    estimate(&f.project, &environments, &read_state(&f.project).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        read_state(&f.project)
+            .unwrap()
+            .recorded
+            .get(&f.db)
+            .unwrap()
+            .bytes,
+        150
+    );
+    // A replaced/truncated database invalidates the old high-water mark.
+    f.sql("DELETE FROM materializations").await;
+    estimate(&f.project, &environments, &read_state(&f.project).unwrap())
+        .await
+        .unwrap();
+    let reset = read_state(&f.project).unwrap();
+    let recorded = reset.recorded.get(&f.db).unwrap();
+    assert_eq!((recorded.through, recorded.bytes), (0, 0));
+}

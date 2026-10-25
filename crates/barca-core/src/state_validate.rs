@@ -77,6 +77,7 @@ pub(crate) const STEP_COLUMNS: &[&str] = &[
     "cpu_seconds",
     "max_rss_bytes",
     "output_hash",
+    "observation_hash",
     "bytes_changed",
     "run_id",
     "error_type",

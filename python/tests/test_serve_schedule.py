@@ -27,8 +27,8 @@ from pathlib import Path
 from barca import asset, sensor, task, Schedule
 
 @sensor()
-def version() -> tuple[bool, str]:
-    return True, Path("version.txt").read_text()
+def version() -> str:
+    return Path("version.txt").read_text()
 
 
 @asset(freshness=Schedule("* * * * * *"), inputs={"version": version})

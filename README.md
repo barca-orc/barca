@@ -131,8 +131,8 @@ from barca import asset, sensor
 
 
 @sensor()
-def orders_version() -> tuple[bool, str]:
-    return True, hashlib.md5(Path("orders.csv").read_bytes()).hexdigest()
+def orders_version() -> str:
+    return hashlib.md5(Path("orders.csv").read_bytes()).hexdigest()
 
 
 @asset(inputs={"version": orders_version})

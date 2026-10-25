@@ -31,9 +31,9 @@ from barca import asset, collect, partitions, partitions_from, sensor
 
 
 @sensor()
-def feed_version() -> tuple[bool, str]:
+def feed_version() -> str:
     # Stands in for the etag of the price feed.
-    return True, Path("feed_version.txt").read_text().strip()
+    return Path("feed_version.txt").read_text().strip()
 
 
 @asset(inputs={"version": feed_version},
@@ -286,8 +286,8 @@ values as keys. Here the list comes from a file, through a sensor:
 
 ```python
 @sensor()
-def region_list() -> tuple[bool, list]:
-    return True, Path("regions.txt").read_text().split()
+def region_list() -> list:
+    return Path("regions.txt").read_text().split()
 
 
 @asset(inputs={"names": region_list})

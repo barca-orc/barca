@@ -312,3 +312,26 @@ def test_small_target_returns_every_cached_value_across_lookup_groups(tmp_path):
             "SELECT DISTINCT last_read_at FROM materializations WHERE node_id LIKE 'pipeline.py:report[%'"
         ).fetchall()
     assert all(stamp > recent for (stamp,) in stamps)
+
+
+def test_large_source_proofs_and_updates_retain_only_compact_observations(tmp_path):
+    versions = project(tmp_path, count=1200)
+    get(tmp_path)
+    with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        proofs = db.execute("SELECT snapshot FROM freshness_proofs").fetchall()
+        assert len(proofs) == 3
+        assert max(len(row[0]) for row in proofs) < 2500
+        source = next(json.loads(row[0])["source"] for row in proofs if json.loads(row[0])["source"])
+        assert source["count"] == 1200
+        assert "keys" not in source
+    versions["c1199"] = 2
+    (tmp_path / "versions.json").write_text(json.dumps(versions))
+    updated, trace = get(tmp_path)
+    assert updated["steps_executed"] == 3
+    assert identities(trace) == 3
+    for i in range(17):
+        versions[f"c{i * 53}"] += 1
+    (tmp_path / "versions.json").write_text(json.dumps(versions))
+    batched, trace = get(tmp_path)
+    assert batched["steps_executed"] == 35
+    assert identities(trace) == 35

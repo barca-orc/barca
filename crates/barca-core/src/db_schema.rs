@@ -54,6 +54,8 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // Content hash of a sensor's output (#183): folded into its consumers' run hashes, and
     // what `--dry-run` / `barca status` assume the sensor returns next.
     "output_hash TEXT",
+    // A sensor observation revision, independent of its artifact bytes.
+    "observation_hash TEXT",
     // Whether this recompute differed from the last digest for the same node/run hash.
     "bytes_changed INTEGER DEFAULT 0",
     // The run that wrote the row (#214). Steps are recorded as they finish and again in the

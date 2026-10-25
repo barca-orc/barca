@@ -110,7 +110,7 @@ pub fn expand_pending_partitions(
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
 ) -> Expansion {
-    expand_pending_partitions_filtered(dag, phase, all_outputs, pool_size, |_, _| {})
+    expand_pending_partitions_filtered(dag, phase, all_outputs, pool_size, |_, _| None, |_, _| {})
 }
 
 pub(crate) fn expand_pending_partitions_filtered(
@@ -118,6 +118,7 @@ pub(crate) fn expand_pending_partitions_filtered(
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
+    project: impl Fn(&str, &str) -> Option<(usize, crate::keyed::SourceKeys)>,
     filter: impl Fn(&str, &mut HashMap<String, Vec<String>>),
 ) -> Expansion {
     use crate::keyed::{KeyedSource, SourceKeys};
@@ -141,12 +142,13 @@ pub(crate) fn expand_pending_partitions_filtered(
     type Read = Result<
         (
             String,
+            usize,
             Arc<Vec<String>>,
             Option<Arc<HashMap<String, String>>>,
         ),
         String,
     >;
-    let mut read: HashMap<String, Read> = HashMap::new();
+    let mut read: HashMap<(String, String), Read> = HashMap::new();
     // A step's chunks are expanded once: (base id) -> the expanded step.
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -166,6 +168,7 @@ pub(crate) fn expand_pending_partitions_filtered(
                 .unwrap_or_default();
 
             let mut dim_values: HashMap<String, Vec<String>> = HashMap::new();
+            let mut original_count = 1usize;
             let mut keyed: Vec<KeyedSource> = Vec::new();
             let mut inputs = step.inputs.clone();
             let mut failure: Option<String> = None;
@@ -184,7 +187,7 @@ pub(crate) fn expand_pending_partitions_filtered(
                     ));
                     break;
                 };
-                let entry = read.entry(source_id.clone()).or_insert_with(|| {
+                let entry = read.entry((base.clone(), source_id.clone())).or_insert_with(|| {
                     let oref = all_outputs.get(&source_id).ok_or_else(|| {
                         format!(
                             "partitions_from source '{source_name}' has no output to read keys \
@@ -199,6 +202,12 @@ pub(crate) fn expand_pending_partitions_filtered(
                             oref.format
                         ));
                     }
+                    if let Some((count, source)) = project(&base, &source_id) {
+                        return match source {
+                            SourceKeys::List(keys) => Ok((oref.path.clone(), count, Arc::new(keys), None)),
+                            SourceKeys::Keyed(keys, hashes) => Ok((oref.path.clone(), count, Arc::new(keys), Some(Arc::new(hashes)))),
+                        };
+                    }
                     // Always local: a store-backed cache hit is fetched before expansion.
                     let text = std::fs::read_to_string(&oref.path).map_err(|e| {
                         format!(
@@ -207,9 +216,9 @@ pub(crate) fn expand_pending_partitions_filtered(
                         )
                     })?;
                     match crate::keyed::read_source(&text) {
-                        Ok(SourceKeys::List(keys)) => Ok((oref.path.clone(), Arc::new(keys), None)),
+                        Ok(SourceKeys::List(keys)) => Ok((oref.path.clone(), keys.len(), Arc::new(keys), None)),
                         Ok(SourceKeys::Keyed(keys, hashes)) => {
-                            Ok((oref.path.clone(), Arc::new(keys), Some(Arc::new(hashes))))
+                            Ok((oref.path.clone(), keys.len(), Arc::new(keys), Some(Arc::new(hashes))))
                         }
                         Err(why) => Err(format!("partitions_from source '{source_name}' {why}")),
                     }
@@ -219,7 +228,8 @@ pub(crate) fn expand_pending_partitions_filtered(
                         failure = Some(why.clone());
                         break;
                     }
-                    Ok((path, keys, hashes)) => {
+                    Ok((path, count, keys, hashes)) => {
+                        original_count = original_count.saturating_mul(*count);
                         dim_values.insert(dim.clone(), keys.as_ref().clone());
                         let Some(hashes) = hashes else { continue };
                         let param = if inherited.contains(dim) {
@@ -254,12 +264,7 @@ pub(crate) fn expand_pending_partitions_filtered(
                 continue;
             }
 
-            key_counts.insert(
-                base.clone(),
-                dim_values
-                    .values()
-                    .fold(1usize, |n, values| n.saturating_mul(values.len())),
-            );
+            key_counts.insert(base.clone(), original_count);
             filter(&base, &mut dim_values);
             let combos = expand_partition_combos(&dim_values);
             let pks: Vec<crate::PartitionKey> =

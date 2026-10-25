@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
 /// Negotiated worker/transfer wire version, independent of package and DB versions.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Negotiate before a helper can receive work. The caller bounds this together
 /// with connection startup and owns reaping the child on every error path.
@@ -59,7 +59,7 @@ pub enum WorkerMessage {
     /// A step completed successfully with an artifact.
     StepCompleted {
         node_id: String,
-        artifact: ArtifactRef,
+        artifact: Box<ArtifactRef>,
     },
     /// A step failed with a structured error.
     StepError {
@@ -148,6 +148,11 @@ pub struct ArtifactRef {
     /// into their consumers' run hashes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Explicit sensor freshness signal, independent of the optional value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_changed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_observation: Option<serde_json::Value>,
     /// When the step finished (Unix seconds, worker clock) and how long it took, for telemetry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<f64>,
@@ -555,7 +560,7 @@ mod tests {
     fn test_encode_decode_worker_message() {
         let msg = WorkerMessage::StepCompleted {
             node_id: "load_data".to_string(),
-            artifact: ArtifactRef {
+            artifact: Box::new(ArtifactRef {
                 upload_snapshot: None,
                 import_seconds: None,
                 path: "/tmp/artifacts/load_data.json".to_string(),
@@ -565,6 +570,8 @@ mod tests {
                 cpu_seconds: None,
                 max_rss_bytes: None,
                 content_hash: None,
+                sensor_changed: None,
+                source_observation: None,
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
@@ -572,7 +579,7 @@ mod tests {
                 batch_keys: None,
 
                 sinks: Vec::new(),
-            },
+            }),
         };
 
         let frame = encode_message(&msg).unwrap();
@@ -638,7 +645,7 @@ mod tests {
     fn test_artifact_ref_with_sinks_round_trips() {
         let msg = WorkerMessage::StepCompleted {
             node_id: "n".to_string(),
-            artifact: ArtifactRef {
+            artifact: Box::new(ArtifactRef {
                 upload_snapshot: None,
                 import_seconds: None,
                 path: "abfss://cont@acct.dfs.core.windows.net/arts/n.parquet".to_string(),
@@ -648,6 +655,8 @@ mod tests {
                 cpu_seconds: None,
                 max_rss_bytes: None,
                 content_hash: None,
+                sensor_changed: None,
+                source_observation: None,
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
@@ -672,7 +681,7 @@ mod tests {
                         warning: None,
                     },
                 ],
-            },
+            }),
         };
         let frame = encode_message(&msg).unwrap();
         let mut cursor = Cursor::new(frame);
@@ -830,7 +839,7 @@ mod tests {
             WorkerMessage::Heartbeat,
             WorkerMessage::StepCompleted {
                 node_id: "step_1".to_string(),
-                artifact: ArtifactRef {
+                artifact: Box::new(ArtifactRef {
                     upload_snapshot: None,
                     import_seconds: None,
                     path: "/tmp/step_1.json".to_string(),
@@ -840,6 +849,8 @@ mod tests {
                     cpu_seconds: None,
                     max_rss_bytes: None,
                     content_hash: None,
+                    sensor_changed: None,
+                    source_observation: None,
                     finished_at: None,
                     wall_seconds: None,
                     frame_type: None,
@@ -847,7 +858,7 @@ mod tests {
                     batch_keys: None,
 
                     sinks: Vec::new(),
-                },
+                }),
             },
             WorkerMessage::Blocked {
                 node_id: "step_2".to_string(),
@@ -1243,7 +1254,7 @@ mod tests {
     #[tokio::test]
     async fn helper_hello_requires_matching_version_and_role() {
         for role in ["worker", "transfer"] {
-            for version in [0, 2, 3, PROTOCOL_VERSION, PROTOCOL_VERSION + 1] {
+            for version in [0, 2, 3, 4, PROTOCOL_VERSION, PROTOCOL_VERSION + 1] {
                 let (mut client, mut server) = tokio::io::duplex(4096);
                 write_frame(&mut client, &serde_json::json!({"type": "hello", "role": role, "protocol_version": version})).await.unwrap();
                 let accepted = accept_hello(&mut server, role).await;

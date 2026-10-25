@@ -8,12 +8,21 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Sensors now honor explicit change signals: `True` advances freshness even without data,
+  `False` retains the previous observation, and `(changed, value)` also passes data.
+  For content comparison, return the version value alone instead of `(True, value)`.
+  Worker protocol 5 requires matching native and Python packages.
+
 ### Performance
 
 - Default DAG runs reuse validated freshness per node before expanding partition keys.
   A changed key schedules only its affected chain; fresh keys keep their cache and history
   counts without coordinator objects for every key. Target selection also plans only its
-  dependency cone. Sensors still discover their keys, and changed fan-ins read all inputs.
+  dependency cone. Workers compare source snapshots and report compact observations;
+  scheduling priors and routine cache accounting avoid scanning every partition.
+  Sensors still discover their keys, and changed fan-ins read all inputs.
 
 
 ## 0.32.0 (2026-10-24)

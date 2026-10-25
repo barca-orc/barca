@@ -4,10 +4,12 @@ description: A sensor reports the version of data that lives outside the graph, 
 ---
 
 A `@sensor` is a function with no inputs that looks at something outside the graph (a file, a
-bucket, a table) and returns `(update_detected, value)`. A sensor runs on every `barca get` or
-`barca run` that includes it. Its `value` is part of the run hash of every asset that reads it.
+bucket, a table). Return a version value for content comparison, or `True`/`False` when
+the function already knows whether it changed. `(changed, value)` also passes data to
+consumers. `True` advances freshness even without data; `False` retains the previous
+observation. A dictionary defining partitions is compared per key.
 
-Everything on this page was run with barca 0.30.2. The terminal manual covers the same ground in
+The examples below use version values for comparison. The terminal manual covers the same ground in
 `barca docs cache` ("External data that changes in place") and `barca docs assets` ("Sensors").
 
 ## Outside data that changes in place
@@ -89,9 +91,9 @@ from barca import asset, sensor
 
 
 @sensor()
-def orders_version() -> tuple[bool, str]:
+def orders_version() -> str:
     # Stands in for a blob's etag or a table's last-modified time.
-    return True, hashlib.sha256(Path("orders.csv").read_bytes()).hexdigest()[:12]
+    return hashlib.sha256(Path("orders.csv").read_bytes()).hexdigest()[:12]
 
 
 @asset(inputs={"version": orders_version})
@@ -200,8 +202,8 @@ from barca import asset, sensor
 
 
 @sensor()
-def checked() -> tuple[bool, dict]:
-    return False, {"etag": "abc", "checked_at": time.time()}
+def checked() -> dict:
+    return {"etag": "abc", "checked_at": time.time()}
 
 
 @asset(inputs={"c": checked})
@@ -218,8 +220,10 @@ Two runs in a row, with the etag unchanged, each print:
 [barca] 2/2 steps | done in 0.0s
 ```
 
-Return the etag alone. The example also shows that the first element of the tuple is not used
-for caching: the sensor returns `False` and its consumer re-runs anyway.
+Return the etag alone for comparison. Explicit change signals have a different meaning:
+`False` retains freshness and the previous value; `True` advances freshness even when
+no value is supplied. Through 0.32.0 the flag was ignored; replace always-true tuples
+with a version value when upgrading.
 
 ## What `--dry-run` and `barca status` show
 
@@ -314,8 +318,8 @@ same tick, in the same run, brings up to date every `Always` asset and task belo
 
 ```python
 @sensor(freshness=Schedule("*/5 * * * * *"))      # every 5 seconds, for the demonstration
-def orders_version() -> tuple[bool, str]:
-    return True, hashlib.sha256(Path("orders.csv").read_bytes()).hexdigest()[:12]
+def orders_version() -> str:
+    return hashlib.sha256(Path("orders.csv").read_bytes()).hexdigest()[:12]
 ```
 
 With `orders` and `total` left at their default freshness, each tick polls `orders_version`.

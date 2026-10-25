@@ -133,7 +133,7 @@ from pathlib import Path
 import time
 from barca import asset, sensor, task
 @sensor()
-def version(): return True, Path("data.txt").read_text()
+def version(): return Path("data.txt").read_text()
 @asset(inputs={"version": version})
 def rows(version): return {"version": version}
 @task(inputs={"_rows": rows})
@@ -154,7 +154,7 @@ def test_sensor_returning_to_earlier_value_compares_earlier_run_hash(tmp_path):
 from pathlib import Path
 from barca import asset, sensor
 @sensor()
-def tick(): return True, Path("tick.txt").read_text()
+def tick(): return Path("tick.txt").read_text()
 @asset(inputs={"tick": tick})
 def result(tick): return {"tick": tick, "value": Path("external.txt").read_text()}
 """)

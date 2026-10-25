@@ -34,7 +34,7 @@ Default cache-aware execution may omit proven-fresh work before per-key expansio
 are private, rebuildable metadata, scoped to each requested logical node and artifact layout.
 They contain the node's structural signature (definition, bindings, freshness, sinks,
 partition specs, declared environment and upstream signatures), its validated key count,
-and source observations or an unpartitioned output reference. Cutoff and Manual upstreams
+and compact source observations or an unpartitioned output reference. Cutoff and Manual upstreams
 retain their output-based freshness semantics. Tasks and sensors still use normal decisions;
 Manual assets and compound partition nodes validate through the normal cache engine.
 
@@ -53,6 +53,14 @@ steps are loaded only when active inputs or returned values require them. A cach
 therefore does not assert the existence of an unused artifact. Missing needed artifacts
 still recover through the existing dependency repair path. Cache eviction after a command
 protects current results of proven-fresh nodes in its cone without loading each key.
+
+Workers compare source snapshots against digest-verified previous artifacts and report
+only affected keys and membership changes. Rust retains counts and digests, projects
+changed keys into expansion, and preserves canonical per-key fingerprints. Uncertain
+previous bytes fall back to normal validation. Full snapshots are not persisted inside
+freshness proofs. Metadata generation uses an indexed last-row read. Routine cache-size
+estimates inspect appended rows; a full survey corrects reused paths before eviction.
+Scheduling loads logical priors first and exact key estimates only for affected work.
 
 Source discovery/comparison can be linear in source keys; changed fan-ins necessarily load
 all collected inputs. No constant-time claim applies to those operations. The normal complete

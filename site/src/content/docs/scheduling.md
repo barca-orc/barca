@@ -84,8 +84,8 @@ from barca import Manual, Schedule, asset, sensor, task
 
 
 @sensor(freshness=Schedule("*/5 * * * *"))
-def prices() -> tuple[bool, str]:
-    return True, Path("prices.txt").read_text()
+def prices() -> str:
+    return Path("prices.txt").read_text()
 
 
 @asset(inputs={"etag": prices}, freshness=Manual)
@@ -163,7 +163,7 @@ that node's direct inputs.
 
 ```python
 @sensor(freshness=Schedule("*/5 * * * *", max_failures=3))
-def inbox() -> tuple[bool, str]:
+def inbox() -> str:
     ...
 ```
 
@@ -180,9 +180,9 @@ from barca import Schedule, asset, sensor, task
 
 
 @sensor()
-def inbox() -> tuple[bool, dict]:
+def inbox() -> dict:
     # Return something that identifies the version of the outside data.
-    return True, {"version": int(time.time()) // 20}
+    return {"version": int(time.time()) // 20}
 
 
 @asset(inputs={"src": inbox})

@@ -240,7 +240,7 @@ struct Trace {
 macro_rules! trace_point {
     ($trace:expr, $($arg:tt)*) => {
         if $trace.enabled {
-            crate::errln!("[trace] {:>8.1}ms  {}  [db opens {}]", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*), db::opens());
+            crate::errln!("[trace] {:>8.1}ms  {}  [db opens {}, cpu {:.1}ms]", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*), db::opens(), trace_cpu_ms());
         }
     };
 }
@@ -358,6 +358,7 @@ struct RunState {
     logs_buffer: crate::run_logs::Recorder,
     all_sinks: HashMap<String, String>,
     all_timings: HashMap<String, (Option<f64>, Option<u64>)>,
+    source_observations: HashMap<String, serde_json::Value>,
     step_clocks: HashMap<String, (f64, f64)>,
     all_failures: Vec<dispatch::StepFailure>,
     all_attempts: HashMap<String, u32>,
@@ -543,9 +544,55 @@ async fn execute_started(
     executed.result.cache = crate::gc::after_command(cfg, &own, pin.as_ref()).await;
     if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
         crate::errln!("[trace] metadata db opens {}", db::opens());
+        trace_resources();
     }
     Ok(executed)
 }
+
+#[cfg(unix)]
+fn trace_cpu_ms() -> f64 {
+    // SAFETY: getrusage writes only this initialized output struct.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return 0.;
+    }
+    (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as f64 * 1000.
+        + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as f64 / 1000.
+}
+#[cfg(not(unix))]
+fn trace_cpu_ms() -> f64 {
+    0.
+}
+
+#[cfg(unix)]
+fn trace_resources() {
+    // SAFETY: rusage is a plain C output struct and the pointer stays valid for the call.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return;
+    }
+    let cpu_ms = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as f64 * 1000.
+        + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as f64 / 1000.;
+    #[cfg(target_os = "macos")]
+    let peak_kib = usage.ru_maxrss / 1024;
+    #[cfg(not(target_os = "macos"))]
+    let peak_kib = usage.ru_maxrss;
+    // Linux rusage can retain a spawning interpreter's pre-exec high-water mark.
+    // VmHWM belongs to this executable's address space alone.
+    #[cfg(target_os = "linux")]
+    let peak_kib = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|n| n.parse::<i64>().ok())
+        })
+        .unwrap_or(peak_kib);
+    crate::errln!("[trace] coordinator resources peak_kib={peak_kib} cpu_ms={cpu_ms:.3}");
+}
+#[cfg(not(unix))]
+fn trace_resources() {}
 
 /// Delete the keys that assets with a dataset sink no longer have (`crate::dataset_sinks`).
 /// Not after a cancelled or broken run: its key sets may be incomplete.
@@ -1493,6 +1540,13 @@ async fn expand_and_decide<'p>(
         phase,
         &session.state.all_outputs,
         session.prepared.pool_size,
+        |base, source| {
+            session
+                .state
+                .incremental
+                .as_ref()
+                .and_then(|i| i.expanded_source(base, source))
+        },
         |base, dims| {
             if let Some(incremental) = &session.state.incremental {
                 incremental.filter(base, dims);
@@ -1575,6 +1629,7 @@ async fn expand_and_decide<'p>(
         cfg: session.request.cfg,
         phase_ref,
         decide_state: &mut session.state.decide_state,
+        cost_model: &mut session.cost_model,
         store: &mut session.store,
         step_reports: &mut session.state.step_reports,
         all_outputs: &mut session.state.all_outputs,
@@ -1597,6 +1652,8 @@ async fn expand_and_decide<'p>(
             phase,
             &session.state.all_outputs,
             session.state.decide_state.run_hashes(),
+            &session.state.decide_state.sensor_outputs,
+            &session.state.source_observations,
         );
     }
     if decided.streams.is_empty() {
@@ -1772,6 +1829,7 @@ async fn dispatch_ready(
             decide_state: &session.state.decide_state,
             store: &mut session.store,
             recorder: session.recorder.as_ref().expect("recorder started"),
+            run_id: &session.started.run_id,
             store_paths: &mut session.state.store_paths,
             dag: &session.prepared.dag,
             pb: &session.pb,
@@ -1812,6 +1870,12 @@ fn collect_outputs(
             .state
             .all_attempts
             .insert(node_id.clone(), item.attempts);
+        if let Some(observation) = artifact_val.get("source_observation") {
+            session
+                .state
+                .source_observations
+                .insert(node_id.clone(), observation.clone());
+        }
         let oref = dispatch::OutputRef {
             path: artifact_val
                 .get("path")
@@ -1868,11 +1932,18 @@ fn collect_outputs(
                 .contains_key(&node_id)
             && let Some(h) = artifact_val.get("content_hash").and_then(|v| v.as_str())
         {
+            let revision = crate::observation::from_artifact(
+                artifact_val,
+                session.state.decide_state.sensor_outputs.get(&node_id),
+                &session.started.run_id,
+                &node_id,
+            )
+            .unwrap_or_else(|| h.to_owned());
             session
                 .state
                 .decide_state
                 .sensor_outputs
-                .insert(node_id.clone(), h.to_string());
+                .insert(node_id.clone(), revision);
         }
         phase_outputs.insert(node_id, oref);
     }
@@ -2212,6 +2283,8 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
                 &phase,
                 &session.state.all_outputs,
                 session.state.decide_state.run_hashes(),
+                &session.state.decide_state.sensor_outputs,
+                &session.state.source_observations,
             );
         }
         if session.state.phase_error.is_some()
@@ -3506,6 +3579,7 @@ struct DecidePhase<'a> {
     cfg: &'a crate::config::ResolvedConfig,
     phase_ref: &'a Phase,
     decide_state: &'a mut DecideState,
+    cost_model: &'a mut crate::cost::CostModel,
     store: &'a mut Option<StoreSync>,
     step_reports: &'a mut Vec<StepReport>,
     all_outputs: &'a mut HashMap<String, OutputRef>,
@@ -3523,6 +3597,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         cfg,
         phase_ref,
         decide_state,
+        cost_model,
         store,
         step_reports,
         all_outputs,
@@ -3550,8 +3625,17 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
     // Decide all upstream chunks before any consumer, independently of the worker split.
     let mut uncached: Vec<Vec<crate::planner::StreamStep>> =
         vec![Vec::new(); phase_ref.streams.len()];
+    let mut due_costs = Vec::new();
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
+        if step.kind == crate::NodeKind::Sensor {
+            let id = step.step_id.display();
+            if let Some((revision, output)) = crate::observation::previous(&cache, &id).await? {
+                let output = crate::cache::accept_cache_hit(store, &id, output);
+                decide_state.sensor_outputs.insert(id.clone(), revision);
+                decide_state.sensor_previous.insert(id, output);
+            }
+        }
         let (step, decision) = decide_step(dag, policy, Some(&cache), decide_state, step).await?;
         let decision = localize_decision(decision, &step, store);
         step_reports.push(report_for(dag, &step, &decision, false));
@@ -3616,6 +3700,11 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
                 }
                 if !missing.is_empty() {
                     // Its run hashes, for the keys that run only; not a copy of every key.
+                    due_costs.extend(
+                        missing
+                            .iter()
+                            .map(|key| key.display_id(step.step_id.base_id())),
+                    );
                     let mut partial = step.with_keys(missing);
                     partial.run_hashes = partial
                         .partition_keys
@@ -3632,6 +3721,9 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
                 }
             }
         }
+    }
+    if !due_costs.is_empty() {
+        cost_model.seed_exact(db::cost_estimates_for(cache.conn(), &due_costs).await?);
     }
     for (stream, uncached_steps) in phase_ref.streams.iter().zip(uncached) {
         if !uncached_steps.is_empty() {
@@ -3667,6 +3759,7 @@ struct DispatchPhase<'a> {
     decide_state: &'a DecideState,
     store: &'a mut Option<StoreSync>,
     recorder: &'a StepRecorder,
+    run_id: &'a str,
     store_paths: &'a mut HashMap<String, String>,
     dag: &'a Dag,
     pb: &'a Option<indicatif::ProgressBar>,
@@ -3699,6 +3792,7 @@ async fn dispatch_phase(
         decide_state,
         store,
         recorder,
+        run_id,
         store_paths,
         dag,
         pb,
@@ -3715,6 +3809,7 @@ async fn dispatch_phase(
     let mut coord = crate::coordinator::Coordinator::new();
     coord.assign_calls(calls);
     let loaded = coord.load_phase(filtered_phase, provided);
+    coord.sensor_previous(&decide_state.sensor_previous);
     let expected: usize = filtered_phase
         .streams
         .iter()
@@ -3744,9 +3839,18 @@ async fn dispatch_phase(
                 && let Some(run_hash) = run_hashes.get(node_id)
             {
                 recorder.record(
-                    StepRow::from_artifact(node_id, run_hash, artifact, attempts).with_components(
-                        crate::changes::step_components_json(dag, decide_state, node_id),
-                    ),
+                    StepRow::from_artifact(node_id, run_hash, artifact, attempts)
+                        .with_observation(crate::observation::from_artifact(
+                            artifact,
+                            decide_state.sensor_outputs.get(node_id),
+                            run_id,
+                            node_id,
+                        ))
+                        .with_components(crate::changes::step_components_json(
+                            dag,
+                            decide_state,
+                            node_id,
+                        )),
                 );
             }
             // A sink that failed failed the step (the worker reports it as the step's error).
@@ -3768,9 +3872,18 @@ async fn dispatch_phase(
                 && let Some(at) = s.layout.store_for(path)
             {
                 let record = recorder.after_upload(
-                    StepRow::from_artifact(node_id, run_hash, artifact, attempts).with_components(
-                        crate::changes::step_components_json(dag, decide_state, node_id),
-                    ),
+                    StepRow::from_artifact(node_id, run_hash, artifact, attempts)
+                        .with_observation(crate::observation::from_artifact(
+                            artifact,
+                            decide_state.sensor_outputs.get(node_id),
+                            run_id,
+                            node_id,
+                        ))
+                        .with_components(crate::changes::step_components_json(
+                            dag,
+                            decide_state,
+                            node_id,
+                        )),
                     at.clone(),
                 );
                 let snapshot = artifact
@@ -4107,7 +4220,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
 
     // Persist all executed outputs (including partial results on failure).
     let cost_snapshot: Vec<(String, crate::cost::NodeEstimate)> = cost_model
-        .snapshot()
+        .persistence_snapshot()
         .map(|(node_id, est)| (node_id.clone(), *est))
         .collect();
     // What each executed step's run hash was made of, so a later status can say what changed.

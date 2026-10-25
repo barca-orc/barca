@@ -239,6 +239,7 @@ pub(crate) struct DecideState {
     /// step finishes (it runs in an earlier phase than its consumers) or is served from cache;
     /// a dry run seeds it from each one's last recorded output.
     pub(crate) sensor_outputs: HashMap<String, String>,
+    pub(crate) sensor_previous: HashMap<String, crate::dispatch::OutputRef>,
     /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
     pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
     /// Under a tick: the scheduled node. Every other task fires only when it is out of date.

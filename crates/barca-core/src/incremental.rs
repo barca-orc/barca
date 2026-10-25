@@ -17,47 +17,14 @@ use std::sync::Arc;
 
 pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, snapshot TEXT NOT NULL)";
 
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
-struct Source {
-    keys: Vec<String>,
-    hashes: Option<Arc<Hashes>>,
-}
-/// Intern repeated version hashes; metadata size tracks keys, not repeated 64-byte digests.
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
-struct Hashes {
-    values: Vec<String>,
-    keys: HashMap<String, usize>,
-}
-impl Hashes {
-    fn new(hashes: HashMap<String, String>) -> Self {
-        let mut values = Vec::new();
-        let mut interned = HashMap::new();
-        let keys = hashes
-            .into_iter()
-            .map(|(key, hash)| {
-                let index = *interned.entry(hash.clone()).or_insert_with(|| {
-                    values.push(hash);
-                    values.len() - 1
-                });
-                (key, index)
-            })
-            .collect();
-        Self { values, keys }
-    }
-    fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(*self.keys.get(key)?)
-    }
-    fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
-        self.keys
-            .iter()
-            .filter_map(|(key, index)| self.values.get(*index).map(|hash| (key, hash)))
-    }
-}
+use crate::source_observation::Source;
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Proof {
     signature: String,
     count: usize,
     output_hash: Option<String>,
+    #[serde(default)]
+    observation_hash: Option<String>,
     output: Option<OutputRef>,
     run_hash: Option<String>,
     source: Option<Arc<Source>>,
@@ -113,7 +80,7 @@ impl Incremental {
         let mut ids: Vec<_> = templates.keys().cloned().collect();
         ids.sort();
         let key = format!(
-            "freshness-v1:{:x}",
+            "freshness-v2:{:x}",
             Sha256::digest(
                 serde_json::to_vec(&(&cfg.artifact_root, &cfg.local_artifact_dir)).unwrap()
             )
@@ -134,7 +101,11 @@ impl Incremental {
                 .map_err(db_error)?;
             if let Some(row) = rows.next().await.map_err(db_error)?
                 && let Ok(text) = row.get::<String>(0)
-                && let Ok(proof) = serde_json::from_str(&text)
+                && let Ok(proof) = serde_json::from_str::<Proof>(&text)
+                && proof
+                    .source
+                    .as_ref()
+                    .is_none_or(|s| s.valid() && s.matches(proof.output_hash.as_deref()))
             {
                 previous.nodes.insert(id, proof);
             }
@@ -217,7 +188,7 @@ impl Incremental {
             return 1;
         }
         if let Some((_, source)) = self.source_for(dag, id) {
-            return source.keys.len();
+            return source.count;
         }
         original
             .streams
@@ -260,26 +231,15 @@ impl Incremental {
                         )
                         && dag.partition_sources(id).contains(&up)
                 })
-                .and_then(|dim| {
+                .and_then(|_| {
                     let source = self.next.nodes.get(up)?.source.as_ref()?;
                     let previous = self.previous.nodes.get(up)?.source.as_ref()?;
-                    let new = source.hashes.as_ref()?;
-                    let old = previous.hashes.as_ref()?;
-                    Some((dim, new, old))
+                    Some((source, previous))
                 });
-            if let Some((_, new, old)) = keyed_source {
-                changed.extend(
-                    new.iter()
-                        .filter(|(k, v)| old.get(k) != Some(*v))
-                        .map(|(k, _)| k.clone()),
-                );
-                // Removed keys affect collected consumers even though there is no
-                // surviving partition to recompute.
-                changed.extend(
-                    old.iter()
-                        .filter(|(k, _)| new.get(k).is_none())
-                        .map(|(k, _)| k.clone()),
-                );
+            if let Some((source, previous)) = keyed_source
+                && let Some(keys) = source.changes(previous)
+            {
+                changed.extend(keys);
                 continue;
             }
             match self.changes.get(up) {
@@ -330,11 +290,8 @@ impl Incremental {
                         |(_, source)| {
                             Arc::new(
                                 source
-                                    .keys
-                                    .iter()
-                                    .filter(|k| values.contains(*k))
-                                    .cloned()
-                                    .collect(),
+                                    .active(values)
+                                    .unwrap_or_else(|_| values.as_ref().clone()),
                             )
                         },
                     );
@@ -401,6 +358,8 @@ impl Incremental {
         phase: &Phase,
         outputs: &HashMap<String, OutputRef>,
         hashes: &HashMap<String, String>,
+        observations: &HashMap<String, String>,
+        source_observations: &HashMap<String, serde_json::Value>,
     ) {
         let bases: HashSet<_> = phase
             .streams
@@ -413,20 +372,25 @@ impl Incremental {
                 continue;
             };
             if let Some(output) = outputs.get(id) {
+                let same_source =
+                    proof.source.is_some() && proof.output_hash == output.content_hash;
                 proof.output_hash = output.content_hash.clone();
+                proof.observation_hash = observations.get(id).cloned();
                 proof.output = Some(output.clone());
                 proof.run_hash = hashes.get(id).cloned();
-                if dag.feeds_partitions(id)
-                    && let Ok(text) = std::fs::read_to_string(&output.path)
-                    && let Ok(source) = crate::keyed::read_source(&text)
-                {
-                    proof.source = Some(Arc::new(match source {
-                        crate::keyed::SourceKeys::List(keys) => Source { keys, hashes: None },
-                        crate::keyed::SourceKeys::Keyed(keys, hashes) => Source {
-                            keys,
-                            hashes: Some(Arc::new(Hashes::new(hashes))),
-                        },
-                    }));
+                if !same_source && dag.feeds_partitions(id) {
+                    proof.source = output
+                        .content_hash
+                        .as_deref()
+                        .and_then(|content_hash| {
+                            source_observations
+                                .get(id)
+                                .and_then(|wire| {
+                                    Source::observed(&output.path, content_hash, wire).ok()
+                                })
+                                .or_else(|| Source::read(&output.path, content_hash).ok())
+                        })
+                        .map(Arc::new);
                 }
                 // A sensor runs every time, but consumers depend on what it observed.
                 if dag
@@ -436,13 +400,27 @@ impl Incremental {
                     && self.previous.nodes.get(id).is_some_and(|old| {
                         (crate::cache::is_cutoff(dag, id)
                             || (old.signature == proof.signature && old.run_hash == proof.run_hash))
-                            && old.output_hash == proof.output_hash
+                            && old.observation_hash.as_ref().or(old.output_hash.as_ref())
+                                == proof
+                                    .observation_hash
+                                    .as_ref()
+                                    .or(proof.output_hash.as_ref())
                     })
                 {
                     self.changes.insert(id.to_owned(), Change::Fresh);
                 }
             }
         }
+    }
+
+    pub(crate) fn expanded_source(
+        &self,
+        base: &str,
+        source: &str,
+    ) -> Option<(usize, crate::keyed::SourceKeys)> {
+        let (_, selected) = self.filters.get(base)?;
+        let source = self.next.nodes.get(source)?.source.as_ref()?;
+        Some((source.count, source.project(selected).ok()?))
     }
 
     pub(crate) fn filter(&self, base: &str, dims: &mut HashMap<String, Vec<String>>) {
@@ -481,7 +459,8 @@ impl Incremental {
         if let Some((_, source)) = self.source_for(dag, id) {
             return Some(
                 source
-                    .keys
+                    .keys()
+                    .ok()?
                     .iter()
                     .map(|v| {
                         PartitionKey(std::collections::BTreeMap::from([(dim.clone(), v.clone())]))
@@ -596,9 +575,7 @@ impl Incremental {
                 let node = dag.get_node(&base).unwrap();
                 let mut sources = Vec::new();
                 for dim in step.pending_partitions.keys() {
-                    if let Some((source_id, source)) = self.source_for(dag, &base)
-                        && let Some(hashes) = &source.hashes
-                    {
+                    if let Some((source_id, source)) = self.source_for(dag, &base) {
                         let inherited = node.extracted.inherited_partitions.contains(dim);
                         let named = step
                             .inputs
@@ -630,7 +607,7 @@ impl Incremental {
                                     .iter()
                                     .filter_map(|key| {
                                         let value = key.0.get(dim)?;
-                                        Some((value.clone(), hashes.get(value)?.clone()))
+                                        Some((value.clone(), source.hash(value)?))
                                     })
                                     .collect(),
                             ),
@@ -656,7 +633,7 @@ impl Incremental {
             .nodes
             .get(source_id)
             .and_then(|p| p.source.as_ref())
-            .is_none_or(|old| old.keys != source.keys)
+            .is_none_or(|old| old.membership_hash != source.membership_hash)
     }
 
     pub(crate) fn summary(
@@ -748,7 +725,7 @@ impl Incremental {
         let mut rows = cache
             .conn()
             .query(
-                "SELECT 1 FROM materializations WHERE id > ?1 AND (run_id IS NULL OR run_id != ?2) LIMIT 1",
+                "SELECT 1 FROM materializations NOT INDEXED WHERE id > ?1 AND (run_id IS NULL OR run_id != ?2) LIMIT 1",
                 (self.generation, run_id.to_owned()),
             )
             .await
@@ -774,7 +751,10 @@ fn db_error(e: impl std::fmt::Display) -> BarcaError {
 }
 async fn generation(conn: &turso::Connection) -> Result<i64, BarcaError> {
     let mut rows = conn
-        .query("SELECT COALESCE(MAX(id),0) FROM materializations", ())
+        .query(
+            "SELECT COALESCE((SELECT id FROM materializations ORDER BY id DESC LIMIT 1),0)",
+            (),
+        )
         .await
         .map_err(db_error)?;
     rows.next()

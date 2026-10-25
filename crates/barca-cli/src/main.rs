@@ -117,7 +117,7 @@ fn main() {
         Err(e) => e.emit(json),
         Ok(Some(server)) if matches!(cli, Cli::Sql { .. }) => sql_server = Some(server),
         Ok(Some(server)) => {
-            let rt = runtime(json);
+            let rt = runtime(json, false);
             if let Err(e) = rt.block_on(run_on_server(cli, &server, &ctx)) {
                 e.emit(json);
             }
@@ -159,7 +159,7 @@ fn main() {
             },
         ) => {
             server.announce();
-            let rt = runtime(json);
+            let rt = runtime(json, false);
             if let Err(e) = rt.block_on(run_on_server(cli, &server, &ctx)) {
                 e.emit(json);
             }
@@ -170,7 +170,7 @@ fn main() {
     }
 
     if let Some(server) = sql_server {
-        let rt = runtime(json);
+        let rt = runtime(json, false);
         if let Err(e) = rt.block_on(sql_on_server(cli, &server, sql_files_given)) {
             e.emit(json);
         }
@@ -178,7 +178,7 @@ fn main() {
         finish(json);
     }
 
-    let rt = runtime(json);
+    let rt = runtime(json, matches!(cli, Cli::Serve { .. }));
     if let Err(e) = rt.block_on(run_cli(cli, &ctx, ledger)) {
         e.emit(json);
     }
@@ -188,17 +188,23 @@ fn main() {
 
 /// The one runtime for the whole process — barca-core is async-native and runs on whatever
 /// runtime the caller provides.
-fn runtime(json: bool) -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap_or_else(|e| {
-            CliError::from_barca(
-                barca_core::BarcaError::Other(format!("failed to create runtime: {e}")),
-                &Context::default(),
-            )
-            .emit(json)
-        })
+fn runtime(json: bool, server: bool) -> tokio::runtime::Runtime {
+    // A command needs one event loop; jobs execute in Python processes and blocking I/O
+    // uses Tokio's separate blocking pool. Serve also handles concurrent HTTP requests.
+    let mut builder = if server {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.worker_threads(2);
+        builder
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+    };
+    builder.enable_all().build().unwrap_or_else(|e| {
+        CliError::from_barca(
+            barca_core::BarcaError::Other(format!("failed to create runtime: {e}")),
+            &Context::default(),
+        )
+        .emit(json)
+    })
 }
 
 /// `barca status --state a,b --problems`: an unknown state is a usage error naming the valid

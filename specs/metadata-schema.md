@@ -47,6 +47,19 @@ normal cache validation, never loss of history. The table is disposable accelera
 older format-1 binaries ignore it and invalidate its generation when they write new
 materializations. This addition changes neither `user_version` nor public JSON contracts.
 
+## Sensor freshness revisions
+
+Format 1 adds nullable `materializations.observation_hash`. It records a sensor's
+freshness revision independently of `output_hash`, which remains the digest of actual
+artifact bytes. Explicit change signals can therefore invalidate consumers without a
+payload. Null revisions from older binaries fall back to their content digest. Ledger
+posts optionally carry this revision; equal bytes can still establish a new observation.
+
+Source freshness proofs contain only a key count, membership digest and artifact identity.
+Their private payload version changes when their representation changes; incompatible
+payloads fall back to ordinary validation. Scheduling loads logical-node priors at startup and exact partition estimates only for
+work that will execute. Both are persisted without loading every historical estimate.
+
 ## Backups, restore and older binaries
 
 The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).

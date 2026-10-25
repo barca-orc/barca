@@ -328,13 +328,15 @@ def deploy(model):
 
 ## Sensors: SensorResult in, SensorResult out (status: parked, not implemented)
 
-**Current implementation:** Sensors return `(updated, data)` tuples. This works
-but is an unusual Python contract — ambiguous, hard to remember which element
-is which, and doesn't compose well.
+**Current implementation:** Sensors accept a boolean change signal, `(updated, data)`
+with optional data, or a non-boolean value for content comparison. Explicit `True`
+advances a freshness revision; `False` retains the previous observation and payload.
+The revision is separate from the artifact's content digest. Keyed snapshots still
+compare values per key.
 
-**Status (2026-10-10):** `SensorResult` does not exist. The tuple is the
-contract (`barca docs assets`); the cache keys on the returned value and the
-`bool` is not used. The redesign below is parked with no open issue.
+**Status (2026-10-24):** `SensorResult` does not exist. The contract is documented in
+`barca docs assets`. Through 0.32.0 the tuple's flag was ignored; the next release
+honors it. The typed redesign below remains parked.
 
 **Redesign direction:** Sensors receive the previous `SensorResult` as a
 parameter and return a new `SensorResult`. Same type in, same type out.

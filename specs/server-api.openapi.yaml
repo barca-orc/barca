@@ -4672,6 +4672,11 @@ components:
           - string
           - 'null'
           description: SHA-256 of the artifact's bytes; required for a successful step.
+        observation_hash:
+          type:
+          - string
+          - 'null'
+          description: Sensor freshness revision, independent of its artifact digest.
         elapsed_seconds:
           type:
           - number

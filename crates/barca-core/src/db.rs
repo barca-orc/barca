@@ -1057,7 +1057,7 @@ async fn initialized(
 
 /// What a run reads from the metadata DB as it starts ([`start_run`]).
 pub struct StartedRun {
-    /// Every persisted per-node cost estimate ([`load_cost_estimates`]).
+    /// Logical-node scheduling priors for the requested plan.
     pub cost_estimates: Vec<(String, crate::cost::NodeEstimate)>,
     /// [`get_avg_elapsed`] of the run's unpartitioned nodes.
     pub avg_elapsed: HashMap<String, f64>,
@@ -1081,7 +1081,11 @@ pub async fn start_run(
     let started = async {
         insert_run(&conn, db_path, &run).await;
         Ok(StartedRun {
-            cost_estimates: cost_estimates_on(&conn).await?,
+            cost_estimates: {
+                let ids: std::collections::BTreeSet<_> =
+                    node_ids.iter().chain(base_ids).cloned().collect();
+                cost_estimates_on(&conn, Some(&ids.into_iter().collect::<Vec<_>>())).await?
+            },
             avg_elapsed: avg_elapsed_on(&conn, node_ids).await?,
             partitioned_avg_elapsed: partitioned_avg_elapsed_on(&conn, base_ids).await?,
         })
@@ -1857,7 +1861,10 @@ pub async fn max_materialization_id(db_path: &str) -> Result<i64, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
-        .query("SELECT COALESCE(MAX(id), 0) FROM materializations", ())
+        .query(
+            "SELECT COALESCE((SELECT id FROM materializations ORDER BY id DESC LIMIT 1),0)",
+            (),
+        )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
     Ok(match rows.next().await {
@@ -2025,12 +2032,12 @@ pub async fn last_output_hashes(
         let mut found: Vec<(i64, String, String)> = Vec::new();
         for (sql, params) in [
             (
-                "SELECT id, node_id, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+                "SELECT id, node_id, COALESCE(observation_hash, output_hash) FROM materializations INDEXED BY idx_mat_node_run \
                  WHERE node_id = ?1 AND status = 'success' AND output_hash IS NOT NULL",
                 vec![base.to_string()],
             ),
             (
-                "SELECT id, node_id, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+                "SELECT id, node_id, COALESCE(observation_hash, output_hash) FROM materializations INDEXED BY idx_mat_node_run \
                  WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
                  AND output_hash IS NOT NULL",
                 vec![lo.clone(), hi.clone()],
@@ -2098,34 +2105,57 @@ pub async fn load_cost_estimates(
 ) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    cost_estimates_on(&conn).await
+    cost_estimates_on(&conn, None).await
+}
+
+pub(crate) async fn cost_estimates_for(
+    conn: &turso::Connection,
+    ids: &[String],
+) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
+    cost_estimates_on(conn, Some(ids)).await
 }
 
 async fn cost_estimates_on(
     conn: &turso::Connection,
+    ids: Option<&[String]>,
 ) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
-    let mut rows = conn
-        .query(
-            "SELECT node_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples FROM cost_estimates",
-            (),
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to query cost_estimates: {e}")))?;
+    let columns =
+        "SELECT node_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples FROM cost_estimates";
+    let queries = match ids {
+        None => vec![(columns.to_owned(), Vec::new())],
+        Some(ids) => ids
+            .chunks(IN_LIST_CHUNK)
+            .map(|chunk| {
+                let marks = (1..=chunk.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                (
+                    format!("{columns} WHERE node_id IN ({marks})"),
+                    chunk.to_vec(),
+                )
+            })
+            .collect(),
+    };
     let mut out = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        let node_id = row.get::<String>(0).unwrap_or_default();
-        if node_id.is_empty() {
-            continue;
+    for (sql, params) in queries {
+        let failed = |e| BarcaError::Db(format!("failed to query cost_estimates: {e}"));
+        let mut rows = conn.query(&sql, params).await.map_err(failed)?;
+        while let Some(row) = rows.next().await.map_err(failed)? {
+            let node_id = row.get::<String>(0).unwrap_or_default();
+            if node_id.is_empty() {
+                continue;
+            }
+            out.push((
+                node_id,
+                crate::cost::NodeEstimate {
+                    estimate_seconds: row.get::<f64>(1).unwrap_or(0.0),
+                    cpu_seconds: row.get::<f64>(2).unwrap_or(0.0),
+                    max_rss_bytes: row.get::<i64>(3).unwrap_or(0).max(0) as u64,
+                    samples: row.get::<i64>(4).unwrap_or(0).max(0) as u64,
+                },
+            ));
         }
-        out.push((
-            node_id,
-            crate::cost::NodeEstimate {
-                estimate_seconds: row.get::<f64>(1).unwrap_or(0.0),
-                cpu_seconds: row.get::<f64>(2).unwrap_or(0.0),
-                max_rss_bytes: row.get::<i64>(3).unwrap_or(0).max(0) as u64,
-                samples: row.get::<i64>(4).unwrap_or(0).max(0) as u64,
-            },
-        ));
     }
     Ok(out)
 }

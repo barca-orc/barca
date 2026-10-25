@@ -1,6 +1,6 @@
 # Worker and transfer protocol
 
-Specification 4; protocol version 4. Batched calls are implemented for 0.32.0.
+Specification 5; protocol version 5. Batched calls are implemented for 0.32.0.
 
 ## Framing and negotiation
 
@@ -8,9 +8,9 @@ Each frame is a four-byte unsigned big-endian length followed by UTF-8 JSON.
 Readers reject payload lengths greater than 256 MiB before allocation. Python's
 stdlib suffices; optional orjson changes encoding speed, not the wire layout.
 
-The helper first sends `{"type":"hello","role":"worker","protocol_version":4}`
+The helper first sends `{"type":"hello","role":"worker","protocol_version":5}`
 (or role `transfer`). The coordinator validates the role and integer version and
-acknowledges `{"type":"hello","role":"coordinator","protocol_version":4}`.
+acknowledges `{"type":"hello","role":"coordinator","protocol_version":5}`.
 A missing/mismatched version or role gets `protocol_error` with `message` and the
 expected version, then connection refusal. The error says to reinstall matching
 Barca packages. Connection and negotiation share the ten-second startup deadline.
@@ -26,7 +26,8 @@ the id pairs each connection with the process the coordinator started (the
 peer's process id, `SO_PEERCRED`, when a hello has none). A connection that
 matches no worker still starting is closed. A coordinator ignores unknown hello
 fields, so the key is additive within each protocol version.
-Version 4 requires helpers that understand a one-call batch. Version 3 helpers are refused
+Version 5 requires helpers that preserve explicit sensor signals and report compact source
+observations. Version 4 and earlier helpers are refused
 before receiving work, with a reinstall message; matching barca packages are required.
 The historical standalone stderr batch protocol is independently version 2.
 
@@ -212,3 +213,20 @@ Plan documents independently carry `plan_version:1` on CLI and HTTP output. Cons
 should reject unsupported versions; absence identifies an older unversioned document.
 The CLI contract and OpenAPI Plan schema own that shape. DB compatibility remains in
 [metadata-schema.md](metadata-schema.md); this change does not bump its format.
+
+## Sensor observations and source discovery
+
+A sensor item may carry `previous_sensor` with the prior local artifact path, format,
+size and content digest. This is producer-owned data, not access to the metadata DB.
+An unchanged observation can reuse it without rewriting the artifact. Results carry
+`sensor_changed` independently of `content_hash`: the coordinator records a freshness
+revision while the content digest continues to describe actual bytes.
+
+An unpartitioned source of `partitions_from` reports `source_observation`: count,
+`keyed`, membership digest, and, when verified previous bytes are available, the previous
+content digest, changed key/value pairs, changed keys in producer order, and removed keys.
+The worker checks the previous bytes against their recorded digest before comparing.
+Rust hashes affected values using the existing canonical JSON contract. A delta is usable
+only against the validated previous source digest; otherwise ordinary cache validation
+applies. Full snapshots stay in worker memory and artifacts; proofs persist only compact
+counts and digests. Missing or malformed observations never establish freshness.

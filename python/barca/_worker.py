@@ -774,6 +774,17 @@ def _check_partition_source(value, step):
     return out
 
 
+def _sensor_result(result):
+    if isinstance(result, bool):
+        return result, None
+    if isinstance(result, tuple) and len(result) == 2:
+        changed, value = result
+        if not isinstance(changed, bool):
+            raise TypeError("a sensor's change signal must be a bool")
+        return changed, value
+    return None, result
+
+
 def _execute(fn, kwargs, step):
     """Run a step function with optional timeout, unpacking sensor tuples."""
     timeout = step.get("timeout_seconds", 0)
@@ -784,9 +795,8 @@ def _execute(fn, kwargs, step):
         result = fn(**kwargs) if kwargs else fn()
     elapsed = time.perf_counter() - t0
 
-    # Sensors return (updated: bool, data) tuples — unpack for downstream.
-    if step.get("kind") == "sensor" and isinstance(result, tuple) and len(result) == 2:
-        _updated, result = result
+    if step.get("kind") == "sensor":
+        step["sensor_changed"], result = _sensor_result(result)
     return result, elapsed
 
 
@@ -960,6 +970,8 @@ def _materialize(
         artifact["upload_snapshot"] = upload_snapshot
     if content_hash is not None:
         artifact["content_hash"] = content_hash
+    if isinstance(step.get("sensor_changed"), bool):
+        artifact["sensor_changed"] = step["sensor_changed"]
     if step.get("branch") and fmt in ("parquet", "csv"):
         # The caller of parallel() gets back the frame type the branch returned.
         from barca import _branches
@@ -1372,9 +1384,26 @@ def _run_daemon_step(step, modules, art_dir, lru):
         wall = time.perf_counter() - t0
         cpu = time.process_time() - c0
 
-        # Sensors return (updated: bool, data) tuples — unpack for downstream.
-        if step.get("kind") == "sensor" and isinstance(result, tuple) and len(result) == 2:
-            _updated, result = result
+        # Freshness is independent of the optional payload.
+        sensor_changed = None
+        if step.get("kind") == "sensor":
+            sensor_changed, result = _sensor_result(result)
+
+        if sensor_changed is False and step.get("previous_sensor"):
+            artifact = {
+                **step["previous_sensor"],
+                "sensor_changed": False,
+                "elapsed_seconds": wall,
+                "wall_seconds": wall,
+                "finished_at": time.time(),
+                "cpu_seconds": cpu,
+            }
+            peak = _step_peak_rss_bytes(rss_window)
+            if peak is not None:
+                artifact["max_rss_bytes"] = peak
+            tracing.finish()
+            _emit("result", node_id=node_id, artifact=artifact, elapsed=wall)
+            return True
 
         # Convert ParallelError instances so results are JSON-serializable.
         from barca import ParallelError
@@ -1394,6 +1423,14 @@ def _run_daemon_step(step, modules, art_dir, lru):
             result = _check_partition_source(result, step)
             materialize_step = {**step, "serializer": "json"}
 
+        source_observation = None
+        if step.get("partition_source"):
+            from barca._source_observation import observe
+            source_observation = observe(result, step.get("previous_sensor"))
+
+        # Source validation and comparison are producer work too, not coordinator overhead.
+        wall = time.perf_counter() - t0
+        cpu = time.process_time() - c0
         # Serialize result to artifact (and write any declared sinks).
         try:
             artifact = _materialize(
@@ -1413,6 +1450,10 @@ def _run_daemon_step(step, modules, art_dir, lru):
                         if import_seconds and import_seconds > 1
                         else {}
                     ),
+                },
+                extra={
+                    **({"sensor_changed": sensor_changed} if sensor_changed is not None else {}),
+                    **({"source_observation": source_observation} if source_observation is not None else {}),
                 },
                 before_emit=tracing.finish,
             )
