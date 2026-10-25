@@ -1,10 +1,104 @@
 # Benchmark Results
 
-Latest passes: 2026-10-25, bounded coordinator overhead; 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
+Latest passes: 2026-10-25, framework cold/warm updates and bounded coordinator overhead; 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
 early cutoff and bounded server run records; 2026-10-22, keyed sources and server read routes.
 The latest framework comparison is 2026-10-21 (barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0
 and Airflow 3.3.2, #65). Older passes on other hardware are kept below. Absolute times from
 different machines are not comparable; within one pass, the ratios between frameworks are.
+
+## Framework cold paths (2026-10-25)
+
+Empty orchestration history for every sample, with no framework warm-up or asset seed.
+Python 3.13.16, four pinned cores, same host and framework versions as the warm comparison
+below. Cold **selected** chains use explicit partition selection and have three samples;
+wall time is the median and RSS the maximum. Cold **full** runs execute a poll and two
+functions for every key, with individual durable outputs: one sample per case, no vectorized
+calls for Barca. All scores, function counts, and output persistence were checked.
+
+| Cold workload | Barca: time / tree RSS | Dagster: time / tree RSS | Prefect: time / tree RSS |
+|---|---:|---:|---:|
+| One selected key of 1 | 0.052 s / 37.2 MiB | 1.471 s / 137.9 MiB | 6.639 s / 403.3 MiB |
+| One selected key of 1,000 | 0.053 s / 35.1 MiB | 1.354 s / 138.1 MiB | 6.332 s / 403.3 MiB |
+| One selected key of 50,000 | 0.128 s / 45.4 MiB | 1.250 s / 143.7 MiB | 6.276 s / 414.1 MiB |
+| One selected key of 200,000† | 0.253 s / 72.9 MiB | 1.472 s / 163.1 MiB | 6.390 s / 456.4 MiB |
+| All 1 keys (3 calls), one sample | 0.058 s / 33.7 MiB | 1.330 s / 138.2 MiB | 6.724 s / 403.1 MiB |
+| All 100 keys (201 calls), one sample | 0.139 s / 97.1 MiB | 8.165 s / 140.0 MiB | 6.850 s / 424.1 MiB |
+| All 1,000 keys (2,001 calls), one sample | 0.584 s / 120.5 MiB | 80.017 s / 159.0 MiB | 14.050 s / 456.9 MiB |
+
+Memory is sampled whole-process-tree RSS, including Python workers and the Prefect API;
+shared pages are counted in each process. Times include fresh interpreter/engine/database
+startup and shutdown. Prefect starts its ephemeral local API on each invocation. These
+are not warmed-server comparisons. Dagster's full path uses dynamic mapped ops in **one**
+in-process job, not thousands of separate runs. Its filesystem outputs use pickle; Barca
+and Prefect use JSON. Prefect also persists the source checkpoint at the adapter boundary.
+Per-key outputs are durable in all three; asset catalogs/retry/resume semantics differ.
+†200k is above Dagster's recommended 100k partitions per asset, and is a stress case.
+
+The first cold probe exposed a real Barca issue: a selected key still caused the native
+coordinator to load/hash every source value before filtering. At 200k, that was 0.521 s,
+190.7 MiB whole-tree RSS and 111.9 MiB native peak, versus Dagster's 161.5 MiB tree peak.
+The fix streams selected values/hashes while counting the full source domain, preserves
+missing-key warnings/skipped counts, and keeps compound dimension projections independent.
+Final native memory remains below **20,000,000 bytes** on all twelve selected-chain samples;
+this is an enforced regression budget, not the whole-tree memory in the table. Full runs
+retain per-key scheduling/metadata state (the 1k run's native peak is 29.4 MiB); this fix does
+not claim that all cold materializations use under 20 MB. We did not run a full 200k-key
+Dagster/Prefect bootstrap, so the table makes no comparison claim for that workload.
+
+Source: `c3227be2`, package version still 0.32.0. All 1,176 Rust tests and 118 focused Python
+regressions pass; Clippy is clean. A post-fix warm check still executes only three functions
+and enforces the same native-memory budget at 50k/200k (200k median 0.280 s).
+
+[Cold methodology/reproducer](framework_partitions/README.md#cold-comparisons),
+[36 cold selected records](framework_partitions/cold-measurements.jsonl),
+[9 full first-materialization records](framework_partitions/cold-full-measurements.jsonl),
+[initial probe before the fix](framework_partitions/cold-probe.jsonl),
+[warm regression check](framework_partitions/warm-after-cold-fix.jsonl),
+[cold environment/dependency versions](framework_partitions/cold-environment.json).
+
+## Framework warm-data updates (2026-10-25)
+
+A sensor/poll observes one changed key and refreshes its `cleaned -> scored` chain. Fresh
+local processes, warm durable state, three measured updates per case. All use Python
+3.13.16 and the same four pinned CPU cores on the Ryzen AI MAX+ 395/Fedora host. Barca is
+source `487601d0` (package version 0.32.0, containing the pending fix), Dagster 1.13.26,
+and Prefect 3.9.0. No builds or test suites ran during measurements.
+
+| Domain | Framework | One-key update | Whole-tree peak RSS | Unchanged |
+|---:|---|---:|---:|---:|
+| 1,000 | Barca | 0.057 s | 51.2 MiB | 0.050 s |
+| 1,000 | Dagster | 1.199 s | 137.2 MiB | 0.804 s |
+| 1,000 | Prefect | 4.624 s | 430.8 MiB | 4.514 s |
+| 50,000 | Barca | 0.105 s | 47.8 MiB | 0.088 s |
+| 50,000 | Dagster | 1.315 s | 142.6 MiB | 0.934 s |
+| 50,000 | Prefect | 5.048 s | 382.3 MiB | 4.969 s |
+| 200,000† | Barca | 0.300 s | 95.0 MiB | 0.245 s |
+| 200,000† | Dagster | 1.586 s | 159.9 MiB | 1.091 s |
+| 200,000† | Prefect | 4.955 s | 447.2 MiB | 4.905 s |
+
+Wall times are medians of three updates; memory is the maximum sampled sum of live RSS
+across the **whole process tree**, including Barca's Python worker and Prefect's local API.
+Shared pages count in each process; 5 ms sampling can miss short peaks. Unchanged has one
+sample per framework/domain. These memory numbers are not Barca's native-only footprint.
+
+Dagster/Prefect get application code that compares snapshots and explicitly routes only
+the changed partition. Their history contains only that key; Barca's full domain is seeded
+and its ordinary DAG workflow discovers/reuses freshness. This intentionally favors the
+competitors' dispatch path rather than forcing them to revisit every task. Every update
+checks three domain function calls and the new score; unchanged checks one poll and no
+asset work. Dagster uses its in-process `materialize()` API and persistent local IO manager;
+Prefect persists JSON results with input/source cache keys.
+
+**Scope:** these are local invocation costs, not warmed-daemon latency, distributed
+throughput, or feature equivalence. Prefect's ephemeral API startup/shutdown is included;
+imports are included for all frameworks. Cold seeding and Barca's first validation are
+excluded. †200k is a stress case above Dagster's recommended 100k partitions per asset;
+1k/50k are the main comparison. No UI is loaded. Barca's measured release build omits UI
+assets; its execution code matches the pending performance fix.
+
+[Methodology, API references and reproducer](framework_partitions/README.md),
+[raw 48 records](framework_partitions/measurements.jsonl),
+[exact environment/dependency versions](framework_partitions/environment.json).
 
 ## Bounded coordinator overhead (2026-10-25)
 
