@@ -48,8 +48,8 @@ struct Observation {
     removed: HashSet<String>,
 }
 impl Source {
-    pub(crate) fn matches(&self, hash: Option<&str>) -> bool {
-        hash == Some(self.content_hash.as_str())
+    pub(crate) fn matches(&self, path: &str, hash: Option<&str>) -> bool {
+        self.path == path && hash == Some(self.content_hash.as_str())
     }
     pub(crate) fn valid(&self) -> bool {
         self.content_hash.len() == 64 && self.membership_hash.len() == 64
@@ -172,14 +172,8 @@ impl Source {
             crate::keyed::SourceKeys::List(keys)
         })
     }
-    pub(crate) fn hash(&self, key: &str) -> Option<String> {
-        if let Some(hash) = self.delta.as_ref().and_then(|d| d.hashes.get(key)) {
-            return Some(hash.clone());
-        }
-        scan(&self.path, Some(&HashSet::from([key.into()])), false, false)
-            .ok()?
-            .hashes
-            .remove(key)
+    pub(crate) fn is_keyed(&self) -> bool {
+        self.keyed
     }
 }
 #[derive(Default)]
@@ -353,8 +347,11 @@ mod tests {
             panic!()
         };
         assert_eq!(source.keys().unwrap(), keys);
-        for key in keys {
-            assert_eq!(source.hash(&key).unwrap(), hashes[&key]);
-        }
+        let crate::keyed::SourceKeys::Keyed(_, projected) =
+            source.project(&keys.into_iter().collect()).unwrap()
+        else {
+            panic!("keyed source");
+        };
+        assert_eq!(projected, hashes);
     }
 }

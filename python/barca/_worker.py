@@ -1426,6 +1426,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
         source_observation = None
         if step.get("partition_source"):
             from barca._source_observation import observe
+
             source_observation = observe(result, step.get("previous_sensor"))
 
         # Source validation and comparison are producer work too, not coordinator overhead.
@@ -1453,7 +1454,11 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 },
                 extra={
                     **({"sensor_changed": sensor_changed} if sensor_changed is not None else {}),
-                    **({"source_observation": source_observation} if source_observation is not None else {}),
+                    **(
+                        {"source_observation": source_observation}
+                        if source_observation is not None
+                        else {}
+                    ),
                 },
                 before_emit=tracing.finish,
             )
@@ -1471,7 +1476,8 @@ def _run_daemon_step(step, modules, art_dir, lru):
         # (Not a branch's result: no step of this worker reads it, and its file is removed
         # when the calling step ends.)
         result_type = _result_frame_type(result)
-        if result_type is not False and not step.get("branch"):
+        # Keyed sources have a separate snapshot cache; this copy is never used by it.
+        if result_type is not False and not step.get("branch") and not step.get("partition_source"):
             lru.admit(artifact["path"], result, result_type, artifact.get("size_bytes"))
         return True
 
@@ -1635,9 +1641,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                     )
                 paths.append(path)
             if frame_type in _batch.LAZY_TYPES:
-                kwargs[param] = _batch.lazy_table(
-                    param, frame_type, dims, keys, paths, texts
-                )
+                kwargs[param] = _batch.lazy_table(param, frame_type, dims, keys, paths, texts)
             else:
                 kwargs[param] = {
                     k: _load_artifact(path, lru, frame_type=frame_type)
@@ -1685,8 +1689,10 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                 prewritten = None
                 if isinstance(value, tuple) and len(value) == 2 and value[0] == "parquet":
                     files = value[1]
-                    if len(files) == 1 and Path(files[0]).name != "__empty.parquet" and (
-                        explicit in (None, "parquet")
+                    if (
+                        len(files) == 1
+                        and Path(files[0]).name != "__empty.parquet"
+                        and (explicit in (None, "parquet"))
                     ):
                         prewritten = files[0]
                         value = None

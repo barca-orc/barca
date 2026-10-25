@@ -776,7 +776,7 @@ fn range_cache_leftovers(project: &Project) -> Vec<plan::Leftover> {
 }
 
 /// The recorded size of the results the DB says are on disk (each file once).
-async fn recorded_bytes(conn: &turso::Connection) -> Result<u64, BarcaError> {
+async fn recorded_bytes(conn: &libsql::Connection) -> Result<u64, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to measure the cache: {e}"));
     let mut rows = conn
         .query(
@@ -801,7 +801,7 @@ async fn recorded_bytes(conn: &turso::Connection) -> Result<u64, BarcaError> {
 /// module reads), and run `f` on it.
 async fn with_db<T>(
     db_path: &str,
-    f: impl AsyncFnOnce(&turso::Connection) -> Result<T, BarcaError>,
+    f: impl AsyncFnOnce(&libsql::Connection) -> Result<T, BarcaError>,
 ) -> Result<T, BarcaError> {
     crate::db::init_db(db_path).await?;
     let _g = crate::db::db_guard().await;

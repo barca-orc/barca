@@ -38,8 +38,8 @@ pub(crate) struct StoreSync {
     /// for the run hash the sensor runs at ([`crate::db::confirmed_object`]), for each sensor
     /// decided to run. A poll that produces the same bytes there is not uploaded again (#554).
     pub(crate) confirmed: HashMap<String, (String, String)>,
-    /// Sensor results of this run that were the bytes the store already held, so not uploaded.
-    pub(crate) unchanged_sensors: usize,
+    /// Sensor polls that preserved their observation and whose bytes the store already held.
+    pub(crate) unchanged_observations: usize,
     /// Set when the run skipped the startup check (the store was checked in the last 5 minutes,
     /// #593): the check's time limit. The first fetch makes the check before it starts.
     check_before_fetching: Option<std::time::Duration>,
@@ -72,7 +72,7 @@ impl StoreSync {
             present: None,
             cancel,
             confirmed: HashMap::new(),
-            unchanged_sensors: 0,
+            unchanged_observations: 0,
             check_before_fetching: None,
         }
     }
@@ -122,6 +122,12 @@ impl StoreSync {
         self.confirmed
             .get(node_id)
             .is_some_and(|(at, known)| at == store && known == digest)
+    }
+
+    /// A newly written artifact supersedes a pending cache read at that mirror path.
+    /// Never fetch an earlier sensor observation over the producer's new bytes.
+    pub(crate) fn produced(&mut self, path: &str) {
+        self.fetchable.remove(path);
     }
 
     /// Whether `path` is the local mirror of a cache hit that has not been

@@ -27,6 +27,44 @@ def _membership(keys):
     return digest.hexdigest()
 
 
+# Bound protocol metadata independently of the producer's artifact size. An oversized
+# delta is optional evidence: omit it and let the normal validation path read the artifact.
+_DELTA_BYTES = 256 * 1024
+
+
+def _fits_wire(value):
+    remaining = _DELTA_BYTES
+    pending = [value]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            if len(value) > remaining:
+                return False
+            remaining -= len(json.dumps(value, ensure_ascii=True))
+        elif value is None:
+            remaining -= 4
+        elif isinstance(value, bool):
+            remaining -= 5
+        elif isinstance(value, int):
+            remaining -= len(str(value))
+        elif isinstance(value, float):
+            remaining -= 32
+        elif isinstance(value, dict):
+            remaining -= 2 + 6 * len(value)
+            if remaining >= 0:
+                pending.extend(value.keys())
+                pending.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            remaining -= 2 + 2 * len(value)
+            if remaining >= 0:
+                pending.extend(value)
+        else:
+            return False
+        if remaining < 0:
+            return False
+    return True
+
+
 def observe(value, previous):
     """The previous snapshot is evidence only when its bytes match the recorded digest."""
     keyed = isinstance(value, dict)
@@ -44,10 +82,11 @@ def observe(value, previous):
     if not isinstance(old, dict):
         return summary
     changed = {k: v for k, v in value.items() if k not in old or not _same(old[k], v)}
-    summary.update(
-        previous_hash=previous["content_hash"],
-        changed=changed,
-        changed_order=list(changed),
-        removed=[k for k in old if k not in value],
-    )
-    return summary
+    delta = {
+        **summary,
+        "previous_hash": previous["content_hash"],
+        "changed": changed,
+        "changed_order": list(changed),
+        "removed": [k for k in old if k not in value],
+    }
+    return delta if _fits_wire(delta) else summary

@@ -11,7 +11,7 @@ from barca.api import _find_binary
 @pytest.mark.parametrize("observation", ["changed", "(changed, None)"])
 def test_signal_without_data_keeps_asset_chain_fresh(tmp_path, observation):
     (tmp_path / "pipeline.py").write_text(
-        f'''from pathlib import Path
+        f"""from pathlib import Path
 from barca import sensor, asset
 
 @sensor()
@@ -26,7 +26,7 @@ def bronze(_source):
 @asset(inputs={{"bronze": bronze}})
 def silver(bronze):
     return bronze * 2
-'''
+"""
     )
     env = os.environ.copy()
     for name in ("BARCA_SERVER", "BARCA_REMOTE_URI", "BARCA_ENV", "BARCA_OUTPUT"):
@@ -37,7 +37,11 @@ def silver(bronze):
         (tmp_path / "value").write_text(str(value))
         result = subprocess.run(
             [_find_binary(), "get", "silver", "pipeline.py", "--json", "-o", "value"],
-            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
@@ -51,7 +55,7 @@ def silver(bronze):
 
 
 def test_unchanged_signal_preserves_data_for_a_new_consumer(tmp_path):
-    pipeline = '''from pathlib import Path
+    pipeline = """from pathlib import Path
 from barca import sensor, asset
 
 @sensor()
@@ -63,7 +67,7 @@ def source():
 @asset(inputs={"source": source})
 def report(source):
     return source["value"] * FACTOR
-'''
+"""
     env = {**os.environ, "BARCA_OUTPUT": "value"}
     for name in ("BARCA_SERVER", "BARCA_REMOTE_URI", "BARCA_ENV"):
         env.pop(name, None)
@@ -73,7 +77,11 @@ def report(source):
         (tmp_path / "changed").write_text("yes" if changed else "no")
         result = subprocess.run(
             [_find_binary(), "get", "report", "pipeline.py", "--json", "-o", "value"],
-            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
@@ -85,7 +93,8 @@ def report(source):
 
 @pytest.mark.parametrize("kind", ["asset", "task"])
 def test_explicit_change_refreshes_even_with_the_same_payload(tmp_path, kind):
-    (tmp_path / "pipeline.py").write_text('''from pathlib import Path
+    (tmp_path / "pipeline.py").write_text(
+        """from pathlib import Path
 from barca import sensor, asset, task
 
 @sensor()
@@ -95,15 +104,27 @@ def source():
 @asset(inputs={"source": source})
 def report(source):
     return int(Path("value").read_text())
-'''.replace('@asset(inputs=', f'@{kind}(inputs='))
+""".replace("@asset(inputs=", f"@{kind}(inputs=")
+    )
     env = os.environ.copy()
     for name in ("BARCA_SERVER", "BARCA_REMOTE_URI", "BARCA_ENV", "BARCA_OUTPUT"):
         env.pop(name, None)
     for value in (1, 2, 3):
         (tmp_path / "value").write_text(str(value))
         result = subprocess.run(
-            [_find_binary(), "get" if kind == "asset" else "run", "report", "pipeline.py", "--json", "-o", "value"],
-            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
+            [
+                _find_binary(),
+                "get" if kind == "asset" else "run",
+                "report",
+                "pipeline.py",
+                "--json",
+                *(["-o", "value"] if kind == "asset" else []),
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert json.loads(result.stdout)["final_output"] == value

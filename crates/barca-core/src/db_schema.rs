@@ -1,7 +1,7 @@
 //! Version discipline for persistent history. Checking never migrates or resets data.
 
 use crate::BarcaError;
-use turso::Connection;
+use libsql::Connection;
 
 pub(crate) const VERSION: i64 = 1;
 
@@ -105,6 +105,8 @@ pub(crate) const LOCAL_MATERIALIZATION_COLUMNS: &[&str] = &["evicted_at", "last_
 
 /// Indexes added after version 1 was introduced; created with the additive columns.
 pub(crate) const INDEXES: &[&str] = &[
+    // A sensor reads only its latest successful observation, across definition changes.
+    "CREATE INDEX IF NOT EXISTS idx_mat_node_latest ON materializations(node_id, id DESC) WHERE status = 'success' AND artifact_path IS NOT NULL",
     // Eviction and `last_read_at` address results by artifact path.
     "CREATE INDEX IF NOT EXISTS idx_mat_path ON materializations(artifact_path)",
     // A notification integration finds a job's previous finished run through this index.
@@ -277,8 +279,8 @@ mod tests {
     use super::*;
     use crate::{db, state_validate};
 
-    async fn raw(path: &str) -> (turso::Database, Connection) {
-        let db = turso::Builder::new_local(path).build().await.unwrap();
+    async fn raw(path: &str) -> (libsql::Database, Connection) {
+        let db = libsql::Builder::new_local(path).build().await.unwrap();
         let conn = db.connect().unwrap();
         (db, conn)
     }

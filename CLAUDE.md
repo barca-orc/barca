@@ -37,7 +37,7 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
    - Parses Python using ruff's AST (no import, pure static analysis)
    - Builds a petgraph DAG from `@asset`/`@sensor`/`@task` decorators
    - Generates a tiered execution plan (JSON)
-   - Persists plan + results to local Turso/libSQL database (`.barca/metadata.db`)
+   - Persists plan + results to local SQLite-compatible libSQL database (`.barca/metadata.db`)
    - Maintains a pool of stateless Python workers and a global ready queue
    - Rust assigns one task at a time to idle workers via Unix domain socket (UDS)
 
@@ -62,7 +62,7 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
 
 ### Dependencies
 
-- **Rust**: ruff_python_parser (AST), petgraph (DAG), turso (DB), serde/serde_json, sha2, toml (barca.toml config)
+- **Rust**: ruff_python_parser (AST), petgraph (DAG), libsql (local DB), serde/serde_json, sha2, toml (barca.toml config)
 - **Python**: no runtime dependencies (stdlib only; pyarrow optional for parquet; fsspec + adlfs/s3fs/gcsfs optional for remote artifact storage via the `azure`/`s3`/`gcs`/`remote` extras)
 - **Build**: maturin (packages Rust binary + Python stubs into one wheel)
 
@@ -98,7 +98,7 @@ filing an issue.
    keys that need to run. Keep planning imports within these documented resolver operations.
 3. **Rust for planning, Python for execution** — each does what it's best at
 4. **Single install** — `uv add barca` gives users everything
-5. **Turso for persistence** — Rust owns the DB; Python has no DB access
+5. **SQLite for persistence** — Rust owns the DB through local-only libSQL; Python has no DB access
 6. **Artifact-based data passing** — serialized files (json/pickle/parquet) between worker batches
 7. **Run-hash-addressed artifacts** — `{artifacts}/{node}/{run_hash}{ext}`; with a store, the metadata DB is backed up to it (`barca state restore` puts a copy back) (see site/src/content/docs/reference/config.mdx and site/src/content/docs/reference/remote-storage.md, published at https://barca.sh/reference/config/ and https://barca.sh/reference/remote-storage/)
 

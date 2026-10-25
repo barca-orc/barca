@@ -8,7 +8,10 @@ tests in `db.rs`. See [boundary inventory](README.md).
 The metadata database contains durable run history, logs and schedules alongside
 rebuildable cache/cost data. A version mismatch never permits deleting or
 recreating it. Rust owns this boundary; no new CLI or Python configuration is
-introduced.
+introduced. The local driver is bundled libSQL with its local core enabled. Existing
+SQLite-format metadata remains readable. Compatibility is checked through a read-only
+connection before opening a writer, so an unusable database is left untouched even when
+the driver checkpoints on close. Reused prepared statements reset before rebinding.
 
 ## Version 1 and legacy databases
 

@@ -102,10 +102,13 @@ impl Incremental {
             if let Some(row) = rows.next().await.map_err(db_error)?
                 && let Ok(text) = row.get::<String>(0)
                 && let Ok(proof) = serde_json::from_str::<Proof>(&text)
-                && proof
-                    .source
-                    .as_ref()
-                    .is_none_or(|s| s.valid() && s.matches(proof.output_hash.as_deref()))
+                && proof.source.as_ref().is_none_or(|s| {
+                    s.valid()
+                        && proof
+                            .output
+                            .as_ref()
+                            .is_some_and(|o| s.matches(&o.path, proof.output_hash.as_deref()))
+                })
             {
                 previous.nodes.insert(id, proof);
             }
@@ -372,8 +375,9 @@ impl Incremental {
                 continue;
             };
             if let Some(output) = outputs.get(id) {
-                let same_source =
-                    proof.source.is_some() && proof.output_hash == output.content_hash;
+                let same_source = proof.source.as_ref().is_some_and(|source| {
+                    source.matches(&output.path, output.content_hash.as_deref())
+                });
                 proof.output_hash = output.content_hash.clone();
                 proof.observation_hash = observations.get(id).cloned();
                 proof.output = Some(output.clone());
@@ -537,6 +541,42 @@ impl Incremental {
             }
             None => HashMap::new(),
         };
+        // Recovery needs source fingerprints only for direct keyed inputs. Project all
+        // requested values once per source; a per-key scan makes returned refs quadratic.
+        let mut selected: HashMap<String, HashSet<String>> = HashMap::new();
+        for (base, key) in &ids {
+            let Some(key) = key else {
+                continue;
+            };
+            let Some((source_id, source)) = self.source_for(dag, base) else {
+                continue;
+            };
+            if !source.is_keyed() {
+                continue;
+            }
+            let node = dag.get_node(base).unwrap();
+            for dim in self.templates[base].pending_partitions.keys() {
+                if !node.extracted.inherited_partitions.contains(dim)
+                    && let Some(value) = key.0.get(dim)
+                {
+                    selected
+                        .entry(source_id.to_owned())
+                        .or_default()
+                        .insert(value.clone());
+                }
+            }
+        }
+        let fingerprints: HashMap<_, _> = selected
+            .into_iter()
+            .filter_map(|(id, selected)| {
+                let source = self.next.nodes.get(&id)?.source.as_ref()?;
+                let crate::keyed::SourceKeys::Keyed(_, hashes) = source.project(&selected).ok()?
+                else {
+                    return None;
+                };
+                Some((id, Arc::new(hashes)))
+            })
+            .collect();
         for (base, key) in ids {
             let display = key
                 .as_ref()
@@ -576,6 +616,9 @@ impl Incremental {
                 let mut sources = Vec::new();
                 for dim in step.pending_partitions.keys() {
                     if let Some((source_id, source)) = self.source_for(dag, &base) {
+                        if !source.is_keyed() {
+                            continue;
+                        }
                         let inherited = node.extracted.inherited_partitions.contains(dim);
                         let named = step
                             .inputs
@@ -602,15 +645,11 @@ impl Incremental {
                                 .path
                                 .clone(),
                             param,
-                            hashes: Arc::new(
-                                step.partition_keys
-                                    .iter()
-                                    .filter_map(|key| {
-                                        let value = key.0.get(dim)?;
-                                        Some((value.clone(), source.hash(value)?))
-                                    })
-                                    .collect(),
-                            ),
+                            hashes: if inherited {
+                                Arc::default()
+                            } else {
+                                fingerprints.get(source_id).cloned().unwrap_or_default()
+                            },
                         });
                     }
                 }
@@ -749,7 +788,7 @@ impl Incremental {
 fn db_error(e: impl std::fmt::Display) -> BarcaError {
     BarcaError::Other(format!("freshness proof: {e}"))
 }
-async fn generation(conn: &turso::Connection) -> Result<i64, BarcaError> {
+async fn generation(conn: &libsql::Connection) -> Result<i64, BarcaError> {
     let mut rows = conn
         .query(
             "SELECT COALESCE((SELECT id FROM materializations ORDER BY id DESC LIMIT 1),0)",
@@ -781,8 +820,8 @@ async fn latest_many(
             "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(id) FROM materializations INDEXED BY idx_mat_node_run WHERE node_id IN ({wanted}) AND id <= ?1 AND status = 'success' AND artifact_path IS NOT NULL GROUP BY node_id)",
             crate::cache::READ_STAMP_REFRESH
         );
-        let params = std::iter::once(turso::Value::Integer(through))
-            .chain(chunk.iter().cloned().map(turso::Value::Text))
+        let params = std::iter::once(libsql::Value::Integer(through))
+            .chain(chunk.iter().cloned().map(libsql::Value::Text))
             .collect::<Vec<_>>();
         let mut rows = cache.conn().query(&sql, params).await.map_err(db_error)?;
         while let Some(row) = rows.next().await.map_err(db_error)? {

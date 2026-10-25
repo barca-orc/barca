@@ -321,7 +321,9 @@ def test_large_source_proofs_and_updates_retain_only_compact_observations(tmp_pa
         proofs = db.execute("SELECT snapshot FROM freshness_proofs").fetchall()
         assert len(proofs) == 3
         assert max(len(row[0]) for row in proofs) < 2500
-        source = next(json.loads(row[0])["source"] for row in proofs if json.loads(row[0])["source"])
+        source = next(
+            json.loads(row[0])["source"] for row in proofs if json.loads(row[0])["source"]
+        )
         assert source["count"] == 1200
         assert "keys" not in source
     versions["c1199"] = 2
@@ -335,3 +337,58 @@ def test_large_source_proofs_and_updates_retain_only_compact_observations(tmp_pa
     batched, trace = get(tmp_path)
     assert batched["steps_executed"] == 35
     assert identities(trace) == 35
+
+
+def test_cached_list_source_keeps_whole_list_inputs_during_artifact_recovery(tmp_path):
+    source = """from barca import asset, sensor, partitions_from, collect
+
+@sensor()
+def keys():
+    return ["a", "b"]
+
+@asset(inputs={"keys": keys}, partitions={"k": partitions_from(keys)})
+def leaf(k: str, keys):
+    return {"k": k, "count": len(keys)}
+
+@asset(inputs={"values": collect(leaf)})
+def total(values):
+    return sum(v["count"] for v in values) * FACTOR
+"""
+    pipeline = tmp_path / "pipeline.py"
+    pipeline.write_text(source.replace("FACTOR", "1"))
+    result, _ = run(tmp_path, "get", "total", "pipeline.py", "-o", "value")
+    assert result["final_output"] == 4
+    with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        path = db.execute(
+            "SELECT artifact_path FROM materializations WHERE node_id LIKE '%:leaf[k=a]' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+    (tmp_path / path).unlink()
+    pipeline.write_text(source.replace("FACTOR", "2"))
+    result, _ = run(tmp_path, "get", "total", "pipeline.py", "-o", "value")
+    assert result["final_output"] == 8
+    assert result["steps_executed"] == 3  # Sensor, one recovered key, and total.
+
+
+def test_a_source_with_equal_bytes_moves_its_proof_to_the_new_artifact(tmp_path):
+    project(tmp_path)
+    first, _ = get(tmp_path, "-o", "value")
+
+    def source_path():
+        with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+            return db.execute(
+                "SELECT artifact_path FROM materializations WHERE node_id = 'pipeline.py:versions' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0]
+
+    old = source_path()
+    pipeline = tmp_path / "pipeline.py"
+    pipeline.write_text(
+        pipeline.read_text().replace("return True, json.loads", "return bool(1), json.loads")
+    )
+    second, _ = get(tmp_path, "-o", "value")
+    assert source_path() != old
+    assert second["final_output"] == first["final_output"]
+    (tmp_path / old).unlink()
+    third, _ = get(tmp_path, "-o", "value")
+    assert third["final_output"] == first["final_output"]

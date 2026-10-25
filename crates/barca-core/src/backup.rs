@@ -370,8 +370,8 @@ async fn write_local(
 /// Run and materialization rows in the database at `path`, and its metadata format. Opens a
 /// copy no other process knows about, so it takes no lock.
 async fn count_rows(path: &Path) -> Result<(u64, i64), BarcaError> {
-    let failed = |e: turso::Error| BarcaError::Db(format!("failed to read the backup copy: {e}"));
-    let db = turso::Builder::new_local(&path.to_string_lossy())
+    let failed = |e: libsql::Error| BarcaError::Db(format!("failed to read the backup copy: {e}"));
+    let db = libsql::Builder::new_local(path)
         .build()
         .await
         .map_err(failed)?;

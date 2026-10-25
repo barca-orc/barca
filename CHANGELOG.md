@@ -22,7 +22,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   counts without coordinator objects for every key. Target selection also plans only its
   dependency cone. Workers compare source snapshots and report compact observations;
   scheduling priors and routine cache accounting avoid scanning every partition.
-  Sensors still discover their keys, and changed fan-ins read all inputs.
+  The native coordinator uses the bundled, local-only libSQL driver and one CLI event loop.
+  Existing SQLite-format history remains readable. Sensors still discover their keys,
+  and changed fan-ins read all inputs.
 
 
 ## 0.32.0 (2026-10-24)

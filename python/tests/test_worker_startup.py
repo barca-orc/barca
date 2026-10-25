@@ -43,7 +43,12 @@ def test_a_wave_of_workers_starts_before_any_is_waited_for(tmp_path):
     )
     # A negligible pull cost makes every step a batch of its own: four batches, four workers.
     trace = traced(
-        tmp_path, "get", "pipeline.py", "--json", BARCA_POOL_SIZE="4", BARCA_COMM_COST_SECONDS="1e-9"
+        tmp_path,
+        "get",
+        "pipeline.py",
+        "--json",
+        BARCA_POOL_SIZE="4",
+        BARCA_COMM_COST_SECONDS="1e-9",
     )
     lines = worker_lines(trace)
     spawned = [w for kind, w in lines if kind == "spawned"]
@@ -67,7 +72,7 @@ def test_a_one_step_run_starts_one_worker(tmp_path):
     assert [kind for kind, _ in worker_lines(trace)] == ["spawned", "connected"], trace
 
 
-def test_a_warm_run_starts_no_worker_and_opens_the_metadata_db_once_per_phase_and_twice(tmp_path):
+def test_a_warm_run_starts_no_worker_and_bounds_metadata_connections(tmp_path):
     (tmp_path / "barca.toml").write_text("")
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset\n\n"
@@ -80,7 +85,7 @@ def test_a_warm_run_starts_no_worker_and_opens_the_metadata_db_once_per_phase_an
     assert worker_lines(warm) == [], warm
     phases = len(re.findall(r"phase\d+_cache_check_done", warm))
     opens = int(re.search(r"metadata db opens (\d+)", warm).group(1))
-    # Start (initialize, record the run, read estimates) + one cache lookup per phase + the
-    # ledger. Before #560: eleven for three phases.
+    # Start + one cache visit per phase + the ledger. Each visit checks the format
+    # read-only before opening a writer: SQLite must not checkpoint an unsupported DB.
     assert phases >= 1
-    assert opens == phases + 2, warm
+    assert opens == 2 * (phases + 2), warm

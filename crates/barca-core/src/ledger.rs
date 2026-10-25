@@ -791,11 +791,11 @@ pub mod posts {
     /// A post the server accepted.
     pub const SHARED: &str = "shared";
 
-    fn failed(what: &'static str) -> impl Fn(turso::Error) -> BarcaError {
+    fn failed(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
         move |e| BarcaError::Db(format!("ledger posts: {what}: {e}"))
     }
 
-    async fn has_table(conn: &turso::Connection) -> Result<bool, BarcaError> {
+    async fn has_table(conn: &libsql::Connection) -> Result<bool, BarcaError> {
         let mut rows = conn
             .query(
                 "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'ledger_posts'",
@@ -1263,7 +1263,7 @@ async fn recorded_post(db_path: &str, client_run_id: &str) -> Result<Option<Stri
 /// already hold. A step whose run hash the ledger holds with the same digest adds nothing; with
 /// a different digest the ledger keeps its row and the step is reported in `bytes_changed`.
 async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, BarcaError> {
-    let failed = |e: turso::Error| BarcaError::Db(format!("failed to record a ledger post: {e}"));
+    let failed = |e: libsql::Error| BarcaError::Db(format!("failed to record a ledger post: {e}"));
     let run_id = db::generate_run_id();
     let run = &post.run;
     let _g = db::db_guard().await;

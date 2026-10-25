@@ -979,9 +979,9 @@ pub(crate) async fn lookup_cached(
          FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
          AND status = 'success' ORDER BY id DESC";
     let conn = cache.conn();
-    let mut statement = match conn.prepare_cached(WITH_OUTPUT_HASH).await {
+    let statement = match conn.prepare(WITH_OUTPUT_HASH).await {
         Ok(statement) => statement,
-        Err(_) => conn.prepare_cached(WITHOUT).await.unwrap(),
+        Err(_) => conn.prepare(WITHOUT).await.unwrap(),
     };
     let mut rows = statement
         .query([node_id.to_string(), run_hash.to_string()])

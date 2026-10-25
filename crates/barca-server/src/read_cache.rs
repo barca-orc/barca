@@ -478,7 +478,10 @@ mod tests {
         std::fs::write(&file, PIPELINE).unwrap();
         std::fs::write(dir.join("helpers.py"), "def compute():\n    return 1\n").unwrap();
         let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
-        resolved.db_path = dir.join("metadata.db").display().to_string();
+        // Match the production layout: WAL sidecar churn belongs below .barca,
+        // outside the import directory stamps whose changes invalidate the graph.
+        std::fs::create_dir_all(dir.join(".barca")).unwrap();
+        resolved.db_path = dir.join(".barca/metadata.db").display().to_string();
         AppState::new(crate::ServeConfig {
             files: vec![file.display().to_string()],
             host: "127.0.0.1".parse().unwrap(),

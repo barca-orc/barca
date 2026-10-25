@@ -1,4 +1,5 @@
 """Worker comparisons must agree with JSON semantics and reject uncertain evidence."""
+
 import hashlib
 import json
 
@@ -29,3 +30,19 @@ def test_missing_or_mismatched_previous_bytes_do_not_produce_a_delta(tmp_path):
     (tmp_path / "source.json").unlink()
     assert "previous_hash" not in observe({"a": 2}, old)
     assert "previous_hash" not in observe({"a": 2}, None)
+
+
+def test_large_changed_values_stay_in_artifacts_instead_of_protocol_frames(tmp_path):
+    old = previous(tmp_path, {"a": "before"})
+    for value in ("x" * 1_000_000, "\U0001f600" * 24_000):
+        observed = observe({"a": value}, old)
+        assert observed["count"] == 1
+        assert "previous_hash" not in observed
+        assert len(json.dumps(observed).encode()) < 200
+
+
+def test_large_removed_key_sets_use_full_validation_instead_of_large_frames(tmp_path):
+    old = previous(tmp_path, {f"key-{i:06d}": 1 for i in range(20_000)})
+    observed = observe({}, old)
+    assert observed["count"] == 0
+    assert "previous_hash" not in observed

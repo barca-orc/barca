@@ -39,7 +39,11 @@ def measure(binary, project, count, implementation, case, changed=1):
     done = threading.Event()
     process = subprocess.Popen(
         [binary, "get", "scored", "pipeline.py", "--json"],
-        cwd=project, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=project,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
 
     def sample():
@@ -47,7 +51,9 @@ def measure(binary, project, count, implementation, case, changed=1):
         status = Path(f"/proc/{process.pid}/status")
         while not done.is_set():
             try:
-                line = next(line for line in status.read_text().splitlines() if line.startswith("VmHWM:"))
+                line = next(
+                    line for line in status.read_text().splitlines() if line.startswith("VmHWM:")
+                )
                 peak_kib = max(peak_kib, int(line.split()[1]))
             except (OSError, StopIteration):
                 pass
@@ -72,7 +78,8 @@ def measure(binary, project, count, implementation, case, changed=1):
     resources = re.search(r"coordinator resources peak_kib=(\d+) cpu_ms=([\d.]+)", result.stderr)
     with closing(sqlite3.connect(project / ".barca/metadata.db")) as db:
         worker = db.execute(
-            "SELECT MAX(max_rss_bytes), SUM(cpu_seconds), SUM(elapsed_seconds) "
+            "SELECT MAX(max_rss_bytes), SUM(cpu_seconds), SUM(elapsed_seconds), "
+            "COUNT(DISTINCT batch_id) + COALESCE(SUM(batch_id IS NULL),0) "
             "FROM materializations INDEXED BY idx_mat_run WHERE run_id = ?",
             (document["run_id"],),
         ).fetchone()
@@ -87,15 +94,19 @@ def measure(binary, project, count, implementation, case, changed=1):
         "worker_cpu_ms": round((worker[1] or 0) * 1000, 3),
         "worker_elapsed_ms": round((worker[2] or 0) * 1000, 3),
         "steps": document["steps_executed"],
+        "calls": worker[3],
         "identities": int(match[1]) if match else None,
     }
     print(json.dumps(row), flush=True)
     if case in ("one_key", "batch"):
         assert row["steps"] == 1 + 2 * changed, row
+        assert row["calls"] == 3, row
         if implementation == "incremental":
             # Small targets return every artifact reference, so those references
             # must enter coordinator state too. Large targets return a summary.
-            assert row["identities"] == (count + 1 + changed if count <= 1000 else 1 + 2 * changed), row
+            assert row["identities"] == (
+                count + 1 + changed if count <= 1000 else 1 + 2 * changed
+            ), row
     if case == "unchanged":
         assert row["steps"] == 1, row
         if implementation == "incremental":
@@ -145,8 +156,14 @@ def benchmark(root):
                 for key in keys:
                     versions[key] += 1
                 versions_file.write_text(json.dumps(versions))
-                measure(executable, project, count, label,
-                        "one_key" if changed == 1 else "batch", changed)
+                measure(
+                    executable,
+                    project,
+                    count,
+                    label,
+                    "one_key" if changed == 1 else "batch",
+                    changed,
+                )
             measure(executable, project, count, label, "unchanged")
 
 

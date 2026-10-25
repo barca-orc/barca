@@ -31,9 +31,9 @@
 //! is an error of this machine, not a verdict on the object, and is reported as such.
 
 use crate::BarcaError;
+use libsql::{Connection, Database, Value};
 use std::collections::HashMap;
 use std::fs;
-use turso::{Connection, Database, Value};
 
 /// Every column of `runs` except its row id.
 pub(crate) const RUN_COLUMNS: &[&str] = &[
@@ -232,7 +232,7 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
     }
     // Reading only: whatever the engine cannot read here is the file's fault.
     let read = async {
-        let db = turso::Builder::new_local(path).build().await?;
+        let db = libsql::Builder::new_local(path).build().await?;
         let conn = db.connect()?;
         let mut tables = Vec::new();
         let mut rows = conn
@@ -250,7 +250,7 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
             }
         }
         let problems = integrity_problems(&checked);
-        Ok::<_, turso::Error>((db, conn, tables, problems))
+        Ok::<_, libsql::Error>((db, conn, tables, problems))
     };
     let (db, conn, tables, problems) = match read.await {
         Ok(read) => read,
@@ -419,7 +419,7 @@ mod tests {
     use super::*;
 
     async fn new_db(path: &str, sql: &[&str]) {
-        let db = turso::Builder::new_local(path).build().await.unwrap();
+        let db = libsql::Builder::new_local(path).build().await.unwrap();
         let conn = db.connect().unwrap();
         for statement in sql {
             conn.execute(statement, ()).await.unwrap();

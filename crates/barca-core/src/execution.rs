@@ -3871,6 +3871,11 @@ async fn dispatch_phase(
                 && let Some(path) = artifact.get("path").and_then(|v| v.as_str())
                 && let Some(at) = s.layout.store_for(path)
             {
+                // False reuses an old reference; it still needs fetching if its mirror is
+                // gone. Every materialized result supersedes any pending cache fetch.
+                if artifact.get("sensor_changed").and_then(|v| v.as_bool()) != Some(false) {
+                    s.produced(path);
+                }
                 let record = recorder.after_upload(
                     StepRow::from_artifact(node_id, run_hash, artifact, attempts)
                         .with_observation(crate::observation::from_artifact(
@@ -3903,7 +3908,10 @@ async fn dispatch_phase(
                     if let Some(path) = &snapshot {
                         std::fs::remove_file(path).ok();
                     }
-                    s.unchanged_sensors += 1;
+                    // Identical bytes still carry a new observation when explicitly changed.
+                    if artifact.get("sensor_changed").and_then(|v| v.as_bool()) != Some(true) {
+                        s.unchanged_observations += 1;
+                    }
                     store_paths.insert(node_id.to_string(), at);
                 } else if let Some(at) = s.client.upload_confirmed(
                     node_id,
@@ -4327,7 +4335,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     let mut publish_error = None;
     // A run that recorded no new result takes no backup (#554): nothing failed, nothing was
     // uploaded (no new artifact, no repair, no pending retry), every step it ran was a sensor
-    // whose value the store already held, and every earlier run is in a backup the store
+    // whose observation stayed unchanged, and every earlier run is in a backup the store
     // confirmed. Its run row reaches the store with the next backup.
     let nothing_new = cfg.backup_uri.is_some()
         && !was_cancelled
@@ -4336,7 +4344,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         && phase_error.is_none()
         && transfer_error.is_none()
         && store.as_ref().is_some_and(|s| {
-            s.client.uploads_queued() == 0 && s.unchanged_sensors == steps_executed
+            s.client.uploads_queued() == 0 && s.unchanged_observations == steps_executed
         })
         && crate::backup::covered(cfg, run_id).await;
     if nothing_new {

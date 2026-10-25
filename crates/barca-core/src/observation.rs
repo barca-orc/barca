@@ -35,15 +35,18 @@ pub(crate) fn from_artifact(
     ))
 }
 
+const PREVIOUS: &str = "SELECT COALESCE(observation_hash, output_hash), artifact_path, artifact_format, artifact_size_bytes, output_hash FROM materializations INDEXED BY idx_mat_node_latest WHERE node_id = ?1 AND status = 'success' AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1";
+
 pub(crate) async fn previous(
     cache: &crate::db::CacheReader,
     node_id: &str,
 ) -> Result<Option<(String, crate::dispatch::OutputRef)>, crate::BarcaError> {
     let fail = |e| crate::BarcaError::Db(format!("failed to read sensor observation: {e}"));
-    let mut rows = cache.conn().query(
-        "SELECT COALESCE(observation_hash, output_hash), artifact_path, artifact_format, artifact_size_bytes, output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND status = 'success' AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1",
-        [node_id.to_owned()],
-    ).await.map_err(fail)?;
+    let mut rows = cache
+        .conn()
+        .query(PREVIOUS, [node_id.to_owned()])
+        .await
+        .map_err(fail)?;
     let Some(row) = rows.next().await.map_err(fail)? else {
         return Ok(None);
     };
@@ -87,5 +90,39 @@ mod tests {
             revision(None, "payload", Some(&first), "run2", "source[a]"),
             "payload"
         );
+    }
+    #[tokio::test]
+    async fn the_latest_sensor_observation_does_not_sort_its_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        crate::db::init_db(&path).await.unwrap();
+        let cache = crate::db::CacheReader::open(&path).await.unwrap();
+        for (definition, digest) in [("old", "first"), ("new", "second"), ("old", "latest")] {
+            cache.conn().execute(
+                "INSERT INTO materializations (node_id,run_hash,status,artifact_path,artifact_format,artifact_size_bytes,output_hash) VALUES ('p.py:source',?1,'success',?2,'json',1,?2)",
+                (definition, digest),
+            ).await.unwrap();
+        }
+        let (revision, output) = super::previous(&cache, "p.py:source")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(revision, "latest");
+        assert_eq!(output.path, "latest");
+        let mut plan = cache
+            .conn()
+            .query(
+                &format!("EXPLAIN QUERY PLAN {}", super::PREVIOUS),
+                ["p.py:source"],
+            )
+            .await
+            .unwrap();
+        while let Some(row) = plan.next().await.unwrap() {
+            let detail = row.get::<String>(3).unwrap();
+            assert!(
+                !detail.contains("TEMP B-TREE"),
+                "latest observation must not sort every prior poll: {detail}"
+            );
+        }
     }
 }

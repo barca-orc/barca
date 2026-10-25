@@ -230,3 +230,7 @@ Rust hashes affected values using the existing canonical JSON contract. A delta 
 only against the validated previous source digest; otherwise ordinary cache validation
 applies. Full snapshots stay in worker memory and artifacts; proofs persist only compact
 counts and digests. Missing or malformed observations never establish freshness.
+
+Producer source deltas are optional evidence capped at 256 KiB of conservative JSON size.
+Oversized changed values or removed-key lists send only the compact summary; the engine
+then uses normal artifact validation. Artifact payload size never expands the protocol frame.

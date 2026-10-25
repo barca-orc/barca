@@ -1954,7 +1954,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(error, barca_core::BarcaError::Db(_)));
+        assert!(
+            matches!(error, barca_core::BarcaError::MetadataUnusable { path, .. }
+            if path == dir.path().to_string_lossy())
+        );
         assert!(st.runs.is_empty());
         assert!(st.schedule.read().unwrap().is_empty());
     }

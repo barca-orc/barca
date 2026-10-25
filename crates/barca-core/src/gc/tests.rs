@@ -44,7 +44,7 @@ impl Fixture {
         conn.execute(
             "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, \
              artifact_size_bytes, status, created_at) VALUES (?1, ?2, ?3, 'json', ?4, 'success', ?5)",
-            turso::params![node, hash, recorded, bytes as i64, created],
+            libsql::params![node, hash, recorded, bytes as i64, created],
         )
         .await
         .unwrap();
