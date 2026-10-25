@@ -24,7 +24,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   scheduling priors and routine cache accounting avoid scanning every partition.
   The native coordinator uses the bundled, local-only libSQL driver and one CLI event loop.
   Existing SQLite-format history remains readable. Sensors still discover their keys,
-  and changed fan-ins read all inputs.
+  and changed fan-ins read all inputs. Explicit partition selections stream only requested
+  source values into Rust, including cold runs and dry-run predictions.
 
 
 ## 0.32.0 (2026-10-24)

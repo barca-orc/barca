@@ -518,6 +518,24 @@ impl Narrowing {
         }
     }
 
+    /// Finish narrowing when source projection already discarded unselected keys.
+    pub(crate) fn narrow_projected(&mut self, phase: &mut Phase, totals: &HashMap<String, usize>) {
+        self.narrow_expanded(phase);
+        for (id, total) in totals {
+            if let Some(counts) = self.nodes.get_mut(id) {
+                if counts.is_none() && *total > 0 {
+                    crate::run_line!(
+                        Always,
+                        "[barca] warning: --partition: '{}' has none of the selected keys; nothing of it is computed",
+                        short_name(id)
+                    );
+                }
+                let counts = counts.get_or_insert_with(KeyCounts::default);
+                counts.skipped = total.saturating_sub(counts.selected);
+            }
+        }
+    }
+
     /// The step reports of the skipped nodes: status `skipped` (action `skipped` in a dry run,
     /// whose steps have an action), reason `partition_selection`.
     pub fn skipped_reports(&self, dag: &Dag, dry_run: bool) -> Vec<crate::results::StepReport> {

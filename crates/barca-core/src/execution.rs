@@ -1540,12 +1540,20 @@ async fn expand_and_decide<'p>(
         phase,
         &session.state.all_outputs,
         session.prepared.pool_size,
-        |base, source| {
+        |base, dim, source| {
             session
                 .state
                 .incremental
                 .as_ref()
                 .and_then(|i| i.expanded_source(base, source))
+                .or_else(|| {
+                    dispatch::selected_source(
+                        &session.state.all_outputs,
+                        session.request.partition.as_ref(),
+                        dim,
+                        source,
+                    )
+                })
         },
         |base, dims| {
             if let Some(incremental) = &session.state.incremental {
@@ -1564,12 +1572,7 @@ async fn expand_and_decide<'p>(
     if let (Some(narrowing), Some(expanded)) =
         (session.state.narrowing.as_mut(), expanded_phase.as_mut())
     {
-        narrowing.narrow_expanded(expanded);
-        for (base, total) in &expansion.key_counts {
-            if let Some(Some(counts)) = narrowing.nodes.get_mut(base) {
-                counts.skipped = total.saturating_sub(counts.selected);
-            }
-        }
+        narrowing.narrow_projected(expanded, &expansion.key_counts);
     }
     let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
     // The whole key set of each asset with a dataset sink, before the cache drops the keys
@@ -3534,8 +3537,25 @@ async fn predict_steps(
 }
 async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), BarcaError> {
     let ready = expand_prediction(ctx, phase);
-    let expansion =
-        dispatch::expand_pending_partitions(ctx.dag, &ready, ctx.all_outputs, ctx.pool_size);
+    let expansion = dispatch::expand_pending_partitions_filtered(
+        ctx.dag,
+        &ready,
+        ctx.all_outputs,
+        ctx.pool_size,
+        |_, dim, source| {
+            dispatch::selected_source(
+                ctx.all_outputs,
+                ctx.narrowing.as_ref().map(|n| &n.selection),
+                dim,
+                source,
+            )
+        },
+        |_, dims| {
+            if let Some(narrowing) = ctx.narrowing.as_ref() {
+                narrowing.selection.prefilter(dims);
+            }
+        },
+    );
     for (base, message) in expansion.failures {
         ctx.steps.push(unknown_report(
             ctx.dag,
@@ -3548,7 +3568,7 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), Ba
     }
     let mut expanded = expansion.phase;
     if let (Some(narrowing), Some(phase)) = (ctx.narrowing.as_deref_mut(), expanded.as_mut()) {
-        narrowing.narrow_expanded(phase);
+        narrowing.narrow_projected(phase, &expansion.key_counts);
     }
     let phase_ref = expanded.as_ref().unwrap_or(&ready);
     // The steps of this phase that would execute: what they read has to be there.

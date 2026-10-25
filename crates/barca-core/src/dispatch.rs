@@ -110,7 +110,26 @@ pub fn expand_pending_partitions(
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
 ) -> Expansion {
-    expand_pending_partitions_filtered(dag, phase, all_outputs, pool_size, |_, _| None, |_, _| {})
+    expand_pending_partitions_filtered(
+        dag,
+        phase,
+        all_outputs,
+        pool_size,
+        |_, _, _| None,
+        |_, _| {},
+    )
+}
+
+/// Explicit selection can project before allocating hashes for the entire source.
+pub(crate) fn selected_source(
+    outputs: &HashMap<String, OutputRef>,
+    selection: Option<&crate::selection::PartitionSelection>,
+    dim: &str,
+    source: &str,
+) -> Option<(usize, crate::keyed::SourceKeys)> {
+    let selected = selection?.0.get(dim)?.iter().cloned().collect();
+    let output = outputs.get(source)?;
+    crate::source_observation::Source::project_file(&output.path, &selected).ok()
 }
 
 pub(crate) fn expand_pending_partitions_filtered(
@@ -118,7 +137,7 @@ pub(crate) fn expand_pending_partitions_filtered(
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
-    project: impl Fn(&str, &str) -> Option<(usize, crate::keyed::SourceKeys)>,
+    project: impl Fn(&str, &str, &str) -> Option<(usize, crate::keyed::SourceKeys)>,
     filter: impl Fn(&str, &mut HashMap<String, Vec<String>>),
 ) -> Expansion {
     use crate::keyed::{KeyedSource, SourceKeys};
@@ -137,8 +156,8 @@ pub(crate) fn expand_pending_partitions_filtered(
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut all_expanded_steps: Vec<StreamStep> = Vec::new();
     let mut passthrough_steps: Vec<StreamStep> = Vec::new();
-    // Each source is read once per phase, however many steps (and worker chunks) it feeds:
-    // source id -> its artifact and keys, or why it cannot be read.
+    // Read each step/dimension source once, shared by all its worker chunks.
+    // Include the dimension: compound selections can select different keys of one source.
     type Read = Result<
         (
             String,
@@ -148,7 +167,7 @@ pub(crate) fn expand_pending_partitions_filtered(
         ),
         String,
     >;
-    let mut read: HashMap<(String, String), Read> = HashMap::new();
+    let mut read: HashMap<(String, String, String), Read> = HashMap::new();
     // A step's chunks are expanded once: (base id) -> the expanded step.
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -187,7 +206,7 @@ pub(crate) fn expand_pending_partitions_filtered(
                     ));
                     break;
                 };
-                let entry = read.entry((base.clone(), source_id.clone())).or_insert_with(|| {
+                let entry = read.entry((base.clone(), dim.clone(), source_id.clone())).or_insert_with(|| {
                     let oref = all_outputs.get(&source_id).ok_or_else(|| {
                         format!(
                             "partitions_from source '{source_name}' has no output to read keys \
@@ -202,7 +221,7 @@ pub(crate) fn expand_pending_partitions_filtered(
                             oref.format
                         ));
                     }
-                    if let Some((count, source)) = project(&base, &source_id) {
+                    if let Some((count, source)) = project(&base, dim, &source_id) {
                         return match source {
                             SourceKeys::List(keys) => Ok((oref.path.clone(), count, Arc::new(keys), None)),
                             SourceKeys::Keyed(keys, hashes) => Ok((oref.path.clone(), count, Arc::new(keys), Some(Arc::new(hashes)))),

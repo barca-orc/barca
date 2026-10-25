@@ -372,3 +372,24 @@ def test_the_python_api_carries_the_selection(project, monkeypatch):
     assert barca.run("notify", "pipeline.py", partition="retailer=r4") == {"retailer=r4": None}
     with pytest.raises(barca.BarcaError, match="retailer=r8"):
         barca.get("revenue", "pipeline.py", partition="retailer=r8")
+
+
+def test_shared_dynamic_source_keeps_separate_compound_dimension_selections(tmp_path):
+    (tmp_path / "pipeline.py").write_text("""from barca import sensor, asset, partitions_from
+
+@sensor()
+def source():
+    return {"a": 1, "b": 2, "c": 3}
+
+@asset(partitions={"x": partitions_from(source), "y": partitions_from(source)})
+def pair(x: str, y: str):
+    return f"{x}/{y}"
+""")
+    (tmp_path / "barca.toml").write_text("")
+    args = ("get", "pair", "pipeline.py", "--partition", '{"x":"a","y":"b"}', "--json")
+    result = doc(cli(tmp_path, *args, "-o", "value"))
+    assert list(result["final_output"].values()) == ["a/b"]
+    assert result["steps_executed"] == 2
+    assert counts(result)["pair"] == (1, 8)
+    predicted = doc(cli(tmp_path, *args, "--dry-run"))
+    assert counts(predicted)["pair"] == (1, 8)

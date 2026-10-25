@@ -172,6 +172,19 @@ impl Source {
             crate::keyed::SourceKeys::List(keys)
         })
     }
+    /// Read only selected values while counting the full partition domain.
+    pub(crate) fn project_file(
+        path: &str,
+        selected: &HashSet<String>,
+    ) -> Result<(usize, crate::keyed::SourceKeys), String> {
+        let read = scan(path, Some(selected), false, false)?;
+        let keys = if read.keyed {
+            crate::keyed::SourceKeys::Keyed(read.keys, read.hashes)
+        } else {
+            crate::keyed::SourceKeys::List(read.keys)
+        };
+        Ok((read.count, keys))
+    }
     pub(crate) fn is_keyed(&self) -> bool {
         self.keyed
     }
