@@ -1,10 +1,83 @@
 # Benchmark Results
 
-Latest passes: 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
+Latest passes: 2026-10-25, bounded coordinator overhead; 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
 early cutoff and bounded server run records; 2026-10-22, keyed sources and server read routes.
 The latest framework comparison is 2026-10-21 (barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0
 and Airflow 3.3.2, #65). Older passes on other hardware are kept below. Absolute times from
 different machines are not comparable; within one pass, the ratios between frameworks are.
+
+## Bounded coordinator overhead (2026-10-25)
+
+The same `versions -> cleaned -> scored` DAG now keeps producer snapshots and comparisons
+in Python, sends a bounded change summary, and builds Rust state only for affected keys.
+Scheduling estimates, cache accounting, and latest sensor lookups use scoped metadata reads.
+The CLI uses one event loop and a compact release binary, with bundled local-only libSQL
+for existing SQLite-format history. No special incremental mode is required.
+
+The release binary includes the production UI. The comparison baseline is the earlier
+incremental implementation (`da87219f`), which still copied whole source snapshots into
+Rust; it is not the published 0.32.0 baseline in the older table below. The machine is the
+same Ryzen AI MAX+ 395/Fedora host. Three warm updates per size, with no concurrent builds
+or test suites. Times and CPU are medians; memory is the maximum across the three updates.
+
+| Keys | Earlier wall | New wall | Earlier native peak | New native peak | New native CPU | Python job CPU |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.096 s | 0.058 s | 25.18 MiB | 13.71 MiB | 13.1 ms | 2.5 ms |
+| 50,000 | 0.492 s | 0.109 s | 98.15 MiB | 13.79 MiB | 13.5 ms | 52.2 ms |
+| 200,000 | 2.028 s | 0.299 s | 221.62 MiB | 13.75 MiB | 15.9 ms | 237.4 ms |
+
+Native memory is the coordinator's own `/proc/PID/status` high-water mark, sampled every
+millisecond through exit and combined with its self-reported peak. It excludes Python
+workers. Native CPU is `RUSAGE_SELF`, measured through engine and cache cleanup, before
+final CLI formatting. Wall time covers process start through exit. Python job CPU includes
+imports, input loading, sensor comparison, and result serialization; it excludes interpreter
+startup and post-result bookkeeping. These CPU figures are not an additive wall-time
+breakdown. At 200k keys, the Python worker peaks near 80 MiB because this particular sensor
+loads and compares the entire map.
+
+Each large one-key update registers three identities and makes three Python calls: one
+sensor and one key in each downstream asset. An unchanged run registers one identity and
+runs only the sensor. A dispersed 17-key update registers 35 identities and still makes
+three calls (one sensor plus one batch per asset). The harness asserts all these counts.
+
+| Keys / 17 changed | Wall | Native peak | Native CPU | Python calls |
+|---:|---:|---:|---:|---:|
+| 50,000 | 0.120 s | 15.84 MiB | 20.5 ms | 3 |
+| 200,000 | 0.318 s | 15.98 MiB | 24.4 ms | 3 |
+
+At 1,000 keys, returning every reference takes 0.077 s, 18.95 MiB native peak, and
+26.0 ms native CPU. It still executes only the sensor and the two affected asset keys.
+
+The main one-key runs enforce less than **20,000,000 bytes** of native memory and **20 ms**
+of native CPU, including the unchanged checks. The 17-key batches enforce the same memory
+budget and 40 ms CPU. The 1,000-key case returns every artifact reference: it consequently
+registers 1,002 identities and is measured separately with a 20 MiB/40 ms budget. A result
+listing is more work than returning the large target's existing bounded summary.
+
+Limits: the first validation or a proof-version upgrade still uses normal per-key cache
+decisions (the 200k reference is about six seconds and 1.2 GiB). Explicit partition
+selection, refreshes, compound partition nodes, and local runs using a remote server ledger
+retain normal validation. Changed fan-ins must read all inputs. Oversized source deltas
+(over 256 KiB of protocol metadata) fall back to normal validation. Full cache surveys are
+still proportional to cache size. The small Rust budget applies to the validated warm
+single-chain path; it is not a claim about those broader operations.
+
+```bash
+export PATH="$PWD/.venv/bin:$PATH" PYTHONPATH="$PWD/python"
+export BARCA_BIN="$PWD/target-local/release/barca"
+# For the before/after comparison, also set BASELINE_BIN and matching
+# BASELINE_PYTHONPATH (the baseline uses worker protocol 4; this branch uses 5).
+KEYS=1,50000,200000 REPEATS=3 COORDINATOR_MAX_KIB=19531 \
+COORDINATOR_MAX_CPU_MS=20 .venv/bin/python benchmarks/incremental_dag/bench.py
+# On retained seeded projects, omit BASELINE_BIN for the batch-only pass:
+KEYS=50000,200000 CHANGED_KEYS=17 REPEATS=3 COORDINATOR_MAX_KIB=19531 \
+COORDINATOR_MAX_CPU_MS=40 .venv/bin/python benchmarks/incremental_dag/bench.py
+```
+
+Raw comparison: [incremental_dag/compact-measurements.jsonl](incremental_dag/compact-measurements.jsonl).
+Batches: [incremental_dag/compact-batches.jsonl](incremental_dag/compact-batches.jsonl).
+Small reference listing: [incremental_dag/compact-small.jsonl](incremental_dag/compact-small.jsonl).
+Seed/proof rows are warm-ups and are excluded from the warm-run budgets.
 
 ## Incremental DAG planning (2026-10-24)
 
@@ -16,7 +89,8 @@ expanding keys; no new mode or flag is involved. Execution grouping is independe
 Published 0.32.0 wheel versus this PR's release build, using the same 0.32.0 Python helpers
 (protocol 4), on the AMD Ryzen AI MAX+ 395, 32 threads, 62 GiB RAM, Fedora 44 kernel 7.2.8,
 NVMe. Three warm updates per size: elapsed time is their median and RSS is their maximum,
-measured by `/usr/bin/time`. RSS describes the coordinator, not summed worker memory.
+measured by `/usr/bin/time`. These historical RSS readings can include a child process's peak;
+the 2026-10-25 pass below measures the native process directly. They are not summed worker memory.
 Runs were not CPU-pinned; no local build or test suite ran during the measured warm updates.
 The 1k and 50k caches were reused; 200k was seeded once. Seed timings are excluded.
 
