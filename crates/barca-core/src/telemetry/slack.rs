@@ -574,6 +574,7 @@ mod tests {
 
     fn failed_run() -> RunReport {
         RunReport {
+            cached_partitions: Default::default(),
             run_id: "0179afe0cb58".into(),
             command: "get".into(),
             target: Some("daily_revenue".into()),

@@ -1,7 +1,7 @@
 //! Version discipline for persistent history. Checking never migrates or resets data.
 
 use crate::BarcaError;
-use turso::Connection;
+use libsql::Connection;
 
 pub(crate) const VERSION: i64 = 1;
 
@@ -54,6 +54,8 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // Content hash of a sensor's output (#183): folded into its consumers' run hashes, and
     // what `--dry-run` / `barca status` assume the sensor returns next.
     "output_hash TEXT",
+    // A sensor observation revision, independent of its artifact bytes.
+    "observation_hash TEXT",
     // Whether this recompute differed from the last digest for the same node/run hash.
     "bytes_changed INTEGER DEFAULT 0",
     // The run that wrote the row (#214). Steps are recorded as they finish and again in the
@@ -103,6 +105,8 @@ pub(crate) const LOCAL_MATERIALIZATION_COLUMNS: &[&str] = &["evicted_at", "last_
 
 /// Indexes added after version 1 was introduced; created with the additive columns.
 pub(crate) const INDEXES: &[&str] = &[
+    // A sensor reads only its latest successful observation, across definition changes.
+    "CREATE INDEX IF NOT EXISTS idx_mat_node_latest ON materializations(node_id, id DESC) WHERE status = 'success' AND artifact_path IS NOT NULL",
     // Eviction and `last_read_at` address results by artifact path.
     "CREATE INDEX IF NOT EXISTS idx_mat_path ON materializations(artifact_path)",
     // A notification integration finds a job's previous finished run through this index.
@@ -121,6 +125,8 @@ pub(crate) const INDEXES: &[&str] = &[
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
 /// Created by `init_db`, and by the additive migration in a version-1 database that lacks one.
 pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
+    // Derived per-node freshness witnesses; never a second ledger.
+    ("freshness_proofs", crate::incremental::CREATE),
     // Results whose upload failed after their step succeeded (#390).
     ("pending_uploads", crate::pending_uploads::CREATE),
     // The last post a notification integration (Slack) made about a job, so a job that keeps
@@ -273,8 +279,8 @@ mod tests {
     use super::*;
     use crate::{db, state_validate};
 
-    async fn raw(path: &str) -> (turso::Database, Connection) {
-        let db = turso::Builder::new_local(path).build().await.unwrap();
+    async fn raw(path: &str) -> (libsql::Database, Connection) {
+        let db = libsql::Builder::new_local(path).build().await.unwrap();
         let conn = db.connect().unwrap();
         (db, conn)
     }

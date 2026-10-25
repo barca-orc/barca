@@ -8,7 +8,10 @@ tests in `db.rs`. See [boundary inventory](README.md).
 The metadata database contains durable run history, logs and schedules alongside
 rebuildable cache/cost data. A version mismatch never permits deleting or
 recreating it. Rust owns this boundary; no new CLI or Python configuration is
-introduced.
+introduced. The local driver is bundled libSQL with its local core enabled. Existing
+SQLite-format metadata remains readable. Compatibility is checked through a read-only
+connection before opening a writer, so an unusable database is left untouched even when
+the driver checkpoints on close. Reused prepared statements reset before rebinding.
 
 ## Version 1 and legacy databases
 
@@ -35,6 +38,30 @@ replaces as `metadata.db.pre-restore`. A future destructive migration must separ
 test a recoverable backup before it is accepted; this policy does not authorize
 one. Unsupported versions are refused in place and are never automatically
 restored, downgraded or reset. Upgrade to a compatible Barca release to open them.
+
+## Rebuildable freshness proofs
+
+Format 1 adds `freshness_proofs(id TEXT PRIMARY KEY, generation INTEGER NOT NULL,
+snapshot TEXT NOT NULL)` through the registered additive table migration. IDs include a
+private payload version, artifact-layout hash and logical node ID; snapshots are JSON.
+Generation is the maximum materialization ID validated by that proof. Old generations are
+removed when a successful run publishes new proofs. Missing or malformed payloads cause
+normal cache validation, never loss of history. The table is disposable acceleration data;
+older format-1 binaries ignore it and invalidate its generation when they write new
+materializations. This addition changes neither `user_version` nor public JSON contracts.
+
+## Sensor freshness revisions
+
+Format 1 adds nullable `materializations.observation_hash`. It records a sensor's
+freshness revision independently of `output_hash`, which remains the digest of actual
+artifact bytes. Explicit change signals can therefore invalidate consumers without a
+payload. Null revisions from older binaries fall back to their content digest. Ledger
+posts optionally carry this revision; equal bytes can still establish a new observation.
+
+Source freshness proofs contain only a key count, membership digest and artifact identity.
+Their private payload version changes when their representation changes; incompatible
+payloads fall back to ordinary validation. Scheduling loads logical-node priors at startup and exact partition estimates only for
+work that will execute. Both are persisted without loading every historical estimate.
 
 ## Backups, restore and older binaries
 

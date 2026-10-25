@@ -63,6 +63,35 @@ pub(crate) fn collect(
     }
 }
 
+/// Supply complete membership after incremental planning omitted fresh keys.
+pub(crate) fn collect_membership(
+    datasets: &mut HashMap<String, DatasetKeys>,
+    base: &str,
+    sinks: &[SinkDecl],
+    keys: impl IntoIterator<Item = crate::PartitionKey>,
+) {
+    let dataset_sinks: Vec<_> = sinks
+        .iter()
+        .filter(|s| s.is_dataset() && !s.dims.is_empty())
+        .cloned()
+        .collect();
+    let Some(sink) = dataset_sinks.first() else {
+        return;
+    };
+    let entry = datasets.entry(base.to_owned()).or_default();
+    for key in keys {
+        if let Some(values) = sink
+            .dims
+            .iter()
+            .map(|dim| key.0.get(dim).cloned())
+            .collect::<Option<Vec<_>>>()
+        {
+            entry.keys.insert(values);
+        }
+    }
+    entry.sinks = dataset_sinks;
+}
+
 /// What the prune records of a key set: SHA-256 over the sorted JSON arrays of its values.
 pub(crate) fn keys_digest(keys: &BTreeSet<Vec<String>>) -> String {
     let mut lines: Vec<String> = keys

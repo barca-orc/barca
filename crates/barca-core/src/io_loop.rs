@@ -838,6 +838,7 @@ impl WorkerPool {
                                     is_dynamic: false,
                                     keyed_inputs: HashMap::new(),
                                     partition_source: false,
+                                    previous_sensor: None,
                                 }
                             })
                             .collect();
@@ -2003,6 +2004,10 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
         "branch": item.group.is_some(),
         // Read by a `partitions_from(...)` for keys: the worker checks what it returns.
         "partition_source": item.spec.partition_source,
+        "previous_sensor": item.spec.previous_sensor.as_ref().map(|output| serde_json::json!({
+            "path": output.path, "format": output.format, "size_bytes": output.size_bytes,
+            "content_hash": output.content_hash,
+        })),
         // Where the branch writes that result, without the extension: the worker adds the one
         // for the format it picks.
         "branch_path": item
@@ -2246,6 +2251,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         };
         let id = coord.add_item(crate::StepId::unpartitioned("f.py:a"), spec, Vec::new());
         let step = build_step_json(coord.item(id), &coord);
@@ -2287,6 +2293,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         };
         let id = coord.add_item(
             crate::StepId::unpartitioned("f.py:downstream"),
@@ -2324,6 +2331,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         };
         let id = coord.add_item(crate::StepId::unpartitioned("f.py:a"), spec, Vec::new());
         let step = build_step_json(coord.item(id), &coord);
@@ -2359,6 +2367,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         };
         spec.collected_inputs.insert(
             "data".to_string(),
@@ -2484,6 +2493,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         };
         let parent = coord.add_item(
             crate::StepId::unpartitioned("f.py:a"),
@@ -2525,6 +2535,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         };
         let parent = coord.add_item(
             crate::StepId::unpartitioned("f.py:a"),
@@ -2626,6 +2637,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         }
     }
 

@@ -418,6 +418,7 @@ fn skip_report(
     epoch: i64,
 ) -> barca_core::telemetry::RunReport {
     barca_core::telemetry::RunReport {
+        cached_partitions: Default::default(),
         run_id: db::generate_run_id(),
         command: match job.kind {
             NodeKind::Task => "run",
@@ -1953,7 +1954,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(error, barca_core::BarcaError::Db(_)));
+        assert!(
+            matches!(error, barca_core::BarcaError::MetadataUnusable { path, .. }
+            if path == dir.path().to_string_lossy())
+        );
         assert!(st.runs.is_empty());
         assert!(st.schedule.read().unwrap().is_empty());
     }

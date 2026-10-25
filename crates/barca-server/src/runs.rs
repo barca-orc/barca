@@ -506,9 +506,9 @@ async fn execute(
             // A request that names files reads only those, as `barca get x a.py` does.
             let files = run_files(&state, &spec.files);
             let dag = if spec.files.is_empty() {
-                (*state.current_dag().await?).clone()
+                state.current_dag().await?
             } else {
-                barca_core::load::build_dag(files, &state.config.python).await?
+                std::sync::Arc::new(barca_core::load::build_dag(files, &state.config.python).await?)
             };
             serve_run(ServedRun {
                 dag,

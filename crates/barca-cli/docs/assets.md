@@ -524,20 +524,24 @@ turns the warning off.
 
 ## Sensors
 
-`@sensor` takes the arguments in the table under "Accepted arguments" (`@asset`'s without
-`inputs`). `@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no
-inputs. Their default freshness is `Manual`; `Always` is also accepted. Only
-`Schedule(...)` gives a sensor ticks of its own under `barca serve`, and a tick also updates the
-`Always` nodes below it (`barca docs scheduling`). Whatever its freshness, a sensor is polled
-whenever a run needs its value: `Manual` does not pin a sensor.
+`@sensor` observes external state and has no inputs. It is polled whenever a run needs
+it, including with its default `Manual` freshness. Use `Schedule(...)` for its own ticks
+under `barca serve`. `Always` is also accepted; sensors are polled either way.
 
-A sensor always runs, and its `value` is part of the run hash of every asset that reads it: when
-the value changes, those assets and everything downstream of them re-run; when it is the same,
-they are served from cache. This is how to track external data that changes in place: a sensor
-returns a blob's etag and the asset that reads the blob depends on the sensor (`barca docs cache`,
-"External data that changes in place"). Return only what identifies the data: a value that
-changes on every run, such as a timestamp, re-runs the sensor's consumers every time. The
-`update_detected` flag is not used for caching.
+| Return | Meaning |
+| --- | --- |
+| `False` or `(False, value)` | No change. Retain the previous observation and its value. On the first poll, initialize from the supplied value or `None`. |
+| `True` or `(True, value)` | Changed. Advance freshness even if the value is absent or equal to the previous value. Without a value, downstream receives `None` and can fetch or generate the data. |
+| A value other than a boolean/two-item tuple | Compare its content with the previous value. For example, return an mtime, ETag, or a dictionary of key versions. |
+
+Consumers receive the optional value, never the change flag. Assets follow normal freshness
+rules; tasks follow their normal execution rules. A dictionary used by `partitions_from`
+is compared per key, so a snapshot reporting changes updates only the affected chains.
+A source defining dynamic partition keys must supply a list or dictionary when it changes.
+
+**Migration:** the change flag was ignored through 0.32.0. A sensor that always returned
+`(True, etag)` to request comparison should now return `etag` alone. A boolean payload can
+be wrapped in a dictionary for content-based comparison.
 
 `barca get <sensor> pipeline.py` observes one sensor. `barca get pipeline.py` (no target) observes
 every sensor, including one nothing depends on: a sensor is something `get` can target, and

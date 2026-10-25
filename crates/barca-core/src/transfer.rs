@@ -966,8 +966,8 @@ def recv():
 def send(m):
     b = json.dumps(m).encode()
     with lock: s.sendall(struct.pack(">I", len(b)) + b)
-send({"type": "hello", "role": "transfer", "protocol_version": 4})
-assert recv() == {"type": "hello", "role": "coordinator", "protocol_version": 4}
+send({"type": "hello", "role": "transfer", "protocol_version": 5})
+assert recv() == {"type": "hello", "role": "coordinator", "protocol_version": 5}
 def handle(m):
     src, dst = (m["local"], m["remote"]) if m["type"] == "put" else (m["remote"], m["local"])
     if "slow" in m["remote"]: time.sleep(0.3)

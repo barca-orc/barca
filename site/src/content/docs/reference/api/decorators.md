@@ -317,8 +317,8 @@ from pathlib import Path
 from barca import asset, partitions, sensor
 
 @sensor()
-def rate_feed() -> tuple[bool, float]:
-    return True, float(Path("rate.txt").read_text())
+def rate_feed() -> float:
+    return float(Path("rate.txt").read_text())
 
 @asset(inputs={"raw": rate_feed}, cutoff=True)
 def rates(raw: float) -> dict:
@@ -600,9 +600,9 @@ from barca import asset, sensor, Schedule
 
 
 @sensor(freshness=Schedule("*/5 * * * *"))
-def inbox_files() -> tuple[bool, list[str]]:
+def inbox_files() -> list[str]:
     files = sorted(str(f) for f in Path("inbox").glob("*.csv"))
-    return len(files) > 0, files
+    return files
 
 
 @asset(inputs={"files": inbox_files})
@@ -610,10 +610,11 @@ def loaded(files: list[str]) -> dict:
     return {"n": len(files)}
 ```
 
-**Return value.** Return a tuple `(update_detected, value)`. The asset that reads the sensor
-receives `value` only. `update_detected` is not used for caching. A sensor that returns
-something other than a two-item tuple has the whole return value passed on as `value`
-(observed on 0.18.0; the tuple is the documented form).
+**Return value.** Return a version value (mtime, ETag, file list) for content comparison.
+Return `True`/`False` for an explicit change signal, or `(changed, value)` to also pass data.
+`True` advances freshness even without data; `False` retains the previous observation
+and its value. Consumers receive only the optional value. Through 0.32.0 the flag was
+ignored: replace `(True, etag)` with `etag` when comparison is intended.
 
 **Caching.** The sensor's `value` is part of the run hash of every asset that reads it: with
 the same files `loaded` is served from cache, and after a file is added `loaded` and

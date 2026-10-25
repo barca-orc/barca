@@ -206,8 +206,8 @@ from barca import asset, collect, partitions, partitions_from, sensor
 
 
 @sensor()
-def version() -> tuple[bool, str]:
-    return True, Path("version.txt").read_text().strip()
+def version() -> str:
+    return Path("version.txt").read_text().strip()
 
 
 @asset(inputs={"v": version}, partitions={"ticker": partitions(KEYS)})

@@ -13,7 +13,7 @@
 
 use crate::BarcaError;
 use crate::db;
-use turso::{Connection, Value};
+use libsql::{Connection, Value};
 
 pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS pending_uploads (
     store_path TEXT PRIMARY KEY,
@@ -42,7 +42,7 @@ pub struct PendingUpload {
     pub error: Option<String>,
 }
 
-fn failed(what: &'static str) -> impl Fn(turso::Error) -> BarcaError {
+fn failed(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
     move |e| BarcaError::Db(format!("pending uploads: {what}: {e}"))
 }
 

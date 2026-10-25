@@ -379,7 +379,8 @@ rule ExecuteStep {
         -- Rust assigns the step to an idle worker via UDS.
         -- Worker imports the module, calls the function, serializes the result.
         -- Ordering-only deps (_ prefix params) receive None.
-        -- Sensors return (updated, data); only data is serialized.
+        -- Sensors accept a change flag, (updated, data), or a value to compare.
+        -- Only data is serialized; freshness revisions are separate from content digests.
 }
 
 rule StepFails {
@@ -547,7 +548,9 @@ invariant OrderingDepsCarryNoData {
 }
 
 invariant SensorUnpacking {
-    -- Sensors return (updated, data). Only data is passed downstream.
+    -- Sensors accept a change flag, (updated, data), or a value to compare.
+    -- Only the optional data is passed downstream. False retains the previous observation.
+    -- True advances freshness even without data; dictionary sources compare per key.
     -- The updated flag is consumed by the orchestrator, not by user code.
     for node in Dag.nodes:
         if node.kind = sensor:

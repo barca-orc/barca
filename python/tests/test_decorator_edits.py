@@ -232,7 +232,7 @@ def test_a_sensor_s_schedule_and_description_do_not_rerun_its_consumers(project)
         return (
             "from barca import Manual, Schedule, asset, sensor\n\n\n"
             f"@sensor({sensor_arguments})\n"
-            "def version() -> tuple[bool, str]:\n    return True, 'v1'\n\n\n"
+            "def version() -> str:\n    return 'v1'\n\n\n"
             '@asset(inputs={"v": version})\n'
             "def data(v: str) -> dict:\n    return {'v': v}\n"
         )
@@ -256,15 +256,15 @@ def test_editing_a_sensor_s_code_reruns_its_consumers_even_with_the_same_value(p
     def source(body: str) -> str:
         return (
             "from barca import asset, sensor\n\n\n"
-            f"@sensor()\ndef version() -> tuple[bool, str]:\n    {body}\n\n\n"
+            f"@sensor()\ndef version() -> str:\n    {body}\n\n\n"
             '@asset(inputs={"v": version})\n'
             "def data(v: str) -> dict:\n    return {'v': v}\n"
         )
 
-    write(project, source("return True, 'v1'"))
+    write(project, source("return 'v1'"))
     get(project, "data")
     assert ran(get(project, "data")) == {"version": True}
-    write(project, source("value = 'v1'\n    return True, value"))
+    write(project, source("value = 'v1'\n    return value"))
     assert ran(get(project, "data")) == {"version": True, "data": True}
 
 

@@ -82,6 +82,7 @@ pub(crate) struct StepRow {
     max_rss_bytes: Option<u64>,
     /// Digest of the producer-owned serialized bytes.
     output_hash: Option<String>,
+    observation_hash: Option<String>,
     /// The run hash's components ([`crate::changes::step_components_json`]).
     pub(crate) components: Option<String>,
     /// The batched call that computed it (RFC-0013).
@@ -117,9 +118,15 @@ impl StepRow {
             cpu_seconds: artifact.get("cpu_seconds").and_then(|v| v.as_f64()),
             max_rss_bytes: artifact.get("max_rss_bytes").and_then(|v| v.as_u64()),
             output_hash: str_of("content_hash").map(str::to_string),
+            observation_hash: None,
             components: None,
             batch: str_of("batch").map(str::to_string),
         }
+    }
+
+    pub(crate) fn with_observation(mut self, revision: Option<String>) -> Self {
+        self.observation_hash = revision;
+        self
     }
 
     /// With the run hash's components recorded ([`crate::changes`]).
@@ -131,19 +138,19 @@ impl StepRow {
 
 /// Appends successful steps' rows, unless the run already has a row for the node. Prepared once
 /// per transaction and rebound for each row (#460).
-struct StepInsert(turso::Statement);
+struct StepInsert(db::Prepared);
 
 impl StepInsert {
     // Turso otherwise intersects the node and run indexes, scanning this run
     // for each partition. Bound deduplication to the node's own history.
-    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, '') WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)";
+    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, '') WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)";
 
-    async fn prepare(conn: &turso::Connection) -> Result<Self, turso::Error> {
+    async fn prepare(conn: &libsql::Connection) -> Result<Self, libsql::Error> {
         db::prepare(conn, Self::SQL).await.map(Self)
     }
 
     /// Rows written: 1, or 0 when the run already recorded the node.
-    async fn run(&mut self, row: &StepRow, run_id: &str) -> Result<u64, turso::Error> {
+    async fn run(&mut self, row: &StepRow, run_id: &str) -> Result<u64, libsql::Error> {
         let opt = |v: Option<String>| v.unwrap_or_default();
         self.0
             .execute([
@@ -161,6 +168,7 @@ impl StepInsert {
                 run_id.to_string(),
                 opt(row.components.clone()),
                 opt(row.batch.clone()),
+                opt(row.observation_hash.clone()),
             ])
             .await
     }
@@ -532,10 +540,7 @@ pub(crate) fn telemetry_report(
             digest: if cached {
                 None
             } else {
-                l.output_hashes
-                    .get(node_id)
-                    .or(oref.content_hash.as_ref())
-                    .cloned()
+                oref.content_hash.clone()
             },
             cpu_seconds,
             max_rss_bytes,
@@ -590,6 +595,7 @@ pub(crate) fn telemetry_report(
     targets.dedup();
 
     RunReport {
+        cached_partitions: Default::default(),
         run_id: l.run_id.to_string(),
         command: l.command.to_string(),
         target: l.target.map(str::to_string),
@@ -673,7 +679,7 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
 
 /// The steps of `run_id` already recorded, by node id.
 async fn steps_of_run(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     run_id: &str,
 ) -> Result<HashSet<String>, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read recorded steps: {e}"));
@@ -693,7 +699,7 @@ async fn steps_of_run(
 
 /// Required outcome rows and terminal status, inside the caller's transaction.
 async fn write_terminal_ledger(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     l: &RunLedger<'_>,
 ) -> Result<(), BarcaError> {
     conn.execute(
@@ -737,11 +743,8 @@ async fn write_terminal_ledger(
         row.sinks_json = l.all_sinks.get(node_id).cloned();
         row.cpu_seconds = cpu;
         row.max_rss_bytes = rss;
-        row.output_hash = l
-            .output_hashes
-            .get(node_id)
-            .or(oref.content_hash.as_ref())
-            .cloned();
+        row.output_hash = oref.content_hash.clone();
+        row.observation_hash = l.output_hashes.get(node_id).cloned();
         row.components = l.components.get(node_id).cloned();
         row.batch = l.batches.get(node_id).cloned();
         let failed = |e| BarcaError::Db(format!("failed to record terminal step: {e}"));

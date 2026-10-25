@@ -239,6 +239,7 @@ pub(crate) struct DecideState {
     /// step finishes (it runs in an earlier phase than its consumers) or is served from cache;
     /// a dry run seeds it from each one's last recorded output.
     pub(crate) sensor_outputs: HashMap<String, String>,
+    pub(crate) sensor_previous: HashMap<String, crate::dispatch::OutputRef>,
     /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
     pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
     /// Under a tick: the scheduled node. Every other task fires only when it is out of date.
@@ -307,6 +308,25 @@ impl DecideState {
 pub(crate) type ExpandedMembership = BTreeMap<String, BTreeSet<String>>;
 
 impl DecideState {
+    pub(crate) fn seed_fresh(
+        &mut self,
+        dag: &Dag,
+        step: &crate::planner::StreamStep,
+        id: &str,
+        hash: String,
+        content: Option<&String>,
+    ) {
+        let phase = Phase {
+            reason: crate::planner::PhaseReason::Initial,
+            streams: vec![crate::planner::WorkerStream {
+                stream_id: "fresh".into(),
+                steps: vec![step.clone()],
+            }],
+        };
+        self.register_phase(&phase);
+        self.run_hashes.insert(id.to_owned(), hash);
+        record_output(dag, self, id, content);
+    }
     pub(crate) fn into_membership(self) -> ExpandedMembership {
         self.expected_steps
     }
@@ -488,7 +508,13 @@ pub(crate) fn in_dependency_order<'p>(
     phase: &'p Phase,
 ) -> Vec<(usize, &'p crate::planner::StreamStep)> {
     let rank: HashMap<&str, usize> = dag
-        .topo_order()
+        .order_for(
+            phase
+                .streams
+                .iter()
+                .flat_map(|s| &s.steps)
+                .map(|s| s.step_id.base_id()),
+        )
         .into_iter()
         .enumerate()
         .map(|(i, id)| (id, i))
@@ -953,9 +979,9 @@ pub(crate) async fn lookup_cached(
          FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
          AND status = 'success' ORDER BY id DESC";
     let conn = cache.conn();
-    let mut statement = match conn.prepare_cached(WITH_OUTPUT_HASH).await {
+    let statement = match conn.prepare(WITH_OUTPUT_HASH).await {
         Ok(statement) => statement,
-        Err(_) => conn.prepare_cached(WITHOUT).await.unwrap(),
+        Err(_) => conn.prepare(WITHOUT).await.unwrap(),
     };
     let mut rows = statement
         .query([node_id.to_string(), run_hash.to_string()])

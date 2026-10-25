@@ -42,9 +42,9 @@ from barca import sensor
 
 
 @sensor()
-def orders_version() -> tuple[bool, str]:
+def orders_version() -> str:
     # Return only what identifies the data. For a bucket: the object's etag.
-    return True, hashlib.sha256(Path("orders.csv").read_bytes()).hexdigest()
+    return hashlib.sha256(Path("orders.csv").read_bytes()).hexdigest()
 
 
 @asset(inputs={"version": orders_version})

@@ -18,7 +18,7 @@ chrono = "0.4.45"
 chrono-tz = "0.10.4"
 smallvec = { version = "1.13", features = ["serde"] }
 tempfile = "3"
-turso = { version = "=0.7.0-pre.19", default-features = false }
+libsql = { version = "=0.10.0", default-features = false, features = ["core"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time", "sync", "process"] }
 tokio-util = "0.7"
 futures = "0.3"

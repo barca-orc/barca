@@ -283,7 +283,7 @@ pub enum RunResult {
 /// A run `barca serve` starts over its loaded graph (no source is parsed again). Progress
 /// lines are printed as for `--agent` and streamed as `line` events to `event_tx`.
 pub struct ServedRun<'a> {
-    pub dag: crate::dag::Dag,
+    pub dag: std::sync::Arc<crate::dag::Dag>,
     pub cfg: &'a crate::config::ResolvedConfig,
     pub command: crate::outcome::RunCommand,
     /// As given; one target is a single-target run, several a multi-target run, none every

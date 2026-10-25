@@ -25,6 +25,9 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [profile.release]
+# Jobs run in worker processes; compact coordinator code keeps resident instruction
+# pages small without changing its data structures or limiting worker parallelism.
+opt-level = "s"
 strip = true
 lto = true
 codegen-units = 1

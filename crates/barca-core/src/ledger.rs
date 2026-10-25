@@ -120,6 +120,9 @@ pub struct LedgerStep {
     /// SHA-256 of the artifact's bytes; required for a successful step.
     #[serde(default)]
     pub digest: Option<String>,
+    /// Sensor freshness revision; independent of the artifact digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_hash: Option<String>,
     #[serde(default)]
     pub elapsed_seconds: Option<f64>,
     #[serde(default)]
@@ -788,11 +791,11 @@ pub mod posts {
     /// A post the server accepted.
     pub const SHARED: &str = "shared";
 
-    fn failed(what: &'static str) -> impl Fn(turso::Error) -> BarcaError {
+    fn failed(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
         move |e| BarcaError::Db(format!("ledger posts: {what}: {e}"))
     }
 
-    async fn has_table(conn: &turso::Connection) -> Result<bool, BarcaError> {
+    async fn has_table(conn: &libsql::Connection) -> Result<bool, BarcaError> {
         let mut rows = conn
             .query(
                 "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'ledger_posts'",
@@ -1009,7 +1012,7 @@ pub mod posts {
         let mut rows = conn
             .query(
                 "SELECT node_id, run_hash, status, artifact_path, artifact_format, \
-                 artifact_size_bytes, output_hash, elapsed_seconds, attempts, error_message \
+                 artifact_size_bytes, output_hash, elapsed_seconds, attempts, error_message, observation_hash \
                  FROM materializations WHERE run_id = ?1 ORDER BY id",
                 [run_id],
             )
@@ -1033,6 +1036,7 @@ pub mod posts {
                 elapsed_seconds: row.get::<f64>(7).ok(),
                 attempts: row.get::<i64>(8).ok(),
                 error: text(9),
+                observation_hash: text(10),
             };
             // A step is recorded as it finishes and again at the end of the run: the last
             // row of a node is its outcome.
@@ -1259,7 +1263,7 @@ async fn recorded_post(db_path: &str, client_run_id: &str) -> Result<Option<Stri
 /// already hold. A step whose run hash the ledger holds with the same digest adds nothing; with
 /// a different digest the ledger keeps its row and the step is reported in `bytes_changed`.
 async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, BarcaError> {
-    let failed = |e: turso::Error| BarcaError::Db(format!("failed to record a ledger post: {e}"));
+    let failed = |e: libsql::Error| BarcaError::Db(format!("failed to record a ledger post: {e}"));
     let run_id = db::generate_run_id();
     let run = &post.run;
     let _g = db::db_guard().await;
@@ -1296,22 +1300,22 @@ async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, Ba
             if step.status == "success" {
                 let mut rows = conn
                     .query(
-                        "SELECT output_hash FROM materializations WHERE node_id = ?1 AND \
+                        "SELECT output_hash, observation_hash FROM materializations WHERE node_id = ?1 AND \
                          run_hash = ?2 AND status = 'success' ORDER BY id DESC LIMIT 1",
                         [step.node_id.clone(), step.run_hash.clone()],
                     )
                     .await
                     .map_err(failed)?;
-                let held = rows
-                    .next()
-                    .await
-                    .map_err(failed)?
-                    .map(|row| row.get::<String>(0).ok().filter(|h| !h.is_empty()));
+                let held = rows.next().await.map_err(failed)?;
+                let held_observation = held.as_ref().and_then(|row| row.get::<String>(1).ok());
+                let held = held.map(|row| row.get::<String>(0).ok().filter(|h| !h.is_empty()));
                 while rows.next().await.map_err(failed)?.is_some() {}
                 match held {
                     // Held, with the same bytes: nothing to add.
                     Some(Some(digest)) if Some(digest.as_str()) == step.digest.as_deref() => {
-                        continue;
+                        if step.observation_hash.is_none() || held_observation == step.observation_hash {
+                            continue;
+                        }
                     }
                     // Held with other bytes: the ledger's row stays the truth.
                     Some(Some(_)) => {
@@ -1325,9 +1329,9 @@ async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, Ba
             conn.execute(
                 "INSERT INTO materializations (node_id, run_hash, artifact_path, \
                  artifact_format, artifact_size_bytes, elapsed_seconds, status, error_message, \
-                 attempts, output_hash, run_id) \
+                 attempts, output_hash, run_id, observation_hash) \
                  VALUES (?1, ?2, NULLIF(?3, ''), NULLIF(?4, ''), NULLIF(?5, ''), NULLIF(?6, ''), \
-                 ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), ?11)",
+                 ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), ?11, NULLIF(?12, ''))",
                 [
                     step.node_id.clone(),
                     step.run_hash.clone(),
@@ -1342,6 +1346,7 @@ async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, Ba
                     step.attempts.unwrap_or(1).to_string(),
                     step.digest.clone().unwrap_or_default(),
                     run_id.clone(),
+                    step.observation_hash.clone().unwrap_or_default(),
                 ],
             )
             .await
@@ -1369,6 +1374,7 @@ mod tests {
             format: Some("json".to_string()),
             size_bytes: Some(1),
             digest: Some("d".to_string()),
+            observation_hash: None,
             elapsed_seconds: None,
             attempts: None,
             error: None,
@@ -1420,5 +1426,41 @@ mod tests {
             ["p.py:noisy"]
         );
         assert_eq!(post(&[]).warns_for(changed.clone()), changed);
+    }
+    #[tokio::test]
+    async fn equal_artifact_bytes_can_carry_a_new_sensor_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        db::init_db(&path).await.unwrap();
+        let mut first = post(&[]);
+        first.steps.truncate(1);
+        first.steps[0].observation_hash = Some("observation1".into());
+        write_post(&path, &first).await.unwrap();
+        let mut next = first.clone();
+        next.run.run_id = "r2".into();
+        next.steps[0].observation_hash = Some("observation2".into());
+        write_post(&path, &next).await.unwrap();
+        let cache = db::CacheReader::open(&path).await.unwrap();
+        let revisions = db::last_output_hashes(&cache, &[first.steps[0].node_id.as_str()])
+            .await
+            .unwrap();
+        assert_eq!(revisions[&first.steps[0].node_id], "observation2");
+        let mut rows = cache
+            .conn()
+            .query(
+                "SELECT output_hash FROM materializations ORDER BY id DESC LIMIT 1",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            "d"
+        );
     }
 }

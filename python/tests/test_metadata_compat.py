@@ -137,7 +137,9 @@ def test_a_database_written_by_an_older_release_opens(tmp_path, version):
     got = _ok(_barca(project, "get", "refreshed", "pipeline.py", "--json"))
     assert got["status"] == "success", got
     refreshed = next(s for s in got["steps"] if s["id"] == "pipeline.py:refreshed")
-    assert refreshed["status"] == "cached", got
+    # The historical fixture reports explicit True. The current sensor contract honors
+    # that signal, so its consumer refreshes while the old history remains readable.
+    assert refreshed["status"] == "ran", got
 
     # A writer server starts on the migrated file and answers /health.
     with Serve(project, "--no-schedule", env=_env()) as server:

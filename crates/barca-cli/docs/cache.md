@@ -4,6 +4,24 @@ Barca skips a step when it has already computed the same thing. This topic cover
 same" means (the run hash), what the hash does and does not see, the states a cached result
 can be in, how to force a recompute, the cache size limit, and where everything is stored.
 
+## Incremental runs
+
+A normal `get` or `run` reuses previously validated freshness before expanding partition
+keys. When one sensor key changes, only that key's affected chain needs new cache decisions;
+unchanged keys remain cached. Target selection plans only the target's dependency cone.
+This works with the usual DAG workflow and needs no flag or batching setting.
+
+The first run validates the full requested graph. Code, declared environment, partition
+membership and upstream changes invalidate the affected evidence; refreshes and writes from
+another run force normal validation. Missing artifacts needed by active work or returned
+values are recovered through the usual cache path. Freshness does not promise that unused
+artifact files still exist.
+
+A sensor returning every key still discovers and compares every key. A changed `collect`
+consumer still reads all its inputs, and returning every small partition value requires
+loading those values. Compound partition changes and local execution against a remote
+server's ledger use normal validation. Batching controls function calls independently.
+
 ## What is cached
 
 Each asset step has a **run hash**: a hash of the function's definition, its inputs' run hashes,
@@ -345,10 +363,10 @@ from barca import asset, sensor
 
 
 @sensor()
-def orders_etag() -> tuple[bool, str]:
+def orders_etag() -> str:
     # Stands in for a blob's etag. With azure-storage-blob, for example:
     #   BlobClient.from_blob_url(url, credential).get_blob_properties().etag
-    return True, hashlib.md5(Path("orders.csv").read_bytes()).hexdigest()
+    return hashlib.md5(Path("orders.csv").read_bytes()).hexdigest()
 
 
 @asset(inputs={"etag": orders_etag})
@@ -383,8 +401,9 @@ How it works:
   materialization made then.
 - Sensors run in a phase of their own, before their consumers, so a consumer's cache decision
   always uses the value the sensor returned in this run.
-- The `bool` in the sensor's `(update_detected, value)` return is not used for caching; only
-  `value` is hashed.
+- These examples return a value for content-based comparison. An explicit `False`
+  retains the previous observation; `True` advances a separate freshness revision even
+  without a value. `(changed, value)` also supplies data (`barca docs assets`, "Sensors").
 - A partitioned asset that reads a sensor re-runs every key when the sensor's output changes.
   To re-run only the keys whose data changed, let the sensor return a dict of key -> version
   and take the keys from it with `partitions_from(sensor)`: each key then folds in its own
@@ -398,9 +417,9 @@ includes the time it was fetched) makes every asset that reads it re-run every t
 
 ```python
 @sensor()
-def orders_etag() -> tuple[bool, dict]:
+def orders_etag() -> dict:
     props = get_blob_properties()
-    return True, {"etag": props.etag, "checked_at": time.time()}   # re-runs bronze every time
+    return {"etag": props.etag, "checked_at": time.time()}   # re-runs bronze every time
 ```
 
 Return `props.etag` alone. That is the intended meaning: an asset that reads a sensor depends on
@@ -429,8 +448,8 @@ CUSTOMERS = ["acme", "globex", "initech"]
 
 
 @sensor()
-def rate_feed() -> tuple[bool, float]:
-    return True, float(Path("rate.txt").read_text())
+def rate_feed() -> float:
+    return float(Path("rate.txt").read_text())
 
 
 @asset(inputs={"raw": rate_feed}, cutoff=True)

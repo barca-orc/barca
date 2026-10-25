@@ -345,6 +345,16 @@ struct State {
     /// storage options: seconds since the epoch ([`store_checked_recently`], #593).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     store_checks: Vec<StoreCheck>,
+    /// Conservative artifact-byte estimates through each environment's last observed row.
+    /// New polls inspect only appended rows. A full survey corrects duplicate paths.
+    #[serde(default)]
+    recorded: BTreeMap<String, Recorded>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Recorded {
+    through: i64,
+    bytes: u64,
 }
 
 /// One successful check of an artifact store (#593).
@@ -766,7 +776,7 @@ fn range_cache_leftovers(project: &Project) -> Vec<plan::Leftover> {
 }
 
 /// The recorded size of the results the DB says are on disk (each file once).
-async fn recorded_bytes(conn: &turso::Connection) -> Result<u64, BarcaError> {
+async fn recorded_bytes(conn: &libsql::Connection) -> Result<u64, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to measure the cache: {e}"));
     let mut rows = conn
         .query(
@@ -791,7 +801,7 @@ async fn recorded_bytes(conn: &turso::Connection) -> Result<u64, BarcaError> {
 /// module reads), and run `f` on it.
 async fn with_db<T>(
     db_path: &str,
-    f: impl AsyncFnOnce(&turso::Connection) -> Result<T, BarcaError>,
+    f: impl AsyncFnOnce(&libsql::Connection) -> Result<T, BarcaError>,
 ) -> Result<T, BarcaError> {
     crate::db::init_db(db_path).await?;
     let _g = crate::db::db_guard().await;
@@ -802,8 +812,40 @@ async fn with_db<T>(
 /// The fast size: recorded sizes, the small directories, and the last walk's correction.
 async fn estimate(project: &Project, envs: &[EnvDb], state: &State) -> Result<u64, BarcaError> {
     let mut recorded = 0u64;
+    let mut updated = BTreeMap::new();
     for env in envs {
-        recorded += with_db(&env.db_path, async |conn| recorded_bytes(conn).await).await?;
+        let previous = state.recorded.get(&env.db_path);
+        let estimate = with_db(&env.db_path, async |conn| {
+            let mut rows = conn.query(
+                "SELECT COALESCE((SELECT id FROM materializations ORDER BY id DESC LIMIT 1),0)", ()
+            ).await.map_err(|e| BarcaError::Db(format!("failed to measure the cache: {e}")))?;
+            let through = rows.next().await
+                .map_err(|e| BarcaError::Db(format!("failed to measure the cache: {e}")))?
+                .and_then(|r| r.get::<i64>(0).ok()).unwrap_or(0);
+            drop(rows);
+            let bytes = match previous.filter(|p| p.through <= through) {
+                Some(previous) => {
+                    // An upper bound: reused paths can be counted again. Near the limit,
+                    // the full survey measures actual files before planning eviction.
+                    let mut rows = conn.query(
+                        "SELECT COALESCE(SUM(artifact_size_bytes),0) FROM materializations NOT INDEXED WHERE id > ?1 AND status = 'success' AND artifact_path IS NOT NULL AND evicted_at IS NULL",
+                        [previous.through]
+                    ).await.map_err(|e| BarcaError::Db(format!("failed to measure the cache: {e}")))?;
+                    let added = rows.next().await
+                        .map_err(|e| BarcaError::Db(format!("failed to measure the cache: {e}")))?
+                        .and_then(|r| r.get::<i64>(0).ok()).unwrap_or(0).max(0) as u64;
+                    previous.bytes.saturating_add(added)
+                }
+                None => recorded_bytes(conn).await?,
+            };
+            Ok(Recorded { through, bytes })
+        }).await?;
+        recorded = recorded.saturating_add(estimate.bytes);
+        updated.insert(env.db_path.clone(), estimate);
+    }
+    if let Some(mut latest) = read_state(project) {
+        latest.recorded = updated;
+        write_state(project, &latest);
     }
     let other = walk(project, false).other;
     Ok((recorded as i64 + state.artifact_adjust).max(0) as u64 + other)
@@ -1027,6 +1069,7 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
         project,
         &State {
             surveyed_at: now_secs(),
+            recorded: BTreeMap::new(),
             artifact_adjust: walked.artifacts as i64 - recorded as i64,
             store_checks: read_state(project)
                 .map(|s| s.store_checks)
@@ -1056,6 +1099,8 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
 pub(crate) struct Own {
     pub recorded: HashSet<String>,
     pub run_hashes: HashSet<String>,
+    /// Current results proven fresh without materializing each key's cache state.
+    pub nodes: HashSet<String>,
     pub manual: HashSet<String>,
     /// The command added nothing to `.barca/`: no step ran and nothing was fetched from a
     /// store. Its check is skipped when the last check, under the same limit, found the cache
@@ -1167,7 +1212,7 @@ async fn protections(
             .chain(&pinned.run_hashes)
             .cloned()
             .collect(),
-        nodes: pinned.nodes.clone(),
+        nodes: pinned.nodes.iter().chain(&own.nodes).cloned().collect(),
         manual_known: manual.is_some(),
         manual: manual
             .unwrap_or_default()

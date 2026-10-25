@@ -41,8 +41,8 @@ def _called(what):
 
 
 @sensor()
-def feed() -> tuple[bool, float]:
-    return True, float((HERE / "rate.txt").read_text())
+def feed() -> float:
+    return float((HERE / "rate.txt").read_text())
 
 
 # A global step every customer reads. It reruns whenever the feed moves; most moves round to
@@ -72,8 +72,8 @@ def summary(all: dict) -> int:
 
 
 @sensor()
-def regional_feed() -> tuple[bool, dict]:
-    return True, json.loads((HERE / "regions.json").read_text())
+def regional_feed() -> dict:
+    return json.loads((HERE / "regions.json").read_text())
 
 
 # Per key: each region's bytes decide its own consumers.
@@ -357,8 +357,8 @@ HERE = pathlib.Path(__file__).parent
 
 
 @sensor()
-def feed() -> tuple[bool, str]:
-    return True, (HERE / "versions.json").read_text()
+def feed() -> str:
+    return (HERE / "versions.json").read_text()
 
 
 # A dict `partitions_from` source that is an asset: with cutoff, each key folds in its own

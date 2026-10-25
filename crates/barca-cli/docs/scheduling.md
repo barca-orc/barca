@@ -23,8 +23,8 @@ from barca import asset, sensor, task, Manual, Schedule
 
 
 @sensor(freshness=Schedule("*/5 * * * *"))      # the only schedule
-def inbox() -> tuple[bool, str]:
-    return True, Path("inbox.txt").read_text()
+def inbox() -> str:
+    return Path("inbox.txt").read_text()
 
 
 @asset(inputs={"files": inbox})                  # Always (the default)
@@ -119,8 +119,8 @@ from barca import asset, sensor, task, Manual, Schedule
 
 
 @sensor(freshness=Schedule("*/5 * * * *"))
-def prices() -> tuple[bool, str]:
-    return True, Path("prices.txt").read_text()
+def prices() -> str:
+    return Path("prices.txt").read_text()
 
 
 @asset(inputs={"etag": prices}, freshness=Manual)

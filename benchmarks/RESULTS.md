@@ -1,14 +1,224 @@
 # Benchmark Results
 
-Latest passes: 2026-10-24, batched partitions at 10k and 200k keys (first section);
-2026-10-23, early cutoff for assets at 10k and 200k keys
-and bounded run records under `barca serve` at 200k keys; 2026-10-22, keyed partition
-sources at 10k to 200k keys (fourth section), and the read routes of `barca serve` and the
-inspection commands at 300 assets (fifth). Latest comparison pass: 2026-10-21, barca 0.28.0
-against Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one Linux machine (sixth section,
-#65). The sections after it are older passes on other hardware and are kept for the record.
-Absolute times from different machines are not comparable; within one pass, the ratios between
-frameworks are.
+Latest passes: 2026-10-25, framework cold/warm updates and bounded coordinator overhead; 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
+early cutoff and bounded server run records; 2026-10-22, keyed sources and server read routes.
+The latest framework comparison is 2026-10-21 (barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0
+and Airflow 3.3.2, #65). Older passes on other hardware are kept below. Absolute times from
+different machines are not comparable; within one pass, the ratios between frameworks are.
+
+## Framework cold paths (2026-10-25)
+
+Empty orchestration history for every sample, with no framework warm-up or asset seed.
+Python 3.13.16, four pinned cores, same host and framework versions as the warm comparison
+below. Cold **selected** chains use explicit partition selection and have three samples;
+wall time is the median and RSS the maximum. Cold **full** runs execute a poll and two
+functions for every key, with individual durable outputs: one sample per case, no vectorized
+calls for Barca. All scores, function counts, and output persistence were checked.
+
+| Cold workload | Barca: time / tree RSS | Dagster: time / tree RSS | Prefect: time / tree RSS |
+|---|---:|---:|---:|
+| One selected key of 1 | 0.052 s / 37.2 MiB | 1.471 s / 137.9 MiB | 6.639 s / 403.3 MiB |
+| One selected key of 1,000 | 0.053 s / 35.1 MiB | 1.354 s / 138.1 MiB | 6.332 s / 403.3 MiB |
+| One selected key of 50,000 | 0.128 s / 45.4 MiB | 1.250 s / 143.7 MiB | 6.276 s / 414.1 MiB |
+| One selected key of 200,000† | 0.253 s / 72.9 MiB | 1.472 s / 163.1 MiB | 6.390 s / 456.4 MiB |
+| All 1 keys (3 calls), one sample | 0.058 s / 33.7 MiB | 1.330 s / 138.2 MiB | 6.724 s / 403.1 MiB |
+| All 100 keys (201 calls), one sample | 0.139 s / 97.1 MiB | 8.165 s / 140.0 MiB | 6.850 s / 424.1 MiB |
+| All 1,000 keys (2,001 calls), one sample | 0.584 s / 120.5 MiB | 80.017 s / 159.0 MiB | 14.050 s / 456.9 MiB |
+
+Memory is sampled whole-process-tree RSS, including Python workers and the Prefect API;
+shared pages are counted in each process. Times include fresh interpreter/engine/database
+startup and shutdown. Prefect starts its ephemeral local API on each invocation. These
+are not warmed-server comparisons. Dagster's full path uses dynamic mapped ops in **one**
+in-process job, not thousands of separate runs. Its filesystem outputs use pickle; Barca
+and Prefect use JSON. Prefect also persists the source checkpoint at the adapter boundary.
+Per-key outputs are durable in all three; asset catalogs/retry/resume semantics differ.
+†200k is above Dagster's recommended 100k partitions per asset, and is a stress case.
+
+The first cold probe exposed a real Barca issue: a selected key still caused the native
+coordinator to load/hash every source value before filtering. At 200k, that was 0.521 s,
+190.7 MiB whole-tree RSS and 111.9 MiB native peak, versus Dagster's 161.5 MiB tree peak.
+The fix streams selected values/hashes while counting the full source domain, preserves
+missing-key warnings/skipped counts, and keeps compound dimension projections independent.
+Final native memory remains below **20,000,000 bytes** on all twelve selected-chain samples;
+this is an enforced regression budget, not the whole-tree memory in the table. Full runs
+retain per-key scheduling/metadata state (the 1k run's native peak is 29.4 MiB); this fix does
+not claim that all cold materializations use under 20 MB. We did not run a full 200k-key
+Dagster/Prefect bootstrap, so the table makes no comparison claim for that workload.
+
+Source: `c3227be2`, package version still 0.32.0. All 1,176 Rust tests and 118 focused Python
+regressions pass; Clippy is clean. A post-fix warm check still executes only three functions
+and enforces the same native-memory budget at 50k/200k (200k median 0.280 s).
+
+[Cold methodology/reproducer](framework_partitions/README.md#cold-comparisons),
+[36 cold selected records](framework_partitions/cold-measurements.jsonl),
+[9 full first-materialization records](framework_partitions/cold-full-measurements.jsonl),
+[initial probe before the fix](framework_partitions/cold-probe.jsonl),
+[warm regression check](framework_partitions/warm-after-cold-fix.jsonl),
+[cold environment/dependency versions](framework_partitions/cold-environment.json).
+
+## Framework warm-data updates (2026-10-25)
+
+A sensor/poll observes one changed key and refreshes its `cleaned -> scored` chain. Fresh
+local processes, warm durable state, three measured updates per case. All use Python
+3.13.16 and the same four pinned CPU cores on the Ryzen AI MAX+ 395/Fedora host. Barca is
+source `487601d0` (package version 0.32.0, containing the pending fix), Dagster 1.13.26,
+and Prefect 3.9.0. No builds or test suites ran during measurements.
+
+| Domain | Framework | One-key update | Whole-tree peak RSS | Unchanged |
+|---:|---|---:|---:|---:|
+| 1,000 | Barca | 0.057 s | 51.2 MiB | 0.050 s |
+| 1,000 | Dagster | 1.199 s | 137.2 MiB | 0.804 s |
+| 1,000 | Prefect | 4.624 s | 430.8 MiB | 4.514 s |
+| 50,000 | Barca | 0.105 s | 47.8 MiB | 0.088 s |
+| 50,000 | Dagster | 1.315 s | 142.6 MiB | 0.934 s |
+| 50,000 | Prefect | 5.048 s | 382.3 MiB | 4.969 s |
+| 200,000† | Barca | 0.300 s | 95.0 MiB | 0.245 s |
+| 200,000† | Dagster | 1.586 s | 159.9 MiB | 1.091 s |
+| 200,000† | Prefect | 4.955 s | 447.2 MiB | 4.905 s |
+
+Wall times are medians of three updates; memory is the maximum sampled sum of live RSS
+across the **whole process tree**, including Barca's Python worker and Prefect's local API.
+Shared pages count in each process; 5 ms sampling can miss short peaks. Unchanged has one
+sample per framework/domain. These memory numbers are not Barca's native-only footprint.
+
+Dagster/Prefect get application code that compares snapshots and explicitly routes only
+the changed partition. Their history contains only that key; Barca's full domain is seeded
+and its ordinary DAG workflow discovers/reuses freshness. This intentionally favors the
+competitors' dispatch path rather than forcing them to revisit every task. Every update
+checks three domain function calls and the new score; unchanged checks one poll and no
+asset work. Dagster uses its in-process `materialize()` API and persistent local IO manager;
+Prefect persists JSON results with input/source cache keys.
+
+**Scope:** these are local invocation costs, not warmed-daemon latency, distributed
+throughput, or feature equivalence. Prefect's ephemeral API startup/shutdown is included;
+imports are included for all frameworks. Cold seeding and Barca's first validation are
+excluded. †200k is a stress case above Dagster's recommended 100k partitions per asset;
+1k/50k are the main comparison. No UI is loaded. Barca's measured release build omits UI
+assets; its execution code matches the pending performance fix.
+
+[Methodology, API references and reproducer](framework_partitions/README.md),
+[raw 48 records](framework_partitions/measurements.jsonl),
+[exact environment/dependency versions](framework_partitions/environment.json).
+
+## Bounded coordinator overhead (2026-10-25)
+
+The same `versions -> cleaned -> scored` DAG now keeps producer snapshots and comparisons
+in Python, sends a bounded change summary, and builds Rust state only for affected keys.
+Scheduling estimates, cache accounting, and latest sensor lookups use scoped metadata reads.
+The CLI uses one event loop and a compact release binary, with bundled local-only libSQL
+for existing SQLite-format history. No special incremental mode is required.
+
+The release binary includes the production UI. The comparison baseline is the earlier
+incremental implementation (`da87219f`), which still copied whole source snapshots into
+Rust; it is not the published 0.32.0 baseline in the older table below. The machine is the
+same Ryzen AI MAX+ 395/Fedora host. Three warm updates per size, with no concurrent builds
+or test suites. Times and CPU are medians; memory is the maximum across the three updates.
+
+| Keys | Earlier wall | New wall | Earlier native peak | New native peak | New native CPU | Python job CPU |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.096 s | 0.058 s | 25.18 MiB | 13.71 MiB | 13.1 ms | 2.5 ms |
+| 50,000 | 0.492 s | 0.109 s | 98.15 MiB | 13.79 MiB | 13.5 ms | 52.2 ms |
+| 200,000 | 2.028 s | 0.299 s | 221.62 MiB | 13.75 MiB | 15.9 ms | 237.4 ms |
+
+Native memory is the coordinator's own `/proc/PID/status` high-water mark, sampled every
+millisecond through exit and combined with its self-reported peak. It excludes Python
+workers. Native CPU is `RUSAGE_SELF`, measured through engine and cache cleanup, before
+final CLI formatting. Wall time covers process start through exit. Python job CPU includes
+imports, input loading, sensor comparison, and result serialization; it excludes interpreter
+startup and post-result bookkeeping. These CPU figures are not an additive wall-time
+breakdown. At 200k keys, the Python worker peaks near 80 MiB because this particular sensor
+loads and compares the entire map.
+
+Each large one-key update registers three identities and makes three Python calls: one
+sensor and one key in each downstream asset. An unchanged run registers one identity and
+runs only the sensor. A dispersed 17-key update registers 35 identities and still makes
+three calls (one sensor plus one batch per asset). The harness asserts all these counts.
+
+| Keys / 17 changed | Wall | Native peak | Native CPU | Python calls |
+|---:|---:|---:|---:|---:|
+| 50,000 | 0.120 s | 15.84 MiB | 20.5 ms | 3 |
+| 200,000 | 0.318 s | 15.98 MiB | 24.4 ms | 3 |
+
+At 1,000 keys, returning every reference takes 0.077 s, 18.95 MiB native peak, and
+26.0 ms native CPU. It still executes only the sensor and the two affected asset keys.
+
+The main one-key runs enforce less than **20,000,000 bytes** of native memory and **20 ms**
+of native CPU, including the unchanged checks. The 17-key batches enforce the same memory
+budget and 40 ms CPU. The 1,000-key case returns every artifact reference: it consequently
+registers 1,002 identities and is measured separately with a 20 MiB/40 ms budget. A result
+listing is more work than returning the large target's existing bounded summary.
+
+Limits: the first validation or a proof-version upgrade still uses normal per-key cache
+decisions (the 200k reference is about six seconds and 1.2 GiB). Explicit partition
+selection, refreshes, compound partition nodes, and local runs using a remote server ledger
+retain normal validation. Changed fan-ins must read all inputs. Oversized source deltas
+(over 256 KiB of protocol metadata) fall back to normal validation. Full cache surveys are
+still proportional to cache size. The small Rust budget applies to the validated warm
+single-chain path; it is not a claim about those broader operations.
+
+```bash
+export PATH="$PWD/.venv/bin:$PATH" PYTHONPATH="$PWD/python"
+export BARCA_BIN="$PWD/target-local/release/barca"
+# For the before/after comparison, also set BASELINE_BIN and matching
+# BASELINE_PYTHONPATH (the baseline uses worker protocol 4; this branch uses 5).
+KEYS=1,50000,200000 REPEATS=3 COORDINATOR_MAX_KIB=19531 \
+COORDINATOR_MAX_CPU_MS=20 .venv/bin/python benchmarks/incremental_dag/bench.py
+# On retained seeded projects, omit BASELINE_BIN for the batch-only pass:
+KEYS=50000,200000 CHANGED_KEYS=17 REPEATS=3 COORDINATOR_MAX_KIB=19531 \
+COORDINATOR_MAX_CPU_MS=40 .venv/bin/python benchmarks/incremental_dag/bench.py
+```
+
+Raw comparison: [incremental_dag/compact-measurements.jsonl](incremental_dag/compact-measurements.jsonl).
+Batches: [incremental_dag/compact-batches.jsonl](incremental_dag/compact-batches.jsonl).
+Small reference listing: [incremental_dag/compact-small.jsonl](incremental_dag/compact-small.jsonl).
+Seed/proof rows are warm-ups and are excluded from the warm-run budgets.
+
+## Incremental DAG planning (2026-10-24)
+
+`benchmarks/incremental_dag/bench.py`: the same keyed sensor and two-asset chain as the
+batching fixture, `versions -> cleaned -> scored`, with batches of 1000. Each warm update
+changes only `r0`. The ordinary cache-aware DAG workflow reuses validated freshness before
+expanding keys; no new mode or flag is involved. Execution grouping is independent.
+
+Published 0.32.0 wheel versus this PR's release build, using the same 0.32.0 Python helpers
+(protocol 4), on the AMD Ryzen AI MAX+ 395, 32 threads, 62 GiB RAM, Fedora 44 kernel 7.2.8,
+NVMe. Three warm updates per size: elapsed time is their median and RSS is their maximum,
+measured by `/usr/bin/time`. These historical RSS readings can include a child process's peak;
+the 2026-10-25 pass below measures the native process directly. They are not summed worker memory.
+Runs were not CPU-pinned; no local build or test suite ran during the measured warm updates.
+The 1k and 50k caches were reused; 200k was seeded once. Seed timings are excluded.
+
+```bash
+PATH="/path/to/matching/helpers/bin:$PATH" \
+BASELINE_BIN="/path/to/published-0.32.0/barca" \
+BARCA_BIN="$PWD/target-local/release/barca" KEYS=1000,50000,200000 \
+.venv/bin/python benchmarks/incremental_dag/bench.py
+```
+
+| Keys | 0.32.0 one-key update | Incremental update | 0.32.0 peak RSS | Incremental peak RSS | Registered identities |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | 0.089 s | 0.083 s | 36.0 MiB | 31.7 MiB | 1,002 |
+| 50,000 | 1.552 s | 0.491 s | 351.8 MiB | 96.7 MiB | 3 |
+| 200,000 | 6.843 s | 2.162 s | 1258.5 MiB | 220.4 MiB | 3 |
+
+Every update executes exactly three steps: the sensor and one key of each asset. At 50k
+and 200k, exactly three identities enter cache/coordinator state; an unchanged run executes
+only its sensor and registers one identity. The harness asserts these counts. At 1k, the
+output includes every artifact reference, so the update registers 1,002 identities and an
+unchanged run registers 1,001. Needed references are read in bounded SQL groups; recent
+reads keep their existing one-hour timestamp refresh policy.
+
+Sensor discovery and comparison still process its full key list. A changed fan-in still
+loads all its inputs, and the initial validation of a requested warm cache uses normal
+per-key decisions. A reference pass before the final lookup optimization measured that
+one-time 200k validation at 7.223 s and 1,265.4 MiB, with 400,001 identities. Those are
+separate from subsequent warm updates. Large outputs use the existing bounded summary;
+small outputs still return every reference.
+
+Raw final comparison: [incremental_dag/measurements.jsonl](incremental_dag/measurements.jsonl).
+The final incremental pass reused valid proofs; its `seed` and `proof` cases are warm-ups.
+The earlier first-validation reference is in
+[incremental_dag/initial-validation.jsonl](incremental_dag/initial-validation.jsonl).
 
 ## Batched partitions (2026-10-24)
 

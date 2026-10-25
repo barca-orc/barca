@@ -119,9 +119,10 @@ An asset that reads a file, a bucket or a table in its own body has the same cod
 same inputs on every run. Barca computes it once and then serves it from cache, even after
 the data changes.
 
-The supported pattern is a `@sensor` in front of the asset. A sensor returns
-`(update_detected, value)`. It runs every time, and its `value` is part of the run hash of
-every asset that reads it.
+Put a `@sensor` in front of the asset. Return an mtime, ETag or other version value
+and Barca compares it on each poll. When you already know whether the source changed,
+return `True`/`False`, or `(changed, value)` to also pass data. A change advances freshness
+without requiring a payload; an unchanged signal retains the previous observation.
 
 ```python
 import hashlib
@@ -131,9 +132,9 @@ from barca import asset, sensor
 
 
 @sensor()
-def orders_version() -> tuple[bool, str]:
+def orders_version() -> str:
     # anything that identifies the version of the data: an etag, a last-modified time
-    return True, hashlib.md5(Path("orders.csv").read_bytes()).hexdigest()
+    return hashlib.md5(Path("orders.csv").read_bytes()).hexdigest()
 
 
 @asset(inputs={"version": orders_version})
@@ -255,7 +256,10 @@ More: `barca docs big-inputs`, `barca docs types`.
 ## 7. Partitions
 
 Partitions run one asset once per key. The keys run in parallel, and each key is cached on
-its own.
+its own. After the first successful run, ordinary DAG runs reuse validated freshness
+before expanding keys: one changed key schedules only its affected chain. Sensors that
+return all keys still discover them all; a changed `collect` consumer still reads all its
+inputs. Batching is independent and needs no special setting for incremental planning.
 
 ```python
 from barca import asset, collect, partitions, partitions_from

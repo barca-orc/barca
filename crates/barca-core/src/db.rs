@@ -5,13 +5,13 @@
 
 use crate::BarcaError;
 use crate::dispatch::OutputRef;
+use libsql::Builder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, MutexGuard};
-use turso::Builder;
 
 /// Process-wide serialization of `metadata.db` operations. The server can run
 /// multiple pipelines in parallel (they execute Python concurrently), but their
@@ -21,13 +21,9 @@ use turso::Builder;
 /// on the file without depending on WAL support. A one-shot CLI run leaves it
 /// uncontended.
 ///
-/// This guard only covers one process. Turso's default mode is single-process: it
-/// takes a non-blocking exclusive lock on the DB file, so a second *process*
-/// that overlaps used to fail with "File is locked by another process". Each
-/// open therefore also holds a short cross-process lock (see
-/// [`acquire_file_lock`]) so concurrent barca processes queue instead of fail.
-/// (Turso's `experimental_multiprocess_wal` would allow true concurrent access,
-/// but it is experimental and unsupported on some filesystems.)
+/// Each open also holds a short cross-process lock ([`acquire_file_lock`]). It
+/// serializes the read/write operation with snapshots, restores and other Barca processes.
+/// libSQL uses SQLite WAL; no database lock is held across Python execution.
 ///
 /// Known limit: this serializes every DB op and each helper opens a fresh
 /// connection, which becomes the contention point under many concurrent daemon
@@ -35,17 +31,37 @@ use turso::Builder;
 /// a persistent connection.
 static DB_LOCK: Mutex<()> = Mutex::const_new(());
 
-/// Prepare `sql` once for a loop that runs it per row. Turso parses and plans the SQL of every
+/// Prepare `sql` once for a loop that runs it per row. The driver parses and plans the SQL of every
 /// `Connection::execute` again, which dominated recording thousands of rows (#460); a prepared
 /// statement is parsed once and rebound for each row. Every per-row write statement goes
 /// through here, so tests can count preparations ([`prepares`]).
 pub(crate) async fn prepare(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     sql: &str,
-) -> Result<turso::Statement, turso::Error> {
+) -> Result<Prepared, libsql::Error> {
     #[cfg(test)]
     PREPARES.with(|n| n.set(n.get() + 1));
-    conn.prepare(sql).await
+    conn.prepare(sql).await.map(Prepared)
+}
+
+/// A reusable statement always starts from its initial state. Keep this driver detail
+/// here: libSQL leaves a completed statement at SQLITE_DONE until it is reset.
+pub(crate) struct Prepared(libsql::Statement);
+impl Prepared {
+    pub(crate) async fn execute(
+        &mut self,
+        params: impl libsql::params::IntoParams,
+    ) -> Result<u64, libsql::Error> {
+        self.0.reset();
+        self.0.execute(params).await.map(|n| n as u64)
+    }
+    pub(crate) async fn query(
+        &mut self,
+        params: impl libsql::params::IntoParams,
+    ) -> Result<libsql::Rows, libsql::Error> {
+        self.0.reset();
+        self.0.query(params).await
+    }
 }
 
 /// Run `body` in a transaction on `conn`: `begin` (`BEGIN` or `BEGIN IMMEDIATE`), then `COMMIT`
@@ -54,7 +70,7 @@ pub(crate) async fn prepare(
 /// and a failed rollback is added to the error that caused it (`{error}; {what} rollback
 /// failed`). A best-effort caller ignores the result.
 pub(crate) async fn with_tx<T>(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     begin: &str,
     what: &str,
     body: impl std::future::Future<Output = Result<T, BarcaError>>,
@@ -319,7 +335,7 @@ const DB_FILE_LOCK_WAIT: Duration = Duration::from_secs(60);
 /// An open database plus the cross-process lock that makes it safe to open. Field
 /// order matters: the database is closed before the lock is released.
 pub struct DbHandle {
-    _db: turso::Database,
+    _db: libsql::Database,
     _lock: fs::File,
 }
 
@@ -537,12 +553,12 @@ pub(crate) fn remove_sidecars(path: &str) -> Result<(), BarcaError> {
     Ok(())
 }
 
-/// Wrap a Turso open failure, adding a hint when the DB is locked by something that
+/// Wrap a database open failure, adding a hint when the DB is locked by something that
 /// does not follow barca's own locking.
 fn db_open_error(detail: impl std::fmt::Display) -> BarcaError {
     let detail = detail.to_string();
     let mut msg = format!("failed to open DB: {detail}");
-    if detail.contains("locked by another process") {
+    if detail.contains("locked by another process") || detail.contains("database is locked") {
         msg.push_str(
             "\n\nSomething outside barca's own locking has the metadata DB open (a DB \
              browser, a backup tool, or a barca process from an older version). Close it \
@@ -565,7 +581,7 @@ pub struct CacheReader {
     /// node with many keys is looked up ([`CacheReader::key_rows`]); `None` for a node whose
     /// keys are looked up one by one.
     key_rows: std::sync::Mutex<HashMap<String, Option<std::sync::Arc<KeyRows>>>>,
-    conn: turso::Connection,
+    conn: libsql::Connection,
     _handle: DbHandle,
     _guard: MutexGuard<'static, ()>,
 }
@@ -605,7 +621,7 @@ impl CacheReader {
             .is_none_or(|root| crate::config::local_artifact(path, root))
     }
 
-    pub fn conn(&self) -> &turso::Connection {
+    pub fn conn(&self) -> &libsql::Connection {
         &self.conn
     }
 
@@ -655,7 +671,7 @@ impl CacheReader {
         let mut rows = self
             .conn
             .query(
-                format!(
+                &format!(
                     "SELECT id, node_id, run_hash, artifact_path, artifact_format, \
                      artifact_size_bytes, output_hash, evicted_at IS NULL AND \
                      last_read_at >= datetime('now', '{}') FROM materializations NOT INDEXED \
@@ -841,7 +857,7 @@ impl KeyRows {
     }
 }
 
-/// How many times this process has opened a metadata DB ([`connect`]). Each open costs a
+/// Lock-coordinated metadata connections, including read-only compatibility preflights. Each open costs a
 /// fraction of a millisecond plus the lock; `BARCA_TRACE_TIMING` prints the count at the end
 /// of a run, and a test holds a warm run's count down (#560).
 static OPENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -853,7 +869,38 @@ pub fn opens() -> usize {
 
 /// Open the database file at `path` and connect, taking no lock. For callers that already
 /// hold the cross-process lock for the database this file is (or is about to become).
-async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), BarcaError> {
+async fn connect(path: &str) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
+    // Do not let SQLite recover or discard sidecars of a file that is not a database.
+    if let Some(why) = unusable_file(path) {
+        return Err(unusable_at(unusable(why), path));
+    }
+    if Path::new(path).exists() {
+        let (db, read) = connect_read_only(path).await?;
+        drop(read);
+        drop(db);
+    }
+    connect_write(path).await
+}
+
+/// Format checks happen read-only: opening an unsupported database must not checkpoint it.
+async fn connect_read_only(
+    path: &str,
+) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
+    OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let db = Builder::new_local(path)
+        .flags(libsql::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .build()
+        .await
+        .map_err(db_open_error)?;
+    let conn = db.connect().map_err(db_open_error)?;
+    crate::db_schema::check(&conn)
+        .await
+        .map_err(|e| unusable_at(e, path))?;
+    Ok((db, conn))
+}
+
+/// The caller holds the file lock and has checked an existing database read-only.
+async fn connect_write(path: &str) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
     OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let db = Builder::new_local(path)
         .build()
@@ -929,14 +976,14 @@ pub(crate) fn empty_file(path: &str) -> bool {
 /// Open the database at `db_path` and connect. Callers must hold [`db_guard`]
 /// for the duration of their work on the returned connection; the returned
 /// handle holds the cross-process lock until it is dropped.
-pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connection), BarcaError> {
+pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, libsql::Connection), BarcaError> {
     open_conn_with_until(db_path, crate::helper_proc::Until::done()).await
 }
 
 pub(crate) async fn open_conn_with_until(
     db_path: &str,
     until: crate::helper_proc::Until<'_>,
-) -> Result<(DbHandle, turso::Connection), BarcaError> {
+) -> Result<(DbHandle, libsql::Connection), BarcaError> {
     let lock = until
         .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
         .await??;
@@ -953,7 +1000,7 @@ pub(crate) async fn open_conn_with_until(
 
 /// Fold the write-ahead log into the main database file (`PRAGMA wal_checkpoint(TRUNCATE)`).
 /// No other connection may be open on the file.
-pub(crate) async fn checkpoint(conn: &turso::Connection) -> Result<(), BarcaError> {
+pub(crate) async fn checkpoint(conn: &libsql::Connection) -> Result<(), BarcaError> {
     let failed = |e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}"));
     // The pragma returns one (busy, log_pages, checkpointed_pages) row; busy means another
     // connection kept it from finishing.
@@ -1002,10 +1049,8 @@ pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
     initialized(path, shown)
         .await
         .map(|(handle, conn, version)| {
-            // The connection keeps the file open (and Turso's lock on it) until it is dropped,
-            // so it goes before the handle releases barca's lock. Dropped the other way round,
-            // another process could take barca's lock while the file was still held, and fail
-            // with "File is locked by another process" (#537).
+            // The connection keeps the file open (and its SQLite locks) until it is dropped,
+            // so it goes before the handle releases barca's lock (#537).
             drop(conn);
             drop(handle);
             version
@@ -1019,7 +1064,7 @@ pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
 async fn initialized(
     path: &str,
     shown: &str,
-) -> Result<(DbHandle, turso::Connection, i64), BarcaError> {
+) -> Result<(DbHandle, libsql::Connection, i64), BarcaError> {
     // Under the lock: a database another process is creating is empty until it commits.
     let lock = acquire_file_lock(path, DB_FILE_LOCK_WAIT).await?;
     if empty_file(path) {
@@ -1036,7 +1081,23 @@ async fn initialized(
     } else if let Some(why) = unusable_file(path) {
         return Err(unusable(why));
     }
-    let (db, conn) = connect(path).await?;
+    if Path::new(path).exists() {
+        // A read-write SQLite connection may checkpoint on close, even after a failed
+        // schema check. Judge compatibility read-only before opening the writer.
+        let (_db, read) = connect_read_only(path).await?;
+        let version = crate::db_schema::check(&read).await?;
+        if version == crate::db_schema::VERSION {
+            crate::state_validate::Schema::read(&read)
+                .await?
+                .columns_fit(true)
+                .map_err(unusable)?;
+        } else {
+            crate::state_validate::legacy_schema(&read)
+                .await?
+                .map_err(unusable)?;
+        }
+    }
+    let (db, conn) = connect_write(path).await?;
     let handle = DbHandle {
         _db: db,
         _lock: lock,
@@ -1046,7 +1107,23 @@ async fn initialized(
         Err(e) => Err(e),
     };
     match version {
-        Ok(version) => Ok((handle, conn, version)),
+        Ok(version) => {
+            // Preserve the existing WAL metadata format for newly created databases too.
+            let wal = async {
+                let mut rows = conn.query("PRAGMA journal_mode=WAL", ()).await?;
+                while rows.next().await?.is_some() {}
+                Ok::<_, libsql::Error>(())
+            }
+            .await;
+            if let Err(error) = wal {
+                drop(conn);
+                drop(handle);
+                return Err(BarcaError::Db(format!(
+                    "failed to enable metadata WAL: {error}"
+                )));
+            }
+            Ok((handle, conn, version))
+        }
         Err(e) => {
             drop(conn);
             drop(handle);
@@ -1057,7 +1134,7 @@ async fn initialized(
 
 /// What a run reads from the metadata DB as it starts ([`start_run`]).
 pub struct StartedRun {
-    /// Every persisted per-node cost estimate ([`load_cost_estimates`]).
+    /// Logical-node scheduling priors for the requested plan.
     pub cost_estimates: Vec<(String, crate::cost::NodeEstimate)>,
     /// [`get_avg_elapsed`] of the run's unpartitioned nodes.
     pub avg_elapsed: HashMap<String, f64>,
@@ -1081,7 +1158,11 @@ pub async fn start_run(
     let started = async {
         insert_run(&conn, db_path, &run).await;
         Ok(StartedRun {
-            cost_estimates: cost_estimates_on(&conn).await?,
+            cost_estimates: {
+                let ids: std::collections::BTreeSet<_> =
+                    node_ids.iter().chain(base_ids).cloned().collect();
+                cost_estimates_on(&conn, Some(&ids.into_iter().collect::<Vec<_>>())).await?
+            },
             avg_elapsed: avg_elapsed_on(&conn, node_ids).await?,
             partitioned_avg_elapsed: partitioned_avg_elapsed_on(&conn, base_ids).await?,
         })
@@ -1092,7 +1173,7 @@ pub async fn start_run(
     started
 }
 
-/// `error` naming `shown`, if it says the database cannot be used. Turso's own words for a file
+/// `error` naming `shown`, if it says the database cannot be used. The driver's own words for a file
 /// it cannot read as a database count.
 fn named(error: BarcaError, shown: &str) -> BarcaError {
     match error {
@@ -1153,7 +1234,7 @@ pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
 /// 0.24.0; see `db_schema::ADDED_TABLES` and `db_schema::INDEXES`). It gets the same additive
 /// migration as a legacy database, in one transaction, and an older release still reads the
 /// result.
-pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
+pub(crate) async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
     let version = crate::db_schema::check(conn).await?;
     if version == crate::db_schema::VERSION {
         // Read once and judged twice: this runs at the start of every run.
@@ -1188,7 +1269,7 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
 /// Add this release's additive columns and indexes to a version-1 database written by an
 /// earlier release, in one transaction: rows are untouched, and an error leaves the schema as it
 /// was. The format stays version 1 (see `specs/metadata-schema.md`).
-async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
+async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
     with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
         for (table, definitions) in crate::db_schema::ADDED_COLUMNS {
             crate::db_schema::add_columns(conn, table, definitions).await?;
@@ -1207,7 +1288,7 @@ async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     .await
 }
 
-async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
+async fn migrate_legacy_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS materializations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1426,8 +1507,8 @@ pub async fn recent_durations(
                  WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
                  ORDER BY id DESC LIMIT ?2",
                 vec![
-                    turso::Value::Text(base.clone()),
-                    turso::Value::Integer(window as i64),
+                    libsql::Value::Text(base.clone()),
+                    libsql::Value::Integer(window as i64),
                 ],
             )
             .await
@@ -1448,8 +1529,8 @@ pub async fn recent_durations(
             "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run \
              WHERE node_id >= ?1 AND node_id < ?2",
             vec![
-                turso::Value::Text(lo.clone()),
-                turso::Value::Text(hi.clone()),
+                libsql::Value::Text(lo.clone()),
+                libsql::Value::Text(hi.clone()),
             ],
         )
         .await?;
@@ -1572,24 +1653,24 @@ pub async fn insert_logs(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let mut params: Vec<turso::Value> = Vec::with_capacity(chunk.len() * 6);
+            let mut params: Vec<libsql::Value> = Vec::with_capacity(chunk.len() * 6);
             for (i, line) in chunk.iter().enumerate() {
                 let seq = (chunk_no * LOG_INSERT_ROWS + i) as i64;
-                params.push(turso::Value::Text(run_id.to_string()));
-                params.push(turso::Value::Text(line.node_id.clone()));
-                params.push(turso::Value::Integer(seq));
-                params.push(turso::Value::Text(line.line.clone()));
-                params.push(turso::Value::Text(line.stream.as_str().to_string()));
+                params.push(libsql::Value::Text(run_id.to_string()));
+                params.push(libsql::Value::Text(line.node_id.clone()));
+                params.push(libsql::Value::Integer(seq));
+                params.push(libsql::Value::Text(line.line.clone()));
+                params.push(libsql::Value::Text(line.stream.as_str().to_string()));
                 params.push(match &line.ts {
-                    Some(ts) => turso::Value::Text(ts.clone()),
-                    None => turso::Value::Null,
+                    Some(ts) => libsql::Value::Text(ts.clone()),
+                    None => libsql::Value::Null,
                 });
             }
             conn.execute(
                 &format!(
                     "INSERT INTO logs (run_id, node_id, seq, line, stream, ts) VALUES {marks}"
                 ),
-                turso::params_from_iter(params),
+                libsql::params_from_iter(params),
             )
             .await
             .map_err(|e| BarcaError::Db(format!("failed to record output: {e}")))?;
@@ -1857,7 +1938,10 @@ pub async fn max_materialization_id(db_path: &str) -> Result<i64, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
-        .query("SELECT COALESCE(MAX(id), 0) FROM materializations", ())
+        .query(
+            "SELECT COALESCE((SELECT id FROM materializations ORDER BY id DESC LIMIT 1),0)",
+            (),
+        )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
     Ok(match rows.next().await {
@@ -2025,12 +2109,12 @@ pub async fn last_output_hashes(
         let mut found: Vec<(i64, String, String)> = Vec::new();
         for (sql, params) in [
             (
-                "SELECT id, node_id, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+                "SELECT id, node_id, COALESCE(observation_hash, output_hash) FROM materializations INDEXED BY idx_mat_node_run \
                  WHERE node_id = ?1 AND status = 'success' AND output_hash IS NOT NULL",
                 vec![base.to_string()],
             ),
             (
-                "SELECT id, node_id, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+                "SELECT id, node_id, COALESCE(observation_hash, output_hash) FROM materializations INDEXED BY idx_mat_node_run \
                  WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
                  AND output_hash IS NOT NULL",
                 vec![lo.clone(), hi.clone()],
@@ -2098,34 +2182,57 @@ pub async fn load_cost_estimates(
 ) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    cost_estimates_on(&conn).await
+    cost_estimates_on(&conn, None).await
+}
+
+pub(crate) async fn cost_estimates_for(
+    conn: &libsql::Connection,
+    ids: &[String],
+) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
+    cost_estimates_on(conn, Some(ids)).await
 }
 
 async fn cost_estimates_on(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
+    ids: Option<&[String]>,
 ) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
-    let mut rows = conn
-        .query(
-            "SELECT node_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples FROM cost_estimates",
-            (),
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to query cost_estimates: {e}")))?;
+    let columns =
+        "SELECT node_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples FROM cost_estimates";
+    let queries = match ids {
+        None => vec![(columns.to_owned(), Vec::new())],
+        Some(ids) => ids
+            .chunks(IN_LIST_CHUNK)
+            .map(|chunk| {
+                let marks = (1..=chunk.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                (
+                    format!("{columns} WHERE node_id IN ({marks})"),
+                    chunk.to_vec(),
+                )
+            })
+            .collect(),
+    };
     let mut out = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        let node_id = row.get::<String>(0).unwrap_or_default();
-        if node_id.is_empty() {
-            continue;
+    for (sql, params) in queries {
+        let failed = |e| BarcaError::Db(format!("failed to query cost_estimates: {e}"));
+        let mut rows = conn.query(&sql, params).await.map_err(failed)?;
+        while let Some(row) = rows.next().await.map_err(failed)? {
+            let node_id = row.get::<String>(0).unwrap_or_default();
+            if node_id.is_empty() {
+                continue;
+            }
+            out.push((
+                node_id,
+                crate::cost::NodeEstimate {
+                    estimate_seconds: row.get::<f64>(1).unwrap_or(0.0),
+                    cpu_seconds: row.get::<f64>(2).unwrap_or(0.0),
+                    max_rss_bytes: row.get::<i64>(3).unwrap_or(0).max(0) as u64,
+                    samples: row.get::<i64>(4).unwrap_or(0).max(0) as u64,
+                },
+            ));
         }
-        out.push((
-            node_id,
-            crate::cost::NodeEstimate {
-                estimate_seconds: row.get::<f64>(1).unwrap_or(0.0),
-                cpu_seconds: row.get::<f64>(2).unwrap_or(0.0),
-                max_rss_bytes: row.get::<i64>(3).unwrap_or(0).max(0) as u64,
-                samples: row.get::<i64>(4).unwrap_or(0).max(0) as u64,
-            },
-        ));
     }
     Ok(out)
 }
@@ -2232,7 +2339,7 @@ pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), Barca
 }
 
 /// The row of a run that is starting, and the runs it finds interrupted ([`create_run_with`]).
-async fn insert_run(conn: &turso::Connection, db_path: &str, run: &NewRun<'_>) {
+async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) {
     // The marker exists from before the row does until the run has recorded its outcome
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
@@ -2381,7 +2488,7 @@ pub async fn get_run_outcome(db_path: &str, run_id: &str) -> Result<Option<Strin
 
 /// Whether `table` has `column` (an inspected snapshot may predate it).
 /// Whether the database has the index `name` (a snapshot of an older database may not).
-async fn has_index(conn: &turso::Connection, name: &str) -> Result<bool, BarcaError> {
+async fn has_index(conn: &libsql::Connection, name: &str) -> Result<bool, BarcaError> {
     let mut rows = conn
         .query(
             "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = ?1",
@@ -2397,7 +2504,7 @@ async fn has_index(conn: &turso::Connection, name: &str) -> Result<bool, BarcaEr
 }
 
 async fn has_column(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     table: &str,
     column: &str,
 ) -> Result<bool, BarcaError> {
@@ -2457,7 +2564,7 @@ pub(crate) fn pid_alive(pid: i64) -> bool {
 /// A run that recorded nothing of the kind (an older barca) is judged as before: gone when
 /// it was started on this host and its pid does not exist. Best effort: empty when nothing
 /// can be read.
-async fn interrupted_runs(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+async fn interrupted_runs(conn: &libsql::Connection, db_path: &str) -> Vec<String> {
     let on = crate::run_owner::System::for_db(db_path);
     interrupted_among(&running_runs(conn).await, &on, pid_alive)
 }
@@ -2475,7 +2582,7 @@ struct RunningRun {
     job: String,
 }
 
-async fn running_runs(conn: &turso::Connection) -> Vec<RunningRun> {
+async fn running_runs(conn: &libsql::Connection) -> Vec<RunningRun> {
     // A database this version has not migrated (history read from one an older barca wrote)
     // has no `owner` or `job` column yet. `idx_runs_status` serves the filter.
     let with_owner = "SELECT run_id, pid, COALESCE(host, ''), COALESCE(owner, ''), command, COALESCE(job, '') FROM runs WHERE status = 'running' ORDER BY id";
@@ -2533,7 +2640,7 @@ fn interrupted_among(
 ///
 /// Afterwards the markers that no `running` row names any more are removed
 /// ([`crate::run_owner::sweep`]).
-async fn mark_interrupted_runs(conn: &turso::Connection, db_path: &str) {
+async fn mark_interrupted_runs(conn: &libsql::Connection, db_path: &str) {
     for run_id in interrupted_runs(conn, db_path).await {
         conn.execute(
             "UPDATE runs SET status = 'interrupted' WHERE run_id = ?1 AND status = 'running'",
@@ -2552,7 +2659,7 @@ async fn mark_interrupted_runs(conn: &turso::Connection, db_path: &str) {
 
 /// The `running` runs whose owner is not known to be gone: in progress, here or elsewhere, or
 /// unknowable (see [`interrupted_runs`]). Best effort: empty when nothing can be read.
-pub(crate) async fn live_runs(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+pub(crate) async fn live_runs(conn: &libsql::Connection, db_path: &str) -> Vec<String> {
     let running = running_runs(conn).await;
     let gone: std::collections::HashSet<String> = interrupted_among(
         &running,
@@ -2574,7 +2681,7 @@ pub(crate) async fn live_runs(conn: &turso::Connection, db_path: &str) -> Vec<St
 /// refusal that must not hold forever because of a row nobody will finish (`barca state
 /// reset`, and the scheduler's skip of a node a CLI run covers). Best effort: empty when
 /// nothing can be read.
-pub(crate) async fn runs_alive_here(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+pub(crate) async fn runs_alive_here(conn: &libsql::Connection, db_path: &str) -> Vec<String> {
     alive_here(running_runs(conn).await, db_path)
         .into_iter()
         .map(|run| run.run_id)
@@ -2602,7 +2709,9 @@ fn alive_here(running: Vec<RunningRun>, db_path: &str) -> Vec<RunningRun> {
 
 /// Open the database file at `db_path`, taking no lock, for a caller that holds it
 /// ([`lock_db`]). `None` when it cannot be opened or is not one this version reads.
-pub(crate) async fn connect_locked(db_path: &str) -> Option<(turso::Database, turso::Connection)> {
+pub(crate) async fn connect_locked(
+    db_path: &str,
+) -> Option<(libsql::Database, libsql::Connection)> {
     connect(db_path).await.ok()
 }
 
@@ -2707,7 +2816,7 @@ pub(crate) async fn adopt_store_digests(db_path: &str, adopted: &[(String, Strin
 }
 
 /// [`touch_read`] on an open connection, in a transaction of its own. Best effort.
-pub(crate) async fn touch_read_on(conn: &turso::Connection, paths: &[String]) {
+pub(crate) async fn touch_read_on(conn: &libsql::Connection, paths: &[String]) {
     if paths.is_empty() {
         return;
     }
@@ -2723,7 +2832,7 @@ pub(crate) async fn touch_read_on(conn: &turso::Connection, paths: &[String]) {
 
 /// Set `last_read_at` of `paths` inside the caller's transaction. Returns whether every update
 /// went through; it stops at the first that does not (the earlier ones stay in the transaction).
-pub(crate) async fn touch_read_in(conn: &turso::Connection, paths: &[String]) -> bool {
+pub(crate) async fn touch_read_in(conn: &libsql::Connection, paths: &[String]) -> bool {
     if paths.is_empty() {
         return true;
     }
@@ -3190,7 +3299,7 @@ pub async fn get_run_steps_page(
         &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
-    let text = |row: &turso::Row, i: usize| row.get::<String>(i).ok().filter(|t| !t.is_empty());
+    let text = |row: &libsql::Row, i: i32| row.get::<String>(i).ok().filter(|t| !t.is_empty());
     let mut steps = Vec::new();
     while let Some(row) = rows
         .next()
@@ -3264,7 +3373,7 @@ pub async fn get_run_steps_page(
 /// The recorded lines of `run_id` written by `nodes`, (node id, line), in the order they were
 /// written. Empty on a database without a `logs` table.
 async fn output_lines(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     run_id: &str,
     nodes: &std::collections::HashSet<String>,
 ) -> Result<Vec<(String, String)>, BarcaError> {
@@ -3373,7 +3482,8 @@ pub async fn read_step_rows(
             select.push(format!("NULL AS {column}"));
         }
     }
-    let failed = |e: turso::Error| BarcaError::Db(format!("failed to query materializations: {e}"));
+    let failed =
+        |e: libsql::Error| BarcaError::Db(format!("failed to query materializations: {e}"));
     let mut rows = conn
         .query("SELECT COUNT(*) FROM materializations", ())
         .await
@@ -3399,7 +3509,7 @@ pub async fn read_step_rows(
         .map_err(failed)?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().await.map_err(failed)? {
-        let text = |i: usize| row.get::<String>(i).ok().filter(|s| !s.is_empty());
+        let text = |i: i32| row.get::<String>(i).ok().filter(|s| !s.is_empty());
         let node_id = row.get::<String>(0).unwrap_or_default();
         let partition = node_id
             .split_once('[')
@@ -3665,12 +3775,12 @@ pub async fn node_histories(
 /// rows (`base[...]`, a range of `idx_mat_node_run`), so every query is an index seek or an
 /// index-only scan. A `substr(node_id, ...)` filter cannot use the index: it scanned the whole
 /// table four times per node, minutes for a project with a 200k-key node.
-async fn node_history(conn: &turso::Connection, base: &str) -> Result<NodeHistory, BarcaError> {
+async fn node_history(conn: &libsql::Connection, base: &str) -> Result<NodeHistory, BarcaError> {
     let (lo, hi) = key_range(base);
-    let exact = ("node_id = ?1", vec![turso::Value::Text(base.to_string())]);
+    let exact = ("node_id = ?1", vec![libsql::Value::Text(base.to_string())]);
     let keys = (
         "node_id >= ?1 AND node_id < ?2",
-        vec![turso::Value::Text(lo), turso::Value::Text(hi)],
+        vec![libsql::Value::Text(lo), libsql::Value::Text(hi)],
     );
     let mut h = NodeHistory::default();
     let mut latest: Option<i64> = None;
@@ -3729,7 +3839,7 @@ async fn node_history(conn: &turso::Connection, base: &str) -> Result<NodeHistor
             .await
             .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
         {
-            let opt = |i: usize| row.get::<String>(i).ok().filter(|s| !s.is_empty());
+            let opt = |i: i32| row.get::<String>(i).ok().filter(|s| !s.is_empty());
             h.latest = Some(MaterializationRecord {
                 content_hash: opt(9),
                 node_id: row.get::<String>(0).unwrap_or_default(),
@@ -3773,10 +3883,10 @@ async fn node_history(conn: &turso::Connection, base: &str) -> Result<NodeHistor
 /// first node id in sort order (the base id, then its keys) in that row's run, that node's
 /// latest in the run. `latest` itself when it has no run id.
 async fn first_key_of_latest_run(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     latest: i64,
-    exact: &(&str, Vec<turso::Value>),
-    keys: &(&str, Vec<turso::Value>),
+    exact: &(&str, Vec<libsql::Value>),
+    keys: &(&str, Vec<libsql::Value>),
 ) -> Result<i64, BarcaError> {
     let mut rows = conn
         .query(
@@ -3797,9 +3907,9 @@ async fn first_key_of_latest_run(
     let Some(run) = run else {
         return Ok(latest);
     };
-    let with_run = |(filter, params): &(&str, Vec<turso::Value>)| {
+    let with_run = |(filter, params): &(&str, Vec<libsql::Value>)| {
         let mut params = params.clone();
-        params.push(turso::Value::Text(run.clone()));
+        params.push(libsql::Value::Text(run.clone()));
         let n = params.len();
         (format!("{filter} AND run_id = ?{n}"), params)
     };
@@ -3842,7 +3952,7 @@ async fn first_key_of_latest_run(
         conn,
         "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run \
          WHERE node_id = ?1 AND run_id = ?2",
-        vec![turso::Value::Text(first), turso::Value::Text(run)],
+        vec![libsql::Value::Text(first), libsql::Value::Text(run)],
     )
     .await?
     .unwrap_or(latest))
@@ -3850,9 +3960,9 @@ async fn first_key_of_latest_run(
 
 /// The first column of the first row as an integer; `None` for no row or a NULL.
 async fn query_i64(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     sql: &str,
-    params: Vec<turso::Value>,
+    params: Vec<libsql::Value>,
 ) -> Result<Option<i64>, BarcaError> {
     let mut rows = conn
         .query(sql, params)
@@ -3974,7 +4084,7 @@ const IN_LIST_CHUNK: usize = 500;
 
 /// [`get_avg_elapsed`] on an open connection: one statement per 500 nodes, not one per node.
 async fn avg_elapsed_on(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     node_ids: &[String],
 ) -> Result<HashMap<String, f64>, BarcaError> {
     let mut result = HashMap::new();
@@ -3989,7 +4099,7 @@ async fn avg_elapsed_on(
                     "SELECT node_id, AVG(elapsed_seconds) FROM materializations \
                      WHERE node_id IN ({marks}) AND elapsed_seconds IS NOT NULL GROUP BY node_id"
                 ),
-                turso::params_from_iter(chunk.iter().cloned()),
+                libsql::params_from_iter(chunk.iter().cloned()),
             )
             .await
             .map_err(|e| BarcaError::Db(format!("failed to query avg elapsed: {e}")))?;
@@ -4022,7 +4132,7 @@ pub async fn get_avg_elapsed_for_partitioned(
 }
 
 async fn partitioned_avg_elapsed_on(
-    conn: &turso::Connection,
+    conn: &libsql::Connection,
     base_node_ids: &[String],
 ) -> Result<HashMap<String, f64>, BarcaError> {
     let mut result = HashMap::new();
@@ -5561,7 +5671,7 @@ mod tests {
     }
 
     #[test]
-    fn turso_lock_errors_get_an_actionable_hint() {
+    fn database_lock_errors_get_an_actionable_hint() {
         let hinted = db_open_error(
             "Locking error: Failed locking file '.barca/metadata.db'. File is locked by another process",
         )
@@ -5601,7 +5711,7 @@ mod tests {
 
 #[cfg(test)]
 mod fold_log_tests {
-    use turso::Builder;
+    use libsql::Builder;
 
     async fn open_and_count(db_path: &str, table: &str) -> u64 {
         let db = Builder::new_local(db_path).build().await.unwrap();
@@ -5622,10 +5732,17 @@ mod fold_log_tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
 
+        // Keep an idle connection open so SQLite's last-close checkpoint cannot hide
+        // whether fold_log actually folds a nonempty WAL.
+        let held_db = Builder::new_local(&db_path).build().await.unwrap();
+        let held = held_db.connect().unwrap();
         // Create a table and write enough rows that data definitely lives in the WAL.
         {
             let db = Builder::new_local(&db_path).build().await.unwrap();
             let conn = db.connect().unwrap();
+            let mut mode = conn.query("PRAGMA journal_mode=WAL", ()).await.unwrap();
+            while mode.next().await.unwrap().is_some() {}
+            drop(mode);
             conn.execute(
                 "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)",
                 (),
@@ -5637,6 +5754,12 @@ mod fold_log_tests {
                     .await
                     .unwrap();
             }
+            let mut read = held.query("SELECT COUNT(*) FROM t", ()).await.unwrap();
+            assert_eq!(
+                read.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+                200
+            );
+            while read.next().await.unwrap().is_some() {}
         }
 
         // Sanity: without a checkpoint the WAL holds the data.
@@ -5645,7 +5768,7 @@ mod fold_log_tests {
         assert!(
             wal_size_before > 0,
             "expected data in the WAL before checkpoint (got {wal_size_before} bytes) — \
-             if this fails, turso started auto-checkpointing and the sync design should be revisited"
+             the fixture must leave committed frames pending before fold_log"
         );
 
         super::fold_log(&db_path).await.unwrap();
@@ -5681,7 +5804,7 @@ mod duration_tests {
                     conn.execute(
                         "INSERT INTO materializations (node_id, status, elapsed_seconds) \
                          VALUES (?1, ?2, ?3)",
-                        turso::params![node, status, elapsed],
+                        libsql::params![node, status, elapsed],
                     )
                     .await
                     .unwrap();

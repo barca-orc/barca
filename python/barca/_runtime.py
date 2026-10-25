@@ -21,7 +21,7 @@ except ImportError:
 
 # ─── Socket connection ────────────────────────────────────────────────────────
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 _socket: socket.socket | None = None
 # Separate locks: whole frames never interleave on either direction, and a

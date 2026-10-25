@@ -186,8 +186,12 @@ def sensor(
 ):
     """Declare a sensor node (observes external state).
 
-    Sensors must use `Manual` or `Schedule(...)` freshness — `Always` is not
-    valid for a sensor (its polling cadence must be declared explicitly). See
+    Return `True`/`False` to report a change, or `(changed, value)` to also supply
+    data. `False` retains the previous observation. `True` advances freshness even
+    without data. Return another value (e.g. an mtime or ETag) to compare versions.
+
+    Sensors default to `Manual` and are polled whenever needed. `Schedule(...)`
+    gives a sensor its own polling cadence; `Always` is also accepted. See
     `asset` for `env`, `weight`, `retries` and `retry_backoff` semantics.
 
     `partitions` runs the sensor once per key, with the key passed as the parameter

@@ -1,0 +1,8 @@
+{"framework": "barca", "keys": 50000, "case": "one_key", "sample": 10, "seconds": 0.1486, "process_tree_peak_rss_kib": 48916, "calls": 3, "native_peak_kib": 14168, "native_cpu_ms": 18.438}
+{"framework": "barca", "keys": 50000, "case": "one_key", "sample": 11, "seconds": 0.1356, "process_tree_peak_rss_kib": 48692, "calls": 3, "native_peak_kib": 13792, "native_cpu_ms": 14.896}
+{"framework": "barca", "keys": 50000, "case": "one_key", "sample": 12, "seconds": 0.131, "process_tree_peak_rss_kib": 48688, "calls": 3, "native_peak_kib": 13860, "native_cpu_ms": 15.57}
+{"framework": "barca", "keys": 50000, "case": "unchanged", "sample": 12, "seconds": 0.0941, "process_tree_peak_rss_kib": 49224, "calls": 1, "native_peak_kib": 14064, "native_cpu_ms": 10.972}
+{"framework": "barca", "keys": 200000, "case": "one_key", "sample": 10, "seconds": 0.2968, "process_tree_peak_rss_kib": 96988, "calls": 3, "native_peak_kib": 13680, "native_cpu_ms": 17.447}
+{"framework": "barca", "keys": 200000, "case": "one_key", "sample": 11, "seconds": 0.2798, "process_tree_peak_rss_kib": 97448, "calls": 3, "native_peak_kib": 14104, "native_cpu_ms": 13.497}
+{"framework": "barca", "keys": 200000, "case": "one_key", "sample": 12, "seconds": 0.2761, "process_tree_peak_rss_kib": 97068, "calls": 3, "native_peak_kib": 13860, "native_cpu_ms": 12.827}
+{"framework": "barca", "keys": 200000, "case": "unchanged", "sample": 12, "seconds": 0.2385, "process_tree_peak_rss_kib": 97600, "calls": 1, "native_peak_kib": 14012, "native_cpu_ms": 10.209}

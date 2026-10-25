@@ -71,6 +71,7 @@ pub struct ItemSpec {
     /// The step's output is read by a `partitions_from(...)` for keys: the worker checks it is
     /// a list or a dict it can write as JSON (`crate::keyed`).
     pub partition_source: bool,
+    pub previous_sensor: Option<crate::dispatch::OutputRef>,
 }
 
 impl ItemSpec {
@@ -97,6 +98,7 @@ impl ItemSpec {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: step.keyed.is_source,
+            previous_sensor: None,
         }
     }
 }
@@ -602,6 +604,17 @@ impl Coordinator {
     }
 
     /// The ready items in the order `next_ready` hands them out, left in the queue.
+    pub(crate) fn sensor_previous(
+        &mut self,
+        previous: &HashMap<String, crate::dispatch::OutputRef>,
+    ) {
+        for item in self.items.values_mut() {
+            if item.spec.kind == "sensor" {
+                item.spec.previous_sensor = previous.get(&item.step_id.display()).cloned();
+            }
+        }
+    }
+
     pub fn ready_items(&self) -> impl Iterator<Item = ItemId> + '_ {
         self.ready.iter()
     }
@@ -1302,6 +1315,7 @@ mod tests {
             is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: false,
+            previous_sensor: None,
         }
     }
 

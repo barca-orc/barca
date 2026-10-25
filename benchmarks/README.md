@@ -2,7 +2,10 @@
 
 Compares Barca, Dagster, and Prefect on orchestration overhead and parallel throughput.
 
-All measurements use [hyperfine](https://github.com/sharkdp/hyperfine). See [RESULTS.md](RESULTS.md) for the latest numbers.
+Most script comparisons use [hyperfine](https://github.com/sharkdp/hyperfine). The
+[warm-data partition comparison](framework_partitions/README.md) uses a subprocess harness with
+output/call-count checks and whole-process-tree memory sampling. See [RESULTS.md](RESULTS.md)
+for the latest numbers.
 
 ## Methodology
 

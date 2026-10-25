@@ -16,6 +16,7 @@ pub struct Dag {
     pub groups: Vec<crate::groups::NodeGroup>,
     pub graph: DiGraph<DagNode, EdgeKind>,
     index: HashMap<String, NodeIndex>,
+    names: HashMap<String, Vec<NodeIndex>>,
     /// Pipeline files (as node `source_file`s) that import a project module that does not
     /// parse (#550). Their steps cannot run: [`Dag::check_imports`] refuses a plan with one.
     pub(crate) broken_imports: HashMap<String, crate::project_modules::BrokenImport>,
@@ -514,6 +515,68 @@ impl Resolver {
 }
 
 impl Dag {
+    fn name_index(graph: &DiGraph<DagNode, EdgeKind>) -> HashMap<String, Vec<NodeIndex>> {
+        let mut names: HashMap<String, Vec<NodeIndex>> = HashMap::new();
+        for idx in graph.node_indices() {
+            names
+                .entry(crate::targets::short_name(&graph[idx].id).to_owned())
+                .or_default()
+                .push(idx);
+        }
+        names
+    }
+
+    pub(crate) fn named(&self, name: &str) -> Vec<&DagNode> {
+        self.names
+            .get(crate::targets::short_name(name))
+            .into_iter()
+            .flatten()
+            .map(|&idx| &self.graph[idx])
+            .filter(|node| crate::targets::target_name_matches(&node.id, name))
+            .collect()
+    }
+
+    /// Topologically order only these nodes, visiting their incoming edges once.
+    pub(crate) fn order_for<'a, 'b>(
+        &'a self,
+        ids: impl IntoIterator<Item = &'b str>,
+    ) -> Vec<&'a str> {
+        use std::collections::{BTreeSet, HashSet};
+        let nodes: HashSet<_> = ids
+            .into_iter()
+            .filter_map(|id| self.index.get(id).copied())
+            .collect();
+        let mut remaining = HashMap::new();
+        let mut dependents: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
+        let mut ready = BTreeSet::new();
+        for &idx in &nodes {
+            let mut count = 0;
+            for edge in self.graph.edges_directed(idx, Direction::Incoming) {
+                if nodes.contains(&edge.source()) {
+                    count += 1;
+                    dependents.entry(edge.source()).or_default().push(idx);
+                }
+            }
+            remaining.insert(idx, count);
+            if count == 0 {
+                ready.insert(idx);
+            }
+        }
+        let mut ordered = Vec::with_capacity(nodes.len());
+        while let Some(idx) = ready.pop_last() {
+            ordered.push(self.graph[idx].id.as_str());
+            for next in dependents.get(&idx).into_iter().flatten() {
+                let count = remaining.get_mut(next).unwrap();
+                *count -= 1;
+                if *count == 0 {
+                    ready.insert(*next);
+                }
+            }
+        }
+        debug_assert_eq!(ordered.len(), nodes.len());
+        ordered
+    }
+
     /// Isolate graph-invalid definitions while retaining their unrelated neighbours.
     /// Dependency edges are resolved before removing anything, so removal cannot redirect
     /// an input to a different same-named definition.
@@ -788,9 +851,11 @@ impl Dag {
             }
         }
 
+        let names = Self::name_index(&graph);
         let dag = Dag {
             graph,
             index,
+            names,
             groups: Vec::new(),
             broken_imports: HashMap::new(),
             files_read: Vec::new(),
@@ -835,13 +900,7 @@ impl Dag {
             }
         }
 
-        // Return in topo order (filtered to subgraph).
-        let sorted = toposort(&self.graph, None).expect("verified acyclic");
-        sorted
-            .into_iter()
-            .filter(|idx| visited.contains(idx))
-            .map(|idx| self.graph[idx].id.as_str())
-            .collect()
+        self.order_for(visited.into_iter().map(|idx| self.graph[idx].id.as_str()))
     }
 
     /// Topologically sorted node IDs.

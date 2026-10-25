@@ -28,8 +28,8 @@ from barca import asset, sensor, task, Manual, Schedule
 
 
 @sensor(freshness=Schedule("* * * * * *"))
-def inbox() -> tuple[bool, str]:
-    return True, Path("inbox.txt").read_text()
+def inbox() -> str:
+    return Path("inbox.txt").read_text()
 
 
 @asset(inputs={"files": inbox})
@@ -55,8 +55,8 @@ from barca import asset, sensor, task, Manual, Schedule
 
 
 @sensor(freshness=Schedule("* * * * * *"))
-def prices() -> tuple[bool, str]:
-    return True, Path("prices.txt").read_text()
+def prices() -> str:
+    return Path("prices.txt").read_text()
 
 
 @asset(inputs={"etag": prices}, freshness=Manual)
@@ -82,8 +82,8 @@ from barca import sensor, task, Schedule
 
 
 @sensor(freshness=Schedule("* * * * * *", max_failures=2))
-def signal() -> tuple[bool, str]:
-    return True, Path("signal.txt").read_text()
+def signal() -> str:
+    return Path("signal.txt").read_text()
 
 
 @task(inputs={"value": signal})
@@ -418,8 +418,8 @@ def mapped(r: str, table: str) -> str:
 
 
 @sensor(freshness=Schedule("* * * * * *"))
-def clock() -> tuple[bool, str]:
-    return True, Path("clock.txt").read_text()
+def clock() -> str:
+    return Path("clock.txt").read_text()
 
 
 @asset(inputs={"rate": fx, "tick": clock})

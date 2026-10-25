@@ -11,7 +11,7 @@
 
 use crate::BarcaError;
 use crate::db;
-use turso::Connection;
+use libsql::Connection;
 
 pub(crate) const CREATE_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
     run_id TEXT PRIMARY KEY,
@@ -65,7 +65,7 @@ pub struct QueuedRun {
     pub queued_at: String,
 }
 
-fn failed(what: &'static str) -> impl Fn(turso::Error) -> BarcaError {
+fn failed(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
     move |e| BarcaError::Db(format!("run queue: {what}: {e}"))
 }
 
@@ -406,7 +406,7 @@ mod tests {
         let path = dir.path().join("old.db").display().to_string();
         // A database from before the tables: nothing queued, not paused.
         {
-            let db = turso::Builder::new_local(&path).build().await.unwrap();
+            let db = libsql::Builder::new_local(&path).build().await.unwrap();
             let conn = db.connect().unwrap();
             conn.execute("CREATE TABLE runs (run_id TEXT)", ())
                 .await

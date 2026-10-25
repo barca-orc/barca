@@ -15,7 +15,7 @@
 //! under-estimating over-batches secretly-heavy tasks onto one worker and
 //! tail-blocks the run (catastrophic error). The first completed tasks decay
 //! the estimate, so the cold price is paid once per node — and persisting the
-//! EWMA across runs (see `db::load_cost_estimates_sync`) means once *ever*.
+//! EWMA across runs (see `db::cost_estimates_for`) means once *ever*.
 
 use std::collections::HashMap;
 
@@ -81,6 +81,7 @@ pub struct CostModel {
     comm_cost_seconds: f64,
     /// Nodes observed this run: the only estimates that can differ from what was seeded.
     observed: std::collections::HashSet<String>,
+    observed_bases: std::collections::HashSet<String>,
 }
 
 impl CostModel {
@@ -95,6 +96,7 @@ impl CostModel {
             per_base: HashMap::new(),
             comm_cost_seconds,
             observed: Default::default(),
+            observed_bases: Default::default(),
         }
     }
 
@@ -103,12 +105,20 @@ impl CostModel {
     /// new partition inherits sibling history immediately.
     pub fn seed(&mut self, persisted: impl IntoIterator<Item = (String, NodeEstimate)>) {
         let mut by_base: HashMap<String, Vec<f64>> = HashMap::new();
+        let mut explicit_bases = std::collections::HashSet::new();
         for (node_id, est) in persisted {
             let base = crate::StepId::parse(&node_id).base_id().to_string();
+            if node_id == base {
+                explicit_bases.insert(base.clone());
+                self.per_base.insert(base.clone(), est);
+            }
             by_base.entry(base).or_default().push(est.estimate_seconds);
             self.per_node.insert(node_id, est);
         }
         for (base, mut vals) in by_base {
+            if explicit_bases.contains(&base) {
+                continue;
+            }
             vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let median = vals[vals.len() / 2];
             self.per_base.insert(
@@ -121,6 +131,14 @@ impl CostModel {
                 },
             );
         }
+    }
+
+    /// Exact history is loaded only for keys that are about to execute.
+    pub(crate) fn seed_exact(
+        &mut self,
+        persisted: impl IntoIterator<Item = (String, NodeEstimate)>,
+    ) {
+        self.per_node.extend(persisted);
     }
 
     /// Three-tier prior: exact-node history → node-level (sibling-partition)
@@ -143,6 +161,7 @@ impl CostModel {
         let wall = wall_seconds.max(0.0);
         let base = crate::StepId::parse(node_id).base_id().to_string();
         self.observed.insert(node_id.to_string());
+        self.observed_bases.insert(base.clone());
         Self::fold(
             self.per_node.entry(node_id.to_string()),
             wall,
@@ -241,6 +260,20 @@ impl CostModel {
         k.min(remaining_tasks)
     }
 
+    /// Keep exact histories on disk, with one aggregate prior per changed logical node.
+    pub(crate) fn persistence_snapshot(&self) -> impl Iterator<Item = (&String, &NodeEstimate)> {
+        self.snapshot()
+            .filter(|(id, _)| !self.observed_bases.contains(*id))
+            .chain(self.base_snapshot())
+    }
+
+    /// Persist one scheduling prior per logical node, independent of partition count.
+    pub(crate) fn base_snapshot(&self) -> impl Iterator<Item = (&String, &NodeEstimate)> {
+        self.per_base
+            .iter()
+            .filter(|(base, _)| self.observed_bases.contains(*base))
+    }
+
     /// Snapshot the exact-node estimates this run changed, for run-end persistence. A seeded
     /// estimate no step updated is already in the database as it is: writing it again was one
     /// upsert per node on every run, cached ones included (#560).
@@ -269,6 +302,7 @@ mod tests {
             per_base: HashMap::new(),
             comm_cost_seconds: DEFAULT_COMM_COST_SECONDS,
             observed: Default::default(),
+            observed_bases: Default::default(),
         }
     }
 
@@ -453,5 +487,21 @@ mod tests {
         m.observe("f.py:b", 2.0, 2.0, 0);
         let ids: Vec<&String> = m.snapshot().map(|(id, _)| id).collect();
         assert_eq!(ids, ["f.py:b"]);
+    }
+    #[test]
+    fn base_priors_are_bounded_by_logical_nodes_and_keep_their_history() {
+        let mut m = model();
+        for i in 0..1000 {
+            m.observe(&format!("p.py:a[k={i}]"), 0.1, 0.05, 100);
+        }
+        let persisted: Vec<_> = m.base_snapshot().map(|(k, v)| (k.clone(), *v)).collect();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].0, "p.py:a");
+        assert_eq!(persisted[0].1.samples, 1000);
+        let mut warm = model();
+        warm.seed(persisted);
+        assert!((warm.estimate("p.py:a[k=new]") - 0.1).abs() < 1e-9);
+        warm.observe("p.py:a[k=new]", 0.2, 0.1, 100);
+        assert_eq!(warm.base_snapshot().next().unwrap().1.samples, 1001);
     }
 }

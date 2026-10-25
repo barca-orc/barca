@@ -27,9 +27,9 @@ from barca import asset, partitions, sensor, task
 
 
 @sensor()
-def blob_etag() -> tuple[bool, str]:
+def blob_etag() -> str:
     etag = Path("etag.txt").read_text().strip()   # stands in for an Azure/S3 blob's etag
-    return True, etag
+    return etag
 
 
 @asset(inputs={"etag": blob_etag})

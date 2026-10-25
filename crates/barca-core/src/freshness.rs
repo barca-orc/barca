@@ -77,9 +77,8 @@ pub fn followers(dag: &Dag, scheduled: &str) -> Vec<String> {
             }
         }
     }
-    dag.topo_order()
+    dag.order_for(reached.iter().copied())
         .into_iter()
-        .filter(|id| reached.contains(id))
         .map(str::to_string)
         .collect()
 }
@@ -142,7 +141,7 @@ pub(crate) fn walk<'a>(dag: &'a Dag, targets: &[&str], policy: &CachePolicy) -> 
             }
         }
     }
-    let order = dag.topo_order();
+    let order = dag.order_for(visited.iter().copied());
     Walk {
         cone: order
             .iter()

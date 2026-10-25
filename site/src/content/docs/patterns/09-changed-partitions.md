@@ -19,11 +19,11 @@ from barca import Schedule, asset, partitions_from, sensor
 
 
 @sensor(freshness=Schedule("*/5 * * * *"))
-def retailer_versions() -> tuple[bool, dict]:
+def retailer_versions() -> dict:
     rows = duckdb.connect("warehouse.duckdb", read_only=True).execute(
         "select retailer, max(updated_at)::varchar from orders group by retailer"
     ).fetchall()
-    return True, dict(rows)                       # {"r000001": "2026-10-22 09:14:03", ...}
+    return dict(rows)                       # {"r000001": "2026-10-22 09:14:03", ...}
 
 
 @asset(partitions={"retailer": partitions_from(retailer_versions)})
