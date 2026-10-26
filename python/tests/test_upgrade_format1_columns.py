@@ -2,7 +2,7 @@
 
 Format 1 gained `materializations.bytes_changed` in 0.24.0 without a version bump, and 0.24.0
 to 0.24.2 refused every older format-1 database with exit 3. Opening one now adds the missing
-column in place (specs/metadata-schema.md, "Additions within format 1").
+column in place (specs/interfaces/metadata-schema.md, "Additions within format 1").
 """
 
 import json

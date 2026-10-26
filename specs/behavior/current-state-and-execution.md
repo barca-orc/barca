@@ -1,13 +1,25 @@
 # Current state and execution ownership
 
-Design revision: 1. Status: approved product behavior, not implemented.
+## Scope and status
+
+Specification version: 2. Status: approved product behavior, not implemented.
 Scope: current selection, validation status, pending reconciliation and shared asset work.
 This records the user decisions made during the 0.33.0 audit. It does not prescribe a new
 public field, database table, persistent worker pool or transport protocol. Terms:
 [glossary](../../GLOSSARY.md). Implemented baseline:
-[freshness](../freshness.md), [execution](../execution.md), [inspection](../inspection.md).
+[freshness](freshness.md), [execution](execution.md), [inspection](inspection.md).
 
-## Observation and selection ordering
+## Entities and state
+
+Entities are ordered observations in a defined reconciliation scope, current
+membership/selection, captured requests, resolved computation identities, owners and
+subscribers. Automatic unstarted reconciliation can be pending; a computation is in flight,
+failed or durably complete. Freshness validation, execution and artifact availability remain
+independent facts.
+
+## Rules and transitions
+
+### Observation and selection ordering
 
 A running run finishes against its resolved inputs. Observing a newer version is not an
 implicit cancellation of existing work. Its result remains available to its original callers
@@ -21,16 +33,9 @@ snapshot or a versioned validity check; comparing unrelated per-source numbers i
 The implementation must define that scope and order before concurrent versions are enabled.
 Resolved input bytes also need a stable lifetime: a reusable artifact pathname that another
 run can overwrite does not establish snapshot isolation. The observed concurrent-reader
-limit in [upload receipts](../artifact-upload-receipts.md#concurrent-readers-remain-a-separate-boundary)
+limit in [upload
+receipts](../interfaces/artifact-upload-receipts.md#concurrent-readers-remain-a-separate-boundary)
 must be addressed before enabling concurrent versions; truthful upload receipts alone do not fix it.
-
-- **INV-SELECT-ORDER-01:** Completion against an older observation cannot replace a current
-  selection already established against a newer observation.
-- **INV-MEMBER-ORDER-01:** Removing a key at a newer observation cannot be undone by an
-  older computation completing; its result can remain in history without restoring membership.
-- **INV-SNAPSHOT-01:** A running computation's resolved inputs do not change underneath it.
-- **INV-COMMIT-01:** A committed selection, its freshness evidence, progress and summary
-  updates agree after restart; cache-only selection changes follow the same rule.
 
 | Event | Required effect |
 | --- | --- |
@@ -47,19 +52,12 @@ invocations do not coalesce away. Captured requests for an older snapshot can st
 result. Admission alone does not promise when all inputs have been resolved; the implementation
 must state the resolution point rather than silently retarget running work.
 
-## Sharing asset computations
+### Sharing asset computations
 
 Use one in-flight computation for matching asset identities: canonical node/partition,
 complete resolved input identity, definition, declared environment and relevant execution
 policy. Different identities remain independent. Do not deduplicate by node name alone.
 Sensors are separate observations; this decision does not merge sensor polls or task actions.
-
-- **INV-SHARE-01:** At most one owner executes a matching in-flight asset identity in the
-  sharing scope; acquisition atomically checks completed results and registers ownership.
-- **INV-CANCEL-01:** Detaching one run cannot cancel a computation another run still needs.
-- **INV-TASK-ID-01:** Distinct explicit task invocations retain separate identities.
-- **INV-RECOVERY-01:** Owner failure releases or retries ownership; it cannot strand subscribers
-  or let all waiters independently start the same retry.
 
 For requests `{a,b}` and `{b,c}` with matching input identities, only `b` is shared.
 Different hashes for `b` are separate computations. Each run retains truthful progress:
@@ -75,16 +73,11 @@ The initial candidate sharing scope is server-owned execution. Independent CLI p
 and local execution consulting a server ledger require explicit cross-process ownership to
 share computation. No global deduplication claim is approved without that mechanism.
 
-## Inspection
+### Inspection
 
 Validation, execution and artifact availability are independent facts. An implementation may
 return **checking** while it revalidates freshness. It must track which evidence is pending
 and what counts are authoritative; it cannot reuse a stale answer indefinitely under that label.
-
-- **INV-STATUS-01:** Pending/invalidated freshness evidence cannot be reported as confirmed fresh.
-- **INV-STATUS-02:** Completion of an obsolete validation cannot overwrite a newer status result.
-- **INV-STATUS-03:** Unknown counts and known counts are distinguishable. A missing artifact is
-  an availability finding, not automatically a code/input freshness change.
 
 A code edit can invalidate a logical node's evidence without allocating a stale object per
 key. An unchanged observation can update poll history without invalidating asset freshness.
@@ -93,17 +86,58 @@ reconciliation; immediate exact availability without inspecting external changes
 Exact status wire fields, UI behavior, revalidation cadence and summary storage remain design
 work. OpenAPI/CLI snapshots and the UI must change with implementation, not in this proposal.
 
-## Bounded work and acceptance
+### Bounded work
+
+Cold bootstrap, full refresh, first validation and inspection must be measured separately
+from warm one-key execution. Application output size, Python discovery and a real fan-in can
+remain proportional to domain size. See [performance](performance.md) for current gaps.
+
+## Invariants
+
+- **INV-SELECT-ORDER-01:** Completion against an older observation cannot replace a current
+  selection already established against a newer observation.
+
+- **INV-MEMBER-ORDER-01:** Removing a key at a newer observation cannot be undone by an
+  older computation completing; its result can remain in history without restoring membership.
+
+- **INV-SNAPSHOT-01:** A running computation's resolved inputs do not change underneath it.
+
+- **INV-COMMIT-01:** A committed selection, its freshness evidence, progress and summary
+  updates agree after restart; cache-only selection changes follow the same rule.
+
+- **INV-SHARE-01:** At most one owner executes a matching in-flight asset identity in the
+  sharing scope; acquisition atomically checks completed results and registers ownership.
+
+- **INV-CANCEL-01:** Detaching one run cannot cancel a computation another run still needs.
+
+- **INV-TASK-ID-01:** Distinct explicit task invocations retain separate identities.
+
+- **INV-RECOVERY-01:** Owner failure releases or retries ownership; it cannot strand subscribers
+  or let all waiters independently start the same retry.
+
+- **INV-STATUS-01:** Pending/invalidated freshness evidence cannot be reported as confirmed fresh.
+
+- **INV-STATUS-02:** Completion of an obsolete validation cannot overwrite a newer status result.
+
+- **INV-STATUS-03:** Unknown counts and known counts are distinguishable. A missing artifact is
+  an availability finding, not automatically a code/input freshness change.
 
 - **INV-WINDOW-01:** Retained coordinator execution state is bounded by graph structure,
   admitted key pages, in-flight work and bounded buffers/samples; completed per-key state can
   be released after durable recording. Backpressure reaches key discovery and persistence.
+
 - **INV-BATCH-ORDER-01:** Internal windows cannot silently change documented batch grouping,
   explicit group boundaries or per-key partial-failure behavior.
 
-Cold bootstrap, full refresh, first validation and inspection must be measured separately
-from warm one-key execution. Application output size, Python discovery and a real fan-in can
-remain proportional to domain size. See [performance](../performance.md) for current gaps.
+## Failures and recovery
+
+Owner failure releases or retries ownership without stranding subscribers or multiplying
+retries. Cancellation detaches a requester; execution survives while another requester or
+reconciliation needs it. When concurrent versions cannot be made safe, finish existing work
+before reconciling the latest pending observation. Restart must preserve agreement among
+committed selection, evidence, progress and summaries.
+
+## Acceptance and evidence
 
 Required implementation evidence, not currently passing conformance claims:
 
@@ -122,3 +156,10 @@ check, not implementation conformance, a complete asset semantics model, or a pe
 Issues [#654](https://github.com/barca-orc/barca/issues/654),
 [#655](https://github.com/barca-orc/barca/issues/655), and
 [#656](https://github.com/barca-orc/barca/issues/656) track the implementation gaps.
+
+## Open questions and gaps
+
+Observation scope/order, multi-source validity, stable input-byte lifetime and exact
+checking/count interfaces require implementation design. Server-owned execution is the initial
+sharing scope; independent CLI processes need explicit cross-process ownership before claiming
+deduplication. The finite model does not establish these implementation guarantees.

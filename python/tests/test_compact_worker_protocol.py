@@ -1,4 +1,4 @@
-"""Runtime conformance for specs/worker-protocol.md's compact batch profile."""
+"""Runtime conformance for specs/interfaces/worker-protocol.md's compact batch profile."""
 
 import json
 import os

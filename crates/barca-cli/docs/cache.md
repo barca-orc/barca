@@ -53,7 +53,7 @@ environment variable and the hash changes, so only the affected subgraph re-runs
   the new code. Installed packages import as usual.
 
 How the coordinator assembles a step's hash from its upstreams, and the guarantees that come
-with it, are specified in `specs/cache-decisions.md`.
+with it, are specified in `specs/behavior/cache-decisions.md`.
 
 ### Environment variables
 
@@ -330,7 +330,7 @@ result is never served. This happens for a name that comes from:
 
 This provenance is kept through later assignments, aliases, functions, classes and imports, so
 even overwriting such a name later keeps the conservative hashing. Definitions that do not use
-these names keep their selective cones. The exact rules are in `specs/cache-decisions.md`.
+these names keep their selective cones. The exact rules are in `specs/behavior/cache-decisions.md`.
 
 #### Not followed
 
@@ -727,7 +727,7 @@ def exchange_rates() -> dict:
 `barca status` shows the last such event even after a later unchanged recompute: its JSON has
 `last_bytes_change` (node id, run hash, digest, UTC timestamp) and
 `last_materialization.content_hash` when a digest was recorded. The boundary is specified in
-`specs/materialization-digests.md`.
+`specs/interfaces/materialization-digests.md`.
 
 ```bash
 barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
@@ -1054,13 +1054,13 @@ If a required database write fails, the command reports an infrastructure error 
 records no new outcome; what was already recorded stays. With an artifact store, a refresh in
 one process can replace an artifact another process is reading: the path names the computation,
 not the bytes. What an upload records in that case is specified in
-`specs/artifact-upload-receipts.md`.
+`specs/interfaces/artifact-upload-receipts.md`.
 
 ## While a run is going, and after one is killed
 
 A run records each completed step in `.barca/metadata.db` while it runs, normally within about
 half a second (with an artifact store, once its upload is confirmed). The order of these writes
-and how a failed write is retried are specified in `specs/cache-decisions.md`.
+and how a failed write is retried are specified in `specs/behavior/cache-decisions.md`.
 
 ```bash
 barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
@@ -1090,7 +1090,7 @@ barca history --json            # the run is `running`; `steps_executed` is the 
 whenever it cannot, the run stays `running`. Barca looks at the process table on the same
 kernel, at a marker file the process holds open (`.barca/run-owners/`) from another container on
 the same kernel, and at whether the owner's kernel has shut down for a marker on a local disk
-(`specs/cache-decisions.md`). Machine ids, host names and clocks decide nothing: a killed run
+(`specs/behavior/cache-decisions.md`). Machine ids, host names and clocks decide nothing: a killed run
 reads `interrupted` at once, and a suspended laptop or a stopped process (Ctrl-Z) does not make a
 live run look dead.
 
@@ -1179,7 +1179,7 @@ root. Barca changes into the root before doing anything, so:
 
 Put an empty `barca.toml` at the top of a project to anchor it. Barca records the metadata
 format version and refuses a database it does not support rather than rebuilding it
-(`specs/metadata-schema.md`).
+(`specs/interfaces/metadata-schema.md`).
 
 ## Upgrading
 

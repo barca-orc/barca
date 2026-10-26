@@ -18,6 +18,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   freshness requests, retries, snapshots, drain/recovery and configurable artifact retention,
   with remaining requirements questions saved for resuming the discussion. Map current
   architecture ownership and stage refactors with explicit implementation acceptance gates.
+  Separate approved behavioral specs, interface contracts, unapproved proposals and engineering
+  notes; standardize behavioral sections, remove completed plans and enforce the structure.
 
 ## 0.33.0 (2026-10-25)
 

@@ -1,6 +1,6 @@
 """Reproduce #302 through the worker without a coordinator or object store.
 
-Run: PYTHONPATH=python python specs/reproductions/duckdb_step_isolation.py
+Run: PYTHONPATH=python python docs/engineering/reproductions/duckdb_step_isolation.py
 Requires DuckDB; pyarrow is not needed for the JSON-only worker probes.
 This is diagnostic evidence of intentionally shared state, not an isolation guarantee.
 """

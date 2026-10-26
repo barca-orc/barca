@@ -9,25 +9,17 @@ answers and concentrating on genuine tradeoffs. Avoid repeatedly asking for cons
 already established. Prefer low overhead when unspecified; preserve freedom over internal
 algorithms, module boundaries, storage and rendering.
 
-Approved requirements live in [product experience](../experience.md),
-[resources](resources.md), [agent interaction](agents.md),
-[operations](operations.md), and [current-state ownership](current-state-and-execution.md).
+Approved requirements live in [product experience](../../specs/behavior/experience.md),
+[resources](../../specs/behavior/resources.md), [agent interaction](../../specs/behavior/agents.md),
+[operations](../../specs/behavior/operations.md), and [current-state ownership](../../specs/behavior/current-state-and-execution.md).
 They describe intent, with incomplete implementation coverage. Existing behavior/wire owners
-remain indexed in [the specification index](../README.md).
+remain indexed in [the specification index](../../specs/README.md).
 
 ## Next three proposals — unanswered
 
-These were proposed immediately before the pause. The user has NOT approved them:
-
-1. Missing artifact bytes: recompute on request under the freshness policy; retained history
-   alone does not make the result available. Clarify remote read-through before recomputation.
-2. Disk full: fail affected writes clearly, preserve existing valid artifacts, and suggest
-   cleanup; do not silently evict beyond configured retention.
-3. Structured responses: expose the same outcomes, causes and recovery actions as human
-   output through stable fields, without requiring prose parsing.
-
-The broader machine-information parity requirement is already approved. Item 3 asks about
-its precise outcome/error contract rather than reopening parity.
+Resume with the three [recovery and structured-outcome proposals](../../specs/proposals/api-ideas.md#recovery-and-structured-outcomes--unanswered).
+They remain unapproved. The proposal file owns their wording; do not treat this handoff as
+another requirements source or reopen already approved machine-information parity.
 
 ## Remaining meaningful choices
 
@@ -56,7 +48,7 @@ its precise outcome/error contract rather than reopening parity.
 
 ## Implementation follow-up, not more product confirmation
 
-The [architecture map and cleanup sequence](../architecture-cleanup.md) now traces existing
+The [architecture map and cleanup sequence](architecture-cleanup.md) now traces existing
 owners and proposes a first behavior-preserving bookkeeping refactor, followed by separately
 gated publication, input lifetime, sharing and bounded-work changes. No runtime refactor has
 shipped in this documentation branch. Use it to start implementation without reopening

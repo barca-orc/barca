@@ -8,7 +8,7 @@ becomes its `repr`. Unpickling runs the pickled classes' code, exactly as `barca
 Protocol: one JSON document on stdin, {"artifacts": [{"path", "format"}, ...]}; one JSON array
 on stdout with {"value": ...} or {"error": "..."} per artifact, in order.
 
-`barca get -o url` sends a sign request instead (version 1, specs/worker-protocol.md):
+`barca get -o url` sends a sign request instead (version 1, specs/interfaces/worker-protocol.md):
 {"op": "sign", "version": 1, "objects": [{"uri", "expires", "filename"}, ...]}, answered with
 {"url", "expires_at"} (and a "note" when the link ends sooner than asked) or {"error", "kind"}
 per object, in order. A signed URL is written to

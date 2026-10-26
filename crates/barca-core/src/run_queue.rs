@@ -3,7 +3,7 @@
 //! operator paused the queue (`server_state`). Both survive a restart: a server that starts
 //! resumes the runs it finds queued, in order, under their run ids.
 //!
-//! Additive tables of metadata format 1 (`specs/metadata-schema.md`): `init_db` creates them, a
+//! Additive tables of metadata format 1 (`specs/interfaces/metadata-schema.md`): `init_db` creates them, a
 //! format-1 database from an earlier release gains them in the additive migration, and a reader
 //! of a database without them (an older copy, a snapshot of one) finds the queue empty and not
 //! paused. Only `barca serve` writes them; what a row's `spec` holds is the server's business

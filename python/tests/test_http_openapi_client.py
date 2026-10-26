@@ -24,7 +24,9 @@ from barca.client import Client
 from .test_serve_load_isolation import BROKEN, PIPELINE
 from .test_serve_robustness import Server
 
-SPEC = yaml.safe_load((Path(__file__).parents[2] / "specs/server-api.openapi.yaml").read_text())
+SPEC = yaml.safe_load(
+    (Path(__file__).parents[2] / "specs/interfaces/server-api.openapi.yaml").read_text()
+)
 
 
 def validate(schema, body):

@@ -4,7 +4,7 @@ Each partition has its own run hash, so a re-run serves unchanged keys from cach
 only keys whose hash has no successful materialization (new keys, or a changed upstream).
 Downstream unpartitioned nodes, including a `collect` fan-in, are cached the usual way.
 
-Contract: specs/freshness.md (INV-MEMBER-01).
+Contract: specs/behavior/freshness.md (INV-MEMBER-01).
 """
 
 import json

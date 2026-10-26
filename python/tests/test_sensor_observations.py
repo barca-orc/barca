@@ -1,6 +1,6 @@
 """Sensor change signals and optional values have independent meanings.
 
-Contract: specs/freshness.md (INV-OBS-01, INV-OBS-02, INV-OBS-03).
+Contract: specs/behavior/freshness.md (INV-OBS-01, INV-OBS-02, INV-OBS-03).
 """
 
 import json

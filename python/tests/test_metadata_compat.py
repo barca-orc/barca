@@ -1,6 +1,6 @@
 """This build opens a metadata DB written by every older release (#629).
 
-Format 1 is additive (specs/metadata-schema.md, "Additions within format 1"): a release may add
+Format 1 is additive (specs/interfaces/metadata-schema.md, "Additions within format 1"): a release may add
 a column, a table or an index without a new version number, and must add it in place to a
 database an older release wrote. 0.29.2 added `logs.stream` and `logs.ts` and refused every
 database from before them, because the check that runs before the migration did not know them.

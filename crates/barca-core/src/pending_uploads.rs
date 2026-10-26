@@ -5,7 +5,7 @@
 //! the store is kept here. `barca status` shows those nodes `unsynced` (`local_only`), and the
 //! next command that opens the artifact store uploads them before its own work.
 //!
-//! It is an additive table of metadata format 1 (`specs/metadata-schema.md`): `init_db` creates
+//! It is an additive table of metadata format 1 (`specs/interfaces/metadata-schema.md`): `init_db` creates
 //! it, a format-1 database from an earlier release gains it in the additive migration, and a
 //! database without it (opened read-only, or a copy being validated) reads as having none. Rows carry the host
 //! that wrote them; only this host's rows are read, retried or shown, because the local file

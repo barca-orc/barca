@@ -6,7 +6,7 @@ authors never write their own input bind code, and orchestration input views are
 after the step. Deliberate user-created catalog state persists. The connection is
 exposed as `barca.duckdb_connection()` so a module can configure it once per worker process.
 
-Contract: specs/python-runtime.md (INV-WORKER-STATE-01, INV-WORKER-VIEW-01).
+Contract: specs/behavior/python-runtime.md (INV-WORKER-STATE-01, INV-WORKER-VIEW-01).
 """
 
 import json

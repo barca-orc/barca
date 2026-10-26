@@ -1,13 +1,25 @@
 # Execution lifecycle, freshness requests and retention
 
-Design revision: 1. Status: approved product intent; implementation conformance has not
+## Scope and status
+
+Specification version: 2. Status: approved product intent; implementation conformance has not
 been established. This records requirements, not shipped commands, configuration keys,
 wire fields or an implementation plan. Existing interface owners remain authoritative.
 See [agent interaction](agents.md), [resource bounds](resources.md), and
 [current-state ownership](current-state-and-execution.md). Outstanding choices are in the
-[requirements handoff](requirements-handoff.md).
+[requirements handoff](../../docs/engineering/requirements-handoff.md).
+Scope: freshness requests, invocation/attempt identity, snapshots, lifecycle and retention.
 
-## Fresh data requests and sensors
+## Entities and state
+
+An invocation fixes target and arguments and owns recorded attempts. An attempt uses captured
+code/configuration and resolved inputs. Requests, execution owners, background freshness demand,
+sensor checks and retained artifact versions have separate lifetimes. A manager can be
+admitting, draining or stopped.
+
+## Rules and transitions
+
+### Fresh data requests and sensors
 
 A data request honors the node's code-declared freshness policy. For Always, report stale
 or refreshing state, reconcile the requested dependency chain, then return the fresh correct
@@ -33,7 +45,7 @@ cause and offer an available older result explicitly labeled possibly stale. Do 
 return it as fresh success or block the user's work indefinitely. Managed recovery continues
 where a manager is running. Exact fallback selection and timeout interfaces remain open.
 
-## Invocation, retry and snapshots
+### Invocation, retry and snapshots
 
 An invocation ID fixes its target and arguments. Reusing it with different target/arguments
 fails validation and requires a new ID. Attempts remain individually recorded under that ID.
@@ -57,7 +69,7 @@ code and policy. Incompatible original arguments fail promptly; corrected argume
 new invocation. How complete project imports/configuration are snapshotted needs verification;
 copying an entry module alone is not proof of isolation.
 
-## Cancellation, ownership and shutdown
+### Cancellation, ownership and shutdown
 
 A client timeout/disconnection alone does not cancel execution. Work remains accessible by
 ID until explicitly cancelled. Cancelling a queued invocation removes it immediately; it must
@@ -82,7 +94,7 @@ and cleans its owned workers/connections when finished; a pre-existing server re
 Expose why work waits: resources, dependencies, freshness checks or shutdown, in human output
 and structured status. Do not kill shared or unrelated processes as part of one run's cleanup.
 
-## Artifact retention
+### Artifact retention
 
 Default to retaining the latest three artifact versions per asset partition, configurable.
 Apply retention retroactively to existing historical artifacts as well as new writes. This
@@ -100,7 +112,25 @@ explicit rather than presenting history as retrievable data. History/logs are co
 cheap enough to retain; no automatic history/log eviction policy was approved. Shared bytes,
 remote-store deletion scope and the definition of a distinct retained version need design.
 
-## Acceptance obligations
+## Invariants
+
+- **INV-INVOCATION-01:** An invocation identity cannot be reused with different target or arguments.
+- **INV-RETRY-01:** Automatic transport recovery cannot execute a failed task again; task retry
+  requires explicit intent.
+- **INV-ATTEMPT-01:** Active attempts retain their captured code/configuration; an explicit new
+  attempt captures current code/configuration.
+- **INV-RETENTION-01:** Automatic retention and explicit cleanup protect selected artifacts and
+  artifacts needed by active runs while retaining execution history and logs.
+
+## Failures and recovery
+
+Freshness outages fail promptly and offer any available older result as possibly stale. Tasks
+require explicit retry after failure/crash; interrupted assets recover without duplicating
+surviving ownership. Cancellation and shutdown escalate from graceful termination to forced
+process-tree cleanup while preserving recovery state. Retention protects current and active-use
+artifacts and keeps history/logs.
+
+## Acceptance and evidence
 
 Cover a source outage with a possibly stale alternative, immediate request during sensor
 backoff, request-time freshness during newer observations, duplicate submission after a lost
@@ -108,3 +138,11 @@ reply, explicit task retry under changed code/policy, incompatible arguments, qu
 shared cancellation, shutdown during active work, second-signal cleanup, restart recovery,
 and retroactive retention with pinned/shared artifacts. These are required scenarios, not
 claims of passing runtime conformance or new finite-model coverage.
+
+## Open questions and gaps
+
+Open choices include direct-check deadlines and fallback selection; deduplication record
+lifetime and pre-acknowledgement IDs; environment/dependency snapshot scope; drain/cancellation
+deadlines and uncertain remote owners; distinct retained versions, shared-byte accounting and
+remote deletion scope. The [discussion handoff](../../docs/engineering/requirements-handoff.md)
+keeps these questions and unanswered proposals separate from approved rules.

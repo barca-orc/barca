@@ -1,38 +1,30 @@
 # Cache decisions and run records
 
-Specification version: 2. Status: implemented; historical-selection deviation tracked in [freshness](freshness.md). This boundary covers what a cache decision may
-rely on (complete upstream hashes, conservative dependency provenance), the order in which a
+## Scope and status
+
+Specification version: 3. Status: implemented; historical-selection deviation tracked in [freshness](freshness.md).
+Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
-([cache.md](../crates/barca-cli/docs/cache.md)); the hash inputs themselves and which decorator
+([cache.md](../../crates/barca-cli/docs/cache.md)); the hash inputs themselves and which decorator
 arguments count are listed there and checked against `definition.rs`. Upload receipts are
-[artifact-upload-receipts.md](artifact-upload-receipts.md); metadata compatibility is
-[metadata-schema.md](metadata-schema.md).
+[artifact-upload-receipts.md](../interfaces/artifact-upload-receipts.md); metadata compatibility is
+[metadata-schema.md](../interfaces/metadata-schema.md).
 
-Conformance: cache decision tests in [cache.rs](../crates/barca-core/src/cache.rs)
-(`partial_upstream_cannot_hit_a_persisted_partial_cache_row`,
-`complete_decisions_retain_hashes_across_worker_chunks`,
-`aligned_key_present_does_not_allow_another_expanded_chunk_to_be_missing`),
-[conditional bindings](../python/tests/test_conditional_helper_hashing.py),
-[helper star imports](../python/tests/test_helper_star_hashing.py),
-[pipeline star imports and binding proof](../python/tests/test_static_barca_bindings.py),
-[unproven decorators](../python/tests/test_decorator_names_not_barcas.py),
-[progress recording](../python/tests/test_incremental_persist.py),
-[progress counts](../python/tests/test_progress_counts.py),
-[terminal outcomes](../python/tests/test_terminal_persist.py),
-early cutoff in [cache.rs](../crates/barca-core/src/cache.rs) (`cutoff_tests`),
-[cone.rs](../crates/barca-core/src/cone.rs)
-(`a_cutoff_asset_reached_by_name_adds_a_marker_not_its_code`) and
-[test_asset_cutoff.py](../python/tests/test_asset_cutoff.py),
-persistence tests in [persist.rs](../crates/barca-core/src/persist.rs),
-run owners in [run_owner.rs](../crates/barca-core/src/run_owner.rs) and
-[reconciliation](../python/tests/test_history_reconcile.py).
+## Entities and state
+
+A cache decision uses a complete computation identity and conservative dependency provenance.
+Validated proofs are rebuildable evidence scoped to a logical node, layout and metadata
+generation. A run has completed artifacts, queued recording, committed progress and a
+terminal outcome; process ownership can be proven alive, proven gone or unknown.
+
+## Rules and transitions
 
 Product observation/membership rules are owned by [freshness](freshness.md), run/batch/process
 semantics by [execution](execution.md), and status meaning by [inspection](inspection.md).
-[The approved replacement](proposals/current-state-and-execution.md) is not implemented behavior.
+[The approved replacement](current-state-and-execution.md) is not implemented behavior.
 
-## Validated freshness before expansion
+### Validated freshness before expansion
 
 Default cache-aware execution may omit proven-fresh work before per-key expansion. Proofs
 are private, rebuildable metadata, scoped to each requested logical node and artifact layout.
@@ -70,11 +62,9 @@ Source discovery/comparison can be linear in source keys; changed fan-ins necess
 all collected inputs. No constant-time claim applies to those operations. The normal complete
 hash requirement below applies to all affected work, including lazily loaded fresh inputs.
 
-Conformance: [incremental DAG regressions](../python/tests/test_incremental_dag.py),
-[missing artifact recovery](../python/tests/test_missing_artifact.py), dataset sink,
-cutoff, telemetry and startup suites; [benchmark](../benchmarks/incremental_dag/bench.py).
 
-## Complete upstream hashes
+
+### Complete upstream hashes
 
 Before deciding a consumer, the coordinator checks that every upstream step in the expanded
 plan has a run hash, including every upstream partition key across worker chunks. An
@@ -83,7 +73,7 @@ computed or any cache row is looked up: a result is never reused on a hash compu
 partial set of upstream keys. The expected keys come from the selected expanded plan. Worker
 pool size does not change valid hashes or cache decisions.
 
-## Conservative provenance
+### Conservative provenance
 
 Where a name's definition cannot be selected statically, the consumer hashes more, never less.
 An unrelated edit may cause an extra recompute; an edit that can change the result always
@@ -115,7 +105,7 @@ changes the hash.
 
 Installed packages, the standard library and dynamic imports are outside the tracking boundary.
 
-## Early cutoff
+### Early cutoff
 
 An `@asset(cutoff=True)` (#628, experimental) changes what its consumers fold in, not its own
 run hash (`cutoff` does not count in its definition):
@@ -138,7 +128,7 @@ run hash (`cutoff` does not count in its definition):
   only through its bytes. Calling a cutoff asset as a plain function from another step is outside
   the tracking boundary.
 
-## Recording progress
+### Recording progress
 
 - A completed local result is queued for recording after its artifact is completely written.
   With a remote artifact store it is queued only after its upload is confirmed; an unfinished
@@ -155,7 +145,7 @@ run hash (`cutoff` does not count in its definition):
   for a partially written ledger. Captured output is written separately, after the outcome
   transaction.
 
-## Interrupted runs
+### Interrupted runs
 
 A run is reported `interrupted` only on an observation that can be made only when its process
 is gone; otherwise it stays `running`. A run records the kernel its process ran on (the boot
@@ -176,3 +166,57 @@ process holds open while it has a run in flight. Three observations count:
 Machine ids, host names and clocks decide nothing. `barca history --reconcile RUN_ID` records a
 single uncertain row as `interrupted` on the operator's assertion, and refuses a proven live
 owner.
+
+## Invariants
+
+- **INV-CACHE-HASH-01:** A consumer cannot use a cache decision based on an incomplete set
+  of required upstream hashes.
+- **INV-CACHE-DURABLE-01:** Replay does not duplicate a run/step result or progress count;
+  required terminal result rows and status commit together or leave prior committed state.
+- **INV-CACHE-OWNER-01:** Uncertain process ownership alone cannot relabel a run interrupted;
+  explicit operator reconciliation refuses a proven live owner.
+
+## Failures and recovery
+
+An incomplete upstream identity fails as infrastructure failure before cache lookup.
+Malformed or missing rebuildable proofs fall back to validation; database errors remain
+infrastructure errors. Failed progress batches retry without claiming uncommitted progress.
+A required terminal-write failure preserves earlier committed state and reports failure.
+Owner uncertainty remains running unless explicitly reconciled by an operator.
+
+## Acceptance and evidence
+
+Exercise incomplete hashes across worker chunks, conservative bindings and imports, cutoff
+propagation, invalid/missing proofs, repeated progress batches, terminal rollback and unknown
+versus proven-live/gone owners. The existing conformance sources below cover their stated
+implemented boundaries; ordered publication and shared ownership have separate obligations.
+
+Conformance: cache decision tests in [cache.rs](../../crates/barca-core/src/cache.rs)
+(`partial_upstream_cannot_hit_a_persisted_partial_cache_row`,
+`complete_decisions_retain_hashes_across_worker_chunks`,
+`aligned_key_present_does_not_allow_another_expanded_chunk_to_be_missing`),
+[conditional bindings](../../python/tests/test_conditional_helper_hashing.py),
+[helper star imports](../../python/tests/test_helper_star_hashing.py),
+[pipeline star imports and binding proof](../../python/tests/test_static_barca_bindings.py),
+[unproven decorators](../../python/tests/test_decorator_names_not_barcas.py),
+[progress recording](../../python/tests/test_incremental_persist.py),
+[progress counts](../../python/tests/test_progress_counts.py),
+[terminal outcomes](../../python/tests/test_terminal_persist.py),
+early cutoff in [cache.rs](../../crates/barca-core/src/cache.rs) (`cutoff_tests`),
+[cone.rs](../../crates/barca-core/src/cone.rs)
+(`a_cutoff_asset_reached_by_name_adds_a_marker_not_its_code`) and
+[test_asset_cutoff.py](../../python/tests/test_asset_cutoff.py),
+persistence tests in [persist.rs](../../crates/barca-core/src/persist.rs),
+run owners in [run_owner.rs](../../crates/barca-core/src/run_owner.rs) and
+[reconciliation](../../python/tests/test_history_reconcile.py).
+
+Conformance: [incremental DAG regressions](../../python/tests/test_incremental_dag.py),
+[missing artifact recovery](../../python/tests/test_missing_artifact.py), dataset sink,
+cutoff, telemetry and startup suites; [benchmark](../../benchmarks/incremental_dag/bench.py).
+
+## Open questions and gaps
+
+The historical-selection deviation remains documented in [freshness](freshness.md).
+Ordered current selection, shared computation ownership and bounded full-domain retained
+state are approved requirements in [ownership](current-state-and-execution.md), not proved
+by the current cache engine or its warm incremental benchmarks.

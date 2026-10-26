@@ -1,7 +1,7 @@
 # DuckDB connection lifetime (#302 / roadmap P02)
 
 > Historical record from [PR #346](https://github.com/barca-orc/barca/pull/346) (merged 2026-10-09).
-> Describes that change, not a current contract. Current owner: [Python runtime](../python-runtime.md).
+> Describes that change, not a current contract. Current owner: [Python runtime](../../../specs/behavior/python-runtime.md).
 
 Status: **accepted product decision, 2026-10-09**.
 The user chose one connection per process because a process executes steps sequentially.
@@ -30,7 +30,7 @@ arbitrary user-created catalog state, including after a user exception.
 ## Investigation evidence
 
 ```sh
-PYTHONPATH=python python specs/reproductions/duckdb_step_isolation.py
+PYTHONPATH=python python docs/engineering/reproductions/duckdb_step_isolation.py
 ```
 
 Executed against DuckDB 1.5.6 and worker code at 523e0a4:

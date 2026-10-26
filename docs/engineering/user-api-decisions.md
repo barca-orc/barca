@@ -1,9 +1,9 @@
 # User API rationale
 
 Status: rationale for implemented choices, checked against the 0.33.0 baseline.
-This document explains decisions; the normative owners are [the specification index](README.md).
-[Unscheduled API ideas](proposals/api-ideas.md) and
-[approved execution/status changes](proposals/current-state-and-execution.md) are separate.
+This document explains decisions; the normative owners are [the specification index](../../specs/README.md).
+[Unscheduled API ideas](../../specs/proposals/api-ideas.md) and
+[approved execution/status changes](../../specs/behavior/current-state-and-execution.md) are separate.
 
 ## Assets, tasks and sensors
 
@@ -21,7 +21,7 @@ identity is separate from the bytes digest, so a timestamp-only signal can refre
 that produces its data later. Dictionary partition sources compare values per key.
 A typed `SensorResult` and injected previous observation are not implemented or approved.
 
-Normative owner: [freshness](freshness.md).
+Normative owner: [freshness](../../specs/behavior/freshness.md).
 
 ## Ordinary Python declarations
 
@@ -41,9 +41,9 @@ they obscure that distinction or duplicate the graph.
 Underscore-prefixed declared inputs express ordering without data; those parameters receive
 `None`. Omitting the parameters entirely is an unscheduled idea, not current calling behavior.
 
-Normative owners: [declaration model](user-api.allium),
-[cache provenance/completeness](cache-decisions.md),
-[decorator grammar tests](../crates/barca-core/tests/grammar_spec.rs).
+Normative owners: [declaration model](../../specs/interfaces/user-api.allium),
+[cache provenance/completeness](../../specs/behavior/cache-decisions.md),
+[decorator grammar tests](../../crates/barca-core/tests/grammar_spec.rs).
 
 ## Get data, run actions
 
@@ -60,8 +60,8 @@ common mapping case. Results retain argument order; user branch failures become
 `ParallelError` values. Failure to transport a branch result is a separate error and must
 not silently replace the value with `None`. Standalone Python uses sequential execution.
 
-Normative owners: [execution](execution.md), [task results](task-output.md),
-[manual](../crates/barca-cli/docs/tasks.md), [CLI contract](../crates/barca-cli/docs/contract.md).
+Normative owners: [execution](../../specs/behavior/execution.md), [task results](../../specs/interfaces/task-output.md),
+[manual](../../crates/barca-cli/docs/tasks.md), [CLI contract](../../crates/barca-cli/docs/contract.md).
 
 ## Freshness and scheduling
 
@@ -75,8 +75,8 @@ use its existing result and can update for other changed inputs. Explicit refres
 it. A never-produced pin blocks readers. Partitioned Manual nodes and deprecated HTTP aliases
 retain the documented exceptions; do not generalize the unpartitioned canonical-run rule to them.
 
-Normative owner: [freshness](freshness.md); examples and compatibility details:
-[scheduling manual](../crates/barca-cli/docs/scheduling.md).
+Normative owner: [freshness](../../specs/behavior/freshness.md); examples and compatibility details:
+[scheduling manual](../../crates/barca-cli/docs/scheduling.md).
 
 ## Prefer fewer concepts
 

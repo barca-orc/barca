@@ -1,4 +1,4 @@
-"""Dataset sinks (#621), conformance for specs/artifact-formats.md "Dataset sinks".
+"""Dataset sinks (#621), conformance for specs/interfaces/artifact-formats.md "Dataset sinks".
 
 `@sink("prefix/")` writes a Hive-partitioned dataset.
 

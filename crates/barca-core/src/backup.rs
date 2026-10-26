@@ -42,7 +42,7 @@ pub struct Sidecar {
     pub digest: String,
     /// The barca that wrote it.
     pub barca_version: String,
-    /// The metadata format of the copy (`PRAGMA user_version`; `specs/metadata-schema.md`).
+    /// The metadata format of the copy (`PRAGMA user_version`; `specs/interfaces/metadata-schema.md`).
     pub db_format: i64,
     /// The host that wrote it (`null` in a sidecar from before 0.29).
     #[serde(default, skip_serializing_if = "Option::is_none")]

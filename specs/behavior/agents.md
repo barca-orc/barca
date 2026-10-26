@@ -1,11 +1,22 @@
 # Agent interaction and scalable navigation
 
-Design revision: 1. Status: approved intent below; requirements are still being elicited.
-This does not introduce implemented commands, flags or wire fields. Existing CLI/HTTP owners
-remain authoritative. [Product experience](../experience.md) applies equally to humans and
-agents; simpler human concepts should benefit agents too.
+## Scope and status
 
-## First-class information and discovery
+Specification version: 2. Status: approved intent below; requirements are still being elicited.
+This does not introduce implemented commands, flags or wire fields. Existing CLI/HTTP owners
+remain authoritative. [Product experience](experience.md) applies equally to humans and
+agents; simpler human concepts should benefit agents too.
+Scope: machine information parity, navigation, background interaction and logs.
+
+## Entities and state
+
+Actors are humans and automated callers of the same product concepts. Listings can be complete,
+truncated or failed; an empty complete result differs from an unavailable page. Invocations have
+stable identity and recorded attempts as defined by [operations](operations.md).
+
+## Rules and transitions
+
+### First-class information and discovery
 
 An agent should ergonomically obtain everything necessary to operate the product that a
 human can obtain: commands, arguments, defaults, schemas, error codes, descriptions,
@@ -18,7 +29,7 @@ Use the same asset/task/run concepts and functional capabilities across interfac
 separate, reduced agent mode is not the product model. Choose concise, predictable defaults
 and progressive disclosure rather than duplicating every workflow into an agent-specific API.
 
-## Large structured results
+### Large structured results
 
 Every potentially large structured listing, including assets, runs and partitions, supports
 filtering and pagination, with explicit information when a result is truncated. An agent
@@ -31,13 +42,11 @@ changes remain interface design work. Their semantics must be documented and tes
 shipping. Logs retain the familiar streaming conventions below rather than automatically
 inheriting a paginated-list default.
 
-## Invocation identity and background execution
+### Invocation identity and background execution
 
-A retry is the same invocation with the same stable ID, with attempts recorded underneath
-it. A deliberately new invocation has a new ID. Retrying submission after a lost reply must
-identify/recover the existing invocation rather than accidentally starting another task.
-An invocation ID is not a reusable task-definition name. This does not promise exactly-once
-external side effects after process failure or execution retries.
+Invocation identity and recorded attempts follow [operations](operations.md#invocation-retry-and-snapshots).
+Discoverable interfaces must let callers distinguish a deliberately new invocation, explicit
+retry and recovery of a lost submission response; external side effects are not exactly once.
 
 Support nonblocking submission: return an ID while work continues, then use that ID to
 inspect status, follow logs, retrieve results or cancel. Both managed local background work
@@ -59,7 +68,7 @@ Provide a read-only impact preview showing expected execution/reuse, affected pa
 and reasons, explicitly identifying unresolved sensor state. Preview must not execute work
 just to resolve unknowns. Precise output schemas remain design work.
 
-## Familiar log controls
+### Familiar log controls
 
 Use Docker's conventions: all retained lines by default, explicit `--tail N` for recent
 context, optional `--follow`, time filtering with `--since`, and optional timestamps.
@@ -76,7 +85,7 @@ Prefer familiar DuckDB and Docker patterns when their semantics match the operat
 names do not override the harder aggregate resource guarantees in [resource bounds](resources.md).
 Use actual supported syntax in help and suggested actions, not future design examples.
 
-## Synthetic navigation acceptance case
+### Synthetic navigation acceptance case
 
 A read-only production example informed the shape of this scenario. No source, business data,
 identifying names/paths, credentials, real partition values or exact topology are copied here.
@@ -98,7 +107,29 @@ Accept bounded page retrieval, filtering, completeness/truncation handling, clea
 errors, and the same discoverable operations for local and server contexts. Keep business
 meaning supplied by the user's descriptions separate from orchestration metadata.
 
-## Questions still open
+## Invariants
+
+- **INV-AGENT-01:** Machine discovery exposes the public operational information available to
+  humans without requiring source inspection or prose parsing.
+- **INV-AGENT-02:** Every potentially large structured listing permits bounded
+  filtering/pagination and exposes completeness.
+- **INV-AGENT-03:** Preview does not execute user work to resolve unknown sensor state.
+
+## Failures and recovery
+
+Missing/ambiguous targets fail with actionable diagnostics. A failed or truncated listing does
+not appear as a complete empty result. Lost submission responses recover existing state
+according to operations; they must not silently duplicate a task. Streaming logs must remain
+bounded in coordinator memory.
+
+## Acceptance and evidence
+
+Use the synthetic navigation case above to retrieve bounded overviews and pages, resolve
+qualified identities, inspect one dependency cone and discover next actions in local and server
+contexts. Verify truncation/empty/error distinctions, read-only preview, stable submission
+recovery and streamable logs. These obligations are not all implemented.
+
+## Open questions and gaps
 
 - Precise resume/delivery guarantees for logs/events beyond the familiar controls.
 - Identifier allocation/deduplication retention and exact recovery mechanics.

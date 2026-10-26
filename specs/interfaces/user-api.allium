@@ -5,9 +5,10 @@
 -- Grammar conformance: crates/barca-core/tests/grammar_spec.rs and decorator_args.rs.
 -- These are hand-written conformance tests, not tests generated from this file.
 -- No Allium compiler/model checker is currently a repository validation gate.
--- Execution: execution.md; observations/selections: freshness.md; inspection: inspection.md.
--- Rationale: user-api-decisions.md. Unapproved ideas: proposals/api-ideas.md.
--- Exact CLI and HTTP shapes have their own owners in README.md.
+-- Execution: ../behavior/execution.md; observations/selections: ../behavior/freshness.md.
+-- Inspection: ../behavior/inspection.md.
+-- Rationale: ../../docs/engineering/user-api-decisions.md. Unapproved ideas: ../proposals/api-ideas.md.
+-- Exact CLI and HTTP shapes have their own owners in ../README.md.
 
 ------------------------------------------------------------
 -- Declaration concepts

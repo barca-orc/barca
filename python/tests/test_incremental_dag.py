@@ -1,6 +1,6 @@
 """Validated warm incremental work is bounded by affected identities.
 
-Contracts: specs/freshness.md (INV-CHAIN-01) and specs/performance.md (INV-PERF-01).
+Contracts: specs/behavior/freshness.md (INV-CHAIN-01) and specs/behavior/performance.md (INV-PERF-01).
 """
 
 import json

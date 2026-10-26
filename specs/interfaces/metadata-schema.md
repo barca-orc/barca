@@ -3,7 +3,7 @@
 Scope: metadata format compatibility, not the full table/DDL contract.
 Status: implemented. Specification version: 1 (database versions are described below).
 Conformance: `crates/barca-core/src/db_schema.rs`, `state_validate.rs`, and snapshot
-tests in `db.rs`. See [boundary inventory](README.md).
+tests in `db.rs`. See [boundary inventory](../README.md).
 
 The metadata database contains durable run history, logs and schedules alongside
 rebuildable cache/cost data. A version mismatch never permits deleting or
@@ -94,8 +94,8 @@ An explicit `barca history --reconcile RUN_ID` may record a `running` row as `in
 after the operator verifies the run stopped. It refuses positive live-owner evidence and
 terminal rows, preserves materializations/progress, and records no invented end timestamp
 or duration. Unknown-owner history reads remain conservative. CLI behavior belongs to
-[the CLI contract](../crates/barca-cli/docs/contract.md); executable recovery controls live in
-[test_history_reconcile.py](../python/tests/test_history_reconcile.py). This is a recovery
+[the CLI contract](../../crates/barca-cli/docs/contract.md); executable recovery controls live in
+[test_history_reconcile.py](../../python/tests/test_history_reconcile.py). This is a recovery
 operation within format 1, with no schema change.
 
 Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive format-1

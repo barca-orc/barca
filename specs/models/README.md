@@ -1,7 +1,7 @@
 # Asset ownership design checks
 
 Status: approved-design model, not implemented behavior or implementation conformance.
-Owner: [current-state/execution proposal](../proposals/current-state-and-execution.md).
+Owner: [approved current-state/execution behavior](../behavior/current-state-and-execution.md).
 Model: [AssetOwnership.tla](AssetOwnership.tla). Tool/config/result identity:
 [verification.json](verification.json).
 

@@ -251,7 +251,7 @@ def test_azure_delegation_refused_names_the_permission():
     assert "generateUserDelegationKey" in str(err.value)
 
 
-# ─── the helper's sign request (specs/worker-protocol.md) ────────────────────
+# ─── the helper's sign request (specs/interfaces/worker-protocol.md) ────────────────────
 
 
 def test_the_value_helper_answers_a_sign_request_per_object(monkeypatch, capsys):

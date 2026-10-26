@@ -125,7 +125,7 @@ when loading the module took longer than one second. Missing means no slow impor
 reported; module reuse adds none. It is included in the existing elapsed duration,
 not added on top. Compact tables and checkpoint receipts preserve the field. This
 additive optional metadata was introduced within version 3 and remains in version 4. Timeouts identify the step id.
-[Timing conformance](../python/tests/test_run_step_timing.py) exercises retries,
+[Timing conformance](../../python/tests/test_run_step_timing.py) exercises retries,
 slow imports, timeout identity and worker disconnects; protocol tests cover optional
 error metadata.
 
@@ -141,7 +141,7 @@ unfinished `parallel()` exchange), the worker stops executing its batch, and the
 stops it, returns its unstarted leases to the queue front and starts a fresh worker when ready
 work needs one. A worker that dies is reported as before, with its exit status. The field is
 additive optional metadata introduced within version 3 and retained in version 4.
-[Conformance](../python/tests/test_worker_survives_exceptions.py) counts worker starts and
+[Conformance](../../python/tests/test_worker_survives_exceptions.py) counts worker starts and
 dispatched steps from the coordinator's `BARCA_TRACE_TIMING` summary.
 
 ## Other messages and artifact data
@@ -184,8 +184,8 @@ value`) is `{"artifacts": [{"path", "format"}]}`, answered with `{"value"}` or
 `{"error", "kind"}` with `kind` one of `usage`, `missing`, `credentials`, `store`. The
 helper refuses any other sign `version` before signing anything. A signed URL appears
 only in a successful answer on stdout; errors and notes never contain one.
-Conformance: [signed URL tests](../python/tests/test_signed_urls.py) and the answer
-parser tests in [values.rs](../crates/barca-core/src/values.rs).
+Conformance: [signed URL tests](../../python/tests/test_signed_urls.py) and the answer
+parser tests in [values.rs](../../crates/barca-core/src/values.rs).
 
 ## Version policy and conformance
 
@@ -194,19 +194,19 @@ may retain a version when both readers have documented defaults. Changed meaning
 framing, required fields or incompatible variants require a version bump. Older
 packages are rejected before work; no legacy inline negotiation fallback exists.
 
-[wire.rs](../crates/barca-core/src/wire.rs) tests an actual Rust → Python stdlib → Rust
+[wire.rs](../../crates/barca-core/src/wire.rs) tests an actual Rust → Python stdlib → Rust
 round trip of 10,000 execution rows and mixed completion/error/blocked rows, including
 null/missing values and private upload references. Malformed shapes and inline data
-are negative controls. [result_journal.rs](../crates/barca-core/src/result_journal.rs)
+are negative controls. [result_journal.rs](../../crates/barca-core/src/result_journal.rs)
 checks partial writes, duplicates, invalid receipts and deletion. The worker I/O conformance
 test queues valid stdout/checkpoint/results traffic ahead of the reader and rejects
 publication of receipts before their own stdout frames.
-[compact runtime tests](../python/tests/test_compact_worker_protocol.py) observe real
+[compact runtime tests](../../python/tests/test_compact_worker_protocol.py) observe real
 multi-item result frames and prove crash/exception retry accounting without replaying
-earlier side effects. [parallel tests](../python/tests/test_parallel_results.py) cover
-nested handoff and file-only values; [handshake tests](../python/tests/test_protocol_handshake.py)
+earlier side effects. [parallel tests](../../python/tests/test_parallel_results.py) cover
+nested handoff and file-only values; [handshake tests](../../python/tests/test_protocol_handshake.py)
 cover wrong versions, cancellation and reaping. The worker-pool shutdown test in
-[io_loop.rs](../crates/barca-core/src/io_loop.rs) holds a kill/wait job behind a gate
+[io_loop.rs](../../crates/barca-core/src/io_loop.rs) holds a kill/wait job behind a gate
 and requires shutdown to wait for it. Runtime framing tests cover size limits.
 
 Plan documents independently carry `plan_version:1` on CLI and HTTP output. Consumers

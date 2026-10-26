@@ -306,7 +306,7 @@ outside; barca then prints a warning on stderr, because anyone who can reach the
 runs. Keep it on a private network or behind a proxy that authenticates. Open
 `http://127.0.0.1:8274/` for the web UI. Endpoints are documented at
 https://barca.sh/reference/server-api/; the normative wire contract is
-https://github.com/barca-orc/barca/blob/main/specs/server-api.openapi.yaml. Handler errors are
+https://github.com/barca-orc/barca/blob/main/specs/interfaces/server-api.openapi.yaml. Handler errors are
 JSON, while malformed request parameters can produce plain-text extractor errors.
 `GET /schedule` reports live schedule status. Behind
 nginx or Traefik (any path prefix, live logs included): https://barca.sh/deploying/.

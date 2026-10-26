@@ -139,7 +139,7 @@ All in `python/barca/_storage.py`, one function per scheme, chosen by the URI sc
 
 The `_value` helper protocol gains one request, `{"op": "sign", "uri", "expires"}`, answered
 with `{"url", "expires_at"}` or an error with `kind`. Versioned under the worker protocol
-negotiation (`specs/worker-protocol.md`). No change to workers or to static analysis.
+negotiation (`specs/interfaces/worker-protocol.md`). No change to workers or to static analysis.
 
 ### 4.5 Edge Cases
 

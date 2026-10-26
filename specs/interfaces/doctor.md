@@ -1,7 +1,7 @@
 # Project diagnostics
 
 Implemented boundary, specification 1. CLI help and output schema ownership remains in
-[the CLI contract](../crates/barca-cli/docs/contract.md). Check names and provider-specific
+[the CLI contract](../../crates/barca-cli/docs/contract.md). Check names and provider-specific
 identity fields are experimental.
 
 `barca doctor [files...] [--env NAME] [--json|--pretty]` reports prerequisites without
@@ -48,8 +48,8 @@ not appear in diagnostics. R2/S3-compatible keys and Azure shared keys/SAS are i
 by fingerprints, never raw credential values. Controlled tests do not establish real-provider
 success; real-cloud acceptance is not claimed by this specification.
 
-Conformance: [CLI/no-execution controls](../python/tests/test_doctor.py),
-[selected-credential adapters and redaction](../python/tests/test_identity.py),
-[CLI JSON snapshots](../python/tests/test_cli_contract.py),
-[server checks against a real `barca serve`](../python/tests/test_debugging_problems.py), shared helper lifecycle tests
+Conformance: [CLI/no-execution controls](../../python/tests/test_doctor.py),
+[selected-credential adapters and redaction](../../python/tests/test_identity.py),
+[CLI JSON snapshots](../../python/tests/test_cli_contract.py),
+[server checks against a real `barca serve`](../../python/tests/test_debugging_problems.py), shared helper lifecycle tests
 in `helper_proc.rs`.

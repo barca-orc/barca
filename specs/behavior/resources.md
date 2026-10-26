@@ -1,11 +1,22 @@
 # Project resource bounds
 
-Design revision: 1. Status: approved requirements; implementation remains incomplete.
+## Scope and status
+
+Specification version: 2. Status: approved requirements; implementation remains incomplete.
 Requirements are still being elicited. This is not a new supported TOML section or a claim
 that existing capacity/weight controls enforce CPU or memory quotas. Current measured
-budgets and gaps remain in [performance](../performance.md).
+budgets and gaps remain in [performance](performance.md).
+Scope: aggregate project resource allocation, admission and exhaustion.
 
-## Scope and defaults
+## Entities and state
+
+The budget scope is one project on one machine, including its coordinator processes, CLI/server
+work, workers and children. Ready work waits for admission; admitted jobs consume aggregate CPU
+and memory. Hard enforcement and best-effort enforcement are distinguishable outcomes.
+
+## Rules and transitions
+
+### Scope and defaults
 
 A resource budget applies to the whole project on one machine: overlapping CLI invocations,
 server requests, scheduled runs, managed background work, workers and their children share
@@ -13,17 +24,10 @@ it. Starting another run must not silently multiply the project's allocation. In
 projects are separate scopes; this does not introduce a cross-machine execution budget.
 
 Follow familiar DuckDB-style defaults: use the CPU allocation available to Barca and 80% of
-the available memory allocation, respecting tighter container/OS limits. Resource settings are optional. Users can override
+the available memory allocation, respecting tighter container/OS limits. Resource settings are
+optional. Users can override
 the project budget explicitly. Here allocation means the resource entitlement, not a promise
 to repeatedly resize a budget using momentary free-memory readings.
-
-Proposed, not currently accepted configuration syntax:
-
-```toml
-[resources]
-cpu = 2
-memory = "8GiB"
-```
 
 The CPU unit is a core-equivalent: two CPU-seconds per wall-clock second, aggregated across
 the project, including internal DuckDB/NumPy threads and subprocesses. It is actual CPU
@@ -38,7 +42,7 @@ platforms, accounting details and quota granularity remain implementation/design
 the strongest available enforcement; when hard enforcement is unavailable, proceed with
 best-effort controls and clearly expose the limitation in human and structured status.
 
-## Coordinator cost
+### Coordinator cost
 
 | Scope | Approved bound |
 | --- | --- |
@@ -58,7 +62,7 @@ native CPU and added latency separately; distinguish resource/queue wait and ext
 from useful computation without hiding unexplained coordination overhead. Cold/full-domain
 work needs its own scaling evidence rather than extrapolation from one-key results.
 
-## Admission, sharing and exhaustion
+### Admission, sharing and exhaustion
 
 First come, first served is the default, equally for humans, agents, CLI/UI and schedules.
 Runs share available capacity. A large partitioned run must not reserve the whole machine
@@ -72,13 +76,30 @@ exhaustion must not erase successful peers or masquerade as a cache hit. Identif
 affected attempt and allow unrelated work to continue. Internal ownership,
 backpressure, estimation and process-control mechanisms remain open.
 
-Acceptance must cover overlapping invocation types, a large run alongside a later small run,
-multithreaded Python libraries, child processes, a memory-growing job, and useful diagnostics
-for the effective budget and waits. Fixed coordinator bounds require separate cold,
-inspection, concurrent and long-lived measurements. The finite ownership model does not
-prove CPU/memory enforcement or fair scheduling.
 
-## Questions still open
+## Invariants
+
+- **INV-RESOURCE-01:** Starting another invocation does not multiply the project resource budget.
+- **INV-RESOURCE-02:** Unavailable hard enforcement is exposed as a limitation, never reported
+  as an enforced hard limit.
+- **INV-RESOURCE-03:** Resource exhaustion preserves completed results and identifies the
+  affected attempt.
+
+## Failures and recovery
+
+Hold new work when job memory fills. A running job exceeding an enforced hard limit fails with a
+resource-limit cause while completed peers survive. Where hard enforcement is unavailable,
+expose the effective best-effort limitation in human and structured status; do not claim an
+enforced quota.
+
+## Acceptance and evidence
+
+Exercise overlapping CLI/server/scheduled/background work, a large run followed by a small run,
+multithreaded libraries and children, memory growth and effective-limit diagnostics. Measure
+aggregate coordinator memory, CPU and latency for cold, inspection, concurrent and long-lived
+workloads. These are outstanding acceptance obligations, not passing quota conformance.
+
+## Open questions and gaps
 
 - Exact memory accounting/enforcement seam and quota burst/measurement intervals.
 - Defaults and diagnostics for temporary disk and file/connection pressure.
