@@ -56,7 +56,7 @@ minute it changed. See [Deploying](/deploying/#with-a-remote-store).
 
 ## Endpoints
 
-The normative [OpenAPI 3.1 contract](https://github.com/barca-orc/barca/blob/main/specs/server-api.openapi.yaml)
+The normative [OpenAPI 3.1 contract](https://github.com/barca-orc/barca/blob/main/specs/interfaces/server-api.openapi.yaml)
 defines the current routes, bodies and statuses and is checked against the real router and
 Python Client. This page explains that contract; it does not advertise proposed RFC routes.
 

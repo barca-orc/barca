@@ -1,9 +1,9 @@
 //! Comprehensive grammar specification tests.
-//! Native boundary owner: `specs/user-api.allium`; status/decisions: `specs/README.md`.
+//! Native boundary owner: `specs/interfaces/user-api.allium`; status/decisions: `specs/README.md`.
 //!
-//! These tests define the complete set of Python decorator syntaxes that
-//! barca must parse. Tests marked `#[ignore]` are aspirational — they
-//! document desired behavior that hasn't been implemented yet.
+//! These hand-written tests check supported Python decorator syntax and rejection rules.
+//! They do not execute the Allium model or establish runtime behavior; those contracts
+//! and their integration tests are indexed in `specs/README.md`.
 
 use barca_core::model::*;
 use barca_core::parse::extract_nodes;

@@ -159,14 +159,16 @@ the metadata database in one transaction and the file is deleted. A run whose pr
 leaves the file, and `barca logs` reads its lines from it.
 
 Recorded lines are kept with the run's history: `barca gc` evicts results, not history or
-logs. A run records at most 16 MiB of line text. The line that reaches the cap is followed by
-one `stderr` line,
+logs. A run records complete user lines until their text reaches or exceeds 16 MiB. The
+whole crossing line is retained and followed by one `stderr` line,
 
 ```text
 [barca] log cap reached: this run recorded 16 MiB of output; later lines were shown live but not recorded
 ```
 
-and nothing more of that run is recorded. Every line is still shown live, as before.
+Later user lines are not recorded, but framework notes may still be appended. This is a soft
+threshold: a single line can exceed 16 MiB, and the marker names the threshold rather than
+the exact final byte count. Every line is still shown live, as before.
 
 Recording costs time in proportion to the lines: about 3 µs a line while the step runs and 6 µs
 a line when the run is recorded (a step that writes 100,000 lines to stderr took 0.34 s instead

@@ -13,7 +13,10 @@ use tower::ServiceExt;
 fn contract() -> &'static Value {
     static DOC: OnceLock<Value> = OnceLock::new();
     DOC.get_or_init(|| {
-        serde_yaml_ng::from_str(include_str!("../../../specs/server-api.openapi.yaml")).unwrap()
+        serde_yaml_ng::from_str(include_str!(
+            "../../../specs/interfaces/server-api.openapi.yaml"
+        ))
+        .unwrap()
     })
 }
 fn validator(schema: &Value) -> jsonschema::Validator {

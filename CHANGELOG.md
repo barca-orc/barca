@@ -6,6 +6,25 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Documentation
+
+- Consolidate freshness, execution, inspection and performance contracts; separate approved
+  design from implemented behavior and unscheduled ideas. Remove superseded plans and
+  check specification navigation, invariant ownership and finite concurrency models in CI.
+  Record approved first-use, terminal feedback, project resource and agent interaction bounds
+  without prescribing implementation; include a synthetic navigation scenario. Capture
+  freshness requests, retries, snapshots, drain/recovery and configurable artifact retention,
+  with remaining requirements questions saved for resuming the discussion. Map current
+  architecture ownership and stage refactors with explicit implementation acceptance gates.
+  Separate approved behavioral specs, interface contracts, unapproved proposals and engineering
+  notes; standardize behavioral sections, remove completed plans and enforce the structure.
+  Record a pre-merge audit with separate unresolved decisions, implementation disagreements
+  and specification defects, plus controlled baseline reproduction probes. Correct audit
+  blockers in the declaration model, upload/digest/log contracts and multiline link checking;
+  separate invocation retry intent from the unresolved physical retry policy.
+
 ## 0.33.0 (2026-10-25)
 
 ### Breaking

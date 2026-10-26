@@ -8,9 +8,10 @@
 //! that arrives alone goes out at once. The run deletes the file once its lines are in the
 //! database; a run whose process died leaves it, and readers fall back to it.
 //!
-//! A run records at most [`LOG_CAP_BYTES`] of line text. The line that reaches the cap is
-//! followed by one marker line ([`cap_marker`]) and nothing more is recorded; every line still
-//! reaches the terminal (and a `barca serve` client) live.
+//! A run records complete user lines through the first line reaching or exceeding
+//! [`LOG_CAP_BYTES`], then a marker ([`cap_marker`]); later user lines are not recorded.
+//! The whole crossing line is retained, and framework notes may follow, so this is a soft
+//! threshold rather than a hard byte bound. Every line still reaches the terminal and clients.
 
 use crate::LogStream;
 use serde::{Deserialize, Serialize};

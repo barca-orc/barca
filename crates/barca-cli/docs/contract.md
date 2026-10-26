@@ -1722,7 +1722,7 @@ counts every node even when `nodes` is truncated.
   `next_fire`, `last_fired`, `paused_until` (RFC 3339 UTC or `null`), `last_status`,
   `skip_reason` (string or `null`), `failures`, `max_failures` (integers), `failing`, `paused`
   and `live` (booleans; `live` is `true` when a running scheduler reported it). Its types are in
-  `specs/server-api.openapi.yaml` (`NodeSchedule`).
+  `specs/interfaces/server-api.openapi.yaml` (`NodeSchedule`).
 
 #### Problems only
 
@@ -2533,7 +2533,7 @@ that flag, and stderr identifies each changed key. This warning does not change 
 Status nodes optionally expose `last_bytes_change: {node_id, run_hash, content_hash, created_at}`,
 retained after later unchanged recomputes; latest materializations expose `content_hash`
 when known. These additive keys are stable. See `barca docs cache` and
-`specs/materialization-digests.md`. A `barca get` that re-uploads a `mismatch` target (no step
+`specs/interfaces/materialization-digests.md`. A `barca get` that re-uploads a `mismatch` target (no step
 runs) prints the same warning and sets the same flag. Server-post semantics remain proposed.
 
 #### Recomputed output with changed bytes
@@ -2621,7 +2621,7 @@ An artifact reference may have `format: "csv"` and a `.csv` path when explicitly
 with `serializer="csv"`. CSV sink extensions select CSV automatically. Frames continue
 to default to Parquet. CSV requires a supported tabular value; readers infer types.
 Status samples represent CSV cells as strings, and SQL views support CSV artifacts.
-See `barca docs types` and `specs/artifact-formats.md`.
+See `barca docs types` and `specs/interfaces/artifact-formats.md`.
 
 ### Task stdout and logs
 
@@ -2649,13 +2649,15 @@ exit 2 with the remediation `this run is on this machine: barca logs <run_id> --
 a run id, a configured server's answer is followed on stderr by `[barca] note: this machine has
 a newer run <run_id> (<command> <target>, <status>); barca logs --local reads it` when this
 machine's newest run started later; stdout is unchanged. The wording of both is not stable.
-A run records at most 16 MiB of line text; the line that reaches it is followed by `[barca]
-log cap reached: ...` (stream `stderr`), and nothing after it is recorded.
+A run records complete user lines until their text reaches or exceeds 16 MiB. The whole
+crossing line is retained, followed by `[barca] log cap reached: ...` (stream `stderr`);
+later user lines are not recorded, but framework notes may follow. This is a soft threshold,
+not a hard byte bound on one line or on retained memory.
 Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
 stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. A step's stderr is written
 to stderr as it comes, in every mode, as before. Agent framework lines
 remain `[barca]`-prefixed and are not recorded. Retrieve captured output with `barca logs`.
-See `barca docs logs` and `specs/task-output.md` for flush, failure and ordering boundaries.
+See `barca docs logs` and `specs/interfaces/task-output.md` for flush, failure and ordering boundaries.
 
 <!-- BEGIN GENERATED schema logs -->
 | Key | Type | Present |

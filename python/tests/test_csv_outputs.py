@@ -1,4 +1,4 @@
-"""CSV boundary conformance: specs/artifact-formats.md."""
+"""CSV boundary conformance: specs/interfaces/artifact-formats.md."""
 
 import hashlib
 import json

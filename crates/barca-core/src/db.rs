@@ -1268,7 +1268,7 @@ pub(crate) async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaEr
 
 /// Add this release's additive columns and indexes to a version-1 database written by an
 /// earlier release, in one transaction: rows are untouched, and an error leaves the schema as it
-/// was. The format stays version 1 (see `specs/metadata-schema.md`).
+/// was. The format stays version 1 (see `specs/interfaces/metadata-schema.md`).
 async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
     with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
         for (table, definitions) in crate::db_schema::ADDED_COLUMNS {
@@ -2042,7 +2042,7 @@ pub(crate) async fn last_success_components(cache: &CacheReader, node_id: &str) 
 /// The object this machine knows to be in the artifact store for `node_id` (a display id) at
 /// `run_hash`: the store location and digest of its latest successful row, unless an upload to
 /// that location is pending (#390) or the row has no digest. A row with a store location is
-/// recorded only once its upload was confirmed (`specs/artifact-upload-receipts.md`), so a
+/// recorded only once its upload was confirmed (`specs/interfaces/artifact-upload-receipts.md`), so a
 /// step that produces the same digest again need not upload it again (#554).
 pub(crate) async fn confirmed_object(
     cache: &CacheReader,

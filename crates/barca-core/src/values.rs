@@ -115,7 +115,7 @@ fn helper(
     crate::helper_proc::python_module(python, "barca._value", cfg.storage_options_json.as_deref())
 }
 
-/// Version of the `sign` request to `barca._value` (`specs/worker-protocol.md`).
+/// Version of the `sign` request to `barca._value` (`specs/interfaces/worker-protocol.md`).
 pub const SIGN_VERSION: u32 = 1;
 
 /// One object to sign: its store URI and the name a browser downloads it as.

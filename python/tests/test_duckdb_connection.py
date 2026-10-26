@@ -2,8 +2,11 @@
 
 Inputs annotated `duckdb.DuckDBPyRelation` are loaded on one process-wide connection and bound
 as views named after their parameters, so SQL by name works anywhere (helper modules included),
-authors never write their own bind code, and nothing lingers after the step. The connection is
+authors never write their own input bind code, and orchestration input views are cleaned
+after the step. Deliberate user-created catalog state persists. The connection is
 exposed as `barca.duckdb_connection()` so a module can configure it once per worker process.
+
+Contract: specs/behavior/python-runtime.md (INV-WORKER-STATE-01, INV-WORKER-VIEW-01).
 """
 
 import json

@@ -165,6 +165,6 @@ def orders() -> pd.DataFrame:
     return pd.DataFrame({"id": [1, 2], "amount": [9.5, 12.0]})
 ```
 
-The CSV boundary is specified in `specs/artifact-formats.md`.
+The CSV boundary is specified in `specs/interfaces/artifact-formats.md`.
 
 See also: `barca docs big-inputs`, `barca docs cache`, `barca docs examples/duckdb`.

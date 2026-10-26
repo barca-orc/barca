@@ -19,7 +19,8 @@ crates/
     docs/               ← The manual: markdown topics embedded in the binary (`barca docs`)
   barca-server/         ← `barca serve`: axum HTTP API, cron scheduler, file watcher, embedded UI
 ui/                     ← The web UI (TypeScript, Vite); its build output is compiled into barca-server
-specs/                  ← Boundary specifications (README.md is the index); notes/ holds implementation notes
+specs/                  ← Behavioral/interface contracts, design models and unapproved proposals (README.md is the index)
+docs/engineering/       ← Non-normative architecture plans, rationale and discussion handoff
 DIRECTION.md            ← What barca is, standing non-goals, what is being worked on now
 python/barca/
   __init__.py           ← No-op decorator stubs (identity functions)
@@ -178,8 +179,10 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
 
 [specs/README.md](specs/README.md) inventories native boundary specifications and
 conformance checks. A public boundary change must update its specification, executable
-conformance and explanatory documentation in the same PR. Proposals remain labeled as
-proposed until implemented; do not describe RFC routes or schemas as shipped. Existing
+conformance and explanatory documentation in the same PR. Approved but unimplemented behavior stays explicitly labeled as intent; unapproved
+alternatives live only in `specs/proposals/`. Behavioral owners follow the section structure
+in the index; plans and rationale live in `docs/engineering/`. Do not describe RFC routes or
+schemas as shipped. Existing
 CLI contract/snapshot ownership remains in place.
 
 ## Commit messages

@@ -999,7 +999,9 @@ one stream, `--timestamps` puts the time before each text line. `--step report` 
 function name; use an exact node id if names collide, or a partitioned id to select one key.
 `--env dev` reads that environment's history. It reads no pipeline source and contacts no
 store. Unknown runs/steps and ambiguous names exit 2; silent executed steps return no lines.
-Lines written before a failed step are retained. A run records at most 16 MiB of lines.
+Lines written before a failed step are retained. Recording stops after the first complete user line that reaches or exceeds 16 MiB of
+cumulative text; the crossing line and a marker are retained, and framework notes may follow.
+This is a soft threshold, not a hard byte or memory bound.
 
 `barca logs -f` follows a run: it prints lines as they arrive (one JSON object per line with
 `--json`) and exits when the run ends, 0 when it succeeded, 130 when it was cancelled, 1

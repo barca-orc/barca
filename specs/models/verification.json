@@ -1,0 +1,54 @@
+{
+  "tool": "TLC 1.7.4",
+  "tool_sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+  "model_sha256": "b64cb05fa544f524ae56f4c97394acf1838962487c48f529e9896d01db7f7013",
+  "configs_sha256": {
+    "concurrent.cfg": "98ac98cffc60927cd320a0ca699247443ba556f42b4146c516f5fc7c2013a2ae",
+    "conservative.cfg": "f229e050ceefff3ea3c6a6028c0cd230eb6de4c31a255e209d30c5525b3351c4",
+    "partitioned.cfg": "e1a04e4bc4f0d988c59196a5d5d72fceda95d4698ced2701817e45991ec40c4d"
+  },
+  "checks": [
+    {
+      "check": "concurrent",
+      "expected_violation": null,
+      "generated_states": 8429,
+      "distinct_states": 1324
+    },
+    {
+      "check": "conservative",
+      "expected_violation": null,
+      "generated_states": 4331,
+      "distinct_states": 826
+    },
+    {
+      "check": "partitioned",
+      "expected_violation": null,
+      "generated_states": 74177,
+      "distinct_states": 9646
+    },
+    {
+      "check": "late_completion",
+      "expected_violation": "NoRevisionRegression",
+      "generated_states": 996,
+      "distinct_states": 303
+    },
+    {
+      "check": "duplicate_owner",
+      "expected_violation": "NoDuplicateWork",
+      "generated_states": 34,
+      "distinct_states": 21
+    },
+    {
+      "check": "cancel_other_subscriber",
+      "expected_violation": "CancelPreservesOthers",
+      "generated_states": 296,
+      "distinct_states": 113
+    },
+    {
+      "check": "unsafe_concurrent_versions",
+      "expected_violation": "ConservativeVersions",
+      "generated_states": 107,
+      "distinct_states": 57
+    }
+  ]
+}

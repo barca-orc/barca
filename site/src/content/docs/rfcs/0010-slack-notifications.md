@@ -136,7 +136,7 @@ recovery.
 The previous state comes from the `runs` table, so transitions work the same across separate
 CLI processes and across a server restart. The time of the last post per job is kept in a new
 `notifications` table (`job`, `integration`, `posted_at`, `state`, `message_ref`), added non-destructively
-under the [metadata format policy](https://github.com/barca-orc/barca/blob/main/specs/metadata-schema.md).
+under the [metadata format policy](https://github.com/barca-orc/barca/blob/main/specs/interfaces/metadata-schema.md).
 
 `message_ref` is empty for a webhook post, which returns no message id. It is reserved for a
 later bot-token mode (section 8) to thread replies under the original failure, so adding that

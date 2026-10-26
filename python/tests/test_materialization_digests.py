@@ -1,4 +1,4 @@
-"""Content-digest/recompute boundary: specs/materialization-digests.md."""
+"""Content-digest/recompute boundary: specs/interfaces/materialization-digests.md."""
 
 import hashlib
 import json

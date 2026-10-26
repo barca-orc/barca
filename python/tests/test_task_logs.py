@@ -1,4 +1,4 @@
-"""Task stdout/result conformance: specs/task-output.md and barca docs logs."""
+"""Task stdout/result conformance: specs/interfaces/task-output.md and barca docs logs."""
 
 import json
 import os

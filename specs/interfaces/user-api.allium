@@ -1,0 +1,185 @@
+-- allium: 3
+-- Specification version: 3
+-- Status: implemented declaration concepts; human-readable behavioral model.
+-- Scope: Python node declarations and graph validation, not runtime state machines.
+-- Grammar conformance: crates/barca-core/tests/grammar_spec.rs and decorator_args.rs.
+-- These are hand-written conformance tests, not tests generated from this file.
+-- No Allium compiler/model checker is currently a repository validation gate.
+-- Execution: ../behavior/execution.md; observations/selections: ../behavior/freshness.md.
+-- Inspection: ../behavior/inspection.md.
+-- Rationale: ../../docs/engineering/user-api-decisions.md. Unapproved ideas: ../proposals/api-ideas.md.
+-- Exact CLI and HTTP shapes have their own owners in ../README.md.
+
+------------------------------------------------------------
+-- Declaration concepts
+------------------------------------------------------------
+
+enum NodeKind { asset | sensor | task }
+enum Freshness { always | manual | schedule }
+enum EdgeKind { direct | ordering | collect | partition_source }
+
+value Coordinate {
+    name: String
+    value: String
+}
+
+value PartitionKey {
+    coordinates: Set<Coordinate>
+    -- Canonical named coordinates; integer declaration values normalize to strings.
+}
+
+value RetryPolicy {
+    retries: Integer
+    retry_backoff: Decimal
+    -- retries counts total attempts, not additional attempts.
+    -- Runtime delay before retry is retry_backoff * failed_attempts.
+}
+
+value Tag {
+    name: String
+    value: String
+}
+
+external entity PythonFunction {
+    name: String
+    source_file: String
+    source_text: String
+    -- Declarations are extracted statically. Nonliteral partition expressions
+    -- and computed batch groups have explicit resolver evaluation exceptions.
+}
+
+entity Node {
+    function: PythonFunction
+    kind: NodeKind
+    freshness: Freshness
+    retry_policy: RetryPolicy
+    timeout_seconds: Integer
+    serializer: String?
+    description: String?
+    tags: Set<Tag>
+    inputs: Set<Edge> with downstream = this
+    dependents: Set<Edge> with upstream = this
+    sinks: Set<Sink> with node = this
+    -- Partition declarations can be static, runtime-derived or resolver expressions.
+    -- This model does not imply that all concrete keys are expanded in memory.
+}
+
+entity Edge {
+    upstream: Node
+    downstream: Node
+    kind: EdgeKind
+    param_name: String
+}
+
+entity Sink {
+    node: Node
+    path: String
+    serializer: String?
+    partition_by: List<String>
+    rows_per_file: Integer?
+    -- Trailing-slash dataset paths, staging and pruning: artifact-formats.md.
+}
+
+entity Dag {
+    nodes: Set<Node>
+    edges: Set<Edge>
+}
+
+------------------------------------------------------------
+-- Declaration and validation rules
+------------------------------------------------------------
+
+rule DeclareAsset {
+    when: DeclareAsset(function, freshness, retry_policy, timeout)
+    ensures: Node.created(
+        function: function,
+        kind: asset,
+        freshness: freshness,
+        retry_policy: retry_policy,
+        timeout_seconds: timeout
+    )
+}
+
+rule DeclareSensor {
+    when: DeclareSensor(function, freshness, retry_policy, timeout)
+    ensures: Node.created(
+        function: function,
+        kind: sensor,
+        freshness: freshness,
+        retry_policy: retry_policy,
+        timeout_seconds: timeout
+    )
+}
+
+rule DeclareTask {
+    when: DeclareTask(function, freshness, retry_policy, timeout)
+    ensures: Node.created(
+        function: function,
+        kind: task,
+        freshness: freshness,
+        retry_policy: retry_policy,
+        timeout_seconds: timeout
+    )
+}
+
+rule RejectTaskAsAssetInput {
+    when: Edge.created(upstream, downstream, kind)
+    requires: upstream.kind = task
+    requires: downstream.kind in {asset, sensor}
+    ensures: DagValidationError(message: "task inputs cannot feed assets or sensors")
+}
+
+rule RejectSensorWithInputs {
+    when: Edge.created(upstream, downstream, kind)
+    requires: downstream.kind = sensor
+    ensures: DagValidationError(message: "sensors cannot have inputs")
+}
+
+rule RejectCycle {
+    when: Dag.created(nodes, edges)
+    requires: edges.any(e => path_exists(e.downstream, e.upstream))
+    ensures: DagValidationError(message: "cycle detected in dependency graph")
+}
+
+invariant SensorsHaveNoInputs {
+    for node in Dag.nodes:
+        if node.kind = sensor:
+            node.inputs.count = 0
+}
+
+invariant TasksCannotFeedAssets {
+    for edge in Dag.edges:
+        if edge.upstream.kind = task:
+            edge.downstream.kind = task
+}
+
+invariant NoCycles {
+    not Dag.edges.any(e => path_exists(e.downstream, e.upstream))
+}
+
+surface PythonDecorators {
+    facing user: PythonDeveloper
+    provides:
+        DeclareAsset(function, freshness, retry_policy, timeout)
+        DeclareSensor(function, freshness, retry_policy, timeout)
+        DeclareTask(function, freshness, retry_policy, timeout)
+
+    @guarantee DecoratorsAreNoOps
+        -- Decorators return the original function. Direct Python calls remain ordinary calls.
+        -- Orchestration and runtime helpers are separate from decorator identity.
+
+    @guarantee ExplicitDependencies
+        -- inputs maps parameter names to function references; inferred-by-name wiring
+        -- and string graph references are not substitutes for these declarations.
+        -- Underscore-prefixed inputs are ordering-only and receive None.
+
+    @guarantee StaticDeclarationExtraction
+        -- Reading declarations uses AST analysis without importing pipeline modules.
+        -- Evaluating nonliteral partitions(...) and batches_by(...) is an explicit
+        -- subprocess resolver operation; it may import user code. Doctor does not do it.
+
+    @guarantee ArgumentOwnership
+        -- The complete accepted decorator/helper argument list is decorator_args.rs.
+        -- Unsupported argument behavior is checked by grammar_spec.rs.
+        -- This overview does not enumerate every argument or define CLI wire messages.
+}

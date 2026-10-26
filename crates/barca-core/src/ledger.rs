@@ -599,7 +599,7 @@ fn is_held(post: &LedgerPost, paths: &HashSet<String>) -> bool {
 }
 
 /// The warning for a step whose bytes differ from what was recorded for the same run hash
-/// (`specs/materialization-digests.md`).
+/// (`specs/interfaces/materialization-digests.md`).
 pub(crate) fn bytes_changed_warning(node: &str) -> String {
     format!(
         "[barca] warning: {node} produced different bytes for the same code and inputs; the \
@@ -731,7 +731,7 @@ async fn build_post(
 ///
 /// The table is created the first time a run is posted, never by a reader: a database that has
 /// never been used with a server has no table, and every reader treats that as empty. It is an
-/// additive table of metadata format 1 (`specs/metadata-schema.md`).
+/// additive table of metadata format 1 (`specs/interfaces/metadata-schema.md`).
 pub mod posts {
     use super::{LedgerPost, LedgerStep};
     use crate::BarcaError;
