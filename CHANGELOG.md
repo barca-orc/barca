@@ -20,6 +20,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   architecture ownership and stage refactors with explicit implementation acceptance gates.
   Separate approved behavioral specs, interface contracts, unapproved proposals and engineering
   notes; standardize behavioral sections, remove completed plans and enforce the structure.
+  Record a pre-merge audit with separate unresolved decisions, implementation disagreements
+  and specification defects, plus controlled baseline reproduction probes.
 
 ## 0.33.0 (2026-10-25)
 

@@ -7,6 +7,10 @@ gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) is a pending histor
 fix, not assumed merged. A specification describes its stated scope; a passing grammar
 check or benchmark is not evidence for unrelated runtime behavior.
 
+The [pre-merge audit](../docs/engineering/spec-audit.md) separates unresolved contracts,
+implementation disagreements and specification defects. Its Q1–Q5 findings remain open;
+passing the structural checker does not clear them or establish implementation conformance.
+
 ## Organization
 
 - `behavior/`: the eleven approved behavioral owners, including implemented rules and explicitly labeled unimplemented intent.

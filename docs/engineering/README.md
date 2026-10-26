@@ -4,6 +4,7 @@ These documents are non-normative. Approved behavior and interface owners live i
 [specs](../../specs/README.md); implementation plans, rationale and discussion state cannot
 change those contracts.
 
+- [Pre-merge specification audit](spec-audit.md): separate unconsidered boundaries, implementation disagreements and spec-quality blockers.
 - [Architecture map and cleanup sequence](architecture-cleanup.md): inspected owners and staged refactors.
 - [Requirements discussion handoff](requirements-handoff.md): unanswered proposals and remaining decisions.
 - [User API rationale](user-api-decisions.md): reasons behind declaration choices.
