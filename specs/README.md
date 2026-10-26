@@ -63,6 +63,11 @@ These owners have not been relocated or copied into new schemas.
 
 ## Approved design and unapproved ideas
 
+[Architecture map and cleanup sequence](architecture-cleanup.md) connects the inspected
+implementation to approved responsibilities and orders structural refactors before changes
+to publication, input lifetime and shared execution. It is an engineering plan, not another
+behavior owner or a runtime conformance claim.
+
 [Current state and execution ownership](proposals/current-state-and-execution.md) records
 approved behavior for ordered publication, shared work, cancellation, pending reconciliation,
 checking and bounded execution. Its acceptance scenarios are obligations for implementation,

@@ -56,6 +56,12 @@ its precise outcome/error contract rather than reopening parity.
 
 ## Implementation follow-up, not more product confirmation
 
+The [architecture map and cleanup sequence](../architecture-cleanup.md) now traces existing
+owners and proposes a first behavior-preserving bookkeeping refactor, followed by separately
+gated publication, input lifetime, sharing and bounded-work changes. No runtime refactor has
+shipped in this documentation branch. Use it to start implementation without reopening
+approved product decisions; the unanswered proposals above remain unanswered.
+
 Map approved intent to existing behavior and gaps before implementing. In particular, check
 full code/config snapshots, project-wide resource ownership, surviving-worker reconciliation,
 process-tree cleanup, stable IDs/attempts and retained-history availability. Add conformance
