@@ -8,6 +8,7 @@ and corresponding tests; no user should write code against them.
 | Idea | Current behavior | Unresolved tradeoff |
 | --- | --- | --- |
 | Allow task-to-asset inputs with an uncacheable warning | DAG validation rejects task inputs to assets and sensors | Weakens the asset caching model; no softening is planned |
+| Optional `barca tutorial` | Core commands and manual are available without a tutorial | A possible guided walkthrough of tasks, assets, refresh/cache behavior and exploration; no command is implemented or approved for delivery |
 | A typed `SensorResult`, passed into and returned from sensors | Sensors have no DAG inputs; return a boolean, `(changed, value)`, or a value for comparison | Adds a public type and previous-observation injection; neither is implemented |
 | Omit underscore-prefixed ordering parameters from calls | Declared ordering inputs receive `None` | Changes normal Python call signatures and compatibility |
 

@@ -13,6 +13,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Consolidate freshness, execution, inspection and performance contracts; separate approved
   design from implemented behavior and unscheduled ideas. Remove superseded plans and
   check specification navigation, invariant ownership and finite concurrency models in CI.
+  Record approved first-use and terminal feedback bounds without prescribing implementation.
 
 ## 0.33.0 (2026-10-25)
 

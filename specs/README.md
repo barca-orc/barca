@@ -7,6 +7,13 @@ gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) is a pending histor
 fix, not assumed merged. A specification describes its stated scope; a passing grammar
 check or benchmark is not evidence for unrelated runtime behavior.
 
+## Product intent
+
+[Product experience](experience.md) records the approved first-use, success, progress, logging,
+failure and noninteractive-command bounds. It specifies observable outcomes while leaving
+presentation and internal mechanisms open. Its status is approved intent with partial
+implementation coverage, not an assertion that all defaults have shipped.
+
 ## Behavioral contracts
 
 | Owner | Scope | Status / evidence |
