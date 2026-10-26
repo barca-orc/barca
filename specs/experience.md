@@ -62,6 +62,12 @@ Optional guided experiences may be interactive. A future `barca tutorial` is an
 [unscheduled idea](proposals/api-ideas.md), not an implemented command or a prerequisite for
 using the core product.
 
+Agent information parity, discovery and large structured results are specified in
+[agent interaction](proposals/agents.md). Shared budgets, FIFO ready-work admission and
+coordinator overhead bounds are in [project resources](proposals/resources.md).
+The requirements discussion remains open; the first-use decisions above are not an exhaustive
+product acceptance specification.
+
 ## Acceptance and freedom
 
 Evaluate the experience with these scenarios: a first task, a first cached asset and refresh,

@@ -11,7 +11,9 @@ check or benchmark is not evidence for unrelated runtime behavior.
 
 [Product experience](experience.md) records the approved first-use, success, progress, logging,
 failure and noninteractive-command bounds. It specifies observable outcomes while leaving
-presentation and internal mechanisms open. Its status is approved intent with partial
+presentation and internal mechanisms open. [Project resource bounds](proposals/resources.md)
+and [agent interaction](proposals/agents.md) record the ongoing requirements discussion,
+including an anonymized synthetic navigation case. Their status is approved intent with partial
 implementation coverage, not an assertion that all defaults have shipped.
 
 ## Behavioral contracts

@@ -6,6 +6,11 @@ Scope: orchestration resource cost, excluding application computation and Python
 states what a measurement can establish. These are controlled workload budgets, not a
 universal latency or memory guarantee on arbitrary hardware.
 
+The later [project resource requirements](proposals/resources.md) set approved whole-project
+bounds of <20 MB for simple coordination, <100 MB for demanding coordination, and a <50 ms
+ordinary-overhead target. Those are not newly achieved by the workload-specific records below.
+CPU/memory budget enforcement and sharing defaults are approved design, not existing quota controls.
+
 ## Implemented workload budgets
 
 | Workload | Native memory budget | Native CPU budget | Evidence |
