@@ -14,7 +14,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   design from implemented behavior and unscheduled ideas. Remove superseded plans and
   check specification navigation, invariant ownership and finite concurrency models in CI.
   Record approved first-use, terminal feedback, project resource and agent interaction bounds
-  without prescribing implementation; include a synthetic navigation scenario.
+  without prescribing implementation; include a synthetic navigation scenario. Capture
+  freshness requests, retries, snapshots, drain/recovery and configurable artifact retention,
+  with remaining requirements questions saved for resuming the discussion.
 
 ## 0.33.0 (2026-10-25)
 

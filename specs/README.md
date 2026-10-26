@@ -15,6 +15,10 @@ presentation and internal mechanisms open. [Project resource bounds](proposals/r
 and [agent interaction](proposals/agents.md) record the ongoing requirements discussion,
 including an anonymized synthetic navigation case. Their status is approved intent with partial
 implementation coverage, not an assertion that all defaults have shipped.
+[Operations](proposals/operations.md) records freshness requests, retry/snapshot semantics,
+drain/recovery and artifact retention. Resume the discussion at the
+[remaining questions](proposals/requirements-handoff.md), which separates unanswered proposals
+from approved decisions.
 
 ## Behavioral contracts
 

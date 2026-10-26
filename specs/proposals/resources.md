@@ -13,7 +13,7 @@ it. Starting another run must not silently multiply the project's allocation. In
 projects are separate scopes; this does not introduce a cross-machine execution budget.
 
 Follow familiar DuckDB-style defaults: use the CPU allocation available to Barca and 80% of
-the available memory allocation, respecting tighter container/OS limits. Users can override
+the available memory allocation, respecting tighter container/OS limits. Resource settings are optional. Users can override
 the project budget explicitly. Here allocation means the resource entitlement, not a promise
 to repeatedly resize a budget using momentary free-memory readings.
 
@@ -34,8 +34,9 @@ combined project respects its parent allocation.
 
 CPU and memory limits must be truthful about enforcement. DuckDB's buffer-manager memory
 setting alone cannot establish the hard job-memory bound. Enforcement mechanisms, supported
-platforms, accounting details and quota granularity remain implementation/design work; an
-unsupported hard guarantee cannot silently become a best-effort hint.
+platforms, accounting details and quota granularity remain implementation/design work. Use
+the strongest available enforcement; when hard enforcement is unavailable, proceed with
+best-effort controls and clearly expose the limitation in human and structured status.
 
 ## Coordinator cost
 
@@ -67,7 +68,8 @@ No separate interactive/agent/schedule priority policy is approved.
 
 Hold back new work as a job-memory budget fills. If running jobs exceed a configured hard
 memory budget, report a resource-limit failure and preserve completed results. Resource
-exhaustion must not erase successful peers or masquerade as a cache hit. Internal ownership,
+exhaustion must not erase successful peers or masquerade as a cache hit. Identify the
+affected attempt and allow unrelated work to continue. Internal ownership,
 backpressure, estimation and process-control mechanisms remain open.
 
 Acceptance must cover overlapping invocation types, a large run alongside a later small run,
@@ -78,9 +80,11 @@ prove CPU/memory enforcement or fair scheduling.
 
 ## Questions still open
 
-- Policy when the requested hard enforcement is unavailable on a supported platform.
 - Exact memory accounting/enforcement seam and quota burst/measurement intervals.
-- Defaults and diagnostics for temporary disk, artifact/log/history retention, and file/connection pressure.
-- Cancellation/termination deadlines and escalation for a job that does not cooperate.
+- Defaults and diagnostics for temporary disk and file/connection pressure.
+- Exact cancellation/termination deadlines; graceful then forced cleanup is approved.
 
-These are not permission to relax an agreed hard limit or introduce undocumented priorities.
+[Operations](operations.md) owns approved artifact retention, cleanup and process lifecycle.
+
+Best-effort fallback must be visible; it must not claim an unenforced hard limit or introduce
+undocumented priorities.

@@ -45,9 +45,19 @@ and submission to an existing server are approved options. Foreground execution 
 normal first-use experience. The owner must outlive the initiating client when backgrounded;
 no always-on server is required just to begin using Barca locally.
 
-How the caller knows/reuses a submission ID before acknowledgement, retention of deduplication
-records, recovery after owner restart and handling a repeated ID with changed intent must be
-specified before claiming retry-safe submission. Existing run IDs alone do not prove it.
+The [operations requirements](operations.md) define explicit retry versus lost-response
+recovery, immutable target/arguments, current-code attempts, client lifetime and owner recovery.
+ID allocation before acknowledgement and deduplication retention remain open. Existing run
+IDs alone do not establish these guarantees.
+
+All capabilities must also be available in server mode, including discovery, previews,
+pagination, logs, retries and resource controls. Structured errors expose retry safety
+(safe, unsafe or unknown) and concrete recovery actions; a task may have performed external
+side effects before failing, so execution retry safety can be unknown.
+
+Provide a read-only impact preview showing expected execution/reuse, affected partitions
+and reasons, explicitly identifying unresolved sensor state. Preview must not execute work
+just to resolve unknowns. Precise output schemas remain design work.
 
 ## Familiar log controls
 
@@ -90,9 +100,8 @@ meaning supplied by the user's descriptions separate from orchestration metadata
 
 ## Questions still open
 
-- What a read-only impact preview must expose, including unresolved sensor state and resource waits.
 - Precise resume/delivery guarantees for logs/events beyond the familiar controls.
-- Identifier/deduplication retention and background-owner failure policy.
+- Identifier allocation/deduplication retention and exact recovery mechanics.
 - Default page sizes, consistent navigation during changes, and inspection round-trip budgets.
 
 These are acceptance obligations/design questions. Existing CLI/HTTP contracts provide parts
