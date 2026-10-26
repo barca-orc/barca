@@ -1,6 +1,7 @@
 # Static Barca bindings (#316, P07)
 
-> Note from #355 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #355](https://github.com/barca-orc/barca/pull/355) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [declaration model](../user-api.allium) and [cache provenance](../cache-decisions.md).
 
 ## Scope and contract
 

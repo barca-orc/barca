@@ -38,6 +38,22 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 scripts/check-changelog.py --base "$BASE"
 
+      - name: Specification owners, links and evidence references
+        run: python3 scripts/check-specs.py
+
+      - name: Install Java for specification models
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Check specification models and negative controls
+        run: |
+          mkdir -p .spec-check
+          curl --retry 3 --max-time 60 -fsSL https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar -o .spec-check/tla2tools.jar
+          # The checker verifies the pinned jar's SHA-256 before executing it.
+          python3 specs/models/check.py --jar .spec-check/tla2tools.jar
+
       - name: Mount cache disk
         uses: depot/cache-mount@v1
         with:

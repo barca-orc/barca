@@ -8,6 +8,8 @@ consumer's run hash; everything downstream follows through the consumer's new ru
 Sensors run in an earlier phase than their consumers, so a consumer's cache decision always sees
 this run's sensor output. `--dry-run` and `barca status` execute nothing: they predict from the
 sensor's last recorded output, and report a consumer as `unknown` when there is none.
+
+Contracts: specs/freshness.md and specs/inspection.md (INV-INSPECT-01).
 """
 
 import json

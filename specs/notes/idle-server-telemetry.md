@@ -1,6 +1,7 @@
 # Idle server telemetry (#313 / roadmap P14)
 
-> Note from #356 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #356](https://github.com/barca-orc/barca/pull/356) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [telemetry manual](../../crates/barca-cli/docs/telemetry.md).
 
 ## Contract
 

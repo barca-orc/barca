@@ -2,7 +2,7 @@
 
 Scope: metadata format compatibility, not the full table/DDL contract.
 Status: implemented. Specification version: 1 (database versions are described below).
-Conformance: `crates/barca-core/src/db_schema.rs`, `state_validate.rs`, and snapshot/carry
+Conformance: `crates/barca-core/src/db_schema.rs`, `state_validate.rs`, and snapshot
 tests in `db.rs`. See [boundary inventory](README.md).
 
 The metadata database contains durable run history, logs and schedules alongside
@@ -21,7 +21,7 @@ future versions are refused with an actionable error. Reading that field does
 not create a table, change data or add a configuration knob. SQLite salvage
 preserves it along with the database header, unlike a separate version row that
 can be lost while history rows remain recoverable. The check precedes writes,
-including inspection's private snapshots and shared-state validation/carry.
+including inspection's private snapshots and restore validation.
 
 The version-0 to version-1 migration uses the existing additive table/column
 definitions. It preserves every row, validates the resulting readable/writable

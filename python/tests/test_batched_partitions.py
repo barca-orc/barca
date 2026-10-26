@@ -4,6 +4,8 @@ run into fewer calls of its function.
 The function receives the list of its call's keys, a partitioned input as a dict of key to
 value (or one lazy table), and returns a dict of key to value or a table with the dimension as
 a column. Each key keeps the run hash, artifact and materialization it has without batching.
+
+Contract: specs/execution.md (INV-BATCH-01, INV-BATCH-02, INV-BATCH-03).
 """
 
 import json

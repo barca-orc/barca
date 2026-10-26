@@ -1,4 +1,7 @@
-"""Incremental work is bounded by affected identities, for ordinary and keyed DAGs."""
+"""Validated warm incremental work is bounded by affected identities.
+
+Contracts: specs/freshness.md (INV-CHAIN-01) and specs/performance.md (INV-PERF-01).
+"""
 
 import json
 import os

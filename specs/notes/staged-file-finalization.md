@@ -1,6 +1,7 @@
 # Cancellation-safe staged-file finalization
 
-> Note from #380 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #380](https://github.com/barca-orc/barca/pull/380) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [upload receipts](../artifact-upload-receipts.md).
 
 ## Evidence and scope
 

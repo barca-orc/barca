@@ -1,6 +1,7 @@
 # DuckDB connection lifetime (#302 / roadmap P02)
 
-> Note from #346 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #346](https://github.com/barca-orc/barca/pull/346) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [Python runtime](../python-runtime.md).
 
 Status: **accepted product decision, 2026-10-09**.
 The user chose one connection per process because a process executes steps sequentially.

@@ -1,9 +1,10 @@
 # P09 second slice: complete upstream cache decisions
 
-> Note from #365 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #365](https://github.com/barca-orc/barca/pull/365) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [cache decisions](../cache-decisions.md).
 
 Status: implemented second slice, specification version 1. First slice PR #354 is merged.
-Plan recorded before implementation on main 748479ff; integrated onto ff911226. Refs #337, specs/notes/partition-planning-correctness.md.
+Plan recorded before implementation on main 748479ff; integrated onto ff911226. Refs #337, PR #354 (historical first slice; current owner: ../cache-decisions.md).
 Conformance: cache boundary Rust regressions and existing actual CLI partition suites.
 
 ## Concrete current-code counterexample

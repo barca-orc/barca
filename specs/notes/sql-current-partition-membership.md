@@ -1,6 +1,7 @@
 # SQL views use current partition membership (#288)
 
-> Note from #378 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #378](https://github.com/barca-orc/barca/pull/378) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [current membership](../freshness.md) and [SQL manual](../../crates/barca-cli/docs/sql.md).
 
 ## Problem and accepted scope
 

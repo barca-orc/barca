@@ -1,6 +1,7 @@
 # Serve startup/load isolation (#312, P11)
 
-> Note from #361 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #361](https://github.com/barca-orc/barca/pull/361) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [execution](../execution.md) and [inspection](../inspection.md).
 
 ## Scope and reproduction
 

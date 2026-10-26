@@ -1,10 +1,10 @@
 # Materialization digests
 
-Status: implemented for producer serialization and recompute detection. Specification version: 1.
-Scope: local and confirmed-upload materializations, and server ledger acceptance (RFC-0007,
-`barca_core::ledger`); the RFC-0009 store repair policy is a separate boundary under
-development.
-Conformance: `python/tests/test_materialization_digests.py`, persistence and state-carry Rust
+Status: implemented for producer serialization and recompute detection. Specification version: 2.
+Scope: local and confirmed-upload materializations, store mismatch repair (RFC-0009),
+and implemented server ledger acceptance (RFC-0007). Upload ownership and concurrent read
+limits are specified separately in [artifact-upload-receipts.md](artifact-upload-receipts.md).
+Conformance: `python/tests/test_materialization_digests.py`, persistence Rust
 tests, and for the ledger `crates/barca-server/tests/api.rs` and `python/tests/test_server_ledger.py`.
 
 Each newly recorded successful materialization stores the SHA-256 of its serialized artifact

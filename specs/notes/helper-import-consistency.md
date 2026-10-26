@@ -1,6 +1,7 @@
 # Helper hashing and worker import consistency (#295, P08)
 
-> Note from #358 (merged 2026-10-10). Status 2026-10-20: accurate.
+> Historical record from [PR #358](https://github.com/barca-orc/barca/pull/358) (merged 2026-10-10).
+> Describes that change, not a current contract. Current owner: [cache provenance](../cache-decisions.md) and [Python runtime](../python-runtime.md).
 
 ## Boundary and reproduced failures
 

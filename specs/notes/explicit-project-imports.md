@@ -1,6 +1,7 @@
 # Explicit project imports and stable module identity (#295)
 
-> Note from #371 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #371](https://github.com/barca-orc/barca/pull/371) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [cache provenance](../cache-decisions.md) and [declarations](../user-api.allium).
 
 Status: approved mechanics before implementation. Rebased to current main after PR355/362. The user
 accepted ordinary qualified/explicit imports for ambiguous and history-dependent

@@ -1,6 +1,7 @@
 # Lexical rebinding and unused-input warnings (#300 / P06)
 
-> Note from #349 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #349](https://github.com/barca-orc/barca/pull/349) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [cache provenance](../cache-decisions.md).
 
 ## Boundary
 

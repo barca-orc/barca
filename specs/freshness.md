@@ -1,0 +1,90 @@
+# Observations, partition membership and current selections
+
+Specification version: 1. Status: implemented rules with the known selection defect below.
+Scope: sensor meanings, current membership, cache selection, and freshness policy.
+Terms: [glossary](../GLOSSARY.md). Hash completeness and publication mechanics remain owned by
+[cache decisions](cache-decisions.md); byte digests by [materialization digests](materialization-digests.md).
+Approved changes to revision ordering and shared execution are separate in
+[the design proposal](proposals/current-state-and-execution.md).
+
+## Observations
+
+| Return value | Observation transition | Data available downstream |
+| --- | --- | --- |
+| `True` | Advance freshness, including when no data is supplied | No newly supplied payload |
+| `(True, value)` | Advance freshness, even if serialized bytes match the previous payload | `value` |
+| `False` or `(False, value)` | Retain the previous observation and payload, when present | Previous payload; the tuple's new value is ignored |
+| A non-boolean value | Compare its content with the previous observation | The returned value |
+
+The boolean is orchestration metadata, not downstream data. With no previous observation,
+`False` supplies `None`, while `(False, value)` supplies `value`; there is no previous payload
+to retain. A two-item tuple must start with a boolean; an invalid flag is an error, not
+implicit content comparison. For a dictionary used as a partition source, freshness is compared per key.
+A change signal for the source does not force every unchanged dictionary entry's chain.
+A whole-dictionary input still depends on the whole observation.
+
+- **INV-OBS-01:** An explicit changed signal can invalidate a consumer without different data bytes.
+- **INV-OBS-02:** When a previous payload exists, an explicit unchanged signal cannot replace it with a new tuple value.
+- **INV-OBS-03:** Observation identity and serialized-byte digest have separate meanings.
+
+`observation_hash` is the implemented freshness identity. It is opaque: it is not an ordered
+revision, a content digest, or a timestamp. The approved ordered revision in the proposal
+must not be implemented by comparing existing hashes lexicographically.
+
+Conformance: [sensor observations](../python/tests/test_sensor_observations.py)
+(`test_signal_without_data_keeps_asset_chain_fresh`,
+`test_unchanged_signal_preserves_data_for_a_new_consumer`,
+`test_explicit_change_refreshes_even_with_the_same_payload`),
+[sensor content comparison](../python/tests/test_sensor_freshness.py),
+[worker protocol](worker-protocol.md).
+
+## Membership and selection
+
+A partition domain is current membership, not the set of every historically recorded key.
+For a keyed source, an added or changed value invalidates that key's affected chain; a removed
+key leaves current results. Removing membership does not erase history. Artifact eviction
+can remove bytes while preserving rows under the normal cache policy.
+
+- **INV-MEMBER-01:** A removed key is not resurrected by historical rows in current results.
+- **INV-SELECT-01:** Cache selection matches the current computation identity, even if its
+  materialization predates a more recent computation for that key.
+- **INV-CHAIN-01:** Fresh unrelated keys need no function execution to update an aligned chain.
+
+Example: source values `1 -> 2 -> 1 -> 1`, with an asset doubling the value, require results
+`2 -> 4 -> 2 -> 2`. Returning `4` on the last read violates INV-SELECT-01. A cache hit need
+not append a new materialization, so choosing the greatest historical row ID is insufficient.
+
+Known deviation on the 0.33.0 baseline: [#657](https://github.com/barca-orc/barca/issues/657)
+reproduces that violation for partitioned results. [PR #658](https://github.com/barca-orc/barca/pull/658)
+contains the regression and fix; it is not part of this branch's implemented baseline.
+Do not describe its proof format or bounded historical exceptions as shipped until merged.
+
+Conformance: [partition cache](../python/tests/test_partition_cache.py)
+(`test_a_new_key_runs_only_that_key`, `test_a_removed_key_is_not_resurrected`),
+[keyed sources](../python/tests/test_keyed_partitions.py),
+[current SQL membership](../python/tests/test_sql_current_partitions.py),
+[incremental DAGs](../python/tests/test_incremental_dag.py). The historical reversion control
+is on PR #658; existing unpartitioned return-to-an-earlier-value coverage alone does not
+prove the partitioned invariant.
+
+## Freshness policy
+
+| Context | Meaning |
+| --- | --- |
+| Explicit `get` / `run` | Resolve the requested dependency cone; reuse matching asset results; run requested tasks and required sensors |
+| Scheduled tick | Reconcile its node and reachable `Always` nodes; stop propagation at a separate schedule |
+| `Manual` asset/task | Pin its existing successful result unless explicitly refreshed; a never-produced pin blocks readers |
+| Sensor | Poll whenever required by a run, regardless of its declared freshness |
+| Partitioned `Manual` | Current limitation: follows ordinary computation rather than pinning |
+
+The canonical run interface (`POST /runs`, also used by `--server`) follows CLI freshness
+rules. Deprecated trigger routes retain their compatibility behavior, including their older
+Manual treatment; see [scheduling](../crates/barca-cli/docs/scheduling.md#manual-pins-itself).
+Manual pins itself; it is not an approval gate that prevents other inputs below it updating.
+A changed `collect()` consumer needs all applicable inputs. Explicit partition selection does
+not promise a partial collect over selected keys.
+
+Conformance: [freshness rules](../crates/barca-core/src/freshness.rs),
+[scheduled execution](../python/tests/test_serve_schedule.py),
+[early cutoff](../python/tests/test_asset_cutoff.py),
+[selection](../python/tests/test_partition_selection.py).

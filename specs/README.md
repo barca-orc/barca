@@ -1,47 +1,87 @@
-# Boundary specifications
+# Specifications
 
-A boundary specification defines what callers can rely on. Update the specification,
-its executable conformance checks and explanatory documentation in the same PR when
-changing that boundary. Specification versions identify contract revisions; they are
-independent of Barca package versions. A design plan or RFC does not promise shipped
-behavior.
+Start here for what Barca promises and what is still design. Terms are defined in the
+[glossary](../GLOSSARY.md); product direction lives in [DIRECTION.md](../DIRECTION.md).
+This cleanup describes the implemented 0.33.0 baseline at `fa396a5d` and explicitly identified
+gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) is a pending historical-selection
+fix, not assumed merged. A specification describes its stated scope; a passing grammar
+check or benchmark is not evidence for unrelated runtime behavior.
 
-| Boundary | Native specification | Status / version | Executable conformance |
+## Behavioral contracts
+
+| Owner | Scope | Status / evidence |
+| --- | --- | --- |
+| [Freshness](freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules; known historical-selection defect #657; named invariants and real integration checks |
+| [Execution](execution.md) | Runs, logical keys vs calls/processes, batches, partial failure, cancellation and recovery | Implemented rules; overlapping asset sharing and bounded full execution remain gaps |
+| [Inspection](inspection.md) | Validity, execution, availability and current counts | Implemented behavior; explicit checking and independent status tracking are approved design only |
+| [Performance](performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |
+| [Python runtime](python-runtime.md) | Cached modules, process-local DuckDB state and temporary input views | Implemented; real worker connection controls |
+
+Each owner links its exact conformance sources and records known limitations. Existing wire
+schemas stay authoritative for field names/types/status enums; prose does not silently add
+an interface. New behavior changes its owner, explanatory manual/site pages and conformance
+in the same PR. A known bug is identified as a deviation, not rewritten as intended behavior.
+
+## Interface contracts
+
+| Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and wire bodies | [server-api.openapi.yaml](server-api.openapi.yaml) (OpenAPI 3.1 / JSON Schema 2020-12) | Current implemented surface, including the RFC-0007 §3.4 run contract and inspection routes, the `barca sql` reads (`GET /sql/views`, `GET /materializations`) and the ledger routes, with ETag revalidation on the inspection routes, and the run queue (`GET /queue`, `POST /queue/pause`, `POST /queue/resume`); specification 13 | [Rust router conformance](../crates/barca-server/tests/openapi.rs), [real Python Client conformance](../python/tests/test_http_openapi_client.py) |
-| Python decorator grammar and execution model | [user-api.allium](user-api.allium), [decisions](user-api-decisions.md) | Mixed implemented grammar and design rules; specification 1. Ignored grammar cases and unresolved decisions are aspirations. | [grammar_spec.rs](../crates/barca-core/tests/grammar_spec.rs), [project star-import provenance](../python/tests/test_static_barca_bindings.py); runtime acceptance remains in core and Python integration suites |
-| Batched partitions | [RFC-0013](../site/src/content/docs/rfcs/0013-batched-partitions.md), [worker protocol](worker-protocol.md), [HTTP schema](server-api.openapi.yaml) and [CLI contract](../crates/barca-cli/docs/contract.md) | Implemented for 0.32.0; experimental grouping and observability | [real worker and server conformance](../python/tests/test_batched_partitions.py), [grouping/parser controls](../crates/barca-core/src/batch.rs), [10k/200k benchmark](../benchmarks/batched_partitions/bench.py) |
-| Materialization digests and recompute checks | [materialization-digests.md](materialization-digests.md) | Implemented producer/recompute scope and store mismatch repair (RFC-0009); specification 1. Server acceptance remains proposed. | [CLI digest conformance](../python/tests/test_materialization_digests.py), persistence Rust tests |
-| Artifact formats, CSV outputs and dataset sinks | [artifact-formats.md](artifact-formats.md) | Implemented; specification 2 | [CSV conformance](../python/tests/test_csv_outputs.py), [dataset sinks](../python/tests/test_dataset_sinks.py), [sink arguments](../crates/barca-core/src/sink_args.rs), [decorator grammar](../crates/barca-core/tests/grammar_spec.rs) |
-| Artifact upload ownership and receipts | [artifact-upload-receipts.md](artifact-upload-receipts.md) | Implemented; specification 1 | [controlled overlaps](../python/tests/test_upload_snapshot_receipts.py), [cancellation/crash lifecycle](../python/tests/test_remote_cancel.py), [fail-soft pending uploads](../python/tests/test_fail_soft_uploads.py), transfer and persistence Rust tests |
-| Cache decisions, recorded progress and interrupted runs | [cache-decisions.md](cache-decisions.md) | Implemented; specification 2 | [cache.rs](../crates/barca-core/src/cache.rs) decision tests, [conditional](../python/tests/test_conditional_helper_hashing.py) and [star-import](../python/tests/test_helper_star_hashing.py) hashing, [progress](../python/tests/test_incremental_persist.py), [terminal outcomes](../python/tests/test_terminal_persist.py), [run_owner.rs](../crates/barca-core/src/run_owner.rs), [reconciliation](../python/tests/test_history_reconcile.py) |
-| Metadata format compatibility | [metadata-schema.md](metadata-schema.md) | Implemented compatibility policy; database format 1 (with additive nullable columns and tables, e.g. the cache-limit columns `evicted_at` and `last_read_at` from v0.25.0), legacy 0 | [db_schema.rs](../crates/barca-core/src/db_schema.rs), [state_validate.rs](../crates/barca-core/src/state_validate.rs), restore tests in [backup.rs](../crates/barca-core/src/backup.rs), snapshot tests in [db.rs](../crates/barca-core/src/db.rs), [pending_uploads.rs](../crates/barca-core/src/pending_uploads.rs), snapshot/carry tests in [db.rs](../crates/barca-core/src/db.rs), cache-limit schema tests in [gc/tests.rs](../crates/barca-core/src/gc/tests.rs) |
-| Metadata backups in the store and `barca state restore` | No native specification: [RFC-0009](../site/src/content/docs/rfcs/0009-store-backup-and-restore.md) (accepted) for the design; the layout, names, sidecar and restore checks in [`barca docs remote`](../crates/barca-cli/docs/remote.md) and the `state backups` / `state restore` JSON in [the CLI contract](../crates/barca-cli/docs/contract.md); the `python -m barca._state` verbs in [_state.py](../python/barca/_state.py) | Implemented in 0.26.0; backup names carry milliseconds and a suffix from 0.26.1 (#487), to-the-second names still read | [backup.rs](../crates/barca-core/src/backup.rs) tests, [store backends](../python/tests/test_state_backends.py), [backup and restore CLI](../python/tests/test_store_backup_restore.py), [two-directory e2e](../tests/integration/test_remote_state.sh) |
-| Signed URLs | No native specification: [RFC-0011](../site/src/content/docs/rfcs/0011-signed-urls.md) (accepted); `barca.signed_url` and `barca get -o url` in [`barca docs remote`](../crates/barca-cli/docs/remote.md) and [the CLI contract](../crates/barca-cli/docs/contract.md); the `sign` op of `python -m barca._value` in [_value.py](../python/barca/_value.py) | Implemented in 0.26.0 | [signed URL tests](../python/tests/test_signed_urls.py), CLI snapshots |
-| Slack notifications | No native specification: [RFC-0010](../site/src/content/docs/rfcs/0010-slack-notifications.md) (accepted); variables and messages in [`barca docs telemetry`](../crates/barca-cli/docs/telemetry.md) | Implemented in 0.26.0; the message text is not a stable surface | [slack.rs](../crates/barca-core/src/telemetry/slack.rs) tests, [webhook tests](../python/tests/test_telemetry_slack.py) |
-| Task results and recorded output | [task-output.md](task-output.md) | Implemented; specification 4 | [Task/stdout conformance](../python/tests/test_task_logs.py), [stderr, follow and server reads](../python/tests/test_live_logs.py), CLI snapshots and Rust log persistence tests |
-| Project prerequisites and credential diagnostics | [doctor.md](doctor.md) | Implemented; specification 1, experimental check data | [no-execution controls](../python/tests/test_doctor.py), [identity adapters](../python/tests/test_identity.py), [server checks](../python/tests/test_debugging_problems.py), CLI snapshots |
-| CLI flags, messages and JSON envelopes | [existing CLI contract](../crates/barca-cli/docs/contract.md) and native help/JSON snapshots | Current implemented contract, existing ownership retained; no separate specification version. Includes the v0.25.0 output shape (`get` paths by default, `-o path\|value`, `--partition`; stable, except a partitioned target's partial failure, experimental) and the cache size limit (`barca gc`, `[cache] max_size`; experimental) | [CLI integration tests](../python/tests/test_cli_contract.py), Rust CLI snapshot tests |
-| Worker/transfer socket protocol | [worker-protocol.md](worker-protocol.md) | Implemented in v0.24.0; specification 5 / protocol 5 | [protocol tests](../crates/barca-core/src/protocol.rs), [Python/CLI negotiation](../python/tests/test_protocol_handshake.py), [batched runtime/crash controls](../python/tests/test_compact_worker_protocol.py), [workers that survive a failed step](../python/tests/test_worker_survives_exceptions.py) |
+| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](server-api.openapi.yaml) | Implemented, specification 13 | [Router](../crates/barca-server/tests/openapi.rs), [Python client](../python/tests/test_http_openapi_client.py) |
+| Python declarations | [Allium overview](user-api.allium), [rationale](user-api-decisions.md) | Implemented declaration concepts, specification 2; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-core/tests/grammar_spec.rs), [argument owner](../crates/barca-core/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
+| CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
+| Worker/transfer sockets | [Protocol](worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-core/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
+| Batched partitions | [Execution](execution.md), [RFC-0013](../site/src/content/docs/rfcs/0013-batched-partitions.md), existing wire owners | Implemented in 0.32.0; grouping/observability experimental | [Real worker/server](../python/tests/test_batched_partitions.py), [grouping](../crates/barca-core/src/batch.rs) |
+| Materialization digests | [Digests](materialization-digests.md) | Implemented producer, repair and ledger acceptance, specification 2 | [CLI](../python/tests/test_materialization_digests.py), [ledger](../python/tests/test_server_ledger.py) |
+| Artifact formats and dataset sinks | [Formats](artifact-formats.md) | Implemented, specification 2 | [CSV](../python/tests/test_csv_outputs.py), [dataset sinks](../python/tests/test_dataset_sinks.py) |
+| Upload ownership/receipts | [Receipts](artifact-upload-receipts.md) | Implemented, specification 1; concurrent input read isolation is explicitly not guaranteed | [Controlled overlaps](../python/tests/test_upload_snapshot_receipts.py), [cancellation](../python/tests/test_remote_cancel.py), [pending uploads](../python/tests/test_fail_soft_uploads.py) |
+| Cache decisions and durability | [Cache decisions](cache-decisions.md) | Implemented, specification 2; selection caveat in freshness owner | [Core decisions](../crates/barca-core/src/cache.rs), [progress](../python/tests/test_incremental_persist.py), [terminal writes](../python/tests/test_terminal_persist.py), [reconciliation](../python/tests/test_history_reconcile.py) |
+| Metadata compatibility | [Metadata](metadata-schema.md) | Implemented policy specification 1; database format 1, legacy 0 | [Admission](../crates/barca-core/src/db_schema.rs), [validation](../crates/barca-core/src/state_validate.rs), [compatibility](../python/tests/test_metadata_compat.py) |
+| Task results and recorded output | [Task output](task-output.md) | Implemented, specification 4 | [Task/stdout](../python/tests/test_task_logs.py), [live logs](../python/tests/test_live_logs.py) |
+| Project/credential diagnostics | [Doctor](doctor.md) | Implemented, specification 1; check data experimental | [No-execution](../python/tests/test_doctor.py), [identity](../python/tests/test_identity.py), [server](../python/tests/test_debugging_problems.py) |
 
-The existing CLI normative document and snapshots remain in their established locations.
-This inventory does not duplicate or migrate them. Future boundary specifications should
-live here in their native format (OpenAPI, grammar, SQL/DDL or Markdown as appropriate);
-there is no requirement to rewrite a grammar or a reviewed proposal as YAML.
+Backup/restore layout and signed URLs remain owned by the [remote manual](../crates/barca-cli/docs/remote.md)
+and CLI contract, with [backup tests](../python/tests/test_store_backup_restore.py),
+[backend checks](../python/tests/test_state_backends.py) and [signed URL checks](../python/tests/test_signed_urls.py).
+Their accepted designs are [RFC-0009](../site/src/content/docs/rfcs/0009-store-backup-and-restore.md)
+and [RFC-0011](../site/src/content/docs/rfcs/0011-signed-urls.md).
+Slack configuration/behavior remains in the [telemetry manual](../crates/barca-cli/docs/telemetry.md),
+with [webhook controls](../python/tests/test_telemetry_slack.py); message prose is not a stable surface.
+These owners have not been relocated or copied into new schemas.
 
-Each new normative specification needs a short scope, implemented/proposed status,
-independent specification version and links to the tests enforcing it. Explanatory manuals
-and site pages should link to that owner and defer on wire details. Tests should link back
-to the specification. Test changes should include controls that detect missing fields,
-wrong statuses and additional routes, rather than only repeating happy-path examples.
+## Approved design and unapproved ideas
 
-## Implementation notes
+[Current state and execution ownership](proposals/current-state-and-execution.md) records
+approved behavior for ordered publication, shared work, cancellation, pending reconciliation,
+checking and bounded execution. Its acceptance scenarios are obligations for implementation,
+not claims of passing conformance. [The TLA+ models](models/README.md) check only a finite
+abstraction of the approved ownership/order rules. Model checking is not a proof of Rust
+conformance or performance.
 
-[notes/](notes/) holds the implementation notes individual PRs left behind (a plan, the
-invariant, the regression evidence). They are not boundaries, they are not indexed here, and
-nothing in them is a promise: the PR that made each one is the record. A new boundary goes in
-this directory and in the table above; anything else goes in `notes/` or stays in its PR.
-Each note opens with one line naming the PR that made it and whether it still matches the code
-as of the date given. A note whose subject is removed is deleted, not kept as history.
+[API ideas](proposals/api-ideas.md) are unscheduled, unapproved alternatives. Keep them separate
+from both implemented contracts and accepted design. [Historical implementation notes](notes/README.md)
+retain selected rationale/reproductions; stale superseded plans were removed and remain in
+linked PR history. They are not current contract owners.
 
-[DIRECTION.md](../DIRECTION.md) states what is being worked on and why.
+## Maintaining a specification
+
+Use the native format appropriate to the subject: OpenAPI/JSON Schema for HTTP, the existing
+Allium declaration overview, Markdown transition tables and named invariants for behavior,
+and a small model for concurrency. Specification revisions are independent of package versions.
+Do not migrate formats just to make everything look uniform.
+
+A behavioral owner states scope, status, defined terms, transitions, named invariants,
+failure/restart behavior, examples/counterexamples, conformance and gaps. A narrower owner
+can delegate those topics through explicit links. Avoid writing a second copy of wire fields.
+New `INV-*` definitions have one owner and may be referenced from tests and models.
+
+Checks:
+
+```bash
+python3 scripts/check-specs.py
+python3 specs/models/check.py --jar /path/to/tla2tools.jar
+```
+
+The first verifies local links/anchors, owner inventory and conformance references; it cannot
+prove prose agrees with code. The second checks finite models and negative controls using the
+pinned tool described in [models](models/README.md). Both run in CI. Runtime guarantees still
+need the linked real implementation tests; missing acceptance coverage stays explicitly missing.

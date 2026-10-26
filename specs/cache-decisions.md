@@ -1,6 +1,6 @@
 # Cache decisions and run records
 
-Specification version: 2. Status: implemented. This boundary covers what a cache decision may
+Specification version: 2. Status: implemented; historical-selection deviation tracked in [freshness](freshness.md). This boundary covers what a cache decision may
 rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -27,6 +27,10 @@ early cutoff in [cache.rs](../crates/barca-core/src/cache.rs) (`cutoff_tests`),
 persistence tests in [persist.rs](../crates/barca-core/src/persist.rs),
 run owners in [run_owner.rs](../crates/barca-core/src/run_owner.rs) and
 [reconciliation](../python/tests/test_history_reconcile.py).
+
+Product observation/membership rules are owned by [freshness](freshness.md), run/batch/process
+semantics by [execution](execution.md), and status meaning by [inspection](inspection.md).
+[The approved replacement](proposals/current-state-and-execution.md) is not implemented behavior.
 
 ## Validated freshness before expansion
 

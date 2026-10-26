@@ -45,8 +45,8 @@ Lookup failure alone does not change a successful store listing into failure. Er
 use configured context, include recovery, and precede provider errors; they cannot assert
 an effective identity after failed authentication. Secret values and signed queries must
 not appear in diagnostics. R2/S3-compatible keys and Azure shared keys/SAS are identified
-by fingerprints, never raw credential values. Real cloud acceptance remains blocked on
-issue #86; controlled tests do not establish real-provider success.
+by fingerprints, never raw credential values. Controlled tests do not establish real-provider
+success; real-cloud acceptance is not claimed by this specification.
 
 Conformance: [CLI/no-execution controls](../python/tests/test_doctor.py),
 [selected-credential adapters and redaction](../python/tests/test_identity.py),

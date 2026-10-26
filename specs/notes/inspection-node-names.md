@@ -1,6 +1,7 @@
 # Consistent declared names in inspection (#288)
 
-> Note from #373 (merged 2026-10-09). Status 2026-10-20: accurate.
+> Historical record from [PR #373](https://github.com/barca-orc/barca/pull/373) (merged 2026-10-09).
+> Describes that change, not a current contract. Current owner: [inspection](../inspection.md) and [wire schema](../server-api.openapi.yaml).
 
 Status already gathers canonical node identity and the parsed declaration through
 one shared path reused by SQL. Use the declaration's explicit name when present,
