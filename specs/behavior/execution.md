@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 2. Status: implemented rules; shared computation is approved design only.
+Specification version: 3. Status: implemented rules; shared computation is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
 Terms: [glossary](../../GLOSSARY.md). Python module/connection state is owned by [Python
 runtime](python-runtime.md).
@@ -60,7 +60,7 @@ it does not turn an invalid/missing batch result into a success.
 
 Artifacts are finalized before metadata refers to completed results. Checkpoint and terminal
 writes preserve successful work across interruption according to [cache
-decisions](../interfaces/cache-decisions.md)
+decisions](cache-decisions.md)
 and [upload receipts](../interfaces/artifact-upload-receipts.md). Completion recording is at
 least once;
 replay must not duplicate the same run/key result. This is not an exactly-once promise for
@@ -70,6 +70,9 @@ An explicit cancellation stops that run's work and reaps its owned helpers. A se
 stops admission and waits; its configured deadline/requeue rules determine interrupted work.
 Retry after a user exception may use the same worker. Crash, timeout, `sys.exit()` and failed
 import retries use a replacement worker. Backoff is enforced, not merely declared.
+These are physical step retries under the declared budget, not new invocation attempts.
+The approved invocation-recovery intent and its open physical task-retry policy are separated
+in [operations](operations.md#invocation-retry-and-snapshots).
 
 `parallel()` has its own lifetime: a suspended parent can require a replacement worker.
 Ordinary pool bounds must not be advertised as a bound on all nested parallel process counts.

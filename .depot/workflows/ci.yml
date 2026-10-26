@@ -39,7 +39,9 @@ jobs:
         run: python3 scripts/check-changelog.py --base "$BASE"
 
       - name: Specification owners, links and evidence references
-        run: python3 scripts/check-specs.py
+        run: |
+          python3 scripts/check-specs.py
+          python3 scripts/test-check-specs.py
 
       - name: Install Java for specification models
         uses: actions/setup-java@v4

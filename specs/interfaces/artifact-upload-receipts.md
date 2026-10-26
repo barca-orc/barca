@@ -1,6 +1,6 @@
 # Artifact upload receipts
 
-Specification version: 1. Status: implemented. This boundary covers atomic producer
+Specification version: 2. Status: implemented. This boundary covers atomic producer
 publication, upload source ownership, and confirmed receipt persistence. It preserves the
 existing computation-hash artifact paths and sensor content identities. It does not define
 immutable historical objects or isolation of concurrent readers of the shared local path.
@@ -45,8 +45,9 @@ retained. The existing dead-PID staging cleanup removes it on a later worker sta
 The transfer helper removes its run's snapshots on SIGTERM, socket closure and coordinator
 lifeline EOF. Its existing staged-file registry cleans SDK stages on shutdown. If both
 coordinator and helper are killed outright, the next worker's dead-PID cleanup is the crash
-backstop. Unconfirmed and abandoned (cancelled) requests never produce success rows and never
-supply a receipt digest.
+backstop. An unconfirmed or abandoned (cancelled) upload supplies no successful receipt and
+cannot publish a receipt-driven checkpoint row. This does not prohibit the fail-soft
+terminal materialization of a completed computation described next.
 
 A request that failed after its step succeeded (#390) does not fail the step. The terminal
 ledger records the success row at the store location with the worker's producer digest, and the

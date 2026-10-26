@@ -2649,8 +2649,10 @@ exit 2 with the remediation `this run is on this machine: barca logs <run_id> --
 a run id, a configured server's answer is followed on stderr by `[barca] note: this machine has
 a newer run <run_id> (<command> <target>, <status>); barca logs --local reads it` when this
 machine's newest run started later; stdout is unchanged. The wording of both is not stable.
-A run records at most 16 MiB of line text; the line that reaches it is followed by `[barca]
-log cap reached: ...` (stream `stderr`), and nothing after it is recorded.
+A run records complete user lines until their text reaches or exceeds 16 MiB. The whole
+crossing line is retained, followed by `[barca] log cap reached: ...` (stream `stderr`);
+later user lines are not recorded, but framework notes may follow. This is a soft threshold,
+not a hard byte bound on one line or on retained memory.
 Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
 stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. A step's stderr is written
 to stderr as it comes, in every mode, as before. Agent framework lines

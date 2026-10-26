@@ -1,5 +1,5 @@
 -- allium: 3
--- Specification version: 2
+-- Specification version: 3
 -- Status: implemented declaration concepts; human-readable behavioral model.
 -- Scope: Python node declarations and graph validation, not runtime state machines.
 -- Grammar conformance: crates/barca-core/tests/grammar_spec.rs and decorator_args.rs.
@@ -75,7 +75,7 @@ entity Sink {
     node: Node
     path: String
     serializer: String?
-    partition_by: Sequence<String>
+    partition_by: List<String>
     rows_per_file: Integer?
     -- Trailing-slash dataset paths, staging and pruning: artifact-formats.md.
 }

@@ -32,7 +32,7 @@ BEHAVIOR_SECTIONS = (
     "Acceptance and evidence",
     "Open questions and gaps",
 )
-LINK = re.compile(r"\[[^\]\n]*\]\(([^)\n]+)\)")
+LINK = re.compile(r"\[[^\]]*\]\(([^)\n]+)\)")
 INVARIANT = re.compile(r"\bINV-[A-Z0-9]+(?:-[A-Z0-9]+)*\b")
 DEFINITION = re.compile(r"^\s*- \*\*(INV-[A-Z0-9]+(?:-[A-Z0-9]+)*):\*\*", re.MULTILINE)
 

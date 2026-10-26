@@ -95,7 +95,7 @@ not promise a partial collect over selected keys.
 An invalid change flag fails rather than falling back to content comparison. A never-produced
 Manual pin blocks readers. Removed keys remain absent from current membership even when their
 old results remain in history. Missing bytes are handled under [cache
-decisions](../interfaces/cache-decisions.md), independently of freshness.
+decisions](cache-decisions.md), independently of freshness.
 
 ## Acceptance and evidence
 

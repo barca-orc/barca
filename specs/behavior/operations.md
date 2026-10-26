@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 2. Status: approved product intent; implementation conformance has not
+Specification version: 3. Status: approved product intent; implementation conformance has not
 been established. This records requirements, not shipped commands, configuration keys,
 wire fields or an implementation plan. Existing interface owners remain authoritative.
 See [agent interaction](agents.md), [resource bounds](resources.md), and
@@ -48,20 +48,29 @@ where a manager is running. Exact fallback selection and timeout interfaces rema
 ### Invocation, retry and snapshots
 
 An invocation ID fixes its target and arguments. Reusing it with different target/arguments
-fails validation and requires a new ID. Attempts remain individually recorded under that ID.
+fails validation and requires a new ID. Invocation attempts remain individually recorded under
+that ID. An invocation attempt is distinct from a worker's physical step retry within it;
+existing configured step retries are described by [execution](execution.md).
 Explicit resubmission joins running work, returns an existing success, or retries a failed or
 interrupted invocation. Recovering a lost submission response only retrieves the existing
 state; automatic transport retries must not execute a failed task again. The precise public
 mechanism distinguishing these actions remains interface design work.
 
-Tasks retry only when explicitly requested, including after crashes. Automatically recover
-interrupted asset computations; mark interrupted tasks clearly and require explicit retry.
+Starting a new invocation attempt for a failed or interrupted task requires explicit retry
+intent, including after a crash; response recovery alone never starts one. Automatically
+recover interrupted asset computations; mark interrupted tasks clearly.
 This does not promise exactly-once side effects. A failed branch blocks its dependents with
 the original cause; independent branches continue and successful results are preserved.
 
-Each run uses code and configuration captured at its start, including downstream nodes that
-have not started. Edits do not change active work. Explicit retries capture current code and
-configuration for the new attempt, respecting current code-declared freshness policies:
+Whether a declaration-level `retries=N` budget itself supplies sufficient explicit intent for
+automatic physical task retries is an open policy decision. This specification does not remove
+existing configured retry support or approve its future retention. Until that decision is
+made, the implemented execution contract and this invocation-recovery intent remain distinct.
+
+Each invocation attempt uses code and configuration captured at its start, including downstream
+nodes that have not started. Edits do not change active work. Explicit retries capture current code and
+configuration for the new invocation attempt, respecting current code-declared freshness
+policies:
 Always refreshes stale dependencies first; otherwise rerun the requested node without
 unnecessary dependency execution. Record code identity and resolved inputs for each attempt.
 Do not infer that historical inputs remain valid after a code change; resolve under current
@@ -115,8 +124,9 @@ remote-store deletion scope and the definition of a distinct retained version ne
 ## Invariants
 
 - **INV-INVOCATION-01:** An invocation identity cannot be reused with different target or arguments.
-- **INV-RETRY-01:** Automatic transport recovery cannot execute a failed task again; task retry
-  requires explicit intent.
+- **INV-RETRY-01:** Automatic transport recovery cannot execute a failed task again;
+  a new task invocation attempt requires explicit retry intent. Physical step-retry policy
+  remains a separately identified open decision.
 - **INV-ATTEMPT-01:** Active attempts retain their captured code/configuration; an explicit new
   attempt captures current code/configuration.
 - **INV-RETENTION-01:** Automatic retention and explicit cleanup protect selected artifacts and
@@ -124,9 +134,9 @@ remote-store deletion scope and the definition of a distinct retained version ne
 
 ## Failures and recovery
 
-Freshness outages fail promptly and offer any available older result as possibly stale. Tasks
-require explicit retry after failure/crash; interrupted assets recover without duplicating
-surviving ownership. Cancellation and shutdown escalate from graceful termination to forced
+Freshness outages fail promptly and offer any available older result as possibly stale. A new
+task invocation attempt requires explicit retry after failure/crash; interrupted assets recover
+without duplicating surviving ownership. Cancellation and shutdown escalate from graceful termination to forced
 process-tree cleanup while preserving recovery state. Retention protects current and active-use
 artifacts and keeps history/logs.
 
@@ -146,3 +156,5 @@ lifetime and pre-acknowledgement IDs; environment/dependency snapshot scope; dra
 deadlines and uncertain remote owners; distinct retained versions, shared-byte accounting and
 remote deletion scope. The [discussion handoff](../../docs/engineering/requirements-handoff.md)
 keeps these questions and unanswered proposals separate from approved rules.
+The [physical task-retry decision](../proposals/api-ideas.md#physical-task-retry-authorization)
+must be resolved before changing declaration-level retry behavior.

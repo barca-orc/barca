@@ -46,3 +46,15 @@ approved; existing behavior and approved machine-information parity remain in ef
 
 Implementation of these proposals requires a decision and corresponding contract/conformance
 updates. They do not block the initial structural refactors in the engineering plan.
+
+## Physical task retry authorization
+
+The approved [operations intent](../behavior/operations.md#invocation-retry-and-snapshots)
+requires explicit intent to start a new attempt of a failed/interrupted task invocation.
+Existing declarations separately configure automatic physical step retries, including worker
+replacement. Does `retries=N` count as that caller's explicit authorization for physical task
+retries, or should the future policy require another explicit action after each failure?
+
+Status: unapproved policy choice. No option is selected by this documentation cleanup.
+Resolve this before changing existing retry behavior; distinguish invocation attempts,
+physical executions and their code/configuration identities in the eventual public contract.

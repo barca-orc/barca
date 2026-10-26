@@ -21,7 +21,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   Separate approved behavioral specs, interface contracts, unapproved proposals and engineering
   notes; standardize behavioral sections, remove completed plans and enforce the structure.
   Record a pre-merge audit with separate unresolved decisions, implementation disagreements
-  and specification defects, plus controlled baseline reproduction probes.
+  and specification defects, plus controlled baseline reproduction probes. Correct audit
+  blockers in the declaration model, upload/digest/log contracts and multiline link checking;
+  separate invocation retry intent from the unresolved physical retry policy.
 
 ## 0.33.0 (2026-10-25)
 

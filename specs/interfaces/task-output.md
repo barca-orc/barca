@@ -1,7 +1,8 @@
 # Task output and recorded output
 
-Status: implemented. Specification version: 4 (2: `RUN_ID` is optional; 3: stderr, `stream`,
-`ts`, `--follow`, reading from a server, the per-run cap; 4: keyed partitioned task results).
+Status: implemented. Specification version: 5 (2: `RUN_ID` is optional; 3: stderr, `stream`,
+`ts`, `--follow`, reading from a server, the per-run cap; 4: keyed partitioned task results;
+5: clarify the implemented complete-line recording threshold).
 Scope: local CLI get/run stdout routing and recorded-log inspection.
 Conformance: `python/tests/test_task_logs.py`, `python/tests/test_live_logs.py`, CLI
 contract/help snapshots, log transaction tests in `crates/barca-core/src/db.rs`,
@@ -53,6 +54,11 @@ lines of its step. Native descriptor writes and inherited subprocess output are 
 Python capture and retain their child-stream behavior. There is no promise to recover an
 unflushed line from an abruptly killed process. Lines are spooled as they arrive; runs record
 them in the database on completion, including ordinary step failures, and delete the spool. A
-run records at most 16 MiB of line text, then one `[barca] log cap reached: ...` stderr line.
+run records complete user lines until their cumulative text reaches or exceeds 16 MiB,
+then one `[barca] log cap reached: ...` stderr line. The entire crossing line is retained;
+later user lines are not recorded. Framework notes may still be appended. This is a soft
+recording threshold, not a hard byte or memory bound: a single line can exceed it without
+limit. The marker names the threshold, not an exact final byte count. Hard coordinator
+resource bounds remain approved, unimplemented intent in [resources](../behavior/resources.md).
 Log-stream inserts are atomic and idempotent; a failed write cannot leave a partial stream
 mistaken for a full one.

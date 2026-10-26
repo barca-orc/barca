@@ -1,6 +1,6 @@
 # Pre-merge specification audit
 
-Audited head: `bb5d5f08` on 2026-10-26, PR #659. Status: findings, not approval to merge.
+Audited head: `bb5d5f08` on 2026-10-26, PR #659. Status: findings with the documentation resolutions recorded below.
 This is non-normative evidence. It does not change approved requirements or repair runtime
 behavior. [Specification index](../../specs/README.md); [architecture plan](architecture-cleanup.md).
 
@@ -15,12 +15,41 @@ behavior. [Specification index](../../specs/README.md); [architecture plan](arch
   broken navigation or insufficiently precise evidence ownership. These are spec defects,
   even when the runtime is behaving as intended.
 
-**Hold the clean-audit/merge recommendation for Q1–Q5.** They need a small specification and
-checker correction pass, not the entire engine redesign. Resolve the log-bound policy in V1
-at the same time. U findings need explicit decisions or recorded deferral before their
-corresponding architecture changes. V2–V10 remain separately tracked implementation work;
-they must not be presented as passing conformance. No merge or external issue creation was
-performed by this audit.
+The original audit held its merge recommendation for Q1–Q5 and the inaccurate log-bound
+claim in V1. The documentation/checker corrections below address that hold. U findings
+remain decisions or explicit deferrals for their architecture changes; V2–V10 remain
+implementation work and must not be presented as passing conformance. No runtime guarantee
+is added by these corrections, and no external issues were created by this audit.
+
+## Resolution record
+
+The original findings below describe `bb5d5f08` and retain immutable evidence links. The
+following documentation corrections supersede their merge-blocking status:
+
+- **Q1:** `Sink.partition_by` now uses explicit ordered `List<String>`. Allium 3.0.4 reports
+  zero errors and the same three existing warnings (unused binding/type and missing external
+  source hint). Its check command returns nonzero for those warnings; parse succeeds. This
+  establishes language validity, not model completeness or runtime conformance.
+- **Q2:** Unconfirmed uploads cannot publish a receipt-driven checkpoint or successful receipt;
+  a completed computation can still produce the documented fail-soft terminal materialization.
+- **Q3:** Recomputation diagnostics explicitly exempt `deterministic=False` as well as Manual
+  assets, sensors and tasks. Store-repair consistency warnings remain separate, and ledger
+  client warnings retain their eligibility filter. Stored byte evidence and caching are unchanged.
+- **Q4:** Invocation attempts and physical step retries have distinct meanings. Starting a new
+  failed/interrupted task invocation attempt needs explicit retry intent. Whether declaration
+  retry budgets count as sufficient intent for automatic physical retries remains an explicit
+  [unapproved policy decision](../../specs/proposals/api-ideas.md#physical-task-retry-authorization),
+  not a silent removal or approval of existing retry support.
+- **Q5:** Both cache-owner links are corrected. The checker now recognizes multiline labels;
+  [navigation controls](../../scripts/test-check-specs.py) verify reachability and reject
+  broken multiline and single-line links. These controls run in CI.
+- **V1 contract correction:** The spec, manual, contract and site now describe the implemented
+  soft complete-line threshold, including crossing-line overshoot and later framework notes.
+  A hard line/memory bound remains outstanding resource work. Runtime behavior is unchanged.
+
+The remaining U/V findings are the input to planning after merge, rather than requirements
+to implement the whole architecture in this documentation PR. Required CI and ordinary
+repository merge rules still apply independently of this resolution record.
 
 ## U — unconsidered or underspecified boundaries
 
