@@ -333,3 +333,10 @@ benchmarks/trivial/airflow/run.sh
 `partitioned_10k` is Docker-only: its `Dockerfile` builds the barca wheel from source and
 `airflow/run.sh` runs Airflow from the `apache/airflow` image, so neither needs a local venv or
 a prebuilt wheel.
+
+## Sensor and partition audit
+
+[Released 0.33.0 correctness and resource audit](partition_audit/README.md) covers
+changing domains, partial failure, overlapping requests, cold bootstrap, warm
+updates, process counts and server inspection. It records unresolved defects
+separately from the bounded warm-path results.

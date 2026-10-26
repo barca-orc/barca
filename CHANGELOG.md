@@ -6,6 +6,14 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Bug Fixes
+
+- Keep a partition's selected historical cache result across subsequent fresh runs.
+  Reverting a sensor value no longer returns a newer historical artifact on the next
+  unchanged read. Historical selections are bounded; larger sets use normal validation.
+
 ## 0.33.0 (2026-10-25)
 
 ### Breaking

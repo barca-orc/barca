@@ -6,6 +6,17 @@ The latest framework comparison is 2026-10-21 (barca 0.28.0, Dagster 1.13.26, Pr
 and Airflow 3.3.2, #65). Older passes on other hardware are kept below. Absolute times from
 different machines are not comparable; within one pass, the ratios between frameworks are.
 
+## Sensor and partition audit (2026-10-25)
+
+The [released 0.33.0 audit](partition_audit/README.md) verifies outputs and actual
+function counts across changing domains, partial batch failure, restart/recovery,
+server scheduling, process counts and inspection. It found a stale historical
+partition selection (fixed in this audit) and three outstanding defects:
+duplicate overlapping asset execution, large cold coordinator state, and costly
+status invalidation. It includes raw released/fixed measurements, the failed
+22.1 ms native CPU budget sample, and the costly one-time proof upgrade. The
+bounded warm-path results below do not cover those broader operations.
+
 ## Framework cold paths (2026-10-25)
 
 Empty orchestration history for every sample, with no framework warm-up or asset seed.

@@ -1,0 +1,18 @@
+{"path": "/assets", "sample": 0, "seconds": 0.0006, "VmHWM": 14572, "VmRSS": 14572}
+{"path": "/assets", "sample": 1, "seconds": 0.0004, "VmHWM": 14572, "VmRSS": 14572}
+{"path": "/assets", "sample": 2, "seconds": 0.0004, "VmHWM": 14572, "VmRSS": 14572}
+{"path": "/assets", "sample": 3, "seconds": 0.0003, "VmHWM": 14572, "VmRSS": 14572}
+{"path": "/state", "sample": 0, "seconds": 3.0082, "VmHWM": 1216976, "VmRSS": 951776}
+{"path": "/state", "sample": 1, "seconds": 0.001, "VmHWM": 1216976, "VmRSS": 951776}
+{"path": "/state", "sample": 2, "seconds": 0.0013, "VmHWM": 1216976, "VmRSS": 951776}
+{"path": "/state", "sample": 3, "seconds": 0.0012, "VmHWM": 1216976, "VmRSS": 951776}
+{"path": "/nodes", "sample": 0, "seconds": 2.645, "VmHWM": 1282180, "VmRSS": 1171116}
+{"path": "/nodes", "sample": 1, "seconds": 0.0012, "VmHWM": 1282180, "VmRSS": 1171116}
+{"path": "/nodes", "sample": 2, "seconds": 0.0009, "VmHWM": 1282180, "VmRSS": 1171116}
+{"path": "/nodes", "sample": 3, "seconds": 0.0007, "VmHWM": 1282180, "VmRSS": 1171116}
+{"case": "after_unchanged_run", "sample": 0, "seconds": 2.6747, "VmHWM": 1282180, "VmRSS": 1213664}
+{"case": "after_unchanged_run", "sample": 1, "seconds": 2.723, "VmHWM": 1286304, "VmRSS": 1281560}
+{"case": "after_unchanged_run", "sample": 2, "seconds": 2.7158, "VmHWM": 1286304, "VmRSS": 1284472}
+{"case": "after_unchanged_run", "sample": 3, "seconds": 2.6929, "VmHWM": 1286304, "VmRSS": 1284500}
+{"case": "after_unchanged_run", "sample": 4, "seconds": 2.7084, "VmHWM": 1286304, "VmRSS": 1275948}
+{"case": "health_during_status", "seconds": 0.0008, "VmHWM": 1286304, "VmRSS": 1275984}

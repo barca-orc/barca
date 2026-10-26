@@ -1,0 +1,9 @@
+{
+  "base_commit": "fa396a5dead1f74bdb55ee2eb439326a48377530",
+  "binary_sha256": "69ceb682e802aa5d7120fff5472807aa040983536a1823419c8b4e08d9443368",
+  "bundled_ui": false,
+  "source_sha256": {
+    "crates/barca-core/src/incremental.rs": "dd2268f0d0f0476646fe76f5a8cc091ef574fcf792e53699b6f53ef5e9134bea",
+    "crates/barca-core/src/execution.rs": "ee53c468bc3279bf99b12102bf63860bd76ec8b64c9f3c5092a978135d715635"
+  }
+}

@@ -10,6 +10,9 @@ A normal `get` or `run` reuses previously validated freshness before expanding p
 keys. When one sensor key changes, only that key's affected chain needs new cache decisions;
 unchanged keys remain cached. Target selection plans only the target's dependency cone.
 This works with the usual DAG workflow and needs no flag or batching setting.
+If a key returns to an older input value, its earlier cached result remains selected on
+later unchanged reads. Historical selections are bounded; larger sets use normal cache
+validation. Upgrading the freshness-proof format also causes one normal validation.
 
 The first run validates the full requested graph. Code, declared environment, partition
 membership and upstream changes invalidate the affected evidence; refreshes and writes from

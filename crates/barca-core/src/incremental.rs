@@ -28,6 +28,9 @@ struct Proof {
     output: Option<OutputRef>,
     run_hash: Option<String>,
     source: Option<Arc<Source>>,
+    /// Cached historical selections that differ from the last materialization.
+    #[serde(default)]
+    selected: HashMap<String, String>,
 }
 #[derive(Default, PartialEq, Serialize, Deserialize)]
 struct Snapshot {
@@ -80,7 +83,7 @@ impl Incremental {
         let mut ids: Vec<_> = templates.keys().cloned().collect();
         ids.sort();
         let key = format!(
-            "freshness-v2:{:x}",
+            "freshness-v3:{:x}",
             Sha256::digest(
                 serde_json::to_vec(&(&cfg.artifact_root, &cfg.local_artifact_dir)).unwrap()
             )
@@ -537,7 +540,25 @@ impl Incremental {
                             .map_or_else(|| base.clone(), |key| key.display_id(base))
                     })
                     .collect();
-                latest_many(cache, &needed, self.generation, &mut state.recently_read).await?
+                latest_many(
+                    cache,
+                    &needed,
+                    self.generation,
+                    &needed
+                        .iter()
+                        .filter_map(|id| {
+                            let step = crate::model::StepId::parse(id);
+                            self.previous
+                                .nodes
+                                .get(step.base_id())?
+                                .selected
+                                .get(id)
+                                .map(|hash| (id.clone(), hash.clone()))
+                        })
+                        .collect(),
+                    &mut state.recently_read,
+                )
+                .await?
             }
             None => HashMap::new(),
         };
@@ -753,6 +774,8 @@ impl Incremental {
         cfg: &crate::config::ResolvedConfig,
         run_id: &str,
         materialized: bool,
+        hashes: &HashMap<String, String>,
+        cached: &HashSet<String>,
     ) -> Result<(), BarcaError> {
         if (!materialized && self.next == self.previous)
             || self.next.nodes.len() != self.templates.len()
@@ -773,10 +796,66 @@ impl Incremental {
             return Ok(());
         }
         let generation = generation(cache.conn()).await?;
+        let mut proofs = self.next.nodes.clone();
+        // A cache hit can select an older successful result. MAX(materialization.id)
+        // is then history, not the current result. Keep only these exceptions, bounded
+        // per logical node; a larger set falls back to normal cache validation.
+        let candidates: Vec<_> = cached
+            .iter()
+            .filter(|id| !self.seeded.contains(*id))
+            .cloned()
+            .collect();
+        let latest = latest_many(
+            &cache,
+            &candidates,
+            generation,
+            &HashMap::new(),
+            &mut HashSet::new(),
+        )
+        .await?;
+        let entry_size = |id: &String, hash: &String| {
+            serde_json::to_vec(&(id, hash)).map_or(usize::MAX, |bytes| bytes.len())
+        };
+        let mut selection_bytes: HashMap<_, _> = proofs
+            .iter()
+            .map(|(base, proof)| {
+                (
+                    base.clone(),
+                    proof
+                        .selected
+                        .iter()
+                        .map(|(id, hash)| entry_size(id, hash))
+                        .sum::<usize>(),
+                )
+            })
+            .collect();
+        for (id, hash) in hashes.iter().filter(|(id, _)| !self.seeded.contains(*id)) {
+            let base = crate::model::StepId::parse(id).base_id().to_owned();
+            let Some(proof) = proofs.get_mut(&base) else {
+                continue;
+            };
+            let bytes = selection_bytes.get_mut(&base).unwrap();
+            if let Some(previous) = proof.selected.remove(id) {
+                *bytes = bytes.saturating_sub(entry_size(id, &previous));
+            }
+            if cached.contains(id) && latest.get(id).is_some_and(|(last, _)| last != hash) {
+                *bytes = bytes.saturating_add(entry_size(id, hash));
+                proof.selected.insert(id.clone(), hash.clone());
+            }
+            if *bytes > 256 * 1024 - 2 {
+                proofs.remove(&base);
+            }
+        }
         db::with_tx(cache.conn(), "BEGIN IMMEDIATE", "freshness proofs", async {
             cache.conn().execute("DELETE FROM freshness_proofs WHERE generation != ?1", [generation]).await.map_err(db_error)?;
+            // Cache-only reversion can keep the same metadata generation. Explicitly
+            // remove discarded proofs so an oversized selection cannot revive one.
+            let mut remove = db::prepare(cache.conn(), "DELETE FROM freshness_proofs WHERE id = ?1").await.map_err(db_error)?;
+            for id in self.next.nodes.keys().filter(|id| !proofs.contains_key(*id)) {
+                remove.execute([format!("{}:{id}", self.key)]).await.map_err(db_error)?;
+            }
             let mut insert = db::prepare(cache.conn(), "INSERT OR REPLACE INTO freshness_proofs (id, generation, snapshot) VALUES (?1, ?2, ?3)").await.map_err(db_error)?;
-            for (id, proof) in &self.next.nodes {
+            for (id, proof) in &proofs {
                 let snapshot = serde_json::to_string(proof).map_err(|e| BarcaError::Other(e.to_string()))?;
                 insert.execute((format!("{}:{id}", self.key), generation, snapshot)).await.map_err(db_error)?;
             }
@@ -808,20 +887,29 @@ async fn latest_many(
     cache: &db::CacheReader,
     ids: &[String],
     through: i64,
+    selected: &HashMap<String, String>,
     recently_read: &mut HashSet<String>,
 ) -> Result<HashMap<String, (String, OutputRef)>, BarcaError> {
     let mut found = HashMap::new();
     for chunk in ids.chunks(500) {
-        let wanted = (2..chunk.len() + 2)
-            .map(|i| format!("?{i}"))
+        let wanted = (0..chunk.len())
+            .map(|i| format!("(?{}, ?{})", 2 * i + 2, 2 * i + 3))
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(id) FROM materializations INDEXED BY idx_mat_node_run WHERE node_id IN ({wanted}) AND id <= ?1 AND status = 'success' AND artifact_path IS NOT NULL GROUP BY node_id)",
+            "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m INDEXED BY idx_mat_node_run ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
             crate::cache::READ_STAMP_REFRESH
         );
         let params = std::iter::once(libsql::Value::Integer(through))
-            .chain(chunk.iter().cloned().map(libsql::Value::Text))
+            .chain(chunk.iter().flat_map(|id| {
+                [
+                    libsql::Value::Text(id.clone()),
+                    selected
+                        .get(id)
+                        .cloned()
+                        .map_or(libsql::Value::Null, libsql::Value::Text),
+                ]
+            }))
             .collect::<Vec<_>>();
         let mut rows = cache.conn().query(&sql, params).await.map_err(db_error)?;
         while let Some(row) = rows.next().await.map_err(db_error)? {
