@@ -428,7 +428,11 @@ def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
     for name, positional, keywords in rows:
         params = inspect.signature(getattr(stubs, name)).parameters.values()
         by_keyword = [p.name for p in params if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)]
-        by_position = [p.name for p in params if p.kind == p.POSITIONAL_ONLY and (p.name != "fn" or name == "batches_by")]
+        by_position = [
+            p.name
+            for p in params
+            if p.kind == p.POSITIONAL_ONLY and (p.name != "fn" or name == "batches_by")
+        ]
         assert by_keyword == ([] if keywords == "none" else re.findall(r"`(\w+)`", keywords)), name
         assert len(by_position) == {"none": 0, "one": 1}[positional], name
 
@@ -879,7 +883,7 @@ def test_sinks_topic_example(binary, topics, tmp_path):
 
 
 def test_sinks_topic_dataset_example(binary, topics, tmp_path):
-    """"Dataset sinks": the example writes exactly the layout shown, and the query shown reads
+    """ "Dataset sinks": the example writes exactly the layout shown, and the query shown reads
     it back as one table."""
     duckdb = pytest.importorskip("duckdb")
     body = topics["sinks"]

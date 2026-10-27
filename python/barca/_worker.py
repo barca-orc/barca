@@ -17,6 +17,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from barca import _duckdb, _sinks, _storage
 from barca._artifacts import (
@@ -984,7 +985,7 @@ def _materialize(
             prewritten, path, want_hash=True, snapshot_prefix=snapshot_prefix
         )
         if step.get("sinks"):
-            import duckdb  # ty: ignore[unresolved-import]
+            import duckdb
 
             result = duckdb.read_parquet(str(path))
     elif snapshot_prefix and not step.get("branch"):
@@ -1662,7 +1663,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
 
         phase = LOAD_INPUTS
         param_types = first.get("param_types") or {}
-        kwargs = {d: [st["direct_kwargs"][d] for st in steps] for d in dims}
+        kwargs: dict[str, Any] = {d: [st["direct_kwargs"][d] for st in steps] for d in dims}
         aligned = set(first.get("aligned_inputs") or [])
         params = []
         for st in steps:
@@ -1764,7 +1765,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                         prewritten = files[0]
                         value = None
                     else:
-                        import duckdb  # ty: ignore[unresolved-import]
+                        import duckdb
 
                         value = duckdb.read_parquet(files)
                 key_phase = WRITE_OUTPUT

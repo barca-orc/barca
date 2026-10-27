@@ -108,22 +108,24 @@ def test_metadata_tables_come_from_the_server(team):
     assert all(r["status"] == "success" and r["format"] == "json" for r in body["rows"])
     assert all(r["artifact"].startswith(str(team.store)) for r in body["rows"]), body
 
-    code, body, err = sql(team.b, "select name, state, local from barca.nodes where name = 'report'")
+    code, body, err = sql(
+        team.b, "select name, state, local from barca.nodes where name = 'report'"
+    )
     assert code == 0, err
     assert body["rows"] == [{"name": "report", "state": "cached", "local": False}]
 
 
 def test_metadata_tables_locally(team):
     get(team.a, "report", "--local")
-    code, body, err = sql(
-        team.a, "select target, status, triggered_by from barca.runs", "--local"
-    )
+    code, body, err = sql(team.a, "select target, status, triggered_by from barca.runs", "--local")
     assert code == 0, err
     assert "[barca] server" not in err
     assert body["rows"] == [{"target": "report", "status": "success", "triggered_by": "manual"}]
     code, body, _ = sql(team.a, "select count(*) as n from barca.materializations", "--local")
     assert body["rows"] == [{"n": 3}]
-    code, body, _ = sql(team.a, "select name, local from barca.nodes where name = 'report'", "--local")
+    code, body, _ = sql(
+        team.a, "select name, local from barca.nodes where name = 'report'", "--local"
+    )
     assert body["rows"] == [{"name": "report", "local": None}]
     # The server recorded nothing: its tables are empty.
     code, body, _ = sql(team.b, "select count(*) as n from barca.runs")
@@ -221,7 +223,9 @@ def test_partitioned_views_from_the_server(team):
         {"partition": "week=w1", "week": "w1", "n": 2},
         {"partition": "week=w2", "week": "w2", "n": 2},
     ]
-    code, here, _ = sql(team.a, "select partition, week, n from weekly order by partition", "--local")
+    code, here, _ = sql(
+        team.a, "select partition, week, n from weekly order by partition", "--local"
+    )
     assert here == body
     code, body, _ = sql(
         team.b, "select node_id, partition from barca.materializations order by node_id"

@@ -29,4 +29,3 @@ export function graphState(node: NodeState): GraphState {
 export function liveGraphState(status: StatusKind): GraphState {
   return { status, label: statusMeta(status).label, hint: 'Current run' }
 }
-

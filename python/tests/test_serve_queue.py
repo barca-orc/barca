@@ -259,9 +259,7 @@ def start_long(server: Server, project: Path) -> str:
 # ─── a restart resumes the queue ─────────────────────────────────────────────
 
 
-def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_order(
-    project, serve
-):
+def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_order(project, serve):
     server = serve("--no-schedule", "--max-runs", "1")
     long = start_long(server, project)
     queued = [server.submit(t) for t in ("one", "two", "three")]
@@ -302,9 +300,7 @@ def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_ord
     assert restarted.request("GET", "/queue")[1]["queued"] == []
 
 
-def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart(
-    project, serve
-):
+def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart(project, serve):
     server = serve("--no-schedule")
     start_long(server, project)
     server.proc.send_signal(signal.SIGTERM)
@@ -337,9 +333,7 @@ def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart
     assert order(project) == ["one", "two", "three"]
 
 
-def test_the_drain_timeout_puts_the_run_in_flight_back_in_the_queue_and_exits_0(
-    project, serve
-):
+def test_the_drain_timeout_puts_the_run_in_flight_back_in_the_queue_and_exits_0(project, serve):
     server = serve("--no-schedule", "--drain-timeout", "1", "--max-runs", "1")
     long = start_long(server, project)
     behind = server.submit("one")["run_id"]
@@ -482,7 +476,8 @@ def test_a_client_gives_up_when_the_server_does_not_come_back(project, serve):
     assert "the server did not come back within 2s (BARCA_SERVER_RECONNECT)" in err, err
     assert f"lost the event stream of run {long}" in err, err
     # 0 is the behaviour before 0.29.4: no wait at all.
-    bad = barca(project, "logs", long, "--follow", "--server", server.url,
-                BARCA_SERVER_RECONNECT="soon")
+    bad = barca(
+        project, "logs", long, "--follow", "--server", server.url, BARCA_SERVER_RECONNECT="soon"
+    )
     assert bad.returncode == 2, bad.stderr
     assert "BARCA_SERVER_RECONNECT=soon is not a number of seconds" in bad.stderr

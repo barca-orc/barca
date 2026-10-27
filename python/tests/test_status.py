@@ -231,12 +231,19 @@ def test_an_unknown_target_is_an_error(project):
     proc = barca(project, "status", "nope", "pipeline.py", "--json")
     assert proc.returncode == 2  # usage error (#154)
     assert "nope" in proc.stderr
-    err = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    err = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert err["kind"] == "usage"
     # One remediation wording on every command (#180).
     assert err["remediation"] == "Run `barca list pipeline.py` to see available assets and tasks."
     got = barca(project, "get", "nope", "pipeline.py", "--json")
-    assert json.loads(next(line for line in reversed(got.stderr.splitlines()) if line.startswith("{")))["remediation"] == err["remediation"]
+    assert (
+        json.loads(
+            next(line for line in reversed(got.stderr.splitlines()) if line.startswith("{"))
+        )["remediation"]
+        == err["remediation"]
+    )
 
 
 def test_parquet_shape_reports_rows_and_schema(project):

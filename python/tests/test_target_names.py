@@ -18,7 +18,9 @@ from .get_values import value_args
 
 def _barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [_find_binary(), *value_args(args, json=False), "--json"] if args[0] != "list" else [_find_binary(), *value_args(args)],
+        [_find_binary(), *value_args(args, json=False), "--json"]
+        if args[0] != "list"
+        else [_find_binary(), *value_args(args)],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -31,7 +33,9 @@ def _result(r: subprocess.CompletedProcess) -> dict:
 
 
 def _envelope(r: subprocess.CompletedProcess) -> dict:
-    return json.loads(next(line for line in reversed(r.stderr.splitlines()) if line.startswith("{")))
+    return json.loads(
+        next(line for line in reversed(r.stderr.splitlines()) if line.startswith("{"))
+    )
 
 
 ONLY_PREFIXED = """

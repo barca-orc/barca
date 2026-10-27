@@ -79,6 +79,14 @@ def barca(cwd: Path, *args: str, timeout: float = WAIT) -> subprocess.CompletedP
     )
 
 
+def process_state(pid: int) -> str | None:
+    """The process's `ps` state (`T` stopped, `S` sleeping, ...; the same letters on Linux
+    and macOS), or None once it is gone. A zombie counts as gone: it has exited."""
+    out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    state = out.stdout.strip()
+    return None if out.returncode != 0 or not state or state.startswith("Z") else state
+
+
 def wait_for(predicate, what: str, timeout: float = WAIT):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -407,7 +415,11 @@ def work():
 """)
     proc = subprocess.Popen(
         [_find_binary(), "get", "work", "pipeline.py", "--json"],
-        cwd=project, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=project,
+        env=_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     try:
         wait_for(lambda: (project / "child2.pid").exists(), "parallel children")
@@ -415,12 +427,12 @@ def work():
         assert len(pids) == 3
         # Observe the actual frozen parent rather than infer it from parallel's API.
         parent = int((project / "parent.pid").read_text())
-        wait_for(lambda: "State:\tT" in Path(f"/proc/{parent}/status").read_text(), "frozen parent")
+        wait_for(lambda: (process_state(parent) or "").startswith("T"), "frozen parent")
         proc.send_signal(stop_signal)
         _, stderr = proc.communicate(timeout=WAIT)
         assert proc.returncode == 130, stderr
         for pid in pids:
-            assert not Path(f"/proc/{pid}").exists(), f"worker {pid} survived cancellation"
+            assert process_state(pid) is None, f"worker {pid} survived cancellation"
         history = json.loads(barca(project, "history", "--json", "--all").stdout)
         assert history["runs"][0]["status"] == "cancelled"
     finally:

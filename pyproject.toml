@@ -77,3 +77,22 @@ line-length = 100
 
 [tool.ty.environment]
 extra-paths = ["python"]
+# Check against the oldest supported Python, whatever interpreter the checker finds.
+python-version = "3.12"
+
+[tool.ty.analysis]
+# Optional runtime dependencies (extras) are imported lazily and typed as Any, so ty gives the
+# same answer whether or not they are installed in the environment it finds. The prek hook
+# pins ty's version (prek.toml).
+replace-imports-with-any = [
+    "aiobotocore.**",
+    "azure.**",
+    "ddtrace.**",
+    "duckdb.**",
+    "fsspec.**",
+    "google.**",
+    "orjson.**",
+    "pandas.**",
+    "polars.**",
+    "pyarrow.**",
+]

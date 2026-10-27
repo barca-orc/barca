@@ -16,7 +16,7 @@ fail = (
     else ""
 )
 out.mkdir(parents=True, exist_ok=True)
-(out / "assets.py").write_text(f'''from barca import asset, partitions
+(out / "assets.py").write_text(f"""from barca import asset, partitions
 
 KEYS = [f"k{{i:05d}}" for i in range({n})]
 
@@ -34,4 +34,4 @@ def normalize(data: dict, key: str) -> dict:
 @asset(inputs={{"data": normalize}}, partitions={{"key": partitions(KEYS)}})
 def score(data: dict, key: str) -> dict:
     return {{"key": key, "v": data["v"] + 1}}
-''')
+""")

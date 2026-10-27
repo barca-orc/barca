@@ -98,9 +98,13 @@ def _as_written_by_0_24_3(project: Path) -> None:
 
 def _schema(project: Path) -> set[str]:
     with closing(sqlite3.connect(project / ".barca/metadata.db")) as db:
-        names = {f"{kind} {name}" for kind, name in db.execute("SELECT type, name FROM sqlite_schema")}
+        names = {
+            f"{kind} {name}" for kind, name in db.execute("SELECT type, name FROM sqlite_schema")
+        }
         for table in ("runs", "materializations"):
-            names |= {f"column {table}.{row[1]}" for row in db.execute(f"PRAGMA table_info({table})")}
+            names |= {
+                f"column {table}.{row[1]}" for row in db.execute(f"PRAGMA table_info({table})")
+            }
         return names
 
 

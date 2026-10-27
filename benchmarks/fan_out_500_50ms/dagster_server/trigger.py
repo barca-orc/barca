@@ -51,9 +51,7 @@ def wait_for_completion(run_id, timeout=300):
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        resp = requests.post(
-            GRAPHQL_URL, json={"query": query, "variables": {"runId": run_id}}
-        )
+        resp = requests.post(GRAPHQL_URL, json={"query": query, "variables": {"runId": run_id}})
         run = resp.json()["data"]["runOrError"]
         status = run["status"]
         if status in ("SUCCESS", "FAILURE", "CANCELED"):

@@ -81,7 +81,7 @@ def read_back(prefix: str, fmt: str, columns: str = "*") -> list[tuple]:
 
 # ─── One layout for every writer ─────────────────────────────────────────────
 
-WRITER_PIPELINE = '''
+WRITER_PIPELINE = """
 import datetime
 
 import barca
@@ -120,7 +120,7 @@ def frame(writer, retailer):
     return con.sql(
         f"select * from (values {values}) as t(id, order_date, amount)"
     )
-'''
+"""
 
 
 def writer_assets(sink_args: str, partitioned: bool) -> str:
@@ -132,7 +132,7 @@ def writer_assets(sink_args: str, partitioned: bool) -> str:
         else:
             decorator, signature, call = "@asset()", "", '"r1"'
         out.append(
-            f"{decorator}\n@sink(\"out/{writer}/\"{sink_args})\n"
+            f'{decorator}\n@sink("out/{writer}/"{sink_args})\n'
             f"def {writer}_out({signature}):\n    return frame({writer!r}, {call})\n"
         )
     return "\n\n".join(out)
@@ -176,7 +176,10 @@ EXPECTED_LAYOUT = {
         "retailer=r2/order_date=2026-10-21/part-0.csv",
     ],
     "json": ["retailer=r1/part-0.jsonl", "retailer=r2/part-0.jsonl"],
-    "json_partition_by": ["order_date=2026-10-21/part-0.jsonl", "order_date=2026-10-22/part-0.jsonl"],
+    "json_partition_by": [
+        "order_date=2026-10-21/part-0.jsonl",
+        "order_date=2026-10-22/part-0.jsonl",
+    ],
 }
 
 
@@ -330,7 +333,9 @@ def test_only_changed_keys_rewrite_and_removed_keys_are_deleted(tmp_path):
 
 
 @pytest.mark.parametrize("boundary", ["scan", "mkdir"])
-def test_finishing_writer_cannot_remove_another_writers_stage_parent(tmp_path, monkeypatch, boundary):
+def test_finishing_writer_cannot_remove_another_writers_stage_parent(
+    tmp_path, monkeypatch, boundary
+):
     from barca import _sinks
 
     finishing = _sinks._LocalTarget(str(tmp_path / "out"))
@@ -580,9 +585,7 @@ def test_size_warnings(tmp_path):
     assert "[barca] warning: sink out/by_id/: one write created 1001 directories" in proc.stderr
     assert "How to choose partition columns" in proc.stderr
     proc = get(tmp_path, "tiny")
-    assert "[barca] warning: sink out/tiny/: one write created 120 files averaging" in (
-        proc.stderr
-    )
+    assert "[barca] warning: sink out/tiny/: one write created 120 files averaging" in (proc.stderr)
     proc = get(tmp_path, "fine")
     assert "warning" not in proc.stderr, proc.stderr
 
@@ -613,7 +616,10 @@ def _s3():
 
     bucket = f"barca-ds-{uuid.uuid4().hex[:8]}"
     fs = fsspec.filesystem(
-        "s3", key="minioadmin", secret="minioadmin", endpoint_url=S3_ENDPOINT,
+        "s3",
+        key="minioadmin",
+        secret="minioadmin",
+        endpoint_url=S3_ENDPOINT,
         skip_instance_cache=True,
     )
     fs.mkdir(bucket)
@@ -719,7 +725,10 @@ def test_dataset_sinks_on_object_stores(tmp_path, store):
     import pyarrow.dataset as pds
 
     table = pds.dataset(
-        fs._strip_protocol(root), filesystem=fs, format="parquet", partitioning="hive",
+        fs._strip_protocol(root),
+        filesystem=fs,
+        format="parquet",
+        partitioning="hive",
         exclude_invalid_files=True,
     ).to_table()
     totals = {}

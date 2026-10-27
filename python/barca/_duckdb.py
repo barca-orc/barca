@@ -28,7 +28,7 @@ def connection():
     This is duckdb's default connection, so it is also what ``duckdb.sql(...)`` uses. Works
     outside a barca worker too (standalone runs of your module get the same connection).
     """
-    import duckdb  # ty: ignore[unresolved-import]
+    import duckdb
 
     default = duckdb.default_connection
     # duckdb >= 1.4 exposes a function; older versions expose the connection object itself.
@@ -155,7 +155,7 @@ def explain_error(exc: BaseException, bound_views: list[str]) -> str | None:
     anything else, including a missing table that barca did not bind, which is just a typo.
     """
     try:
-        import duckdb  # ty: ignore[unresolved-import]
+        import duckdb
     except ImportError:
         return None
     if not isinstance(exc, duckdb.Error):

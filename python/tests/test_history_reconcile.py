@@ -13,8 +13,12 @@ from barca.api import _find_binary
 
 def cli(project, *args):
     return subprocess.run(
-        [_find_binary(), *args], cwd=project, env={**os.environ, "BARCA_REMOTE": "off"},
-        capture_output=True, text=True, timeout=30,
+        [_find_binary(), *args],
+        cwd=project,
+        env={**os.environ, "BARCA_REMOTE": "off"},
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
 
@@ -22,7 +26,9 @@ def cli(project, *args):
 def stale(tmp_path):
     # Fixtures create a real run and artifact, then reproduce a legacy row from
     # an inaccessible owner. Its successful materialization must survive recovery.
-    (tmp_path / "p.py").write_text("from barca import asset\n@asset()\ndef value():\n    return 42\n")
+    (tmp_path / "p.py").write_text(
+        "from barca import asset\n@asset()\ndef value():\n    return 42\n"
+    )
     proc = cli(tmp_path, "get", "value", "p.py", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
@@ -30,14 +36,17 @@ def stale(tmp_path):
     with closing(sqlite3.connect(path)) as conn:
         conn.execute(
             "UPDATE runs SET status='running', owner='', pid=1, host='unavailable-container', "
-            "finished_at=NULL, elapsed_seconds=NULL WHERE run_id=?", (result["run_id"],),
+            "finished_at=NULL, elapsed_seconds=NULL WHERE run_id=?",
+            (result["run_id"],),
         )
         conn.commit()
         rows = conn.execute("SELECT * FROM materializations").fetchall()
     return tmp_path, path, result["run_id"], rows
 
 
-@pytest.mark.parametrize("mode", [["--json"], ["--pretty"], ["--fields", "run_id,status,finished_at"]])
+@pytest.mark.parametrize(
+    "mode", [["--json"], ["--pretty"], ["--fields", "run_id,status,finished_at"]]
+)
 def test_unknown_owner_is_reconciled_only_on_explicit_request(stale, mode):
     project, path, run_id, materializations = stale
     before = cli(project, "history", "--json")
@@ -54,7 +63,9 @@ def test_unknown_owner_is_reconciled_only_on_explicit_request(stale, mode):
         assert result["runs"][0]["status"] == "interrupted"
         assert result["runs"][0]["finished_at"] is None
     with closing(sqlite3.connect(path)) as conn:
-        assert conn.execute("SELECT status, finished_at, elapsed_seconds FROM runs WHERE run_id=?", (run_id,)).fetchone() == ("interrupted", None, None)
+        assert conn.execute(
+            "SELECT status, finished_at, elapsed_seconds FROM runs WHERE run_id=?", (run_id,)
+        ).fetchone() == ("interrupted", None, None)
         assert conn.execute("SELECT * FROM materializations").fetchall() == materializations
     cached = cli(project, "get", "value", "p.py", "-o", "value", "--json")
     assert cached.returncode == 0, cached.stderr
@@ -77,7 +88,7 @@ def test_missing_terminal_and_conflicting_requests_are_usage_errors(stale):
 
 
 def test_reconciliation_refuses_a_proven_live_owner(tmp_path):
-    (tmp_path / "p.py").write_text('''
+    (tmp_path / "p.py").write_text("""
 from barca import asset
 from pathlib import Path
 import time
@@ -87,10 +98,14 @@ def held():
     while not Path("release").exists():
         time.sleep(0.01)
     return 42
-''')
+""")
     proc = subprocess.Popen(
-        [_find_binary(), "get", "held", "p.py", "-o", "value", "--json"], cwd=tmp_path,
-        env={**os.environ, "BARCA_REMOTE": "off"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        [_find_binary(), "get", "held", "p.py", "-o", "value", "--json"],
+        cwd=tmp_path,
+        env={**os.environ, "BARCA_REMOTE": "off"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     try:
         deadline = time.monotonic() + 15

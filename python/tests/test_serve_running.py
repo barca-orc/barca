@@ -102,7 +102,9 @@ def _project(root: Path) -> int:
 
 def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
     port = _project(tmp_path)
-    serve = _start(tmp_path, "serve", "pipeline.py", "--no-schedule", "--port", str(port), log="serve.log")
+    serve = _start(
+        tmp_path, "serve", "pipeline.py", "--no-schedule", "--port", str(port), log="serve.log"
+    )
     cli = None
     try:
         _until(lambda: _get(port, "/health"), "the server")
@@ -125,7 +127,11 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
 
         (tmp_path / "release").write_text("")
         assert cli.wait(timeout=60) == 0, (tmp_path / "cli.log").read_text()
-        _until(lambda: _get(port, "/state") and _running_of(port, "slow") is None, "slow to clear", timeout=10)
+        _until(
+            lambda: _get(port, "/state") and _running_of(port, "slow") is None,
+            "slow to clear",
+            timeout=10,
+        )
         assert _get(port, "/runs?status=running")["runs"] == []
     finally:
         (tmp_path / "release").write_text("")
@@ -140,7 +146,9 @@ def test_a_killed_cli_run_is_not_shown_as_running(tmp_path):
     _until(lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run")
     os.killpg(cli.pid, signal.SIGKILL)
     cli.wait(timeout=30)
-    serve = _start(tmp_path, "serve", "pipeline.py", "--no-schedule", "--port", str(port), log="serve.log")
+    serve = _start(
+        tmp_path, "serve", "pipeline.py", "--no-schedule", "--port", str(port), log="serve.log"
+    )
     try:
         _until(lambda: _get(port, "/health"), "the server")
         assert _running_of(port, "slow") is None

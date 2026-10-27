@@ -164,11 +164,7 @@ def feat_4(data):
 @task
 def merge(f0, f1, f2, f3, f4):
     all_features = (
-        f0["features"]
-        + f1["features"]
-        + f2["features"]
-        + f3["features"]
-        + f4["features"]
+        f0["features"] + f1["features"] + f2["features"] + f3["features"] + f4["features"]
     )
     return {"combined": all_features, "count": len(all_features)}
 
@@ -184,11 +180,7 @@ def transform(data):
 
 @task
 def output(data):
-    avg = (
-        sum(r["f"] for r in data["top_100"]) / len(data["top_100"])
-        if data["top_100"]
-        else 0
-    )
+    avg = sum(r["f"] for r in data["top_100"]) / len(data["top_100"]) if data["top_100"] else 0
     return {
         "avg_top_feature": round(avg, 6),
         "total_rows": data["total"],

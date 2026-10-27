@@ -164,9 +164,7 @@ def test_the_pool_defaults_to_the_capacity_and_pool_size_sets_it(tmp_path):
 
 
 def test_doctor_reports_the_pool_size_and_where_it_came_from(tmp_path):
-    project = write(
-        tmp_path / "p", SIZING, "[execution]\ncapacity = 1\n\n[server]\ncapacity = 4\n"
-    )
+    project = write(tmp_path / "p", SIZING, "[execution]\ncapacity = 1\n\n[server]\ncapacity = 4\n")
     out = barca(project, "doctor", "pipeline.py", "--json", BARCA_REMOTE="off")
     checks = {c["name"]: c for c in json.loads(out.stdout)["checks"]}
     cap = checks["capacity"]
@@ -360,9 +358,7 @@ def test_the_server_setting_stops_a_long_run_and_the_flag_wins(tmp_path):
     project = write(tmp_path / "p", TIMEOUT, "[server]\nrun_timeout_seconds = 2\n")
     with Serve(project, "--no-schedule") as server:
         run_id = submit(server, "slow")
-        assert_timed_out(
-            server, run_id, "run timed out after 2s ([server] run_timeout_seconds)"
-        )
+        assert_timed_out(server, run_id, "run timed out after 2s ([server] run_timeout_seconds)")
     with Serve(project, "--no-schedule", "--run-timeout", "0") as server:
         run_id = submit(server, "slow")
         wait_for(lambda: started(project, "slow") >= 2, "the step to start")

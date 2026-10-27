@@ -106,6 +106,7 @@ class _WhenLoggingIsImported:
             return None
         if self in sys.meta_path:
             sys.meta_path.remove(self)
+        from importlib.abc import Loader
         from importlib.machinery import PathFinder
 
         spec = PathFinder.find_spec(name, path)
@@ -113,7 +114,7 @@ class _WhenLoggingIsImported:
             return spec
         loader = spec.loader
 
-        class _Hooking:
+        class _Hooking(Loader):
             def create_module(self, spec):
                 return loader.create_module(spec)
 
