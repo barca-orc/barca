@@ -646,13 +646,23 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
         # The size lookup is I/O too (a request, for a remote path), so it runs in the pool.
         return value, (_artifact_size(path) if lru is not None else None)
 
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor(max_workers=min(len(to_fetch), _COLLECT_IO_MAX_WORKERS)) as ex:
-        for (i, artifact), (value, size) in zip(to_fetch, ex.map(_fetch, to_fetch)):
+    def _store(fetched):
+        for (i, artifact), (value, size) in zip(to_fetch, fetched):
             results[i] = value
             if lru is not None and size is not None:
                 lru.admit(artifact["path"], value, frame_type, size)
+
+    if frame_type == "duckdb":
+        # Relations are made on the worker's one shared duckdb connection, which takes one call
+        # at a time: duckdb 2 refuses a concurrent one ("connection is busy with another call",
+        # #663). Making one reads only the file's metadata, so they are made here, in order.
+        _store(map(_fetch, to_fetch))
+        return results
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(to_fetch), _COLLECT_IO_MAX_WORKERS)) as ex:
+        _store(ex.map(_fetch, to_fetch))
 
     return results
 
