@@ -525,6 +525,8 @@ async fn execute_started(
                 request.cfg,
                 &executed.result.run_id,
                 executed.result.steps_executed > 0,
+                session.state.decide_state.run_hashes(),
+                &session.state.cached_node_ids,
             )
             .await?;
     }

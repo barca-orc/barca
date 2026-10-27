@@ -3,8 +3,8 @@
 Start here for what Barca promises and what is still design. Terms are defined in the
 [glossary](../GLOSSARY.md); product direction lives in [DIRECTION.md](../DIRECTION.md).
 This cleanup describes the implemented 0.33.0 baseline at `fa396a5d` and explicitly identified
-gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) was closed without merging; the
-historical-selection defect remains a known baseline gap. A specification describes its stated scope; a passing grammar
+gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) was closed without merging; its sequential
+historical-selection fix is now carried here with regression controls. A specification describes its stated scope; a passing grammar
 check or benchmark is not evidence for unrelated runtime behavior.
 
 The [pre-merge audit](../docs/engineering/spec-audit.md) separates unresolved contracts,
@@ -38,7 +38,7 @@ from approved decisions.
 
 | Owner | Scope | Status / evidence |
 | --- | --- | --- |
-| [Freshness](behavior/freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules; known historical-selection defect #657; named invariants and real integration checks |
+| [Freshness](behavior/freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules; bounded historical-selection evidence; named invariants and real integration checks |
 | [Execution](behavior/execution.md) | Runs, logical keys vs calls/processes, batches, partial failure, cancellation and recovery | Implemented rules; overlapping asset sharing and bounded full execution remain gaps |
 | [Inspection](behavior/inspection.md) | Validity, execution, availability and current counts | Implemented behavior; explicit checking and independent status tracking are approved design only |
 | [Performance](behavior/performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |

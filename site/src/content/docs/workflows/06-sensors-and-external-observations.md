@@ -7,7 +7,10 @@ A `@sensor` is a function with no inputs that looks at something outside the gra
 bucket, a table). Return a version value for content comparison, or `True`/`False` when
 the function already knows whether it changed. `(changed, value)` also passes data to
 consumers. `True` advances freshness even without data; `False` retains the previous
-observation. A dictionary defining partitions is compared per key.
+observation. A dictionary defining partitions is compared per key. When a key returns to
+an earlier value, Barca can reuse its earlier cached asset result and keeps that selection
+on subsequent unchanged runs. Removing a key removes it from current results; its history
+remains available subject to the normal artifact cache policy.
 
 The examples below use version values for comparison. The terminal manual covers the same ground in
 `barca docs cache` ("External data that changes in place") and `barca docs assets` ("Sensors").

@@ -51,11 +51,11 @@ Example: source values `1 -> 2 -> 1 -> 1`, with an asset doubling the value, req
 `2 -> 4 -> 2 -> 2`. Returning `4` on the last read violates INV-SELECT-01. A cache hit need
 not append a new materialization, so choosing the greatest historical row ID is insufficient.
 
-Known deviation on the 0.33.0 baseline: [#657](https://github.com/barca-orc/barca/issues/657)
-reproduces that violation for partitioned results. [PR
-#658](https://github.com/barca-orc/barca/pull/658)
-contains the regression and fix; it is not part of this branch's implemented baseline.
-Do not describe its proof format or bounded historical exceptions as shipped until merged.
+Generation-scoped freshness proofs retain bounded historical-selection exceptions per logical
+node. When those exceptions exceed 256 KiB, discard the proof and validate normally. Proof
+namespace v3 invalidates old shortcuts once on upgrade. This fixes the sequential reversion
+in [#657](https://github.com/barca-orc/barca/issues/657); it does not establish observation
+ordering or concurrent-version publication from the approved ownership design.
 
 ### Freshness policy
 
@@ -101,8 +101,7 @@ decisions](cache-decisions.md), independently of freshness.
 
 Exercise boolean and tuple signals with/without previous payload, content comparison,
 added/changed/removed keys, return to an older input identity, Manual pins, scheduled
-propagation and explicit partition selection. The historical-reversion control remains pending
-on #658.
+propagation and explicit partition selection. The historical-reversion control covers sensor and cached-asset producers.
 
 Conformance: [sensor observations](../../python/tests/test_sensor_observations.py)
 (`test_signal_without_data_keeps_asset_chain_fresh`,
@@ -115,8 +114,8 @@ Conformance: [partition cache](../../python/tests/test_partition_cache.py)
 (`test_a_new_key_runs_only_that_key`, `test_a_removed_key_is_not_resurrected`),
 [keyed sources](../../python/tests/test_keyed_partitions.py),
 [current SQL membership](../../python/tests/test_sql_current_partitions.py),
-[incremental DAGs](../../python/tests/test_incremental_dag.py). The historical reversion control
-is on PR #658; existing unpartitioned return-to-an-earlier-value coverage alone does not
+[incremental DAGs](../../python/tests/test_incremental_dag.py). The historical reversion control is in [partition audit](../../python/tests/test_partition_audit.py);
+existing unpartitioned return-to-an-earlier-value coverage alone does not
 prove the partitioned invariant.
 
 Conformance: [freshness rules](../../crates/barca-core/src/freshness.rs),
@@ -126,7 +125,7 @@ Conformance: [freshness rules](../../crates/barca-core/src/freshness.rs),
 
 ## Open questions and gaps
 
-The partitioned historical-reversion deviation (#657 / pending #658) remains explicit in the
+The concurrent-version selection ordering gap remains explicit in the
 membership rule. Partitioned Manual pinning remains unsupported. Ordered observation publication
 is approved in [ownership](current-state-and-execution.md), not implemented by comparing opaque
 hashes.
