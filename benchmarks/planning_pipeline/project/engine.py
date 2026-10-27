@@ -16,7 +16,7 @@ def con():
 
 def row_count(rel) -> int:
     """Run an aggregate on a lazy input: the scan happens here, before the step decides."""
-    return rel.aggregate("count(*)").fetchone()[0]
+    return rel.aggregate("count(*)").fetchall()[0][0]
 
 
 def empty(schema: dict) -> duckdb.DuckDBPyRelation:
@@ -39,7 +39,7 @@ def staged(rel, alias: str):
     """
     c = con()
     rel.create_view(f"{alias}_rows", replace=True)
-    c.register(f"{alias}_frame", rel.fetch_arrow_table())
+    c.register(f"{alias}_frame", rel.to_arrow_table())
     c.execute(f"CREATE OR REPLACE TEMP TABLE {alias}_keys AS SELECT DISTINCT * FROM {alias}_frame")
     try:
         yield c

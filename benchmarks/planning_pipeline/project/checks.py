@@ -14,7 +14,7 @@ def no_nulls(name: str, rel, keys: list[str]) -> None:
     if not cols:
         return
     cond = " OR ".join(f"{c} IS NULL" for c in cols)
-    bad = rel.filter(cond).aggregate("count(*)").fetchone()[0]
+    bad = rel.filter(cond).aggregate("count(*)").fetchall()[0][0]
     if bad:
         raise ValueError(f"{name}: {bad} rows with a null in {', '.join(cols)}")
 

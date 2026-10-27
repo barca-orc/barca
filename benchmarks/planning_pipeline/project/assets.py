@@ -652,7 +652,7 @@ def validate_retirement_registry(
         unknown = con.sql(
             "SELECT count(*) FROM registry_rows WHERE item_id IS NOT NULL "
             "AND item_id NOT IN (SELECT item_id FROM forecast_item)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     print(f"validate_retirement_registry: {unknown} registry items not in the forecast")
 
 
@@ -694,7 +694,7 @@ def validate_launch_registry(
         unknown = con.sql(
             "SELECT count(*) FROM registry_rows WHERE item_id IS NOT NULL "
             "AND item_id NOT IN (SELECT item_id FROM forecast_item)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     print(f"validate_launch_registry: {unknown} registry items not in the forecast")
 
 
@@ -713,7 +713,7 @@ def validate_rollout_registry(
         unknown = con.sql(
             "SELECT count(*) FROM registry_rows WHERE item_id IS NOT NULL "
             "AND item_id NOT IN (SELECT item_id FROM forecast_item)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
     print(f"validate_rollout_registry: {unknown} registry items not in the forecast")
 
 

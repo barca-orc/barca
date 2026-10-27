@@ -63,6 +63,11 @@ pub const TOPICS: &[Topic] = &[
         "types.md"
     ),
     topic!(
+        "duckdb",
+        "duckdb 1.x and 2.x: what a pipeline must change for duckdb 2",
+        "duckdb.md"
+    ),
+    topic!(
         "big-inputs",
         "Large inputs: lazy types (duckdb, polars LazyFrame) load only the subset a step needs",
         "big-inputs.md"

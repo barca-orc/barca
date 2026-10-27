@@ -18,6 +18,7 @@ an isolated namespace, so avoid collisions with project-created catalog objects.
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any
 
 
@@ -32,6 +33,39 @@ def connection():
     default = duckdb.default_connection
     # duckdb >= 1.4 exposes a function; older versions expose the connection object itself.
     return default() if callable(default) else default
+
+
+def finish_open_result() -> None:
+    """Discard a DB-API result the step left unread on the shared connection.
+
+    duckdb 2 refuses other work on a connection while a result of ``execute()`` is unfinished
+    (``duckdb.execute(q).fetchone()`` leaves one), so barca could neither write the step's
+    returned relation nor bind the next step's inputs. duckdb 1.x simply replaced such a
+    result; ``abort()`` (duckdb >= 2) does the same. A no-op when duckdb was never imported or
+    has no ``abort()``. Never raises.
+    """
+    if "duckdb" not in sys.modules:
+        return
+    try:
+        con = connection()
+        abort = getattr(con, "abort", None)
+        if abort is not None:
+            abort()
+    except Exception:
+        pass
+
+
+def arrow_reader(relation: Any) -> Any:
+    """Stream a relation as a ``pyarrow.RecordBatchReader`` on duckdb 1.1 to 2.x.
+
+    ``to_arrow_reader()`` on duckdb 1.5 and 2; ``fetch_record_batch()`` warns on duckdb 2 and is
+    absent on 1.1, where ``fetch_arrow_reader()`` is the name.
+    """
+    for name in ("to_arrow_reader", "fetch_arrow_reader", "fetch_record_batch"):
+        method = getattr(relation, name, None)
+        if method is not None:
+            return method()
+    raise TypeError(f"{type(relation).__name__} cannot be read as Arrow record batches")
 
 
 def _quote(name: str) -> str:
@@ -64,7 +98,12 @@ def bind_inputs(kwargs: dict[str, Any], param_types: dict[str, str | None]) -> l
 
 
 def unbind_inputs(names: list[str]) -> None:
-    """Drop the views created by :func:`bind_inputs` (idempotent, never raises)."""
+    """Drop the views created by :func:`bind_inputs` (idempotent, never raises).
+
+    Also discards a result the step left unread (:func:`finish_open_result`), so the next step
+    on this worker starts on a usable connection.
+    """
+    finish_open_result()
     if not names:
         return
     try:
@@ -83,7 +122,7 @@ _MIXED_NOTE = (
     "Barca loads duckdb inputs on one shared connection per worker, the same one that "
     "duckdb.sql(...) and duckdb.read_parquet(...) use. Stay on those (or on "
     "barca.duckdb_connection()) instead of opening your own duckdb.connect().\n"
-    'If you need your own connection, copy an input onto it: con.register("name", input.arrow()).\n'
+    'If you need your own connection, copy an input onto it: con.register("name", input.to_arrow_table()).\n'
     "See `barca docs types`."
 )
 
@@ -118,7 +157,7 @@ def explain_error(exc: BaseException, bound_views: list[str]) -> str | None:
             f"bound it on.\n"
             f"`{name}` is an input of this step, available as a view on barca's shared "
             f"connection. Query it with duckdb.sql(...) or barca.duckdb_connection().sql(...), "
-            f'or copy it onto your own connection: con.register("{name}", {name}.arrow()).\n'
+            f'or copy it onto your own connection: con.register("{name}", {name}.to_arrow_table()).\n'
             "See `barca docs types`."
         )
     return None

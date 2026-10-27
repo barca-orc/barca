@@ -39,7 +39,7 @@ def test_connection_is_the_one_inputs_load_on(parquet):
     # Module-level duckdb functions and barca's connection are the same connection...
     duckdb.execute("create or replace table connection_probe as select 7 as x")
     try:
-        assert con.sql("select x from connection_probe").fetchone() == (7,)
+        assert con.sql("select x from connection_probe").fetchall() == [(7,)]
         # ...so a loaded input combines with relations made through either API.
         rel = duckdb.read_parquet(parquet)  # how barca loads a duckdb-typed input
         assert rel.join(con.sql("select 1 as k"), "k").fetchall() == [(1, "a")]
@@ -85,7 +85,7 @@ def test_bind_never_clobbers_an_existing_table(parquet):
 def test_standalone_use_outside_a_worker():
     import barca
 
-    assert barca.duckdb_connection().sql("select 42").fetchone() == (42,)
+    assert barca.duckdb_connection().sql("select 42").fetchall() == [(42,)]
 
 
 # ─── Loud failure for connection conflicts ────────────────────────────────────
@@ -227,6 +227,44 @@ def test_unannotated_consumer_still_gets_a_pandas_dataframe(binary, project):
     assert run_get(binary, project, "as_pandas", "--refresh-all")["type"] == "DataFrame"
 
 
+UNREAD_RESULT_PIPELINE = """
+import duckdb
+from barca import asset
+
+
+@asset()
+def orders() -> duckdb.DuckDBPyRelation:
+    return duckdb.sql("select range as a from range(1000)")
+
+
+@asset(inputs={"orders": orders})
+def capped(orders: duckdb.DuckDBPyRelation) -> duckdb.DuckDBPyRelation:
+    # fetchone() of a DB-API result leaves the rest of it unread on the shared connection.
+    cap = duckdb.execute("select max(a) from orders").fetchall()[0][0]
+    return orders.filter(f"a < {cap // 2}")
+
+
+@asset(inputs={"capped": capped})
+def total(capped: duckdb.DuckDBPyRelation) -> dict:
+    n = duckdb.sql("select count(*) from capped").fetchall()[0][0]
+    duckdb.execute("select * from capped").fetchall()[0]  # left unread for the next step
+    return {"n": n}
+
+
+@asset(inputs={"_after": total, "orders": orders})
+def after(_after, orders: duckdb.DuckDBPyRelation) -> dict:
+    return {"n": duckdb.sql("select count(*) from orders").fetchall()[0][0]}
+"""
+
+
+def test_a_result_left_unread_does_not_block_writing_or_the_next_step(binary, tmp_path):
+    # duckdb 2 refuses other work on a connection with an unfinished execute() result; barca
+    # discards it once the step returns, as duckdb 1.x did, on one worker so steps share it.
+    (tmp_path / "pipeline.py").write_text(UNREAD_RESULT_PIPELINE)
+    assert run_get(binary, tmp_path, "total", "--refresh-all") == {"n": 499}
+    assert run_get(binary, tmp_path, "after") == {"n": 1000}
+
+
 MIXING_PIPELINE = """
 import duckdb
 from barca import asset
@@ -353,7 +391,7 @@ def fail(orders):
                 "ValueError" if outcome == "user_failure" else "OSError"
             )
             assert errors[0]["worker_continues"] is True
-        assert con.sql("select twice(x) from project_marker").fetchone() == (198,)
+        assert con.sql("select twice(x) from project_marker").fetchall() == [(198,)]
         with pytest.raises(duckdb.CatalogException):
             con.sql("select * from orders")
 
@@ -363,7 +401,7 @@ def fail(orders):
         assert _worker._run_daemon_step(step, modules, str(tmp_path / "arts"), lru)
         artifact = reports[-1][1]["artifact"]
         assert _artifacts.deserialize(artifact["path"], "parquet")["amount"].tolist() == [14]
-        assert con.sql("select twice(x) from project_marker").fetchone() == (198,)
+        assert con.sql("select twice(x) from project_marker").fetchall() == [(198,)]
         with pytest.raises(duckdb.CatalogException):
             con.sql("select * from orders")
     finally:

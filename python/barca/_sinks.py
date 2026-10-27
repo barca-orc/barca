@@ -32,7 +32,7 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 from barca import _storage
 
@@ -154,16 +154,19 @@ def _size_warning(path: str, partition_by: list[str], stats: dict) -> str | None
         return (
             f"sink {path}: one write created {stats['directories']} directories "
             f"(partition_by=[{cols}]). A column with this many distinct values makes many "
-            "small files; partition by a coarser column (`barca docs sinks`, \"How to choose "
+            'small files; partition by a coarser column (`barca docs sinks`, "How to choose '
             'partition columns")'
         )
-    if stats["files"] >= SMALL_FILES_MIN_COUNT and stats["bytes"] / stats["files"] < SMALL_FILE_BYTES:
+    if (
+        stats["files"] >= SMALL_FILES_MIN_COUNT
+        and stats["bytes"] / stats["files"] < SMALL_FILE_BYTES
+    ):
         avg = stats["bytes"] / stats["files"] / 1024
         why = f"partition_by=[{cols}]" if partition_by else "rows_per_file="
         return (
             f"sink {path}: one write created {stats['files']} files averaging {avg:.0f} KB "
             f"({why}). Files under about 1 MB are slow to read; partition by a coarser column "
-            "or raise rows_per_file (`barca docs sinks`, \"How to choose partition columns\")"
+            'or raise rows_per_file (`barca docs sinks`, "How to choose partition columns")'
         )
     return None
 
@@ -246,12 +249,16 @@ def _write_duckdb(rel, stage: Path, fmt, partition_by, rows_per_file, drop) -> N
     if len(kept) != len(rel.columns):
         rel = rel.project(", ".join('"' + c.replace('"', '""') + '"' for c in kept))
     if fmt == "json" or rows_per_file:
-        reader = rel.fetch_record_batch()
+        from barca import _duckdb
+
+        reader = _duckdb.arrow_reader(rel)
         _write_arrow(reader, stage, fmt, partition_by, rows_per_file)
         return
     if fmt == "parquet":
         if partition_by:
-            rel.to_parquet(str(stage), compression="zstd", partition_by=partition_by, overwrite=True)
+            rel.to_parquet(
+                str(stage), compression="zstd", partition_by=partition_by, overwrite=True
+            )
         else:
             rel.to_parquet(str(stage / "part-0.parquet"), compression="zstd")
     else:
@@ -313,7 +320,9 @@ def _write_arrow(data, stage: Path, fmt, partition_by, rows_per_file) -> None:
     if partition_by:
         kwargs.update(partitioning=partition_by, partitioning_flavor="hive")
     if rows_per_file:
-        kwargs.update(max_rows_per_file=rows_per_file, max_rows_per_group=min(rows_per_file, 1 << 20))
+        kwargs.update(
+            max_rows_per_file=rows_per_file, max_rows_per_group=min(rows_per_file, 1 << 20)
+        )
     if fmt == "parquet":
         file_format = pds.ParquetFileFormat()
         kwargs["file_options"] = file_format.make_write_options(compression="zstd")
@@ -553,7 +562,13 @@ def _exchange(a: Path, b: Path) -> bool:
     except (OSError, AttributeError):
         return False
     at_fdcwd, rename_exchange = -100, 2
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
     return renameat2(at_fdcwd, os.fsencode(a), at_fdcwd, os.fsencode(b), rename_exchange) == 0
 
 
@@ -658,9 +673,7 @@ class _RemoteTarget:
                 continue
             parts = rel.split("/")
             levels = parts[: len(dims)]
-            ok = len(parts) > len(dims) and all(
-                p.startswith(f"{d}=") for p, d in zip(levels, dims)
-            )
+            ok = len(parts) > len(dims) and all(p.startswith(f"{d}=") for p, d in zip(levels, dims))
             if not ok or "/".join(levels) not in keep:
                 doomed.append(obj)
                 keys.add("/".join(levels) if ok else rel)

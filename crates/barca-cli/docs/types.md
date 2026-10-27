@@ -54,7 +54,7 @@ def orders() -> duckdb.DuckDBPyRelation:      # written as parquet
 
 @asset(inputs={"orders": orders})
 def total(orders: duckdb.DuckDBPyRelation) -> dict:   # read as a duckdb relation
-    return {"total": orders.sum("amount").fetchone()[0]}
+    return {"total": orders.sum("amount").fetchall()[0][0]}
 
 
 @asset(inputs={"orders": orders})
@@ -123,7 +123,7 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
   (including querying a bound input by name from another connection, which DuckDB reports as
   `Table with name ... does not exist`) and appends a `barca:` note to the step failure that
   says what happened and what to do. If you must, copy the input across with
-  `con.register("x", input.arrow())` (the data is loaded into memory). A relation does not
+  `con.register("x", input.to_arrow_table())` (the data is loaded into memory). A relation does not
   expose its file path.
 - Do not `register` on barca's connection an Arrow table that came from a query on that same
   connection: it hangs (duckdb 1.5.6). Use the relation directly, or `create_view`.
@@ -132,6 +132,8 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
   Prefer stateless SQL and `drop` what you create.
 - Everything is materialized between steps. To cache several results from one computation,
   define several assets or return the one you want cached.
+- duckdb 1.x and 2.x are both supported; what a pipeline must change for duckdb 2:
+  `barca docs duckdb`.
 
 ## CSV outputs
 
@@ -167,4 +169,4 @@ def orders() -> pd.DataFrame:
 
 The CSV boundary is specified in `specs/interfaces/artifact-formats.md`.
 
-See also: `barca docs big-inputs`, `barca docs cache`, `barca docs examples/duckdb`.
+See also: `barca docs big-inputs`, `barca docs duckdb`, `barca docs cache`, `barca docs examples/duckdb`.

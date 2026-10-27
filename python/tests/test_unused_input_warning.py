@@ -119,17 +119,17 @@ def limits() -> dict:
 
 @asset(inputs={"orders": frame})
 def duckdb_over_pandas(orders: pd.DataFrame) -> int:
-    return int(duckdb.sql("select sum(amount) from orders").fetchone()[0])
+    return int(duckdb.sql("select sum(amount) from orders").fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def duckdb_over_polars(orders: pl.DataFrame) -> int:
-    return int(duckdb.sql("select sum(amount) from orders").fetchone()[0])
+    return int(duckdb.sql("select sum(amount) from orders").fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def duckdb_unannotated(orders) -> int:
-    return int(duckdb.sql("select sum(amount) from orders").fetchone()[0])
+    return int(duckdb.sql("select sum(amount) from orders").fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
@@ -144,7 +144,7 @@ def pandas_query(orders: pd.DataFrame, threshold: dict) -> int:
 
 @asset(inputs={"orders": frame})
 def query_from_a_constant(orders: pd.DataFrame) -> int:
-    return int(duckdb.sql(QUERY).fetchone()[0])
+    return int(duckdb.sql(QUERY).fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
@@ -238,7 +238,7 @@ def via_kwargs(**kwargs) -> int:
 @asset(inputs={"orders": orders})
 def via_sql(orders: duckdb.DuckDBPyRelation) -> int:
     # Read through the view barca binds under the parameter's name, not the Python name.
-    return duckdb.sql("select count(*) from orders").fetchone()[0]
+    return duckdb.sql("select count(*) from orders").fetchall()[0][0]
 
 
 @asset(inputs={"etag": etag})
@@ -332,14 +332,18 @@ def test_each_reported_case_once_per_step_input(tmp_path):
 
 
 def test_a_lazy_input_is_not_said_to_be_loaded(tmp_path):
-    proc = barca(write(tmp_path, REPORTED), "get", "lazy_polars", "pipeline.py", "-o", "value", "--json")
+    proc = barca(
+        write(tmp_path, REPORTED), "get", "lazy_polars", "pipeline.py", "-o", "value", "--json"
+    )
     assert proc.returncode == 0, proc.stderr
     [w] = json_warnings(proc)
     assert "loaded in full" not in w["message"]
     assert "annotated as a lazy input (polars_lazy)" in w["message"]
     assert "opened but not read" in w["message"]
     # The eager one in the same file is.
-    [eager] = json_warnings(barca(tmp_path, "get", "dropped", "pipeline.py", "-o", "value", "--json"))
+    [eager] = json_warnings(
+        barca(tmp_path, "get", "dropped", "pipeline.py", "-o", "value", "--json")
+    )
     assert "loaded in full each time the step runs" in eager["message"]
 
 
@@ -416,7 +420,9 @@ def test_the_underscore_prefix_declares_an_input_unused_on_purpose(tmp_path):
     assert [s["id"] for s in out["steps"]].index("pipeline.py:other") < len(out["steps"]) - 1
 
     write(tmp_path, source.replace('{"m": 2}', '{"m": 3}'))
-    second = json.loads(barca(tmp_path, "get", "report", "pipeline.py", "-o", "value", "--json").stdout)
+    second = json.loads(
+        barca(tmp_path, "get", "report", "pipeline.py", "-o", "value", "--json").stdout
+    )
     status = {s["id"]: s["status"] for s in second["steps"]}
     assert status["pipeline.py:other"] == "ran"
     assert status["pipeline.py:report"] == "ran"  # still a cache dependency
@@ -506,7 +512,9 @@ def test_a_failed_run_keeps_exit_1_and_still_carries_the_warnings(tmp_path):
     assert pairs(out["warnings"]) == [REPORT_OTHER]
     assert len(stderr_warnings(proc)) == 1
     # The error envelope is still the last stderr line, and has no warnings in it.
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert envelope["kind"] == "step_failed" and "warnings" not in envelope
 
     multi = barca(cwd, "run", "publish,fails", "pipeline.py", "--json")
@@ -603,42 +611,42 @@ def frame() -> pd.DataFrame:
 def mixed_concatenation(orders: pd.DataFrame) -> int:
     n = 0
     rel = duckdb.sql("select 1 as one")
-    return int(rel.query("v", "select sum(amount) from orders " f"where amount > {n}").fetchone()[0])
+    return int(rel.query("v", "select sum(amount) from orders " f"where amount > {n}").fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def aliased_entry_point(orders: pd.DataFrame) -> int:
     n = 0
-    return int(dsql("select sum(amount) from orders " f"where amount > {n}").fetchone()[0])
+    return int(dsql("select sum(amount) from orders " f"where amount > {n}").fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def aliased_with_a_constant(orders: pd.DataFrame) -> int:
-    return int(dsql(QUERY).fetchone()[0])
+    return int(dsql(QUERY).fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def query_by_keyword(orders: pd.DataFrame) -> int:
-    return int(duckdb.sql(alias="x", query=QUERY).fetchone()[0])
+    return int(duckdb.sql(alias="x", query=QUERY).fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def table_by_variable(orders: pd.DataFrame) -> int:
     name = "orders"
-    return int(duckdb.table(name).aggregate("sum(amount)").fetchone()[0])
+    return int(duckdb.table(name).aggregate("sum(amount)").fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def entry_point_bound_to_a_local(orders: pd.DataFrame) -> int:
     q = duckdb.sql
-    return int(q(QUERY).fetchone()[0])
+    return int(q(QUERY).fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def plain_part_outside_any_call(orders: pd.DataFrame) -> int:
     n = 0
     text = "select sum(amount) from orders " f"where amount > {n}"
-    return int(duckdb.sql(text).fetchone()[0])
+    return int(duckdb.sql(text).fetchall()[0][0])
 """
 
 
@@ -688,12 +696,12 @@ def frame() -> pd.DataFrame:
 
 @asset(inputs={"orders": frame})
 def reexported_entry_point(orders: pd.DataFrame) -> int:
-    return int(mylib.sql(QUERY).fetchone()[0])
+    return int(mylib.sql(QUERY).fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
 def own_query_helper(orders: pd.DataFrame) -> int:
-    return int(db.query(QUERY).fetchone()[0])
+    return int(db.query(QUERY).fetchall()[0][0])
 
 
 @asset(inputs={"orders": frame})
@@ -736,11 +744,11 @@ def test_the_manual_lists_exactly_the_packages_the_check_knows_to_be_unrelated(t
 def test_match_and_nested_definitions_shadow_unrelated_imports(tmp_path, binding):
     """A dynamic SQL query reads the input despite its receiver shadowing stdlib json."""
     bodies = {
-        "capture": "match duckdb:\n        case json:\n            return int(json.sql(QUERY).fetchone()[0])",
-        "as_capture": "match duckdb:\n        case object() as json:\n            return int(json.sql(QUERY).fetchone()[0])",
-        "def": "def json():\n        pass\n    attach_query(json)\n    return int(json.sql(QUERY).fetchone()[0])",
-        "async_def": "async def json():\n        pass\n    attach_query(json)\n    return int(json.sql(QUERY).fetchone()[0])",
-        "class": "class json(Engine):\n        pass\n    return int(json.sql(QUERY).fetchone()[0])",
+        "capture": "match duckdb:\n        case json:\n            return int(json.sql(QUERY).fetchall()[0][0])",
+        "as_capture": "match duckdb:\n        case object() as json:\n            return int(json.sql(QUERY).fetchall()[0][0])",
+        "def": "def json():\n        pass\n    attach_query(json)\n    return int(json.sql(QUERY).fetchall()[0][0])",
+        "async_def": "async def json():\n        pass\n    attach_query(json)\n    return int(json.sql(QUERY).fetchall()[0][0])",
+        "class": "class json(Engine):\n        pass\n    return int(json.sql(QUERY).fetchall()[0][0])",
     }
     source = """
 import duckdb
@@ -764,7 +772,7 @@ def frame() -> pd.DataFrame:
 def shadowed(orders: pd.DataFrame) -> int:
     match duckdb:
         case json:
-            return int(json.sql(QUERY).fetchone()[0])
+            return int(json.sql(QUERY).fetchall()[0][0])
 
 @asset(inputs={"orders": frame})
 def really_unused(orders: pd.DataFrame) -> int:

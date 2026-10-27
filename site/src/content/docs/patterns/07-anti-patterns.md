@@ -154,13 +154,13 @@ def orders() -> duckdb.DuckDBPyRelation:
 @asset(inputs={"orders": orders})
 def emea_total(orders: duckdb.DuckDBPyRelation) -> dict:
     duckdb.sql("create view picked as select * from orders where region = 'emea'")
-    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchone()[0]}
+    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchall()[0][0]}
 
 
 @asset(inputs={"orders": orders, "_after": emea_total})
 def amer_total(orders: duckdb.DuckDBPyRelation, _after) -> dict:
     duckdb.sql("create view picked as select * from orders where region = 'amer'")
-    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchone()[0]}
+    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchall()[0][0]}
 ```
 
 ```
@@ -191,13 +191,13 @@ def orders() -> pd.DataFrame:
 @asset(inputs={"orders": orders})
 def emea_total(orders: pd.DataFrame) -> dict:
     duckdb.register("picked", orders[orders.region == "emea"])
-    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchone()[0]}
+    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchall()[0][0]}
 
 
 @asset(inputs={"orders": orders, "_after": emea_total})
 def amer_total(orders: pd.DataFrame, _after) -> dict:
     picked = orders[orders.region == "amer"]
-    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchone()[0]}
+    return {"total": duckdb.sql("select sum(amount)::double from picked").fetchall()[0][0]}
 ```
 
 The registered view wins over the local variable. `amer_total` returns the EMEA total, the
@@ -233,7 +233,7 @@ after `test_emea_total`.
   ```python
   duckdb.sql("create or replace temp view amer_total_picked as select * from orders where region = 'amer'")
   try:
-      total = duckdb.sql("select sum(amount)::double from amer_total_picked").fetchone()[0]
+      total = duckdb.sql("select sum(amount)::double from amer_total_picked").fetchall()[0][0]
   finally:
       duckdb.sql("drop view amer_total_picked")
   ```

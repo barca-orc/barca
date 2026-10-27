@@ -25,7 +25,7 @@ def big() -> pd.DataFrame:
 
 @asset(inputs={"big": big})
 def lazy_sum(big: duckdb.DuckDBPyRelation) -> int:
-    return int(big.aggregate("sum(a)").fetchone()[0])
+    return int(big.aggregate("sum(a)").fetchall()[0][0])
 
 
 @asset(inputs={"big": big})
