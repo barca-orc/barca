@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.33.1 (2026-10-27)
+
 ### Refactoring
 
 - Separate collected run results, attempt/timing evidence and ledger/report projections from
