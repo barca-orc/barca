@@ -239,10 +239,10 @@ jobs:
           BARCA_TEST_S3_ENDPOINT: http://localhost:9100
           BARCA_TEST_GCS_ENDPOINT: http://localhost:9200
           BARCA_TEST_AZURITE_HOST: 127.0.0.1:9210
-        # barca supports duckdb>=1.1,<3 (#567). Every test file that mentions DuckDB runs again
+        # barca supports duckdb>=1.4,<3 (#567). Every test file that mentions DuckDB runs again
         # on the newest 1.x; the step ends by putting 2.x back for the steps after it.
         run: |
-          pip install 'duckdb>=1.1,<2'
+          pip install 'duckdb>=1.4,<2'
           python -c "import duckdb; v = duckdb.__version__; print('duckdb', v); assert v.startswith('1.'), v"
           pytest $(grep -li duckdb python/tests/test_*.py) -q -n 4 --dist loadscope
           pip install 'duckdb>=2,<3'

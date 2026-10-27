@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from barca import _storage
+from barca import _duckdb, _storage
 
 _FORMAT_EXTENSIONS = {
     "json": ".json",
@@ -404,7 +404,7 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
                     "CREATE TABLE downloaded_csv AS SELECT * FROM read_csv(?, header=true)",
                     [str(tmp)],
                 )
-                return con.table("downloaded_csv")
+                return _duckdb.keep_connection_alive(con.table("downloaded_csv"), con)
             return _deserialize_local(tmp, fmt, frame_type=frame_type)
         finally:
             tmp.unlink(missing_ok=True)

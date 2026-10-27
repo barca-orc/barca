@@ -1,6 +1,8 @@
 # DuckDB versions
 
-`barca[sql]` accepts duckdb 1.1 up to (not including) 3, and barca's tests run on 1.x and 2.x.
+`barca[sql]` accepts duckdb 1.4 up to (not including) 3, and barca's tests run on 1.x and 2.x.
+duckdb 1.1 to 1.3 are not supported (on 1.1, for one, dataset sinks fail).
+
 Moving a pipeline to duckdb 2 can need these changes in your own code (checked with 2.0.0):
 
 - Relations no longer have `fetchone()`, `fetchmany()`, `fetch_df_chunk()` or `execute()`.
@@ -14,8 +16,8 @@ Moving a pipeline to duckdb 2 can need these changes in your own code (checked w
   `duckdb.sql(q).fetchall()`, read the result to the end, or call `abort()` on the connection.
 - `fetch_arrow_table()` and `fetch_record_batch()` on a relation warn
   (`DeprecationWarning`); use `to_arrow_table()` and `to_arrow_reader()`. `rel.arrow()`
-  returns a `RecordBatchReader` that can be read once (duckdb 1.5 and 2; a table on 1.1);
-  `to_arrow_table()` returns a table on every version barca supports.
+  returns a `RecordBatchReader` that can be read once (every version barca
+  supports); `to_arrow_table()` returns a table.
 - SQL: the `x -> x + 1` lambda syntax is a binder error (use `lambda x: x + 1`, which 1.x also
   accepts), and integer `//` or `%` by zero raises instead of returning NULL (wrap it in
   `TRY(...)`). DuckDB's migration guide lists the rest:

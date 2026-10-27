@@ -56,16 +56,32 @@ def finish_open_result() -> None:
 
 
 def arrow_reader(relation: Any) -> Any:
-    """Stream a relation as a ``pyarrow.RecordBatchReader`` on duckdb 1.1 to 2.x.
+    """Stream a relation as a ``pyarrow.RecordBatchReader`` on duckdb 1.4 to 2.x.
 
-    ``to_arrow_reader()`` on duckdb 1.5 and 2; ``fetch_record_batch()`` warns on duckdb 2 and is
-    absent on 1.1, where ``fetch_arrow_reader()`` is the name.
+    ``to_arrow_reader()`` on duckdb 1.5 and 2; 1.4 has only ``fetch_arrow_reader()`` and
+    ``fetch_record_batch()``, which warns on duckdb 2.
     """
     for name in ("to_arrow_reader", "fetch_arrow_reader", "fetch_record_batch"):
         method = getattr(relation, name, None)
         if method is not None:
             return method()
     raise TypeError(f"{type(relation).__name__} cannot be read as Arrow record batches")
+
+
+def keep_connection_alive(relation: Any, con: Any) -> Any:
+    """Return ``relation``, keeping ``con`` open for as long as the relation exists.
+
+    duckdb 1.4 closes a connection once nothing references it, even while a relation made on
+    it is still in use (``Connection has already been closed``); duckdb 1.5 and 2 keep it open.
+    The connection is closed when the relation is garbage-collected.
+    """
+    import weakref
+
+    try:
+        weakref.finalize(relation, con.close)
+    except TypeError:
+        pass
+    return relation
 
 
 def _quote(name: str) -> str:

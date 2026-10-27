@@ -36,7 +36,7 @@ with per-key caching unchanged. It also resolves the docs leftovers (#606), incl
 retain the deprecated HTTP aliases for Python `Client` compatibility. It removes the production debug
 output (#645) with a database-dependency update checked against older database fixtures.
 The next work is the cleanup checklist below; no new capability priority has been set.
-DuckDB 2 (#567): barca supports duckdb 1.x and 2.x (`duckdb>=1.1,<3`), with CI on both.
+DuckDB 2 (#567): barca supports duckdb 1.x and 2.x (`duckdb>=1.4,<3`), with CI on both.
 
 ### Release sequence
 

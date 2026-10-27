@@ -18,9 +18,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
-- `barca[sql]` and `barca[test]` accept duckdb 2 (`duckdb>=1.1,<3`, #567); CI runs the
-  DuckDB tests on 1.x and 2.x. Barca no longer calls relation methods duckdb 2 removed or
-  deprecated (`barca sql --limit` failed with `fetchone()`), and discards a result a step left
+- `barca[sql]` and `barca[test]` accept duckdb 2 (`duckdb>=1.4,<3`, #567); CI runs the
+  DuckDB tests on 1.x and 2.x. The floor rises from 1.1 to 1.4: duckdb 1.1 to 1.3 already did
+  not work (dataset sinks pass `to_parquet` arguments 1.1 rejects), and on 1.4 a remote CSV
+  input read as a DuckDB relation failed with `Connection has already been closed`; it is kept
+  open now. Barca no longer calls
+  relation methods duckdb 2 removed or deprecated (`barca sql --limit` failed with `fetchone()`), and discards a result a step left
   unread on the shared connection, which duckdb 2 otherwise lets block writing the step's
   relation and the next step on that worker. Pipelines may need changes for duckdb 2
   (`rel.fetchone()`, unread `execute()` results, `->` lambdas), and a database file duckdb 2
