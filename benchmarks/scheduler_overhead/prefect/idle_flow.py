@@ -15,7 +15,6 @@ def noop_flow():
 
 if __name__ == "__main__":
     deployments = [
-        noop_flow.to_deployment(name=f"idle_{i:02d}", cron="0 0 1 1 *")
-        for i in range(10)
+        noop_flow.to_deployment(name=f"idle_{i:02d}", cron="0 0 1 1 *") for i in range(10)
     ]
     serve(*deployments)

@@ -39,9 +39,7 @@ def raw_orders() -> pd.DataFrame:
             "quantity": rng.integers(1, 21, n),
             "unit_price": np.round(rng.uniform(5.0, 500.0, n), 2),
             "order_date": [f"2022-{m:02d}-{d:02d}" for m, d in zip(months, days)],
-            "status": rng.choice(
-                ["completed", "returned", "cancelled"], n, p=[0.6, 0.2, 0.2]
-            ),
+            "status": rng.choice(["completed", "returned", "cancelled"], n, p=[0.6, 0.2, 0.2]),
         }
     )
 
@@ -123,9 +121,7 @@ def int_customer_agg(orders: pd.DataFrame, customers: pd.DataFrame) -> pd.DataFr
     agg = orders.groupby("customer_id")["total"].agg(order_count="count", lifetime_value="sum")
     agg["lifetime_value"] = agg["lifetime_value"].round(2)
     agg = agg.reset_index()
-    merged = agg.merge(
-        customers[["customer_id", "tier"]], on="customer_id", how="left"
-    )
+    merged = agg.merge(customers[["customer_id", "tier"]], on="customer_id", how="left")
     merged["tier"] = merged["tier"].fillna("UNKNOWN")
     return merged[["customer_id", "tier", "order_count", "lifetime_value"]]
 
@@ -133,14 +129,10 @@ def int_customer_agg(orders: pd.DataFrame, customers: pd.DataFrame) -> pd.DataFr
 @asset(inputs={"orders": stg_orders, "products": stg_products})
 def int_product_stats(orders: pd.DataFrame, products: pd.DataFrame) -> pd.DataFrame:
     """Per-product sales stats."""
-    agg = orders.groupby("product_id").agg(
-        units_sold=("quantity", "sum"), revenue=("total", "sum")
-    )
+    agg = orders.groupby("product_id").agg(units_sold=("quantity", "sum"), revenue=("total", "sum"))
     agg["revenue"] = agg["revenue"].round(2)
     agg = agg.reset_index()
-    merged = agg.merge(
-        products[["product_id", "category"]], on="product_id", how="left"
-    )
+    merged = agg.merge(products[["product_id", "category"]], on="product_id", how="left")
     merged["category"] = merged["category"].fillna("unknown")
     return merged[["product_id", "category", "units_sold", "revenue"]]
 
@@ -175,9 +167,7 @@ def mart_summary(data: dict) -> dict:
         "months_tracked": data["months"],
         "product_count": data["product_count"],
         "total_revenue": data["total_revenue"],
-        "avg_revenue_per_month": round(
-            data["total_revenue"] / max(data["months"], 1), 2
-        ),
+        "avg_revenue_per_month": round(data["total_revenue"] / max(data["months"], 1), 2),
         "top_customer_ltv": data["top_customers"][0]["lifetime_value"]
         if data["top_customers"]
         else 0,

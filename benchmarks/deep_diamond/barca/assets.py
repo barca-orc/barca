@@ -158,11 +158,7 @@ def feat_4(data: dict) -> dict:
 @asset(inputs={"f0": feat_0, "f1": feat_1, "f2": feat_2, "f3": feat_3, "f4": feat_4})
 def merge(f0: dict, f1: dict, f2: dict, f3: dict, f4: dict) -> dict:
     all_features = (
-        f0["features"]
-        + f1["features"]
-        + f2["features"]
-        + f3["features"]
-        + f4["features"]
+        f0["features"] + f1["features"] + f2["features"] + f3["features"] + f4["features"]
     )
     return {"combined": all_features, "count": len(all_features)}
 
@@ -178,11 +174,7 @@ def transform(data: dict) -> dict:
 
 @asset(inputs={"data": transform})
 def output(data: dict) -> dict:
-    avg = (
-        sum(r["f"] for r in data["top_100"]) / len(data["top_100"])
-        if data["top_100"]
-        else 0
-    )
+    avg = sum(r["f"] for r in data["top_100"]) / len(data["top_100"]) if data["top_100"] else 0
     return {
         "avg_top_feature": round(avg, 6),
         "total_rows": data["total"],

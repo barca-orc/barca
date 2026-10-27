@@ -21,9 +21,7 @@ def launch():
 def wait(run_id):
     query = "query($id: ID!) { runOrError(runId: $id) { __typename ... on Run { status } } }"
     while True:
-        r = requests.post(
-            GRAPHQL_URL, json={"query": query, "variables": {"id": run_id}}
-        ).json()
+        r = requests.post(GRAPHQL_URL, json={"query": query, "variables": {"id": run_id}}).json()
         s = r["data"]["runOrError"]["status"]
         if s in ("SUCCESS", "FAILURE", "CANCELED"):
             return s

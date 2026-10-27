@@ -59,7 +59,9 @@ def usage_error(proc: subprocess.CompletedProcess) -> str:
     assert proc.returncode == 2, (proc.returncode, proc.stderr)
     assert proc.stdout == ""
     assert "steps done" not in proc.stderr  # rejected before anything ran
-    env = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    env = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert env["kind"] == "usage" and env["code"] == 2, env
     return f"error: {env['error']}\n\n{env['remediation']}\n"
 
@@ -129,7 +131,10 @@ def test_target_without_files_reads_the_whole_project(project):
 def test_space_separated_refresh_still_says_to_use_commas(project):
     err = usage_error(barca(project, "run", "report", "pipeline.py", "--refresh", "src", "mid"))
     assert "'mid' is not a .py file" in err
-    assert last_line(err) == "If you meant to refresh several assets, join them with commas: --refresh src,mid"
+    assert (
+        last_line(err)
+        == "If you meant to refresh several assets, join them with commas: --refresh src,mid"
+    )
 
 
 def test_unknown_refresh_name(project):
@@ -228,4 +233,6 @@ def test_ambiguous_target(project):
     (project / "other.py").write_text(AMBIGUOUS)
     err = usage_error(barca(project, "get", "src", "pipeline.py", "other.py"))
     assert "'src' matches more than one node" in err
-    assert last_line(err) == "Run `barca list pipeline.py other.py` to see available assets and tasks."
+    assert (
+        last_line(err) == "Run `barca list pipeline.py other.py` to see available assets and tasks."
+    )

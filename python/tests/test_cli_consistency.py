@@ -148,12 +148,17 @@ def test_a_failed_agent_run_names_the_step_and_does_not_say_done(project):
     ), proc.stderr
     summary = [line for line in lines if " steps | " in line]
     assert summary and "failed in" in summary[-1] and "done" not in summary[-1], summary
-    assert lines[-1] == "[barca] run failed: step 'failing.py:broken' failed: ValueError: broken on purpose; 0 downstream steps skipped (exit 1)"
+    assert (
+        lines[-1]
+        == "[barca] run failed: step 'failing.py:broken' failed: ValueError: broken on purpose; 0 downstream steps skipped (exit 1)"
+    )
 
 
 def test_warnings_are_lowercase(project):
     assert barca_cli(project, "get", "total", "pipeline.py", "--json").returncode == 0
-    proc = barca_cli(project, "get", "total", "pipeline.py", "--json", "--refresh", "src", "--no-cascade")
+    proc = barca_cli(
+        project, "get", "total", "pipeline.py", "--json", "--refresh", "src", "--no-cascade"
+    )
     assert "[barca] warning: " in proc.stderr
     assert "[barca] Warning" not in proc.stderr
 
@@ -173,12 +178,17 @@ def test_end_of_run_line_is_the_wall_time_not_the_sum_of_steps(tmp_path):
     # Four one-second steps on four workers take about a second, not four.
     (tmp_path / "pipeline.py").write_text(
         "import time\nfrom barca import asset\n"
-        + "".join(f"@asset()\ndef s{i}() -> int:\n    time.sleep(1)\n    return {i}\n" for i in range(4))
+        + "".join(
+            f"@asset()\ndef s{i}() -> int:\n    time.sleep(1)\n    return {i}\n" for i in range(4)
+        )
     )
     proc = subprocess.run(
         [_find_binary(), "get", "pipeline.py", "--json", "--agent"],
         cwd=tmp_path,
-        env={**{k: v for k, v in os.environ.items() if k != "BARCA_OUTPUT"}, "BARCA_POOL_SIZE": "4"},
+        env={
+            **{k: v for k, v in os.environ.items() if k != "BARCA_OUTPUT"},
+            "BARCA_POOL_SIZE": "4",
+        },
         capture_output=True,
         text=True,
     )

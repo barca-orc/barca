@@ -205,9 +205,9 @@ def mart_customer_orders(customers: dict, orders: dict, products: dict) -> dict:
         "months": len(orders["rows"]),
         "product_count": len(products["rows"]),
         "total_revenue": round(sum(r["revenue"] for r in orders["rows"]), 2),
-        "top_customers": sorted(
-            customers["rows"], key=lambda x: x["lifetime_value"], reverse=True
-        )[:10],
+        "top_customers": sorted(customers["rows"], key=lambda x: x["lifetime_value"], reverse=True)[
+            :10
+        ],
     }
 
 
@@ -218,9 +218,7 @@ def mart_summary(data: dict) -> dict:
         "months_tracked": data["months"],
         "product_count": data["product_count"],
         "total_revenue": data["total_revenue"],
-        "avg_revenue_per_month": round(
-            data["total_revenue"] / max(data["months"], 1), 2
-        ),
+        "avg_revenue_per_month": round(data["total_revenue"] / max(data["months"], 1), 2),
         "top_customer_ltv": data["top_customers"][0]["lifetime_value"]
         if data["top_customers"]
         else 0,

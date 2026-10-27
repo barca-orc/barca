@@ -193,7 +193,7 @@ def test_a_code_edit_with_the_same_bytes_keeps_what_reads_it_cached(project):
 
 def test_a_consumers_own_code_still_counts(project):
     path = project / "pipeline.py"
-    path.write_text(path.read_text().replace("EUR\"", "euro\""))
+    path.write_text(path.read_text().replace('EUR"', 'euro"'))
     get(project, "summary")
     lines = calls(project)
     assert keys_run(lines, "invoice") == len(CUSTOMERS)

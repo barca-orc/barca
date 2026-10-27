@@ -8,7 +8,7 @@ import pytest
 
 from barca.api import _find_binary
 
-PIPELINE = '''
+PIPELINE = """
 from barca import asset, sensor, partitions_from, collect
 
 @sensor()
@@ -26,11 +26,15 @@ def combined(parts):
 @asset()
 def independent():
     return 42
-'''
+"""
 
 
-@pytest.mark.parametrize("target,count", [("combined", 2), ("combined,independent", 2), ("source", 0)])
-@pytest.mark.parametrize("mode", [["--json"], ["--json", "--agent"], ["-o", "pretty"], ["-o", "value"]])
+@pytest.mark.parametrize(
+    "target,count", [("combined", 2), ("combined,independent", 2), ("source", 0)]
+)
+@pytest.mark.parametrize(
+    "mode", [["--json"], ["--json", "--agent"], ["-o", "pretty"], ["-o", "value"]]
+)
 def test_final_summary_and_complete_blocked_fanout(tmp_path, target, count, mode):
     (tmp_path / "pipeline.py").write_text(PIPELINE)
     proc = subprocess.run(

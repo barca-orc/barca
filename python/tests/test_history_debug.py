@@ -314,9 +314,7 @@ def test_a_scheduled_failure_from_a_server(tmp_path):
             "a failed scheduled run",
             lambda: serve.get("/history?status=failed&triggered_by=schedule")["runs"],
         )
-        out = barca(
-            tmp_path, "history", "--server", url, "--triggered-by", "schedule", "--json"
-        )
+        out = barca(tmp_path, "history", "--server", url, "--triggered-by", "schedule", "--json")
         assert out.returncode == 0, out.stderr
         run = json.loads(out.stdout)["runs"][-1]
         assert run["status"] == "failed" and run["schedule_id"] == "pipeline.py:ticker"

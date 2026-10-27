@@ -158,7 +158,8 @@ def branch_files(root: Path) -> list[str]:
 def branch_results(root: Path) -> list[str]:
     """Published results only: atomic-write staging files may disappear by renaming."""
     return [
-        name for name in branch_files(root)
+        name
+        for name in branch_files(root)
         if not (Path(name).name.startswith(".") and name.endswith(".tmp"))
     ]
 

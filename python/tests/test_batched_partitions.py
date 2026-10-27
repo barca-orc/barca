@@ -163,12 +163,15 @@ def test_batch_boundaries_follow_declared_order_across_worker_chunks(keys5, sour
     order = ["r5", "r1", "r4", "r2", "r3"]
     set_versions(keys5, dict.fromkeys(order, "a"))
     declaration = f"partitions({order!r})" if source == "static" else "partitions_from(cleaned)"
-    write(keys5, f'''
+    write(
+        keys5,
+        f"""
         @asset(partitions={{"retailer": {declaration}}}, batch=2)
         def scored(retailer: list[str], cleaned: dict = None):
             _called("scored", retailer)
             return {{r: cleaned[r] if cleaned else r for r in retailer}}
-    ''')
+    """,
+    )
     get(keys5, "scored")
     assert sorted(keys for _, keys in calls(keys5)) == sorted([order[:2], order[2:4], order[4:]])
 

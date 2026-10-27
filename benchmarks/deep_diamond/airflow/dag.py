@@ -52,13 +52,7 @@ def feat(data):
 
 @task
 def merge(f0, f1, f2, f3, f4):
-    all_f = (
-        f0["features"]
-        + f1["features"]
-        + f2["features"]
-        + f3["features"]
-        + f4["features"]
-    )
+    all_f = f0["features"] + f1["features"] + f2["features"] + f3["features"] + f4["features"]
     return {"combined": all_f, "count": len(all_f)}
 
 
@@ -70,17 +64,11 @@ def transform(data):
 
 @task
 def output(data):
-    avg = (
-        sum(r["f"] for r in data["top_100"]) / len(data["top_100"])
-        if data["top_100"]
-        else 0
-    )
+    avg = sum(r["f"] for r in data["top_100"]) / len(data["top_100"]) if data["top_100"] else 0
     return {"avg_top_feature": round(avg, 6), "total_rows": data["total"]}
 
 
-@dag(
-    dag_id="deep_diamond", start_date=datetime(2024, 1, 1), schedule=None, catchup=False
-)
+@dag(dag_id="deep_diamond", start_date=datetime(2024, 1, 1), schedule=None, catchup=False)
 def deep_diamond_dag():
     s = [src_0(), src_1(), src_2(), src_3(), src_4()]
     p = [prep(s[i]) for i in range(5)]

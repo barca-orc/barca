@@ -1,11 +1,12 @@
 """Groups are discoverable metadata, without changing materialization or caching."""
+
 import json
 import subprocess
 
 from barca import group
 from barca.api import _find_binary
 
-BASE = '''from barca import asset, task, group
+BASE = """from barca import asset, task, group
 @asset
 def rows():
     return [1, 2, 3]
@@ -15,17 +16,18 @@ def model(group):
 @task(inputs={"result": model})
 def check(result):
     assert result["count"] == 3
-'''
-GROUPS = '''
+"""
+GROUPS = """
 preparation = group("Preparation", members=[rows], output=rows)
 training = group("Training", members=[preparation, model, check], output=model)
 experiment = group("Experiment", members=[training], output=training)
-'''
+"""
 
 
 def test_python_group_keeps_references():
     def node():
         return 1
+
     inner = group("inner", members=[node], output=node)
     outer = group("outer", members=[inner], output=inner)
     assert outer.members[0] is inner
@@ -39,7 +41,9 @@ def test_groups_do_not_change_steps_or_invalidate_cache(tmp_path):
     pipeline.write_text(BASE.replace(", group", ""))
 
     def run(*args):
-        proc = subprocess.run([binary, *args], cwd=tmp_path, text=True, capture_output=True, check=False)
+        proc = subprocess.run(
+            [binary, *args], cwd=tmp_path, text=True, capture_output=True, check=False
+        )
         assert proc.returncode == 0, proc.stderr
         return json.loads(proc.stdout)
 
@@ -63,7 +67,10 @@ def test_modeling_demo_metadata_matches_browser_fixture():
     root = Path(__file__).resolve().parents[2]
     proc = subprocess.run(
         [_find_binary(), "list", "modeling.py", "--groups", "--json"],
-        cwd=root / "ui" / "demo", text=True, capture_output=True, check=False,
+        cwd=root / "ui" / "demo",
+        text=True,
+        capture_output=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["groups"] == json.loads(

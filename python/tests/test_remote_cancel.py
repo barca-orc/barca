@@ -309,7 +309,9 @@ def test_ctrl_c_during_the_end_of_run_backup(project, whole_group):
     """The steps finished and their artifacts are in the store; the backup's upload is cut.
     The run is `cancelled`; its copy waits here, and the next backup uploads it."""
     store, make = project
-    run = Run(make("m"), store, "backup", "get", "total", "-o", "value", "--json", "--agent").held_at("backup")
+    run = Run(
+        make("m"), store, "backup", "get", "total", "-o", "value", "--json", "--agent"
+    ).held_at("backup")
     run.sigint(whole_group)
     run.end()
 
@@ -326,7 +328,9 @@ def test_ctrl_c_during_the_end_of_run_backup(project, whole_group):
 def test_ctrl_c_during_a_step_with_an_upload_in_flight(project, whole_group):
     """The case of #249: the interrupt arrives while steps run and the helper is uploading."""
     store, make = project
-    run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at("put")
+    run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at(
+        "put"
+    )
     wait_until((run.root / "slow.started").exists, "the second step to start", run.proc)
     run.sigint(whole_group)
     run.end()
@@ -343,7 +347,9 @@ def test_ctrl_c_during_a_step_with_an_upload_in_flight(project, whole_group):
 def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_longer(project):
     store, make = project
     points = "put,backup"
-    run = Run(make("m"), store, points, "get", "numbers", "-o", "value", "--json", "--agent", stall=True)
+    run = Run(
+        make("m"), store, points, "get", "numbers", "-o", "value", "--json", "--agent", stall=True
+    )
     run.held_at("put").printed("1/1 steps | done")
     started = time.monotonic()
     run.sigint()
@@ -365,7 +371,18 @@ def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_long
 @GROUP
 def test_a_second_ctrl_c_abandons_the_wrap_up_at_once(project, whole_group):
     store, make = project
-    run = Run(make("m"), store, "put,backup", "get", "numbers", "-o", "value", "--json", "--agent", stall=True)
+    run = Run(
+        make("m"),
+        store,
+        "put,backup",
+        "get",
+        "numbers",
+        "-o",
+        "value",
+        "--json",
+        "--agent",
+        stall=True,
+    )
     run.held_at("put").printed("1/1 steps | done")
     run.sigint(whole_group)
     # The first Ctrl-C cut the upload and the wrap-up started a backup, which stalls too.
@@ -382,7 +399,18 @@ def test_a_second_ctrl_c_abandons_the_wrap_up_at_once(project, whole_group):
 
 def test_a_third_ctrl_c_changes_nothing(project):
     store, make = project
-    run = Run(make("m"), store, "put,backup", "get", "numbers", "-o", "value", "--json", "--agent", stall=True)
+    run = Run(
+        make("m"),
+        store,
+        "put,backup",
+        "get",
+        "numbers",
+        "-o",
+        "value",
+        "--json",
+        "--agent",
+        stall=True,
+    )
     run.held_at("put").printed("1/1 steps | done")
     run.sigint()
     run.held_at("backup")
@@ -395,7 +423,9 @@ def test_a_third_ctrl_c_changes_nothing(project):
 
 def test_a_wrap_up_backup_that_fails_is_a_note_and_the_exit_code_stays_130(project):
     store, make = project
-    run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at("put")
+    run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at(
+        "put"
+    )
     wait_until((run.root / "slow.started").exists, "the second step to start", run.proc)
     # Something the backup cannot get past: a file where its directory belongs.
     (store / "default" / "state").mkdir(parents=True)

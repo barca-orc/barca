@@ -407,7 +407,11 @@ def work():
 """)
     proc = subprocess.Popen(
         [_find_binary(), "get", "work", "pipeline.py", "--json"],
-        cwd=project, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=project,
+        env=_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     try:
         wait_for(lambda: (project / "child2.pid").exists(), "parallel children")

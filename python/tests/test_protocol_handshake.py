@@ -109,7 +109,11 @@ def test_a_worker_names_itself_in_its_hello(tmp_path, monkeypatch, role):
                 seen.append(receive(peer))
                 send(
                     peer,
-                    {"type": "hello", "role": "coordinator", "protocol_version": _runtime.PROTOCOL_VERSION},
+                    {
+                        "type": "hello",
+                        "role": "coordinator",
+                        "protocol_version": _runtime.PROTOCOL_VERSION,
+                    },
                 )
 
         thread = threading.Thread(target=coordinator)
@@ -163,7 +167,10 @@ time.sleep(60)
         timeout=30,
     )
     assert result.returncode == 3, result.stderr
-    assert f"{helper} protocol v{version}, coordinator expects v{_runtime.PROTOCOL_VERSION}" in result.stderr
+    assert (
+        f"{helper} protocol v{version}, coordinator expects v{_runtime.PROTOCOL_VERSION}"
+        in result.stderr
+    )
     assert "reinstall barca" in result.stderr
     assert not (tmp_path / "step-ran").exists()
     pid = int((tmp_path / "helper-pid").read_text())

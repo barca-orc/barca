@@ -56,9 +56,7 @@ def broken(project: Path, how: str, env: str | None = None) -> Path:
 
 
 def serve(project: Path, *args: str):
-    return barca(
-        project, "serve", "pipeline.py", "--port", str(_free_port()), *args, timeout=60
-    )
+    return barca(project, "serve", "pipeline.py", "--port", str(_free_port()), *args, timeout=60)
 
 
 @pytest.mark.parametrize("how", ["junk", "future"])

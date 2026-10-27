@@ -92,7 +92,11 @@ def project(tmp_path) -> Path:
 
 def barca(project: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [_find_binary(), *value_args(args)], cwd=project, env=dict(os.environ), capture_output=True, text=True
+        [_find_binary(), *value_args(args)],
+        cwd=project,
+        env=dict(os.environ),
+        capture_output=True,
+        text=True,
     )
 
 
@@ -153,7 +157,9 @@ def test_a_failing_target_does_not_stop_the_others(project):
     assert "boom" in proc.stderr
     # The run reports failure on stdout, and stderr ends with the failure summary after its error envelope.
     assert out["status"] == "failed"
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert envelope["kind"] == "step_failed" and envelope["node"] == "pipeline.py:boom"
 
 

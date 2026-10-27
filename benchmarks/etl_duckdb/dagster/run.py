@@ -126,9 +126,7 @@ def int_order_metrics(orders):
     return {"rows": rows}
 
 
-@asset(
-    ins={"orders": AssetIn(key="stg_orders"), "customers": AssetIn(key="stg_customers")}
-)
+@asset(ins={"orders": AssetIn(key="stg_orders"), "customers": AssetIn(key="stg_customers")})
 def int_customer_agg(orders, customers):
     """Per-customer lifetime metrics."""
     cust_orders = defaultdict(lambda: {"count": 0, "total": 0.0})
@@ -151,9 +149,7 @@ def int_customer_agg(orders, customers):
     return {"rows": rows}
 
 
-@asset(
-    ins={"orders": AssetIn(key="stg_orders"), "products": AssetIn(key="stg_products")}
-)
+@asset(ins={"orders": AssetIn(key="stg_orders"), "products": AssetIn(key="stg_products")})
 def int_product_stats(orders, products):
     """Per-product sales stats."""
     prod_sales = defaultdict(lambda: {"units": 0, "revenue": 0.0})
@@ -192,9 +188,9 @@ def mart_customer_orders(customers, orders, products):
         "months": len(orders["rows"]),
         "product_count": len(products["rows"]),
         "total_revenue": round(sum(r["revenue"] for r in orders["rows"]), 2),
-        "top_customers": sorted(
-            customers["rows"], key=lambda x: x["lifetime_value"], reverse=True
-        )[:10],
+        "top_customers": sorted(customers["rows"], key=lambda x: x["lifetime_value"], reverse=True)[
+            :10
+        ],
     }
 
 
@@ -205,9 +201,7 @@ def mart_summary(data):
         "months_tracked": data["months"],
         "product_count": data["product_count"],
         "total_revenue": data["total_revenue"],
-        "avg_revenue_per_month": round(
-            data["total_revenue"] / max(data["months"], 1), 2
-        ),
+        "avg_revenue_per_month": round(data["total_revenue"] / max(data["months"], 1), 2),
         "top_customer_ltv": data["top_customers"][0]["lifetime_value"]
         if data["top_customers"]
         else 0,
