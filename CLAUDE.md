@@ -160,26 +160,39 @@ Trunk-based: `main` is the integration branch — always green, but not necessar
 released. Merging to main never publishes anything; only pushing a `v*` tag does.
 
 - **Always use worktrees** for local development work — see [AGENTS.md](AGENTS.md):
-  create only under `.worktrees/<slug>`, build into the tree's own `target-local/`
-  (`CARGO_TARGET_DIR`; never the trunk `target/` shared between trees), reap processes, and
-  remove the tree when the task is done (orphan trees eat disk)
+  `scripts/new-worktree.sh <slug> [type]` creates `.worktrees/<slug>` on `<type>/<slug>` off
+  origin/main, builds into the tree's own `target-local/` (never the trunk `target/` shared
+  between trees) with sccache sharing compiled dependencies when installed, and sets up
+  `.venv`; `scripts/remove-worktree.sh <slug>` reaps the tree's processes, deletes
+  `target-local/` and removes the tree and its branch when the task is done (orphan trees eat
+  disk)
 - **Topic branches**: one per issue, branched off main, PRed straight into main
 - **Merging**: the `protect-main` ruleset allows **squash merges only**, requires `CI / test`
   and `CI / backends` on the PR's head, and requires the branch to be up to date with main.
   Merge one PR at a time: each merge makes the others behind, and updating them all at once
   restarts every CI run. To ship several PRs as one release, combine them on one branch, run
   CI once, and squash-merge it with a body that lists each PR and the issues it closes.
-- **Release**: when ready to ship, cut a short-lived release branch
-  `release/v<major>.<minor>.<patch>` off main containing only the version bump (and the
-  `## Pending` CHANGELOG heading renamed to the version); PR it into main and squash-merge
-  with `--delete-branch`, then tag the merge commit `v<major>.<minor>.<patch>` — the tag
-  triggers the release workflow (wheels, GitHub Release, PyPI). The `release/` prefix keeps
-  branch and tag names from colliding, so `git push origin v<x.y.z>` and `git log v<x.y.z>..`
-  are unambiguous. The same workflow then deploys barca.sh from the tag (`deploy-site`, using
-  the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets); nothing waits on it, so a
-  failed deploy never blocks a release. PyPI's simple index is cached by its CDN for up to 10 minutes, so a new
-  version can be uploaded but not yet installable; the workflow's post-publish check waits
-  for it.
+- **Release**: `scripts/release.sh X.Y.Z`, from the trunk on an up-to-date main
+  (`--dry-run` does everything locally and stops before the push). It refuses a version not
+  greater than the latest tag, an empty `## Pending`, or (pre-1.0) a patch bump when Pending
+  has `### Breaking`; cuts `release/vX.Y.Z` off main in `.worktrees/release-vX.Y.Z` with only
+  the version bump (crates/*/Cargo.toml, the barca entries in Cargo.lock and uv.lock,
+  pyproject.toml, `barca.__version__`) and `## Pending` renamed to `## X.Y.Z (YYYY-MM-DD)`
+  under a new empty `## Pending`; commits `chore(release): vX.Y.Z`, pushes, opens the PR and
+  enables squash auto-merge with `--delete-branch`. Tidy the Pending notes on main before
+  running it. When the PR merges, `.github/workflows/release-tag.yml` tags the merge commit
+  `vX.Y.Z` (checking it matches pyproject.toml) and dispatches the release workflow on the
+  tag (wheels, GitHub Release, PyPI); a tag pushed with the workflow token does not trigger
+  `on: push: tags`, so it starts `release.yml` by `workflow_dispatch` on the tag ref, which
+  runs it exactly as a pushed tag would. If that workflow fails, tag by hand:
+  `git tag -a vX.Y.Z -m vX.Y.Z <merge sha> && git push origin vX.Y.Z` (the tag-push trigger
+  still works; the tagging workflow skips a tag that already exists). The `release/` prefix
+  keeps branch and tag names from colliding, so `git push origin v<x.y.z>` and
+  `git log v<x.y.z>..` are unambiguous. The same workflow then deploys barca.sh from the tag
+  (`deploy-site`, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets);
+  nothing waits on it, so a failed deploy never blocks a release. PyPI's simple index is
+  cached by its CDN for up to 10 minutes, so a new version can be uploaded but not yet
+  installable; the workflow's post-publish check waits for it.
 
 ## Boundary contracts
 

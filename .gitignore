@@ -56,3 +56,5 @@ benchmarks/*/results.md
 # Docker benchmark harness output (raw logs extracted from the container)
 benchmarks/docker/out/
 target-local/
+# Per-worktree cargo config (target-local/ build dir, sccache) written by scripts/new-worktree.sh
+/.cargo/config.toml
