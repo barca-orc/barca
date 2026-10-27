@@ -193,7 +193,7 @@ def test_end_of_run_line_is_the_wall_time_not_the_sum_of_steps(tmp_path):
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
-    line = next(l for l in proc.stderr.splitlines() if "steps | done in" in l)
+    line = next(ln for ln in proc.stderr.splitlines() if "steps | done in" in ln)
     seconds = float(line.rsplit(" ", 1)[1].rstrip("s"))
     assert 1.0 <= seconds < 3.0, line
     assert seconds <= json.loads(proc.stdout)["elapsed_seconds"] + 0.05, (line, proc.stdout)

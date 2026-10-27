@@ -23,7 +23,10 @@ hooks = [
 repo = "local"
 hooks = [
     { id = "cargo-fmt", name = "cargo fmt", language = "system", entry = "cargo fmt --all --check", pass_filenames = false, types = ["rust"] },
-    { id = "ty", name = "ty", language = "system", entry = "ty check python/barca/", pass_filenames = false, types = ["python"] },
+    # ty is pinned and installed by prek, not taken from PATH: its diagnostics change between
+    # releases. Optional dependencies are typed as Any ([tool.ty.analysis] in pyproject.toml),
+    # so the answer does not depend on what the discovered Python environment has installed.
+    { id = "ty", name = "ty", language = "python", additional_dependencies = ["ty==0.0.92"], entry = "ty check python/barca/", pass_filenames = false, types = ["python"] },
     { id = "version-sync", name = "version sync", language = "system", entry = "bash scripts/check-version-sync.sh", pass_filenames = false, types_or = ["rust", "python", "toml"] },
     { id = "uv-lock", name = "uv lock check", language = "system", entry = "uv lock --check", pass_filenames = false, types = ["toml"] },
     { id = "perf-check", name = "perf check", language = "system", entry = "python benchmarks/perf/profile.py", pass_filenames = false, stages = ["pre-push"] },

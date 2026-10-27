@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-duckdb = pytest.importorskip("duckdb")
-
-from barca import _duckdb
+from barca import _duckdb  # imports duckdb lazily, so it loads without duckdb installed
 from barca.api import _find_binary
+
+duckdb = pytest.importorskip("duckdb")
 
 # ─── Unit: the connection and view binding ────────────────────────────────────
 

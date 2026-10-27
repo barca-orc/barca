@@ -507,7 +507,7 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
         return pq.read_table(str(path))
 
     if frame_type == "duckdb":
-        import duckdb  # ty: ignore[unresolved-import]
+        import duckdb
 
         return duckdb.read_parquet(str(path))
 
