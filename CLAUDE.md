@@ -81,6 +81,12 @@ maturin develop --uv --release --extras test  # active .venv; builds CLI + test 
 # Tests
 cargo test
 
+# Before pushing: CI's always-on gates locally (changelog, specs, prek hooks incl. pinned ruff
+# and ty, clippy -D warnings, cargo test or nextest, rebuild the venv's barca if Rust changed,
+# Python tests picked from the diff), with a pass/fail summary. Exit 1 if any step failed.
+scripts/check-fast.sh                # --python-all for the whole Python suite, --no-python
+BARCA_POOL_SIZE=2 scripts/check-fast.sh   # reproduce CI-only worker-pool failures
+
 # Benchmarks
 benchmarks/trivial/bench.sh 10
 benchmarks/chain_100/bench.sh 5   # (coming soon)
