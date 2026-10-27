@@ -29,9 +29,10 @@ def summary() -> dict:
 - A parquet or CSV sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
   failure: barca never writes pickle bytes under a `.parquet` or `.csv` name.
 - Several `@sink` decorators may be stacked on one asset.
-- A sink is written when its asset runs; an asset served from cache does not write its sinks.
-  Adding a `@sink` or editing one (its path or `serializer=`) therefore changes the asset's run
-  hash, so the next run executes the asset and writes the sink (`barca docs cache`).
+- A sink is written when its asset runs. Adding a `@sink` or editing one (its path or
+  `serializer=`) changes the asset's run hash, so the next run executes the asset and writes
+  the sink (`barca docs cache`). A cache hit writes a sink only when the sink holds another run
+  hash's output ("Cache hits" below).
 - What `@sink` takes is in the table in `barca docs assets`, "Accepted arguments". A path
   passed as `path=`, no path, a second positional argument (`@sink("out.txt", "json")`) or any
   other keyword is an error when the file is read, exit 2. Up to 0.18.1 `@sink(path=...)`
@@ -49,6 +50,38 @@ def summary() -> dict:
 - For partitioned assets each partition writes its own file with the key inserted before the
   extension: `out.parquet` becomes `out_region_emea.parquet`. For a dataset that tools can read
   as one partitioned table, end the path with `/` (below).
+
+## Cache hits
+
+Barca records which run hash each sink last published: per sink, per partition key of a
+partitioned asset. When the asset is served from cache:
+
+- If the sink holds the cached run hash's output, nothing is written.
+- If it holds another one, the sink is written again from the cached artifact, and the step
+  does not run. Code A, then B, then A again: the third run is a cache hit on A, and the sink,
+  which held B, holds A again. Each sink that was written prints a line on stderr:
+
+  ```
+  [barca] sink out.json: republished the cached result of orders
+  [barca] sink exports/scored/: republished 1 cached key of scored
+  ```
+
+- The cached artifact is read back as the asset's annotated return type (pandas when it has
+  none), so a sink written this way is written by that type's writer. With an artifact store,
+  an artifact this machine lacks is fetched first; one that is nowhere is computed again, which
+  writes the sink.
+- A sink that cannot be written this way fails the step like a sink that fails when the step
+  runs: `SinkError: sink out.json: ...`, exit 1, a `step_failed` envelope. Nothing is recorded
+  as published, so the next run tries again.
+- Barca does not look at what is at the path: a sink file deleted or edited by hand is not
+  written again while its run hash stays the same. `--refresh` naming the asset runs it, which
+  writes the sink.
+- The record is per machine. A sink on this machine's disk counts as published only by runs on
+  this machine; a `s3://`, `gs://` or `abfss://` sink written by another machine (another
+  laptop, a server) is not known here, so a run here may write it again, and a run here that
+  matches its own record does not see what another machine wrote there since.
+- A metadata DB from before 0.33.2 has no record. The asset's last run that wrote sinks stands
+  in for it, so upgrading writes nothing that is current.
 
 ## Dataset sinks
 
@@ -114,9 +147,10 @@ the same layout and file names:
 
 **How a key is written.**
 
-- *Only when the key runs.* A cached key writes nothing. A key whose inputs changed rewrites
-  its own directory and no other: one sensor key per retailer re-runs, and so rewrites, only
-  the retailers whose version changed.
+- *Only when the key runs, or its run hash changed.* A cached key writes nothing, unless its
+  directory holds another run hash's output ("Cache hits" above). A key whose inputs changed
+  rewrites its own directory and no other: one sensor key per retailer re-runs, and so
+  rewrites, only the retailers whose version changed.
 - *Staged, then swapped.* The writer writes the key into a staging directory next to the
   prefix (`.<name>.barca-staging/`); for `s3://`, `gs://` and `abfs://` the staging is local
   (`.barca/staging/`) and barca uploads with the store's fsspec credentials. On a local disk

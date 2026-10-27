@@ -1,9 +1,11 @@
 # Artifact formats
 
-Status: implemented. Specification version: 2 (dataset sinks and failing sinks, 0.30.0).
+Status: implemented. Specification version: 3 (sinks republished by cache hits, #662; version
+2: dataset sinks and failing sinks, 0.30.0).
 Scope: choosing CSV artifacts and sinks, dataset sinks, reading them and inspecting cached
 results.
 Conformance: `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
+`python/tests/test_sink_republish.py`, `crates/barca-core/src/sink_publications.rs`,
 `crates/barca-core/src/sink_args.rs`, `crates/barca-core/tests/grammar_spec.rs`.
 
 Frames continue to default to Parquet. A literal `serializer="csv"` on an asset,
@@ -52,3 +54,26 @@ A `@sink` path ending in `/` is a dataset prefix, written as a Hive-partitioned 
   directories of other keys are deleted (`python -m barca._sinks prune`).
 - `partition_by=` and `rows_per_file=` must be literals and apply only to a dataset sink;
   violations are usage errors when the file is read.
+
+## Sink publication
+
+Version 3. The coordinator records, per step (a partition key is a step) and per declared sink
+path, the run hash whose output the sink holds (`sink_publications`, see
+[metadata-schema.md](metadata-schema.md)). It is written with the run's ledger for each sink of a
+step that ran and wrote its sinks, and for each sink of a cache hit that was republished or
+found current.
+
+- A cache hit whose run hash equals the recorded one writes nothing.
+- A cache hit whose run hash differs, or that has no record, is republished: the cached artifact
+  is made local (fetched from the artifact store if needed; computed again when it is nowhere,
+  which writes the sinks) and `python -m barca._sinks republish` writes each stale sink from it,
+  as the worker writes a sink when the step runs. Parquet and CSV artifacts are read as the
+  step's annotated return type, pandas when it has none. The step does not run and is reported
+  as cached; stderr gets `[barca] sink <path>: republished ...`.
+- A sink that fails to be republished fails its step: a `SinkError` failure row, exit 1, a
+  `step_failed` envelope; its sinks' records are left as they were.
+- With no record (a database from before version 3), the step's latest successful
+  `materializations` row with `sinks_json` stands in for it.
+- A record of a local sink path counts only on the host that wrote it; a remote URI counts from
+  any host. Records are not shared through a server's ledger.
+- Version 2 never wrote the sinks of a cache hit: after code A, B, A the sink held B.

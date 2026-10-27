@@ -165,6 +165,9 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     ("run_queue", crate::run_queue::CREATE_QUEUE),
     // Settings `barca serve` keeps across restarts: whether its run queue is paused.
     ("server_state", crate::run_queue::CREATE_SERVER_STATE),
+    // The run hash each `@sink` of a step last published (#662, 0.33.2), so a cache hit
+    // under another run hash republishes its sinks from the cached artifact.
+    ("sink_publications", crate::sink_publications::CREATE),
 ];
 
 /// Create every table of [`ADDED_TABLES`] that is missing.
@@ -450,6 +453,7 @@ mod tests {
                 "DROP TABLE pending_uploads",
                 "DROP TABLE notifications",
                 "DROP TABLE schedule_failures",
+                "DROP TABLE sink_publications",
                 "DROP INDEX idx_runs_job",
                 "DROP INDEX idx_mat_path",
                 "DROP INDEX idx_mat_changed",

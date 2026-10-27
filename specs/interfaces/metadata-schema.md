@@ -197,6 +197,13 @@ every database from before 0.29.2 (#629):
   queue empty, and older binaries ignore it.
 - `server_state (key, value)` (0.29.4), primary key `key`: settings `barca serve` keeps across
   restarts. `queue_paused_at` (unix seconds) is present while the run queue is paused.
+- `sink_publications (node_id, sink, run_hash, host, run_id, published_at)` (0.33.2, #662),
+  primary key `(node_id, sink)`: the run hash whose output each declared `@sink` path of a step
+  (`<node>` or `<node>[<key>]`) holds, the host and run that wrote it, and when (UTC text in
+  SQLite's `datetime('now')` format). A cache hit under another run hash republishes the sink
+  ([artifact-formats.md](artifact-formats.md), "Sink publication"). A database without it reads
+  as having no rows, and the step's latest successful row with `sinks_json` stands in. Older
+  binaries ignore the table.
 - `logs.stream` (`stdout` / `stderr`) and `logs.ts` (RFC 3339 UTC, milliseconds), both TEXT,
   nullable (0.29.2): which stream a recorded line came from and when it arrived. Lines recorded
   before keep `NULL` in both and read as stdout with no time (`barca logs --stream stdout`

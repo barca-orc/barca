@@ -206,7 +206,7 @@ re-run, never a stale result.
 | `inputs=` | yes | decides which upstream feeds which parameter |
 | `serializer=` | yes | changes the bytes that are stored |
 | `partitions=` | the shape, not the keys | the dimension names and a `partitions_from` source decide how the function is called; the keys do not count, because each key is part of its own run hash |
-| `@sink(...)` | yes | a cached step does not write its sinks, so a new or edited sink has to run the asset to be written |
+| `@sink(...)` | yes | a cached step writes a sink only when it holds another run hash's output (`barca docs sinks`), so a new or edited sink has to run the asset to be written |
 | any other decorator | yes | it wraps the function and can change what it returns |
 | any other argument | yes | conservative fallback for unvalidated calls; recognized barca calls reject it |
 | `env=` | no | the declared names and their values are already part of the run hash |
@@ -283,8 +283,9 @@ Known limits:
 - A step whose function reads a constant that the decorator also uses for its keys
   (`partitions(REGIONS)` and `REGIONS` in the body) re-runs every key when the constant is
   edited: the body's use puts the constant in the cone.
-- A sink is written only when its asset runs. Removing a `@sink` also re-runs the asset once,
-  although nothing new has to be written.
+- A sink is written when its asset runs, and by a cache hit whose run hash differs from the one
+  the sink last published (`barca docs sinks`, "Cache hits"). Removing a `@sink` also re-runs
+  the asset once, although nothing new has to be written.
 
 #### Which file a module name means
 

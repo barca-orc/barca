@@ -164,6 +164,7 @@ pub(super) async fn write_terminal_ledger(
             .map_err(failed)?;
     }
     drop(insert_failed);
+    crate::sink_publications::write_in(conn, l.run_id, l.sink_publications).await?;
     let updated = conn.execute(
             "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now'), job = NULLIF(?6, '') WHERE run_id = ?5",
             [

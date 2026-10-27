@@ -38,6 +38,7 @@ use crate::persist::{
 use crate::store_sync::{StoreSync, transfer_remedy};
 
 mod bookkeeping;
+mod republish;
 use bookkeeping::{LedgerContext, RunEvidence, RunResults};
 
 /// Total schedulable steps in a phase: 1 per unpartitioned step, `partition_keys.len()`
@@ -384,6 +385,8 @@ struct RunState {
     dataset_keys: HashMap<String, crate::dataset_sinks::DatasetKeys>,
     /// The next run-local batched call number (RFC-0013).
     next_call: u64,
+    /// A cache hit's sink could not be republished: the step failed (`republish`).
+    sink_failed: bool,
 }
 // Fields drop in the same order as the original run locals: recorder, workers, store.
 struct RunSession<'a, 'r> {
@@ -1346,6 +1349,10 @@ async fn select_work<'p>(
         Work::Planned(phase) => {
             return expand_and_decide(session, phase, phase_idx, queue).await;
         }
+        Work::Republish(ids) => {
+            republish::republish_sinks(session, ids, queue).await?;
+            return Ok(None);
+        }
     };
 
     seed_fresh_inputs(session, &selected.0).await?;
@@ -1668,6 +1675,19 @@ async fn expand_and_decide<'p>(
             &session.state.decide_state.sensor_outputs,
             &session.state.results.observations,
         );
+    }
+    // The cache hits of steps with sinks: each sink that holds another run hash's output is
+    // republished from the cached artifact, after this phase's steps have run (#662).
+    let republish: Vec<String> = phase_ref
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .filter(|st| !st.sinks.is_empty())
+        .flat_map(recover::output_ids)
+        .filter(|id| session.state.cached_node_ids.contains(id))
+        .collect();
+    if !republish.is_empty() {
+        queue.push_front(Work::Republish(republish));
     }
     if decided.streams.is_empty() {
         return Ok(None);
@@ -2177,7 +2197,9 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         next_idx += 1;
         trace_point!(session.started.trace, "phase{phase_idx}_start");
         let selected = select_work(session, work, &mut queue, &requested, phase_idx).await?;
-        if session.state.transfer_error.is_some() {
+        if session.state.transfer_error.is_some()
+            || (session.state.sink_failed && !prepared.keep_going)
+        {
             break;
         }
         let Some((phase, recompute)) = selected else {
@@ -4151,6 +4173,8 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     let recorder_error = recorder.finish().await.err();
     trace_point!("recorder_stopped");
 
+    // Each sink a step wrote holds its run hash (`crate::sink_publications`).
+    results.note_written_sinks(dag, decide_state.run_hashes());
     // Build the immutable terminal projection only after uploads and recorder shutdown.
     let evidence = RunEvidence::new(results, dag, decide_state, cached_node_ids, cost_model);
     let mut ledger = results.ledger(
@@ -4828,6 +4852,7 @@ mod store_tests {
             all_outputs: &HashMap::new(),
             all_failures: &failures,
             all_sinks: &HashMap::new(),
+            sink_publications: &[],
             all_attempts: &all_attempts,
             all_timings: &HashMap::new(),
             batches: &HashMap::new(),
@@ -4887,6 +4912,7 @@ mod store_tests {
             all_outputs: &all_outputs,
             all_failures: &[],
             all_sinks: &HashMap::new(),
+            sink_publications: &[],
             all_attempts: &HashMap::new(),
             all_timings: &HashMap::new(),
             batches: &HashMap::new(),
