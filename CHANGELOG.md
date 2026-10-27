@@ -8,6 +8,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Refactoring
+
+- Give durable result history one internal owner across progress, terminal, legacy-cache and
+  server-ledger writes, preserving their transaction, receipt and deduplication rules.
+
 ### Bug Fixes
 
 - Preserve current partition results when a cache hit reuses an older materialization. Bound

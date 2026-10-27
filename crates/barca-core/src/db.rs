@@ -2147,32 +2147,7 @@ pub async fn persist_outputs(
     outputs: &HashMap<String, OutputRef>,
     run_hashes: &HashMap<String, String>,
 ) -> Result<(), BarcaError> {
-    if outputs.is_empty() {
-        return Ok(());
-    }
-    let _g = db_guard().await;
-    let (_db, conn) = open_conn(db_path).await?;
-    for (node_id, oref) in outputs {
-        let run_hash = run_hashes.get(node_id).cloned().unwrap_or_default();
-        let elapsed_str = oref
-            .elapsed_seconds
-            .map(|e| e.to_string())
-            .unwrap_or_default();
-        conn.execute(
-            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds) VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''))",
-            [
-                node_id.clone(),
-                run_hash,
-                oref.path.clone(),
-                oref.format.clone(),
-                oref.size_bytes.to_string(),
-                elapsed_str,
-            ],
-        )
-        .await
-        .ok();
-    }
-    Ok(())
+    crate::persist::recording::record_legacy_outputs(db_path, outputs, run_hashes).await
 }
 
 /// Load every persisted per-node cost estimate (run start — seeds the
