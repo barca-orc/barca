@@ -1,5 +1,8 @@
 //! Persisted evidence of freshness. A proof is valid only at its metadata generation.
 //! The executor still decides and executes affected work through the normal cache path.
+mod publication;
+use publication::publish_proofs;
+
 use crate::{
     BarcaError,
     cache::CachePolicy,
@@ -783,18 +786,6 @@ impl Incremental {
             return Ok(());
         }
         let cache = db::CacheReader::for_config(cfg).await?;
-        // Another writer invalidates the proof rather than contributing unvalidated work.
-        let mut rows = cache
-            .conn()
-            .query(
-                "SELECT 1 FROM materializations NOT INDEXED WHERE id > ?1 AND (run_id IS NULL OR run_id != ?2) LIMIT 1",
-                (self.generation, run_id.to_owned()),
-            )
-            .await
-            .map_err(db_error)?;
-        if rows.next().await.map_err(db_error)?.is_some() {
-            return Ok(());
-        }
         let generation = generation(cache.conn()).await?;
         let mut proofs = self.next.nodes.clone();
         // A cache hit can select an older successful result. MAX(materialization.id)
@@ -846,21 +837,23 @@ impl Incremental {
                 proofs.remove(&base);
             }
         }
-        db::with_tx(cache.conn(), "BEGIN IMMEDIATE", "freshness proofs", async {
-            cache.conn().execute("DELETE FROM freshness_proofs WHERE generation != ?1", [generation]).await.map_err(db_error)?;
-            // Cache-only reversion can keep the same metadata generation. Explicitly
-            // remove discarded proofs so an oversized selection cannot revive one.
-            let mut remove = db::prepare(cache.conn(), "DELETE FROM freshness_proofs WHERE id = ?1").await.map_err(db_error)?;
-            for id in self.next.nodes.keys().filter(|id| !proofs.contains_key(*id)) {
-                remove.execute([format!("{}:{id}", self.key)]).await.map_err(db_error)?;
-            }
-            let mut insert = db::prepare(cache.conn(), "INSERT OR REPLACE INTO freshness_proofs (id, generation, snapshot) VALUES (?1, ?2, ?3)").await.map_err(db_error)?;
-            for (id, proof) in &proofs {
-                let snapshot = serde_json::to_string(proof).map_err(|e| BarcaError::Other(e.to_string()))?;
-                insert.execute((format!("{}:{id}", self.key), generation, snapshot)).await.map_err(db_error)?;
-            }
-            Ok(())
-        }).await?;
+        let discarded: Vec<_> = self
+            .next
+            .nodes
+            .keys()
+            .filter(|id| !proofs.contains_key(*id))
+            .cloned()
+            .collect();
+        publish_proofs(
+            cache.conn(),
+            &self.key,
+            self.generation,
+            generation,
+            run_id,
+            &proofs,
+            &discarded,
+        )
+        .await?;
         Ok(())
     }
 }

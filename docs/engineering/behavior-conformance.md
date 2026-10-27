@@ -12,9 +12,12 @@ scenario to execute; it is not a claim that all environments or all obligations 
    writes and verified server posts use the recording owner, retaining their distinct
    eligibility, deduplication and transaction rules. Receipt acceptance stays with transfer;
    server object verification stays with ledger admission. History is not current selection.
-3. Guard freshness-proof publication under the write transaction. A different writer between
-   validation and commit must invalidate the shortcut rather than bless its results. Test
-   foreign writes and cache-only generations. This is not general ordered observation publication.
+3. Isolate guarded freshness-proof publication. The existing `CacheReader` holds the
+   in-process guard and cross-process lock across preparation and saving, so cooperating Barca
+   writers already cannot interleave there. Put the generation/foreign-work checks at the
+   transaction boundary too, with exact rejection/rollback/cache-only deletion controls. This
+   protects the boundary during future ownership changes; it is not a newly demonstrated
+   supported-writer race or general ordered observation publication.
 
 Each PR changes one boundary. Review and merge the series bottom-up; a later layer's tests
 include its dependencies. No public wire change is intended by these three layers.
@@ -29,6 +32,14 @@ include its dependencies. No public wire change is intended by these three layer
 | [INV-COMMIT-01](../../specs/behavior/current-state-and-execution.md#invariants) | Partial evidence only: history/count/terminal rollback. Selection, membership and summaries as one ordered commit remain pending | [persistence](../../crates/barca-core/src/persist.rs): `progress_batch_replay_keeps_one_row_and_one_count_per_node`, `a_failed_counter_update_rolls_back_progress_rows`, `a_failed_failure_row_rolls_back_new_success_rows_and_terminal_status`; [terminal persistence](../../python/tests/test_terminal_persist.py): `test_terminal_insert_fault_is_an_infra_error_and_preserves_prior_history` |
 | Confirmed upload before receipt-driven checkpoint | Existing receipt contract retained; fail-soft terminal behavior remains distinct | [upload receipts](../../python/tests/test_upload_snapshot_receipts.py): `test_confirmed_receipt_is_checkpointed_while_later_step_is_running`; [persistence](../../crates/barca-core/src/persist.rs): `upload_receipts_preserve_worker_hashes_and_fill_ordinary_outputs` |
 | Sensor evidence through server-ledger recording | Existing digest/observation distinction retained | [ledger](../../crates/barca-core/src/ledger.rs): `equal_artifact_bytes_can_carry_a_new_sensor_revision` |
+
+Proof-publication boundary controls in [proof publication](../../crates/barca-core/src/incremental/publication.rs):
+`a_materialization_after_preparation_rejects_the_proof_without_deleting_prior_evidence`,
+`foreign_work_is_rejected_even_if_it_precedes_the_generation_read`,
+`own_progress_and_cache_only_discard_publish_at_the_same_generation`, and
+`a_failed_replacement_rolls_back_proof_deletions`. The separate SQL connection deliberately
+bypasses the caller's advisory lock to exercise the boundary, not a supported Barca execution
+path. Existing locks stay in place. Cache-only writes still do not supply an ordered revision.
 
 ## Remaining behavior changes and gates
 
