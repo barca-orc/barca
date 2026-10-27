@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.34.0 (2026-10-27)
+
 ### Breaking
 
 - A decorator value barca cannot read from the source is an error when the file is read (exit
@@ -24,24 +26,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   `partitions([...])` list with an element that is not a string or integer literal is now
   evaluated by the resolver like any other key expression; that element used to be dropped.
 
-### Refactoring
-
-- Make freshness-proof replacement an explicit guarded transaction and cover interference,
-  cache-only deletion and rollback; preserve the existing caller-held database locks.
-
-- Give durable result history one internal owner across progress, terminal, legacy-cache and
-  server-ledger writes, preserving their transaction, receipt and deduplication rules.
-
 ### Features
 
 - `barca[sql]` and `barca[test]` accept duckdb 2 (`duckdb>=1.4,<3`, #567); CI runs the
   DuckDB tests on 1.x and 2.x. The floor rises from 1.1 to 1.4: duckdb 1.1 to 1.3 already did
   not work (dataset sinks pass `to_parquet` arguments 1.1 rejects), and on 1.4 a remote CSV
   input read as a DuckDB relation failed with `Connection has already been closed`; it is kept
-  open now. Barca no longer calls
-  relation methods duckdb 2 removed or deprecated (`barca sql --limit` failed with `fetchone()`), and discards a result a step left
-  unread on the shared connection, which duckdb 2 otherwise lets block writing the step's
-  relation and the next step on that worker. Pipelines may need changes for duckdb 2
+  open now. Barca no longer calls relation methods duckdb 2 removed or deprecated (`barca sql
+  --limit` failed with `fetchone()`), and discards a result a step left unread on the shared
+  connection, which duckdb 2 otherwise lets block writing the step's relation and the next
+  step on that worker. Pipelines may need changes for duckdb 2
   (`rel.fetchone()`, unread `execute()` results, `->` lambdas), and a database file duckdb 2
   writes cannot be opened by 1.x: `barca docs duckdb`.
 
@@ -66,6 +60,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   and dataset sinks, in a new `sink_publications` table of metadata format 1); a cache hit
   whose run hash differs writes the sink from the cached artifact without running the step,
   and one that matches writes nothing. Code A, then B, then A left the sink holding B.
+
+### Refactoring
+
+- Make freshness-proof replacement an explicit guarded transaction and cover interference,
+  cache-only deletion and rollback; preserve the existing caller-held database locks.
+
+- Give durable result history one internal owner across progress, terminal, legacy-cache and
+  server-ledger writes, preserving their transaction, receipt and deduplication rules.
 
 ## 0.33.1 (2026-10-27)
 
