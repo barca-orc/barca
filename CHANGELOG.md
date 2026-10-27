@@ -38,6 +38,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   ("connection is busy with another call"): the worker made the relations on its one shared
   connection from several threads at once. It now makes them one at a time (#663).
 
+- A failure in barca's own code around a step (reading its inputs, splitting a batched call's
+  result, writing its result or its sinks) keeps its full traceback instead of reporting
+  `"traceback": null`, and the error says it failed in barca. Step errors carry a new `phase`
+  (`load_inputs`, `user_code`, `split_output`, `write_output`, `sink`; `null` when unknown) in
+  the error envelope, `barca.BarcaError.phase`, and as `error_phase` in `barca history RUN_ID`
+  and `GET /runs/{run_id}` steps (#664).
+
 ## 0.33.1 (2026-10-27)
 
 ### Refactoring

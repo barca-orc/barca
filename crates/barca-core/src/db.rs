@@ -3153,9 +3153,16 @@ pub struct RunStep {
     /// A failed step's error message alone (without its type and traceback).
     #[serde(default)]
     pub error_message: Option<String>,
-    /// A failed step's Python traceback, barca's own frames left out.
+    /// A failed step's Python traceback: barca's own frames left out of a failure in the
+    /// step's code, every frame kept for a failure in barca's own code (`error_phase`).
     #[serde(default)]
     pub error_traceback: Option<String>,
+    /// Where a failed step failed (#664): `user_code` (the step's own code: importing its
+    /// module, calling it, checking what it returned), or barca's own work around it:
+    /// `load_inputs`, `split_output` (a batched call's result), `write_output` or `sink`.
+    /// `null` for a step that did not fail, a worker that died, or a row from an older barca.
+    #[serde(default)]
+    pub error_phase: Option<String>,
     /// How the worker process ended, for a step whose worker died: `SIGKILL (possibly the OOM
     /// killer)`, another signal, `code N`, or `disconnected`. `null` for a step that raised.
     #[serde(default)]
@@ -3237,6 +3244,7 @@ pub async fn get_run_steps_page(
         "cpu_seconds",
         "max_rss_bytes",
         "batch_id",
+        "error_phase",
     ] {
         columns.push(if has_column(&conn, "materializations", name).await? {
             name
@@ -3244,8 +3252,9 @@ pub async fn get_run_steps_page(
             "NULL"
         });
     }
-    let (attempts, error_type, cpu, rss, batch) =
-        (columns[0], columns[1], columns[2], columns[3], columns[4]);
+    let (attempts, error_type, cpu, rss, batch, phase) = (
+        columns[0], columns[1], columns[2], columns[3], columns[4], columns[5],
+    );
     let total = match limit {
         None => None,
         Some(_) => {
@@ -3271,7 +3280,7 @@ pub async fn get_run_steps_page(
         _ => String::new(),
     };
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &libsql::Row, i: i32| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -3315,6 +3324,7 @@ pub async fn get_run_steps_page(
             max_rss_bytes: row.get::<i64>(12).ok().filter(|rss| *rss > 0),
             output_tail: None,
             batch: text(&row, 13),
+            error_phase: text(&row, 14),
             node_id,
         });
     }

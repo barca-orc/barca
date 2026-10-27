@@ -787,7 +787,7 @@ seconds field. There is no year field. See [Scheduling](/scheduling/) for what a
 | `ParallelError` | What `parallel()` returns in place of a branch that raised. |
 | `BranchResultError` | Raised by `parallel()` when a branch returned a value that cannot be passed back to the caller. |
 | `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See `barca docs agents`, "Getting values, not pointers". |
-| `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`. |
+| `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`, `phase`. |
 | `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |
 
 DuckDB steps share one default connection per worker process and execute sequentially.

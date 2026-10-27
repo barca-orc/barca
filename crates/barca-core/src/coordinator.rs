@@ -257,6 +257,8 @@ pub struct Coordinator {
     /// For a permanently failed item: when its first attempt started and the wall time from
     /// then to the permanent failure, retries and backoff included.
     failure_clocks: HashMap<ItemId, (std::time::SystemTime, std::time::Duration)>,
+    /// For a permanently failed item whose worker said so: where its last attempt failed.
+    failure_phases: HashMap<ItemId, crate::dispatch::ErrorPhase>,
     /// Skipped items (upstream data dep failed).
     skipped: HashSet<ItemId>,
     /// Items parked for retry backoff — not ready until requeue() is called.
@@ -328,6 +330,7 @@ impl Coordinator {
             failed: HashMap::new(),
             first_attempt_at: HashMap::new(),
             failure_clocks: HashMap::new(),
+            failure_phases: HashMap::new(),
             skipped: HashSet::new(),
             waiting_retry: HashSet::new(),
             outputs: HashMap::new(),
@@ -657,6 +660,17 @@ impl Coordinator {
         error: String,
         elapsed: std::time::Duration,
     ) -> FailureAction {
+        self.on_item_failed_in(item_id, error, elapsed, None)
+    }
+
+    /// [`Coordinator::on_item_failed`] for an attempt whose worker said where it failed.
+    pub fn on_item_failed_in(
+        &mut self,
+        item_id: ItemId,
+        error: String,
+        elapsed: std::time::Duration,
+        phase: Option<crate::dispatch::ErrorPhase>,
+    ) -> FailureAction {
         self.executing.remove(&item_id);
 
         let now = std::time::SystemTime::now();
@@ -694,6 +708,9 @@ impl Coordinator {
             self.call_reported(item_id);
             // Permanent failure
             self.failed.insert(item_id, error);
+            if let Some(phase) = phase {
+                self.failure_phases.insert(item_id, phase);
+            }
             self.failure_clocks.insert(
                 item_id,
                 (first, now.duration_since(first).unwrap_or(elapsed)),
@@ -1166,6 +1183,11 @@ impl Coordinator {
         item_id: ItemId,
     ) -> Option<(std::time::SystemTime, std::time::Duration)> {
         self.failure_clocks.get(&item_id).copied()
+    }
+
+    /// Where a permanently failed item failed, when its worker reported it.
+    pub fn failure_phase(&self, item_id: ItemId) -> Option<crate::dispatch::ErrorPhase> {
+        self.failure_phases.get(&item_id).copied()
     }
 
     pub fn skipped_items(&self) -> Vec<ItemId> {

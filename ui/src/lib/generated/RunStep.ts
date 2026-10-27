@@ -34,9 +34,17 @@ error_type: string | null,
  */
 error_message: string | null,
 /**
- * A failed step's Python traceback, barca's own frames left out.
+ * A failed step's Python traceback: barca's own frames left out of a failure in the
+ * step's code, every frame kept for a failure in barca's own code (`error_phase`).
  */
 error_traceback: string | null,
+/**
+ * Where a failed step failed (#664): `user_code` (the step's own code: importing its
+ * module, calling it, checking what it returned), or barca's own work around it:
+ * `load_inputs`, `split_output` (a batched call's result), `write_output` or `sink`.
+ * `null` for a step that did not fail, a worker that died, or a row from an older barca.
+ */
+error_phase: string | null,
 /**
  * How the worker process ended, for a step whose worker died: `SIGKILL (possibly the OOM
  * killer)`, another signal, `code N`, or `disconnected`. `null` for a step that raised.

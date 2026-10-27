@@ -140,7 +140,7 @@ pub(super) async fn write_terminal_ledger(
             None => insert_failed.insert(
                 db::prepare(
                     conn,
-                    "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts, run_id, batch_id) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?7, NULLIF(?8, ''))",
+                    "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts, run_id, batch_id, error_phase) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''))",
                 )
                 .await
                 .map_err(failed)?,
@@ -158,6 +158,7 @@ pub(super) async fn write_terminal_ledger(
                 failure.error.attempts.to_string(),
                 l.run_id.to_string(),
                 l.batches.get(node_id).cloned().unwrap_or_default(),
+                failure.error.phase.map_or("", |p| p.as_str()).to_string(),
             ])
             .await
             .map_err(failed)?;

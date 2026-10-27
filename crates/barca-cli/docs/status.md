@@ -424,8 +424,11 @@ prints all of the failed step's stderr. JSON is `{run, steps, hint?}`: `run` is 
 `barca history --json` lists it, and each step has `node_id`, `partition_key`, `status`
 (`success` or `failed`), `attempts`, `elapsed_seconds`, `cpu_seconds`, `max_rss_bytes`,
 `run_hash`, `artifact_path`, `artifact_format`, `artifact_size_bytes`, `error` (as recorded),
-`error_type`, `error_message`, `error_traceback`, `worker_exit` and `output_tail` (a failed
-step's last lines, `null` for the others).
+`error_type`, `error_message`, `error_traceback`, `error_phase` (where it failed: `user_code`,
+or barca's own `load_inputs`, `split_output`, `write_output` or `sink`; `null` when unknown),
+`worker_exit` and `output_tail` (a failed step's last lines, `null` for the others). A step that
+failed in barca's own code says so: `p.py:clean failed in barca while writing its result
+(phase write_output): ...`, followed by a traceback that keeps barca's frames.
 
 `max_rss_bytes` is the peak resident memory of the worker process while the step ran, from the
 start of the step to the end of writing its result, so a returned DuckDB relation that does

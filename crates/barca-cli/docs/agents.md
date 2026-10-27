@@ -90,17 +90,26 @@ In JSON output mode (whenever the output rule above picks JSON: piped or capture
 | `kind`         | yes    | `usage`, `step_failed`, `infra` or `cancelled`                       |
 | `remediation`  | yes    | what to do next, often a command to run                              |
 | `node`         | `step_failed` | the failing step's id, e.g. `pipeline.py:clean`               |
-| `traceback`    | `step_failed` | the Python traceback of your code (barca frames removed), or null |
+| `traceback`    | `step_failed` | the Python traceback of your code (barca frames removed), or null; every frame when `phase` is not `user_code` |
 | `artifact_dir` | `step_failed` | where that step's artifacts are stored (a path or remote URI); it may not exist if the step never succeeded |
+| `phase`        | `step_failed` | where the step failed: `user_code` (your code), or barca's own work around it: `load_inputs`, `split_output`, `write_output`, `sink`; null when unknown (a worker that died) |
 
 A failed step looks like this (one line; wrapped here):
 
 ```
 {"artifact_dir":".barca/artifacts/pipeline.py--clean","code":1,
  "error":"step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero","kind":"step_failed",
- "node":"pipeline.py:clean","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.",
+ "node":"pipeline.py:clean","phase":"user_code","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.",
  "traceback":"  File \"/abs/path/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
 ```
+
+A step can also fail in barca's own code around it: reading its inputs, splitting a batched
+call's result, writing its result or its sinks. `phase` names which (`barca docs contract`,
+"Error envelope"), the traceback keeps barca's frames, and the prose says
+`Step '...' failed in barca while writing its result (phase write_output): ...`. The kind and
+exit code are those of any failed step. Read the message first: it often names what in the
+step or its inputs to change (a value pickle cannot write, a sink path that cannot be written);
+otherwise the traceback is what to report.
 
 A worker process that dies while it runs a step (killed by the kernel's out-of-memory killer,
 a segfault in a C extension, `os._exit()` in your code) fails that step with `kind`
@@ -126,7 +135,8 @@ Read the last JSON object on stderr with `kind` and `error`; other lines are pro
 your steps' own output and the final run summary.
 In human mode (a terminal, `--pretty`, `-o pretty`, `-o path` or `-o value`) the same error is plain prose with the
 remediation before the final run summary. Errors never go to stdout. From Python, `barca.BarcaError` carries
-the envelope as attributes: `kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`.
+the envelope as attributes: `kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`,
+`phase`.
 
 When a step fails in JSON mode, `get`/`run` still print one result line on stdout, so you can
 read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..., "error": ...,
@@ -570,7 +580,7 @@ barca.run("send_email", "pipeline.py", refresh=["report"])
 
 `barca.plan`, `barca.history` and `barca.stats` return parsed dicts, and `barca.BarcaError` is
 raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and for a failed step
-`node`, `traceback`, `artifact_dir`) come from the error envelope. Or read a parquet `path` directly with duckdb/pandas/polars.
+`node`, `traceback`, `artifact_dir`, `phase`) come from the error envelope. Or read a parquet `path` directly with duckdb/pandas/polars.
 `barca.signed_url("s3://bucket/key.csv", expires=3600)` (experimental) returns a time-limited
 HTTPS link to any object in S3, GCS or Azure; `barca get <target> -o url` gives one for a result
 (`barca docs remote`, "Sharing a result: signed URLs").

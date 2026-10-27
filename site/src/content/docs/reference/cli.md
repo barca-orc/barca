@@ -885,17 +885,21 @@ last JSON error object on stderr (a failed run adds its summary afterwards):
 
 `error`, `code`, `kind` and `remediation` are always present. When a step fails (`kind:
 "step_failed"`) the envelope also has `node` (the failing step's id), `traceback` (the Python
-traceback of your code, with barca's own frames removed) and `artifact_dir` (where that step's
+traceback of your code, with barca's own frames removed), `artifact_dir` (where that step's
 artifacts are stored; a local path or remote URI, which may not exist if the step never
-succeeded):
+succeeded) and `phase` (where the step failed: `user_code` for your code; `load_inputs`,
+`split_output`, `write_output` or `sink` for barca's own work around it, whose traceback keeps
+barca's frames and whose prose says `failed in barca`; `null` when unknown, such as a worker
+that died):
 
 ```
-{"artifact_dir":".barca/artifacts/pipeline.py--clean","code":1,"error":"step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero","kind":"step_failed","node":"pipeline.py:clean","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.","traceback":"  File \"/home/you/project/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
+{"artifact_dir":".barca/artifacts/pipeline.py--clean","code":1,"error":"step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero","kind":"step_failed","node":"pipeline.py:clean","phase":"user_code","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.","traceback":"  File \"/home/you/project/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
 ```
 
 In human mode (a terminal, `--pretty`, `-o pretty`, `-o path` or `-o value`) the error is prose, with the remediation
 on the last lines. Errors never go to stdout. The Python API raises `barca.BarcaError` with the
-same fields as attributes (`kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`).
+same fields as attributes (`kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`,
+`phase`).
 
 When a step fails in JSON mode, `get`/`run` still print one result line on stdout, so you can
 read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..., "error": ...,

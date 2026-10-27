@@ -702,6 +702,7 @@ impl WorkerPool {
                         elapsed,
                         import_seconds,
                         worker_continues,
+                        phase,
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
                             crate::errln!(
@@ -738,10 +739,13 @@ impl WorkerPool {
                                 import_seconds,
                             });
                         }
-                        if let FailureAction::RetryAfter(delay) = coord.on_item_failed(
+                        if let FailureAction::RetryAfter(delay) = coord.on_item_failed_in(
                             item_id,
                             error,
                             Duration::from_secs_f64(elapsed.max(0.0)),
+                            phase
+                                .as_deref()
+                                .and_then(crate::dispatch::ErrorPhase::parse),
                         ) {
                             schedule_retry(&self.event_tx, item_id, delay);
                         }
@@ -1851,7 +1855,7 @@ fn signal_name(signal: i32) -> String {
 /// it waited for its `parallel()` branches): the exit status when there is one, so a worker
 /// killed by the kernel reads as such and not as a bare disconnect (#433).
 /// A failed attempt as Python prints an uncaught exception: the traceback (barca's frames left
-/// out) under its header, then `ErrorType: message`. Recorded as the step's stderr lines.
+/// out of a failure in user code) under its header, then `ErrorType: message`. Recorded as the step's stderr lines.
 fn traceback_lines(error_type: &str, message: &str, traceback: &str) -> Vec<String> {
     let mut lines = Vec::new();
     if !traceback.trim().is_empty() {

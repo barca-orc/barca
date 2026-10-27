@@ -254,6 +254,10 @@ pub struct TargetOutcome {
     /// same key a failed single-target run uses).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_node: Option<String>,
+    /// Where `failed_node` failed, when its worker said so: carried to the run's error
+    /// envelope (`phase`), not into the run JSON.
+    #[serde(skip)]
+    pub failed_phase: Option<crate::dispatch::ErrorPhase>,
     /// A partitioned target's returned keys and their artifacts (see [`GetResult::partitions`]);
     /// on a failed target, the keys that succeeded.
     #[serde(skip)]

@@ -724,6 +724,7 @@ mod tests {
                         key_summary: None,
                         error: None,
                         failed_node: None,
+                        failed_phase: None,
                     },
                 ),
                 (
@@ -735,6 +736,7 @@ mod tests {
                         key_summary: None,
                         error: Some("ValueError: no".into()),
                         failed_node: Some("p.py:alpha".into()),
+                        failed_phase: None,
                     },
                 ),
             ],
@@ -767,6 +769,7 @@ mod tests {
         let error = BarcaError::WorkerFailed(Box::new(crate::FailedStep {
             node: "p.py:a".into(),
             message: "ValueError: bad\n  File \"p.py\", line 4, in a\n    raise".into(),
+            phase: None,
             artifact_dir: None,
             run: Some(Box::new(crate::PartialRun {
                 run_id: "r1".into(),
