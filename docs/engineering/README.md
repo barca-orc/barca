@@ -28,3 +28,5 @@ in the earlier specification cleanup commits on this branch.
 - `sql-current-partition-membership`: [original change](https://github.com/barca-orc/barca/pull/378).
 - `staged-file-finalization`: [original change](https://github.com/barca-orc/barca/pull/380).
 - `static-barca-bindings`: [original change](https://github.com/barca-orc/barca/pull/355).
+
+- [Behavioral conformance series](behavior-conformance.md): implementation slices, exact scenarios and unresolved gates.

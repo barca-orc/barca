@@ -228,3 +228,9 @@ by interpreting this architecture map as approval.
 
 Validation of this document checks navigation and evidence references only. No runtime
 refactor, snapshot isolation, shared execution or performance improvement ships with it.
+
+The [behavioral conformance series](behavior-conformance.md) records the first implementation
+slices, exact obligation scenarios and remaining decision gates. Durable result-history writes
+now share [one recording owner](../../crates/barca-core/src/persist/recording.rs); receipt
+eligibility and transaction lifetimes remain with their existing callers. This is a structural
+boundary, not ordered current-state publication.

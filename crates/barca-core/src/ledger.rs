@@ -1231,7 +1231,7 @@ pub async fn accept(
             }
         }
     }
-    Ok(write_post(&cfg.db_path, post).await?)
+    Ok(crate::persist::record_post(&cfg.db_path, post).await?)
 }
 
 /// The server run id an earlier post of `client_run_id` was recorded under.
@@ -1257,108 +1257,6 @@ async fn recorded_post(db_path: &str, client_run_id: &str) -> Result<Option<Stri
         .is_some()
     {}
     Ok(found)
-}
-
-/// Record a verified post in one transaction: the run, then each step the ledger does not
-/// already hold. A step whose run hash the ledger holds with the same digest adds nothing; with
-/// a different digest the ledger keeps its row and the step is reported in `bytes_changed`.
-async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, BarcaError> {
-    let failed = |e: libsql::Error| BarcaError::Db(format!("failed to record a ledger post: {e}"));
-    let run_id = db::generate_run_id();
-    let run = &post.run;
-    let _g = db::db_guard().await;
-    let (_db, conn) = db::open_conn(db_path).await?;
-    let bytes_changed = db::with_tx(&conn, "BEGIN IMMEDIATE", "ledger post", async {
-        conn.execute(
-            "INSERT INTO runs (run_id, command, files, target, status, steps_total, \
-             steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, host, \
-             triggered_by, client_run_id) \
-             VALUES (?1, ?2, ?3, NULLIF(?4, ''), ?5, NULLIF(?6, ''), ?7, ?8, ?9, NULLIF(?10, ''), \
-             NULLIF(?11, ''), NULLIF(?12, ''), 'client', ?13)",
-            [
-                run_id.clone(),
-                run.command.clone(),
-                db::encode_files(&run.files),
-                run.target.clone().unwrap_or_default(),
-                run.status.clone(),
-                run.steps_total.map(|n| n.to_string()).unwrap_or_default(),
-                run.steps_executed.to_string(),
-                run.steps_cached.to_string(),
-                run.started_at.clone(),
-                run.finished_at.clone().unwrap_or_default(),
-                run.elapsed_seconds
-                    .map(|n| n.to_string())
-                    .unwrap_or_default(),
-                run.host.clone().unwrap_or_default(),
-                run.run_id.clone(),
-            ],
-        )
-        .await
-        .map_err(failed)?;
-        let mut bytes_changed = Vec::new();
-        for step in &post.steps {
-            if step.status == "success" {
-                let mut rows = conn
-                    .query(
-                        "SELECT output_hash, observation_hash FROM materializations WHERE node_id = ?1 AND \
-                         run_hash = ?2 AND status = 'success' ORDER BY id DESC LIMIT 1",
-                        [step.node_id.clone(), step.run_hash.clone()],
-                    )
-                    .await
-                    .map_err(failed)?;
-                let held = rows.next().await.map_err(failed)?;
-                let held_observation = held.as_ref().and_then(|row| row.get::<String>(1).ok());
-                let held = held.map(|row| row.get::<String>(0).ok().filter(|h| !h.is_empty()));
-                while rows.next().await.map_err(failed)?.is_some() {}
-                match held {
-                    // Held, with the same bytes: nothing to add.
-                    Some(Some(digest)) if Some(digest.as_str()) == step.digest.as_deref() => {
-                        if step.observation_hash.is_none() || held_observation == step.observation_hash {
-                            continue;
-                        }
-                    }
-                    // Held with other bytes: the ledger's row stays the truth.
-                    Some(Some(_)) => {
-                        bytes_changed.push(step.node_id.clone());
-                        continue;
-                    }
-                    // Held without a digest (recorded before digests were), or not held.
-                    Some(None) | None => {}
-                }
-            }
-            conn.execute(
-                "INSERT INTO materializations (node_id, run_hash, artifact_path, \
-                 artifact_format, artifact_size_bytes, elapsed_seconds, status, error_message, \
-                 attempts, output_hash, run_id, observation_hash) \
-                 VALUES (?1, ?2, NULLIF(?3, ''), NULLIF(?4, ''), NULLIF(?5, ''), NULLIF(?6, ''), \
-                 ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), ?11, NULLIF(?12, ''))",
-                [
-                    step.node_id.clone(),
-                    step.run_hash.clone(),
-                    step.path.clone().unwrap_or_default(),
-                    step.format.clone().unwrap_or_default(),
-                    step.size_bytes.map(|n| n.to_string()).unwrap_or_default(),
-                    step.elapsed_seconds
-                        .map(|n| n.to_string())
-                        .unwrap_or_default(),
-                    step.status.clone(),
-                    step.error.clone().unwrap_or_default(),
-                    step.attempts.unwrap_or(1).to_string(),
-                    step.digest.clone().unwrap_or_default(),
-                    run_id.clone(),
-                    step.observation_hash.clone().unwrap_or_default(),
-                ],
-            )
-            .await
-            .map_err(failed)?;
-        }
-        Ok::<_, BarcaError>(bytes_changed)
-    })
-    .await?;
-    Ok(PostAccepted {
-        run_id,
-        bytes_changed,
-    })
 }
 
 #[cfg(test)]
@@ -1435,11 +1333,11 @@ mod tests {
         let mut first = post(&[]);
         first.steps.truncate(1);
         first.steps[0].observation_hash = Some("observation1".into());
-        write_post(&path, &first).await.unwrap();
+        crate::persist::record_post(&path, &first).await.unwrap();
         let mut next = first.clone();
         next.run.run_id = "r2".into();
         next.steps[0].observation_hash = Some("observation2".into());
-        write_post(&path, &next).await.unwrap();
+        crate::persist::record_post(&path, &next).await.unwrap();
         let cache = db::CacheReader::open(&path).await.unwrap();
         let revisions = db::last_output_hashes(&cache, &[first.steps[0].node_id.as_str()])
             .await
