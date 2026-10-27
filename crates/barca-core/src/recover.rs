@@ -38,6 +38,9 @@ pub(crate) enum Work<'p> {
     Ready(Phase),
     /// Cached outputs (by id) whose artifact is missing and needed: run their steps again.
     Recompute(Vec<String>),
+    /// Cached outputs (by id) of steps with `@sink`s: republish each sink that holds another
+    /// run hash's output (`crate::sink_publications`).
+    Republish(Vec<String>),
     /// Every phase is done: check the output the command returns.
     Returned,
 }

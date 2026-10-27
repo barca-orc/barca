@@ -18,7 +18,9 @@ How a key is written:
    key's old files that the new write does not have are deleted.
 
 ``python -m barca._sinks prune`` deletes the directories of keys that no longer exist (the
-coordinator runs it after a run with the asset's whole key set).
+coordinator runs it after a run with the asset's whole key set). ``python -m barca._sinks
+republish`` writes the sinks of cached steps from their cached artifacts, when a sink holds
+another run hash's output (#662).
 
 stdlib only at import time: pyarrow, polars and duckdb are imported when a writer needs them.
 """
@@ -707,12 +709,90 @@ def prune(request: dict) -> dict:
     return {"datasets": out}
 
 
+# ─── Republishing: `python -m barca._sinks republish` ────────────────────────
+
+
+def _cached_value(item: dict) -> Any:
+    """The cached result of a step, read as the step's annotated return type."""
+    from barca._artifacts import deserialize
+
+    fmt = item["format"]
+    if fmt == "pickle" and item.get("source_file"):
+        # A pickled value may hold instances of the user's classes: import the module as the
+        # worker does, so they resolve.
+        from barca._worker import load_module
+
+        load_module(item["source_file"])
+    frame_type = item.get("frame_type")
+    if frame_type == "pyarrow_dataset":
+        frame_type = "pyarrow"
+    if fmt not in ("parquet", "csv"):
+        return deserialize(item["path"], fmt)
+    try:
+        return deserialize(item["path"], fmt, frame_type=frame_type or "pandas")
+    except ImportError:
+        if frame_type:
+            raise
+        return deserialize(item["path"], fmt, frame_type="pyarrow")
+
+
+def republish(request: dict) -> dict:
+    """Write the sinks of cached steps from their cached artifacts (#662).
+
+    The request: ``{"items": [{"node_id", "path", "format", "frame_type", "source_file",
+    "partition", "sinks": [...]}]}``. Each sink is written as the worker writes it when the
+    step runs. Answers ``{"items": [{"node_id", "sinks": [{"path"} | {"path", "error"}]}]}``
+    (a dataset sink's size warning as ``warning``).
+    """
+    from barca._worker import _write_sink
+
+    out = []
+    for item in request.get("items", []):
+        node_id = item["node_id"]
+        sinks = item.get("sinks") or []
+        try:
+            value = _cached_value(item)
+        except Exception as exc:
+            why = _storage.safe_error(
+                f"the cached result could not be read: {type(exc).__name__}: {exc}"
+            )
+            failed = [{"path": s["path"], "error": why} for s in sinks]
+            out.append({"node_id": node_id, "sinks": failed})
+            continue
+        step = {"sinks": sinks, "partition": item.get("partition") or {}}
+        results = []
+        for sink in sinks:
+            try:
+                outcome = _write_sink(value, sink, step, node_id, item["format"])
+                done: dict = {"path": sink["path"]}
+                if outcome.get("warning"):
+                    done["warning"] = outcome["warning"]
+                results.append(done)
+            except Exception as exc:
+                results.append(
+                    {
+                        "path": sink["path"],
+                        "error": _storage.safe_error(f"{type(exc).__name__}: {exc}"),
+                    }
+                )
+        out.append({"node_id": node_id, "sinks": results})
+    return {"items": out}
+
+
 def main(argv: list[str]) -> int:
-    if argv[:1] != ["prune"]:
-        print("usage: python -m barca._sinks prune < request.json", file=sys.stderr)
+    commands = {"prune": prune, "republish": republish}
+    if len(argv) != 1 or argv[0] not in commands:
+        print("usage: python -m barca._sinks prune|republish < request.json", file=sys.stderr)
         return 2
     request = json.load(sys.stdin)
-    json.dump(prune(request), sys.stdout)
+    # The answer is the only thing on stdout: what user code or a library prints goes to stderr.
+    answer_to = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        answer = commands[argv[0]](request)
+    finally:
+        sys.stdout = answer_to
+    json.dump(answer, sys.stdout)
     return 0
 
 

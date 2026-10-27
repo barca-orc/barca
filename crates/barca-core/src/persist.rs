@@ -49,6 +49,9 @@ pub(crate) struct RunLedger<'a> {
     pub(crate) batches: &'a HashMap<String, String>,
     pub(crate) all_failures: &'a [dispatch::StepFailure],
     pub(crate) all_sinks: &'a HashMap<String, String>,
+    /// The run hash each sink of a step now holds: the steps that ran and wrote their sinks,
+    /// and the cache hits republished or found current (`crate::sink_publications`).
+    pub(crate) sink_publications: &'a [crate::sink_publications::Publication],
     pub(crate) all_attempts: &'a HashMap<String, u32>,
     /// Per-node worker self-timing: (cpu_seconds, max_rss_bytes).
     pub(crate) all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
@@ -743,6 +746,7 @@ mod persist_tests {
                 batches: &self.empty,
                 all_failures: &self.failures,
                 all_sinks: &self.empty,
+                sink_publications: &[],
                 all_attempts: &self.attempts,
                 all_timings: &self.timings,
                 cached_node_ids: &self.cached,

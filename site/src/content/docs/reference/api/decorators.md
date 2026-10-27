@@ -498,7 +498,7 @@ def process(data: dict) -> dict:
 ```
 
 Stacked under `@asset`, it writes the asset's result to an extra path each time the asset
-runs. A cache hit does not write the sink again. Paths are local or any fsspec URI (`abfss://`,
+runs. A cache hit writes the sink only when it holds another run hash's output (below). Paths are local or any fsspec URI (`abfss://`,
 `s3://`, `gs://`); remote schemes need the matching extra (see
 [Remote storage](/reference/remote-storage/)). Several `@sink` decorators may be stacked on
 one asset.
@@ -527,6 +527,13 @@ def banana() -> dict:
 - On a partitioned asset each key writes its own file, with the key inserted before the
   extension: `@sink("./exports/sales.json")` on keys `region=emea` and `region=amer` wrote
   `exports/sales_region_emea.json` and `exports/sales_region_amer.json`.
+- Barca records the run hash each sink last published, per partition key (from 0.34.0). A cache
+  hit whose run hash differs (code A, then B, then A again) writes the sink again from the
+  cached artifact without running the step, and prints `[barca] sink out.json: republished the
+  cached result of banana` on stderr; one that matches writes nothing. Barca does not check
+  what is at the path, and the record is per machine: a remote sink another machine wrote is
+  not known here. Up to 0.33.1 a cache hit never wrote its sinks, so after A, B, A the sink
+  held B.
 
 ### Dataset sinks
 
@@ -554,9 +561,9 @@ select * from read_parquet('s3://bucket/exports/scored/**/*.parquet', hive_parti
   files.
 - DuckDB writes a returned relation (streaming), polars a polars frame, pyarrow a pandas frame
   or an Arrow table; all three produce the same layout and file names.
-- A cached key writes nothing; a key that runs is written to staging and swapped in for its
-  directory (one rename on a local disk; on an object store the new files are uploaded, then
-  the old ones deleted). A key the asset no longer has is deleted after the run.
+- A cached key writes nothing unless its directory holds another run hash's output; a key that
+  runs is written to staging and swapped in for its directory (one rename on a local disk; on
+  an object store the new files are uploaded, then the old ones deleted). A key the asset no longer has is deleted after the run.
 - The sink owns its prefix and marks it with `_barca_sink.json`; a prefix that holds files
   barca did not write, or that another asset owns, is refused.
 - A write that creates more than 1,000 directories, or at least 100 files averaging under 1 MB,

@@ -15,6 +15,8 @@ pub(super) struct RunResults {
     pub(super) outputs: HashMap<String, OutputRef>,
     pub(super) reports: Vec<StepReport>,
     pub(super) sinks: HashMap<String, String>,
+    /// What each step's sinks hold after this run (`crate::sink_publications`).
+    pub(super) publications: Vec<crate::sink_publications::Publication>,
     pub(super) timings: HashMap<String, (Option<f64>, Option<u64>)>,
     pub(super) observations: HashMap<String, serde_json::Value>,
     pub(super) clocks: HashMap<String, (f64, f64)>,
@@ -137,6 +139,29 @@ impl RunResults {
         oref
     }
 
+    /// What the steps that ran and wrote their sinks published: each declared sink of the
+    /// node holds the step's run hash.
+    pub(super) fn note_written_sinks(&mut self, dag: &Dag, run_hashes: &HashMap<String, String>) {
+        let mut ids: Vec<&String> = self.sinks.keys().collect();
+        ids.sort();
+        for id in ids {
+            let Some(run_hash) = run_hashes.get(id) else {
+                continue;
+            };
+            let Some(node) = dag.get_node(crate::StepId::parse(id).base_id()) else {
+                continue;
+            };
+            for sink in &node.extracted.sinks {
+                self.publications
+                    .push(crate::sink_publications::Publication {
+                        node_id: id.clone(),
+                        sink: sink.path.clone(),
+                        run_hash: run_hash.clone(),
+                    });
+            }
+        }
+    }
+
     pub(super) fn record_failure(
         &mut self,
         node_id: String,
@@ -220,6 +245,7 @@ impl RunResults {
             all_outputs: &self.outputs,
             all_failures: &self.failures,
             all_sinks: &self.sinks,
+            sink_publications: &self.publications,
             all_attempts: &self.attempts,
             all_timings: &self.timings,
             batches: &self.batches,

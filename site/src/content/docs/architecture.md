@@ -133,7 +133,8 @@ Its tables are `materializations` (one row per step result: node id, run hash, s
 artifact path, timings, attempts, error), `runs` (one row per run), `logs` (captured stdout of
 steps), `cost_estimates` (the time estimate per node, used to size batches) and
 `schedule_state` (when each scheduled node last fired, and whether it is paused) and
-`schedule_failures` (the consecutive failed ticks of a scheduled node), and for `barca serve`
+`schedule_failures` (the consecutive failed ticks of a scheduled node) and `sink_publications`
+(the run hash each `@sink` last wrote), and for `barca serve`
 `run_queue` (the runs it accepted and has not finished, in order) and `server_state` (whether
 that queue is paused).
 

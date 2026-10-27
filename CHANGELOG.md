@@ -45,6 +45,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   the error envelope, `barca.BarcaError.phase`, and as `error_phase` in `barca history RUN_ID`
   and `GET /runs/{run_id}` steps (#664).
 
+- A sink is republished when its asset is served from cache under another run hash (#662).
+  Barca records the run hash each `@sink` last published (per partition key for partitioned
+  and dataset sinks, in a new `sink_publications` table of metadata format 1); a cache hit
+  whose run hash differs writes the sink from the cached artifact without running the step,
+  and one that matches writes nothing. Code A, then B, then A left the sink holding B.
+
 ## 0.33.1 (2026-10-27)
 
 ### Refactoring

@@ -62,6 +62,7 @@ pub mod run_queue;
 pub mod schedule;
 pub mod selection;
 mod sink_args;
+mod sink_publications;
 pub mod sql;
 pub(crate) mod state_validate;
 pub mod status;

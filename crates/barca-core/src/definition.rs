@@ -79,8 +79,8 @@ pub const RULES: &[Rule] = &[
     Rule {
         part: SINK,
         counts: Counts::Yes,
-        reason: "a cached step does not write its sinks, so a new or edited sink has to run the \
-                 asset to be written",
+        reason: "a cached step writes a sink only when it holds another run hash's output \
+                 (`barca docs sinks`), so a new or edited sink has to run the asset to be written",
     },
     Rule {
         part: OTHER_DECORATOR,
