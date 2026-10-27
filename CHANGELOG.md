@@ -21,6 +21,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Preserve current partition results when a cache hit reuses an older materialization. Bound
   historical selection evidence per logical node and fall back to full validation on overflow.
 
+- A `collect()` fan-in annotated `list[duckdb.DuckDBPyRelation]` no longer fails with duckdb 2
+  ("connection is busy with another call"): the worker made the relations on its one shared
+  connection from several threads at once. It now makes them one at a time (#663).
+
 ## 0.33.1 (2026-10-27)
 
 ### Refactoring

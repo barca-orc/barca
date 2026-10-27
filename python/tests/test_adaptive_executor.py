@@ -181,6 +181,45 @@ class TestLoadCollectedArtifacts:
             "(8 * 50ms), concurrency may have regressed"
         )
 
+    def test_duckdb_relations_are_made_one_at_a_time(self, tmp_path, monkeypatch):
+        # #663: a `list[duckdb.DuckDBPyRelation]` fan-in makes each relation on the worker's
+        # one shared connection. duckdb 2 refuses a call on a connection that is busy with
+        # another ("connection is busy with another call"), so they must not overlap.
+        import threading
+
+        import barca._worker as worker_mod
+
+        real_deserialize = worker_mod.deserialize
+        lock = threading.Lock()
+        active = 0
+        overlapped = False
+
+        def _guarded_deserialize(path, fmt, **kwargs):
+            nonlocal active, overlapped
+            with lock:
+                active += 1
+                overlapped = overlapped or active > 1
+            try:
+                time.sleep(0.02)
+                return real_deserialize(path, fmt, **kwargs)
+            finally:
+                with lock:
+                    active -= 1
+
+        monkeypatch.setattr(worker_mod, "deserialize", _guarded_deserialize)
+        pa = pytest.importorskip("pyarrow")
+        import pyarrow.parquet as pq
+
+        artifacts = []
+        for i in range(8):
+            path = tmp_path / f"p{i}.parquet"
+            pq.write_table(pa.table({"n": [i]}), path)
+            artifacts.append({"path": str(path), "format": "parquet"})
+        relations = _load_collected_artifacts(artifacts, frame_type="duckdb")
+
+        assert not overlapped
+        assert [r.fetchall()[0][0] for r in relations] == list(range(8))
+
 
 # ─── Integration: timing + estimates persisted through a real run ───────────
 
