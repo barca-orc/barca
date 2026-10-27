@@ -10,6 +10,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Refactoring
 
+- Make freshness-proof replacement an explicit guarded transaction and cover interference,
+  cache-only deletion and rollback; preserve the existing caller-held database locks.
+
 - Give durable result history one internal owner across progress, terminal, legacy-cache and
   server-ledger writes, preserving their transaction, receipt and deduplication rules.
 
