@@ -33,7 +33,7 @@ def context(uri, fs=None):
 
     scheme = _storage._scheme(uri)
     protocol = {"s3a": "s3", "abfss": "abfs", "gs": "gcs"}.get(scheme, scheme)
-    options = _storage.storage_options(protocol)
+    options = _storage.storage_options(protocol) if protocol else {}
     result = {
         "provider": protocol,
         "subject": None,
@@ -201,10 +201,10 @@ def resolve(uri):
             credential = getattr(fs, "credential", None)
             if result.get("credential_fingerprint"):
                 result["subject"] = f"credential fingerprint {result['credential_fingerprint']}"
-            elif hasattr(credential, "get_token"):
+            elif (get_token := getattr(credential, "get_token", None)) is not None:
 
                 async def token():
-                    access = credential.get_token("https://storage.azure.com/.default")
+                    access = get_token("https://storage.azure.com/.default")
                     return await access if inspect.isawaitable(access) else access
 
                 claims = _claims(_sync(fs, token).token)
@@ -227,9 +227,9 @@ def resolve(uri):
             else:
                 claims = _claims(getattr(credential, "id_token", "") or "")
                 result["subject"] = claims.get("email") or claims.get("sub")
-                if not result["subject"] and getattr(credential, "token", None):
+                if not result["subject"] and (access_token := getattr(credential, "token", None)):
                     endpoint = "https://oauth2.googleapis.com/tokeninfo?" + urlencode(
-                        {"access_token": credential.token}
+                        {"access_token": access_token}
                     )
                     # A token goes only to Google's fixed identity endpoint. Never include
                     # this URL or an exception's URL in a diagnostic.

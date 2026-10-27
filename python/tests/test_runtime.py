@@ -279,7 +279,8 @@ class TestConnect:
         original_socket = _runtime._socket
         _runtime._socket = None
         try:
-            with tempfile.TemporaryDirectory() as tmpdir:
+            # /tmp: a long $TMPDIR can exceed the AF_UNIX path limit (#557).
+            with tempfile.TemporaryDirectory(dir="/tmp") as tmpdir:
                 sock_path = os.path.join(tmpdir, "test.sock")
                 # Create a listening socket
                 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

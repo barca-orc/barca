@@ -268,8 +268,7 @@ def test_a_webhook_that_is_not_https_is_a_warning_and_is_not_printed(project, ho
     url = "http://hooks.slack.com/services/T000/B000/SECRETTOKEN"
     proc = nightly(project, False, BARCA_SLACK_WEBHOOK_URL=url)
     assert (
-        "telemetry 'slack' is off: BARCA_SLACK_WEBHOOK_URL is not an https:// URL"
-        in proc.stderr
+        "telemetry 'slack' is off: BARCA_SLACK_WEBHOOK_URL is not an https:// URL" in proc.stderr
     ), proc.stderr
     assert "SECRETTOKEN" not in proc.stderr
 
@@ -318,8 +317,7 @@ def test_under_serve_a_failing_job_posts_once_then_a_reminder(tmp_path, hook):
     try:
         deadline = started + 60
         while (
-            not any("still failing" in h for h in hook.headlines())
-            and time.monotonic() < deadline
+            not any("still failing" in h for h in hook.headlines()) and time.monotonic() < deadline
         ):
             time.sleep(0.25)
         time.sleep(1)

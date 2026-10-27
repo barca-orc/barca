@@ -300,9 +300,7 @@ def test_partition_keys_and_parallel_branches_take_their_nodes_weight(tmp_path):
     assert peak(got) == 2
 
     (tmp_path / "spans.txt").unlink()
-    out = json.loads(
-        cli(tmp_path, "run", "fan_out", "p.py", "--json", BARCA_CAPACITY="4").stdout
-    )
+    out = json.loads(cli(tmp_path, "run", "fan_out", "p.py", "--json", BARCA_CAPACITY="4").stdout)
     assert out["status"] == "success"
     got = spans(tmp_path)
     assert set(got) == {f"branch_{i}" for i in range(4)}

@@ -2786,8 +2786,9 @@ mod tests {
     async fn the_workers_a_wave_needs_start_together_and_no_more() {
         for (ready, pool_size, started) in [(1, 4, 1), (3, 4, 3), (6, 4, 4)] {
             let mut config = test_config("together", pool_size);
-            // A stand-in for the interpreter that never connects.
-            config.python = PathBuf::from("/bin/true");
+            // A stand-in for the interpreter that never connects. Found on PATH: macOS has
+            // no /bin/true, only /usr/bin/true.
+            config.python = PathBuf::from("true");
             let mut pool = WorkerPool::start(config).unwrap();
             let mut coord = Coordinator::new();
             for i in 0..ready {

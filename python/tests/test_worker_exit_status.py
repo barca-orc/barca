@@ -8,7 +8,7 @@ import pytest
 
 from barca.api import _find_binary
 
-PIPELINE = '''
+PIPELINE = """
 import os, signal
 from barca import asset, task
 
@@ -27,7 +27,7 @@ def fine():
 @task()
 def chore():
     return None
-'''
+"""
 
 
 def barca(root, *args, env=None):

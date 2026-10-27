@@ -14,9 +14,9 @@ import threading
 import time
 
 try:
-    import orjson  # ty: ignore[unresolved-import]
+    import orjson
 except ImportError:
-    orjson = None  # ty: ignore[invalid-assignment]
+    orjson = None
 
 
 # ─── Socket connection ────────────────────────────────────────────────────────
@@ -186,6 +186,8 @@ class result_batch:
         # beyond the lifetime of the coordinator is needed for these transient receipts.
         data = json.dumps(_wire.result_record(message)).encode("utf-8") + b"\n"
         view = memoryview(data)
+        # Only an entered batch with a journal is installed as _result_batch.
+        assert self.journal is not None
         while view:
             written = self.journal.write(view)
             view = view[written:]
@@ -193,7 +195,7 @@ class result_batch:
 
     def __exit__(self, *_):
         global _result_batch
-        if self.journal is None:
+        if self.journal is None or self.thread is None:
             return
         self.stop.set()
         self.thread.join()

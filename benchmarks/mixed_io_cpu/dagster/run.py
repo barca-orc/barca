@@ -53,9 +53,7 @@ def api_call_4():
     }
 )
 def combine(a0, a1, a2, a3, a4):
-    all_records = (
-        a0["records"] + a1["records"] + a2["records"] + a3["records"] + a4["records"]
-    )
+    all_records = a0["records"] + a1["records"] + a2["records"] + a3["records"] + a4["records"]
     return {"records": all_records, "count": len(all_records)}
 
 

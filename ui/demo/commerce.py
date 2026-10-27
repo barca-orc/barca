@@ -27,47 +27,79 @@ def partner_feed_version() -> tuple[bool, str]:
 def orders(version: str) -> list[dict]:
     print(f"Loading synthetic orders from {version}")
     return [
-        {"order_id": f"ORD-{i:04d}", "customer_id": f"CUS-{i % 12:03d}",
-         "region": ["Americas", "Europe", "Asia Pacific"][i % 3],
-         "product": ["Notebook", "Desk lamp", "Backpack", "Headphones"][i % 4],
-         "quantity": i % 4 + 1, "unit_price": [18.0, 42.0, 65.0, 89.0][i % 4]}
+        {
+            "order_id": f"ORD-{i:04d}",
+            "customer_id": f"CUS-{i % 12:03d}",
+            "region": ["Americas", "Europe", "Asia Pacific"][i % 3],
+            "product": ["Notebook", "Desk lamp", "Backpack", "Headphones"][i % 4],
+            "quantity": i % 4 + 1,
+            "unit_price": [18.0, 42.0, 65.0, 89.0][i % 4],
+        }
         for i in range(60)
     ]
 
 
 @asset()
 def customers() -> list[dict]:
-    return [{"customer_id": f"CUS-{i:03d}", "name": f"Demo customer {i + 1}",
-             "segment": "business" if i % 3 == 0 else "consumer"} for i in range(12)]
+    return [
+        {
+            "customer_id": f"CUS-{i:03d}",
+            "name": f"Demo customer {i + 1}",
+            "segment": "business" if i % 3 == 0 else "consumer",
+        }
+        for i in range(12)
+    ]
 
 
 @asset(inputs={"version": inventory_version})
 def inventory(version: str) -> list[dict]:
     print(f"Reading synthetic stock: {version}")
-    return [{"product": product, "in_stock": count, "warehouse": "Demo East"}
-            for product, count in [("Notebook", 420), ("Desk lamp", 82),
-                                   ("Backpack", 16), ("Headphones", 0)]]
+    return [
+        {"product": product, "in_stock": count, "warehouse": "Demo East"}
+        for product, count in [
+            ("Notebook", 420),
+            ("Desk lamp", 82),
+            ("Backpack", 16),
+            ("Headphones", 0),
+        ]
+    ]
 
 
 @asset(inputs={"orders": orders, "customers": customers})
 def enriched_orders(orders: list, customers: list) -> list[dict]:
     lookup = {c["customer_id"]: c for c in customers}
-    return [{**order, "segment": lookup[order["customer_id"]]["segment"],
-             "revenue": round(order["quantity"] * order["unit_price"], 2)} for order in orders]
+    return [
+        {
+            **order,
+            "segment": lookup[order["customer_id"]]["segment"],
+            "revenue": round(order["quantity"] * order["unit_price"], 2),
+        }
+        for order in orders
+    ]
 
 
 @asset(inputs={"orders": enriched_orders}, freshness=Schedule("0 * * * *"))
 def revenue_by_region(orders: list) -> list[dict]:
-    return [{"region": region, "orders": sum(o["region"] == region for o in orders),
-             "revenue": sum(o["revenue"] for o in orders if o["region"] == region)}
-            for region in ["Americas", "Europe", "Asia Pacific"]]
+    return [
+        {
+            "region": region,
+            "orders": sum(o["region"] == region for o in orders),
+            "revenue": sum(o["revenue"] for o in orders if o["region"] == region),
+        }
+        for region in ["Americas", "Europe", "Asia Pacific"]
+    ]
 
 
 @asset(inputs={"orders": enriched_orders})
 def revenue_by_product(orders: list) -> list[dict]:
-    return [{"product": product, "units": sum(o["quantity"] for o in orders if o["product"] == product),
-             "revenue": sum(o["revenue"] for o in orders if o["product"] == product)}
-            for product in ["Notebook", "Desk lamp", "Backpack", "Headphones"]]
+    return [
+        {
+            "product": product,
+            "units": sum(o["quantity"] for o in orders if o["product"] == product),
+            "revenue": sum(o["revenue"] for o in orders if o["product"] == product),
+        }
+        for product in ["Notebook", "Desk lamp", "Backpack", "Headphones"]
+    ]
 
 
 @asset()
@@ -77,14 +109,22 @@ def growth_assumption() -> dict:
 
 @asset(inputs={"regions": revenue_by_region, "assumption": growth_assumption})
 def revenue_forecast(regions: list, assumption: dict) -> list[dict]:
-    return [{"region": r["region"], "forecast": round(r["revenue"] * (1 + assumption["growth_rate"]), 2)}
-            for r in regions]
+    return [
+        {
+            "region": r["region"],
+            "forecast": round(r["revenue"] * (1 + assumption["growth_rate"]), 2),
+        }
+        for r in regions
+    ]
 
 
 @asset(inputs={"stock": inventory})
 def stock_alerts(stock: list) -> list[dict]:
-    return [{**item, "severity": "critical" if item["in_stock"] == 0 else "low"}
-            for item in stock if item["in_stock"] < 20]
+    return [
+        {**item, "severity": "critical" if item["in_stock"] == 0 else "low"}
+        for item in stock
+        if item["in_stock"] < 20
+    ]
 
 
 @asset(inputs={"orders": enriched_orders})
@@ -132,7 +172,9 @@ def validate_orders(orders: list) -> None:
 @task(inputs={"products": revenue_by_product}, freshness=Schedule("0 6 * * *"))
 def export_partner_feed(products: list) -> None:
     print(f"Preparing {len(products)} product totals for the demo partner")
-    raise ConnectionError("Synthetic failure: demo partner endpoint is unavailable; no network request was made")
+    raise ConnectionError(
+        "Synthetic failure: demo partner endpoint is unavailable; no network request was made"
+    )
 
 
 @task(inputs={"cohorts": customer_cohorts})

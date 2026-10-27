@@ -1065,6 +1065,10 @@ sys.exit(_state.main())
         )
         .unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Run the new script once before a test uses it: macOS assesses a newly written
+        // executable on its first exec, which made the first backup start about 150ms late.
+        // Without arguments it prints its usage and exits.
+        crate::helper_proc::output_std(&mut std::process::Command::new(&python)).unwrap();
         let mut cfg = crate::config::resolve_in(None, root).unwrap();
         cfg.db_path = root.join("meta/metadata.db").to_string_lossy().into_owned();
         cfg.backup_uri = Some(root.join("store").to_string_lossy().into_owned());
@@ -1097,6 +1101,8 @@ sys.exit(_state.main())
             .await
             .unwrap();
         std::fs::write(dir.path().join("outage"), b"").unwrap();
+        let interval = std::time::Duration::from_millis(250);
+        let started = std::time::Instant::now();
         let recorder = StepRecorder::start_with_intervals(
             cfg.db_path.clone(),
             "r1".into(),
@@ -1106,29 +1112,34 @@ sys.exit(_state.main())
                 cancel: CancellationToken::new(),
             }),
             std::time::Duration::from_millis(20),
-            std::time::Duration::from_millis(150),
+            interval,
         );
         recorder.record(Fixture::new().row("f.py:a"));
-        let attempts = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                let text = std::fs::read_to_string(dir.path().join("attempts")).unwrap_or_default();
-                if text.ends_with('\n')
-                    && let Ok(attempts) = text
-                        .lines()
-                        .map(str::parse::<f64>)
-                        .collect::<Result<Vec<_>, _>>()
-                    && attempts.len() >= 2
-                {
-                    break attempts;
-                }
+        // Whole lines only: the helper may be writing one.
+        let attempts = || {
+            let text = std::fs::read_to_string(dir.path().join("attempts")).unwrap_or_default();
+            text.split_inclusive('\n')
+                .filter(|l| l.ends_with('\n'))
+                .count()
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while attempts() < 2 {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         })
         .await
         .expect("a failed backup was not retried without a new row");
+        // Retries come at most once a tick. Counted, not timed apart: a tick that finds the
+        // previous take still running is skipped, so a retry can start soon after a slow
+        // first take (the database copy), and the helper's start time varies under load.
+        // A busy retry would run as fast as the helper starts, several times a tick.
+        tokio::time::sleep(4 * interval).await;
+        // The first tick is one interval in, and an attempt is written after it starts.
+        let ticks = started.elapsed().as_secs_f64() / interval.as_secs_f64();
+        let tried = attempts();
         assert!(
-            attempts.windows(2).all(|pair| pair[1] - pair[0] >= 0.1),
-            "failure must not cause busy retries: {attempts:?}"
+            tried as f64 <= ticks,
+            "failure must not cause busy retries: {tried} attempts in {ticks:.1} ticks"
         );
         // The copy was taken here even though the store refused it.
         let local = cfg.local_backup_dir();
@@ -1144,7 +1155,7 @@ sys.exit(_state.main())
         .expect("the copy never reached the store");
         // Nothing new recorded: later ticks take nothing.
         let settled = std::fs::read_to_string(dir.path().join("attempts")).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+        tokio::time::sleep(2 * interval).await;
         recorder.finish().await.unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.path().join("attempts")).unwrap(),

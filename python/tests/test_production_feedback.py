@@ -47,7 +47,9 @@ def ok(out: subprocess.CompletedProcess) -> dict:
 
 
 def test_plan_accepts_json_and_pretty_and_prints_the_same_plan(tmp_path):
-    (tmp_path / "p.py").write_text("from barca import asset\n\n@asset()\ndef a() -> int:\n    return 1\n")
+    (tmp_path / "p.py").write_text(
+        "from barca import asset\n\n@asset()\ndef a() -> int:\n    return 1\n"
+    )
     plain = barca(tmp_path, "plan", "p.py")
     assert plain.returncode == 0, plain.stderr
     for flag in ("--json", "--pretty"):
@@ -106,8 +108,11 @@ def test_runs_serve_started_are_in_the_clis_history_and_logs(tmp_path):
 
     # failed_node and error, flat, for --fields.
     runs = ok(barca(tmp_path, "history", "--json", "--fields", "run_id,failed_node,error"))["runs"]
-    assert {"run_id": run_id, "failed_node": "pipeline.py:checked",
-            "error": "AssertionError: checked: 25 check(s) failed"} in runs
+    assert {
+        "run_id": run_id,
+        "failed_node": "pipeline.py:checked",
+        "error": "AssertionError: checked: 25 check(s) failed",
+    } in runs
 
     # The run detail: the traceback, then the last lines the step printed, without the
     # traceback again.
@@ -198,8 +203,11 @@ def test_peak_memory_is_each_steps_own(tmp_path):
     assert trimmed["recent_runs"] == [{"run_id": out["run_id"], "max_rss_bytes": rss["big"]}]
     text = barca(tmp_path, "stats", "big", "--pretty").stdout
     assert "Peak memory (RSS):" in text and out["run_id"] in text, text
-    rows = ok(barca(tmp_path, "sql", "select node_id, max_rss_bytes from barca.materializations",
-                    "--json"))["rows"]
+    rows = ok(
+        barca(
+            tmp_path, "sql", "select node_id, max_rss_bytes from barca.materializations", "--json"
+        )
+    )["rows"]
     assert {r["node_id"].split(":")[1]: r["max_rss_bytes"] for r in rows} == rss
 
 
@@ -227,8 +235,15 @@ def test_require_env_and_the_note_about_several_environments(tmp_path):
     assert "note" not in barca(tmp_path, "history", "--json", BARCA_ENV="prod").stderr
 
     (tmp_path / "barca.toml").write_text('default_env = "staging"\nrequire_env = true\n')
-    for args in (("history",), ("get", "a"), ("status",), ("stats", "a"), ("logs",),
-                 ("sql", "select 1"), ("gc", "--dry-run")):
+    for args in (
+        ("history",),
+        ("get", "a"),
+        ("status",),
+        ("stats", "a"),
+        ("logs",),
+        ("sql", "select 1"),
+        ("gc", "--dry-run"),
+    ):
         out = barca(tmp_path, *args)
         assert out.returncode == 2, (args, out.stderr)
         assert "requires one: pass --env NAME or set BARCA_ENV" in out.stderr, out.stderr
@@ -284,8 +299,9 @@ def test_deterministic_false_and_sensors_do_not_warn(tmp_path):
     refresh = barca(tmp_path, "get", "--refresh", "snapshot,careless", "--json")
     assert refresh.returncode == 0, refresh.stderr
     warned = [line for line in refresh.stderr.splitlines() if NOT_DETERMINISTIC in line]
-    assert warned == [f"[barca] warning: p.py:careless {NOT_DETERMINISTIC}; the function is not "
-                      "deterministic"], refresh.stderr
+    assert warned == [
+        f"[barca] warning: p.py:careless {NOT_DETERMINISTIC}; the function is not deterministic"
+    ], refresh.stderr
     steps = {s["id"].split(":")[1]: s for s in json.loads(refresh.stdout)["steps"]}
     assert steps["careless"].get("bytes_changed") is True
     assert not steps["snapshot"].get("bytes_changed")

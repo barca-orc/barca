@@ -435,7 +435,9 @@ def test_a_directory_in_the_store_fails_the_upload_the_same_way(shared, tmp_path
     stored.unlink()
     (stored / "theirs").mkdir(parents=True)
 
-    proc = cli(reader, "get", "numbers", "--refresh", "numbers", "-o", "value", "--json", store=store)
+    proc = cli(
+        reader, "get", "numbers", "--refresh", "numbers", "-o", "value", "--json", store=store
+    )
 
     doc = ok(proc)
     assert doc["uploads"]["pending"] == 1, doc

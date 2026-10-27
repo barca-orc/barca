@@ -11,8 +11,14 @@ ENV = {**os.environ, "PYTHONPATH": str(ROOT / "python")}
 
 
 def run(command: str, target: str, *, fails: bool = False) -> None:
-    result = subprocess.run([BARCA, command, target, "commerce.py", "--json"],
-                            cwd=DEMO, env=ENV, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        [BARCA, command, target, "commerce.py", "--json"],
+        cwd=DEMO,
+        env=ENV,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     expected = 1 if fails else 0
     if result.returncode != expected:
         raise RuntimeError(f"{command} {target}: {result.stdout}\n{result.stderr}")

@@ -49,7 +49,12 @@ def main() -> int:
         path = Path(tmp) / "artifact.parquet"
         _write(path, args.megabytes)
         expected = hashlib.sha256(path.read_bytes()).hexdigest()
-        msg = {"type": "get", "remote": str(Path(tmp) / "missing"), "local": str(path), "sha256": expected}
+        msg = {
+            "type": "get",
+            "remote": str(Path(tmp) / "missing"),
+            "local": str(path),
+            "sha256": expected,
+        }
 
         _timed(lambda: _transfer._sha256(path))  # warm the page cache
         hash_s = min(_timed(lambda: _transfer._sha256(path)) for _ in range(3))

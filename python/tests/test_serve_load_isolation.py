@@ -192,7 +192,9 @@ def test_one_shot_commands_remain_strict(project, command):
         check=False,
     )
     assert result.returncode == 2, result.stderr
-    error = json.loads(next(line for line in reversed(result.stderr.splitlines()) if line.startswith("{")))
+    error = json.loads(
+        next(line for line in reversed(result.stderr.splitlines()) if line.startswith("{"))
+    )
     assert "broken.py" in error["error"]
 
 

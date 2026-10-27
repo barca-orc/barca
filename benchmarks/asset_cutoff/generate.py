@@ -27,7 +27,7 @@ out.mkdir(parents=True, exist_ok=True)
 )
 cutoff = ", cutoff=True" if mode == "cutoff" else ""
 (out / "pipeline.py").write_text(
-    f'''import pathlib
+    f"""import pathlib
 
 from barca import asset, partitions_from, sensor
 
@@ -57,5 +57,5 @@ def billed(customer: str, rates: dict) -> dict:
 @asset(partitions={{"customer": partitions_from(billed)}})
 def invoice(customer: str, billed: dict) -> str:
     return f"{{customer}}: {{billed['eur']:.2f}}"
-'''
+"""
 )
