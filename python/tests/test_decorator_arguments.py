@@ -134,6 +134,13 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
             "Write it like `timeout_seconds=600`. See `barca docs assets`.",
         ),
         (
+            "@asset()\n@sink(EXPORT_PATH)",
+            "the path of @sink must be a string literal, got `EXPORT_PATH`; barca reads decorator "
+            "arguments from the source without running it, so it cannot see what this is",
+            'Write the path as a string literal, like `@sink("exports/report.parquet")`. '
+            "See `barca docs sinks`.",
+        ),
+        (
             "@asset()\n@sink('out.json', serializer='xml')",
             '`serializer=` names no serializer barca has: "xml"',
             'Write it like `serializer="json"`: one of "json", "pickle", "parquet" or "csv". '

@@ -1866,6 +1866,33 @@ fn a_value_barca_cannot_read_is_an_error_naming_the_argument_and_the_form() {
             "Write it like `serializer=\"json\"`",
         ),
         (
+            "@asset()\n@sink(X)",
+            "the path of @sink must be a string literal, got `X`; barca reads decorator \
+             arguments from the source without running it",
+            "Write the path as a string literal, like `@sink(\"exports/report.parquet\")`. See \
+             `barca docs sinks`.",
+        ),
+        (
+            "@asset()\n@sink(f\"exports/{X}.json\")",
+            "the path of @sink must be a string literal, got `f\"exports/{X}.json\"`",
+            "Write the path as a string literal",
+        ),
+        (
+            "@asset()\n@sink(\"exports/\" + X, partition_by=[\"day\"])",
+            "the path of @sink must be a string literal, got `\"exports/\" + X`",
+            "Write the path as a string literal",
+        ),
+        (
+            "@asset()\n@sink(\"ok.json\")\n@sink(settings.EXPORT)",
+            "the path of @sink must be a string literal, got `settings.EXPORT`",
+            "See `barca docs sinks`.",
+        ),
+        (
+            "@asset()\n@sink(None)",
+            "the path of @sink must be a string literal, got `None`",
+            "Write the path as a string literal",
+        ),
+        (
             "@asset()\n@sink(\"out.json\", serializer=X)",
             "`serializer=` must be a string literal, got `X`",
             "See `barca docs sinks`.",

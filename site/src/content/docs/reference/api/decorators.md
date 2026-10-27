@@ -100,11 +100,12 @@ Each value has to be written in a form barca reads from the source. Any other va
 error when barca reads the file (exit 2, `kind` `usage`), naming the argument, the file and
 line, and the form to write. Up to 0.33.1 most were read as if the argument were not written:
 `inputs=make_inputs()` declared no inputs, `tags=TAGS` no tags, `timeout_seconds=LIMIT` the
-default 300.
+default 300, `@sink(EXPORT_PATH)` no sink.
 
 | Argument | Form |
 |---|---|
 | `name=`, `description=` | a string literal |
+| the path of `@sink` | a string literal (`@sink("exports/report.parquet")`) |
 | `inputs=` | a dict literal: keys are string literals, each value names a step (`upstream`, `module.upstream`, `collect(upstream)`, `asset_ref("file.py:upstream")`) |
 | `partitions=` | a dict literal: keys are string literals, each value is `partitions(<keys>)` or `partitions_from(upstream)`; the keys inside `partitions(...)` may be any expression |
 | `serializer=` | a string literal: `"json"`, `"pickle"`, `"parquet"` or `"csv"` (on `@sink` too) |
@@ -135,8 +136,6 @@ Write it like `tags={"team": "growth"}`: a dict literal whose keys and values ar
 
 Not checked:
 
-- The path of `@sink`. A path that is not a string literal (`@sink(EXPORT_PATH)`) declares no
-  sink, without a message.
 - A call barca cannot identify as its own helper because the name is rebound or comes from
   another library (`partitions = load_partitions`, `cron_lib.Schedule(...)`), or because the
   file reassigns barca's export (`barca.partitions = other`), as a partition dimension or as
@@ -550,7 +549,9 @@ Stacked under `@asset`, it writes the asset's result to an extra path each time 
 runs. A cache hit writes the sink only when it holds another run hash's output (below). Paths are local or any fsspec URI (`abfss://`,
 `s3://`, `gs://`); remote schemes need the matching extra (see
 [Remote storage](/reference/remote-storage/)). Several `@sink` decorators may be stacked on
-one asset.
+one asset. The path is a string literal: a constant, an f-string or a concatenation
+(`@sink(EXPORT_PATH)`) is an error when the file is read, exit 2 ("Values barca reads" above).
+Up to 0.33.1 such a sink was dropped without a message and never written.
 
 ```python
 from barca import asset, sink, Always

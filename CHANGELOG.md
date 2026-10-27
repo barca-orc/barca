@@ -8,19 +8,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
-### Refactoring
-
-- Make freshness-proof replacement an explicit guarded transaction and cover interference,
-  cache-only deletion and rollback; preserve the existing caller-held database locks.
-
-- Give durable result history one internal owner across progress, terminal, legacy-cache and
-  server-ledger writes, preserving their transaction, receipt and deduplication rules.
-
 ### Breaking
 
 - A decorator value barca cannot read from the source is an error when the file is read (exit
   2, naming the argument, the file and line, and the form to write) instead of being read as
-  "not written" (#665): `name=`, `description=`, `inputs=` (not a dict literal, a key that is
+  "not written" (#665): the path of `@sink` (a path that was not a string literal declared no
+  sink, so nothing was written), `name=`, `description=`, `inputs=` (not a dict literal, a key that is
   not a string literal, a value that names no step), `partitions=` (not a dict literal, a key
   that is not a string literal, a value that is not `partitions(...)` / `partitions_from(...)`),
   `serializer=` (also on `@sink`; not a string literal, or an unknown format), `freshness=`
@@ -30,6 +23,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   (`barca docs assets`, "Values barca reads"); `None` still reads as not written. A
   `partitions([...])` list with an element that is not a string or integer literal is now
   evaluated by the resolver like any other key expression; that element used to be dropped.
+
+### Refactoring
+
+- Make freshness-proof replacement an explicit guarded transaction and cover interference,
+  cache-only deletion and rollback; preserve the existing caller-held database locks.
+
+- Give durable result history one internal owner across progress, terminal, legacy-cache and
+  server-ledger writes, preserving their transaction, receipt and deduplication rules.
 
 ### Features
 

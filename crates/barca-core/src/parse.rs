@@ -811,7 +811,7 @@ const NOT_RUN: &str = "barca reads decorator arguments from the source without r
                        cannot see what this is";
 
 /// The source text of `expr`, shortened to its first line and 60 characters.
-fn snippet(source: &str, expr: &Expr) -> String {
+pub(crate) fn snippet(source: &str, expr: &Expr) -> String {
     let range = expr.range();
     let text = source
         .get(range.start().to_usize()..range.end().to_usize())
@@ -828,7 +828,7 @@ fn snippet(source: &str, expr: &Expr) -> String {
 
 /// "; barca reads ... without running it" after a value that is computed (a name, a call, an
 /// operator): nothing for a literal of the wrong kind, which barca reads well enough.
-fn not_run(expr: &Expr) -> String {
+pub(crate) fn not_run(expr: &Expr) -> String {
     let literal = match expr {
         Expr::UnaryOp(op) => matches!(op.operand.as_ref(), Expr::NumberLiteral(_)),
         Expr::List(_) | Expr::Tuple(_) | Expr::Set(_) | Expr::Dict(_) => true,

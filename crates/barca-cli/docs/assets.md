@@ -192,11 +192,12 @@ Barca reads each argument's value from the source, so it has to be written in a 
 read without running the file. Any other value is an error when barca reads the file: exit 2,
 `kind` `usage`, naming the argument, the file and line, and the form to write. Up to 0.33.1
 most of these were read as if the argument were not written: no inputs, no tags, the default
-timeout.
+timeout, and no sink at all for a `@sink` path that was not a string literal.
 
 | Argument | Form |
 |---|---|
 | `name=`, `description=` | a string literal |
+| the path of `@sink` | a string literal (`@sink("exports/report.parquet")`) |
 | `inputs=` | a dict literal: keys are string literals, each value names a step (`upstream`, `module.upstream`, `collect(upstream)`, `asset_ref("file.py:upstream")`) |
 | `partitions=` | a dict literal: keys are string literals, each value is `partitions(<keys>)` or `partitions_from(upstream)`. The keys inside `partitions(...)` may be any expression ("Static analysis" below) |
 | `serializer=` | a string literal: `"json"`, `"pickle"`, `"parquet"` or `"csv"` (on `@sink` too) |
@@ -227,8 +228,6 @@ Write it like `tags={"team": "growth"}`: a dict literal whose keys and values ar
 
 Not checked:
 
-- The path of `@sink`. A path that is not a string literal (`@sink(EXPORT_PATH)`) declares no
-  sink, without a message, and its `partition_by=` and `rows_per_file=` are not checked.
 - A call barca cannot identify as its own helper because the name is rebound or comes from
   another library (`partitions = load_partitions`, `cron_lib.Schedule(...)`), or because the
   file reassigns barca's export (`barca.partitions = other`), as a partition dimension or as

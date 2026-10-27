@@ -59,8 +59,25 @@ pub(crate) fn check(
 }
 
 fn check_call(call: &ast::ExprCall, dims: &[String], source: &str) -> Option<Problem> {
-    let Some(Expr::StringLiteral(path)) = call.arguments.args.first() else {
-        return None;
+    let path = match call.arguments.args.first() {
+        Some(Expr::StringLiteral(path)) => path,
+        // A path barca cannot read declares no sink it could write: refused, not dropped
+        // (#665). A missing path is reported by the argument check.
+        Some(other) => {
+            return Some(Problem {
+                offset: other.range().start().to_usize(),
+                message: format!(
+                    "the path of @sink must be a string literal, got `{}`{}",
+                    crate::parse::snippet(source, other),
+                    crate::parse::not_run(other)
+                ),
+                fix: format!(
+                    "Write the path as a string literal, like `@sink(\"exports/report.parquet\")`. \
+                     {SEE}"
+                ),
+            });
+        }
+        None => return None,
     };
     if let Some(kw) = keyword(call, "serializer")
         && let Err((offset, message, fix)) =
