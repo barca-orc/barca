@@ -127,9 +127,7 @@ def _table(con, table: dict) -> None:
             f"CREATE VIEW {qualified} AS SELECT {nulls} WHERE error({_quote_str(why)}) IS NULL"
         )
         return
-    con.execute(
-        f"CREATE TABLE {qualified} ({', '.join(f'{_quote(c)} {ty}' for c, ty in columns)})"
-    )
+    con.execute(f"CREATE TABLE {qualified} ({', '.join(f'{_quote(c)} {ty}' for c, ty in columns)})")
     if not rows:
         return
     spec = "{" + ", ".join(f"{_quote_str(c)}: {_quote_str(ty)}" for c, ty in columns) + "}"
@@ -333,8 +331,9 @@ def run(request: dict) -> dict:
         truncated = limit is not None and len(fetched) > limit
         if truncated:
             fetched = fetched[:limit]
-            counted = con.sql(f"SELECT count(*) FROM ({query}) AS barca_sql").fetchone()
-            total = counted[0] if counted else limit
+            # fetchall(): duckdb 2 relations have no fetchone().
+            counted = con.sql(f"SELECT count(*) FROM ({query}) AS barca_sql").fetchall()
+            total = counted[0][0] if counted else limit
         else:
             total = len(fetched)
     except duckdb.Error as e:

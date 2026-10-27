@@ -39,7 +39,7 @@ def parts(k: str) -> pd.DataFrame:
 
 @asset(inputs={"p": parts}, partitions={"k": partitions_from(parts)})
 def lazy_each(k: str, p: duckdb.DuckDBPyRelation) -> int:
-    return int(p.aggregate("sum(n)").fetchone()[0])
+    return int(p.aggregate("sum(n)").fetchall()[0][0])
 
 
 @asset(inputs={"p": parts}, partitions={"k": partitions_from(parts)})

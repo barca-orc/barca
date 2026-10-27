@@ -202,6 +202,7 @@ patterns.
 | What is cached, the run hash, artifacts, environments, disk use | `barca docs cache` | [Guide](https://barca.sh/guide/) |
 | Decorators, inputs, freshness, retries | `barca docs assets`, `barca docs tasks` | [Decorators API](https://barca.sh/reference/api/decorators/) |
 | Output formats and large inputs (parquet, CSV, lazy DuckDB and polars) | `barca docs types`, `barca docs big-inputs` | [Guide: large inputs](https://barca.sh/guide/#6-large-inputs) |
+| DuckDB 1.x and 2.x: what a pipeline changes for duckdb 2 | `barca docs duckdb` | [DuckDB Versions](https://barca.sh/reference/duckdb/) |
 | Partitions: fan-out over keys, fan-in with `collect` | `barca docs partitions` | [Guide: partitions](https://barca.sh/guide/#7-partitions) |
 | Schedules, `barca serve` and its HTTP API | `barca docs scheduling` | [Scheduling](https://barca.sh/scheduling/), [Deploying](https://barca.sh/deploying/) |
 | Server mode: one server as the team's ledger | `barca docs server-mode` | [Share with a team](https://barca.sh/team-server/), [Server mode](https://barca.sh/reference/server-mode/) |

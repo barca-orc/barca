@@ -28,7 +28,7 @@ def producer():
 
 def consumer():
     picked = duckdb.sql("select 80.0::double as amount")
-    return duckdb.sql("select sum(amount) from picked").fetchone()[0]
+    return duckdb.sql("select sum(amount) from picked").fetchall()[0][0]
 
 
 def failure():
@@ -37,11 +37,11 @@ def failure():
 
 
 def after_failure():
-    return duckdb.sql("select x from failed_picked").fetchone()[0]
+    return duckdb.sql("select x from failed_picked").fetchall()[0][0]
 
 
 def configured():
-    return duckdb.sql("select twice(3)").fetchone()[0]
+    return duckdb.sql("select twice(3)").fetchall()[0][0]
 """
 
 
@@ -105,13 +105,15 @@ def main():
 
             # Rollback is insufficient: it isolates catalog changes but not SET.
             owned.execute("begin")
-            original_threads = owned.sql("select current_setting('threads')").fetchone()[0]
+            original_threads = owned.sql("select current_setting('threads')").fetchall()[0][0]
             changed_threads = 1 if original_threads != 1 else 2
             owned.execute(f"set threads = {changed_threads}")
             owned.execute("create table rolled_back as select 1 x")
             owned.execute("rollback")
-            assert owned.sql("select current_setting('threads')").fetchone()[0] == changed_threads
-            assert owned.sql("select twice(3)").fetchone()[0] == 6
+            assert (
+                owned.sql("select current_setting('threads')").fetchall()[0][0] == changed_threads
+            )
+            assert owned.sql("select twice(3)").fetchall()[0][0] == 6
             try:
                 owned.sql("select * from rolled_back")
             except duckdb.CatalogException:

@@ -122,7 +122,7 @@ _DUCKDB_SUM = """
     import duckdb
 
     def total(orders: duckdb.DuckDBPyRelation):
-        return orders.aggregate("sum(a)").fetchone()[0]
+        return orders.aggregate("sum(a)").fetchall()[0][0]
     """
 
 _POLARS_SUM = """
@@ -152,7 +152,7 @@ def test_lazy_filter_skips_row_groups(store, tmp_path, monkeypatch):
         import duckdb
 
         def few(orders: duckdb.DuckDBPyRelation):
-            return orders.filter("a < 10000").aggregate("count(*)").fetchone()[0]
+            return orders.filter("a < 10000").aggregate("count(*)").fetchall()[0][0]
         """
     out = _run_step(tmp_path, monkeypatch, body, "few", {"orders": SRC}, {"orders": "duckdb"})
     assert _artifacts.deserialize(out, "json") == 10000
@@ -221,7 +221,7 @@ def test_a_rewritten_artifact_is_read_again_not_served_from_duckdbs_cache(
         import duckdb
 
         def n(orders: duckdb.DuckDBPyRelation):
-            return orders.aggregate("count(*)").fetchone()[0]
+            return orders.aggregate("count(*)").fetchall()[0][0]
         """
     out = _run_step(tmp_path, monkeypatch, body, "n", {"orders": SRC}, {"orders": "duckdb"})
     assert _artifacts.deserialize(out, "json") == 200000
@@ -281,10 +281,10 @@ def test_a_query_reading_more_fetches_only_what_is_not_kept(store, tmp_path, mon
         import duckdb
 
         def total(orders: duckdb.DuckDBPyRelation):
-            return orders.aggregate("sum(a)").fetchone()[0]
+            return orders.aggregate("sum(a)").fetchall()[0][0]
 
         def both(orders: duckdb.DuckDBPyRelation):
-            return orders.aggregate("sum(a), sum(c)").fetchone()[0]
+            return orders.aggregate("sum(a), sum(c)").fetchall()[0][0]
         """
     _run_step(tmp_path, monkeypatch, body, "total", {"orders": SRC}, {"orders": "duckdb"})
     one_column = store.step_fetched
@@ -305,7 +305,7 @@ def test_a_rewritten_object_is_kept_apart_and_fetched_again(store, tmp_path, mon
         import duckdb
 
         def n(orders: duckdb.DuckDBPyRelation):
-            return orders.aggregate("count(*)").fetchone()[0]
+            return orders.aggregate("count(*)").fetchall()[0][0]
         """
     _run_step(tmp_path, monkeypatch, body, "n", {"orders": SRC}, {"orders": "duckdb"})
     duckdb.sql("copy (select 1::bigint as a) to 'one.parquet' (format parquet)")

@@ -698,6 +698,14 @@ const SITE_PAGES: &[SitePage] = &[
                       running steps.",
     },
     SitePage {
+        topic: "duckdb",
+        file: "duckdb.md",
+        slug: "reference/duckdb",
+        title: "DuckDB Versions",
+        description: "duckdb 1.x and 2.x: what a pipeline must change for duckdb 2, and why a \
+                      database file duckdb 2 writes cannot be opened by 1.x.",
+    },
+    SitePage {
         topic: "groups",
         file: "groups.md",
         slug: "reference/groups",

@@ -84,7 +84,7 @@ def test_duckdb_input_reads_one_column_in_place(remote, monkeypatch):
     uri, size = remote
     fetched = _count_reads(monkeypatch, uri)
     rel = _artifacts.deserialize(uri, "parquet", frame_type="duckdb")
-    assert rel.aggregate("sum(a)").fetchone()[0] == sum(range(200000))
+    assert rel.aggregate("sum(a)").fetchall()[0][0] == sum(range(200000))
     assert 0 < fetched[0] < size * 0.25, f"fetched {fetched[0]} of {size} bytes"
 
 

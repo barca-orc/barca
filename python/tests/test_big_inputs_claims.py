@@ -257,7 +257,7 @@ def test_a_filter_skips_row_groups_only_when_the_data_is_clustered_on_it(tmp_pat
         import duckdb
 
         def few(events: duckdb.DuckDBPyRelation):
-            return events.filter("k < {limit}").aggregate("count(*), sum(v)").fetchone()
+            return events.filter("k < {limit}").aggregate("count(*), sum(v)").fetchall()[0]
         """
     fetched, both, share = {}, {}, {}
     # Same rows; only the order they are written in differs.

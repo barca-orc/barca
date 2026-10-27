@@ -108,7 +108,7 @@ def test_fetched_files_are_removed_when_the_step_ends(project, monkeypatch):
         import duckdb
 
         def validate_orders(orders: duckdb.DuckDBPyRelation):
-            return orders.count("*").fetchone()[0]
+            return orders.count("*").fetchall()[0][0]
         """,
         "validate_orders",
     )

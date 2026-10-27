@@ -892,7 +892,8 @@ def test_sinks_topic_dataset_example(binary, topics, tmp_path):
     )
     assert written == shown.strip().splitlines()
     query = next(b for b in blocks(body, "sql") if "hive_partitioning" in b)
-    rows = duckdb.connect().sql(query.replace("exports/", f"{tmp_path}/exports/")).fetchall()
+    con = duckdb.connect()  # held: duckdb 1.4 closes an unreferenced connection mid-query
+    rows = con.sql(query.replace("exports/", f"{tmp_path}/exports/")).fetchall()
     assert sorted((r[0], str(r[1]), r[2]) for r in rows) == [
         ("r1", "2026-10-21", 1.0),
         ("r1", "2026-10-22", 5.0),

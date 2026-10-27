@@ -80,7 +80,7 @@ def test_skeleton_matches_the_issue_table():
     assert [c for _, c in fan_out] == [34, 20, 17, 16, 15]
     assert fan_out[0][0] == "forecast_reconciled"
     assert [n.name for n in nodes if n.kwargs] == ["summarize_qa"]
-    assert len(gen.GUARDS) == 28  # assets that fetchone() a lazy input before returning
+    assert len(gen.GUARDS) == 28  # assets that fetch an aggregate of a lazy input before returning
 
 
 def test_checked_in_assets_py_is_what_the_generator_writes():

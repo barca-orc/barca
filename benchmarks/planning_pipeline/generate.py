@@ -24,7 +24,7 @@ What the project reproduces (see the issue for why each matters):
 - steps stage inputs under shared names on DuckDB's default connection (a view, a registered
   frame, a temp table: `engine.staged`), and the registry validators raise if the names hold
   another step's rows;
-- 28 assets run `fetchone()` on an aggregate of a lazy input and return a typed empty relation
+- 28 assets fetch the row of an aggregate of a lazy input and return a typed empty relation
   when it has no rows; one asset returns its input unchanged under a second name.
 
 `PLANNING_SOURCE_MODE` selects where the roots read: `local` (the project's `data/`), `store`
@@ -360,7 +360,7 @@ STAGED_DRIVERS = {
     "driver_launch_item": 1.0,
 }
 
-# The assets that check a lazy input for rows (a `fetchone()` on an aggregate) and return a
+# The assets that check a lazy input for rows (a fetched aggregate) and return a
 # typed empty relation when it has none: (input parameter, schema of the empty result).
 GUARDS = {
     "ledger_forecast_joined": ("forecast_group", None),
@@ -505,7 +505,7 @@ def _task_body(node: Node) -> str:
                 "    unknown = con.sql(",
                 '        "SELECT count(*) FROM registry_rows WHERE item_id IS NOT NULL "',
                 '        "AND item_id NOT IN (SELECT item_id FROM forecast_item)"',
-                "    ).fetchone()[0]",
+                "    ).fetchall()[0][0]",
                 f'print(f"{name}: {{unknown}} registry items not in the forecast")',
             ]
         else:

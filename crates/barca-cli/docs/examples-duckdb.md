@@ -52,7 +52,7 @@ def revenue_by_region(enriched: duckdb.DuckDBPyRelation) -> duckdb.DuckDBPyRelat
 
 @asset(inputs={"rev": revenue_by_region})
 def top_region(rev: duckdb.DuckDBPyRelation) -> dict:
-    region, orders, revenue = rev.limit(1).fetchone()
+    region, orders, revenue = rev.limit(1).fetchall()[0]
     return {"region": region, "orders": orders, "revenue": revenue}
 ```
 

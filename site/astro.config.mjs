@@ -61,6 +61,7 @@ export default defineConfig({
             { label: 'Decorators API', slug: 'reference/api/decorators' },
             { label: 'Discovery', slug: 'reference/discovery' },
             { label: 'Doctor and Local Debugging', slug: 'reference/doctor' },
+            { label: 'DuckDB Versions', slug: 'reference/duckdb' },
             { label: 'Groups', slug: 'reference/groups' },
             { label: 'Remote Storage', slug: 'reference/remote-storage' },
             { label: 'Server API', slug: 'reference/server-api' },

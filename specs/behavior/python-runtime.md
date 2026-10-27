@@ -30,12 +30,21 @@ User-created catalog changes are not reset or rolled back by Barca. Colliding vi
 be replaced and dropped; use deliberate names and cleanup rather than relying on collision
 preservation. An import-time macro must not be lost through a hidden per-step reset.
 
+A DB-API result of `execute()` that a step leaves unread on the shared connection is discarded
+once the step's function returns, before its output is materialized, and again when the call
+ends. duckdb 2 refuses other work on a connection with an unfinished result; discarding it
+keeps the duckdb 1.x behavior, where the next statement replaced it. Results on the step's own
+cursors or connections are not touched.
+
 ## Invariants
 
 - **INV-WORKER-STATE-01:** Shared import-time setup survives calls on the same worker.
 
 - **INV-WORKER-VIEW-01:** Orchestration-created input views are cleaned after success and
   failure without advertising restoration of arbitrary project-created catalog state.
+
+- **INV-WORKER-RESULT-01:** A result a step left unread on the shared connection blocks neither
+  the materialization of that step's output nor later calls on the worker.
 
 ## Failures and recovery
 
@@ -51,7 +60,8 @@ orchestration views are cleaned after success, user failure and serialization fa
 separate-worker state and lazy-result materialization lifetime.
 
 Conformance: [DuckDB connection tests](../../python/tests/test_duckdb_connection.py), including
-`test_worker_shared_setup_survives_but_input_views_are_cleaned`,
+`test_worker_shared_setup_survives_but_input_views_are_cleaned` and
+`test_a_result_left_unread_does_not_block_writing_or_the_next_step`,
 [worker module/import behavior](../../python/barca/_worker.py),
 [connection adapter](../../python/barca/_duckdb.py).
 The [reproduction](../../docs/engineering/reproductions/duckdb_step_isolation.py) demonstrates

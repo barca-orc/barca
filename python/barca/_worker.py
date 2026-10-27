@@ -921,6 +921,8 @@ def _materialize(
     systematically undercounted for large payloads (serialization can be the
     majority of a step's real wall time and was previously invisible).
     """
+    # The step has returned: a result it left unread would block writing a returned relation.
+    _duckdb.finish_open_result()
     explicit_fmt = step.get("serializer")
     if prewritten is not None:
         fmt = "parquet"
@@ -1666,6 +1668,8 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                 result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=log_id)
             else:
                 result = fn(**kwargs)
+        # Splitting the result runs DuckDB on the shared connection: see finish_open_result.
+        _duckdb.finish_open_result()
 
         staging = Path(art_dir if not _storage.is_remote(art_dir) else ".barca") / (
             f".batch-{os.getpid()}-{call_id}"

@@ -75,6 +75,7 @@ Getting work done:
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs cache` — what is cached, artifacts, `--refresh` / `--refresh-all`, environments
 - `barca docs types` — how outputs are stored and read (json, pickle, parquet, CSV; pandas, polars, pyarrow, duckdb)
+- `barca docs duckdb` — duckdb 1.x and 2.x: what a pipeline must change for duckdb 2
 - `barca docs big-inputs` — large inputs: lazy types load only the columns and rows a step needs
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs status` — one view of cache state, last run and artifact shape per node
