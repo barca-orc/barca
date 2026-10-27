@@ -8,6 +8,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Refactoring
+
+- Separate collected run results, attempt/timing evidence and ledger/report projections from
+  execution decisions, preserving persistence, upload confirmation and cancellation ordering.
+
 ### Documentation
 
 - Consolidate freshness, execution, inspection and performance contracts; separate approved

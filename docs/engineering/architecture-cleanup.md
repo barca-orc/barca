@@ -12,6 +12,20 @@ below follow [approved ownership](../../specs/behavior/current-state-and-executi
 [operations](../../specs/behavior/operations.md), and [resource bounds](../../specs/behavior/resources.md).
 Names describe responsibilities, not mandated new crates, services, tables or public types.
 
+## Bookkeeping extraction
+
+The first implementation slice introduces
+[execution bookkeeping](../../crates/barca-core/src/execution/bookkeeping.rs): `RunResults`
+owns collected outputs, failures, attempts, timings, observations, reports and batch identities.
+It decodes finished artifact evidence, merges only plan outputs, annotates report metrics and
+builds the borrowed terminal ledger projection. `RunEvidence` holds the existing component
+and cost snapshot buffers; the driver determines status and when they are constructed.
+
+`RunSession` retains recorder, worker and store lifetimes, and execution retains freshness,
+capacity, cancellation and publication decisions. The shutdown, upload drain, recorder stop,
+terminal write, log write, telemetry and backup sequence is preserved. This extraction does
+not implement the remaining ownership, snapshot or bounded-work requirements below.
+
 ## Current implementation
 
 ### Admission and run lifetime

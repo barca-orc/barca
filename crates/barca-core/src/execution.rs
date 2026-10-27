@@ -37,6 +37,9 @@ use crate::persist::{
 };
 use crate::store_sync::{StoreSync, transfer_remedy};
 
+mod bookkeeping;
+use bookkeeping::{LedgerContext, RunEvidence, RunResults};
+
 /// Total schedulable steps in a phase: 1 per unpartitioned step, `partition_keys.len()`
 /// for late-expanded ones. Used to keep the live progress-bar total in sync with
 /// `dispatch::expand_pending_partitions`, which turns a single planned
@@ -345,25 +348,16 @@ impl RunStart {
 }
 #[derive(Default)]
 struct RunState {
+    results: RunResults,
     incremental: Option<crate::incremental::Incremental>,
     cached_node_ids: std::collections::HashSet<String>,
     decide_state: DecideState,
-    step_reports: Vec<StepReport>,
     phase_error: Option<String>,
     usage_error: Option<String>,
     step_failure: Option<(String, String)>,
     failed_bases: std::collections::HashSet<String>,
     skipped_bases: std::collections::HashSet<String>,
-    all_outputs: HashMap<String, OutputRef>,
     logs_buffer: crate::run_logs::Recorder,
-    all_sinks: HashMap<String, String>,
-    all_timings: HashMap<String, (Option<f64>, Option<u64>)>,
-    source_observations: HashMap<String, serde_json::Value>,
-    step_clocks: HashMap<String, (f64, f64)>,
-    all_failures: Vec<dispatch::StepFailure>,
-    all_attempts: HashMap<String, u32>,
-    // Worker-reported active duration and slow import duration, including failed attempts.
-    step_durations: HashMap<String, (f64, f64)>,
     steps_executed: usize,
     total_steps: usize,
     total_estimated: f64,
@@ -386,10 +380,8 @@ struct RunState {
     narrowing: Option<crate::selection::Narrowing>,
     /// Every key of each partitioned asset with a dataset sink, for deleting removed keys.
     dataset_keys: HashMap<String, crate::dataset_sinks::DatasetKeys>,
-    /// Batched calls (RFC-0013): the next call's number, and the call of each key that ran in
-    /// one (display id -> call id).
+    /// The next run-local batched call number (RFC-0013).
     next_call: u64,
-    calls: HashMap<String, String>,
 }
 // Fields drop in the same order as the original run locals: recorder, workers, store.
 struct RunSession<'a, 'r> {
@@ -497,7 +489,8 @@ async fn execute_started(
         let requested = recover::requested(&prepared.exec_plan, &ids);
         session
             .state
-            .all_outputs
+            .results
+            .outputs
             .iter()
             .filter(|(id, _)| requested.contains(recover::base_of(id)))
             .map(|(_, o)| o.path.clone())
@@ -650,7 +643,14 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
             .unwrap_or_default(),
         recorded: read
             .into_iter()
-            .chain(session.state.all_outputs.values().map(|o| o.path.clone()))
+            .chain(
+                session
+                    .state
+                    .results
+                    .outputs
+                    .values()
+                    .map(|o| o.path.clone()),
+            )
             .chain(session.state.store_paths.values().cloned())
             .collect(),
         run_hashes: session
@@ -706,7 +706,13 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
                 &crate::freshness::stale_note(dag, id, request.file_args),
             );
         }
-        if let Some(report) = session.state.step_reports.iter_mut().find(|r| r.id == id) {
+        if let Some(report) = session
+            .state
+            .results
+            .reports
+            .iter_mut()
+            .find(|r| r.id == id)
+        {
             report.detail = Some(crate::cache::Held::Manual { stale }.detail().to_string());
         }
     }
@@ -1265,15 +1271,15 @@ async fn select_work<'p>(
                 &session.prepared.exec_plan,
                 &target_ids,
                 session.prepared.keep_going,
-                &session.state.all_outputs,
+                &session.state.results.outputs,
             )
             .into_iter()
             .collect();
             for (_, outcome) in target_outcomes(
                 &session.prepared.dag,
                 &session.prepared.targets,
-                &session.state.all_outputs,
-                &session.state.all_failures,
+                &session.state.results.outputs,
+                &session.state.results.failures,
                 session.request.partition.as_ref(),
             ) {
                 returned_refs.extend(outcome.final_output);
@@ -1285,7 +1291,7 @@ async fn select_work<'p>(
                     &session.prepared.exec_plan,
                     &target_ids,
                     session.prepared.keep_going,
-                    &session.state.all_outputs,
+                    &session.state.results.outputs,
                     session.request.partition.as_ref(),
                 )
                 .into_iter()
@@ -1302,7 +1308,7 @@ async fn select_work<'p>(
                 .cached_node_ids
                 .iter()
                 .filter(|id| requested.contains(recover::base_of(id)))
-                .filter_map(|id| session.state.all_outputs.get(id))
+                .filter_map(|id| session.state.results.outputs.get(id))
                 .map(|o| o.path.clone())
                 .chain(returned.iter().cloned())
                 .collect();
@@ -1313,7 +1319,7 @@ async fn select_work<'p>(
                 &check,
                 &returned,
                 session.pb.as_ref(),
-                &session.state.all_outputs,
+                &session.state.results.outputs,
                 &session.state.cached_node_ids,
                 &mut session.state.cached_steps,
             )
@@ -1392,7 +1398,7 @@ async fn seed_fresh_inputs(
             session.request.cfg,
             needed,
             &mut session.state.decide_state,
-            &mut session.state.all_outputs,
+            &mut session.state.results.outputs,
             &mut session.state.cached_node_ids,
             &mut session.state.cached_steps,
             &mut session.store,
@@ -1426,7 +1432,7 @@ async fn seed_fresh_targets(
             session.request.cfg,
             needed,
             &mut session.state.decide_state,
-            &mut session.state.all_outputs,
+            &mut session.state.results.outputs,
             &mut session.state.cached_node_ids,
             &mut session.state.cached_steps,
             &mut session.store,
@@ -1451,7 +1457,7 @@ async fn expand_and_decide<'p>(
             |base| blocking_failure(&session.prepared.dag, base, &session.state.failed_bases),
             |st, up| {
                 let base = st.step_id.base_id();
-                session.state.step_reports.push(StepReport {
+                session.state.results.reports.push(StepReport {
                     id: base.to_string(),
                     kind: kind_str(session.prepared.dag.get_node(base).map(|n| n.kind())),
                     status: Some("skipped".to_string()),
@@ -1497,7 +1503,7 @@ async fn expand_and_decide<'p>(
     seed_fresh_inputs(session, &membership_phase).await?;
     // `partitions_from` sources are read from disk during expansion.
     let sources: Vec<String> =
-        dispatch::partition_sources(original_phase, &session.state.all_outputs)
+        dispatch::partition_sources(original_phase, &session.state.results.outputs)
             .into_iter()
             .map(|o| o.path.clone())
             .collect();
@@ -1506,7 +1512,7 @@ async fn expand_and_decide<'p>(
         &sources,
         &sources,
         session.pb.as_ref(),
-        &session.state.all_outputs,
+        &session.state.results.outputs,
         &session.state.cached_node_ids,
         &mut session.state.cached_steps,
     )
@@ -1534,11 +1540,11 @@ async fn expand_and_decide<'p>(
                 .map(|r| r.id.clone()),
         );
     }
-    session.state.step_reports.extend(incremental_reports);
+    session.state.results.reports.extend(incremental_reports);
     let expansion = dispatch::expand_pending_partitions_filtered(
         &session.prepared.dag,
         phase,
-        &session.state.all_outputs,
+        &session.state.results.outputs,
         session.prepared.pool_size,
         |base, dim, source| {
             session
@@ -1548,7 +1554,7 @@ async fn expand_and_decide<'p>(
                 .and_then(|i| i.expanded_source(base, source))
                 .or_else(|| {
                     dispatch::selected_source(
-                        &session.state.all_outputs,
+                        &session.state.results.outputs,
                         session.request.partition.as_ref(),
                         dim,
                         source,
@@ -1634,8 +1640,8 @@ async fn expand_and_decide<'p>(
         decide_state: &mut session.state.decide_state,
         cost_model: &mut session.cost_model,
         store: &mut session.store,
-        step_reports: &mut session.state.step_reports,
-        all_outputs: &mut session.state.all_outputs,
+        step_reports: &mut session.state.results.reports,
+        all_outputs: &mut session.state.results.outputs,
         cached_node_ids: &mut session.state.cached_node_ids,
         cached_steps: &mut session.state.cached_steps,
         held_cached_lines: &mut session.state.held_cached_lines,
@@ -1653,10 +1659,10 @@ async fn expand_and_decide<'p>(
         incremental.observe(
             &session.prepared.dag,
             phase,
-            &session.state.all_outputs,
+            &session.state.results.outputs,
             session.state.decide_state.run_hashes(),
             &session.state.decide_state.sensor_outputs,
-            &session.state.source_observations,
+            &session.state.results.observations,
         );
     }
     if decided.streams.is_empty() {
@@ -1679,17 +1685,10 @@ fn fail_step(session: &mut RunSession<'_, '_>, base: String, message: String, er
     if session.state.step_failure.is_none() {
         session.state.step_failure = Some((base.clone(), message.clone()));
     }
-    session.state.all_failures.push(dispatch::StepFailure {
-        node_id: base,
-        error: dispatch::StepError {
-            error_type: error_type.to_string(),
-            message,
-            traceback: String::new(),
-            attempts: 1,
-            started_unix_ns: None,
-            elapsed_seconds: None,
-        },
-    });
+    session
+        .state
+        .results
+        .record_failure(base, error_type, message, 1, None);
 }
 async fn recover_phase_inputs<'p>(
     session: &mut RunSession<'_, '_>,
@@ -1714,13 +1713,13 @@ async fn recover_phase_inputs<'p>(
                     // longer an output of this run.
                     for id in recover::output_ids(st) {
                         recover::mark_recomputed(
-                            &mut session.state.step_reports,
+                            &mut session.state.results.reports,
                             &id,
                             false,
                             false,
                         );
                         session.state.cached_node_ids.remove(&id);
-                        session.state.all_outputs.remove(&id);
+                        session.state.results.outputs.remove(&id);
                     }
                 }
             },
@@ -1734,7 +1733,8 @@ async fn recover_phase_inputs<'p>(
     // Cache hits recorded by other machines are fetched (less the parquet inputs every
     // reader in the phase scans lazily, which are read in place). An input that is
     // neither on disk nor in the store has its step computed again first.
-    let mut provided = dispatch::build_provided_inputs(&filtered_phase, &session.state.all_outputs);
+    let mut provided =
+        dispatch::build_provided_inputs(&filtered_phase, &session.state.results.outputs);
     let check = recover::input_paths(&provided);
     if let Some(s) = session.store.as_ref() {
         s.read_in_place(
@@ -1748,7 +1748,7 @@ async fn recover_phase_inputs<'p>(
         &check,
         &fetch,
         session.pb.as_ref(),
-        &session.state.all_outputs,
+        &session.state.results.outputs,
         &session.state.cached_node_ids,
         &mut session.state.cached_steps,
     )
@@ -1789,19 +1789,27 @@ async fn recover_phase_inputs<'p>(
             .collect();
         let paths: Vec<&str> = ids
             .iter()
-            .filter_map(|id| session.state.all_outputs.get(id).map(|o| o.path.as_str()))
+            .filter_map(|id| {
+                session
+                    .state
+                    .results
+                    .outputs
+                    .get(id)
+                    .map(|o| o.path.as_str())
+            })
             .collect();
         let evicted = db::evicted_among(&session.request.cfg.db_path, &paths).await;
         let mut lost: Vec<(String, String)> = Vec::new();
         for id in ids {
             let was_evicted = session
                 .state
-                .all_outputs
+                .results
+                .outputs
                 .get(&id)
                 .is_some_and(|o| evicted.contains(&o.path));
-            recover::mark_recomputed(&mut session.state.step_reports, &id, false, was_evicted);
+            recover::mark_recomputed(&mut session.state.results.reports, &id, false, was_evicted);
             session.state.cached_node_ids.remove(&id);
-            if let Some(oref) = session.state.all_outputs.remove(&id) {
+            if let Some(oref) = session.state.results.outputs.remove(&id) {
                 lost.push((id, oref.path));
             }
         }
@@ -1843,7 +1851,7 @@ async fn dispatch_ready(
             total_steps: session.state.total_steps,
             event_tx: &session.request.event_tx,
             logs_buffer: &mut session.state.logs_buffer,
-            step_durations: &mut session.state.step_durations,
+            step_durations: &mut session.state.results.durations,
             cancel: &session.started.cancel,
         })
         .await;
@@ -1868,63 +1876,10 @@ fn collect_outputs(
     for (&item_id, artifact_val) in coord.outputs() {
         let item = coord.item(item_id);
         let node_id = item.step_id.display();
-        // Attempts belong to this exact lease, including its partition key.
-        session
+        let oref = session
             .state
-            .all_attempts
-            .insert(node_id.clone(), item.attempts);
-        if let Some(observation) = artifact_val.get("source_observation") {
-            session
-                .state
-                .source_observations
-                .insert(node_id.clone(), observation.clone());
-        }
-        let oref = dispatch::OutputRef {
-            path: artifact_val
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            format: artifact_val
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("json")
-                .to_string(),
-            size_bytes: artifact_val
-                .get("size_bytes")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            elapsed_seconds: artifact_val.get("elapsed_seconds").and_then(|v| v.as_f64()),
-            content_hash: artifact_val
-                .get("content_hash")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-        };
-        if let Some(sinks) = artifact_val.get("sinks").and_then(|v| v.as_array())
-            && !sinks.is_empty()
-        {
-            session.state.all_sinks.insert(
-                node_id.clone(),
-                serde_json::Value::from(sinks.clone()).to_string(),
-            );
-        }
-        let cpu = artifact_val.get("cpu_seconds").and_then(|v| v.as_f64());
-        let rss = artifact_val.get("max_rss_bytes").and_then(|v| v.as_u64());
-        if cpu.is_some() || rss.is_some() {
-            session
-                .state
-                .all_timings
-                .insert(node_id.clone(), (cpu, rss));
-        }
-        if let (Some(finished), Some(wall)) = (
-            artifact_val.get("finished_at").and_then(|v| v.as_f64()),
-            artifact_val.get("wall_seconds").and_then(|v| v.as_f64()),
-        ) {
-            session
-                .state
-                .step_clocks
-                .insert(node_id.clone(), (finished, wall));
-        }
+            .results
+            .record_output(&node_id, artifact_val, item.attempts);
         // A sensor's or `Manual` asset's output hash: its consumers, decided in a later
         // phase, fold it into their run hashes (#183, #548).
         if crate::cache::folds_output(&session.prepared.dag, item.step_id.base_id())
@@ -1986,7 +1941,8 @@ async fn collect_failures(
         let node_id = item.step_id.display();
         session
             .state
-            .all_attempts
+            .results
+            .attempts
             .insert(node_id.clone(), item.attempts);
         if error_msg.starts_with(BLOCKED_ARTIFACT_PATH) {
             // The step ran; its result could not be written because barca's artifact
@@ -2023,22 +1979,13 @@ async fn collect_failures(
             .state
             .failed_bases
             .insert(item.step_id.base_id().to_string());
-        let clock = coord.failure_clock(item_id);
-        session.state.all_failures.push(dispatch::StepFailure {
+        session.state.results.record_failure(
             node_id,
-            error: dispatch::StepError {
-                error_type: "WorkerError".to_string(),
-                message: error_msg.to_string(),
-                traceback: String::new(),
-                attempts: item.attempts,
-                started_unix_ns: clock.map(|(started, _)| {
-                    started
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_nanos() as u64)
-                }),
-                elapsed_seconds: clock.map(|(_, wall)| wall.as_secs_f64()),
-            },
-        });
+            "WorkerError",
+            error_msg.to_string(),
+            item.attempts,
+            coord.failure_clock(item_id),
+        );
     }
 
     // Steps the coordinator skipped because an in-phase dependency failed.
@@ -2059,25 +2006,6 @@ async fn collect_failures(
         && session.state.step_failure.is_none()
     {
         session.state.step_failure = Some(msg);
-    }
-}
-fn merge_outputs(session: &mut RunSession<'_, '_>, phase_outputs: &HashMap<String, OutputRef>) {
-    // Run hashes were computed pre-dispatch for every plan step (including
-    // per-partition ids), so collection is a filter: coordinator outputs
-    // with a known hash are plan steps; the rest are parallel() children,
-    // which are never persisted.
-    for (node_id, oref) in phase_outputs {
-        if session
-            .state
-            .decide_state
-            .run_hashes()
-            .contains_key(node_id)
-        {
-            session
-                .state
-                .all_outputs
-                .insert(node_id.clone(), oref.clone());
-        }
     }
 }
 fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>) {
@@ -2104,7 +2032,7 @@ fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>
                 .incremental
                 .as_ref()
                 .is_some_and(|i| i.unseeded_fresh(&id))
-                && !session.state.all_attempts.contains_key(&id))
+                && !session.state.results.attempts.contains_key(&id))
         {
             crate::run_line!(Agent, "{}", cached_step_line(&session.prepared.dag, &id));
             crate::lines::Lines::current().cached_step(&id);
@@ -2271,7 +2199,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
             }
             break;
         }
-        session.state.calls.extend(
+        session.state.results.batches.extend(
             calls
                 .iter()
                 .flat_map(|(id, keys)| keys.iter().map(move |k| (k.clone(), id.clone()))),
@@ -2279,15 +2207,18 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         let coord = dispatch_ready(session, &phase, &provided, phase_idx, calls).await;
         let phase_outputs = collect_outputs(session, &coord);
         collect_failures(session, &coord).await;
-        merge_outputs(session, &phase_outputs);
+        session
+            .state
+            .results
+            .merge_plan_outputs(&phase_outputs, session.state.decide_state.run_hashes());
         if let Some(incremental) = &mut session.state.incremental {
             incremental.observe(
                 &prepared.dag,
                 &phase,
-                &session.state.all_outputs,
+                &session.state.results.outputs,
                 session.state.decide_state.run_hashes(),
                 &session.state.decide_state.sensor_outputs,
-                &session.state.source_observations,
+                &session.state.results.observations,
             );
         }
         if session.state.phase_error.is_some()
@@ -2306,6 +2237,7 @@ async fn record_and_publish(
 ) -> Result<f64, BarcaError> {
     let elapsed = finalize_run(
         FinalizeRun {
+            results: &mut session.state.results,
             touched,
             pool: session.pool.take().expect("workers started"),
             recorder: session.recorder.take().expect("recorder started"),
@@ -2324,9 +2256,7 @@ async fn record_and_publish(
             phase_error: &session.state.phase_error,
             step_failure: &session.state.step_failure,
             store: &mut session.store,
-            all_outputs: &mut session.state.all_outputs,
             store_paths: &mut session.state.store_paths,
-            all_failures: &mut session.state.all_failures,
             transfer_error: &mut session.state.transfer_error,
             uploads: &mut session.state.uploads,
             cached_node_ids: &session.state.cached_node_ids,
@@ -2336,17 +2266,12 @@ async fn record_and_publish(
             command_label: session.request.command_label,
             file_args: session.request.file_args,
             target_label: &session.prepared.target_label,
-            all_sinks: &session.state.all_sinks,
-            all_attempts: &session.state.all_attempts,
-            all_timings: &session.state.all_timings,
-            calls: &session.state.calls,
             decide_state: &session.state.decide_state,
             db_path: &session.request.cfg.db_path,
             logs_buffer: &mut session.state.logs_buffer,
             telemetry: &session.started.telemetry,
             dag: &session.prepared.dag,
             run_started: session.started.run_started,
-            step_clocks: &session.state.step_clocks,
             skipped_bases: &session.state.skipped_bases,
             job_name: &session.prepared.job_name,
             targets: &session.prepared.targets,
@@ -2373,9 +2298,9 @@ async fn return_outputs(
             &session.prepared.exec_plan,
             session.prepared.keep_going,
             session.request.partition.as_ref(),
-            &session.state.all_outputs,
-            &session.state.all_failures,
-            std::mem::take(&mut session.state.step_reports),
+            &session.state.results.outputs,
+            &session.state.results.failures,
+            std::mem::take(&mut session.state.results.reports),
             &session.state.failed_bases,
             &session.state.skipped_bases,
             &session.state.cached_node_ids,
@@ -2424,25 +2349,7 @@ async fn return_outputs(
         }
     }
 
-    let mut attempts_by_base: HashMap<String, u32> = HashMap::new();
-    for (node, attempts) in &session.state.all_attempts {
-        let id = crate::StepId::parse(node);
-        if id.partition.0.contains_key("_branch") {
-            continue;
-        }
-        let base = id.base_id().to_string();
-        let count = attempts_by_base.entry(base).or_default();
-        *count = (*count).max(*attempts);
-    }
-    for report in &mut step_reports {
-        if let Some(attempts) = attempts_by_base.get(&report.id) {
-            report.attempts = Some(*attempts);
-        }
-        if let Some((elapsed, imports)) = session.state.step_durations.get(&report.id) {
-            report.elapsed_seconds = Some(*elapsed);
-            report.import_seconds = (*imports > 1.0).then_some(*imports);
-        }
-    }
+    session.state.results.annotate_reports(&mut step_reports);
 
     // Only a step that ran can record changed bytes: a run that executed none (every step
     // cached) is not looked up.
@@ -4061,6 +3968,7 @@ async fn dispatch_phase(
 }
 
 struct FinalizeRun<'a> {
+    results: &'a mut RunResults,
     incremental: Option<&'a crate::incremental::Incremental>,
     proven_cached: usize,
     /// What the run read ([`crate::persist::RunLedger::touched`]).
@@ -4076,9 +3984,7 @@ struct FinalizeRun<'a> {
     phase_error: &'a Option<String>,
     step_failure: &'a Option<(String, String)>,
     store: &'a mut Option<StoreSync>,
-    all_outputs: &'a mut HashMap<String, OutputRef>,
     store_paths: &'a mut HashMap<String, String>,
-    all_failures: &'a mut Vec<dispatch::StepFailure>,
     transfer_error: &'a mut Option<String>,
     uploads: &'a mut Option<crate::results::UploadsReport>,
     cached_node_ids: &'a std::collections::HashSet<String>,
@@ -4088,18 +3994,12 @@ struct FinalizeRun<'a> {
     command_label: &'a str,
     file_args: &'a [String],
     target_label: &'a Option<String>,
-    all_sinks: &'a HashMap<String, String>,
-    all_attempts: &'a HashMap<String, u32>,
-    all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
-    /// The batched call of each key that ran in one (RFC-0013).
-    calls: &'a HashMap<String, String>,
     decide_state: &'a DecideState,
     db_path: &'a str,
     logs_buffer: &'a mut crate::run_logs::Recorder,
     telemetry: &'a [(String, Box<dyn crate::telemetry::Integration>)],
     dag: &'a Dag,
     run_started: std::time::SystemTime,
-    step_clocks: &'a HashMap<String, (f64, f64)>,
     skipped_bases: &'a std::collections::HashSet<String>,
     job_name: &'a str,
     /// The command's targets, (name, node id): what a `get` repairs in the store.
@@ -4113,6 +4013,7 @@ struct FinalizeRun<'a> {
 
 async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64, BarcaError> {
     let FinalizeRun {
+        results,
         incremental,
         proven_cached,
         touched,
@@ -4127,9 +4028,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         phase_error,
         step_failure,
         store,
-        all_outputs,
         store_paths,
-        all_failures,
         transfer_error,
         uploads,
         cached_node_ids,
@@ -4139,17 +4038,12 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         command_label,
         file_args,
         target_label,
-        all_sinks,
-        all_attempts,
-        all_timings,
-        calls,
         decide_state,
         db_path,
         logs_buffer,
         telemetry,
         dag,
         run_started,
-        step_clocks,
         skipped_bases,
         job_name,
         targets,
@@ -4200,7 +4094,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             s,
             targets,
             cached_node_ids,
-            all_outputs,
+            &results.outputs,
             &pending,
             repaired_mismatches,
         )
@@ -4216,7 +4110,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             store,
             timeout_secs: cfg.transfer_timeout_secs,
             cancel,
-            all_outputs,
+            all_outputs: &mut results.outputs,
             store_paths,
             pending: &mut pending,
             upload_error: &mut upload_error,
@@ -4246,50 +4140,33 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     let recorder_error = recorder.finish().await.err();
     trace_point!("recorder_stopped");
 
-    // Persist all executed outputs (including partial results on failure).
-    let cost_snapshot: Vec<(String, crate::cost::NodeEstimate)> = cost_model
-        .persistence_snapshot()
-        .map(|(node_id, est)| (node_id.clone(), *est))
-        .collect();
-    // What each executed step's run hash was made of, so a later status can say what changed.
-    let components: HashMap<String, String> = all_outputs
-        .keys()
-        .filter(|id| !cached_node_ids.contains(*id))
-        .filter_map(|id| {
-            crate::changes::step_components_json(dag, decide_state, id).map(|c| (id.clone(), c))
-        })
-        .collect();
-    let mut ledger = RunLedger {
-        run_id,
-        status: if was_cancelled {
-            "cancelled"
-        } else if phase_error.is_some() || step_failure.is_some() || transfer_error.is_some() {
-            "failed"
-        } else {
-            "success"
+    // Build the immutable terminal projection only after uploads and recorder shutdown.
+    let evidence = RunEvidence::new(results, dag, decide_state, cached_node_ids, cost_model);
+    let mut ledger = results.ledger(
+        LedgerContext {
+            run_id,
+            status: if was_cancelled {
+                "cancelled"
+            } else if phase_error.is_some() || step_failure.is_some() || transfer_error.is_some() {
+                "failed"
+            } else {
+                "success"
+            },
+            command: command_label,
+            files: file_args,
+            target: target_label.as_deref(),
+            job: job_name,
+            steps_total: total_steps,
+            steps_executed,
+            steps_cached,
+            elapsed,
+            cached_node_ids,
+            decisions: decide_state,
+            store_paths,
+            touched,
         },
-        command: command_label,
-        files: db::encode_files(file_args),
-        target: target_label.as_deref(),
-        job: job_name,
-        steps_total: total_steps,
-        steps_executed,
-        steps_cached,
-        elapsed,
-        all_outputs,
-        all_failures,
-        all_sinks,
-        all_attempts,
-        all_timings,
-        batches: calls,
-        cached_node_ids,
-        run_hashes: decide_state.run_hashes(),
-        components: &components,
-        output_hashes: &decide_state.sensor_outputs,
-        store_paths,
-        cost_snapshot: &cost_snapshot,
-        touched,
-    };
+        &evidence,
+    );
     persist_run(db_path, &ledger).await?;
     if let Some(error) = recorder_error {
         crate::run_line!(
@@ -4321,7 +4198,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             dag,
             crate::persist::TelemetryRun {
                 started: run_started,
-                clocks: step_clocks,
+                clocks: &results.clocks,
                 skipped: skipped_bases,
                 files: file_args,
                 env: Some(&cfg.env),
@@ -4359,7 +4236,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     // confirmed. Its run row reaches the store with the next backup.
     let nothing_new = cfg.backup_uri.is_some()
         && !was_cancelled
-        && all_failures.is_empty()
+        && results.failures.is_empty()
         && step_failure.is_none()
         && phase_error.is_none()
         && transfer_error.is_none()
