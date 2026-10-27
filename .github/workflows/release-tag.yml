@@ -1,0 +1,72 @@
+name: Release tag
+
+# When a release PR (branch release/vX.Y.Z, opened by scripts/release.sh) merges into main,
+# tag its merge commit vX.Y.Z and start the release workflow on that tag.
+#
+# A tag pushed with the workflow's GITHUB_TOKEN does not trigger `on: push: tags` workflows,
+# so release.yml is started with `workflow_dispatch` on the tag ref instead (dispatch is the
+# one event GITHUB_TOKEN may trigger). That run has github.ref refs/tags/vX.Y.Z,
+# github.ref_name vX.Y.Z and ref type tag, the same as a pushed tag, so every tag-gated job
+# (GitHub Release, PyPI, barca.sh, published-artifact checks) runs exactly as for
+# `git push origin vX.Y.Z`. If the tag already exists (pushed by hand), nothing is done.
+#
+# pull_request_target runs this file as it is on main, with a token that can push; it never
+# checks out or runs code from the PR branch, only the merge commit already on main.
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write   # push the tag
+  actions: write    # dispatch release.yml
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/v') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0   # tags and main, to check the commit is on main
+      - name: Tag the merge commit and start the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          TAG="${HEAD_REF#release/}"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release branch $HEAD_REF does not name a version release/vX.Y.Z"; exit 1
+          fi
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::branch $HEAD_REF but pyproject.toml at $SHA has version $VERSION; not tagging"; exit 1
+          fi
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "::error::$SHA is not on main"; exit 1; }
+          python3 scripts/changelog-section.py "$VERSION" > /dev/null
+
+          if existing=$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}"); then
+            if [ "$existing" = "$SHA" ]; then
+              echo "$TAG already points at $SHA (pushed by hand, which started the release); nothing to do"
+              exit 0
+            fi
+            echo "::error::$TAG already exists at $existing, not the merge commit $SHA"; exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$SHA"
+          git push origin "refs/tags/$TAG"
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          echo "Tagged $SHA as $TAG and started release.yml on it." >> "$GITHUB_STEP_SUMMARY"
