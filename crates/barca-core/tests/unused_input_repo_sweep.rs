@@ -138,6 +138,24 @@ const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
         "exported",
         "partition_by=",
     ),
+    // A value barca cannot read is a usage error (#665): the manual's and the site's example of
+    // it, and two `str.format` templates whose `{{...}}` reads as a set before formatting.
+    ("crates/barca-cli/docs/assets.md", "report", "tags="),
+    (
+        "site/src/content/docs/reference/api/decorators.md",
+        "report",
+        "tags=",
+    ),
+    (
+        "python/tests/test_dataset_sinks.py",
+        "retailer_version",
+        "partitions=",
+    ),
+    (
+        "python/tests/test_partition_unpartitioned_input.py",
+        "leaf",
+        "inputs=",
+    ),
 ];
 
 fn repo_root() -> PathBuf {

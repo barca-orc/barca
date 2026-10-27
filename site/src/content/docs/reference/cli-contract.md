@@ -518,7 +518,8 @@ Each error `kind` has exactly one exit code (stable):
 `step_failed`: one of your steps raised (fix the code), or one of its `@sink`s could not be written (from 0.30.0; the error is a `SinkError` naming the sink). `usage`: bad arguments, unknown target,
 task/asset misuse, a `.py` file that does not parse, a decorator called with an argument it does
 not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `barca docs assets`,
-"Accepted arguments"), a DAG that cannot be built (an input that
+"Accepted arguments"), or with a value barca cannot read from the source (`tags=TAGS`,
+`inputs=make_inputs()`; "Values barca reads"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`, a
 `get`/`run` that reads (or a `get` that targets) a `Manual` node that has never been computed,

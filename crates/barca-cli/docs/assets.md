@@ -183,10 +183,57 @@ Not checked:
   Celery's or Prefect's `@task(bind=True)` stays untouched. Namespace reflection retains
   conservative discovery but disables argument checks.
 - What a helper receives through `*` or `**` (`partitions(*keys)`).
-- The values. `inputs=` that is not a dict literal (`inputs=dict(raw=raw)`,
-  `inputs=make_inputs()`) is still read as "no inputs", without a message. `env=` is the
-  exception: anything but a list of string literals is an error.
+- The values: they are checked next ("Values barca reads").
 - `parallel()` and `parallel_map()`: their arguments are your own.
+
+## Values barca reads
+
+Barca reads each argument's value from the source, so it has to be written in a form barca can
+read without running the file. Any other value is an error when barca reads the file: exit 2,
+`kind` `usage`, naming the argument, the file and line, and the form to write. Up to 0.33.1
+most of these were read as if the argument were not written: no inputs, no tags, the default
+timeout.
+
+| Argument | Form |
+|---|---|
+| `name=`, `description=` | a string literal |
+| `inputs=` | a dict literal: keys are string literals, each value names a step (`upstream`, `module.upstream`, `collect(upstream)`, `asset_ref("file.py:upstream")`) |
+| `partitions=` | a dict literal: keys are string literals, each value is `partitions(<keys>)` or `partitions_from(upstream)`. The keys inside `partitions(...)` may be any expression ("Static analysis" below) |
+| `serializer=` | a string literal: `"json"`, `"pickle"`, `"parquet"` or `"csv"` (on `@sink` too) |
+| `freshness=` | `Always`, `Manual` or `Schedule("<cron>", ...)`, written in the decorator |
+| `timeout_seconds=`, `retries=` | a whole-number literal |
+| `retry_backoff=` | a number literal (`2` or `2.0`) |
+| `tags=` | a dict literal whose keys and values are string literals |
+| `env=` | a list of string literals |
+| `weight=` | a whole-number literal of at least 1 |
+| `deterministic=`, `cutoff=` | `True` or `False` |
+
+`None` reads as "not written" for `name=`, `description=`, `inputs=`, `partitions=`,
+`serializer=` and `tags=`. A module constant, an f-string, a call or `**` in any of these is an
+error, even when the constant holds a literal:
+
+```python
+TAGS = {"team": "growth"}
+
+@asset(tags=TAGS)
+def report() -> int:
+    return 1
+```
+
+```text
+Parse error: pipeline.py:report (line 3): `tags=` must be a dict literal, got `TAGS`; barca reads decorator arguments from the source without running it, so it cannot see what this is
+Write it like `tags={"team": "growth"}`: a dict literal whose keys and values are string literals. See `barca docs assets`.
+```
+
+Not checked:
+
+- The path of `@sink`. A path that is not a string literal (`@sink(EXPORT_PATH)`) declares no
+  sink, without a message, and its `partition_by=` and `rows_per_file=` are not checked.
+- A call barca cannot identify as its own helper because the name is rebound or comes from
+  another library (`partitions = load_partitions`, `cron_lib.Schedule(...)`), or because the
+  file reassigns barca's export (`barca.partitions = other`), as a partition dimension or as
+  `freshness=`: the value is left unread, as its arguments are. In `inputs=` such a call names
+  no step and is an error.
 
 ## Inputs and parameters
 
@@ -394,8 +441,9 @@ not warn about this; Python simply uses the later definition.
 
 Static extraction reads source without importing user code. Literal partition key lists
 need no resolver import; a nonliteral `partitions(<expression>)` imports the pipeline
-module to evaluate its keys. The decorators, `inputs=` and `freshness=` must be written
-literally enough for barca to read them from the source. Dynamic decorator construction
+module to evaluate its keys; so does a list with an element that is not a string or integer
+literal (`partitions(["us", OTHER_REGION])`). The other decorator arguments must be written in
+the forms of "Values barca reads" above; any other value is an error. Dynamic decorator construction
 (building `inputs` in a loop, calling a decorator through a variable) is not visible to the
 planner. An argument barca does not define, and `**options` in a decorator call, are errors
 ("Accepted arguments" above). Mark code barca cannot reason about with `@unsafe` (silences purity warnings only).

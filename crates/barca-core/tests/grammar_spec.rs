@@ -1008,7 +1008,8 @@ class MyClass:
 }
 
 #[test]
-fn inputs_not_a_dict_is_ignored() {
+fn inputs_not_a_dict_is_rejected() {
+    // Until #665 this read as "no inputs", without a message.
     let src = r#"
 from barca import asset
 
@@ -1016,13 +1017,18 @@ from barca import asset
 def bad_inputs() -> dict:
     return {}
 "#;
-    let nodes = extract_nodes(src, "test.py").unwrap();
-    assert_eq!(nodes.len(), 1);
-    assert!(nodes[0].inputs.is_empty()); // gracefully ignored
+    let err = rejected(src);
+    assert!(
+        err.starts_with(
+            "test.py:bad_inputs (line 4): `inputs=` must be a dict literal, got `\"not_a_dict\"`\n"
+        ),
+        "{err}"
+    );
 }
 
 #[test]
-fn timeout_not_an_int_falls_back_to_default() {
+fn timeout_not_an_int_is_rejected() {
+    // Until #665 this read as the default, 300.
     let src = r#"
 from barca import asset
 
@@ -1030,9 +1036,14 @@ from barca import asset
 def bad_timeout() -> dict:
     return {}
 "#;
-    let nodes = extract_nodes(src, "test.py").unwrap();
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0].timeout_seconds, 300); // default
+    let err = rejected(src);
+    assert!(
+        err.starts_with(
+            "test.py:bad_timeout (line 4): `timeout_seconds=` must be a whole-number literal, \
+             got `\"not_an_int\"`\nWrite it like `timeout_seconds=600`. See `barca docs assets`."
+        ),
+        "{err}"
+    );
 }
 
 #[test]
@@ -1564,11 +1575,21 @@ def collect(thing, flatten=False):
 def raw():
     return [1]
 
-@asset(inputs={"raw": collect(raw, flatten=True)}, partitions={"k": partitions(load(kind="x"))})
-def uses(raw, k):
-    return raw
+@asset(partitions={"k": partitions(load(kind="x"))})
+def uses(k):
+    return k
 "#;
     assert!(extract_nodes(helpers, "test.py").is_ok());
+    // The file's own `collect` is not checked for its arguments (`flatten=`), but it names no
+    // step (#665; before, it read as a step named `collect`, an error when the DAG was built).
+    let err = rejected(&helpers.replace(
+        "@asset(partitions",
+        "@asset(inputs={\"raw\": collect(raw, flatten=True)}, partitions",
+    ));
+    assert!(
+        err.contains("the inputs= key `raw` must name a step, got `collect(raw, flatten=True)`"),
+        "{err}"
+    );
 
     // A function that is no barca node: its decorators are not looked at.
     let plain = r#"
@@ -1744,4 +1765,361 @@ def report(): pass
         assert_eq!(node.artifact_serializer, Some(SerializerKind::Csv));
     }
     assert_eq!(nodes[0].sinks[0].serializer, Some(SerializerKind::Csv));
+}
+
+// ─── Values barca cannot read (#665) ─────────────────────────────────────────
+//
+// A decorator value that is not written in the form barca reads from the source used to be
+// read as "not written": no inputs, no tags, the default timeout. Each is now an error naming
+// the argument, the line and the form to write.
+
+/// The error for `decorators` on `node`, after a constant `X` and the usual upstream.
+fn unreadable(decorators: &str) -> String {
+    rejected(&with_decorators(&format!(
+        "X = {{\"team\": \"a\"}}\nmod = object()\n\n{decorators}"
+    )))
+}
+
+#[test]
+fn a_value_barca_cannot_read_is_an_error_naming_the_argument_and_the_form() {
+    for (decorators, message, fix) in [
+        (
+            "@asset(name=X)",
+            "`name=` must be a string literal, got `X`; barca reads decorator arguments from the \
+             source without running it",
+            "Write it like `name=\"...\"`",
+        ),
+        (
+            "@asset(name=f\"n_{X}\")",
+            "`name=` must be a string literal, got `f\"n_{X}\"`",
+            "Write it like `name=\"...\"`",
+        ),
+        (
+            "@asset(description=X)",
+            "`description=` must be a string literal, got `X`",
+            "Write it like `description=\"...\"`",
+        ),
+        (
+            "@asset(timeout_seconds=X)",
+            "`timeout_seconds=` must be a whole-number literal, got `X`",
+            "Write it like `timeout_seconds=600`",
+        ),
+        (
+            "@asset(timeout_seconds=1.5)",
+            "`timeout_seconds=` must be a whole-number literal, got `1.5`",
+            "Write it like `timeout_seconds=600`",
+        ),
+        (
+            "@asset(retries=X)",
+            "`retries=` must be a whole-number literal, got `X`",
+            "Write it like `retries=3`",
+        ),
+        (
+            "@asset(retries=-1)",
+            "`retries=` must be a whole-number literal, got `-1`",
+            "Write it like `retries=3`",
+        ),
+        (
+            "@asset(retry_backoff=X)",
+            "`retry_backoff=` must be a number literal of seconds, got `X`",
+            "Write it like `retry_backoff=2.0`",
+        ),
+        (
+            "@asset(retry_backoff=-2.0)",
+            "`retry_backoff=` must be a number literal of seconds, got `-2.0`",
+            "Write it like `retry_backoff=2.0`",
+        ),
+        (
+            "@asset(tags=X)",
+            "`tags=` must be a dict literal, got `X`",
+            "Write it like `tags={\"team\": \"growth\"}`",
+        ),
+        (
+            "@asset(tags={\"team\": X})",
+            "`tags=` must be a dict literal of string literals, got `X`",
+            "Write it like `tags={\"team\": \"growth\"}`",
+        ),
+        (
+            "@asset(tags={\"tier\": 1})",
+            "`tags=` must be a dict literal of string literals, got `1`",
+            "Write it like `tags={\"team\": \"growth\"}`",
+        ),
+        (
+            "@asset(tags={**X})",
+            "`tags=` must be a dict literal of string literals, got `X`",
+            "Write it like `tags={\"team\": \"growth\"}`",
+        ),
+        (
+            "@asset(serializer=X)",
+            "`serializer=` must be a string literal, got `X`",
+            "Write it like `serializer=\"json\"`: one of \"json\", \"pickle\", \"parquet\" or \
+             \"csv\". See `barca docs assets`.",
+        ),
+        (
+            "@asset(serializer=json)",
+            "`serializer=` must be a string literal, got `json`",
+            "Write it like `serializer=\"json\"`",
+        ),
+        (
+            "@asset(serializer=\"xml\")",
+            "`serializer=` names no serializer barca has: \"xml\"",
+            "Write it like `serializer=\"json\"`",
+        ),
+        (
+            "@asset()\n@sink(\"out.json\", serializer=X)",
+            "`serializer=` must be a string literal, got `X`",
+            "See `barca docs sinks`.",
+        ),
+        (
+            "@asset()\n@sink(\"out.json\", serializer=\"xml\")",
+            "`serializer=` names no serializer barca has: \"xml\"",
+            "See `barca docs sinks`.",
+        ),
+        (
+            "@asset(inputs=X)",
+            "`inputs=` must be a dict literal, got `X`",
+            "Write it like `inputs={\"param\": upstream}`",
+        ),
+        (
+            "@asset(inputs=dict(raw=raw))",
+            "`inputs=` must be a dict literal, got `dict(raw=raw)`",
+            "Write it like `inputs={\"param\": upstream}`",
+        ),
+        (
+            "@asset(inputs={X: raw})",
+            "`inputs=` must be a dict literal whose keys are string literals, got `X`",
+            "Write it like `inputs={\"param\": upstream}`",
+        ),
+        (
+            "@asset(inputs={**X})",
+            "`inputs=` must be a dict literal without `**`, got `X`",
+            "Write it like `inputs={\"param\": upstream}`",
+        ),
+        (
+            "@asset(inputs={\"raw\": \"raw\"})",
+            "the inputs= key `raw` must name a step, got `\"raw\"`",
+            "`asset_ref(\"file.py:upstream\")`",
+        ),
+        (
+            "@asset(inputs={\"raw\": make(raw)})",
+            "the inputs= key `raw` must name a step, got `make(raw)`",
+            "`collect(upstream)`",
+        ),
+        (
+            "@asset(inputs={\"raw\": mod.attr.raw})",
+            "the inputs= key `raw` must name a step, got `mod.attr.raw`",
+            "`module.upstream`",
+        ),
+        (
+            "@asset(inputs={\"raw\": collect(X[0])})",
+            "the inputs= key `raw` must name a step, got `collect(X[0])`",
+            "`collect(upstream)`",
+        ),
+        (
+            "@asset(inputs={\"raw\": asset_ref(X)})",
+            "the inputs= key `raw` must name a step, got `asset_ref(X)`",
+            "`asset_ref(\"file.py:upstream\")`",
+        ),
+        (
+            "@asset(partitions=X)",
+            "`partitions=` must be a dict literal, got `X`",
+            "Write it like `partitions={\"region\": partitions([\"us\", \"eu\"])}`",
+        ),
+        (
+            "@asset(partitions={X: partitions([\"a\"])})",
+            "`partitions=` must be a dict literal whose keys are string literals, got `X`",
+            "See `barca docs partitions`.",
+        ),
+        (
+            "@asset(partitions={\"region\": [\"us\"]})",
+            "the partition dimension `region` must be `partitions(...)` or \
+             `partitions_from(...)`, got `[\"us\"]`",
+            "See `barca docs partitions`.",
+        ),
+        (
+            "@asset(partitions={\"region\": partitions_from(\"raw\")})",
+            "partitions_from() must name a step, got `\"raw\"`",
+            "Write it like `partitions_from(upstream)`",
+        ),
+        (
+            "@asset(freshness=X)",
+            "`freshness=` must be `Always`, `Manual` or `Schedule(\"<cron>\")` written in the \
+             decorator, got `X`",
+            "Write it like `freshness=Schedule(\"0 5 * * *\")`, `freshness=Manual` or \
+             `freshness=Always`. See `barca docs scheduling`.",
+        ),
+        (
+            "@asset(freshness=Schedule)",
+            "`freshness=` must be `Always`, `Manual` or `Schedule(\"<cron>\")` written in the \
+             decorator, got `Schedule`",
+            "See `barca docs scheduling`.",
+        ),
+    ] {
+        let err = unreadable(decorators);
+        assert!(
+            err.starts_with("test.py:node (line "),
+            "{decorators}: {err}"
+        );
+        let (first, second) = err.split_once('\n').expect("two lines");
+        assert!(first.contains(message), "{decorators}: {first}");
+        assert!(second.contains(fix), "{decorators}: {second}");
+    }
+}
+
+#[test]
+fn the_error_names_the_line_of_the_value() {
+    let src = r#"from barca import asset
+
+TAGS = {"team": "a"}
+
+@asset(
+    description="d",
+    tags=TAGS,
+)
+def node():
+    return 1
+"#;
+    let err = rejected(src);
+    assert!(
+        err.starts_with("test.py:node (line 7): `tags=` must be a dict literal, got `TAGS`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_long_value_is_shortened_in_the_message() {
+    let err = unreadable(&format!("@asset(description=X + \"{}\")", "a".repeat(80)));
+    assert!(err.contains("got `X + \"aaaa"), "{err}");
+    assert!(err.contains("...`"), "{err}");
+    let err = unreadable("@asset(inputs=make(\n    raw,\n))");
+    assert!(err.contains("got `make(...`"), "{err}");
+}
+
+#[test]
+fn none_reads_as_not_written_and_literals_are_read() {
+    let src = r#"from barca import asset, sensor, partitions
+
+@sensor(name=None, description=None, tags=None, serializer=None, partitions=None)
+def raw():
+    return 1
+
+@asset(
+    name="n",
+    description="d",
+    inputs={"raw": raw},
+    tags={"team": "a"},
+    serializer="PARQUET",
+    timeout_seconds=0,
+    retries=0,
+    retry_backoff=2,
+)
+def node(raw):
+    return 1
+
+@asset(inputs=None, retry_backoff=0.5)
+def other():
+    return 1
+"#;
+    let nodes = extract_nodes(src, "test.py").unwrap();
+    let raw = &nodes[0];
+    assert_eq!(raw.explicit_name, None);
+    assert_eq!(raw.description, None);
+    assert!(raw.tags.is_empty());
+    assert_eq!(raw.artifact_serializer, None);
+    assert!(raw.partitions.is_empty());
+    let node = &nodes[1];
+    assert_eq!(node.explicit_name.as_deref(), Some("n"));
+    assert_eq!(node.description.as_deref(), Some("d"));
+    assert_eq!(node.inputs.len(), 1);
+    assert_eq!(node.tags.get("team").map(String::as_str), Some("a"));
+    assert_eq!(
+        node.artifact_serializer,
+        Some(barca_core::model::SerializerKind::Parquet)
+    );
+    assert_eq!(node.timeout_seconds, 0);
+    assert_eq!(node.retries, 1);
+    assert_eq!(node.retry_backoff_seconds, 2.0);
+    assert!(nodes[2].inputs.is_empty());
+    assert_eq!(nodes[2].retry_backoff_seconds, 0.5);
+}
+
+#[test]
+fn a_partition_list_with_an_element_that_is_not_a_literal_is_evaluated() {
+    // Before #665 `REGION` was dropped and the keys were ["us"]. Now the whole list goes to the
+    // resolver, as any other expression in partitions(...) does (RFC-0013).
+    let src = r#"from barca import asset, partitions
+
+REGION = "eu"
+
+@asset(partitions={"region": partitions(["us", REGION, -1, 1.5])})
+def node(region):
+    return 1
+
+@asset(partitions={"region": partitions(["us", 2])})
+def literal(region):
+    return 1
+"#;
+    let nodes = extract_nodes(src, "test.py").unwrap();
+    match &nodes[0].partitions["region"] {
+        PartitionSpec::Dynamic { source_text } => {
+            assert_eq!(source_text, "[\"us\", REGION, -1, 1.5]")
+        }
+        other => panic!("expected Dynamic, got {other:?}"),
+    }
+    assert!(matches!(
+        &nodes[1].partitions["region"],
+        PartitionSpec::Static { values } if values.len() == 2
+    ));
+}
+
+#[test]
+fn a_helper_barca_cannot_identify_is_left_unread() {
+    // `barca.partitions = other`: whether `partitions(...)` is barca's is unknown, so the
+    // argument checks leave it alone and so does the value check (#355).
+    let src = r#"import barca as b
+b.partitions = foreign
+b.Schedule = foreign
+@b.asset(partitions={"a": b.partitions([1])}, freshness=b.Schedule("0 * * * *"))
+def f(): return 1
+"#;
+    let nodes = extract_nodes(src, "pipeline.py").unwrap();
+    assert!(nodes[0].partitions.is_empty());
+    assert_eq!(nodes[0].freshness, Freshness::Always);
+
+    // The name rebound, or a helper of the same name from another library.
+    let src = r#"from barca import asset, partitions, Schedule
+import cron_lib
+partitions = load_partitions
+@asset(partitions={"k": partitions(kind="daily")}, freshness=cron_lib.Schedule("0 5 * * *"))
+def f(k=None): return 1
+"#;
+    let nodes = extract_nodes(src, "pipeline.py").unwrap();
+    assert!(nodes[0].partitions.is_empty());
+    assert_eq!(nodes[0].freshness, Freshness::Always);
+
+    // In inputs= such a call names no step, whatever it is.
+    for src in [
+        "import barca as b\nb.collect = foreign\n@b.asset()\ndef raw(): return 1\n\
+         @b.asset(inputs={\"x\": b.collect(raw)})\ndef f(x): return 1\n",
+        "from barca import asset, collect\ncollect = gather\n@asset()\ndef raw(): return 1\n\
+         @asset(inputs={\"x\": collect(raw)})\ndef f(x): return 1\n",
+    ] {
+        let err = rejected(src);
+        assert!(
+            err.contains("the inputs= key `x` must name a step"),
+            "{err}"
+        );
+    }
+
+    // A call of another name is not mistaken for one.
+    let err = rejected(
+        "from barca import asset
+@asset(partitions={\"k\": load_partitions()})
+def f(k): return 1
+",
+    );
+    assert!(
+        err.contains("the partition dimension `k` must be `partitions(...)`"),
+        "{err}"
+    );
 }

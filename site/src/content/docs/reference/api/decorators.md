@@ -7,7 +7,7 @@ Everything here is imported from `barca`. The decorators return the function unc
 `barca` binary extracts their arguments from source without importing your module. Literal
 partition key lists need no resolver import; a nonliteral `partitions(<expression>)` imports
 the pipeline module to evaluate its keys. Arguments must therefore be written literally (a dict literal for `inputs=`, a list of
-string literals for `env=`); a decorator built in a loop or installed through a runtime assignment is not
+string literals for `env=`; "Values barca reads" below), or barca exits 2; a decorator built in a loop or installed through a runtime assignment is not
 seen. Qualified names and imported aliases are supported as described below. The signatures below are those of `python/barca/__init__.py`; unless a version is named,
 the behavior was checked by running 0.18.0.
 
@@ -91,8 +91,57 @@ Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 - Qualified and aliased top-level Barca imports are checked. Foreign imports and explicit
   rebinding disable recognition of the affected name. A later star import disables it only
   when the export set is unknown or includes that local name. Namespace reflection retains
-  conservative discovery but disables argument checks. Argument values and task-body
-  `parallel()` / `parallel_map()` calls are not checked here.
+  conservative discovery but disables argument checks. Argument values are checked next;
+  task-body `parallel()` / `parallel_map()` calls are not checked.
+
+### Values barca reads
+
+Each value has to be written in a form barca reads from the source. Any other value is an
+error when barca reads the file (exit 2, `kind` `usage`), naming the argument, the file and
+line, and the form to write. Up to 0.33.1 most were read as if the argument were not written:
+`inputs=make_inputs()` declared no inputs, `tags=TAGS` no tags, `timeout_seconds=LIMIT` the
+default 300.
+
+| Argument | Form |
+|---|---|
+| `name=`, `description=` | a string literal |
+| `inputs=` | a dict literal: keys are string literals, each value names a step (`upstream`, `module.upstream`, `collect(upstream)`, `asset_ref("file.py:upstream")`) |
+| `partitions=` | a dict literal: keys are string literals, each value is `partitions(<keys>)` or `partitions_from(upstream)`; the keys inside `partitions(...)` may be any expression |
+| `serializer=` | a string literal: `"json"`, `"pickle"`, `"parquet"` or `"csv"` (on `@sink` too) |
+| `freshness=` | `Always`, `Manual` or `Schedule("<cron>", ...)`, written in the decorator |
+| `timeout_seconds=`, `retries=` | a whole-number literal |
+| `retry_backoff=` | a number literal (`2` or `2.0`) |
+| `tags=` | a dict literal whose keys and values are string literals |
+| `env=` | a list of string literals |
+
+`None` reads as "not written" for `name=`, `description=`, `inputs=`, `partitions=`,
+`serializer=` and `tags=`. A module constant is an error even when it holds a literal:
+
+```python
+from barca import asset
+
+TAGS = {"team": "growth"}
+
+@asset(tags=TAGS)
+def report() -> int:
+    return 1
+```
+
+```
+$ barca list pipeline.py --pretty
+Parse error: pipeline.py:report (line 5): `tags=` must be a dict literal, got `TAGS`; barca reads decorator arguments from the source without running it, so it cannot see what this is
+Write it like `tags={"team": "growth"}`: a dict literal whose keys and values are string literals. See `barca docs assets`.
+```
+
+Not checked:
+
+- The path of `@sink`. A path that is not a string literal (`@sink(EXPORT_PATH)`) declares no
+  sink, without a message.
+- A call barca cannot identify as its own helper because the name is rebound or comes from
+  another library (`partitions = load_partitions`, `cron_lib.Schedule(...)`), or because the
+  file reassigns barca's export (`barca.partitions = other`), as a partition dimension or as
+  `freshness=`: the value is left unread, as its arguments are. In `inputs=` such a call names
+  no step and is an error.
 
 A later `from shared import *` preserves imported Barca names when the project module has
 one literal `__all__` list or tuple of strings, with no other references to `__all__`,

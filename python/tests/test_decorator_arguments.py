@@ -56,7 +56,9 @@ def barca_cmd(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:
-    return json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    return json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
 
 
 @pytest.mark.parametrize(
@@ -115,6 +117,27 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
             "Schedule() accepts: max_failures, timeout_seconds, batch",
             'Pass the value as the first argument, without `cron=`, like `Schedule("0 5 * * *")`. '
             "See `barca docs scheduling`.",
+        ),
+        # A value barca cannot read from the source (#665).
+        (
+            "@asset(inputs=make_inputs())",
+            "`inputs=` must be a dict literal, got `make_inputs()`; barca reads decorator arguments "
+            "from the source without running it, so it cannot see what this is",
+            'Write it like `inputs={"param": upstream}`: a dict literal whose keys are parameter names '
+            "as string literals and whose values name a step (`upstream`, `module.upstream`, "
+            '`collect(upstream)` or `asset_ref("file.py:upstream")`). See `barca docs assets`.',
+        ),
+        (
+            "@asset(timeout_seconds=LIMIT)",
+            "`timeout_seconds=` must be a whole-number literal, got `LIMIT`; barca reads decorator "
+            "arguments from the source without running it, so it cannot see what this is",
+            "Write it like `timeout_seconds=600`. See `barca docs assets`.",
+        ),
+        (
+            "@asset()\n@sink('out.json', serializer='xml')",
+            '`serializer=` names no serializer barca has: "xml"',
+            'Write it like `serializer="json"`: one of "json", "pickle", "parquet" or "csv". '
+            "See `barca docs sinks`.",
         ),
     ],
 )

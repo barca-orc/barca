@@ -323,11 +323,17 @@ mod tests {
     }
 
     #[test]
-    fn inputs_that_cannot_be_read_statically_report_no_missing_parameter() {
-        ok(
+    fn inputs_that_cannot_be_read_statically_are_reported_before_the_parameters() {
+        // Not "the parameter `x` of a() is not filled": the inputs= itself is the problem (#665).
+        let err = error(
             "from barca import asset\n\nINPUTS = {}\n\n@asset(inputs=INPUTS)\n\
             def a(x) -> int:\n    return x\n",
         );
+        assert!(
+            err.starts_with("p.py:a (line 5): `inputs=` must be a dict literal, got `INPUTS`"),
+            "{err}"
+        );
+        assert!(!err.contains("parameter `x`"), "{err}");
     }
 
     #[test]

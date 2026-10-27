@@ -46,21 +46,32 @@ pub(crate) fn check(
     decorators: &[ast::Decorator],
     barca: &BarcaNames,
     dims: &[String],
+    source: &str,
 ) -> Option<Problem> {
     decorators
         .iter()
         .find_map(|decorator| match &decorator.expression {
             Expr::Call(call) if barca.recognized(&call.func) == Some("sink") => {
-                check_call(call, dims)
+                check_call(call, dims, source)
             }
             _ => None,
         })
 }
 
-fn check_call(call: &ast::ExprCall, dims: &[String]) -> Option<Problem> {
+fn check_call(call: &ast::ExprCall, dims: &[String], source: &str) -> Option<Problem> {
     let Some(Expr::StringLiteral(path)) = call.arguments.args.first() else {
         return None;
     };
+    if let Some(kw) = keyword(call, "serializer")
+        && let Err((offset, message, fix)) =
+            crate::parse::serializer_kind(&kw.value, source, "sinks")
+    {
+        return Some(Problem {
+            offset,
+            message,
+            fix,
+        });
+    }
     let path = path.value.to_string();
     let dataset = path.ends_with('/');
     let serializer = keyword(call, "serializer").and_then(|kw| match &kw.value {

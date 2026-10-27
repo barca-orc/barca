@@ -16,6 +16,21 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Give durable result history one internal owner across progress, terminal, legacy-cache and
   server-ledger writes, preserving their transaction, receipt and deduplication rules.
 
+### Breaking
+
+- A decorator value barca cannot read from the source is an error when the file is read (exit
+  2, naming the argument, the file and line, and the form to write) instead of being read as
+  "not written" (#665): `name=`, `description=`, `inputs=` (not a dict literal, a key that is
+  not a string literal, a value that names no step), `partitions=` (not a dict literal, a key
+  that is not a string literal, a value that is not `partitions(...)` / `partitions_from(...)`),
+  `serializer=` (also on `@sink`; not a string literal, or an unknown format), `freshness=`
+  (not `Always`, `Manual` or `Schedule(...)`), `tags=` (not a dict of string literals),
+  `timeout_seconds=`, `retries=` and `retry_backoff=` (not a number literal; these used to
+  fall back to 300, 1 and 0.0). Replacement: write the value as a literal in the decorator
+  (`barca docs assets`, "Values barca reads"); `None` still reads as not written. A
+  `partitions([...])` list with an element that is not a string or integer literal is now
+  evaluated by the resolver like any other key expression; that element used to be dropped.
+
 ### Features
 
 - `barca[sql]` and `barca[test]` accept duckdb 2 (`duckdb>=1.4,<3`, #567); CI runs the

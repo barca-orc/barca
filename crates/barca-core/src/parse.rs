@@ -333,6 +333,18 @@ fn try_extract_function(
             fix: problem.fix,
         });
     }
+    // A value barca cannot read from the source is an error naming the argument, never read as
+    // "not written" (#665). Read before the parameter check, which would otherwise report the
+    // parameters an unreadable `inputs=` or `partitions=` leaves unfilled.
+    let rejected = |(offset, message, fix): Rejected| ParseError::InvalidArguments {
+        file: file_path.to_string(),
+        function: func.name.to_string(),
+        line: source[..offset.min(source.len())].matches('\n').count() + 1,
+        message,
+        fix,
+    };
+    let inputs = extract_inputs(&keywords, source, names).map_err(rejected)?;
+    let partitions = extract_partitions(&keywords, source, names).map_err(rejected)?;
     // What the worker passes the function must be what it takes (#549).
     if let Some(problem) = crate::input_params::check(func, kind, &keywords, &names.barca) {
         return Err(ParseError::InvalidArguments {
@@ -344,20 +356,22 @@ fn try_extract_function(
         });
     }
 
-    let (freshness, max_failures, schedule_timeout) =
-        extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?.unwrap_or((
-            Freshness::default_for(kind),
-            None,
-            None,
-        ));
-    let inputs = extract_inputs(&keywords, names);
-    let partitions = extract_partitions(&keywords, source, names);
+    let (freshness, max_failures, schedule_timeout) = extract_freshness(
+        &keywords,
+        file_path,
+        func.name.as_str(),
+        source,
+        &names.barca,
+    )?
+    .unwrap_or((Freshness::default_for(kind), None, None));
     // A dataset sink's directory levels are the asset's dimensions, in the order written.
     let dims: Vec<String> = crate::sink_args::dimension_order(&keywords)
         .into_iter()
         .filter(|d| partitions.contains_key(d))
         .collect();
-    if let Some(problem) = crate::sink_args::check(&func.decorator_list, &names.barca, &dims) {
+    if let Some(problem) =
+        crate::sink_args::check(&func.decorator_list, &names.barca, &dims, source)
+    {
         return Err(ParseError::InvalidArguments {
             file: file_path.to_string(),
             function: func.name.to_string(),
@@ -369,13 +383,20 @@ fn try_extract_function(
     for sink in sinks.iter_mut().filter(|s| s.is_dataset()) {
         sink.dims = dims.clone();
     }
-    let explicit_name = extract_string_kwarg(&keywords, "name");
-    let description = extract_string_kwarg(&keywords, "description");
-    let timeout_seconds = extract_int_kwarg(&keywords, "timeout_seconds").unwrap_or(300);
+    let explicit_name = optional_string(&keywords, "name", source).map_err(rejected)?;
+    let description = optional_string(&keywords, "description", source).map_err(rejected)?;
+    let timeout_seconds = whole_number(&keywords, "timeout_seconds", source)
+        .map_err(rejected)?
+        .unwrap_or(300);
     // `retries` is the total number of attempts (1 = no retry). Clamp 0 → 1.
-    let retries = extract_int_kwarg(&keywords, "retries").unwrap_or(1).max(1);
-    let retry_backoff_seconds = extract_float_kwarg(&keywords, "retry_backoff").unwrap_or(0.0);
-    let tags = extract_tags(&keywords);
+    let retries = whole_number(&keywords, "retries", source)
+        .map_err(rejected)?
+        .unwrap_or(1)
+        .max(1);
+    let retry_backoff_seconds = seconds(&keywords, "retry_backoff", source)
+        .map_err(rejected)?
+        .unwrap_or(0.0);
+    let tags = extract_tags(&keywords, source).map_err(rejected)?;
     let weight = extract_weight(&keywords, source).map_err(|(offset, message)| {
         ParseError::InvalidArguments {
             file: file_path.to_string(),
@@ -429,10 +450,10 @@ fn try_extract_function(
             }
         })?;
     let env = extract_env(&keywords, file_path, func.name.as_str())?;
-    let artifact_serializer = keywords
-        .iter()
-        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("serializer"))
-        .and_then(|kw| extract_serializer_kind(&kw.value));
+    let artifact_serializer = match keyword(&keywords, "serializer") {
+        Some(kw) => serializer_kind(&kw.value, source, "assets").map_err(rejected)?,
+        None => None,
+    };
 
     let parallel_calls = if kind == NodeKind::Task {
         extract_parallel_calls(&func.body, &names.barca.in_function(func))
@@ -595,7 +616,8 @@ pub(crate) fn try_extract_sink(
             .keywords
             .iter()
             .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("serializer"))
-            .and_then(|kw| extract_serializer_kind(&kw.value));
+            // An unreadable serializer is reported by `sink_args::check`.
+            .and_then(|kw| serializer_kind(&kw.value, "", "sinks").ok().flatten());
         let (partition_by, rows_per_file) = crate::sink_args::extract(call);
         return Some(SinkDecl {
             path,
@@ -608,12 +630,8 @@ pub(crate) fn try_extract_sink(
     None
 }
 
-fn extract_serializer_kind(expr: &Expr) -> Option<SerializerKind> {
-    let name = match expr {
-        Expr::StringLiteral(s) => s.value.to_string(),
-        Expr::Name(n) => n.id.to_string(),
-        _ => return None,
-    };
+/// The serializers `serializer=` names, matched without regard to case.
+fn serializer_named(name: &str) -> Option<SerializerKind> {
     match name.to_lowercase().as_str() {
         "json" => Some(SerializerKind::Json),
         "parquet" => Some(SerializerKind::Parquet),
@@ -622,6 +640,41 @@ fn extract_serializer_kind(expr: &Expr) -> Option<SerializerKind> {
         "text" => Some(SerializerKind::Text),
         "yaml" => Some(SerializerKind::Yaml),
         _ => None,
+    }
+}
+
+/// `serializer="json"` (or `None`, the default) on a node or a sink (#665): a string literal
+/// naming a serializer. A name, a call or an unknown format is refused rather than read as
+/// "not written", which would store the value in a format nobody asked for.
+pub(crate) fn serializer_kind(
+    expr: &Expr,
+    source: &str,
+    topic: &str,
+) -> Result<Option<SerializerKind>, Rejected> {
+    let fix = format!(
+        "Write it like `serializer=\"json\"`: one of \"json\", \"pickle\", \"parquet\" or \
+         \"csv\". See `barca docs {topic}`."
+    );
+    match expr {
+        Expr::NoneLiteral(_) => Ok(None),
+        Expr::StringLiteral(s) => match serializer_named(s.value.to_str()) {
+            Some(kind) => Ok(Some(kind)),
+            None => Err((
+                expr.range().start().to_usize(),
+                format!(
+                    "`serializer=` names no serializer barca has: {:?}",
+                    s.value.to_str()
+                ),
+                fix,
+            )),
+        },
+        _ => Err(unreadable(
+            source,
+            expr,
+            "serializer",
+            "a string literal",
+            fix,
+        )),
     }
 }
 
@@ -651,8 +704,29 @@ fn extract_freshness(
     keywords: &[&Keyword],
     file_path: &str,
     function_name: &str,
+    source: &str,
     barca: &crate::decorator_args::BarcaNames,
 ) -> Result<Option<FreshnessArgs>, ParseError> {
+    // `freshness=` that is not one of the three markers is refused rather than read as the
+    // default (#665): a schedule kept in a variable would never fire.
+    let unreadable_freshness = |expr: &Expr| {
+        let (offset, message, fix) = unreadable(
+            source,
+            expr,
+            "freshness",
+            "`Always`, `Manual` or `Schedule(\"<cron>\")` written in the decorator",
+            "Write it like `freshness=Schedule(\"0 5 * * *\")`, `freshness=Manual` or \
+             `freshness=Always`. See `barca docs scheduling`."
+                .to_string(),
+        );
+        ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: function_name.to_string(),
+            line: source[..offset.min(source.len())].matches('\n').count() + 1,
+            message,
+            fix,
+        }
+    };
     for kw in keywords {
         let Some(ref ident) = kw.arg else { continue };
         if ident.as_str() != "freshness" {
@@ -668,7 +742,9 @@ fn extract_freshness(
             Some("Always") => Freshness::Always,
             Some("Manual") => Freshness::Manual,
             Some("Schedule") => {
-                let Some(call) = call else { return Ok(None) };
+                let Some(call) = call else {
+                    return Err(unreadable_freshness(&kw.value));
+                };
                 let cron = call
                     .arguments
                     .args
@@ -716,199 +792,347 @@ fn extract_freshness(
                 }
                 Freshness::Schedule(CronExpr(cron))
             }
-            _ => return Ok(None),
+            None if unidentified_helper(callee, &["Always", "Manual", "Schedule"], barca) => {
+                return Ok(None);
+            }
+            _ => return Err(unreadable_freshness(&kw.value)),
         };
         return Ok(Some((freshness, max_failures, timeout)));
     }
     Ok(None)
 }
 
-fn extract_inputs(keywords: &[&Keyword], names: &FileNames) -> SmallVec<[DeclaredInput; 4]> {
-    for kw in keywords {
-        let Some(ref ident) = kw.arg else { continue };
-        if ident.as_str() != "inputs" {
-            continue;
-        }
-        if let Expr::Dict(dict) = &kw.value {
-            return extract_inputs_from_dict(dict, names);
-        }
+/// A decorator value barca cannot read: the byte offset of the value, what is wrong, and what to
+/// write instead.
+pub(crate) type Rejected = (usize, String, String);
+
+/// How barca reads decorator arguments, for a message about one it cannot read.
+const NOT_RUN: &str = "barca reads decorator arguments from the source without running it, so it \
+                       cannot see what this is";
+
+/// The source text of `expr`, shortened to its first line and 60 characters.
+fn snippet(source: &str, expr: &Expr) -> String {
+    let range = expr.range();
+    let text = source
+        .get(range.start().to_usize()..range.end().to_usize())
+        .unwrap_or("?");
+    let first = text.lines().next().unwrap_or("");
+    if first.chars().count() > 60 {
+        format!("{}...", first.chars().take(57).collect::<String>())
+    } else if first.len() < text.len() {
+        format!("{first}...")
+    } else {
+        first.to_string()
     }
-    SmallVec::new()
 }
 
-fn extract_inputs_from_dict(
-    dict: &ast::ExprDict,
-    names: &FileNames,
-) -> SmallVec<[DeclaredInput; 4]> {
-    let mut inputs = SmallVec::new();
+/// "; barca reads ... without running it" after a value that is computed (a name, a call, an
+/// operator): nothing for a literal of the wrong kind, which barca reads well enough.
+fn not_run(expr: &Expr) -> String {
+    let literal = match expr {
+        Expr::UnaryOp(op) => matches!(op.operand.as_ref(), Expr::NumberLiteral(_)),
+        Expr::List(_) | Expr::Tuple(_) | Expr::Set(_) | Expr::Dict(_) => true,
+        e => e.is_literal_expr(),
+    };
+    if literal {
+        String::new()
+    } else {
+        format!("; {NOT_RUN}")
+    }
+}
 
+/// `arg=` holds `expr`, which is not `wants`.
+fn unreadable(source: &str, expr: &Expr, arg: &str, wants: &str, fix: String) -> Rejected {
+    (
+        expr.range().start().to_usize(),
+        format!(
+            "`{arg}=` must be {wants}, got `{}`{}",
+            snippet(source, expr),
+            not_run(expr)
+        ),
+        fix,
+    )
+}
+
+/// Whether `callee` may be one of barca's `exports` without barca being able to tell: the name
+/// is rebound or comes from elsewhere (`partitions = load_partitions`, `cron.Schedule`), or
+/// the file reassigns barca's export. Such a `partitions=` or `freshness=` value is left
+/// unread rather than refused, as the argument check leaves such a call alone (#355).
+fn unidentified_helper(
+    callee: &Expr,
+    exports: &[&str],
+    barca: &crate::decorator_args::BarcaNames,
+) -> bool {
+    let name = match callee {
+        Expr::Name(n) => n.id.as_str(),
+        Expr::Attribute(a) => a.attr.as_str(),
+        _ => return false,
+    };
+    exports.contains(&name) || barca.uncertain(exports)
+}
+
+/// The keyword `name=` of a decorator, when it is written.
+fn keyword<'a>(keywords: &[&'a Keyword], name: &str) -> Option<&'a Keyword> {
+    keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().is_some_and(|a| a.as_str() == name))
+        .copied()
+}
+
+const INPUTS_FIX: &str = "Write it like `inputs={\"param\": upstream}`: a dict literal whose keys are \
+                          parameter names as string literals and whose values name a step \
+                          (`upstream`, `module.upstream`, `collect(upstream)` or \
+                          `asset_ref(\"file.py:upstream\")`). See `barca docs assets`.";
+
+/// `inputs={"param": upstream, ...}` (#665): a dict literal (or `None`). A key that is not a
+/// string literal, or a value that does not name a step, is refused: dropped, the step would
+/// run without that input, or be called without an argument it takes.
+fn extract_inputs(
+    keywords: &[&Keyword],
+    source: &str,
+    names: &FileNames,
+) -> Result<SmallVec<[DeclaredInput; 4]>, Rejected> {
+    let Some(kw) = keyword(keywords, "inputs") else {
+        return Ok(SmallVec::new());
+    };
+    let dict = match &kw.value {
+        Expr::NoneLiteral(_) => return Ok(SmallVec::new()),
+        Expr::Dict(dict) => dict,
+        other => {
+            return Err(unreadable(
+                source,
+                other,
+                "inputs",
+                "a dict literal",
+                INPUTS_FIX.to_string(),
+            ));
+        }
+    };
+    let mut inputs = SmallVec::new();
     for item in &dict.items {
         let Some(ref key_expr) = item.key else {
-            continue;
+            return Err(unreadable(
+                source,
+                &item.value,
+                "inputs",
+                "a dict literal without `**`",
+                INPUTS_FIX.to_string(),
+            ));
         };
-        let param_name = match extract_string_literal(key_expr) {
-            Some(s) => s,
-            None => continue,
+        let Some(param_name) = extract_string_literal(key_expr) else {
+            return Err(unreadable(
+                source,
+                key_expr,
+                "inputs",
+                "a dict literal whose keys are string literals",
+                INPUTS_FIX.to_string(),
+            ));
         };
-
-        let (upstream, collected) = match &item.value {
-            e @ (Expr::Name(_) | Expr::Attribute(_)) => match names.node_ref(e) {
-                Some(r) => (r, false),
-                None => continue,
-            },
-            Expr::Call(call) => {
-                let is_collect = names.barca.recognized(&call.func) == Some("collect");
-                if is_collect {
-                    match call.arguments.args.first().and_then(|a| names.node_ref(a)) {
-                        Some(r) => (r, true),
-                        None => continue,
-                    }
-                } else if names.barca.recognized(&call.func) == Some("asset_ref") {
-                    if let Some(arg) = call.arguments.args.first() {
-                        if let Some(s) = extract_string_literal(arg) {
-                            (NodeRef::Canonical(s), false)
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                } else if let Expr::Name(n) = call.func.as_ref() {
-                    (NodeRef::FunctionName(n.id.to_string()), false)
-                } else {
-                    continue;
-                }
-            }
-            _ => continue,
+        let Some((upstream, collected)) = input_reference(&item.value, names) else {
+            // A `collect` or `asset_ref` that is not barca's names no step either: refused
+            // like any other value (before #665 it read as a step named `collect`).
+            return Err((
+                item.value.range().start().to_usize(),
+                format!(
+                    "the inputs= key `{param_name}` must name a step, got `{}`",
+                    snippet(source, &item.value)
+                ),
+                INPUTS_FIX.to_string(),
+            ));
         };
-
         inputs.push(DeclaredInput {
             param_name,
             upstream,
             collected,
         });
     }
-
-    inputs
+    Ok(inputs)
 }
 
+/// The step an `inputs=` value names, and whether it is `collect()`ed.
+fn input_reference(value: &Expr, names: &FileNames) -> Option<(NodeRef, bool)> {
+    match value {
+        Expr::Name(_) | Expr::Attribute(_) => Some((names.node_ref(value)?, false)),
+        Expr::Call(call) => {
+            let first = call.arguments.args.first()?;
+            match names.barca.recognized(&call.func) {
+                Some("collect") => Some((names.node_ref(first)?, true)),
+                Some("asset_ref") => {
+                    Some((NodeRef::Canonical(extract_string_literal(first)?), false))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+const PARTITIONS_FIX: &str = "Write it like `partitions={\"region\": partitions([\"us\", \"eu\"])}`: \
+                              a dict literal whose keys are dimension names as string literals \
+                              and whose values are `partitions(<keys>)` or \
+                              `partitions_from(upstream)`. See `barca docs partitions`.";
+
+/// `partitions={"dim": partitions(...) | partitions_from(upstream), ...}` (#665): a dict literal
+/// (or `None`). The keys inside `partitions(...)` may be any expression (the resolver evaluates
+/// one that is not a literal list, RFC-0013); the dict around them may not.
 fn extract_partitions(
     keywords: &[&Keyword],
     source: &str,
     names: &FileNames,
-) -> HashMap<String, PartitionSpec> {
+) -> Result<HashMap<String, PartitionSpec>, Rejected> {
     let mut result = HashMap::new();
-
-    for kw in keywords {
-        let Some(ref ident) = kw.arg else { continue };
-        if ident.as_str() != "partitions" {
-            continue;
+    let Some(kw) = keyword(keywords, "partitions") else {
+        return Ok(result);
+    };
+    let dict = match &kw.value {
+        Expr::NoneLiteral(_) => return Ok(result),
+        Expr::Dict(dict) => dict,
+        other => {
+            return Err(unreadable(
+                source,
+                other,
+                "partitions",
+                "a dict literal",
+                PARTITIONS_FIX.to_string(),
+            ));
         }
-        if let Expr::Dict(dict) = &kw.value {
-            for item in &dict.items {
-                let Some(ref key_expr) = item.key else {
-                    continue;
-                };
-                let key = match extract_string_literal(key_expr) {
-                    Some(s) => s,
-                    None => continue,
-                };
-
-                let spec = match &item.value {
-                    Expr::Call(call) => {
-                        if let Some(name) = names.barca.recognized(&call.func) {
-                            match name {
-                                "partitions" => extract_partition_spec(call, source),
-                                "partitions_from" => {
-                                    let source_ref =
-                                        call.arguments.args.first().and_then(|a| names.node_ref(a));
-                                    if let Some(source_ref) = source_ref {
-                                        PartitionSpec::DerivedFrom { source_ref }
-                                    } else {
-                                        continue;
-                                    }
-                                }
-                                _ => continue,
-                            }
-                        } else {
-                            continue;
-                        }
+    };
+    for item in &dict.items {
+        let Some(ref key_expr) = item.key else {
+            return Err(unreadable(
+                source,
+                &item.value,
+                "partitions",
+                "a dict literal without `**`",
+                PARTITIONS_FIX.to_string(),
+            ));
+        };
+        let Some(key) = extract_string_literal(key_expr) else {
+            return Err(unreadable(
+                source,
+                key_expr,
+                "partitions",
+                "a dict literal whose keys are string literals",
+                PARTITIONS_FIX.to_string(),
+            ));
+        };
+        let call = match &item.value {
+            Expr::Call(call) => Some(call),
+            _ => None,
+        };
+        let spec = match call.map(|c| (c, names.barca.recognized(&c.func))) {
+            Some((call, Some("partitions"))) => extract_partition_spec(call, source),
+            Some((call, Some("partitions_from"))) => {
+                match call.arguments.args.first().and_then(|a| names.node_ref(a)) {
+                    Some(source_ref) => PartitionSpec::DerivedFrom { source_ref },
+                    None => {
+                        let at: &Expr = call.arguments.args.first().unwrap_or(&item.value);
+                        return Err((
+                            at.range().start().to_usize(),
+                            format!(
+                                "partitions_from() must name a step, got `{}`",
+                                snippet(source, at)
+                            ),
+                            "Write it like `partitions_from(upstream)`, naming the asset or \
+                             sensor whose keys or values become this dimension's keys. See \
+                             `barca docs partitions`."
+                                .to_string(),
+                        ));
                     }
-                    _ => continue,
-                };
-
-                result.insert(key, spec);
+                }
             }
-        }
+            Some((call, None))
+                if unidentified_helper(
+                    &call.func,
+                    &["partitions", "partitions_from"],
+                    &names.barca,
+                ) =>
+            {
+                continue;
+            }
+            _ => {
+                return Err((
+                    item.value.range().start().to_usize(),
+                    format!(
+                        "the partition dimension `{key}` must be `partitions(...)` or \
+                         `partitions_from(...)`, got `{}`{}",
+                        snippet(source, &item.value),
+                        not_run(&item.value)
+                    ),
+                    PARTITIONS_FIX.to_string(),
+                ));
+            }
+        };
+        result.insert(key, spec);
     }
-
-    result
+    Ok(result)
 }
 
 /// Extract a PartitionSpec from a `partitions(...)` call.
-/// If the argument is a literal list, extract values statically.
-/// Otherwise, extract the source text for dynamic Python evaluation at plan time.
+/// A literal list of string and integer literals is read statically. Anything else, a list
+/// with an element that is not such a literal included, is the source text the resolver
+/// evaluates at plan time (RFC-0013).
 fn extract_partition_spec(call: &ast::ExprCall, source: &str) -> PartitionSpec {
     let Some(first_arg) = call.arguments.args.first() else {
         return PartitionSpec::Static { values: vec![] };
     };
 
-    // Try static extraction first (literal list).
-    if let Expr::List(_) = first_arg {
-        let values = extract_partition_values(first_arg);
+    if let Some(values) = literal_partition_values(first_arg) {
         return PartitionSpec::Static { values };
     }
 
-    // Non-literal (ListComp, Call, etc.) — extract source text for Python eval.
     let start = first_arg.range().start().to_usize();
     let end = first_arg.range().end().to_usize();
     let source_text = source[start..end].to_string();
     PartitionSpec::Dynamic { source_text }
 }
 
-fn extract_partition_values(expr: &Expr) -> Vec<PartitionValue> {
-    if let Expr::List(list) = expr {
-        list.elts
-            .iter()
-            .filter_map(|e| match e {
-                Expr::StringLiteral(s) => Some(PartitionValue::Str(s.value.to_string())),
-                Expr::NumberLiteral(n) => {
-                    if let ast::Number::Int(i) = &n.value {
-                        i.as_i64().map(PartitionValue::Int)
-                    } else {
-                        None
-                    }
-                }
+/// The keys of a literal list whose every element is a string or integer literal.
+fn literal_partition_values(expr: &Expr) -> Option<Vec<PartitionValue>> {
+    let Expr::List(list) = expr else { return None };
+    list.elts
+        .iter()
+        .map(|e| match e {
+            Expr::StringLiteral(s) => Some(PartitionValue::Str(s.value.to_string())),
+            Expr::NumberLiteral(n) => match &n.value {
+                ast::Number::Int(i) => i.as_i64().map(PartitionValue::Int),
                 _ => None,
-            })
-            .collect()
-    } else {
-        vec![]
-    }
+            },
+            _ => None,
+        })
+        .collect()
 }
 
-fn extract_tags(keywords: &[&Keyword]) -> HashMap<String, String> {
+/// `tags={"team": "growth"}` (#665): a dict literal of string literals (or `None`).
+fn extract_tags(keywords: &[&Keyword], source: &str) -> Result<HashMap<String, String>, Rejected> {
     let mut tags = HashMap::new();
-    for kw in keywords {
-        let Some(ref ident) = kw.arg else { continue };
-        if ident.as_str() != "tags" {
-            continue;
-        }
-        if let Expr::Dict(dict) = &kw.value {
-            for item in &dict.items {
-                let Some(ref key_expr) = item.key else {
-                    continue;
-                };
-                if let (Some(k), Some(v)) = (
-                    extract_string_literal(key_expr),
-                    extract_string_literal(&item.value),
-                ) {
-                    tags.insert(k, v);
-                }
-            }
-        }
+    let Some(kw) = keyword(keywords, "tags") else {
+        return Ok(tags);
+    };
+    let fix = || {
+        "Write it like `tags={\"team\": \"growth\"}`: a dict literal whose keys and values are \
+         string literals. See `barca docs assets`."
+            .to_string()
+    };
+    let dict = match &kw.value {
+        Expr::NoneLiteral(_) => return Ok(tags),
+        Expr::Dict(dict) => dict,
+        other => return Err(unreadable(source, other, "tags", "a dict literal", fix())),
+    };
+    for item in &dict.items {
+        let wants = "a dict literal of string literals";
+        let Some(ref key_expr) = item.key else {
+            return Err(unreadable(source, &item.value, "tags", wants, fix()));
+        };
+        let Some(k) = extract_string_literal(key_expr) else {
+            return Err(unreadable(source, key_expr, "tags", wants, fix()));
+        };
+        let Some(v) = extract_string_literal(&item.value) else {
+            return Err(unreadable(source, &item.value, "tags", wants, fix()));
+        };
+        tags.insert(k, v);
     }
-    tags
+    Ok(tags)
 }
 
 /// `env=["NAME", ...]`: a literal list of string literals, read statically. Anything else (a
@@ -1137,14 +1361,69 @@ fn extract_cutoff(keywords: &[&Keyword], source: &str) -> Result<bool, (usize, S
     ))
 }
 
-fn extract_string_kwarg(keywords: &[&Keyword], name: &str) -> Option<String> {
-    for kw in keywords {
-        let Some(ref ident) = kw.arg else { continue };
-        if ident.as_str() == name {
-            return extract_string_literal(&kw.value);
+/// `name="..."` / `description="..."` (#665): a string literal, or `None` (not written).
+fn optional_string(
+    keywords: &[&Keyword],
+    name: &str,
+    source: &str,
+) -> Result<Option<String>, Rejected> {
+    match keyword(keywords, name).map(|kw| &kw.value) {
+        None | Some(Expr::NoneLiteral(_)) => Ok(None),
+        Some(Expr::StringLiteral(s)) => Ok(Some(s.value.to_string())),
+        Some(other) => Err(unreadable(
+            source,
+            other,
+            name,
+            "a string literal",
+            format!("Write it like `{name}=\"...\"`. See `barca docs assets`."),
+        )),
+    }
+}
+
+/// `timeout_seconds=600` / `retries=3` (#665): a whole-number literal, `None` when not written.
+/// Anything else is refused rather than read as the default.
+fn whole_number(keywords: &[&Keyword], name: &str, source: &str) -> Result<Option<u32>, Rejected> {
+    let Some(kw) = keyword(keywords, name) else {
+        return Ok(None);
+    };
+    if let Expr::NumberLiteral(n) = &kw.value
+        && let ast::Number::Int(i) = &n.value
+        && let Some(v) = i.as_u32()
+    {
+        return Ok(Some(v));
+    }
+    let example = if name == "retries" { "3" } else { "600" };
+    Err(unreadable(
+        source,
+        &kw.value,
+        name,
+        "a whole-number literal",
+        format!("Write it like `{name}={example}`. See `barca docs assets`."),
+    ))
+}
+
+/// `retry_backoff=2.0` (#665): a non-negative number literal (`2` or `2.0`), `None` when not
+/// written.
+fn seconds(keywords: &[&Keyword], name: &str, source: &str) -> Result<Option<f64>, Rejected> {
+    let Some(kw) = keyword(keywords, name) else {
+        return Ok(None);
+    };
+    if let Expr::NumberLiteral(n) = &kw.value {
+        match &n.value {
+            ast::Number::Float(f) if f.is_finite() => return Ok(Some(*f)),
+            ast::Number::Int(i) if i.as_u32().is_some() => {
+                return Ok(i.as_u32().map(f64::from));
+            }
+            _ => {}
         }
     }
-    None
+    Err(unreadable(
+        source,
+        &kw.value,
+        name,
+        "a number literal of seconds",
+        format!("Write it like `{name}=2.0`. See `barca docs assets`."),
+    ))
 }
 
 fn extract_int_kwarg(keywords: &[&Keyword], name: &str) -> Option<u32> {
@@ -1155,23 +1434,6 @@ fn extract_int_kwarg(keywords: &[&Keyword], name: &str) -> Option<u32> {
             && let ast::Number::Int(i) = &n.value
         {
             return i.as_u32();
-        }
-    }
-    None
-}
-
-/// Extract a float kwarg, accepting both float (`2.0`) and int (`2`) literals.
-fn extract_float_kwarg(keywords: &[&Keyword], name: &str) -> Option<f64> {
-    for kw in keywords {
-        let Some(ref ident) = kw.arg else { continue };
-        if ident.as_str() == name
-            && let Expr::NumberLiteral(n) = &kw.value
-        {
-            return match &n.value {
-                ast::Number::Float(f) => Some(*f),
-                ast::Number::Int(i) => i.as_u32().map(|v| v as f64),
-                _ => None,
-            };
         }
     }
     None

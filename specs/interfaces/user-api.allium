@@ -178,6 +178,14 @@ surface PythonDecorators {
         -- Evaluating nonliteral partitions(...) and batches_by(...) is an explicit
         -- subprocess resolver operation; it may import user code. Doctor does not do it.
 
+    @guarantee UnreadableValuesRejected
+        -- A decorator value outside the form static extraction reads (a constant, call or
+        -- f-string for name, description, inputs, partitions, serializer, freshness, tags,
+        -- timeout_seconds, retries or retry_backoff) is a usage error naming the argument
+        -- and line, never read as the argument's default. A partitions([...]) list with a
+        -- nonliteral element is a resolver expression. Known exception: a nonliteral @sink
+        -- path declares no sink. Checked by grammar_spec.rs.
+
     @guarantee ArgumentOwnership
         -- The complete accepted decorator/helper argument list is decorator_args.rs.
         -- Unsupported argument behavior is checked by grammar_spec.rs.
