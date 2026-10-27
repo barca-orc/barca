@@ -527,7 +527,7 @@ def banana() -> dict:
 - On a partitioned asset each key writes its own file, with the key inserted before the
   extension: `@sink("./exports/sales.json")` on keys `region=emea` and `region=amer` wrote
   `exports/sales_region_emea.json` and `exports/sales_region_amer.json`.
-- Barca records the run hash each sink last published, per partition key (from 0.33.2). A cache
+- Barca records the run hash each sink last published, per partition key (from 0.34.0). A cache
   hit whose run hash differs (code A, then B, then A again) writes the sink again from the
   cached artifact without running the step, and prints `[barca] sink out.json: republished the
   cached result of banana` on stderr; one that matches writes nothing. Barca does not check

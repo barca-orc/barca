@@ -80,7 +80,7 @@ partitioned asset. When the asset is served from cache:
   this machine; a `s3://`, `gs://` or `abfss://` sink written by another machine (another
   laptop, a server) is not known here, so a run here may write it again, and a run here that
   matches its own record does not see what another machine wrote there since.
-- A metadata DB from before 0.33.2 has no record. The asset's last run that wrote sinks stands
+- A metadata DB from before 0.34.0 has no record. The asset's last run that wrote sinks stands
   in for it, so upgrading writes nothing that is current.
 
 ## Dataset sinks

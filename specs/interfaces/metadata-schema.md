@@ -197,7 +197,7 @@ every database from before 0.29.2 (#629):
   queue empty, and older binaries ignore it.
 - `server_state (key, value)` (0.29.4), primary key `key`: settings `barca serve` keeps across
   restarts. `queue_paused_at` (unix seconds) is present while the run queue is paused.
-- `sink_publications (node_id, sink, run_hash, host, run_id, published_at)` (0.33.2, #662),
+- `sink_publications (node_id, sink, run_hash, host, run_id, published_at)` (0.34.0, #662),
   primary key `(node_id, sink)`: the run hash whose output each declared `@sink` path of a step
   (`<node>` or `<node>[<key>]`) holds, the host and run that wrote it, and when (UTC text in
   SQLite's `datetime('now')` format). A cache hit under another run hash republishes the sink
