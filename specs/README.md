@@ -3,8 +3,8 @@
 Start here for what Barca promises and what is still design. Terms are defined in the
 [glossary](../GLOSSARY.md); product direction lives in [DIRECTION.md](../DIRECTION.md).
 This cleanup describes the implemented 0.33.0 baseline at `fa396a5d` and explicitly identified
-gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) is a pending historical-selection
-fix, not assumed merged. A specification describes its stated scope; a passing grammar
+gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) was closed without merging; the
+historical-selection defect remains a known baseline gap. A specification describes its stated scope; a passing grammar
 check or benchmark is not evidence for unrelated runtime behavior.
 
 The [pre-merge audit](../docs/engineering/spec-audit.md) separates unresolved contracts,
