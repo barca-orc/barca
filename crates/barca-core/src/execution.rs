@@ -355,6 +355,8 @@ struct RunState {
     phase_error: Option<String>,
     usage_error: Option<String>,
     step_failure: Option<(String, String)>,
+    /// Where `step_failure` failed, when its worker said so.
+    step_failure_phase: Option<crate::dispatch::ErrorPhase>,
     failed_bases: std::collections::HashSet<String>,
     skipped_bases: std::collections::HashSet<String>,
     logs_buffer: crate::run_logs::Recorder,
@@ -1690,7 +1692,7 @@ fn fail_step(session: &mut RunSession<'_, '_>, base: String, message: String, er
     session
         .state
         .results
-        .record_failure(base, error_type, message, 1, None);
+        .record_failure(base, error_type, message, 1, None, None);
 }
 async fn recover_phase_inputs<'p>(
     session: &mut RunSession<'_, '_>,
@@ -1931,6 +1933,7 @@ async fn collect_failures(
     }
     let cancelled = session.started.cancel.is_cancelled();
     let mut first_non_group_failure: Option<(String, String)> = None;
+    let mut first_failure_phase = None;
     for (item_id, error_msg) in coord.failed_items() {
         let item = coord.item(item_id);
         if item.group.is_some() {
@@ -1974,8 +1977,10 @@ async fn collect_failures(
                 }
             );
         }
+        let phase = coord.failure_phase(item_id);
         if first_non_group_failure.is_none() {
             first_non_group_failure = Some((node_id.clone(), error_msg.to_string()));
+            first_failure_phase = phase;
         }
         session
             .state
@@ -1987,6 +1992,7 @@ async fn collect_failures(
             error_msg.to_string(),
             item.attempts,
             coord.failure_clock(item_id),
+            phase,
         );
     }
 
@@ -2008,6 +2014,7 @@ async fn collect_failures(
         && session.state.step_failure.is_none()
     {
         session.state.step_failure = Some(msg);
+        session.state.step_failure_phase = first_failure_phase;
     }
 }
 fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>) {
@@ -2429,6 +2436,7 @@ async fn return_outputs(
             .step_failure
             .take()
             .map(|(node, message)| crate::FailedStep {
+                phase: session.state.step_failure_phase,
                 artifact_dir: Some(format!(
                     "{}/{}",
                     session.request.cfg.artifact_root.trim_end_matches('/'),
@@ -2538,6 +2546,7 @@ async fn pin_manual<'a>(
                                 short_name(&manual)
                             )),
                             failed_node: Some(manual),
+                            failed_phase: None,
                             partitions: None,
                             key_summary: None,
                         },
@@ -4796,6 +4805,7 @@ mod store_tests {
                 error_type: "UploadError".to_string(),
                 message: "upload to s3://b/f__a/h1.json failed: ConnectionError: reset".to_string(),
                 traceback: String::new(),
+                phase: None,
                 attempts: 4,
                 started_unix_ns: None,
                 elapsed_seconds: None,

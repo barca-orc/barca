@@ -236,11 +236,13 @@ def emit_step_error(
     elapsed: float,
     import_seconds: float | None = None,
     worker_continues: bool = False,
+    phase: str = "user_code",
 ) -> None:
     """Report a step failed.
 
     `worker_continues` tells the coordinator this worker is still sound and goes on with its
-    batch; without it the coordinator stops the worker and starts a fresh one (#523).
+    batch; without it the coordinator stops the worker and starts a fresh one (#523). `phase`
+    is where the failure happened (`_worker.PHASES`).
     """
     _report_repeated_warnings()
     _emit_result(
@@ -251,6 +253,7 @@ def emit_step_error(
             "message": message,
             "traceback": traceback,
             "elapsed": elapsed,
+            "phase": phase,
             **({"import_seconds": import_seconds} if import_seconds is not None else {}),
             **({"worker_continues": True} if worker_continues else {}),
         }

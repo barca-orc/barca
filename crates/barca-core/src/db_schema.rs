@@ -76,6 +76,10 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // The batched call (RFC-0013, 0.32.0) that computed the key: the keys of one call share it.
     // NULL for a step that ran on its own.
     "batch_id TEXT",
+    // Where a failed step failed (#664): `load_inputs`, `user_code`, `split_output`,
+    // `write_output` or `sink` (`dispatch::ErrorPhase`). NULL on success rows, on failures its
+    // worker did not report one for (it died) and on rows from older versions.
+    "error_phase TEXT",
 ];
 
 /// Every table's columns added within format 1, by table. The one list that the pre-migration

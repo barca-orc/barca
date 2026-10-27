@@ -144,6 +144,7 @@ impl RunResults {
         message: String,
         attempts: u32,
         clock: Option<(std::time::SystemTime, std::time::Duration)>,
+        phase: Option<crate::dispatch::ErrorPhase>,
     ) {
         self.failures.push(StepFailure {
             node_id,
@@ -151,6 +152,7 @@ impl RunResults {
                 error_type: error_type.to_string(),
                 message,
                 traceback: String::new(),
+                phase,
                 attempts,
                 started_unix_ns: clock.map(|(started, _)| {
                     started

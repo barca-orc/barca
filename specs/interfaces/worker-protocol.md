@@ -81,9 +81,13 @@ failure if execution stops), or one single-row frame for singleton execution:
 All parallel arrays and detail rows have equal lengths. Status is `step_completed`,
 `step_error` or `blocked`. Completion metadata requires path, format and byte size;
 elapsed time comes from its parallel array. Error metadata requires error type,
-message and traceback, with elapsed time in the array. Blocked metadata requires
-reason. Optional metadata retains timing, digest, sinks, frame reader and the private
-upload snapshot reference. Unknown statuses, invalid identity/time types, malformed
+message and traceback, with elapsed time in the array. Optional error metadata is
+`phase`, where the step failed: `load_inputs`, `user_code` (importing the module, calling
+the function, checking what it returned), `split_output`, `write_output` or `sink`. For
+`user_code` the traceback holds the user's frames only (barca's and importlib's removed);
+for the others it holds every frame. An absent or unknown `phase` is read as unknown.
+Blocked metadata requires reason. Optional metadata retains timing, digest, sinks, frame
+reader and the private upload snapshot reference. Unknown statuses, invalid identity/time types, malformed
 tables, missing required metadata and inline `json` artifact data are rejected.
 Legacy per-item result message variants are not accepted after v3 negotiation.
 

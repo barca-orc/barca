@@ -25,8 +25,10 @@ class BarcaError(Exception):
     When the CLI reported a structured error (the JSON envelope on stderr, see
     ``barca docs agents``), its fields are attributes: ``kind`` (``usage`` |
     ``step_failed`` | ``infra`` | ``cancelled``), ``code`` (the exit code),
-    ``remediation``, and for ``step_failed`` also ``node``, ``traceback`` and
-    ``artifact_dir``. They are ``None`` when the CLI printed plain text.
+    ``remediation``, and for ``step_failed`` also ``node``, ``traceback``,
+    ``artifact_dir`` and ``phase`` (where the step failed: ``user_code`` for the step's own
+    code; ``load_inputs``, ``split_output``, ``write_output`` or ``sink`` for barca's own work
+    around it; ``None`` when unknown). They are ``None`` when the CLI printed plain text.
     """
 
     def __init__(self, message: str, envelope: dict | None = None, stderr: str | None = None):
@@ -40,6 +42,7 @@ class BarcaError(Exception):
         self.node: str | None = env.get("node")
         self.traceback: str | None = env.get("traceback")
         self.artifact_dir: str | None = env.get("artifact_dir")
+        self.phase: str | None = env.get("phase")
 
 
 def _error_envelope(stderr: str) -> dict | None:

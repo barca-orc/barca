@@ -1,6 +1,7 @@
 //! Transport-neutral error classification, remediation, and rendering.
 
 use crate::BarcaError;
+use crate::dispatch::ErrorPhase;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -156,8 +157,12 @@ pub struct ErrorEnvelope {
     pub remediation: Option<String>,
     /// `step_failed` only: the failing node id.
     pub node: Option<String>,
-    /// `step_failed` only: the user-code traceback.
+    /// `step_failed` only: the traceback (the user's code's frames; every frame for a failure
+    /// in barca's own code).
     pub traceback: Option<String>,
+    /// `step_failed` only: where the step failed (`dispatch::ErrorPhase`, by name), when its
+    /// worker said so (#664).
+    pub phase: Option<String>,
     /// `step_failed` only: the failing step's artifact directory (local path or URI).
     pub artifact_dir: Option<String>,
     /// A stable name for an error a client may handle on its own, when barca has one:
@@ -192,6 +197,8 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             #[serde(default)]
             artifact_dir: Option<String>,
             #[serde(default)]
+            phase: Option<String>,
+            #[serde(default)]
             reason: Option<String>,
         }
         let wire = WireEnvelope::deserialize(deserializer)?;
@@ -204,7 +211,10 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             )));
         }
         if wire.kind != ErrorKind::StepFailed
-            && (wire.node.is_some() || wire.traceback.is_some() || wire.artifact_dir.is_some())
+            && (wire.node.is_some()
+                || wire.traceback.is_some()
+                || wire.artifact_dir.is_some()
+                || wire.phase.is_some())
         {
             return Err(serde::de::Error::custom(
                 "step details require kind 'step_failed'",
@@ -212,13 +222,14 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
         }
         // A failed step reads as a local run prints it: `Step '<node>' failed: <summary>` and
         // the traceback.
+        let phase = wire.phase.as_deref().and_then(ErrorPhase::parse);
         let head = match (&wire.kind, &wire.node) {
             (ErrorKind::StepFailed, Some(node)) => wire
                 .error
                 .strip_prefix(&format!("step '{node}' failed: "))
                 .map_or_else(
                     || wire.error.clone(),
-                    |s| format!("Step '{node}' failed: {s}"),
+                    |s| format!("{}{s}", failed_head(node, phase)),
                 ),
             _ => wire.error.clone(),
         };
@@ -232,6 +243,7 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             remediation: wire.remediation,
             node: wire.node,
             traceback: wire.traceback,
+            phase: wire.phase,
             artifact_dir: wire.artifact_dir,
             reason: wire.reason,
             prose,
@@ -241,13 +253,65 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
     }
 }
 
+/// How a failed step's text begins: `Step '<node>' failed: `, or for a failure in barca's own
+/// code, `Step '<node>' failed in barca while loading its inputs (phase load_inputs): `.
+fn failed_head(node: &str, phase: Option<ErrorPhase>) -> String {
+    match phase.filter(|p| p.in_barca()) {
+        Some(p) => format!(
+            "Step '{node}' failed in barca while {} (phase {}): ",
+            p.doing(),
+            p.as_str()
+        ),
+        None => format!("Step '{node}' failed: "),
+    }
+}
+
+/// The verb of the one-line run failure: `failed in barca (load_inputs): ` for a failure in
+/// barca's own code, else `failed: `.
+fn failed_word(phase: Option<ErrorPhase>) -> String {
+    match phase.filter(|p| p.in_barca()) {
+        Some(p) => format!("failed in barca ({}): ", p.as_str()),
+        None => "failed: ".to_string(),
+    }
+}
+
 /// What to do about a failed step, by how it failed: a timeout, a worker that died without a
-/// Python exception, or an exception (with or without a traceback to look at).
+/// Python exception, a failure in barca's own code around the step, or an exception (with or
+/// without a traceback to look at).
 fn step_remediation(step: &crate::FailedStep) -> String {
     const RERUN: &str =
         "re-run the same command. Steps that succeeded are cached and will not re-run.";
     let summary = step.summary();
     let node = &step.node;
+    if let Some(phase) = step.phase.filter(|p| p.in_barca()) {
+        let check = match phase {
+            ErrorPhase::LoadInputs => {
+                "An input artifact may be missing or unreadable: recompute the step that \
+                 produced it with --refresh."
+            }
+            ErrorPhase::SplitOutput => {
+                "Check that the batched function returns a result for each key it was given \
+                 (see `barca docs partitions`)."
+            }
+            ErrorPhase::WriteOutput => {
+                "If the message is about the value the step returned (it cannot be pickled, or \
+                 is not a table for parquet), return something barca can write or set \
+                 serializer= on the decorator."
+            }
+            ErrorPhase::Sink => {
+                "Check each failed sink's path and serializer (the message names them; see \
+                 `barca docs sinks`)."
+            }
+            ErrorPhase::UserCode => "",
+        };
+        return format!(
+            "The failure is in barca's own code while it was {} for '{node}', not in the \
+             step's function; the traceback shows barca's frames. {check} If it is not \
+             something in the step or its inputs, report it with the traceback at \
+             https://github.com/barca-orc/barca/issues. Then {RERUN}",
+            phase.doing()
+        );
+    }
     if summary.starts_with("TimeoutError: ") && summary.contains(" exceeded timeout of ") {
         format!(
             "'{node}' ran longer than its timeout_seconds= (300 when not set). Raise it on the \
@@ -281,6 +345,7 @@ impl ErrorEnvelope {
             remediation: (!rest.is_empty()).then(|| rest.to_string()),
             node: None,
             traceback: None,
+            phase: None,
             artifact_dir: None,
             reason: None,
             prose_has_remediation: true,
@@ -309,13 +374,15 @@ impl ErrorEnvelope {
                 remediation: Some(step_remediation(step)),
                 node: Some(step.node.clone()),
                 traceback: step.traceback().map(str::to_string),
+                phase: step.phase.map(|p| p.as_str().to_string()),
                 artifact_dir: step.artifact_dir.clone(),
                 reason: None,
-                prose: e.to_string(),
+                prose: format!("{}{}", failed_head(&step.node, step.phase), step.message),
                 prose_has_remediation: false,
                 run_failure_line: Some(format!(
-                    "[barca] run failed: step '{}' failed: {}; {} downstream steps skipped (exit 1)",
+                    "[barca] run failed: step '{}' {}{}; {} downstream steps skipped (exit 1)",
                     step.node,
+                    failed_word(step.phase),
                     step.summary().lines().next().unwrap_or("unknown error"),
                     step.run.as_ref().map_or(0, |run| run
                         .steps
@@ -403,6 +470,7 @@ impl ErrorEnvelope {
                 remediation: Some(fallback),
                 node: None,
                 traceback: None,
+                phase: None,
                 artifact_dir: None,
                 reason: None,
                 prose: prose.trim_end().to_string(),
@@ -465,6 +533,7 @@ impl ErrorEnvelope {
             m.insert("node".into(), json!(self.node));
             m.insert("traceback".into(), json!(self.traceback));
             m.insert("artifact_dir".into(), json!(self.artifact_dir));
+            m.insert("phase".into(), json!(self.phase));
         }
         Value::Object(m)
     }
@@ -482,8 +551,10 @@ impl ErrorEnvelope {
             let node = self.node.clone().unwrap_or_default();
             let prefix = format!("step '{node}' failed: ");
             let summary = self.error.strip_prefix(&prefix).unwrap_or(&self.error);
+            let phase = self.phase.as_deref().and_then(ErrorPhase::parse);
             self.run_failure_line = Some(format!(
-                "[barca] run failed: step '{node}' failed: {}; {skipped} downstream steps skipped (exit 1)",
+                "[barca] run failed: step '{node}' {}{}; {skipped} downstream steps skipped (exit 1)",
+                failed_word(phase),
                 summary.lines().next().unwrap_or("unknown error"),
             ));
         }
@@ -518,10 +589,79 @@ mod wire_tests {
     use super::*;
 
     #[test]
+    fn a_failure_in_barca_says_so_and_keeps_its_phase_on_the_wire() {
+        let step = |phase| {
+            BarcaError::WorkerFailed(Box::new(crate::FailedStep {
+                node: "p.py:a".into(),
+                message: "FileNotFoundError: Input artifact not found: x.json\n  File \"/site/barca/_worker.py\", line 9, in _load_artifact".into(),
+                phase,
+                artifact_dir: None,
+                run: None,
+            }))
+        };
+        let e = ErrorEnvelope::from_barca(step(Some(ErrorPhase::LoadInputs)), &Context::default());
+        let wire = e.to_json();
+        assert_eq!(wire["phase"], "load_inputs");
+        assert!(wire["traceback"].as_str().unwrap().contains("_worker.py"));
+        assert!(
+            e.to_human().starts_with(
+                "Step 'p.py:a' failed in barca while loading its inputs (phase load_inputs): FileNotFoundError"
+            ),
+            "{}",
+            e.to_human()
+        );
+        assert!(
+            wire["remediation"]
+                .as_str()
+                .unwrap()
+                .contains("barca's own code")
+        );
+        assert_eq!(
+            e.run_failure_line(),
+            Some(
+                "[barca] run failed: step 'p.py:a' failed in barca (load_inputs): FileNotFoundError: Input artifact not found: x.json; 0 downstream steps skipped (exit 1)"
+            )
+        );
+        // Read back from the wire (a server's error), the text is the same.
+        let restored: ErrorEnvelope = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(restored.to_human(), e.to_human());
+        assert_eq!(
+            restored.with_failed_run_summary(0).run_failure_line(),
+            e.run_failure_line()
+        );
+
+        // A failure in the step's own code reads as before; `phase` is still there.
+        let user = ErrorEnvelope::from_barca(step(Some(ErrorPhase::UserCode)), &Context::default());
+        assert_eq!(user.to_json()["phase"], "user_code");
+        assert!(
+            user.to_human()
+                .starts_with("Step 'p.py:a' failed: FileNotFoundError")
+        );
+        // Unknown (a worker that died): null.
+        let unknown = ErrorEnvelope::from_barca(step(None), &Context::default());
+        assert!(unknown.to_json()["phase"].is_null());
+        // Only a step failure carries a phase.
+        let bad =
+            json!({"kind": "usage", "code": 2, "error": "x", "remediation": null, "phase": "sink"});
+        assert!(serde_json::from_value::<ErrorEnvelope>(bad).is_err());
+    }
+
+    #[test]
+    fn phases_are_a_closed_set_named_on_the_wire() {
+        for phase in ErrorPhase::ALL {
+            assert_eq!(ErrorPhase::parse(phase.as_str()), Some(phase));
+            assert_eq!(serde_json::to_value(phase).unwrap(), phase.as_str());
+            assert_eq!(phase.in_barca(), phase != ErrorPhase::UserCode);
+        }
+        assert_eq!(ErrorPhase::parse("compile"), None);
+    }
+
+    #[test]
     fn envelopes_roundtrip_the_existing_wire_schema_without_local_prose() {
         let failed = BarcaError::WorkerFailed(Box::new(crate::FailedStep {
             node: "p.py:a".into(),
             message: "ValueError: bad\n  File \"p.py\", line 4, in a\n    raise".into(),
+            phase: None,
             artifact_dir: Some("s3://bucket/a".into()),
             run: None,
         }));

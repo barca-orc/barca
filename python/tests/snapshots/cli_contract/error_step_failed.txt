@@ -4,5 +4,6 @@ code : integer
 error : string
 kind : string
 node : string
+phase : string
 remediation : string
 traceback : string

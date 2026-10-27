@@ -76,6 +76,10 @@ pub enum WorkerMessage {
         /// coordinator stops the worker and starts a fresh one (#523).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         worker_continues: bool,
+        /// Where the step failed (`dispatch::ErrorPhase`, by name). Absent from an older
+        /// worker; a name this barca does not know is read as unknown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
@@ -778,6 +782,7 @@ mod tests {
             elapsed: 1.5,
             import_seconds: Some(1.1),
             worker_continues: true,
+            phase: Some("load_inputs".to_string()),
         };
 
         let mut buffer = Vec::new();
@@ -796,8 +801,10 @@ mod tests {
                 elapsed,
                 import_seconds,
                 worker_continues,
+                phase,
             } => {
                 assert!(worker_continues);
+                assert_eq!(phase.as_deref(), Some("load_inputs"));
                 assert_eq!(node_id, "transform");
                 assert_eq!(error_type, "ValueError");
                 assert_eq!(message, "invalid input");

@@ -226,6 +226,7 @@ mod tests {
                 BarcaError::WorkerFailed(Box::new(barca_core::FailedStep {
                     node: "p.py:a".into(),
                     message: "ValueError: no\n  File \"p.py\", line 3, in a\n    raise".into(),
+                    phase: None,
                     artifact_dir: Some(".barca/artifacts/p.py--a".into()),
                     run: None,
                 })),

@@ -475,6 +475,7 @@ def _emit(msg_type, **fields):
                 message=fields["message"],
                 traceback=fields["traceback"],
                 elapsed=fields.get("elapsed", 0.0),
+                phase=fields.get("phase", USER_CODE),
             )
         elif msg_type == "blocked":
             _runtime.emit_blocked(fields["node_id"], fields["reason"])
@@ -482,6 +483,31 @@ def _emit(msg_type, **fields):
     # Original stderr protocol
     payload = json.dumps({"type": msg_type, **fields})
     print(f"BARCA:{_PROTOCOL_VERSION}:{payload}", file=sys.stderr, flush=True)
+
+
+# Where a step failed (the `phase` of a `step_error`). A closed set: the coordinator reads any
+# other value as unknown. Only `user_code` is the step's own code; the others are barca's.
+USER_CODE = "user_code"  # importing the module, calling the function, checking what it returned
+LOAD_INPUTS = "load_inputs"  # reading the step's input artifacts (collect() fan-in included)
+SPLIT_OUTPUT = "split_output"  # dividing a batched call's result into its keys
+WRITE_OUTPUT = "write_output"  # writing the result to its artifact
+SINK = "sink"  # writing the step's @sink files
+PHASES = (USER_CODE, LOAD_INPUTS, SPLIT_OUTPUT, WRITE_OUTPUT, SINK)
+
+
+def _traceback_for(exc, phase: str) -> str:
+    """The traceback a failure in `phase` reports: the user's frames for a failure in user
+    code, every frame for a failure in barca's own code, which has nowhere else to show."""
+    if phase == USER_CODE:
+        return _user_traceback(exc)
+    import traceback
+
+    return "".join(traceback.format_list(traceback.extract_tb(exc.__traceback__))).rstrip("\n")
+
+
+def _output_phase(exc) -> str:
+    """The phase of a failure while a result was written: its sinks, or its artifact."""
+    return SINK if isinstance(exc, _sinks.SinkError) else WRITE_OUTPUT
 
 
 def _user_traceback(exc) -> str:
@@ -515,15 +541,16 @@ def _user_traceback(exc) -> str:
     return text.rstrip("\n")
 
 
-def _emit_error(node_id, exc, elapsed=0.0):
+def _emit_error(node_id, exc, elapsed=0.0, phase=USER_CODE):
     """Emit a structured failure for a single step. Rust owns the retry decision."""
     _emit(
         "error",
         node_id=node_id,
         error_type=type(exc).__name__,
         message=str(exc),
-        traceback=_user_traceback(exc),
+        traceback=_traceback_for(exc, phase),
         elapsed=elapsed,
+        phase=phase,
     )
 
 
@@ -1053,6 +1080,7 @@ def run_batch(batch):
                     )
                     continue
 
+                phase = USER_CODE
                 try:
                     source = str(Path(step["source_file"]).resolve())
                     activate_source_path(source)
@@ -1077,6 +1105,7 @@ def run_batch(batch):
                             result = fn(*d_args, **d_kwargs)
                         elapsed = time.time() - t0
                         cache[full_node_id] = result
+                        phase = WRITE_OUTPUT
                         _materialize(result, full_node_id, art_dir, step, elapsed)
                         continue
                     else:
@@ -1091,6 +1120,7 @@ def run_batch(batch):
                             elif upstream_id in cache:
                                 kwargs[param_name] = cache[upstream_id]
                             else:
+                                phase = LOAD_INPUTS
                                 raise RuntimeError(
                                     f"Input '{param_name}' (from '{upstream_id}') not found in cache. "
                                     f"Tried aligned '{aligned_id}' and base '{upstream_id}'. "
@@ -1101,14 +1131,16 @@ def run_batch(batch):
                     result, elapsed = _execute(fn, kwargs, step)
                 except Exception as exc:
                     unavailable.add(full_node_id)
-                    _emit_error(full_node_id, exc)
+                    if phase == WRITE_OUTPUT:
+                        phase = _output_phase(exc)
+                    _emit_error(full_node_id, exc, phase=phase)
                     continue
 
                 try:
                     _materialize(result, full_node_id, art_dir, step, elapsed)
                 except _sinks.SinkError as exc:
                     unavailable.add(full_node_id)
-                    _emit_error(full_node_id, exc)
+                    _emit_error(full_node_id, exc, phase=SINK)
                     continue
                 cache[full_node_id] = result
         else:
@@ -1125,6 +1157,7 @@ def run_batch(batch):
                 _emit("blocked", node_id=node_id, reason=f"upstream '{blocked_on}' unavailable")
                 continue
 
+            phase = USER_CODE
             try:
                 source = str(Path(step["source_file"]).resolve())
                 activate_source_path(source)
@@ -1146,6 +1179,7 @@ def run_batch(batch):
                         result = fn(*d_args, **d_kwargs)
                     elapsed = time.time() - t0
                     cache[node_id] = result
+                    phase = WRITE_OUTPUT
                     _materialize(result, node_id, art_dir, step, elapsed)
                     continue
                 else:
@@ -1157,6 +1191,7 @@ def run_batch(batch):
                         if upstream_id in cache:
                             kwargs[param_name] = cache[upstream_id]
                         else:
+                            phase = LOAD_INPUTS
                             raise RuntimeError(
                                 f"Input '{param_name}' (from '{upstream_id}') not found in cache. "
                                 f"Available: {list(cache.keys())}"
@@ -1167,14 +1202,16 @@ def run_batch(batch):
                 result, elapsed = _execute(fn, kwargs, step)
             except Exception as exc:
                 unavailable.add(node_id)
-                _emit_error(node_id, exc)
+                if phase == WRITE_OUTPUT:
+                    phase = _output_phase(exc)
+                _emit_error(node_id, exc, phase=phase)
                 continue
 
             try:
                 _materialize(result, node_id, art_dir, step, elapsed)
             except _sinks.SinkError as exc:
                 unavailable.add(node_id)
-                _emit_error(node_id, exc)
+                _emit_error(node_id, exc, phase=SINK)
                 continue
             cache[node_id] = result
 
@@ -1311,6 +1348,8 @@ def _run_daemon_step(step, modules, art_dir, lru):
     # Whether the step's module is imported and its function found: a failure before that
     # stops the worker (`_worker_survives`).
     imported = False
+    # Where the step is: what a failure is reported as (`PHASES`).
+    phase = USER_CODE
 
     try:
         source = str(Path(step["source_file"]).resolve())
@@ -1339,6 +1378,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
         d_kwargs = step.get("direct_kwargs", {})
 
         # Resolve dag_inputs as function arguments.
+        phase = LOAD_INPUTS
         inputs = step.get("inputs", {})
         param_types = step.get("param_types") or {}
         kwargs = dict(d_kwargs) if d_kwargs else {}
@@ -1378,6 +1418,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
         activate_source_path(source)
 
         timeout = step.get("timeout_seconds", 0)
+        phase = USER_CODE
         # Capture user stdout and stderr and stream them live, line by line.
         with _captured(emitter, err_emitter):
             if d_args:
@@ -1445,6 +1486,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
         wall = time.perf_counter() - t0
         cpu = time.process_time() - c0
         # Serialize result to artifact (and write any declared sinks).
+        phase = WRITE_OUTPUT
         try:
             artifact = _materialize(
                 result,
@@ -1475,6 +1517,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 before_emit=tracing.finish,
             )
         except Exception as exc:
+            phase = _output_phase(exc)
             if not step.get("branch"):
                 raise
             # A parallel() branch whose return value cannot be written: say so in terms of
@@ -1525,10 +1568,11 @@ def _run_daemon_step(step, modules, art_dir, lru):
             # included, is a branch that raised.
             error_type=_branches.UNRETURNABLE if unwritable else type(exc).__name__,
             message=message,
-            traceback=_user_traceback(exc),
+            traceback=_traceback_for(exc, phase),
             elapsed=wall,
             import_seconds=import_seconds if import_seconds and import_seconds > 1 else None,
             worker_continues=survives,
+            phase=phase,
         )
         return survives
 
@@ -1571,6 +1615,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
     reported = set()
     n = len(steps)
     bound_views: list[str] = []
+    phase = USER_CODE
 
     def fail_all(exc, survives, wall):
         """Report every key of the call not yet reported as failed with `exc`."""
@@ -1580,7 +1625,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                 f"{message} (the step called sys.exit(); a step must return a value or raise "
                 "an exception, and barca reports any sys.exit() as a failure)"
             )
-        traceback = _user_traceback(exc)
+        traceback = _traceback_for(exc, phase)
         left = [st for st in steps if st["node_id"] not in reported]
         for i, st in enumerate(left):
             reported.add(st["node_id"])
@@ -1594,6 +1639,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                 # The coordinator stops an unsound worker at the first report that says so:
                 # every key is reported before that.
                 worker_continues=survives or i < len(left) - 1,
+                phase=phase,
             )
 
     try:
@@ -1614,6 +1660,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
         imported = True
         _ctrl_c_interrupts_the_step()
 
+        phase = LOAD_INPUTS
         param_types = first.get("param_types") or {}
         kwargs = {d: [st["direct_kwargs"][d] for st in steps] for d in dims}
         aligned = set(first.get("aligned_inputs") or [])
@@ -1663,6 +1710,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
         bound_views.extend(_duckdb.bind_inputs(kwargs, param_types))
         activate_source_path(source)
         timeout = first.get("timeout_seconds", 0)
+        phase = USER_CODE
         with _captured(emitter, err_emitter):
             if timeout and timeout > 0:
                 result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=log_id)
@@ -1675,6 +1723,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
             f".batch-{os.getpid()}-{call_id}"
         )
         explicit = first.get("serializer")
+        phase = SPLIT_OUTPUT
         values = _batch.split(result, keys, dims, staging)
     except BaseException as exc:
         _ctrl_c_does_nothing()
@@ -1690,15 +1739,19 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
     cpu = time.process_time() - c0
     share = wall / max(n, 1)
     ok = True
+    key_phase = SPLIT_OUTPUT
     try:
         for k, text, st in zip(keys, texts, steps):
             node_id = st["node_id"]
             n_key = _batch._norm(k, dims)
+            # The call's own failure of this key (`barca.Failed`) is the step's.
+            key_phase = SPLIT_OUTPUT
             try:
                 if n_key not in values:
                     raise _batch.BatchFailed(f"batch returned no result for {text}")
                 value = values[n_key]
                 if isinstance(value, _batch.Failed):
+                    key_phase = USER_CODE
                     raise _batch.BatchFailed(value.reason or f"{text} failed")
                 prewritten = None
                 if isinstance(value, tuple) and len(value) == 2 and value[0] == "parquet":
@@ -1714,6 +1767,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                         import duckdb  # ty: ignore[unresolved-import]
 
                         value = duckdb.read_parquet(files)
+                key_phase = WRITE_OUTPUT
                 _materialize(
                     value,
                     node_id,
@@ -1733,10 +1787,12 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                 raise
             except Exception as exc:
                 reported.add(node_id)
+                if key_phase == WRITE_OUTPUT:
+                    key_phase = _output_phase(exc)
                 if isinstance(exc, _batch.BatchFailed):
                     error_type, traceback = "BatchKeyFailed", ""
                 else:
-                    error_type, traceback = type(exc).__name__, _user_traceback(exc)
+                    error_type, traceback = type(exc).__name__, _traceback_for(exc, key_phase)
                 _runtime.emit_step_error(
                     node_id=node_id,
                     error_type=error_type,
@@ -1744,12 +1800,14 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                     traceback=traceback,
                     elapsed=share,
                     worker_continues=True,
+                    phase=key_phase,
                 )
     except BaseException as exc:
         _ctrl_c_does_nothing()
         if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
             raise
         ok = _worker_survives(exc, True)
+        phase = key_phase
         fail_all(exc, ok, time.perf_counter() - t0)
     finally:
         _ctrl_c_does_nothing()

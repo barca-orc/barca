@@ -906,9 +906,17 @@ pub fn render_run_detail(
             step.error_type.as_deref().unwrap_or_default(),
             message,
         );
+        // A failure in barca's own code around the step says so (#664).
+        let in_barca = step
+            .error_phase
+            .as_deref()
+            .and_then(crate::dispatch::ErrorPhase::parse)
+            .filter(|p| p.in_barca())
+            .map(|p| format!(" in barca while {} (phase {})", p.doing(), p.as_str()))
+            .unwrap_or_default();
         line!(
             rendered,
-            "{} failed{attempts}: {}",
+            "{} failed{attempts}{in_barca}: {}",
             step.node_id,
             failure.error
         );
@@ -1360,6 +1368,7 @@ pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
             crate::FailedStep {
                 node: t.failed_node.clone().unwrap_or_else(|| name.clone()),
                 message: t.error.clone().unwrap_or_else(|| "unknown error".into()),
+                phase: t.failed_phase,
                 artifact_dir: None,
                 run: Some(Box::new(crate::PartialRun {
                     run_id: result.run_id.clone(),
@@ -1723,6 +1732,22 @@ mod run_detail_tests {
             "SIGKILL (possibly the OOM killer)"
         );
         assert_eq!(v["run"]["failure"]["node"], "p.py:clean");
+    }
+
+    #[test]
+    fn a_failure_in_barca_says_where() {
+        let mut step = failed("p.py:clean");
+        step.error_phase = Some("write_output".into());
+        let (stdout, _) = text(&render_run_detail(&detail(vec![step]), false, ""));
+        assert!(
+            stdout.contains("p.py:clean failed after 3 attempts in barca while writing its result (phase write_output): ZeroDivisionError"),
+            "{stdout}"
+        );
+        let mut step = failed("p.py:clean");
+        step.error_phase = Some("user_code".into());
+        let (stdout, _) = text(&render_run_detail(&detail(vec![step]), true, ""));
+        let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(v["steps"][0]["error_phase"], "user_code");
     }
 
     #[test]

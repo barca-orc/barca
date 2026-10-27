@@ -1951,8 +1951,10 @@ past the limit failed steps are kept first; 0.30.2, #623):
 `elapsed_seconds`, `run_hash`, `artifact_path` (this machine's path or the store location),
 `artifact_format`, `artifact_size_bytes`, `error` (the error as recorded: for a Python
 exception `Type: message` and the frames), `error_type`, `error_message` (the message alone),
-`error_traceback` and `worker_exit` (how a dead worker ended: `SIGKILL (possibly the OOM
-killer)`, another signal name, `code N` or `disconnected`; `null` for a step that raised).
+`error_traceback`, `error_phase` (where the step failed, as in the error envelope's `phase`;
+`null` for a step that did not fail, a dead worker or a row from before #664) and
+`worker_exit` (how a dead worker ended: `SIGKILL (possibly the OOM killer)`, another signal
+name, `code N` or `disconnected`; `null` for a step that raised).
 Cached steps are not listed: `run.steps_cached` counts them. `steps_page` is `{total,
 truncated}`: how many steps the run recorded and whether `steps` lists fewer (the table
 prints a note on stderr). `hint`, present when a step
@@ -2069,6 +2071,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `steps[].elapsed_seconds` | null \| number | always |
 | `steps[].error` | null \| string | always |
 | `steps[].error_message` | null \| string | always |
+| `steps[].error_phase` | null \| string | always |
 | `steps[].error_traceback` | null \| string | always |
 | `steps[].error_type` | null \| string | always |
 | `steps[].max_rss_bytes` | integer \| null | always |
@@ -2422,7 +2425,7 @@ An argument the parser rejects (here `--jsn`) gives the same shape:
 | `remediation` | string | always |
 <!-- END GENERATED schema error_usage_parse -->
 
-`step_failed` adds `node`, `traceback` (your code's frames, or `null`) and `artifact_dir`:
+`step_failed` adds `node`, `traceback`, `artifact_dir` and `phase`:
 
 <!-- BEGIN GENERATED schema error_step_failed -->
 | Key | Type | Present |
@@ -2432,12 +2435,32 @@ An argument the parser rejects (here `--jsn`) gives the same shape:
 | `error` | string | always |
 | `kind` | string | always |
 | `node` | string | always |
+| `phase` | string | always |
 | `remediation` | string | always |
 | `traceback` | string | always |
 <!-- END GENERATED schema error_step_failed -->
 
 `code` equals the exit code. `remediation` can be `null`. In human mode the same error is prose
 with the remediation before the final run summary.
+
+`phase` (#664) says where the step failed, as its worker reported it. The values are a closed
+set, in the order a step goes through them:
+
+| `phase` | Where | `traceback` |
+|---|---|---|
+| `load_inputs` | barca reading the step's input artifacts (a `collect()` fan-in included) | every frame, barca's included |
+| `user_code` | the step's own code: importing its module, calling its function, checking what it returned (a sensor's change signal, a `partitions_from` source's keys) | your code's frames (barca's removed), or `null` |
+| `split_output` | barca dividing a batched call's result into its keys (a key with no result included) | every frame |
+| `write_output` | barca writing the result to its artifact (an unpicklable return value included) | every frame |
+| `sink` | barca writing the step's `@sink` files | every frame |
+
+`phase` is `null` when no worker reported one: a worker that died (`worker for ... exited with
+...`), a step barca failed without running it (its `partitions_from` source could not be read).
+For any phase but `user_code` the failure is in barca's own code around the step, the human
+prose says so (`Step 'p.py:clean' failed in barca while loading its inputs (phase
+load_inputs): ...`, and `run failed: step 'p.py:clean' failed in barca (load_inputs): ...`),
+and `error`, `kind` and the exit code are those of any failed step (`step_failed`, exit 1). A
+future release may add a value; a client should treat an unknown one like a failure in barca.
 
 `reason` (string) is present only on an error a client may handle on its own, and names it
 stably; any other error has no `reason` key. The one value so far is `metadata_unusable`

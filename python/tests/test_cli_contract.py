@@ -233,7 +233,14 @@ CHANGED_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_dry_run_changed", ["get", "total", "pipeline.py", "--dry-run", "--json"], "stdout", 0),
 ]
 PARTITION_RUN_CASE = ("run_partitioned", ["run", "per_key", "pipeline.py", "--json"], "stdout", 0)
-ALL_CASES = CASES + SETUP_CASES + UPLOAD_CASES + [TIMING_CASE, CACHE_CASE] + CHANGED_CASES + [PARTITION_RUN_CASE]
+ALL_CASES = (
+    CASES
+    + SETUP_CASES
+    + UPLOAD_CASES
+    + [TIMING_CASE, CACHE_CASE]
+    + CHANGED_CASES
+    + [PARTITION_RUN_CASE]
+)
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
 USER_VALUES = {
@@ -729,7 +736,7 @@ def test_no_stale_snapshots():
 
 
 def test_error_envelope_shape(runs):
-    """The envelope is the same object for every kind; step_failed adds three keys."""
+    """The envelope is the same object for every kind; step_failed adds four keys."""
     base = {"error": "string", "code": "integer", "kind": "string", "remediation": "string"}
     for case in ("error_usage", "error_usage_parse"):
         s = runs[case][0]
@@ -740,6 +747,7 @@ def test_error_envelope_shape(runs):
         "node": "string",
         "traceback": "string",
         "artifact_dir": "string",
+        "phase": "string",
     }, failed
 
 

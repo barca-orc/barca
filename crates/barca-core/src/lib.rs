@@ -148,8 +148,13 @@ fn metadata_unusable(path: &str, why: &str) -> String {
 pub struct FailedStep {
     /// Node id of the failing step (`file.py:name`, with a partition suffix when partitioned).
     pub node: String,
-    /// What the worker reported: `ExcType: message`, then the user-code traceback frames.
+    /// What the worker reported: `ExcType: message`, then the traceback frames (the user's
+    /// code's, or every frame for a failure in barca's own code: see `phase`).
     pub message: String,
+    /// Where the step failed, when its worker said so (#664). `None` for a worker that died
+    /// without reporting, or a step barca failed without running it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<dispatch::ErrorPhase>,
     /// Where this step's artifacts are stored (`{artifact_root}/{safe node id}`): a local
     /// directory or a remote URI. It may not exist if the step never succeeded.
     pub artifact_dir: Option<String>,
@@ -184,7 +189,7 @@ impl FailedStep {
         self.split().0
     }
 
-    /// The user-code traceback frames, when the worker reported any.
+    /// The traceback frames, when the worker reported any.
     pub fn traceback(&self) -> Option<&str> {
         self.split().1
     }
@@ -233,6 +238,7 @@ mod failed_step_tests {
         FailedStep {
             node: "p.py:oops".into(),
             message: message.into(),
+            phase: None,
             artifact_dir: None,
             run: None,
         }

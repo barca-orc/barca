@@ -167,6 +167,11 @@ every database from before 0.29.2 (#629):
 - `materializations.batch_id` (TEXT, nullable, 0.32.0, RFC-0013): the run-local call id
   shared by the keys computed in one batched function call. History groups these rows for
   display; cache lookup and run hashes remain per key. Unbatched and older rows have NULL.
+- `materializations.error_phase` (TEXT, nullable, #664): where a failed row's step failed, as its
+  worker reported it: `load_inputs`, `user_code`, `split_output`, `write_output` or `sink`. Only
+  `user_code` is the step's own code; for the others `error_traceback` keeps barca's frames.
+  Success rows, failures without a worker report (a worker that died, a step barca failed
+  without running it) and older rows have NULL. Not sent to a server's ledger.
 - `schedule_failures (node_id, failures, failed_nodes, mark)` (0.28.0, RFC-0008 rule 9), primary
   key `node_id`: the consecutive failed ticks of one scheduled node, the nodes that failed in the
   last counted tick (a JSON array), and the highest `materializations.id` when it was counted. A
