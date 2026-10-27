@@ -1,13 +1,25 @@
 """Negotiation is completed before a worker or transfer helper can receive work."""
 
 import json
+import shutil
 import socket
 import struct
+import tempfile
 import threading
 
 import pytest
 
 from barca import _runtime
+
+
+@pytest.fixture
+def sock_path():
+    """A socket path under /tmp: pytest's tmp_path (under $TMPDIR, inside a worktree's long
+    test names) can exceed the 104-byte AF_UNIX limit on macOS. barca itself falls back to
+    /tmp the same way (#557)."""
+    d = tempfile.mkdtemp(prefix="bh", dir="/tmp")
+    yield f"{d}/protocol.sock"
+    shutil.rmtree(d, ignore_errors=True)
 
 
 def exact(sock, n):
@@ -31,8 +43,8 @@ def send(sock, value):
 
 @pytest.mark.parametrize("role", ["worker", "transfer"])
 @pytest.mark.parametrize("response", ["valid", "mismatch", "eof", "malformed"])
-def test_real_connection_negotiates_before_returning(tmp_path, monkeypatch, role, response):
-    path = str(tmp_path / "protocol.sock")
+def test_real_connection_negotiates_before_returning(sock_path, monkeypatch, role, response):
+    path = sock_path
     monkeypatch.setenv("BARCA_SOCKET", path)
     monkeypatch.delenv("BARCA_WORKER_ID", raising=False)
     monkeypatch.setattr(_runtime, "_socket", None)
@@ -90,10 +102,10 @@ def test_real_connection_negotiates_before_returning(tmp_path, monkeypatch, role
 
 
 @pytest.mark.parametrize("role", ["worker", "transfer"])
-def test_a_worker_names_itself_in_its_hello(tmp_path, monkeypatch, role):
+def test_a_worker_names_itself_in_its_hello(sock_path, monkeypatch, role):
     """Workers start together and connect in any order: the hello's `worker_id` (from
     `BARCA_WORKER_ID`) pairs the connection with the process the coordinator started."""
-    path = str(tmp_path / "protocol.sock")
+    path = sock_path
     monkeypatch.setenv("BARCA_SOCKET", path)
     monkeypatch.setenv("BARCA_WORKER_ID", "5")
     monkeypatch.setattr(_runtime, "_socket", None)
