@@ -627,6 +627,13 @@ impl BarcaNames {
         }
     }
 
+    /// Whether a call of any of `exports` could be barca's without barca being able to tell:
+    /// the module's export was reassigned (`barca.partitions = other`). Such a value is left
+    /// unread rather than refused, as an argument check leaves such a call alone.
+    pub(crate) fn uncertain(&self, exports: &[&str]) -> bool {
+        exports.iter().any(|e| self.mutated_exports.contains(e))
+    }
+
     /// Compatibility for bare names in source snippets with no competing binding.
     pub(crate) fn recognized(&self, expr: &Expr) -> Option<&'static str> {
         self.resolve(expr)

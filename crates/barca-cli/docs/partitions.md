@@ -24,8 +24,9 @@ def summary(all_sales: list[dict]) -> dict:
     return {"total": sum(s["revenue"] for s in all_sales)}
 ```
 
-- `partitions([...])` declares keys. A literal list is read statically; any other expression
-  (a list comprehension, a function call) is evaluated by the Python runtime at plan time. It
+- `partitions([...])` declares keys. A literal list of string and integer literals is read
+  statically; any other expression (a list comprehension, a function call, a list with a
+  constant in it) is evaluated by the Python runtime at plan time. It
   imports the asset's module the way a worker does, with the module's directory and the project
   root on `sys.path`, so a helper module beside it or a package of the project imports. An
   expression that raises (or a module that fails to import) is a load error naming the node,

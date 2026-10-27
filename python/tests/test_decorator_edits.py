@@ -100,7 +100,10 @@ def ran(result: dict) -> dict[str, list[str] | bool]:
 
 def get(project: Path, target: str = "report") -> dict:
     proc = subprocess.run(
-        [_find_binary(), "get", target, "pipeline.py", "-o", "value", "--json"], cwd=project, capture_output=True, text=True
+        [_find_binary(), "get", target, "pipeline.py", "-o", "value", "--json"],
+        cwd=project,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -199,7 +202,6 @@ SAME_RESULT = {
     "quotes": "@asset(partitions={'region': partitions(['us', 'eu'])}, serializer='json')",
     "trailing_comma": '@asset(partitions={"region": partitions(["us", "eu",]),}, serializer="json",)',
     "keyword_order": '@asset(serializer="json", partitions={"region": partitions(["us", "eu"])})',
-    "constant_in_description": '@asset(partitions={"region": partitions(["us", "eu"])}, serializer="json", description=SUMMARY)',
 }
 
 
@@ -213,18 +215,23 @@ def test_an_edit_that_cannot_change_the_result_runs_nothing(project, edit):
     assert ran(get(project)) == {}
 
 
-def test_a_constant_used_only_in_an_argument_that_does_not_count_is_not_followed(project):
-    def source(summary: str, team: str) -> str:
-        return (
-            f"{IMPORTS}\nSUMMARY = {summary!r}\nTAGS = {{'team': {team!r}}}\n\n\n"
-            '@asset(partitions={"region": partitions(["us", "eu"])}, description=SUMMARY, tags=TAGS)'
-            f"{SALES}{CONSUMERS}"
-        )
-
-    write(project, source("Sales", "data"))
-    get(project)
-    write(project, source("Sales by region", "finance"))
-    assert ran(get(project)) == {}
+def test_a_constant_in_an_argument_that_does_not_count_is_an_error(project):
+    """Up to 0.33.1 `description=SUMMARY` and `tags=TAGS` read as not written (#665)."""
+    write(
+        project,
+        f"{IMPORTS}\nSUMMARY = 'Sales'\nTAGS = {{'team': 'data'}}\n\n\n"
+        '@asset(partitions={"region": partitions(["us", "eu"])}, description=SUMMARY, tags=TAGS)'
+        f"{SALES}{CONSUMERS}",
+    )
+    proc = subprocess.run(
+        [_find_binary(), "get", "report", "pipeline.py", "--json"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 2, proc.stderr
+    assert "`description=` must be a string literal, got `SUMMARY`" in proc.stderr
+    assert not (project / ".barca" / "artifacts").exists()
 
 
 def test_a_sensor_s_schedule_and_description_do_not_rerun_its_consumers(project):
@@ -334,7 +341,9 @@ def test_an_unknown_argument_edit_is_rejected_before_using_the_cache(project):
     )
     assert proc.returncode == 2
     assert proc.stdout == ""
-    error = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    error = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert error["kind"] == "usage"
     assert "`mode` is not an argument of @asset" in error["error"]
     write(project, before)

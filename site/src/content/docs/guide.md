@@ -36,8 +36,8 @@ barca get summary pipeline.py     # one asset and what it depends on
 - An asset runs again when its own code changes or when one of its inputs does. Edit
   `summary` and only `summary` runs. Edit `raw_data` and both run.
 - `inputs=` has to be written literally in the decorator, because barca reads it from the
-  source without importing the file. Inputs built in a loop or passed through a variable are
-  not seen.
+  source without importing the file. `inputs=` passed through a variable or a call is an
+  error (exit 2); inputs built in a loop are not seen.
 - The decorator returns the function unchanged, so `summary` can be imported and called in a
   unit test like any other function.
 - Assets that do not depend on each other run in parallel, in separate worker processes.

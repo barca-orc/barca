@@ -37,6 +37,10 @@ def summary() -> dict:
   passed as `path=`, no path, a second positional argument (`@sink("out.txt", "json")`) or any
   other keyword is an error when the file is read, exit 2. Up to 0.18.1 `@sink(path=...)`
   declared no sink and `@sink("out.txt", "json")` ignored the format.
+- The path is a string literal, read from the source. A constant, an f-string or a
+  concatenation (`@sink(EXPORT_PATH)`, `@sink(f"exports/{name}.parquet")`) is an error when the
+  file is read, exit 2 (`barca docs assets`, "Values barca reads"). Up to 0.33.1 such a sink was
+  dropped without a message and never written.
 - Writes are staged and finalized atomically, so a crash never leaves a partial file.
 - A sink path is yours: barca writes the file there and changes nothing else. If the path is a
   symlink, the file it points to is written and the link stays. If a directory is at the path

@@ -260,4 +260,5 @@ def test_imported_alias_receives_its_original_signature(tmp_path):
 def test_foreign_collect_does_not_receive_barca_fan_in_semantics(tmp_path):
     proc = listed(tmp_path, CASES["local_class_helper"][0])
     assert proc.returncode == 2
-    assert "unknown upstream 'collect'" in proc.stderr
+    # The file's own `collect` names no step: an error when the file is read (#665).
+    assert "the inputs= key `raw` must name a step, got `collect(raw, flatten=True)`" in proc.stderr
