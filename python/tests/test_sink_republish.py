@@ -224,6 +224,7 @@ def test_a_sink_that_cannot_be_republished_fails_the_step(tmp_path):
     assert envelope["kind"] == "step_failed", envelope
     assert envelope["node"] == "pipeline.py:exported", envelope
     assert "SinkError: sink out.json:" in envelope["error"], envelope
+    assert envelope["phase"] == "sink", envelope
     assert json.loads(proc.stdout)["status"] == "failed"
     # Nothing was recorded as published: once the path is free, the next run writes it.
     (tmp_path / "out.json").rmdir()

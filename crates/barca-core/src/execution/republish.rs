@@ -257,9 +257,14 @@ fn fail_republish(session: &mut RunSession<'_, '_>, id: &str, message: String) {
     session.state.sink_failed = true;
     if session.state.step_failure.is_none() {
         session.state.step_failure = Some((id.to_string(), message.clone()));
+        session.state.step_failure_phase = Some(crate::dispatch::ErrorPhase::Sink);
     }
-    session
-        .state
-        .results
-        .record_failure(id.to_string(), "SinkError", message, 1, None);
+    session.state.results.record_failure(
+        id.to_string(),
+        "SinkError",
+        message,
+        1,
+        None,
+        Some(crate::dispatch::ErrorPhase::Sink),
+    );
 }
