@@ -445,6 +445,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
+      # Timestamps of the shard's phases, for the summary the test step writes.
+      - name: Mark the start
+        run: echo "start $(date +%s.%N)" > /tmp/phases
+
       - uses: actions/checkout@v4
 
       # The full suite includes the state-backend conformance tests, which run against local
@@ -494,6 +498,9 @@ jobs:
           name: barca-wheel
           path: dist-wheel
 
+      - name: Mark the wheel downloaded
+        run: echo "wheel $(date +%s.%N)" >> /tmp/phases
+
       - name: Select test files
         env:
           SHARD: ${{ matrix.shard }}
@@ -527,6 +534,7 @@ jobs:
             uv pip install -q --python /tmp/dd-test-agent ddapm-test-agent
             echo "BARCA_DD_TEST_AGENT=/tmp/dd-test-agent/bin/ddapm-test-agent" >> "$GITHUB_ENV"
           fi
+          echo "deps $(date +%s.%N)" >> /tmp/phases
 
       - name: Wait for emulators
         if: needs.changes.outputs.emulators == 'true'
@@ -545,9 +553,14 @@ jobs:
           mapfile -t files < test-files.txt
           set -o pipefail
           echo "$(nproc) CPUs, $(free -g | awk '/Mem:/ {print $2}') GB" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "pytest $(date +%s.%N)" >> /tmp/phases
           status=0
-          pytest "${files[@]}" -q -n "$(nproc)" --dist loadscope --durations=30 -rfE \
-            --junitxml=junit.xml 2>&1 | tee pytest.log || status=$?
+          # Its own session: a test that signals its process group cannot reach the runner.
+          setsid --wait pytest "${files[@]}" -q -n "$(nproc)" --dist loadscope --durations=30 \
+            -rfE --junitxml=junit.xml 2>&1 | tee pytest.log || status=$?
+          echo "end $(date +%s.%N)" >> /tmp/phases
+          awk 'NR > 1 { printf "%s→%s %.0fs, ", prev, $1, $2 - t } { prev = $1; t = $2 }
+               END { print "" }' /tmp/phases | tee -a "$GITHUB_STEP_SUMMARY"
           {
             echo '```'
             grep -E '^(FAILED|ERROR) ' pytest.log | head -50 || true
