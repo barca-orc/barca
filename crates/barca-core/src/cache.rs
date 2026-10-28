@@ -715,6 +715,10 @@ pub(crate) fn phase_keys(dag: &Dag, phase: &Phase, state: &DecideState) -> Vec<(
     keys
 }
 
+/// How many keys of one step make [`decide_step`] look them up together
+/// ([`db::CacheReader::lookup_many`]) when their rows are not read in one pass.
+const KEYS_LOOKED_UP_TOGETHER: usize = 32;
+
 /// How many keys of one step make [`decide_step`] ask for the node's key rows in one pass
 /// ([`db::CacheReader::key_rows`]) instead of a lookup per key.
 const KEYS_READ_TOGETHER: usize = 256;
@@ -843,29 +847,53 @@ pub(crate) async fn decide_step(
             }
             _ => None,
         };
-        for (i, pk) in step.partition_keys.iter().enumerate() {
+        let ids: Vec<String> = step
+            .partition_keys
+            .iter()
+            .map(|pk| pk.display_id(&step.step_id.base))
+            .collect();
+        // Otherwise many keys are looked up together, a query per thousand.
+        let mut looked_up = match (cache, &rows) {
+            (Some(cache), None) if ids.len() >= KEYS_LOOKED_UP_TOGETHER => {
+                let keys: Vec<(&str, &str)> = ids
+                    .iter()
+                    .map(|id| {
+                        let run_h = step
+                            .run_hashes
+                            .get(id)
+                            .expect("partitioned step has a precomputed run hash per key");
+                        (id.as_str(), run_h.as_str())
+                    })
+                    .collect();
+                cache.lookup_many(&keys).await.map(Vec::into_iter)
+            }
+            _ => None,
+        };
+        for (i, (pk, pdisplay)) in step.partition_keys.iter().zip(ids).enumerate() {
             // Answered from memory, the keys of a big node never wait: give the other tasks
             // of this thread a turn now and then (a helper's connection is accepted by one).
             if i % 1024 == 1023 {
                 tokio::task::yield_now().await;
             }
-            let pdisplay = pk.display_id(&step.step_id.base);
             let run_h = step
                 .run_hashes
                 .get(&pdisplay)
                 .cloned()
                 .expect("partitioned step has a precomputed run hash per key");
-            let hit = match &rows {
-                Some(rows) => {
-                    let hit = rows.get(&pdisplay, &run_h);
-                    if let Some(oref) = &hit
-                        && rows.recently_read(&pdisplay, &run_h)
-                    {
-                        state.recently_read.insert(oref.path.clone());
+            let hit = match (&rows, looked_up.as_mut()) {
+                (None, Some(looked_up)) => looked_up.next().flatten(),
+                _ => match &rows {
+                    Some(rows) => {
+                        let hit = rows.get(&pdisplay, &run_h);
+                        if let Some(oref) = &hit
+                            && rows.recently_read(&pdisplay, &run_h)
+                        {
+                            state.recently_read.insert(oref.path.clone());
+                        }
+                        hit
                     }
-                    hit
-                }
-                None => lookup_in(cache, &pdisplay, &run_h).await,
+                    None => lookup_in(cache, &pdisplay, &run_h).await,
+                },
             };
             match hit {
                 Some(oref) => {
@@ -969,7 +997,7 @@ pub(crate) async fn lookup_cached(
     if let Some(ledger) = cache.ledger() {
         return ledger.answer(node_id, run_hash).flatten();
     }
-    // Prepared once per connection: a dry run of a 200k-key node asks 200k times, and compiling
+    // Prepared once per reader: a dry run of a 200k-key node asks 200k times, and compiling
     // the statement each time cost more than the lookup.
     const WITH_OUTPUT_HASH: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes, \
          output_hash FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
@@ -978,11 +1006,7 @@ pub(crate) async fn lookup_cached(
     const WITHOUT: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes \
          FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
          AND status = 'success' ORDER BY id DESC";
-    let conn = cache.conn();
-    let statement = match conn.prepare(WITH_OUTPUT_HASH).await {
-        Ok(statement) => statement,
-        Err(_) => conn.prepare(WITHOUT).await.unwrap(),
-    };
+    let statement = cache.lookup_statement(&[WITH_OUTPUT_HASH, WITHOUT]).await;
     let mut rows = statement
         .query([node_id.to_string(), run_hash.to_string()])
         .await

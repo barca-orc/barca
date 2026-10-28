@@ -574,6 +574,11 @@ fn db_open_error(detail: impl std::fmt::Display) -> BarcaError {
 /// this run executes Python. (Fields drop in order: connection, database + file lock,
 /// then the in-process guard.)
 pub struct CacheReader {
+    /// The statement of a one-key cache lookup, compiled on first use and kept for the
+    /// reader's life ([`crate::cache::lookup_cached`]): compiling it cost more than the lookup.
+    lookup: tokio::sync::Mutex<Option<libsql::Statement>>,
+    /// The statement of [`CacheReader::lookup_many`], kept the same way.
+    lookup_many: tokio::sync::Mutex<Option<libsql::Statement>>,
     local_artifact_dir: Option<String>,
     /// A server's ledger, which answers cache lookups in place of this database.
     ledger: Option<crate::ledger::Ledger>,
@@ -592,6 +597,8 @@ impl CacheReader {
         let guard = db_guard().await;
         let (handle, conn) = open_conn(db_path).await?;
         Ok(Self {
+            lookup: Default::default(),
+            lookup_many: Default::default(),
             local_artifact_dir: None,
             ledger: None,
             key_rows: Default::default(),
@@ -623,6 +630,99 @@ impl CacheReader {
 
     pub fn conn(&self) -> &libsql::Connection {
         &self.conn
+    }
+
+    /// The one-key lookup statement, compiled from the first of `sql` this database accepts
+    /// on first use and reset for the next query.
+    pub(crate) async fn lookup_statement(
+        &self,
+        sql: &[&str],
+    ) -> tokio::sync::MappedMutexGuard<'_, libsql::Statement> {
+        Self::kept_statement(&self.conn, &self.lookup, sql)
+            .await
+            .expect("the materializations table accepts a lookup")
+    }
+
+    /// The statement kept in `slot`, compiled from the first of `sql` that `conn` accepts on
+    /// first use, and reset for the next query; `None` when it accepts none.
+    async fn kept_statement<'a>(
+        conn: &libsql::Connection,
+        slot: &'a tokio::sync::Mutex<Option<libsql::Statement>>,
+        sql: &[&str],
+    ) -> Option<tokio::sync::MappedMutexGuard<'a, libsql::Statement>> {
+        let mut slot = slot.lock().await;
+        if slot.is_none() {
+            for candidate in sql {
+                #[cfg(test)]
+                PREPARES.with(|n| n.set(n.get() + 1));
+                if let Ok(statement) = conn.prepare(candidate).await {
+                    *slot = Some(statement);
+                    break;
+                }
+            }
+        }
+        let statement = tokio::sync::MutexGuard::try_map(slot, Option::as_mut).ok()?;
+        statement.reset();
+        Some(statement)
+    }
+
+    /// [`crate::cache::lookup_cached`] of each `(node id, run hash)`, in order, a few thousand
+    /// at a time: one query (compiled once, the keys passed as one JSON array) instead of one
+    /// query and one transaction per key. `None` when this database cannot answer them so (a
+    /// server's ledger answers lookups, or the table predates output hashes); the caller then
+    /// looks them up one by one.
+    pub(crate) async fn lookup_many(
+        &self,
+        keys: &[(&str, &str)],
+    ) -> Option<Vec<Option<OutputRef>>> {
+        if self.ledger.is_some() {
+            return None;
+        }
+        const CHUNK: usize = 4096;
+        const SQL: &str = "SELECT k.key, m.artifact_path, m.artifact_format, \
+             m.artifact_size_bytes, m.output_hash FROM json_each(?1) AS k \
+             JOIN materializations m INDEXED BY idx_mat_node_run \
+             ON m.node_id = json_extract(k.value, '$[0]') \
+             AND m.run_hash = json_extract(k.value, '$[1]') \
+             WHERE m.status = 'success' ORDER BY k.key, m.id DESC";
+        let mut out: Vec<Option<OutputRef>> = Vec::with_capacity(keys.len());
+        for chunk in keys.chunks(CHUNK) {
+            let pairs = serde_json::to_string(chunk).ok()?;
+            let statement = Self::kept_statement(&self.conn, &self.lookup_many, &[SQL]).await?;
+            let mut rows = statement.query([pairs]).await.ok()?;
+            // Each key's rows newest first: its first row with an artifact this run may read
+            // decides, as in a lookup.
+            let mut found: Vec<Option<Option<OutputRef>>> = vec![None; chunk.len()];
+            while let Some(row) = rows.next().await.ok()? {
+                let Ok(i) = row.get::<i64>(0) else { continue };
+                let Some(slot) = found.get_mut(i as usize) else {
+                    continue;
+                };
+                if slot.is_some() {
+                    continue;
+                }
+                let Ok(path) = row.get::<String>(1) else {
+                    continue;
+                };
+                if !self.allows_artifact(&path) {
+                    continue;
+                }
+                *slot = Some((|| {
+                    Some(OutputRef {
+                        path,
+                        format: row.get::<String>(2).ok()?,
+                        size_bytes: row.get::<i64>(3).ok()? as u64,
+                        elapsed_seconds: None,
+                        content_hash: row.get::<String>(4).ok().filter(|h| !h.is_empty()),
+                    })
+                })());
+            }
+            drop(rows);
+            drop(statement);
+            out.extend(found.into_iter().map(Option::flatten));
+            tokio::task::yield_now().await;
+        }
+        Some(out)
     }
 
     /// Every successful row of `base`'s partition keys, by key id, when reading them in one
@@ -5849,5 +5949,129 @@ mod output_tail_tests {
         assert_eq!(tail.first().unwrap(), "line 10");
         assert_eq!(tail.last().unwrap(), "line 29");
         assert!(output_tail(&lines, "p.py:c").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    /// A reader compiles its lookup statements once, however many keys it looks up: 0.34.0
+    /// compiled the one-key lookup again for every key, a third of `barca status` over a
+    /// million keys.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_reader_compiles_each_lookup_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        init_db(&path).await.unwrap();
+        let cache = CacheReader::open(&path).await.unwrap();
+        let before = prepares();
+        for k in 0..100 {
+            crate::cache::lookup_cached(&cache, &format!("p.py:a[k={k}]"), "h").await;
+        }
+        assert_eq!(prepares() - before, 1, "one-key lookups");
+        let keys: Vec<(String, String)> = (0..5000)
+            .map(|k| (format!("p.py:a[k={k}]"), "h".to_string()))
+            .collect();
+        let pairs: Vec<(&str, &str)> = keys.iter().map(|(n, h)| (n.as_str(), h.as_str())).collect();
+        let found = cache.lookup_many(&pairs).await.unwrap();
+        assert_eq!(found.len(), 5000);
+        assert_eq!(
+            prepares() - before,
+            2,
+            "and the lookup of many keys, in two chunks"
+        );
+    }
+
+    fn db_in(dir: &tempfile::TempDir) -> String {
+        dir.path().join("metadata.db").display().to_string()
+    }
+
+    #[tokio::test]
+    async fn lookups_together_answer_what_lookups_one_by_one_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        init_db(&path).await.unwrap();
+        for (node, hash, path_, format, status) in [
+            // The newest successful row decides, even without a format: no hit.
+            (
+                "p.py:a[k=1]",
+                "h1",
+                Some("/x/a1.json"),
+                Some("json"),
+                "success",
+            ),
+            ("p.py:a[k=1]", "h1", Some("/x/a1b.json"), None, "success"),
+            // An older row with an artifact under a newer one without.
+            (
+                "p.py:a[k=2]",
+                "h2",
+                Some("/x/a2.json"),
+                Some("json"),
+                "success",
+            ),
+            ("p.py:a[k=2]", "h2", None, None, "success"),
+            // Failed only, and another run hash.
+            (
+                "p.py:a[k=3]",
+                "h3",
+                Some("/x/a3.json"),
+                Some("json"),
+                "failed",
+            ),
+            (
+                "p.py:a[k=4]",
+                "other",
+                Some("/x/a4.json"),
+                Some("json"),
+                "success",
+            ),
+            (
+                "p.py:a[k=5]",
+                "h5",
+                Some("/x/a5.pkl"),
+                Some("pickle"),
+                "success",
+            ),
+        ] {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            conn.execute(
+                "INSERT INTO materializations (node_id, run_hash, artifact_path, \
+                 artifact_format, artifact_size_bytes, status, output_hash) \
+                 VALUES (?1, ?2, ?3, ?4, 7, ?5, 'c')",
+                libsql::params![node, hash, path_, format, status],
+            )
+            .await
+            .unwrap();
+        }
+        let keys: Vec<(String, String)> = (1..=6)
+            .map(|k| (format!("p.py:a[k={k}]"), format!("h{k}")))
+            .collect();
+        let pairs: Vec<(&str, &str)> = keys.iter().map(|(n, h)| (n.as_str(), h.as_str())).collect();
+        let cache = CacheReader::open(&path).await.unwrap();
+        let together = cache.lookup_many(&pairs).await.expect("answered together");
+        let mut one_by_one = Vec::new();
+        for (node, hash) in &pairs {
+            one_by_one.push(crate::cache::lookup_cached(&cache, node, hash).await);
+        }
+        let paths = |found: &[Option<OutputRef>]| -> Vec<Option<String>> {
+            found
+                .iter()
+                .map(|o| o.as_ref().map(|o| o.path.clone()))
+                .collect()
+        };
+        assert_eq!(paths(&together), paths(&one_by_one));
+        assert_eq!(
+            paths(&together),
+            [
+                None,
+                Some("/x/a2.json".into()),
+                None,
+                None,
+                Some("/x/a5.pkl".into()),
+                None
+            ]
+        );
     }
 }
