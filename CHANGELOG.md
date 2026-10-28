@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.35.0 (2026-10-28)
+
 ### Bug Fixes
 
 - `barca serve` loads a `partitions_from` consumer in another file than its source when the
