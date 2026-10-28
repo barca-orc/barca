@@ -32,7 +32,7 @@ concurrency:
 # only shortens the wall time. Jobs that compile or run tests in parallel use more CPUs.
 env:
   # Python test shards in the backends check (scripts/ci-shards.py).
-  PYTHON_SHARDS: 3
+  PYTHON_SHARDS: 4
   # What the aggregators run on the results of the jobs they need. In a full run any result
   # but success fails the required check. In a PR's fast run, a skipped full-set job is
   # expected; a failed or cancelled one still fails it.

@@ -4,14 +4,14 @@
 The `backends` check in `.depot/workflows/ci.yml` runs `python/tests` as several parallel
 jobs. Each job asks this script for its files:
 
-    python3 scripts/ci-shards.py --shards 3 --shard 1              # one path per line
-    python3 scripts/ci-shards.py --shards 3 --shard 1 --emulators  # when CI starts them
+    python3 scripts/ci-shards.py --shards 4 --shard 1              # one path per line
+    python3 scripts/ci-shards.py --shards 4 --shard 1 --emulators  # when CI starts them
 
 The split is by file, so `--dist loadscope` inside a shard keeps its module and class
 grouping. Every `python/tests/test_*.py` file goes to exactly one shard; `--check` verifies
 that, for both maps below, and prints the estimated length of each shard:
 
-    python3 scripts/ci-shards.py --shards 3 --check
+    python3 scripts/ci-shards.py --shards 4 --check
 
 Weights come from `scripts/ci-test-durations.json`: seconds per file, summed over its tests,
 in two maps. `with_emulators` is a run with the object-store emulators up; `without_emulators`
