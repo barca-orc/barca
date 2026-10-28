@@ -486,7 +486,9 @@ async fn read_results_are_no_longer_evicted_and_move_their_last_read_time() {
             .await
             .is_empty()
     );
-    let (rows, _) = rows_of(&f.project, &envs(&f.project)[0]).await.unwrap();
+    let (rows, _) = rows_of(&f.project, &envs(&f.project)[0], None)
+        .await
+        .unwrap();
     assert!(rows[0].last_read_at.is_some());
 }
 
@@ -894,4 +896,134 @@ async fn routine_estimates_advance_only_over_new_rows_and_surveys_correct_reused
     let reset = read_state(&f.project).unwrap();
     let recorded = reset.recorded.get(&f.db).unwrap();
     assert_eq!((recorded.through, recorded.bytes), (0, 0));
+}
+
+/// A scan reads every row once, in id order, across chunks, whatever the ids.
+#[tokio::test]
+async fn a_scan_reads_every_row_once_across_chunks() {
+    let f = Fixture::new().await;
+    let n = SCAN_CHUNK * 2 + 7;
+    f.sql(&format!(
+        "WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < {n}) \
+         INSERT INTO materializations (node_id, run_hash, status) \
+         SELECT 'p.py:a[k=' || i || ']', 'h', 'success' FROM r"
+    ))
+    .await;
+    f.sql("UPDATE materializations SET id = 0 WHERE id = 1")
+        .await;
+    f.sql("UPDATE materializations SET id = -5 WHERE id = 2")
+        .await;
+    let ids = scan(&f.db, "node_id", "status = 'success'", |row| {
+        Ok(row.get::<i64>(0).unwrap())
+    })
+    .await
+    .unwrap();
+    assert_eq!(ids.len(), n);
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "in id order, once each"
+    );
+    assert_eq!(ids[..2], [-5, 0]);
+}
+
+/// A writer is not held for the whole of a long scan: the lock is let go between chunks. One
+/// query over every row held it until the last row, and a server's runs waited that long.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_writer_does_not_wait_for_a_whole_scan() {
+    let f = Fixture::new().await;
+    let n = SCAN_CHUNK * 3;
+    f.sql(&format!(
+        "WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < {n}) \
+         INSERT INTO materializations (node_id, run_hash, status) \
+         SELECT 'p.py:a[k=' || i || ']', 'h', 'success' FROM r"
+    ))
+    .await;
+    let db = f.db.clone();
+    let scanning = tokio::spawn(async move {
+        let rows = scan(&db, "node_id", "status = 'success'", |_| {
+            std::thread::sleep(std::time::Duration::from_micros(20));
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (rows.len(), Instant::now())
+    });
+    // Once the scan holds the lock for its first chunk.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let mut written = Instant::now();
+    for i in 0..3 {
+        crate::db::create_run(&f.db, &format!("r{i}"), "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        written = Instant::now();
+    }
+    let (read, scanned) = scanning.await.unwrap();
+    assert!(read >= n);
+    assert!(
+        written < scanned,
+        "the writes landed between chunks, before the scan ended"
+    );
+}
+
+/// A row's file found by the walk is not looked at again: the walk's sizes give the same rows.
+#[tokio::test]
+async fn rows_from_the_walk_are_the_rows_from_the_disk() {
+    let (f, _) = project().await;
+    let env = &envs(&f.project)[0];
+    let walked = walk(&f.project, true);
+    let sizes: HashMap<PathBuf, u64> = walked
+        .files
+        .iter()
+        .map(|(path, bytes, _)| (f.project.key(path), *bytes))
+        .collect();
+    let (from_disk, recorded) = rows_of(&f.project, env, None).await.unwrap();
+    let (from_walk, recorded_walk) = rows_of(&f.project, env, Some(&sizes)).await.unwrap();
+    let view = |rows: &[plan::Row]| -> Vec<(i64, bool, u64)> {
+        rows.iter().map(|r| (r.id, r.present, r.bytes)).collect()
+    };
+    assert_eq!(view(&from_walk), view(&from_disk));
+    assert_eq!(recorded_walk, recorded);
+    // A file the walk did not see (written since) is looked at on disk.
+    let (rows, _) = rows_of(&f.project, env, Some(&HashMap::new()))
+        .await
+        .unwrap();
+    assert_eq!(view(&rows), view(&from_disk));
+}
+
+/// Under `serve`'s runtime the check runs on a thread of its own: the event loop's other tasks
+/// go on while it blocks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn a_blocking_check_leaves_the_event_loop_running() {
+    let ticks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ticker = tokio::spawn({
+        let ticks = ticks.clone();
+        async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    });
+    tokio::spawn(off_the_event_loop(async {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }))
+    .await
+    .unwrap();
+    ticker.abort();
+    assert!(
+        ticks.load(std::sync::atomic::Ordering::Relaxed) >= 10,
+        "the ticker ran while the check blocked"
+    );
+}
+
+/// One survey of a `.barca/` at a time in a process; another one is free to start.
+#[test]
+fn a_second_survey_of_the_same_cache_waits_for_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a/.barca"), dir.path().join("b/.barca"));
+    let first = Surveying::start(&a).expect("nothing surveys a yet");
+    assert!(Surveying::start(&a).is_none(), "a is being surveyed");
+    assert!(Surveying::start(&b).is_some(), "b is another cache");
+    drop(first);
+    assert!(Surveying::start(&a).is_some());
 }
