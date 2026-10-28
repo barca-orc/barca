@@ -393,6 +393,9 @@
 .barca-table td { padding: 9px 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
 .barca-table tbody tr { cursor: pointer; }
 .barca-table tbody tr:hover, .barca-table tbody tr:focus-visible { background: var(--bg-hover); outline: none; }
+/* The space of the rows a long table leaves out (components/TableWindow.tsx). */
+.barca-table tbody tr.barca-table-spacer { cursor: default; background: none; }
+.barca-table tbody tr.barca-table-spacer td { padding: 0; border: 0; }
 .barca-table .num { text-align: right; font-family: var(--font-sans); white-space: nowrap; }
 .barca-cell-name { display: flex; align-items: center; gap: 8px; }
 .barca-cell-name .name { font-family: var(--font-sans); color: var(--text-strong); }
@@ -473,6 +476,11 @@
 .barca-hist-note { margin: 0; flex: 1; display: flex; align-items: center; font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-muted); }
 /* History while loading: the stats row, then the bars, as tall as they will be. */
 .barca-stats { min-height: 34px; }
+/* A big graph while its layout is computed off the main thread: the canvas keeps its size. */
+.barca-graph-pending {
+  display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+  font-family: var(--font-sans); font-size: var(--text-sm); color: var(--text-muted);
+}
 .barca-table-skeleton { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
 
 /* The development kit page (pages/KitPage.tsx). */

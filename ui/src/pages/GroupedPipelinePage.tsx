@@ -21,8 +21,10 @@ import {
   StatusBadge,
   StatusDot,
   Tag,
+  TableSpacer,
   ResetDatabaseButton,
 } from '@/components'
+import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import {
   GraphCanvas,
   type GraphCanvasHandle,
@@ -73,6 +75,7 @@ export function GroupedPipelinePage() {
   const [dir, setDir] = useState<LayoutDir>('LR')
   const canvas = useRef<GraphCanvasHandle>(null)
   const tableBody = useRef<HTMLTableSectionElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
 
   const assets = useMemo(
     () =>
@@ -142,6 +145,7 @@ export function GroupedPipelinePage() {
         ))
     )
   })
+  const win = useTableWindow(visible.length, scroller)
   // Searching narrows the table; the graph preserves connections and hierarchy.
   const graphEntries = entries
   const path = groupPath(scope, tree)
@@ -216,8 +220,7 @@ export function GroupedPipelinePage() {
       const next = visible[nextIndex]
       if (!next) return
       select(next.id)
-      tableBody.current?.rows[nextIndex]?.focus({ preventScroll: true })
-      tableBody.current?.rows[nextIndex]?.scrollIntoView({ block: 'nearest' })
+      focusWindowRow(tableBody.current, nextIndex, win.scrollToIndex)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -432,7 +435,7 @@ export function GroupedPipelinePage() {
               </div>
             </div>
           ) : (
-            <div className="barca-view-body barca-table-scroll">
+            <div className="barca-view-body barca-table-scroll" ref={scroller}>
               <table className="barca-table barca-group-table">
                 <thead>
                   <tr>
@@ -444,7 +447,10 @@ export function GroupedPipelinePage() {
                   </tr>
                 </thead>
                 <tbody ref={tableBody}>
-                  {visible.map((entry) => {
+                  <TableSpacer height={win.before} columns={5} />
+                  {win.items.map(({ index }) => {
+                    const entry = visible[index]
+                    if (!entry) return null
                     const group = tree.groups.get(entry.id)
                     const nestedGroups = group?.members.filter((id) => tree.groups.has(id)).length ?? 0
                     const state = visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE
@@ -455,6 +461,8 @@ export function GroupedPipelinePage() {
                     return (
                       <tr
                         key={entry.id}
+                        ref={win.measure}
+                        data-index={index}
                         tabIndex={0}
                         aria-selected={selected === entry.id}
                         data-group={group ? entry.id : undefined}
@@ -529,6 +537,7 @@ export function GroupedPipelinePage() {
                       </tr>
                     )
                   })}
+                  <TableSpacer height={win.after} columns={5} />
                 </tbody>
               </table>
               {visible.length === 0 && (

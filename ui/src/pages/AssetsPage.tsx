@@ -11,8 +11,10 @@ import {
   Skeleton,
   StatusBadge,
   StatusDot,
+  TableSpacer,
   Tag,
 } from '@/components'
+import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
@@ -146,6 +148,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const counts = facetCounts(rows, filters, now)
   const visible = sortRows(applyFilters(rows, filters, now), sort)
   const tableBody = useRef<HTMLTableSectionElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
+  const win = useTableWindow(visible.length, scroller)
+  const { scrollToIndex } = win
 
   // The node shown in the side panel (?node=<id>).
   const selectedId = params.get('node')
@@ -183,13 +188,11 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
       const p = new URLSearchParams(params)
       p.set('node', next.id)
       setParams(p, { replace: true })
-      const row = tableBody.current?.rows[nextIndex]
-      row?.focus({ preventScroll: true })
-      row?.scrollIntoView({ block: 'nearest' })
+      focusWindowRow(tableBody.current, nextIndex, scrollToIndex)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedId, visible, params, setParams])
+  }, [selectedId, visible, params, setParams, scrollToIndex])
 
   return (
     <div className="barca-view">
@@ -276,7 +279,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
       </div>
 
       <div className="barca-assets-split">
-      <div className="barca-view-body barca-table-scroll">
+      <div className="barca-view-body barca-table-scroll" ref={scroller}>
         {isError ? (
           <p className="barca-table-empty">
             Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}
@@ -301,9 +304,15 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
               </tr>
             </thead>
             <tbody ref={tableBody}>
-              {visible.map((r) => (
+              <TableSpacer height={win.before} columns={5} />
+              {win.items.map(({ index }) => {
+                const r = visible[index]
+                if (!r) return null
+                return (
                 <tr
                   key={r.id}
+                  ref={win.measure}
+                  data-index={index}
                   tabIndex={0}
                   aria-selected={r.id === selectedId}
                   onClick={(event) => {
@@ -347,7 +356,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   </td>
                   <td>{formatNextRun(r.nextRunMs)}</td>
                 </tr>
-              ))}
+                )
+              })}
+              <TableSpacer height={win.after} columns={5} />
             </tbody>
           </table>
         )}

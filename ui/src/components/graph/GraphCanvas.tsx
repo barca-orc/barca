@@ -7,19 +7,29 @@ import {
   Controls,
   MiniMap,
   useReactFlow,
+  type Edge,
   type Node,
   type NodeTypes,
 } from '@xyflow/react'
 import { AssetNode } from './AssetNode'
 import { GroupNode } from './GroupNode'
 import { UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
-import { buildGraph, edgeClassName, type LayoutDir, type GraphNode, type GraphEntry } from '@/lib/graph'
+import { edgeClassName, type LayoutDir, type GraphNode, type GraphEntry } from '@/lib/graph'
+import { useGraphLayout } from '@/hooks/useGraphLayout'
 import { statusMeta } from '@/lib/status'
 
 // Defined once, outside the component — a fresh object each render is a perf bug.
 const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode }
 
 const FIT_OPTIONS = { padding: 0.18, maxZoom: 1.4, duration: 200 }
+
+/**
+ * The minimap draws every node again on each pan and zoom: above this many it costs more than
+ * it shows (half the main-thread time of a pan at a thousand nodes), and is left out.
+ */
+const MINIMAP_UP_TO = 400
+
+const NO_GRAPH: { nodes: GraphNode[]; edges: Edge[] } = { nodes: [], edges: [] }
 
 export interface GraphCanvasHandle {
   fit: () => void
@@ -67,8 +77,9 @@ export function GraphCanvas({
   handleRef,
 }: GraphCanvasProps) {
   // Re-layout only when structure or direction changes — never on selection or
-  // a live status tick.
-  const base = useMemo(() => buildGraph(assets, dir), [assets, dir])
+  // a live status tick. A big graph is laid out in a worker: `null` until it is.
+  const laidOut = useGraphLayout(assets, dir)
+  const base = laidOut ?? NO_GRAPH
 
   const nodes = useMemo<GraphNode[]>(
     () =>
@@ -98,6 +109,14 @@ export function GraphCanvas({
     onSelect(n.id)
   }, [onSelect])
 
+  if (!laidOut) {
+    return (
+      <div className="barca-graph-pending" role="status">
+        Laying out {assets.length} nodes…
+      </div>
+    )
+  }
+
   return (
     <ReactFlowProvider>
       <ReactFlow
@@ -123,7 +142,7 @@ export function GraphCanvas({
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-grid)" />
         <Controls showInteractive={false} />
-        <MiniMap nodeColor={n => statusMeta(nodeStates.get(n.id) ?? 'skipped').color} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />
+        {base.nodes.length <= MINIMAP_UP_TO && <MiniMap nodeColor={n => statusMeta(nodeStates.get(n.id) ?? 'skipped').color} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
         <FitController layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} handleRef={handleRef} />
       </ReactFlow>
     </ReactFlowProvider>

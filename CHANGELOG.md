@@ -28,6 +28,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   index, `idx_mat_failed`, instead of every row of the run: 115k rows for a run of a 115k-key
   node, read again on each poll of the web UI's runs list. Opening an older metadata DB
   builds the index once, about ten seconds for 3M rows.
+- The web UI stays responsive with a thousand nodes. The assets and groups tables render the
+  rows in view only (26 instead of 1,000 on a 1,000-node project; with the CPU slowed four
+  times, a poll during a run no longer blocks the page, where it held it for 1.8 s), and
+  keyboard navigation and sorting work as before. A graph of 300 nodes or more is laid out
+  off the main thread, and the minimap is left out above 400 nodes, where it was most of the
+  cost of a pan.
 
 ## 0.34.0 (2026-10-27)
 

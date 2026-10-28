@@ -59,7 +59,8 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause | `schedules.test.ts` |
 | `lib/runFeedback.ts` | `runFeedback(status, logs, error)` — map a node's status to a feedback descriptor | `runFeedback.test.ts` |
 | `lib/status.ts` | `statusMeta`, `freshnessLabel`, `nodeKindLabel` — domain → display tokens | — |
-| `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges | — |
+| `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
+| `lib/graphLayout.ts` | `layout(input)` — dagre alone, no React: what `graphLayout.worker.ts` runs off the main thread | — |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids | — |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.
@@ -117,6 +118,24 @@ Rules:
 
 Not primitives yet, by that second-use rule: the sortable table, the run list, the log viewer's
 frame. They are the next candidates when a second view needs them.
+
+## Large projects
+
+A project can have thousands of nodes; a view must not render all of them at once.
+
+- **Long tables render the rows in view.** `hooks/useTableWindow.ts` (TanStack Virtual) gives a
+  table body the rows near the viewport; `TableSpacer` holds the height of the rest, so the
+  sticky header and the scrollbar behave as before. Keyboard navigation goes through
+  `focusWindowRow`, which scrolls to a row that is not rendered yet. A table short enough to fit
+  renders no spacer, so it has only its own rows. The assets and the groups tables use it.
+- **Big graphs are laid out in a worker.** `hooks/useGraphLayout.ts` lays out a graph of 300
+  nodes or more in `lib/graphLayout.worker.ts` and shows "Laying out N nodes…" in the canvas
+  until it arrives; a smaller one is laid out in place, with its data. A poll that returns the
+  same structure keeps its layout. The minimap is left out above 400 nodes: it redraws every
+  node on each pan.
+- Measured on 1,000 partitioned nodes with the CPU slowed four times: a poll of the assets
+  table during a run has no long task, and the remaining cost of a 1,000-node graph is the
+  browser laying out its nodes when it first shows them.
 
 ## Layout stability
 

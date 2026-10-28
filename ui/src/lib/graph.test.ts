@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildGraph, edgeClassName, overlayRunStatus, shortName } from './graph'
+import { buildGraph, edgeClassName, graphAt, layoutInput, overlayRunStatus, shortName } from './graph'
+import { layout } from './graphLayout'
 import type { ListNode, StatusKind } from './types'
 
 const ASSETS: ListNode[] = [
@@ -34,6 +35,20 @@ describe('buildGraph', () => {
       { id: 'p.py:x', kind: 'asset', freshness: 'always', env: [], inputs: ['p.py:missing'] },
     ]
     expect(buildGraph(orphan, 'LR').edges).toEqual([])
+  })
+})
+
+describe('layoutInput / graphAt', () => {
+  it('lay out in two steps (as the worker does) what buildGraph lays out in one', () => {
+    const input = layoutInput(ASSETS, 'TB')
+    // Plain data: what is posted to the worker.
+    expect(JSON.parse(JSON.stringify(input))).toEqual(input)
+    expect(graphAt(ASSETS, 'TB', layout(input))).toEqual(buildGraph(ASSETS, 'TB'))
+  })
+
+  it('gives dagre only the dependencies inside the asset set', () => {
+    const orphan: ListNode[] = [{ ...ASSETS[1]!, inputs: ['p.py:missing'] }]
+    expect(layoutInput(orphan, 'LR').edges).toEqual([])
   })
 })
 
