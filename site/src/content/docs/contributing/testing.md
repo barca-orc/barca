@@ -166,7 +166,7 @@ the queue about a minute after a push:
 | **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes |
 | **changes**: which optional parts the change needs (`scripts/ci-changes.py`); every test file is in exactly one shard (`scripts/ci-shards.py --check`) | backends | yes | yes |
 | **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes |
-| **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes |
+| **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes |
 | **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | yes |
 | **ui**: the web UI's typecheck, lint and unit tests | backends | | yes |
 | **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | yes |
@@ -203,11 +203,12 @@ worker runs. A file the map does not list is weighted by its size. To refresh a 
 suite changes shape, run the suite with `--junitxml` and pass the report to
 `scripts/ci-shards.py --update-durations` (add `--emulators` for a run with them).
 
-Cargo builds in the runner's local `target/` directory. Each Rust job (clippy, rust-tests,
-build) restores and saves a separate Rust dependency archive with `Swatinem/rust-cache`, and
-sccache caches compiler outputs in Depot Cache. Building directly on Depot's shared cache disk
-caused truncated object files and invalid Rust metadata, including after target directories
-were separated by PR.
+Cargo builds in the runner's local `target/` directory, incrementally (`CARGO_INCREMENTAL=1`).
+Each Rust job (clippy, rust-tests, build) restores that directory before the build from a
+cache entry keyed on the job, the rustc version, the `Cargo.lock` hash and the branch (a merge
+group starts from `main`'s latest), and saves a new entry after it, except in a merge group.
+Building directly on Depot's shared cache disk caused truncated object files and invalid Rust
+metadata, including after target directories were separated by PR.
 
 ## Reference for test authors
 
