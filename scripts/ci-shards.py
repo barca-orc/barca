@@ -4,18 +4,22 @@
 The `backends` check in `.depot/workflows/ci.yml` runs `python/tests` as several parallel
 jobs. Each job asks this script for its files:
 
-    python3 scripts/ci-shards.py --shards 4 --shard 1              # one path per line
-    python3 scripts/ci-shards.py --shards 4 --shard 1 --emulators  # when CI starts them
+    python3 scripts/ci-shards.py --shards 3 --shard 1              # one path per line
+    python3 scripts/ci-shards.py --shards 3 --shard 1 --emulators  # when CI starts them
+    python3 scripts/ci-shards.py --shards 3 --shard 1 --checkpoint # when the minute test runs
 
 The split is by file, so `--dist loadscope` inside a shard keeps its module and class
 grouping. Every `python/tests/test_*.py` file goes to exactly one shard; `--check` verifies
-that, for both maps below, and prints the estimated length of each shard:
+that, for both maps below with and without `--checkpoint`, and prints the estimated length of
+each shard:
 
-    python3 scripts/ci-shards.py --shards 4 --check
+    python3 scripts/ci-shards.py --shards 3 --check
 
 Weights come from `scripts/ci-test-durations.json`: seconds per file, summed over its tests,
 in two maps. `with_emulators` is a run with the object-store emulators up; `without_emulators`
-is a run without them, where the backend tests skip (most PRs). A file missing from a map, such
+is a run without them, where the backend tests skip (most PRs). Without `--checkpoint`, the
+files in `GATED` weigh what they take when they skip (CI runs them only when
+`scripts/ci-changes.py` turns their part on). A file missing from a map, such
 as a new one, is weighted by its size at the median seconds per byte of the listed files. To
 refresh a map from a run (only the files in the report are replaced):
 
@@ -42,6 +46,8 @@ MAPS = ("with_emulators", "without_emulators")
 WORKERS = 8
 # Measured on CI: 8 workers do about 6 workers of serial test time (setup, uneven scopes).
 EFFECTIVE_WORKERS = 6
+# Files that skip unless their part of `scripts/ci-changes.py` is on, and their weight then.
+GATED = {"python/tests/test_minute_checkpoints.py": 0.1}
 
 
 def map_name(emulators: bool) -> str:
@@ -70,9 +76,16 @@ def weights(files: list[str], durations: dict[str, float]) -> dict[str, float]:
     return {f: known.get(f, (REPO / f).stat().st_size * rate) for f in files}
 
 
-def split(shards: int, emulators: bool = False) -> list[list[str]]:
-    files = test_files()
+def run_weights(files: list[str], emulators: bool, checkpoint: bool) -> dict[str, float]:
     weight = weights(files, load_durations(emulators))
+    if not checkpoint:
+        weight.update({f: w for f, w in GATED.items() if f in weight})
+    return weight
+
+
+def split(shards: int, emulators: bool = False, checkpoint: bool = False) -> list[list[str]]:
+    files = test_files()
+    weight = run_weights(files, emulators, checkpoint)
     totals = [0.0] * shards
     longest = [0.0] * shards
     assigned: list[list[str]] = [[] for _ in range(shards)]
@@ -95,9 +108,9 @@ def estimate(total: float, longest: float) -> float:
     return max(total / EFFECTIVE_WORKERS, longest)
 
 
-def check_one(shards: int, emulators: bool) -> list[str]:
+def check_one(shards: int, emulators: bool, checkpoint: bool) -> list[str]:
     files = test_files()
-    assigned = split(shards, emulators)
+    assigned = split(shards, emulators, checkpoint)
     seen: dict[str, int] = {}
     problems = []
     for i, part in enumerate(assigned, 1):
@@ -110,8 +123,9 @@ def check_one(shards: int, emulators: bool) -> list[str]:
     problems += [f"{f} is in no shard" for f in sorted(set(files) - set(seen))]
     problems += [f"{f} is not a test file" for f in sorted(set(seen) - set(files))]
     durations = load_durations(emulators)
-    weight = weights(files, durations)
-    print(f"{map_name(emulators)}:", file=sys.stderr)
+    weight = run_weights(files, emulators, checkpoint)
+    name = f"{map_name(emulators)}{', checkpoint' if checkpoint else ''}"
+    print(f"{name}:", file=sys.stderr)
     for i, part in enumerate(assigned, 1):
         total = sum(weight[f] for f in part)
         longest = max((weight[f] for f in part), default=0.0)
@@ -123,11 +137,16 @@ def check_one(shards: int, emulators: bool) -> list[str]:
     unknown = [f for f in files if f not in durations]
     if unknown:
         print(f"  weighted by size (no recorded duration): {', '.join(unknown)}", file=sys.stderr)
-    return [f"{map_name(emulators)}: {p}" for p in problems]
+    return [f"{name}: {p}" for p in problems]
 
 
 def check(shards: int) -> int:
-    problems = check_one(shards, False) + check_one(shards, True)
+    problems = [
+        p
+        for emulators in (False, True)
+        for checkpoint in (False, True)
+        for p in check_one(shards, emulators, checkpoint)
+    ]
     for p in problems:
         print(f"error: {p}", file=sys.stderr)
     n = len(test_files())
@@ -167,6 +186,11 @@ def main() -> int:
     ap.add_argument(
         "--emulators", action="store_true", help="use (or update) the with_emulators map"
     )
+    ap.add_argument(
+        "--checkpoint",
+        action="store_true",
+        help="the gated minute checkpoint test runs (weigh it by its recorded duration)",
+    )
     ap.add_argument("--check", action="store_true", help="verify the split and print it")
     ap.add_argument(
         "--update-durations",
@@ -183,7 +207,7 @@ def main() -> int:
         return check(args.shards)
     if args.shard is None or not 1 <= args.shard <= args.shards:
         ap.error(f"--shard must be between 1 and {args.shards}")
-    print("\n".join(split(args.shards, args.emulators)[args.shard - 1]))
+    print("\n".join(split(args.shards, args.emulators, args.checkpoint)[args.shard - 1]))
     return 0
 
 

@@ -1,4 +1,13 @@
-"""The real one-minute backup checkpoint, and recovery of a wiped machine from it (RFC-0009)."""
+"""The real one-minute backup checkpoint, and recovery of a wiped machine from it (RFC-0009).
+
+The test waits about two minutes on the real fixed timer, so CI runs it only when
+`scripts/ci-changes.py` sees a change to the checkpoint's code (its `checkpoint` part), on a
+`release/v*` branch and on a PR labelled `ci-full`; otherwise CI sets
+`BARCA_TEST_MINUTE_CHECKPOINT=0` and it skips. Unset, as on a laptop, it runs. The checkpoint
+logic itself (backs up only new progress, retries an outage once a tick) is also covered in
+seconds by `the_checkpoint_backs_up_new_progress_and_retries_an_outage` in
+`crates/barca-core/src/persist.rs`, on a short private interval.
+"""
 
 import json
 import os
@@ -7,10 +16,19 @@ import sqlite3
 import subprocess
 import time
 
+import pytest
+
 from barca.api import _find_binary
 
 from .test_incremental_persist import PIPELINE
 from .test_serve_robustness import _env, wait_for
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("BARCA_TEST_MINUTE_CHECKPOINT") == "0",
+    reason="the real minute checkpoint test (about 2 min) is off for this CI run: "
+    "scripts/ci-changes.py saw no change to the checkpoint's code; it runs on such a change, "
+    "on release/v* and with the ci-full label (unset BARCA_TEST_MINUTE_CHECKPOINT to run it)",
+)
 
 
 def backup_rows(path):

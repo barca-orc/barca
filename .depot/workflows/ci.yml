@@ -9,13 +9,12 @@ on:
   # before main moves to it. This is the run that gates a merge.
   merge_group:
     types: [checks_requested]
-  # Also on main, so the README's CI badge reports the integration branch.
-  push:
-    branches: [main]
+  # No run on push to main: main only ever moves to a merge group's commit, which the queue
+  # has just tested.
 
 # One run per PR at a time; a newer push to the PR cancels the older run. A merge group has a
 # ref of its own (gh-readonly-queue/main/pr-<n>-<sha>), so merge-group runs never share a group
-# with each other or with PR runs, and neither they nor runs on main are cancelled.
+# with each other or with PR runs, and are never cancelled.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -26,15 +25,16 @@ concurrency:
 # - pull_request: the fast set only (`checks`, `clippy`, `changes`), so a PR can enter the
 #   merge queue about a minute after a push. Everything else is skipped, and the aggregators
 #   accept those skips. A PR labelled `ci-full` runs the full set, as the queue does.
-# - merge_group, and push to main: the full set. Here every job must succeed.
+# - merge_group: the full set. Here every job must succeed.
 #
 # The full-set jobs carry `if: ${{ github.event_name != 'pull_request' || contains(...) }}`.
 #
 # Sandbox sizes: Depot bills per vCPU-second, so a larger sandbox costs the same CPU time and
 # only shortens the wall time. Jobs that compile or run tests in parallel use more CPUs.
 env:
-  # Python test shards in the backends check (scripts/ci-shards.py).
-  PYTHON_SHARDS: 4
+  # Python test shards in the backends check (scripts/ci-shards.py). Three are as fast as four
+  # (the longest test files set the floor) and cost one sandbox less.
+  PYTHON_SHARDS: 3
   # What the aggregators run on the results of the jobs they need. In a full run any result
   # but success fails the required check. In a PR's fast run, a skipped full-set job is
   # expected; a failed or cancelled one still fails it.
@@ -58,9 +58,12 @@ jobs:
   # .rlib/.rmeta files, even with a target dir per PR. So each Rust job builds incrementally in
   # ./target, restored before the build from an immutable cache archive (actions/cache: an
   # entry is written whole under a new key, never updated in place) and saved after it. Keys
-  # carry the job, the rustc version, the Cargo.lock hash and the branch; a merge group starts
-  # from main's latest entry. Rust jobs use no sccache: it cannot cache incremental crates,
-  # and the restored target dir already holds the compiled dependencies.
+  # carry the job, the rustc version, the Cargo.lock hash, the branch and the run; a PR starts
+  # from its own latest entry, else main's. A merge group saves under `main`, since its commit
+  # is what main becomes: each run writes its own key, so concurrent merge groups never write
+  # the same entry, and a restore takes the newest under the prefix. Rust jobs use no
+  # sccache: it cannot cache incremental crates, and the restored target dir already holds
+  # the compiled dependencies.
   checks:
     runs-on: depot-ubuntu-latest
     timeout-minutes: 15
@@ -75,7 +78,7 @@ jobs:
       # copy or the base's; a commit line `Changelog-Fix: <reason>` allows a deliberate fix.
       - name: Released CHANGELOG sections are unchanged
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: python3 scripts/check-changelog.py --base "$BASE"
 
       - name: Specification owners, links and evidence references
@@ -123,25 +126,26 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}
+          # A merge group's branch is `main` (its commit becomes main's).
+          key: rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
           # This branch's latest, then main's, then main's with another Cargo.lock.
           restore-keys: |
-            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-
+            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-
             rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
             rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Saved from a PR's own runs and from main, never from a merge group (main's next
-      # entry follows it). Incremental session dirs not used for 2 days are pruned first.
+      # Saved from a PR's own runs, and from a merge group as main's next entry. Incremental
+      # session dirs not used for 2 days are pruned first, which bounds the entry's size.
       - name: Save the build directory
-        if: success() && github.event_name != 'merge_group'
+        if: success()
         run: |
           find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
             -exec rm -rf {} + 2>/dev/null || true
           echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - if: success() && github.event_name != 'merge_group'
+      - if: success()
         uses: actions/cache/save@v4
         with:
           path: |
@@ -182,10 +186,11 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}
+          # A merge group's branch is `main` (its commit becomes main's).
+          key: rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
           # This branch's latest, then main's, then main's with another Cargo.lock.
           restore-keys: |
-            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-
+            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-
             rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
             rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-
       # nextest runs each test in its own process. The crates have no runnable doctests (their
@@ -195,16 +200,16 @@ jobs:
         timeout-minutes: 20
         run: cargo nextest run --workspace --no-fail-fast
 
-      # Saved from a PR's own runs and from main, never from a merge group (main's next
-      # entry follows it). Incremental session dirs not used for 2 days are pruned first.
+      # Saved from a PR's own runs, and from a merge group as main's next entry. Incremental
+      # session dirs not used for 2 days are pruned first, which bounds the entry's size.
       - name: Save the build directory
-        if: success() && github.event_name != 'merge_group'
+        if: success()
         run: |
           find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
             -exec rm -rf {} + 2>/dev/null || true
           echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - if: success() && github.event_name != 'merge_group'
+      - if: success()
         uses: actions/cache/save@v4
         with:
           path: |
@@ -285,15 +290,19 @@ jobs:
   #         └───── proxy (nginx/Traefik and server-mode shell tests)
   #   ui (typecheck, lint, unit tests)
   #
-  # The object-store emulators and the duckdb 1.x rerun run only when the change can affect
-  # them (scripts/ci-changes.py lists the paths), on a release branch, and on every push to
-  # main. Without the emulators the backend conformance tests skip (python/tests/emulators.py).
+  # The object-store emulators, the duckdb 1.x rerun and the real minute checkpoint test run
+  # only when the change can affect them (scripts/ci-changes.py lists the paths) and on a
+  # release branch; the checkpoint test also on a PR labelled `ci-full`. A release's merge
+  # group turns them all on too: its version bump touches pyproject.toml. Without the
+  # emulators the backend conformance tests skip (python/tests/emulators.py); without the
+  # checkpoint part, BARCA_TEST_MINUTE_CHECKPOINT=0 skips python/tests/test_minute_checkpoints.py.
   changes:
     runs-on: depot-ubuntu-latest
     timeout-minutes: 10
     outputs:
       emulators: ${{ steps.decide.outputs.emulators }}
       duckdb1: ${{ steps.decide.outputs.duckdb1 }}
+      checkpoint: ${{ steps.decide.outputs.checkpoint }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
@@ -304,16 +313,17 @@ jobs:
       - name: Decide which optional parts run
         id: decide
         env:
-          EVENT: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
+          CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}
           # A merge group can hold several PRs; its base is main before all of them.
           BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         # The reasons go to the check's summary as well as the log.
         run: |
-          if [ "$EVENT" = push ] || [[ "$HEAD_REF" == release/v* ]]; then
+          if [[ "$HEAD_REF" == release/v* ]]; then
             python3 scripts/ci-changes.py --all >> "$GITHUB_OUTPUT" 2> why.txt
           else
-            python3 scripts/ci-changes.py --base "$BASE" >> "$GITHUB_OUTPUT" 2> why.txt
+            on=(); [ "$CI_FULL" = true ] && on=(--on checkpoint)
+            python3 scripts/ci-changes.py --base "$BASE" "${on[@]}" >> "$GITHUB_OUTPUT" 2> why.txt
           fi
           cat why.txt "$GITHUB_OUTPUT"
           { echo '```'; cat why.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -425,10 +435,11 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}
+          # A merge group's branch is `main` (its commit becomes main's).
+          key: rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
           # This branch's latest, then main's, then main's with another Cargo.lock.
           restore-keys: |
-            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-
+            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-
             rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
             rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-
       - name: Build the barca wheel
@@ -444,16 +455,16 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
-      # Saved from a PR's own runs and from main, never from a merge group (main's next
-      # entry follows it). Incremental session dirs not used for 2 days are pruned first.
+      # Saved from a PR's own runs, and from a merge group as main's next entry. Incremental
+      # session dirs not used for 2 days are pruned first, which bounds the entry's size.
       - name: Save the build directory
-        if: success() && github.event_name != 'merge_group'
+        if: success()
         run: |
           find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
             -exec rm -rf {} + 2>/dev/null || true
           echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - if: success() && github.event_name != 'merge_group'
+      - if: success()
         uses: actions/cache/save@v4
         with:
           path: |
@@ -565,17 +576,22 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           EMULATORS: ${{ needs.changes.outputs.emulators }}
+          CHECKPOINT: ${{ needs.changes.outputs.checkpoint }}
         run: |
           if [ "$SHARD" = 0 ]; then
             # barca supports duckdb>=1.4,<3 (#567): every test file that mentions DuckDB runs
             # again on the newest 1.x.
             grep -li duckdb python/tests/test_*.py > test-files.txt
           else
-            # The split balances on durations with or without the emulators, whichever this run has.
+            # The split balances on durations with or without the emulators, whichever this run
+            # has, and weighs the minute checkpoint test only when it runs.
             map=(); [ "$EMULATORS" = true ] && map=(--emulators)
+            [ "$CHECKPOINT" = true ] && map+=(--checkpoint)
             python3 scripts/ci-shards.py --shards "$PYTHON_SHARDS" --shard "$SHARD" "${map[@]}" \
               > test-files.txt
           fi
+          # Off, the real minute checkpoint test skips (python/tests/test_minute_checkpoints.py).
+          [ "$CHECKPOINT" = true ] || echo "BARCA_TEST_MINUTE_CHECKPOINT=0" >> "$GITHUB_ENV"
           echo "$(wc -l < test-files.txt) test files"; cat test-files.txt
 
       - name: Install barca and test extras

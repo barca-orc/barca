@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """Decide which optional parts of the `backends` CI job a change needs.
 
-Two parts of `.depot/workflows/ci.yml` run only when a change can affect them:
+Three parts of `.depot/workflows/ci.yml` run only when a change can affect them:
 
 - **emulators**: the object-store emulators (MinIO, fake-gcs-server, Azurite) and the
   `BARCA_TEST_*` variables that make the backend conformance tests run instead of skip.
 - **duckdb1**: the second run of every test file that mentions duckdb, against duckdb 1.x.
+- **checkpoint**: `python/tests/test_minute_checkpoints.py`, which waits about two minutes on
+  the real one-minute backup checkpoint timer (RFC-0009). Off, CI sets
+  `BARCA_TEST_MINUTE_CHECKPOINT=0` and the test skips.
 
     python3 scripts/ci-changes.py --base <sha>          # diff <sha>...HEAD (or --head)
-    python3 scripts/ci-changes.py --all                 # both on (push to main, a release)
+    python3 scripts/ci-changes.py --all                 # every part on (a release branch)
+    python3 scripts/ci-changes.py --base <sha> --on checkpoint   # and this part regardless
 
-It prints `emulators=true|false` and `duckdb1=true|false` on stdout (for `$GITHUB_OUTPUT`)
-and the files that turned each one on to stderr. If the diff cannot be computed (a base
-commit missing from the clone), both are on.
+It prints `emulators=true|false`, `duckdb1=true|false` and `checkpoint=true|false` on stdout
+(for `$GITHUB_OUTPUT`) and the files that turned each one on to stderr. If the diff cannot be
+computed (a base commit missing from the clone), every part is on.
 
 A change turns a part on when it touches a path below, or:
 - emulators: a test file (or test helper) that uses the emulators (`emulators` or `BARCA_TEST_`);
@@ -80,6 +84,23 @@ DUCKDB1 = ALWAYS + [
     "python/tests/conftest.py",
 ]
 
+# The minute checkpoint: the run's step recorder and its checkpoint timer, the backup it
+# takes, the helper process that runs it, the store side, `barca state backups|restore`, and
+# the test with the helpers it imports.
+CHECKPOINT = ALWAYS + [
+    "crates/barca-core/src/persist.rs",
+    "crates/barca-core/src/backup.rs",
+    "crates/barca-core/src/helper_proc.rs",
+    "crates/barca-cli/src/commands/state.rs",
+    "python/barca/_state.py",
+    "python/barca/_storage.py",
+    "python/tests/test_minute_checkpoints.py",
+    "python/tests/test_incremental_persist.py",
+    "python/tests/test_serve_robustness.py",
+]
+
+PARTS = ("emulators", "duckdb1", "checkpoint")
+
 EMULATOR_TEST = re.compile(r"\bemulators\b|BARCA_TEST_")
 DUCKDB = re.compile(r"duckdb", re.IGNORECASE)
 
@@ -112,7 +133,7 @@ def changed_lines_mention(base: str, path: str, pattern: re.Pattern, head: str =
 
 
 def decide(base: str, files: list[str], head: str = "HEAD") -> dict[str, list[str]]:
-    why: dict[str, list[str]] = {"emulators": [], "duckdb1": []}
+    why: dict[str, list[str]] = {part: [] for part in PARTS}
     for f in files:
         if matches(f, EMULATORS) or (is_test_source(f) and file_mentions(f, EMULATOR_TEST)):
             why["emulators"].append(f)
@@ -122,6 +143,8 @@ def decide(base: str, files: list[str], head: str = "HEAD") -> dict[str, list[st
             or (f.endswith((".py", ".rs")) and changed_lines_mention(base, f, DUCKDB, head))
         ):
             why["duckdb1"].append(f)
+        if matches(f, CHECKPOINT):
+            why["checkpoint"].append(f)
     return why
 
 
@@ -131,11 +154,14 @@ def main() -> int:
     group.add_argument("--base", help="the commit the change is compared with")
     group.add_argument("--all", action="store_true", help="turn every part on")
     ap.add_argument("--head", default="HEAD", help="the change's commit (default HEAD)")
+    ap.add_argument(
+        "--on", action="append", default=[], choices=PARTS, help="turn this part on regardless"
+    )
     args = ap.parse_args()
 
     if args.all:
         print("all parts on", file=sys.stderr)
-        parts = {"emulators": True, "duckdb1": True}
+        parts = dict.fromkeys(PARTS, True)
     else:
         try:
             files = git("diff", "--name-only", f"{args.base}...{args.head}").split()
@@ -145,7 +171,7 @@ def main() -> int:
                 f"cannot diff against {args.base} ({e.stderr.strip()}); all parts on",
                 file=sys.stderr,
             )
-            parts = {"emulators": True, "duckdb1": True}
+            parts = dict.fromkeys(PARTS, True)
         else:
             print(f"{len(files)} changed file(s) since {args.base}", file=sys.stderr)
             for part, hits in why.items():
@@ -154,6 +180,9 @@ def main() -> int:
                     file=sys.stderr,
                 )
             parts = {part: bool(hits) for part, hits in why.items()}
+    for part in args.on:
+        print(f"{part}: on (--on {part})", file=sys.stderr)
+        parts[part] = True
     for part, on in parts.items():
         print(f"{part}={'true' if on else 'false'}")
     return 0

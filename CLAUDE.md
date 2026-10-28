@@ -177,11 +177,13 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   CI once, and squash-merge it with a body that lists each PR and the issues it closes.
 - **What CI runs**: the merge group's run gates the merge. A PR runs only the fast set
   (`checks`, `clippy`, `changes`) so it enters the queue within about a minute; the full set
-  (Rust tests, the wheel, integration, UI checks, Python shards) runs in the queue and on main,
-  or on a PR labelled `ci-full`. The object-store emulator tests and the duckdb 1.x rerun run
-  only when the change touches the paths `scripts/ci-changes.py` lists, on a `release/v*`
-  branch and on push to main; otherwise those tests skip. A change to store or duckdb code
-  outside those paths should add the path there. Details: `contributing/testing.md` on the site.
+  (Rust tests, the wheel, integration, UI checks, Python shards) runs in the queue, or on a PR
+  labelled `ci-full`. Nothing runs on push to main: main only moves to a merge group's commit,
+  which the queue has tested. The object-store emulator tests, the duckdb 1.x rerun and the
+  real minute checkpoint test (`test_minute_checkpoints.py`, about 2 min) run only when the
+  change touches the paths `scripts/ci-changes.py` lists and on a `release/v*` branch (the
+  checkpoint test also with `ci-full`); otherwise those tests skip. A change to store, duckdb
+  or backup checkpoint code outside those paths should add the path there. Details: `contributing/testing.md` on the site.
 - **Release**: `scripts/release.sh X.Y.Z`, from the trunk on an up-to-date main
   (`--dry-run` does everything locally and stops before the push). It refuses a version not
   greater than the latest tag, an empty `## Pending`, or (pre-1.0) a patch bump when Pending

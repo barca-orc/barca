@@ -21,12 +21,13 @@ def load(name: str):
     return module
 
 
+@pytest.mark.parametrize("checkpoint", [False, True])
 @pytest.mark.parametrize("emulators", [False, True])
 @pytest.mark.parametrize("shards", [1, 2, 3, 4, 6])
-def test_every_test_file_is_in_exactly_one_shard(shards, emulators):
+def test_every_test_file_is_in_exactly_one_shard(shards, emulators, checkpoint):
     ci_shards = load("ci-shards")
     files = ci_shards.test_files()
-    assigned = ci_shards.split(shards, emulators)
+    assigned = ci_shards.split(shards, emulators, checkpoint)
     flat = [f for part in assigned for f in part]
     assert len(assigned) == shards and all(assigned)
     assert sorted(flat) == files
@@ -63,7 +64,7 @@ def test_unrelated_changes_turn_nothing_on(monkeypatch):
         ci_changes, "changed_lines_mention", lambda base, path, pattern, head="HEAD": False
     )
     why = ci_changes.decide("base", ["README.md", "crates/barca-core/src/dag.rs", "ui/src/x.ts"])
-    assert why == {"emulators": [], "duckdb1": []}
+    assert why == {"emulators": [], "duckdb1": [], "checkpoint": []}
 
 
 def test_store_and_duckdb_paths_turn_their_part_on(monkeypatch):
@@ -101,7 +102,7 @@ def test_dependencies_and_the_workflow_turn_everything_on(monkeypatch):
     )
     for f in ["pyproject.toml", "uv.lock", ".depot/workflows/ci.yml"]:
         why = ci_changes.decide("base", [f])
-        assert why == {"emulators": [f], "duckdb1": [f]}
+        assert why == {"emulators": [f], "duckdb1": [f], "checkpoint": [f]}
 
 
 def test_a_changed_line_mentioning_duckdb_turns_the_rerun_on(monkeypatch):
@@ -112,4 +113,28 @@ def test_a_changed_line_mentioning_duckdb_turns_the_rerun_on(monkeypatch):
         lambda base, path, pattern, head="HEAD": path.endswith("_worker.py"),
     )
     why = ci_changes.decide("base", ["python/barca/_worker.py", "python/barca/_runtime.py"])
-    assert why == {"emulators": [], "duckdb1": ["python/barca/_worker.py"]}
+    assert why == {"emulators": [], "duckdb1": ["python/barca/_worker.py"], "checkpoint": []}
+
+
+def test_checkpoint_paths_turn_the_minute_test_on(monkeypatch):
+    ci_changes = load("ci-changes")
+    monkeypatch.setattr(
+        ci_changes, "changed_lines_mention", lambda base, path, pattern, head="HEAD": False
+    )
+    files = [
+        "crates/barca-core/src/persist.rs",
+        "crates/barca-core/src/backup.rs",
+        "python/barca/_state.py",
+        "python/tests/test_minute_checkpoints.py",
+        "crates/barca-core/src/dag.rs",
+    ]
+    assert ci_changes.decide("base", files)["checkpoint"] == files[:4]
+
+
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_the_minute_test_weighs_its_duration_only_when_it_runs(checkpoint):
+    ci_shards = load("ci-shards")
+    files = ci_shards.test_files()
+    weight = ci_shards.run_weights(files, False, checkpoint)
+    for f, skipped in ci_shards.GATED.items():
+        assert (weight[f] == skipped) is not checkpoint
