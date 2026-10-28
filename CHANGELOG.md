@@ -8,6 +8,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Performance
+
+- Deciding the cache state of many partition keys is faster again: `barca status` over 1,000
+  nodes with 1.2M keys takes 7.5 s instead of 12.2 s, and so does `GET /state` and the
+  decisions every run makes. Since 0.34.0 a one-key cache lookup compiled its SQL again for
+  every key (the move from `turso` to libSQL lost the statement cache); a reader now compiles
+  it once, and the keys of a partitioned step are looked up a few thousand to a query.
+
 ## 0.34.0 (2026-10-27)
 
 ### Breaking
