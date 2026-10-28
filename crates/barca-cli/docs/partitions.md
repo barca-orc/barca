@@ -28,7 +28,10 @@ def summary(all_sales: list[dict]) -> dict:
   statically; any other expression (a list comprehension, a function call, a list with a
   constant in it) is evaluated by the Python runtime at plan time. It
   imports the asset's module the way a worker does, with the module's directory and the project
-  root on `sys.path`, so a helper module beside it or a package of the project imports. An
+  root on `sys.path`, so a helper module beside it or a package of the project imports. Each
+  expression is evaluated once per module each time barca loads the project: the nodes of a
+  file that read the same expression, and the `partitions_from` consumers below them (in any
+  file), have the keys of that one evaluation. An
   expression that raises (or a module that fails to import) is a load error naming the node,
   with the traceback, in `barca list`, `barca status`, `get` (exit 2 when it is the target),
   `GET /health` `load_errors` and `barca doctor`; the node and what reads it are left out of

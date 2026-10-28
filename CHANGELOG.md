@@ -8,6 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- `barca serve` loads a `partitions_from` consumer in another file than its source when the
+  source's keys come from an expression (`partitions(KEYS)`). The server evaluated the
+  expression again for each consumer, in the consumer's module, and refused the node with
+  `NameError: name 'KEYS' is not defined`; the CLI loaded it. Each expression is now evaluated
+  once per module and load, so the server also starts in 0.3 s where a project of 1,000
+  partitioned nodes took 19 s (960 interpreters started, now 10).
+
 ### Performance
 
 - Deciding the cache state of many partition keys is faster again: `barca status` over 1,000

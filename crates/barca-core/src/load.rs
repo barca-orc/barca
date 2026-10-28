@@ -345,12 +345,14 @@ fn load_files(
     }
     let failed_files = errors.iter().map(|e| e.file.clone()).collect::<Vec<_>>();
     let (dag, mut failures) = Dag::isolate(&all_nodes, &failed_files);
+    // The healthy nodes as written, as the full load above evaluates them: before building the
+    // graph copies a source's keys onto each `partitions_from` consumer. Evaluated after, a
+    // consumer in another file evaluated its source's expression in its own module, where the
+    // names it reads are not defined, and every consumer evaluated it again.
     let mut healthy: Vec<_> = all_nodes
         .iter()
-        .filter_map(|node| {
-            dag.get_node(&node.continuity_key())
-                .map(|node| node.extracted.clone())
-        })
+        .filter(|node| dag.get_node(&node.continuity_key()).is_some())
+        .cloned()
         .collect();
     let unevaluated = resolve_dynamic_partitions(&mut healthy, python)?;
     let (mut dag, additional) = Dag::isolate_with(&healthy, &failed_files, unevaluated);
@@ -448,13 +450,11 @@ fn resolve_dynamic_partitions(
     nodes: &mut [crate::model::ExtractedNode],
     python: &std::path::Path,
 ) -> Result<Vec<(String, String)>, BarcaError> {
-    // `-c`: the cwd (the project root) is first on sys.path, as for a worker.
-    const SCRIPT: &str = "import json, sys\n\
-        from barca._source_import import load_pipeline_module\n\
-        _ns = dict(vars(load_pipeline_module(sys.argv[1])))\n\
-        _ns['__builtins__'] = __builtins__\n\
-        print(json.dumps(list(eval(sys.argv[2], _ns))))\n";
     let mut failures = Vec::new();
+    // Each expression is evaluated once per module and load: several nodes of a file that read
+    // the same keys (`partitions(KEYS)`) start one interpreter, not one each.
+    let mut evaluated: std::collections::HashMap<(PathBuf, String), Result<Vec<_>, KeysError>> =
+        std::collections::HashMap::new();
     for node in nodes.iter_mut() {
         let mut resolved: Vec<(String, Vec<crate::model::PartitionValue>)> = Vec::new();
         let mut failed = None;
@@ -465,60 +465,43 @@ fn resolve_dynamic_partitions(
             let module_path = std::path::Path::new(&node.source_file)
                 .canonicalize()
                 .unwrap_or_else(|_| PathBuf::from(&node.source_file));
-            let mut eval = Command::new(python);
-            eval.arg("-c")
-                .arg(SCRIPT)
-                .arg(module_path.to_string_lossy().as_ref())
-                .arg(source_text)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            let output = match crate::helper_proc::spawn_std(&mut eval)
-                .and_then(|child| child.wait_with_output())
-            {
-                Ok(output) => output,
-                // Not the pipeline's fault: barca's own Python is missing (exit 3).
-                Err(e) => {
-                    return Err(BarcaError::Other(format!(
-                        "cannot evaluate partitions({source_text}) of {}: cannot run {}: {e}",
-                        node.continuity_key(),
-                        python.display()
-                    )));
+            let key = (module_path, source_text.clone());
+            let outcome = match evaluated.get(&key) {
+                Some(outcome) => outcome.clone(),
+                None => {
+                    let outcome = evaluate_keys(python, &key.0, source_text).map_err(|e| {
+                        // Not the pipeline's fault: barca's own Python is missing (exit 3).
+                        BarcaError::Other(format!(
+                            "cannot evaluate partitions({source_text}) of {}: cannot run {}: {e}",
+                            node.continuity_key(),
+                            python.display()
+                        ))
+                    })?;
+                    evaluated.insert(key, outcome.clone());
+                    outcome
                 }
             };
-            if !output.status.success() {
-                let (exception, frames) = user_traceback(&String::from_utf8_lossy(&output.stderr));
-                let mut error =
-                    format!("partitions({source_text}) for dimension '{dim}' raised {exception}");
-                if !frames.is_empty() {
-                    error.push_str("\nTraceback (most recent call last):\n");
-                    error.push_str(&frames);
+            match outcome {
+                Ok(values) => resolved.push((dim.clone(), values)),
+                Err(KeysError::Raised { exception, frames }) => {
+                    let mut error = format!(
+                        "partitions({source_text}) for dimension '{dim}' raised {exception}"
+                    );
+                    if !frames.is_empty() {
+                        error.push_str("\nTraceback (most recent call last):\n");
+                        error.push_str(&frames);
+                    }
+                    failed = Some(error);
+                    break;
                 }
-                failed = Some(error);
-                break;
-            }
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let values: Vec<serde_json::Value> = match serde_json::from_str(stdout.trim()) {
-                Ok(values) => values,
-                Err(e) => {
+                Err(KeysError::NotAList(e)) => {
                     failed = Some(format!(
                         "partitions({source_text}) for dimension '{dim}' did not give a list of \
                          keys: {e}"
                     ));
                     break;
                 }
-            };
-            let partition_values: Vec<crate::model::PartitionValue> = values
-                .into_iter()
-                .filter_map(|v| match v {
-                    serde_json::Value::String(s) => Some(crate::model::PartitionValue::Str(s)),
-                    serde_json::Value::Number(n) => {
-                        n.as_i64().map(crate::model::PartitionValue::Int)
-                    }
-                    _ => None,
-                })
-                .collect();
-            resolved.push((dim.clone(), partition_values));
+            }
         }
         if let Some(error) = failed {
             failures.push((node.continuity_key(), error));
@@ -556,6 +539,132 @@ fn resolve_dynamic_partitions(
         }
     }
     Ok(failures)
+}
+
+/// Why a `partitions(<expression>)` gave no keys.
+#[derive(Clone)]
+enum KeysError {
+    /// It raised: the exception line and the user's frames of the traceback.
+    Raised { exception: String, frames: String },
+    /// It printed something that is not a JSON list.
+    NotAList(String),
+}
+
+/// Evaluate `source_text` in the module at `module_path`, imported as a worker imports it.
+/// The outer error is not the pipeline's: `python` could not be run.
+fn evaluate_keys(
+    python: &std::path::Path,
+    module_path: &std::path::Path,
+    source_text: &str,
+) -> std::io::Result<Result<Vec<crate::model::PartitionValue>, KeysError>> {
+    // `-c`: the cwd (the project root) is first on sys.path, as for a worker.
+    const SCRIPT: &str = "import json, sys\n\
+        from barca._source_import import load_pipeline_module\n\
+        _ns = dict(vars(load_pipeline_module(sys.argv[1])))\n\
+        _ns['__builtins__'] = __builtins__\n\
+        print(json.dumps(list(eval(sys.argv[2], _ns))))\n";
+    let mut eval = Command::new(python);
+    eval.arg("-c")
+        .arg(SCRIPT)
+        .arg(module_path.to_string_lossy().as_ref())
+        .arg(source_text)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output =
+        crate::helper_proc::spawn_std(&mut eval).and_then(|child| child.wait_with_output())?;
+    if !output.status.success() {
+        let (exception, frames) = user_traceback(&String::from_utf8_lossy(&output.stderr));
+        return Ok(Err(KeysError::Raised { exception, frames }));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let values: Vec<serde_json::Value> = match serde_json::from_str(stdout.trim()) {
+        Ok(values) => values,
+        Err(e) => return Ok(Err(KeysError::NotAList(e.to_string()))),
+    };
+    Ok(Ok(values
+        .into_iter()
+        .filter_map(|v| match v {
+            serde_json::Value::String(s) => Some(crate::model::PartitionValue::Str(s)),
+            serde_json::Value::Number(n) => n.as_i64().map(crate::model::PartitionValue::Int),
+            _ => None,
+        })
+        .collect()))
+}
+
+#[cfg(test)]
+mod dynamic_key_tests {
+    use super::{build_dag, build_partial_dag};
+
+    /// A `python` that logs each key evaluation (module and expression) to `calls`, and runs
+    /// the real interpreter with this checkout's `barca` importable.
+    fn logging_python(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../python")
+            .canonicalize()
+            .unwrap();
+        let calls = dir.join("calls");
+        let python = dir.join("python");
+        std::fs::write(
+            &python,
+            format!(
+                "#!/bin/sh\necho \"$3 $4\" >> '{}'\nPYTHONPATH='{}' exec python3 \"$@\"\n",
+                calls.display(),
+                source.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (python, calls)
+    }
+
+    /// The server loads partially (`build_partial_dag`), the CLI fully (`build_dag`): either way
+    /// the nodes that read the same expression, and the `partitions_from` chain below them,
+    /// have its keys from one evaluation, not one per node (the partial load evaluated each
+    /// consumer's copy of its source's expression, a thousand interpreters for a thousand
+    /// partitioned nodes).
+    #[tokio::test]
+    async fn keys_from_an_expression_are_evaluated_once_per_module() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.py");
+        std::fs::write(
+            &file,
+            "from barca import asset, partitions, partitions_from\nKEYS = ['k1', 'k2', 'k3']\n\
+             @asset(partitions={'key': partitions(KEYS)})\ndef src(key: str) -> str:\n    return key\n\
+             @asset(partitions={'key': partitions(KEYS)})\ndef other(key: str) -> str:\n    return key\n\
+             @asset(partitions={'key': partitions_from(src)})\ndef down(key: str, src: str) -> str:\n    return src\n\
+             @asset(partitions={'key': partitions_from(down)})\ndef further(key: str, down: str) -> str:\n    return down\n",
+        )
+        .unwrap();
+        let (python, calls) = logging_python(dir.path());
+        let files = vec![file.display().to_string()];
+        for partial in [true, false] {
+            let _ = std::fs::remove_file(&calls);
+            let dag = if partial {
+                let (dag, errors) = build_partial_dag(&files, &python).await.unwrap();
+                assert!(errors.is_empty(), "{errors:?}");
+                dag
+            } else {
+                build_dag(&files, &python).await.unwrap()
+            };
+            for node in ["src", "other", "down", "further"] {
+                let id = format!("{}:{node}", files[0]);
+                match &dag.get_node(&id).expect(&id).extracted.partitions["key"] {
+                    crate::model::PartitionSpec::Static { values } => {
+                        assert_eq!(values.len(), 3, "partial={partial}: {node}")
+                    }
+                    spec => panic!("partial={partial}: {node}: {spec:?}"),
+                }
+            }
+            let evaluated = std::fs::read_to_string(&calls).unwrap();
+            assert_eq!(
+                evaluated.lines().count(),
+                1,
+                "partial={partial}: one evaluation, not one per node: {evaluated}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

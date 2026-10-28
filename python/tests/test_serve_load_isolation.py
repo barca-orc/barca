@@ -306,3 +306,31 @@ def healthy(): return 7
         assert not (tmp_path / "imported").exists()
     finally:
         server.stop()
+
+
+def test_keys_from_an_expression_reach_a_consumer_in_another_file(tmp_path):
+    """The source's expression is evaluated in its own module: the consumer's has no `KEYS`.
+    The server used to evaluate each consumer's copy in the consumer's module and refuse it
+    (`NameError: name 'KEYS' is not defined`), where the CLI loaded it."""
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, partitions\n"
+        "KEYS = [f'k{i}' for i in range(3)]\n"
+        "@asset(partitions={'key': partitions(KEYS)})\n"
+        "def src(key: str) -> str: return key\n"
+    )
+    (tmp_path / "b.py").write_text(
+        "from barca import asset, partitions_from\n"
+        "from pipeline import src\n"
+        "@asset(partitions={'key': partitions_from(src)})\n"
+        "def down(key: str, src: str) -> str: return src + '!'\n"
+    )
+    server = Server(tmp_path, "b.py")
+    try:
+        assert errors(server) == []
+        code, state = server.request("GET", "/state")
+        assert code == 200
+        totals = {n["id"]: n["partitions"]["total"] for n in state}
+        assert totals == {"pipeline.py:src": 3, "b.py:down": 3}
+    finally:
+        server.stop()
