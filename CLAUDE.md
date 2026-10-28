@@ -72,7 +72,8 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
 ```bash
 # Build (development)
 cargo build --release
-maturin develop --uv --release --extras test  # active .venv; builds CLI + test dependencies
+maturin develop --uv --profile fast --extras test  # active .venv; ~40s cold, seconds after an edit (no LTO)
+maturin develop --uv --release --extras test       # release profile (fat LTO), what wheels ship
 
 # Run
 .venv/bin/barca get <file.py>
