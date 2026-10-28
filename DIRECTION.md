@@ -62,7 +62,10 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.30.1 | 2026-10-23 | Older metadata DB compatibility | #629, #630 |
 | 0.30.2 | 2026-10-23 | Bounded outcomes and memory over many partition keys | #623 |
 | 0.31.0 | 2026-10-23 | Production diagnostics, shared capacity, timeout, drain recovery and cutoff | #627, #628, #616, #637 |
-| 0.32.0 | [release status](https://github.com/barca-orc/barca/releases/tag/v0.32.0) | Batched partitions and remaining documentation | #643, #606 |
+| 0.32.0 | 2026-10-24 | Batched partitions and remaining documentation | #643, #606 |
+| 0.33.0 | 2026-10-25 | Bounded DAG coordination; sensor `(True, value)` always counts as changed | #652 |
+| 0.33.1 | 2026-10-27 | Run result bookkeeping separated from execution; behavioral contracts consolidated | #659, #660 |
+| 0.34.0 | 2026-10-27 | Breaking: unreadable decorator values exit 2; duckdb 2; sink republish on cache hits; failure phases | #567, #662 to #665 |
 
 An open issue with no milestone is unscheduled on purpose (#567); it is scheduled when it becomes the next most important thing.
 
