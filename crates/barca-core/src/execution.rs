@@ -318,8 +318,9 @@ impl RunStart {
         // Start remote I/O first so it overlaps parsing and planning: the artifact transfer
         // helper's startup (joined before workers start). Nothing is pulled: this machine's
         // database is the truth for this machine (RFC-0009).
-        // Not a task: the helper connects on its own while this function goes on, and the value
-        // stops it if this function returns before using it (see `transfer::Launching`).
+        // Not a task on this stack frame: the helper connects on its own while this function
+        // goes on, and the value stops it if this function returns before using it (see
+        // `transfer::Launching`, which accepts the hello in a background task).
         let upload_snapshots = cfg
             .remote_artifacts()
             .then(|| UploadSnapshots::new(&run_id))
@@ -1170,6 +1171,11 @@ async fn open_run<'a, 'r>(
     prepared: &'a Prepared,
     mut started: RunStart,
 ) -> Result<RunSession<'a, 'r>, BarcaError> {
+    if let Ok(secs) = std::env::var("BARCA_TEST_BEFORE_START_WORKERS_SECS") {
+        if let Ok(secs) = secs.parse::<u64>() {
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+        }
+    }
     let (cost_model, avg_times, partitioned_avg_times) =
         open_state(request, prepared, &mut started).await?;
     let (pb, total_estimated) = prepare_progress(

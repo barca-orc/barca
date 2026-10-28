@@ -8,6 +8,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Runs with a remote artifact store no longer fail when planning takes longer than 10 s: the
+  transfer helper's hello is answered as soon as it connects, instead of after planning finishes
+  (#702).
+
 ## 0.35.0 (2026-10-28)
 
 ### Bug Fixes

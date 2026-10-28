@@ -60,9 +60,10 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def barca(root: Path, *args: str, code: int = 0) -> subprocess.CompletedProcess:
+def barca(root: Path, *args: str, code: int = 0, **env_extra: str) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     env["BARCA_TRACE_TIMING"] = "1"
+    env.update(env_extra)
     out = subprocess.run(
         [_find_binary(), *args],
         cwd=root,
@@ -75,8 +76,8 @@ def barca(root: Path, *args: str, code: int = 0) -> subprocess.CompletedProcess:
     return out
 
 
-def get(root: Path, *args: str) -> tuple[dict, str]:
-    out = barca(root, "get", *(args or ("report",)), "--json")
+def get(root: Path, *args: str, **env_extra: str) -> tuple[dict, str]:
+    out = barca(root, "get", *(args or ("report",)), "--json", **env_extra)
     return json.loads(out.stdout), out.stderr
 
 
@@ -225,6 +226,12 @@ def test_a_failed_upload_ends_the_window(project):
     assert CHECKING in retry, retry
     assert "[barca] uploaded" in retry, retry
     assert len(store_checks(project)) == 1
+
+
+def test_the_transfer_helper_survives_planning_longer_than_its_hello_timeout(project):
+    """Regression for #702: hello is answered when the helper connects, not after planning."""
+    _, err = get(project, BARCA_TEST_BEFORE_START_WORKERS_SECS="15")
+    assert helpers(err) == 1 and CHECKING in err, err
 
 
 def test_doctor_and_gc_check_the_store_within_the_window(project):
