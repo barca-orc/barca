@@ -3,27 +3,63 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # The merge queue: each merge group (one or more queued PRs on top of main) is tested
+  # before main moves to it. This is the run that gates a merge.
+  merge_group:
+    types: [checks_requested]
   # Also on main, so the README's CI badge reports the integration branch.
   push:
     branches: [main]
 
-# One run per PR at a time; a newer push cancels the older run.
+# One run per PR at a time; a newer push to the PR cancels the older run. A merge group has a
+# ref of its own (gh-readonly-queue/main/pr-<n>-<sha>), so merge-group runs never share a group
+# with each other or with PR runs, and neither they nor runs on main are cancelled.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# What runs where. The required checks are `CI / test` and `CI / backends`, the two aggregator
+# jobs at the end of each group below; they report on every event.
+#
+# - pull_request: the fast set only (`checks`, `clippy`, `changes`), so a PR can enter the
+#   merge queue about a minute after a push. Everything else is skipped, and the aggregators
+#   accept those skips. A PR labelled `ci-full` runs the full set, as the queue does.
+# - merge_group, and push to main: the full set. Here every job must succeed.
+#
+# The full-set jobs carry `if: ${{ github.event_name != 'pull_request' || contains(...) }}`.
+#
+# Sandbox sizes: Depot bills per vCPU-second, so a larger sandbox costs the same CPU time and
+# only shortens the wall time. Jobs that compile or run tests in parallel use more CPUs.
+env:
+  # Python test shards in the backends check (scripts/ci-shards.py).
+  PYTHON_SHARDS: 3
+  # What the aggregators run on the results of the jobs they need. In a full run any result
+  # but success fails the required check. In a PR's fast run, a skipped full-set job is
+  # expected; a failed or cancelled one still fails it.
+  CHECK_NEEDS: |
+    import json, os, sys
+    full = os.environ["FULL"] == "true"
+    results = {job: v["result"] for job, v in json.loads(os.environ["RESULTS"]).items()}
+    ok = {"success"} if full else {"success", "skipped"}
+    for job, result in results.items():
+        print(f"{job}: {result}")
+    bad = {job: r for job, r in results.items() if r not in ok}
+    sys.exit(f"not every job this check needs succeeded: {bad}" if bad else 0)
 
 jobs:
-  test:
+  # ---- CI / test -------------------------------------------------------------------------
+  #
+  # checks, clippy (fast set); rust-tests, and integration against the wheel `build` makes
+  # once for both checks (full set).
+  #
+  # Cargo must build on local disk: builds on the shared cache volume produced corrupt
+  # .rlib/.rmeta files, even with a target dir per PR. So each Rust job builds in ./target,
+  # which rust-cache restores from an archive before the build and saves afterward. sccache
+  # caches compiler outputs in Depot Cache (Depot CI configures its backend; the summary of
+  # each Rust job prints `sccache --show-stats`).
+  checks:
     runs-on: depot-ubuntu-latest
-    # A hung test fails the job instead of holding it for hours (#637). A green run takes
-    # about 7 minutes with a warm cache.
-    timeout-minutes: 45
-    env:
-      # Cargo must build on local disk: builds on the shared cache volume
-      # produced corrupt .rlib/.rmeta files, even with a target dir per PR.
-      # rust-cache restores an archive here before the build and saves afterward.
-      CARGO_TARGET_DIR: target
-      PIP_CACHE_DIR: /mnt/cache/test/pip
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,7 +71,7 @@ jobs:
       # copy or the base's; a commit line `Changelog-Fix: <reason>` allows a deliberate fix.
       - name: Released CHANGELOG sections are unchanged
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: python3 scripts/check-changelog.py --base "$BASE"
 
       - name: Specification owners, links and evidence references
@@ -56,52 +92,116 @@ jobs:
           # The checker verifies the pinned jar's SHA-256 before executing it.
           python3 specs/models/check.py --jar .spec-check/tla2tools.jar
 
-      - name: Mount cache disk
-        uses: depot/cache-mount@v1
-        with:
-          name: barca-ci-cache
-          path: /mnt/cache
-
-      - name: Prepare cache dirs
-        run: |
-          mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
-            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown "$(id -u):$(id -g)" "$PIP_CACHE_DIR"; }
+  clippy:
+    runs-on: depot-ubuntu-24.04-4
+    # A hung step fails the job instead of holding it for hours (#637).
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: target
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Use sccache
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
       - name: Restore Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          # Separate archives for clippy/test builds and wheel-only builds.
-          key: ci-local-v1-test
+          # One archive per Rust job: clippy, test builds and the wheel differ.
+          key: ci-local-v1-clippy
           workspaces: ". -> target"
           cache-on-failure: true
 
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: sccache statistics
+        if: always()
+        run: |
+          sccache --show-stats
+          { echo '```'; sccache --show-stats; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  rust-tests:
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    runs-on: depot-ubuntu-24.04-8
+    # See clippy (#637).
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: target
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Use sccache
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-local-v1-test
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      # nextest runs each test in its own process. The crates have no runnable doctests (their
+      # code blocks are `text`/`json`), so there is no `cargo test --doc` step.
       - name: Run unit tests
-        # Includes building the test binaries; the tests themselves take about a minute.
+        # Includes building the test binaries; the tests themselves take under a minute.
         timeout-minutes: 20
-        run: cargo test
+        run: cargo nextest run --workspace --no-fail-fast
+
+      - name: sccache statistics
+        if: always()
+        run: |
+          sccache --show-stats
+          { echo '```'; sccache --show-stats; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  integration:
+    # The shell integration tests and benchmark examples, against the wheel `build` makes.
+    needs: build
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
-      - name: Install maturin and build
-        run: |
-          pip install maturin
-          # Wheel goes to a per-run dir, not $CARGO_TARGET_DIR/wheels on the
-          # shared cache disk, where overlapping runs could delete or install
-          # each other's wheel.
-          WHEELS=$(mktemp -d)
-          maturin build --release --out "$WHEELS"
-          pip install "$WHEELS"/*.whl
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Download the wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: barca-wheel
+          path: dist-wheel
+
+      - name: Install barca
+        # scikit-learn: only benchmarks/spaceflights needs it; pandas, pyarrow: only
+        # benchmarks/etl_duckdb_dataframes.
+        run: uv pip install --system dist-wheel/*.whl scikit-learn pandas pyarrow
 
       - name: Run integration tests
         run: |
@@ -117,33 +217,248 @@ jobs:
       - name: Run benchmark examples as integration smoke tests
         run: |
           # benchmarks/*/barca/run.sh hardcode $REPO_ROOT/.venv/bin/barca, matching
-          # the local dev convention (`maturin develop --release` installs there) —
-          # link it to the wheel-installed barca from the build step above instead
-          # of building a second copy.
+          # the local dev convention (`maturin develop` installs there) — link it to the
+          # wheel-installed barca instead of building a second copy.
           mkdir -p .venv/bin
           ln -sf "$(command -v barca)" .venv/bin/barca
-          pip install scikit-learn  # only benchmarks/spaceflights needs this
-          pip install pandas pyarrow  # only benchmarks/etl_duckdb_dataframes needs this
           bash tests/integration/test_benchmark_examples.sh
 
-  backends:
-    # Full Python suite, including the state-backend conformance suite that runs
-    # against local object-store emulators (no cloud credentials). MinIO covers
-    # the S3 API — and therefore Cloudflare R2's code path — fake-gcs-server
-    # covers GCS generation-match, Azurite covers Azure ETag If-Match.
+  test:
+    # The required `CI / test` check. It always runs, so a failed, cancelled or (in a full run)
+    # skipped job fails it instead of leaving the check missing.
+    needs: [checks, clippy, rust-tests, build, integration]
+    if: always()
     runs-on: depot-ubuntu-latest
-    # See the test job (#637). A green run takes about 15 minutes with a warm cache.
-    timeout-minutes: 60
-    env:
-      CARGO_TARGET_DIR: target
-      PIP_CACHE_DIR: /mnt/cache/backends/pip
+    timeout-minutes: 5
+    steps:
+      - name: Every test job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+        run: python3 -c "$CHECK_NEEDS"
+
+  # ---- CI / backends ---------------------------------------------------------------------
+  #
+  #   changes ──┐
+  #   build ────┴─ python (matrix: PYTHON_SHARDS shards of python/tests [+ duckdb 1.x])
+  #         └───── proxy (nginx/Traefik and server-mode shell tests)
+  #   ui (typecheck, lint, unit tests)
+  #
+  # The object-store emulators and the duckdb 1.x rerun run only when the change can affect
+  # them (scripts/ci-changes.py lists the paths), on a release branch, and on every push to
+  # main. Without the emulators the backend conformance tests skip (python/tests/emulators.py).
+  changes:
+    runs-on: depot-ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      emulators: ${{ steps.decide.outputs.emulators }}
+      duckdb1: ${{ steps.decide.outputs.duckdb1 }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the change is the diff from the PR's (or merge group's) base.
+          fetch-depth: 0
+
+      - name: Decide which optional parts run
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          # A merge group can hold several PRs; its base is main before all of them.
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        # The reasons go to the check's summary as well as the log.
+        run: |
+          if [ "$EVENT" = push ] || [[ "$HEAD_REF" == release/v* ]]; then
+            python3 scripts/ci-changes.py --all >> "$GITHUB_OUTPUT" 2> why.txt
+          else
+            python3 scripts/ci-changes.py --base "$BASE" >> "$GITHUB_OUTPUT" 2> why.txt
+          fi
+          cat why.txt "$GITHUB_OUTPUT"
+          { echo '```'; cat why.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Every test file is in exactly one shard
+        run: python3 scripts/ci-shards.py --shards "$PYTHON_SHARDS" --check
+
+      - name: Shard matrix
+        id: matrix
+        env:
+          DUCKDB1: ${{ steps.decide.outputs.duckdb1 }}
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os
+          n = int(os.environ["PYTHON_SHARDS"])
+          include = [{"name": f"{i}/{n}", "shard": i, "duckdb": "2"} for i in range(1, n + 1)]
+          if os.environ["DUCKDB1"] == "true":
+              include.append({"name": "duckdb 1.x", "shard": 0, "duckdb": "1"})
+          print("matrix=" + json.dumps({"include": include}))
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  ui:
+    # The web UI's own checks. The build job builds `ui/dist` (or restores it) on its own.
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      # Start the emulators first: `docker run -d` returns after pulling, and the
-      # pulls then overlap with the (much longer) Rust build below instead of
-      # waiting behind it.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Check the web UI
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui typecheck
+          pnpm --dir ui lint
+          pnpm --dir ui test
+
+  build:
+    # Builds the wheel once, for both checks: the integration tests, the Python shards and
+    # the proxy tests. It does not wait for `changes`. The wheel is built with the `fast`
+    # profile (no whole-program LTO); release wheels (release workflow) keep `--release`.
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    runs-on: depot-ubuntu-24.04-16
+    # See clippy (#637).
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target
+    steps:
+      - uses: actions/checkout@v4
+
+      # The binary embeds ui/dist (rust-embed), so it must exist before Cargo runs. It depends
+      # only on ui/, so it is cached on a hash of that directory.
+      - name: Restore the web UI build
+        id: ui-dist
+        uses: actions/cache@v4
+        with:
+          path: ui/dist
+          key: ui-dist-v1-${{ hashFiles('ui/**') }}
+
+      - if: steps.ui-dist.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+
+      - if: steps.ui-dist.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Build the web UI
+        if: steps.ui-dist.outputs.cache-hit != 'true'
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui build
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Use sccache
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-local-v1-wheel-fast
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      - name: Build the barca wheel
+        run: |
+          mkdir -p dist-wheel
+          uvx maturin build --profile fast --out dist-wheel
+
+      - name: Upload the wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: barca-wheel
+          path: dist-wheel/*.whl
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: sccache statistics
+        if: always()
+        run: |
+          sccache --show-stats
+          { echo '```'; sccache --show-stats; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  proxy:
+    # The shell tests that need the UI-embedded binary, beside the Python shards.
+    needs: build
+    runs-on: depot-ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download the wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: barca-wheel
+          path: dist-wheel
+
+      - name: Install barca
+        run: uv pip install --system dist-wheel/*.whl
+
+      - name: barca serve behind nginx (prefix, embedded UI, live events)
+        run: bash tests/integration/test_reverse_proxy.sh
+
+      - name: --server through nginx with a path prefix
+        run: bash tests/integration/test_server_mode.sh
+
+  python:
+    # The Python suite, split by file into shards balanced by recorded duration
+    # (scripts/ci-shards.py), plus the duckdb 1.x rerun when the change needs it.
+    name: python (${{ matrix.name }})
+    needs: [changes, build]
+    runs-on: depot-ubuntu-24.04-8
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The full suite includes the state-backend conformance tests, which run against local
+      # object-store emulators (no cloud credentials). MinIO covers the S3 API — and so
+      # Cloudflare R2's code path — fake-gcs-server covers GCS generation-match, Azurite covers
+      # Azure ETag If-Match. Started first so the pulls overlap with the install below.
+      # Setting the variables declares the emulators provided: an unreachable one then fails
+      # its tests instead of skipping them.
       - name: Start object-store emulators
+        if: needs.changes.outputs.emulators == 'true'
+        env:
+          BARCA_TEST_S3_ENDPOINT: http://localhost:9100
+          BARCA_TEST_GCS_ENDPOINT: http://localhost:9200
+          BARCA_TEST_AZURITE_HOST: 127.0.0.1:9210
         run: |
           docker run -d --name minio -p 9100:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
@@ -156,99 +471,116 @@ jobs:
           docker run -d --name azurite -p 9210:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.37.0 \
             azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
-
-      - name: Mount cache disk
-        uses: depot/cache-mount@v1
-        with:
-          name: barca-ci-cache
-          path: /mnt/cache
-
-      - name: Prepare cache dirs
-        run: |
-          mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
-            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown "$(id -u):$(id -g)" "$PIP_CACHE_DIR"; }
+          {
+            echo "BARCA_TEST_S3_ENDPOINT=$BARCA_TEST_S3_ENDPOINT"
+            echo "BARCA_TEST_GCS_ENDPOINT=$BARCA_TEST_GCS_ENDPOINT"
+            echo "BARCA_TEST_AZURITE_HOST=$BARCA_TEST_AZURITE_HOST"
+          } >> "$GITHUB_ENV"
 
       - name: Install Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          # Separate archives for clippy/test builds and wheel-only builds.
-          key: ci-local-v1-backends
-          workspaces: ". -> target"
-          cache-on-failure: true
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
 
-      # Build the UI before Cargo so the binary embeds it for the proxy test.
-      - uses: pnpm/action-setup@v4
+      - name: Download the wheel
+        uses: actions/download-artifact@v4
         with:
-          package_json_file: ui/package.json
+          name: barca-wheel
+          path: dist-wheel
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Check and build the web UI
+      - name: Select test files
+        env:
+          SHARD: ${{ matrix.shard }}
+          EMULATORS: ${{ needs.changes.outputs.emulators }}
         run: |
-          pnpm --dir ui install --frozen-lockfile
-          pnpm --dir ui typecheck
-          pnpm --dir ui lint
-          pnpm --dir ui test
-          pnpm --dir ui build
+          if [ "$SHARD" = 0 ]; then
+            # barca supports duckdb>=1.4,<3 (#567): every test file that mentions DuckDB runs
+            # again on the newest 1.x.
+            grep -li duckdb python/tests/test_*.py > test-files.txt
+          else
+            # The split balances on durations with or without the emulators, whichever this run has.
+            map=(); [ "$EMULATORS" = true ] && map=(--emulators)
+            python3 scripts/ci-shards.py --shards "$PYTHON_SHARDS" --shard "$SHARD" "${map[@]}" \
+              > test-files.txt
+          fi
+          echo "$(wc -l < test-files.txt) test files"; cat test-files.txt
 
-      - name: Build barca and install test extras
+      - name: Install barca and test extras
+        env:
+          DUCKDB: ${{ matrix.duckdb }}
         run: |
-          pip install maturin
-          # Per-run wheel dir: see the test job.
-          WHEELS=$(mktemp -d)
-          maturin build --release --out "$WHEELS"
-          WHEEL=$(ls "$WHEELS"/*.whl)
-          pip install "${WHEEL}[test]"
-          # Datadog's APM test agent checks barca's trace payloads; its own venv keeps its
-          # dependencies (an older protobuf) out of the test environment.
-          python -m venv /tmp/dd-test-agent
-          /tmp/dd-test-agent/bin/pip install ddapm-test-agent
-          echo "BARCA_DD_TEST_AGENT=/tmp/dd-test-agent/bin/ddapm-test-agent" >> "$GITHUB_ENV"
+          WHEEL=$(ls dist-wheel/*.whl)
+          # The test extra resolves to the newest duckdb, 2.x.
+          extra=(); [ "$DUCKDB" = 1 ] && extra=('duckdb>=1.4,<2')
+          uv pip install --system "${WHEEL}[test]" "${extra[@]}"
+          python -c "import duckdb, sys; v = duckdb.__version__; print('duckdb', v); assert v.startswith(sys.argv[1] + '.'), v" "$DUCKDB"
+          if grep -q test_telemetry_datadog.py test-files.txt; then
+            # Datadog's APM test agent checks barca's trace payloads; its own venv keeps its
+            # dependencies (an older protobuf) out of the test environment.
+            uv venv -q /tmp/dd-test-agent
+            uv pip install -q --python /tmp/dd-test-agent ddapm-test-agent
+            echo "BARCA_DD_TEST_AGENT=/tmp/dd-test-agent/bin/ddapm-test-agent" >> "$GITHUB_ENV"
+          fi
 
       - name: Wait for emulators
+        if: needs.changes.outputs.emulators == 'true'
+        # Each loop ends at the first answer; by now the containers have usually started.
         run: |
-          for i in $(seq 1 60); do curl -sf http://localhost:9100/minio/health/live && break; sleep 1; done
-          for i in $(seq 1 60); do curl -sf http://localhost:9200/storage/v1/b >/dev/null && break; sleep 1; done
-          for i in $(seq 1 60); do curl -s http://localhost:9210/devstoreaccount1 >/dev/null && break; sleep 1; done
+          for i in $(seq 1 120); do curl -sf http://localhost:9100/minio/health/live && break; sleep 0.5; done
+          for i in $(seq 1 120); do curl -sf http://localhost:9200/storage/v1/b >/dev/null && break; sleep 0.5; done
+          for i in $(seq 1 120); do curl -s http://localhost:9210/devstoreaccount1 >/dev/null && break; sleep 0.5; done
 
-      - name: Run full Python suite (incl. backend conformance and transfer fault tests)
+      - name: Run the shard's Python tests
         timeout-minutes: 30
-        env:
-          BARCA_TEST_S3_ENDPOINT: http://localhost:9100
-          BARCA_TEST_GCS_ENDPOINT: http://localhost:9200
-          BARCA_TEST_AZURITE_HOST: 127.0.0.1:9210
-        # Bound concurrency: these tests launch workers and local store clients.
-        # The test extra resolves to the newest duckdb, 2.x; the next step covers 1.x.
+        # One pytest worker per CPU. Failures and each file's duration go to the check's
+        # summary, readable without the Depot log (`scripts/ci-shards.py --update-durations`
+        # takes the JUnit report the same way).
         run: |
-          python -c "import duckdb; v = duckdb.__version__; print('duckdb', v); assert v.startswith('2.'), v"
-          pytest python/tests -q -n 4 --dist loadscope --durations=30
+          mapfile -t files < test-files.txt
+          set -o pipefail
+          echo "$(nproc) CPUs, $(free -g | awk '/Mem:/ {print $2}') GB" | tee -a "$GITHUB_STEP_SUMMARY"
+          status=0
+          pytest "${files[@]}" -q -n "$(nproc)" --dist loadscope --durations=30 -rfE \
+            --junitxml=junit.xml 2>&1 | tee pytest.log || status=$?
+          {
+            echo '```'
+            grep -E '^(FAILED|ERROR) ' pytest.log | head -50 || true
+            tail -n 5 pytest.log
+            echo '```'
+            echo '<details><summary>Seconds per file</summary>'
+            echo
+            echo '```json'
+            python3 -c "
+          import json, xml.etree.ElementTree as ET
+          t = {}
+          for c in ET.parse('junit.xml').getroot().iter('testcase'):
+              m = next((p for p in c.get('classname', '').split('.') if p.startswith('test_')), None)
+              if m:
+                  f = f'python/tests/{m}.py'
+                  t[f] = round(t.get(f, 0) + float(c.get('time') or 0), 1)
+          print(json.dumps(dict(sorted(t.items())), separators=(',', ':')))
+          " || true
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
-      - name: Python tests that use duckdb, against duckdb 1.x
-        timeout-minutes: 15
+  backends:
+    # The required `CI / backends` check. It always runs, so a failed, cancelled or (in a full
+    # run) skipped job fails it instead of leaving the check missing.
+    needs: [changes, ui, build, proxy, python]
+    if: always()
+    runs-on: depot-ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every backends job succeeded
         env:
-          BARCA_TEST_S3_ENDPOINT: http://localhost:9100
-          BARCA_TEST_GCS_ENDPOINT: http://localhost:9200
-          BARCA_TEST_AZURITE_HOST: 127.0.0.1:9210
-        # barca supports duckdb>=1.4,<3 (#567). Every test file that mentions DuckDB runs again
-        # on the newest 1.x; the step ends by putting 2.x back for the steps after it.
-        run: |
-          pip install 'duckdb>=1.4,<2'
-          python -c "import duckdb; v = duckdb.__version__; print('duckdb', v); assert v.startswith('1.'), v"
-          pytest $(grep -li duckdb python/tests/test_*.py) -q -n 4 --dist loadscope
-          pip install 'duckdb>=2,<3'
-
-      - name: barca serve behind nginx (prefix, embedded UI, live events)
-        run: bash tests/integration/test_reverse_proxy.sh
-
-      - name: --server through nginx with a path prefix
-        run: bash tests/integration/test_server_mode.sh
+          RESULTS: ${{ toJSON(needs) }}
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+        run: python3 -c "$CHECK_NEEDS"

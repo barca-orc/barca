@@ -15,7 +15,8 @@ Normalized, because they differ by design (the declared differences, listed in
 - Lines the Python workers write to stderr themselves (`[barca] importing <module>`) go to the
   server's stderr: they are dropped from both sides.
 - Run ids, timestamps and durations differ between any two runs; they read `<run_id>`, `<t>`
-  and `<n>s`.
+  and `<n>s`. A step's `import_seconds` is reported only when its import took over a second,
+  so whether the key is there at all depends on load: it is dropped from both sides.
 - The hint of `barca history RUN_ID` names the server it read (`--server <url>`): dropped.
 
 Each copy computes its own artifacts, so an artifact's `size_bytes` and `content_hash` read
@@ -129,7 +130,7 @@ def _value(v, roots: list[str], key: str = ""):
     if isinstance(v, dict) and v.get("partitioned") is True:
         v = {**v, "last_materialization": "<key>", "shape": "<key>"}
     if isinstance(v, dict):
-        return {k: _value(x, roots, k) for k, x in v.items()}
+        return {k: _value(x, roots, k) for k, x in v.items() if k != "import_seconds"}
     if isinstance(v, list):
         return [_value(x, roots) for x in v]
     if key == "triggered_by" and v in ("manual", "api"):

@@ -178,7 +178,7 @@ ALL_BACKENDS = [FileBackend(), S3Backend(), GcsBackend(), AzureBackend()]
 
 
 def test_the_emulators_the_environment_names_are_reachable():
-    """Under CI's `backends` job all three variables are set: every backend must be up, and
+    """When CI starts the emulators all three variables are set: every backend must be up, and
     this test says so by name rather than leaving it to a count of skips. (Each test that
     needs an emulator also fails, rather than skips, there: `emulators.require`.)"""
     named = [be for be in ALL_BACKENDS if be.id != "file" and emulators.provided(be.id)]
