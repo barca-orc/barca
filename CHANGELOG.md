@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.35.1 (2026-10-28)
+
 ### Bug Fixes
 
 - `barca serve` no longer stops starting runs while it measures `.barca/` against its size
