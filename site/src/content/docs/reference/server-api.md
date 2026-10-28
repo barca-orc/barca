@@ -425,14 +425,22 @@ that it is still right:
   or a path an import was looked up at changes (or `--watch` sees an edit). A graph with keys
   from `partitions(<expression>)` is loaded again at least every 30 seconds, since the
   expression can read anything;
-- one private copy of the metadata DB for every request, until the database or its WAL
-  changes on disk;
+- nothing of the metadata DB itself: the routes read it in place, through read-only
+  connections beside the runs that write it (SQLite's WAL mode), so a read never waits for a
+  run and never holds one up. A `--read-only` server, and a database this release would
+  migrate first, are read through a private copy, taken again when the database changes;
 - each `barca status` result (`/state`, `/nodes`, the `running` fields), until the graph or the
   database changes. An answer kept for more than 30 seconds is computed again in the
   background, which bounds how long an artifact deleted by hand, outside barca, still shows as
   `cached`.
 
 A finished run, a run on this project by the CLI, a ledger post or an edit is in the next answer.
+When deciding the cache states takes longer than a second (a graph with a million partition
+keys takes several), a request after a change is answered with the last result after that
+second while the new one is computed, and gets the new one once it is ready; the `running`
+fields are always current. During a run the database changes many times a second, so a poll
+waits at most that second instead of a whole computation. If computing the new result fails,
+the next request computes it while it waits and answers the error.
 A file is trusted to be unchanged only once it has been still for a moment (2 seconds for source
 files, a tenth of a second for the database), so a request right after a write computes its
 answer afresh. While a client polls `/state` (the UI does every 10 seconds while open), the

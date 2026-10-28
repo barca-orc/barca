@@ -324,7 +324,8 @@ The UI's Runs view shows persisted CLI, scheduled and HTTP runs, plus queued/liv
 runs, with what started each. Select a run to inspect its status, timing, steps, errors and
 logs. After triggering a node in the graph, use View run to open its details; even a cache hit
 records a new run. The same inspection is available through `GET /runs?limit=100` and
-`GET /runs/{run_id}`, which read private DB snapshots. A run the server started keeps its full
+`GET /runs/{run_id}`, which read the metadata DB beside the runs writing it (a `--read-only`
+server reads private copies). A run the server started keeps its full
 outcome in the DB, so `GET /runs/{run_id}` gives the same answer after a restart.
 
 What a run keeps is bounded by what it computed, not by how many keys it served from cache

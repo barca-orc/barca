@@ -334,8 +334,10 @@ paths:
                 $ref: '#/components/schemas/Error'
             text/plain:
               schema: *id005
-      description: Built by the function barca status --json uses, against a private snapshot of the metadata
-        DB. A scheduled node's schedule is the running scheduler's view (GET /schedule), or with no
+      description: Built by the function barca status --json uses, reading the metadata DB in place
+        beside the runs writing it (a --read-only server reads a private copy). When deciding the cache
+        states takes longer than a second, a request after a change is answered after that second with
+        the last result while the new one is computed; running is always current. A scheduled node's schedule is the running scheduler's view (GET /schedule), or with no
         scheduler what the metadata DB holds (live false). state and problems keep only the matching
         nodes, as barca status --state and --problems do; summary still counts every node, and filter
         names the filter. An unknown state is 400.

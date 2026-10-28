@@ -47,11 +47,13 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-/// A metadata DB a read-only request may query: a private snapshot of the real
-/// one, or — when there is no DB yet — an empty scratch DB, so the absence is
-/// preserved. Either way the schema is ensured on the copy, never on the
+/// A metadata DB a read-only request may query: the real one read in place
+/// ([`db::ReadView`]) when this release uses it as it is; otherwise a private
+/// snapshot of it, or — when there is no DB yet — an empty scratch DB, so the
+/// absence is preserved. A copy has the schema ensured on it, never on the
 /// original. Dropping it deletes the copy.
 pub(crate) struct SnapshotDb {
+    _view: Option<db::ReadView>,
     _snapshot: Option<db::DbSnapshot>,
     _scratch: Option<tempfile::TempDir>,
     pub(crate) path: String,
@@ -63,8 +65,18 @@ pub(crate) async fn snapshot_db(state: &AppState) -> Result<std::sync::Arc<Snaps
     Ok(state.note_metadata(state.read_snapshot().await)?)
 }
 
-pub(crate) async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError> {
+/// A `--read-only` server (`in_place` false) reads copies only: it promises to leave the
+/// database untouched, and even a reader of it in place can create its `-wal` and `-shm`.
+pub(crate) async fn snapshot_of(db_path: &str, in_place: bool) -> Result<SnapshotDb, BarcaError> {
     db::directory_check(db_path)?;
+    if in_place && let Some(view) = db::ReadView::open(db_path).await? {
+        return Ok(SnapshotDb {
+            path: view.path().to_string(),
+            _view: Some(view),
+            _snapshot: None,
+            _scratch: None,
+        });
+    }
     let (snapshot, scratch, path) = match db::DbSnapshot::take(db_path).await? {
         Some(s) => {
             let path = s.path().to_string();
@@ -79,6 +91,7 @@ pub(crate) async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError>
     };
     db::init_db_as(&path, db_path).await?;
     Ok(SnapshotDb {
+        _view: None,
         _snapshot: snapshot,
         _scratch: scratch,
         path,
@@ -87,7 +100,7 @@ pub(crate) async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError>
 
 /// `GET /state` — every node's cache state (would `barca get` reuse it?), latest
 /// attempt, typical durations, and next scheduled run. Read-only by
-/// construction: the cache check runs against a private snapshot of the DB.
+/// construction: the cache check reads the DB through read-only connections ([`SnapshotDb`]).
 ///
 /// The cache states and durations are kept until the sources or the database change
 /// ([`crate::read_cache`]); what runs now and the next fire times are read for every request.
@@ -103,15 +116,20 @@ pub(crate) async fn state_rows(state: &AppState) -> Result<Vec<NodeState>, ApiEr
     let dag = state.inspect_dag().await?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(state).await?;
-    let status = whole_status(state, &dag, &db_state, &snapshot).await?;
-    let durations = state
-        .cached_durations(&dag, &db_state, || async {
-            let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
-            Ok(durations_from(
-                db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
-            ))
+    // Together: after a change, each waits a moment for its new value (`read_cache`).
+    let (status, durations) = tokio::join!(
+        whole_status(state, &dag, &db_state, &snapshot),
+        state.cached_durations(&dag, &db_state, {
+            let (dag, snapshot) = (dag.clone(), snapshot.clone());
+            move || async move {
+                let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
+                Ok(durations_from(
+                    db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
+                ))
+            }
         })
-        .await?;
+    );
+    let (status, durations) = (status?, durations?);
     let runs = crate::running::in_flight(state, Some(&snapshot.path)).await;
     let running = crate::running::by_node(&runs, &status.nodes, &dag);
     Ok(rows(&status.nodes, &durations, &dag, &zone, running))

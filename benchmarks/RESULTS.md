@@ -6,6 +6,30 @@ The latest framework comparison is 2026-10-21 (barca 0.28.0, Dagster 1.13.26, Pr
 and Airflow 3.3.2, #65). Older passes on other hardware are kept below. Absolute times from
 different machines are not comparable; within one pass, the ratios between frameworks are.
 
+## Read routes during a run over many partitioned nodes (2026-10-28)
+
+`benchmarks/wide_partitions/bench.sh` on an Apple M-series laptop: 1,000 nodes, 1.2M
+partition keys, 2.8M result rows, 3,000 runs, a 4.4 GB metadata DB. Each binary on its own
+copy-on-write clone of one seeded project (database, sources and `gc-state.json`), back to
+back on the same machine, which other work was loading (load average about 20). "0.34.0" is
+main before #696; "after" is this change with #696 (cache lookups) and #698
+(`idx_mat_failed`).
+
+| | 0.34.0 | after |
+|---|---:|---:|
+| `GET /state`, unchanged | 12.9 s | 0.01 s |
+| A server run of 115k steps, polled as the UI polls | 88.8 s | 58.5 s |
+| Slowest `GET /runs` during it | 31.9 s | 1.0 s |
+| Slowest `GET /runs/{run_id}` during it | 32.8 s | 2.0 s |
+| Slowest `GET /state` during it | 53.0 s | 2.4 s |
+
+On a quiet machine the same run took 23 to 27 s after the change, with every read under 1.4 s.
+
+A clone without `gc-state.json` is surveyed when the server starts: the cache size check walks
+every artifact (460k files) and read 3 minutes on a cold cache, during which the server did
+not answer and a run stalled (a 0.34.0 run took 394 s, one after the change 445 s). That is
+older than this change and not measured above.
+
 ## Framework cold paths (2026-10-25)
 
 Empty orchestration history for every sample, with no framework warm-up or asset seed.
