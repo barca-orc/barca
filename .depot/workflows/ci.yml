@@ -53,10 +53,12 @@ jobs:
   # once for both checks (full set).
   #
   # Cargo must build on local disk: builds on the shared cache volume produced corrupt
-  # .rlib/.rmeta files, even with a target dir per PR. So each Rust job builds in ./target,
-  # which rust-cache restores from an archive before the build and saves afterward. sccache
-  # caches compiler outputs in Depot Cache (Depot CI configures its backend; the summary of
-  # each Rust job prints `sccache --show-stats`).
+  # .rlib/.rmeta files, even with a target dir per PR. So each Rust job builds incrementally in
+  # ./target, restored before the build from an immutable cache archive (actions/cache: an
+  # entry is written whole under a new key, never updated in place) and saved after it. Keys
+  # carry the job, the rustc version, the Cargo.lock hash and the branch; a merge group starts
+  # from main's latest entry. Rust jobs use no sccache: it cannot cache incremental crates,
+  # and the restored target dir already holds the compiled dependencies.
   checks:
     runs-on: depot-ubuntu-latest
     timeout-minutes: 15
@@ -98,36 +100,54 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_TARGET_DIR: target
+      # Incremental: rustc reuses the unchanged parts of barca's own crates from the restored
+      # target dir (checkout makes every file look modified, but rustc compares content).
+      CARGO_INCREMENTAL: 1
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Use sccache
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@v2
+      - name: Restore the build directory
+        id: rust-cache
+        uses: actions/cache/restore@v4
         with:
-          # One archive per Rust job: clippy, test builds and the wheel differ.
-          key: ci-local-v1-clippy
-          workspaces: ". -> target"
-          cache-on-failure: true
-
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}
+          # This branch's latest, then main's, then main's with another Cargo.lock.
+          restore-keys: |
+            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-
+            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
+            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: sccache statistics
-        if: always()
+      # Saved from a PR's own runs and from main, never from a merge group (main's next
+      # entry follows it). Incremental session dirs not used for 2 days are pruned first.
+      - name: Save the build directory
+        if: success() && github.event_name != 'merge_group'
         run: |
-          sccache --show-stats
-          { echo '```'; sccache --show-stats; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
+            -exec rm -rf {} + 2>/dev/null || true
+          echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - if: success() && github.event_name != 'merge_group'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
   rust-tests:
     if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
@@ -136,30 +156,36 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_TARGET_DIR: target
+      # Incremental: rustc reuses the unchanged parts of barca's own crates from the restored
+      # target dir (checkout makes every file look modified, but rustc compares content).
+      CARGO_INCREMENTAL: 1
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Use sccache
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@v2
+      - name: Restore the build directory
+        id: rust-cache
+        uses: actions/cache/restore@v4
         with:
-          key: ci-local-v1-test
-          workspaces: ". -> target"
-          cache-on-failure: true
-
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}
+          # This branch's latest, then main's, then main's with another Cargo.lock.
+          restore-keys: |
+            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-
+            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
+            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-
       # nextest runs each test in its own process. The crates have no runnable doctests (their
       # code blocks are `text`/`json`), so there is no `cargo test --doc` step.
       - name: Run unit tests
@@ -167,11 +193,24 @@ jobs:
         timeout-minutes: 20
         run: cargo nextest run --workspace --no-fail-fast
 
-      - name: sccache statistics
-        if: always()
+      # Saved from a PR's own runs and from main, never from a merge group (main's next
+      # entry follows it). Incremental session dirs not used for 2 days are pruned first.
+      - name: Save the build directory
+        if: success() && github.event_name != 'merge_group'
         run: |
-          sccache --show-stats
-          { echo '```'; sccache --show-stats; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
+            -exec rm -rf {} + 2>/dev/null || true
+          echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - if: success() && github.event_name != 'merge_group'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
   integration:
     # The shell integration tests and benchmark examples, against the wheel `build` makes.
@@ -330,6 +369,9 @@ jobs:
     timeout-minutes: 40
     env:
       CARGO_TARGET_DIR: target
+      # Incremental: rustc reuses the unchanged parts of barca's own crates from the restored
+      # target dir (checkout makes every file look modified, but rustc compares content).
+      CARGO_INCREMENTAL: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -369,21 +411,24 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Install Rust
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Use sccache
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@v2
+      - name: Restore the build directory
+        id: rust-cache
+        uses: actions/cache/restore@v4
         with:
-          key: ci-local-v1-wheel-fast
-          workspaces: ". -> target"
-          cache-on-failure: true
-
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}
+          # This branch's latest, then main's, then main's with another Cargo.lock.
+          restore-keys: |
+            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.head_ref || github.ref_name }}-
+            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
+            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-
       - name: Build the barca wheel
         run: |
           mkdir -p dist-wheel
@@ -397,11 +442,24 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
-      - name: sccache statistics
-        if: always()
+      # Saved from a PR's own runs and from main, never from a merge group (main's next
+      # entry follows it). Incremental session dirs not used for 2 days are pruned first.
+      - name: Save the build directory
+        if: success() && github.event_name != 'merge_group'
         run: |
-          sccache --show-stats
-          { echo '```'; sccache --show-stats; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
+            -exec rm -rf {} + 2>/dev/null || true
+          echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - if: success() && github.event_name != 'merge_group'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
   proxy:
     # The shell tests that need the UI-embedded binary, beside the Python shards.
@@ -525,7 +583,9 @@ jobs:
           WHEEL=$(ls dist-wheel/*.whl)
           # The test extra resolves to the newest duckdb, 2.x.
           extra=(); [ "$DUCKDB" = 1 ] && extra=('duckdb>=1.4,<2')
-          uv pip install --system "${WHEEL}[test]" "${extra[@]}"
+          # A stalled download is retried rather than waited out (one took 193s).
+          timeout 60 uv pip install --system "${WHEEL}[test]" "${extra[@]}" \
+            || timeout 120 uv pip install --system "${WHEEL}[test]" "${extra[@]}"
           python -c "import duckdb, sys; v = duckdb.__version__; print('duckdb', v); assert v.startswith(sys.argv[1] + '.'), v" "$DUCKDB"
           if grep -q test_telemetry_datadog.py test-files.txt; then
             # Datadog's APM test agent checks barca's trace payloads; its own venv keeps its
