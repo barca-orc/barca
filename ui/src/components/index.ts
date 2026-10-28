@@ -44,3 +44,5 @@ export { RunningBadge } from './RunningBadge'
 export type { RunningBadgeProps } from './RunningBadge'
 
 export { RunsInProgress } from './RunsInProgress'
+
+export { TableSpacer } from './TableWindow'

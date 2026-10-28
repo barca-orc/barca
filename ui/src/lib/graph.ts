@@ -1,9 +1,9 @@
-import dagre from '@dagrejs/dagre'
 import { Position, type Node, type Edge } from '@xyflow/react'
 import { DAG_NODE_WIDTH, DAG_NODE_HEIGHT } from '@/components'
+import { layout, type LayoutDir, type LayoutInput, type LayoutPositions } from './graphLayout'
 import type { NodeKind, StatusKind } from './types'
 
-export type LayoutDir = 'LR' | 'TB'
+export type { LayoutDir }
 
 /** Data carried on each React Flow node (consumed by the custom AssetNode). */
 export interface GraphNodeData {
@@ -43,37 +43,38 @@ export function shortName(id: string): string {
  */
 const RESTING_STATUS: StatusKind = 'skipped'
 
+const GROUP_WIDTH = 248
+const GROUP_HEIGHT = 112
+
+function size(a: GraphEntry) {
+  return a.kind === 'group'
+    ? { width: GROUP_WIDTH, height: GROUP_HEIGHT }
+    : { width: DAG_NODE_WIDTH, height: DAG_NODE_HEIGHT }
+}
+
+/** What dagre is given for `assets`: their sizes and the dependencies between them. */
+export function layoutInput(assets: GraphEntry[], dir: LayoutDir): LayoutInput {
+  const ids = new Set(assets.map((a) => a.id))
+  return {
+    dir,
+    ranksep: assets.some((a) => a.kind === 'group') ? 52 : 96,
+    nodes: assets.map((a) => ({ id: a.id, ...size(a) })),
+    // Edge per dependency: input → asset.
+    edges: assets.flatMap((a) =>
+      a.inputs.filter((input) => ids.has(input)).map((input): [string, string] => [input, a.id]),
+    ),
+  }
+}
+
 /**
- * Build positioned React Flow nodes + edges from the asset graph — purely
- * structural. Same input → same output; re-run only on structure or direction
- * change, never on a status tick (status is merged in afterward).
+ * React Flow nodes + edges for `assets` at `positions` (from `layout` of their `layoutInput`).
+ * Purely structural: status is merged in afterward.
  */
-export function buildGraph(assets: GraphEntry[], dir: LayoutDir) {
-  const byId = new Map(assets.map((a) => [a.id, a]))
-
-  const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: dir, ranksep: assets.some(a => a.kind === 'group') ? 52 : 96, nodesep: 26, marginx: 36, marginy: 36 })
-  g.setDefaultEdgeLabel(() => ({}))
-
-  for (const a of assets) {
-    g.setNode(a.id, { width: a.kind === 'group' ? 248 : DAG_NODE_WIDTH, height: a.kind === 'group' ? 112 : DAG_NODE_HEIGHT })
-  }
-  // Edge per dependency: input → asset.
-  const deps: Array<{ source: string; target: string }> = []
-  for (const a of assets) {
-    for (const input of a.inputs) {
-      if (byId.has(input)) {
-        deps.push({ source: input, target: a.id })
-        g.setEdge(input, a.id)
-      }
-    }
-  }
-
-  dagre.layout(g)
-
+export function graphAt(assets: GraphEntry[], dir: LayoutDir, positions: LayoutPositions) {
   const horizontal = dir === 'LR'
   const nodes: GraphNode[] = assets.map((a) => {
-    const p = g.node(a.id)
+    const p = positions[a.id] ?? { x: 0, y: 0 }
+    const { width, height } = size(a)
     return {
       id: a.id,
       type: a.kind === 'group' ? 'nodeGroup' : 'asset',
@@ -87,20 +88,27 @@ export function buildGraph(assets: GraphEntry[], dir: LayoutDir) {
         status: RESTING_STATUS,
       },
       // dagre centers nodes; React Flow positions by top-left.
-      position: { x: p.x - (a.kind === 'group' ? 248 : DAG_NODE_WIDTH) / 2, y: p.y - (a.kind === 'group' ? 112 : DAG_NODE_HEIGHT) / 2 },
+      position: { x: p.x - width / 2, y: p.y - height / 2 },
       sourcePosition: horizontal ? Position.Right : Position.Bottom,
       targetPosition: horizontal ? Position.Left : Position.Top,
     }
   })
-
-  const edges: Edge[] = deps.map((e) => ({
-    id: `${e.source}->${e.target}`,
-    source: e.source,
-    target: e.target,
+  const edges: Edge[] = layoutInput(assets, dir).edges.map(([source, target]) => ({
+    id: `${source}->${target}`,
+    source,
+    target,
     type: 'smoothstep',
   }))
-
   return { nodes, edges }
+}
+
+/**
+ * Build positioned React Flow nodes + edges from the asset graph — purely
+ * structural. Same input → same output; re-run only on structure or direction
+ * change, never on a status tick (status is merged in afterward).
+ */
+export function buildGraph(assets: GraphEntry[], dir: LayoutDir) {
+  return graphAt(assets, dir, layout(layoutInput(assets, dir)))
 }
 
 /**
