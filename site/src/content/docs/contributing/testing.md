@@ -153,23 +153,62 @@ The other site pages are written by hand, and no test compares them with the man
 
 ## What CI runs
 
-`.depot/workflows/ci.yml` runs on every pull request into `main`, in two jobs:
+`.depot/workflows/ci.yml` runs on every pull request into `main`, on every merge group in
+the merge queue, and on every push to `main`. The required checks are `CI / test` and
+`CI / backends`. Each is a job that passes when the jobs it needs succeeded.
 
-- **test**: `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test`, then builds
-  a wheel with `maturin build --release`, installs it, and runs the shell integration tests.
-- **backends**: starts the three emulators, checks and builds the web UI (typecheck, lint,
-  test, build), builds a wheel and installs it with the `test` extra, runs the whole Python
-  suite with four pytest workers (`-n 4 --dist loadscope`) and the three `BARCA_TEST_*`
-  endpoints set, then runs `test_reverse_proxy.sh`. Tests are grouped by class or module
-  to reuse fixtures; the slowest 30 tests are printed in the log. API tests
-  use a separate temporary working directory per test, keeping `.barca` databases and
-  artifacts isolated from other workers.
+The merge group's run gates the merge. A pull request runs only the fast set, so it can enter
+the queue about a minute after a push:
 
-Cargo builds in the runner's local `target/` directory. Each job restores and saves a
-separate Rust dependency archive with `Swatinem/rust-cache`; the shared Depot disk holds
-only pip downloads. Building directly on that shared disk caused truncated object files
-and invalid Rust metadata, including after target directories were separated by PR.
-Cache preparation does not delete other runs' build directories.
+| Job | Check | Pull request | Merge group, push to `main` |
+| --- | --- | --- | --- |
+| **checks**: the CHANGELOG check, the specification checks and the TLA+ models | test | yes | yes |
+| **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes |
+| **changes**: which optional parts the change needs (`scripts/ci-changes.py`); every test file is in exactly one shard (`scripts/ci-shards.py --check`) | backends | yes | yes |
+| **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes |
+| **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes |
+| **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | yes |
+| **ui**: the web UI's typecheck, lint and unit tests | backends | | yes |
+| **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | yes |
+| **python**: the Python suite in shards | backends | | yes |
+
+A pull request labelled `ci-full` runs the full set too, on its next push. Release wheels are
+built by the release workflow with `--release`, not by CI.
+
+No crate has a runnable doctest, so `cargo test --doc` does not run.
+
+**python** installs the wheel with the `test` extra (with uv) and runs the suite split by file
+into shards (`PYTHON_SHARDS` in the workflow), each on an 8-CPU sandbox with one pytest worker
+per CPU (`-n "$(nproc)" --dist loadscope`). Tests are grouped by class or module to reuse
+fixtures; the slowest 30 tests of each shard are printed in the log, and failures and each
+file's duration are written to the check's summary. API tests use a separate temporary
+working directory per test, keeping `.barca` databases and artifacts isolated from other
+workers.
+
+Two parts run only when the change touches a path `scripts/ci-changes.py` lists, on a
+`release/v*` branch (whose version bump touches `pyproject.toml`, so its merge group runs them
+too) and on push to `main`:
+
+- **Object-store emulators.** Each shard starts MinIO, fake-gcs-server and Azurite and sets the
+  three `BARCA_TEST_*` endpoints, so the backend conformance and transfer fault tests run.
+  Otherwise those tests skip.
+- **duckdb 1.x.** An extra `python (duckdb 1.x)` job runs every test file that mentions duckdb
+  again with the newest duckdb 1.x.
+
+`scripts/ci-test-durations.json` holds each test file's duration, with and without the
+emulators, and the shard split balances on the map that matches the run. A shard's estimated
+length is its tests spread over its workers (counted as six of the eight, as measured), but no
+less than its longest file, which one
+worker runs. A file the map does not list is weighted by its size. To refresh a map after the
+suite changes shape, run the suite with `--junitxml` and pass the report to
+`scripts/ci-shards.py --update-durations` (add `--emulators` for a run with them).
+
+Cargo builds in the runner's local `target/` directory, incrementally (`CARGO_INCREMENTAL=1`).
+Each Rust job (clippy, rust-tests, build) restores that directory before the build from a
+cache entry keyed on the job, the rustc version, the `Cargo.lock` hash and the branch (a merge
+group starts from `main`'s latest), and saves a new entry after it, except in a merge group.
+Building directly on Depot's shared cache disk caused truncated object files and invalid Rust
+metadata, including after target directories were separated by PR.
 
 ## Reference for test authors
 

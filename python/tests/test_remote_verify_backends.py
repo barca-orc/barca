@@ -7,7 +7,7 @@ suite uses (MinIO, fake-gcs-server, Azurite): mismatch, stale-local-copy and inj
 failure cases. test_remote_crash_backends.py adds real coordinator SIGKILL during refresh and
 an actual SDK's staged write; this suite's injected ConnectionResetError is not that evidence.
 
-On a machine without the emulators each backend skips. On CI, where the `backends` job starts
+On a machine without the emulators each backend skips. On CI, when the `backends` check starts
 them and sets `BARCA_TEST_*`, an unreachable emulator fails the test (`emulators.require`).
 """
 

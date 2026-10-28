@@ -167,11 +167,20 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   `target-local/` and removes the tree and its branch when the task is done (orphan trees eat
   disk)
 - **Topic branches**: one per issue, branched off main, PRed straight into main
-- **Merging**: the `protect-main` ruleset allows **squash merges only**, requires `CI / test`
-  and `CI / backends` on the PR's head, and requires the branch to be up to date with main.
-  Merge one PR at a time: each merge makes the others behind, and updating them all at once
-  restarts every CI run. To ship several PRs as one release, combine them on one branch, run
+- **Merging**: through the merge queue. The `protect-main` ruleset allows **squash merges
+  only** and requires `CI / test` and `CI / backends`, on the PR's head and again on the merge
+  group (the queued PRs on top of main, `merge_group` in `.depot/workflows/ci.yml`). Queue a
+  green PR with `gh pr merge <n> --squash --auto` (or "Merge when ready"); do not rebase or
+  update branches by hand to keep them up to date with main, the queue tests each PR against
+  the main it will land on. To ship several PRs as one release, combine them on one branch, run
   CI once, and squash-merge it with a body that lists each PR and the issues it closes.
+- **What CI runs**: the merge group's run gates the merge. A PR runs only the fast set
+  (`checks`, `clippy`, `changes`) so it enters the queue within about a minute; the full set
+  (Rust tests, the wheel, integration, UI checks, Python shards) runs in the queue and on main,
+  or on a PR labelled `ci-full`. The object-store emulator tests and the duckdb 1.x rerun run
+  only when the change touches the paths `scripts/ci-changes.py` lists, on a `release/v*`
+  branch and on push to main; otherwise those tests skip. A change to store or duckdb code
+  outside those paths should add the path there. Details: `contributing/testing.md` on the site.
 - **Release**: `scripts/release.sh X.Y.Z`, from the trunk on an up-to-date main
   (`--dry-run` does everything locally and stops before the push). It refuses a version not
   greater than the latest tag, an empty `## Pending`, or (pre-1.0) a patch bump when Pending

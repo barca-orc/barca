@@ -49,7 +49,7 @@ def test_one_declared_emulator_does_not_turn_the_others_into_failures(monkeypatc
 
 
 def test_ci_declares_every_emulator_it_starts():
-    """The `backends` job must set the three variables, or its skips stay silent."""
+    """CI must set the three variables where it starts the emulators, or its skips stay silent."""
     from pathlib import Path
 
     workflow = Path(__file__).resolve().parents[2] / ".depot" / "workflows" / "ci.yml"
@@ -57,4 +57,6 @@ def test_ci_declares_every_emulator_it_starts():
         pytest.skip("not a source checkout")
     text = workflow.read_text()
     for variable in sorted(set(emulators.PROVIDED_BY.values())):
-        assert f"{variable}:" in text, f"ci.yml does not set {variable} for the backends job"
+        assert f"{variable}:" in text, (
+            f"ci.yml does not set {variable} where it starts the emulators"
+        )
