@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.34.0"
+__version__ = "0.35.0"
 
 __all__ = [
     "group",
