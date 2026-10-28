@@ -22,7 +22,8 @@
 #               CLI surface or the manual changed
 #
 # Not run (CI runs them): tests/integration/*.sh, the benchmark smoke tests, the UI checks, the
-# duckdb 1.x pass, and the object-store emulator tests (they skip without BARCA_TEST_*).
+# duckdb 1.x pass, and the object-store emulator tests (they skip without BARCA_TEST_*). The
+# minute checkpoint test runs when picked (unset BARCA_TEST_MINUTE_CHECKPOINT); it takes 2 min.
 # Set BARCA_POOL_SIZE=2 to reproduce CI-only worker-pool failures.
 set -uo pipefail
 

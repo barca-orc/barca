@@ -153,14 +153,15 @@ The other site pages are written by hand, and no test compares them with the man
 
 ## What CI runs
 
-`.depot/workflows/ci.yml` runs on every pull request into `main`, on every merge group in
-the merge queue, and on every push to `main`. The required checks are `CI / test` and
+`.depot/workflows/ci.yml` runs on every pull request into `main` and on every merge group in
+the merge queue. It does not run on push to `main`: `main` only moves to a merge group's
+commit, which the queue has just tested. The required checks are `CI / test` and
 `CI / backends`. Each is a job that passes when the jobs it needs succeeded.
 
 The merge group's run gates the merge. A pull request runs only the fast set, so it can enter
 the queue about a minute after a push:
 
-| Job | Check | Pull request | Merge group, push to `main` |
+| Job | Check | Pull request | Merge group |
 | --- | --- | --- | --- |
 | **checks**: the CHANGELOG check, the specification checks and the TLA+ models | test | yes | yes |
 | **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes |
@@ -185,18 +186,25 @@ file's duration are written to the check's summary. API tests use a separate tem
 working directory per test, keeping `.barca` databases and artifacts isolated from other
 workers.
 
-Two parts run only when the change touches a path `scripts/ci-changes.py` lists, on a
+Three parts run only when the change touches a path `scripts/ci-changes.py` lists and on a
 `release/v*` branch (whose version bump touches `pyproject.toml`, so its merge group runs them
-too) and on push to `main`:
+too):
 
 - **Object-store emulators.** Each shard starts MinIO, fake-gcs-server and Azurite and sets the
   three `BARCA_TEST_*` endpoints, so the backend conformance and transfer fault tests run.
   Otherwise those tests skip.
 - **duckdb 1.x.** An extra `python (duckdb 1.x)` job runs every test file that mentions duckdb
   again with the newest duckdb 1.x.
+- **The minute checkpoint.** `python/tests/test_minute_checkpoints.py` waits about two minutes
+  on the real one-minute metadata backup timer. It runs when the change touches the
+  checkpoint's code (the step recorder, backups, `barca state`, `barca._state`) and on a pull
+  request labelled `ci-full`; otherwise the shards set `BARCA_TEST_MINUTE_CHECKPOINT=0` and it
+  skips. Locally, with the variable unset, it runs. The checkpoint's logic is also covered in
+  seconds by a Rust unit test in `crates/barca-core/src/persist.rs` on a short interval.
 
 `scripts/ci-test-durations.json` holds each test file's duration, with and without the
-emulators, and the shard split balances on the map that matches the run. A shard's estimated
+emulators, and the shard split balances on the map that matches the run (counting the minute
+checkpoint test only when it runs). A shard's estimated
 length is its tests spread over its workers (counted as six of the eight, as measured), but no
 less than its longest file, which one
 worker runs. A file the map does not list is weighted by its size. To refresh a map after the
@@ -206,7 +214,9 @@ suite changes shape, run the suite with `--junitxml` and pass the report to
 Cargo builds in the runner's local `target/` directory, incrementally (`CARGO_INCREMENTAL=1`).
 Each Rust job (clippy, rust-tests, build) restores that directory before the build from a
 cache entry keyed on the job, the rustc version, the `Cargo.lock` hash and the branch (a merge
-group starts from `main`'s latest), and saves a new entry after it, except in a merge group.
+group starts from `main`'s latest), and saves a new entry after it under a key unique to the
+run. A merge group saves under `main`, since its commit becomes `main`; concurrent merge groups
+write separate entries, and the next restore takes the newest.
 Building directly on Depot's shared cache disk caused truncated object files and invalid Rust
 metadata, including after target directories were separated by PR.
 

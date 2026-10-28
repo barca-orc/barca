@@ -2,8 +2,8 @@
 
 The backend tests run against local emulators (MinIO, fake-gcs-server, Azurite). On a laptop
 without Docker they skip, so the rest of the suite still runs. On CI the `backends` check's
-Python shards start the emulators when a change touches store code, on a release branch and on
-main (`scripts/ci-changes.py`), and say so by setting the variables below
+Python shards start the emulators when a change touches store code and on a release branch
+(`scripts/ci-changes.py`), and say so by setting the variables below
 (.depot/workflows/ci.yml); there an unreachable emulator is a failure, because a skip would
 report green for tests that never ran. Without them, as on most PRs, these tests skip.
 
