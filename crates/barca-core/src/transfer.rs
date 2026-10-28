@@ -298,8 +298,10 @@ impl Launching {
 
     /// Stop the helper, which may still be starting, and return once it is gone.
     pub async fn stop(mut self) {
-        self.hello.abort();
-        let _ = self.hello.await;
+        if !self.hello.is_finished() {
+            self.hello.abort();
+            let _ = self.hello.await;
+        }
         crate::helper_proc::stop(&mut self.child).await;
         std::fs::remove_file(&self.socket_path).ok();
     }
