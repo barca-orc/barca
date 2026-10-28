@@ -988,6 +988,14 @@ on a small project and about 0.1 s with 100,000 results recorded. Eviction after
 after 5 seconds; what is left waits for the next command. When eviction cannot get under the
 limit, the check does not plan again for 10 minutes unless the size grows.
 
+A full walk reads the metadata DBs 20,000 rows at a time and lets go of barca's lock between
+them, so runs, and `barca serve`'s other requests, go on while it reads; under `barca serve` it
+runs on a thread of its own. A result whose file the walk found is not looked at again. One
+full walk of a `.barca/` runs at a time in a process: a check that finds one under way (a run
+that ends while `barca serve` walks) skips its own, and the walk under way records the size.
+With 465,000 artifact files and 2.8M recorded results a full walk takes minutes on a cold
+filesystem cache.
+
 **Read times.** "Least recently read" is the `last_read_at` of a result: set when a step is given
 it as an input, when `barca get` returns it, and when a `barca sql` query names its view. File
 access times are not used (most filesystems do not keep them). A key of a partitioned asset

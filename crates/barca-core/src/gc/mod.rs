@@ -775,26 +775,28 @@ fn range_cache_leftovers(project: &Project) -> Vec<plan::Leftover> {
     out
 }
 
-/// The recorded size of the results the DB says are on disk (each file once).
-async fn recorded_bytes(conn: &libsql::Connection) -> Result<u64, BarcaError> {
+/// The bytes the recorded results of `db_path` take: each artifact path once, at its largest
+/// recorded size, over the successful rows not evicted ([`scan`]).
+async fn recorded_bytes(db_path: &str) -> Result<u64, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to measure the cache: {e}"));
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(SUM(sz), 0) FROM (SELECT MAX(COALESCE(artifact_size_bytes, 0)) AS sz \
-             FROM materializations WHERE status = 'success' AND artifact_path IS NOT NULL \
-             AND evicted_at IS NULL GROUP BY artifact_path)",
-            (),
-        )
-        .await
-        .map_err(failed)?;
-    let total = rows
-        .next()
-        .await
-        .map_err(failed)?
-        .map(|r| r.get::<i64>(0).unwrap_or(0))
-        .unwrap_or(0);
-    while rows.next().await.map_err(failed)?.is_some() {}
-    Ok(total.max(0) as u64)
+    let rows = scan(
+        db_path,
+        "artifact_path, COALESCE(artifact_size_bytes, 0)",
+        "status = 'success' AND artifact_path IS NOT NULL AND evicted_at IS NULL",
+        |row| {
+            Ok((
+                row.get::<String>(1).map_err(failed)?,
+                row.get::<i64>(2).unwrap_or(0).max(0) as u64,
+            ))
+        },
+    )
+    .await?;
+    let mut largest: HashMap<String, u64> = HashMap::new();
+    for (path, bytes) in rows {
+        let size = largest.entry(path).or_default();
+        *size = (*size).max(bytes);
+    }
+    Ok(largest.values().sum())
 }
 
 /// Open one environment's DB, bringing its schema up to date (the additive columns this
@@ -808,6 +810,49 @@ async fn with_db<T>(
     let (_db, conn) = crate::db::open_conn(db_path).await?;
     f(&conn).await
 }
+
+/// Rows of `materializations` where `filter`, as `each` maps them, [`SCAN_CHUNK`] at a time in id
+/// order, each chunk read under barca's lock and the lock let go between them. `select` lists
+/// the columns after `id`, which is column 0. One query over every row held the lock until its
+/// last row: a survey of 2.8M rows held a server's runs that long, and a run could not even
+/// start.
+async fn scan<T>(
+    db_path: &str,
+    select: &str,
+    filter: &str,
+    mut each: impl FnMut(&libsql::Row) -> Result<T, BarcaError>,
+) -> Result<Vec<T>, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to read {db_path}: {e}"));
+    crate::db::init_db(db_path).await?;
+    let sql = format!(
+        "SELECT id, {select} FROM materializations WHERE id > ?1 AND ({filter}) \
+         ORDER BY id LIMIT {SCAN_CHUNK}"
+    );
+    let mut out = Vec::new();
+    // Every row: ids start at 1, but nothing stops a database from holding a 0 or below.
+    let mut after = i64::MIN;
+    loop {
+        let read = {
+            let _g = crate::db::db_guard().await;
+            let (_db, conn) = crate::db::open_conn(db_path).await?;
+            let mut rows = conn.query(&sql, [after]).await.map_err(failed)?;
+            let mut read = 0usize;
+            while let Some(row) = rows.next().await.map_err(failed)? {
+                after = row.get::<i64>(0).map_err(failed)?;
+                out.push(each(&row)?);
+                read += 1;
+            }
+            read
+        };
+        if read < SCAN_CHUNK {
+            return Ok(out);
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Rows read under the lock at a time by [`scan`]: tens of milliseconds.
+const SCAN_CHUNK: usize = 20_000;
 
 /// The fast size: recorded sizes, the small directories, and the last walk's correction.
 async fn estimate(project: &Project, envs: &[EnvDb], state: &State) -> Result<u64, BarcaError> {
@@ -824,7 +869,7 @@ async fn estimate(project: &Project, envs: &[EnvDb], state: &State) -> Result<u6
                 .and_then(|r| r.get::<i64>(0).ok()).unwrap_or(0);
             drop(rows);
             let bytes = match previous.filter(|p| p.through <= through) {
-                Some(previous) => {
+                Some(previous) => Some({
                     // An upper bound: reused paths can be counted again. Near the limit,
                     // the full survey measures actual files before planning eviction.
                     let mut rows = conn.query(
@@ -835,11 +880,19 @@ async fn estimate(project: &Project, envs: &[EnvDb], state: &State) -> Result<u6
                         .map_err(|e| BarcaError::Db(format!("failed to measure the cache: {e}")))?
                         .and_then(|r| r.get::<i64>(0).ok()).unwrap_or(0).max(0) as u64;
                     previous.bytes.saturating_add(added)
-                }
-                None => recorded_bytes(conn).await?,
+                }),
+                None => None,
             };
-            Ok(Recorded { through, bytes })
+            Ok((through, bytes))
         }).await?;
+        // Every row's: read a chunk at a time, outside the lock this one held.
+        let estimate = match estimate {
+            (through, Some(bytes)) => Recorded { through, bytes },
+            (through, None) => Recorded {
+                through,
+                bytes: recorded_bytes(&env.db_path).await?,
+            },
+        };
         recorded = recorded.saturating_add(estimate.bytes);
         updated.insert(env.db_path.clone(), estimate);
     }
@@ -860,23 +913,24 @@ struct Survey {
     held: BTreeMap<Held, u64>,
 }
 
-/// The successful rows of one environment, with their files.
-async fn rows_of(project: &Project, env: &EnvDb) -> Result<(Vec<plan::Row>, u64), BarcaError> {
+/// The successful rows of one environment, with their files. `walked` is the size of each file
+/// a walk just found, by [`Project::key`]: a row's file is looked up there, and looked at on
+/// disk only when the walk did not see it (an artifact tree behind a symlink, which the walk
+/// does not follow, or a file written since). A survey of 2.8M rows looked at a file for each.
+async fn rows_of(
+    project: &Project,
+    env: &EnvDb,
+    walked: Option<&HashMap<PathBuf, u64>>,
+) -> Result<(Vec<plan::Row>, u64), BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read {}: {e}", env.db_path));
-    let raw = with_db(&env.db_path, async |conn| {
-        let recorded = recorded_bytes(conn).await?;
-        let mut rows = conn
-            .query(
-                "SELECT id, node_id, run_hash, COALESCE(artifact_path, ''), \
-                 COALESCE(created_at, ''), last_read_at, output_hash IS NOT NULL \
-                 FROM materializations WHERE status = 'success'",
-                (),
-            )
-            .await
-            .map_err(failed)?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next().await.map_err(failed)? {
-            out.push((
+    let recorded = recorded_bytes(&env.db_path).await?;
+    let raw = scan(
+        &env.db_path,
+        "node_id, run_hash, COALESCE(artifact_path, ''), COALESCE(created_at, ''), \
+         last_read_at, output_hash IS NOT NULL",
+        "status = 'success'",
+        |row| {
+            Ok((
                 row.get::<i64>(0).map_err(failed)?,
                 row.get::<String>(1).map_err(failed)?,
                 row.get::<String>(2).ok(),
@@ -884,19 +938,29 @@ async fn rows_of(project: &Project, env: &EnvDb) -> Result<(Vec<plan::Row>, u64)
                 row.get::<String>(4).unwrap_or_default(),
                 row.get::<String>(5).ok(),
                 row.get::<i64>(6).unwrap_or(0) != 0,
-            ));
-        }
-        Ok((out, recorded))
-    })
+            ))
+        },
+    )
     .await?;
-    let (raw, recorded) = raw;
     let rows = raw
         .into_iter()
         .map(
             |(id, node_id, run_hash, recorded, created_at, last_read_at, digest)| {
                 let (file, store_held) = local_file(project, env, &recorded, digest);
-                let meta = file.as_ref().and_then(|f| std::fs::metadata(f).ok());
-                let present = meta.as_ref().is_some_and(|m| m.is_file());
+                let seen = file
+                    .as_ref()
+                    .and_then(|f| walked.and_then(|w| w.get(&project.key(f))).copied());
+                let (present, bytes) = match seen {
+                    Some(bytes) => (true, bytes),
+                    None => {
+                        let meta = file.as_ref().and_then(|f| std::fs::metadata(f).ok());
+                        let present = meta.as_ref().is_some_and(|m| m.is_file());
+                        (
+                            present,
+                            meta.filter(|_| present).map(|m| m.len()).unwrap_or(0),
+                        )
+                    }
+                };
                 plan::Row {
                     env: env.env.clone(),
                     id,
@@ -904,7 +968,7 @@ async fn rows_of(project: &Project, env: &EnvDb) -> Result<(Vec<plan::Row>, u64)
                     run_hash,
                     recorded,
                     file,
-                    bytes: meta.filter(|_| present).map(|m| m.len()).unwrap_or(0),
+                    bytes,
                     present,
                     created_at,
                     last_read_at,
@@ -948,21 +1012,17 @@ fn local_file(
 /// not to be named.
 async fn named_of(project: &Project, env: &EnvDb) -> Result<Option<Vec<PathBuf>>, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read {}: {e}", env.db_path));
-    let recorded = with_db(&env.db_path, async |conn| {
-        let mut rows = conn
-            .query(
-                "SELECT DISTINCT artifact_path FROM materializations                  WHERE artifact_path IS NOT NULL AND artifact_path != ''",
-                (),
-            )
-            .await
-            .map_err(failed)?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next().await.map_err(failed)? {
-            out.push(row.get::<String>(0).map_err(failed)?);
-        }
-        Ok(out)
-    })
-    .await?;
+    let mut seen = HashSet::new();
+    let recorded: Vec<String> = scan(
+        &env.db_path,
+        "artifact_path",
+        "artifact_path IS NOT NULL AND artifact_path != ''",
+        |row| row.get::<String>(1).map_err(failed),
+    )
+    .await?
+    .into_iter()
+    .filter(|path| seen.insert(path.clone()))
+    .collect();
     let mut out = Vec::with_capacity(recorded.len());
     for path in recorded {
         match local_file(project, env, &path, false).0 {
@@ -1049,10 +1109,15 @@ async fn unreferenced(
 /// [`estimate`].
 async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError> {
     let walked = walk(project, true);
+    let sizes: HashMap<PathBuf, u64> = walked
+        .files
+        .iter()
+        .map(|(path, bytes, _)| (project.key(path), *bytes))
+        .collect();
     let mut rows = Vec::new();
     let mut recorded = 0u64;
     for env in envs {
-        let (env_rows, env_recorded) = rows_of(project, env).await?;
+        let (env_rows, env_recorded) = rows_of(project, env, Some(&sizes)).await?;
         rows.extend(env_rows);
         recorded += env_recorded;
     }
@@ -1400,7 +1465,7 @@ pub(crate) async fn after_command(
         return None;
     }
     let started = Instant::now();
-    let checked = check(cfg.cache_max_size, own, pin).await;
+    let checked = off_the_event_loop(check(cfg.cache_max_size, own, pin)).await;
     if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
         crate::errln!(
             "[trace] cache size check {:.1}ms",
@@ -1416,6 +1481,20 @@ pub(crate) async fn after_command(
     }
 }
 
+/// `fut`, on a thread of its own under a multi-threaded runtime (`barca serve`'s): a survey walks
+/// every file of `.barca/` and looks at the file of every row, minutes of blocking calls over
+/// hundreds of thousands of artifacts, which on one of the server's two event-loop threads held
+/// up its requests and its runs. A single-threaded runtime (a CLI command) has nothing else to
+/// run meanwhile and polls it as it is.
+async fn off_the_event_loop<F: std::future::Future>(fut: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        }
+        _ => fut.await,
+    }
+}
+
 /// `serve`'s minute checkpoint: [`after_command`] with nothing of its own to protect.
 pub async fn checkpoint(cfg: &ResolvedConfig) -> Option<CacheReport> {
     after_command(cfg, &Own::default(), None).await
@@ -1427,6 +1506,31 @@ async fn check(
     pin: Option<&Pin>,
 ) -> Result<Option<CacheReport>, BarcaError> {
     check_in(&Project::here()?, max_size, own, pin).await
+}
+
+/// The `.barca/` directories this process is surveying now ([`check_in`]).
+static SURVEYING: std::sync::Mutex<Option<HashSet<PathBuf>>> = std::sync::Mutex::new(None);
+
+/// A survey of one `.barca/` under way, until dropped.
+struct Surveying(PathBuf);
+
+impl Surveying {
+    /// `None` when this process surveys `barca` already.
+    fn start(barca: &Path) -> Option<Self> {
+        let mut surveying = SURVEYING.lock().unwrap();
+        surveying
+            .get_or_insert_with(HashSet::new)
+            .insert(barca.to_path_buf())
+            .then(|| Self(barca.to_path_buf()))
+    }
+}
+
+impl Drop for Surveying {
+    fn drop(&mut self) {
+        if let Some(surveying) = SURVEYING.lock().unwrap().as_mut() {
+            surveying.remove(&self.0);
+        }
+    }
 }
 
 async fn check_in(
@@ -1477,6 +1581,12 @@ async fn check_in(
             }));
         }
     }
+    // One survey at a time in this process: a run that ends while `serve` surveys would walk
+    // the same files again, and wait for it before it returns. The survey under way records
+    // what this one would.
+    let Some(_surveying) = Surveying::start(&project.barca) else {
+        return Ok(None);
+    };
     let survey = survey(project, &envs).await?;
     remember(survey.total, limit);
     if survey.total <= limit {
