@@ -205,20 +205,21 @@ struct Pending {
 
 /// A transfer helper that has been started and has not connected yet.
 ///
-/// The helper is started early, so that its start-up overlaps planning, and it connects on
-/// its own while the run does other things: the listening socket holds the connection until
-/// [`Self::connect`] takes it. Whatever happens in between, the helper does not outlive this
-/// value: [`Self::stop`] stops it and waits for it to be gone, and dropping the value kills it
-/// on the spot. So a command that fails or is cancelled before its helper was ever used
+/// The helper is started early so its start-up overlaps planning. A background task accepts its
+/// connection and completes the hello as soon as the helper connects; [`Self::connect`] takes
+/// the stream and starts the I/O loop. Whatever happens in between, the helper does not outlive
+/// this value: [`Self::stop`] stops it and waits for it to be gone, and dropping the value kills
+/// it on the spot. So a command that fails or is cancelled before its helper was ever used
 /// leaves no process behind to find the socket gone.
 pub struct Launching {
     child: Child,
     /// The helper's lifeline (see [`crate::helper_proc::give_lifeline`]). Kept out of `child`,
     /// whose `wait` would close it.
     lifeline: Option<tokio::process::ChildStdin>,
-    listener: UnixListener,
     socket_path: PathBuf,
     layout: ArtifactLayout,
+    /// Accepts the helper's connection and hello (10 seconds from connect, not from planning).
+    hello: JoinHandle<Result<tokio::net::UnixStream, String>>,
 }
 
 impl Launching {
@@ -246,19 +247,24 @@ impl Launching {
         if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
             crate::errln!("[trace]  transfer helper started");
         }
+        let hello = tokio::spawn(async move { accept(&listener).await });
         Ok(Self {
             lifeline: child.stdin.take(),
             child,
-            listener,
             socket_path,
             layout,
+            hello,
         })
     }
 
-    /// Wait for the helper to connect (it has 10 seconds from this call).
+    /// Wait for the helper's hello task (started in [`Self::start`]) and begin the I/O loop.
     pub async fn connect(mut self) -> Result<TransferClient, BarcaError> {
         let accepted = tokio::select! {
-            accepted = accept(&self.listener) => accepted,
+            hello = &mut self.hello => match hello {
+                Ok(Ok(stream)) => Ok(stream),
+                Ok(Err(why)) => Err(why),
+                Err(join) => Err(format!("transfer helper hello task failed: {join}")),
+            },
             status = self.child.wait() => Err(format!(
                 "transfer helper exited before connecting ({}) — is barca installed \
                  with the extras for this artifact store?",
@@ -292,6 +298,10 @@ impl Launching {
 
     /// Stop the helper, which may still be starting, and return once it is gone.
     pub async fn stop(mut self) {
+        if !self.hello.is_finished() {
+            self.hello.abort();
+            let _ = self.hello.await;
+        }
         crate::helper_proc::stop(&mut self.child).await;
         std::fs::remove_file(&self.socket_path).ok();
     }
@@ -417,15 +427,19 @@ impl TransferClient {
             Ok(Launching {
                 child,
                 lifeline,
-                listener,
+                hello,
                 ..
             }) => {
                 self.child = Some(child);
                 self._lifeline = lifeline;
                 self.io_task = Some(tokio::spawn(async move {
-                    match accept(&listener).await {
-                        Ok(stream) => io_task(stream, req_rx).await,
-                        Err(why) => fail_all(req_rx, why).await,
+                    match hello.await {
+                        Ok(Ok(stream)) => io_task(stream, req_rx).await,
+                        Ok(Err(why)) => fail_all(req_rx, why).await,
+                        Err(join) => {
+                            fail_all(req_rx, format!("transfer helper hello task failed: {join}"))
+                                .await
+                        }
                     }
                 }));
             }
@@ -1521,6 +1535,28 @@ for t in threads: t.join()
             .status
             .success();
         ok.then_some(p)
+    }
+
+    #[tokio::test]
+    async fn hello_is_accepted_before_connect_even_after_slow_planning() {
+        let Some(python) = repo_python() else {
+            crate::errln!("SKIP: no .venv with barca installed");
+            return;
+        };
+        let fx = Fixture::new();
+        let mut cmd = Command::new(python);
+        cmd.args(["-m", "barca._transfer"]);
+        let sock = crate::protocol::socket_path(
+            &format!("xfer-test-slow-plan-{}", std::process::id()),
+            "transfer",
+        )
+        .unwrap();
+        let launching = Launching::start(cmd, sock, fx.layout()).unwrap();
+        // Longer than the helper's socket hello timeout if the coordinator never answers (#702).
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        let mut c = launching.connect().await.unwrap();
+        assert_eq!(within(c.probe()).await, Ok(()));
+        within(c.shutdown()).await;
     }
 
     #[tokio::test]
