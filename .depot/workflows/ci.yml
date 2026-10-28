@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    # `labeled` so adding `ci-full` starts the full set without another push.
+    types: [opened, synchronize, reopened, labeled]
   # The merge queue: each merge group (one or more queued PRs on top of main) is tested
   # before main moves to it. This is the run that gates a merge.
   merge_group:
