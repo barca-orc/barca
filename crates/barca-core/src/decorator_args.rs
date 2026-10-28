@@ -1131,6 +1131,8 @@ mod tests {
         assert_eq!(asset.closest("freshnes"), ["freshness"]);
         assert_eq!(asset.closest("tag"), ["tags"]);
         assert_eq!(asset.closest("evn"), ["env"]); // two neighbours swapped
+        // The plural people reach for (`batch=` is the argument; #668).
+        assert_eq!(asset.closest("batches"), ["batch"]);
         // Nothing close: no guess.
         assert_eq!(asset.closest("after"), Vec::<&str>::new());
         assert_eq!(asset.closest("when"), Vec::<&str>::new());
