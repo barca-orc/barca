@@ -204,11 +204,10 @@ too):
 
 `scripts/ci-test-durations.json` holds each test file's duration, with and without the
 emulators, and the shard split balances on the map that matches the run (counting the minute
-checkpoint test only when it runs). A shard's estimated
-length is its tests spread over its workers (counted as six of the eight, as measured), but no
-less than its longest file, which one
-worker runs. A file the map does not list is weighted by its size. To refresh a map after the
-suite changes shape, run the suite with `--junitxml` and pass the report to
+checkpoint test only when it runs). A shard's estimated length is its tests spread over its
+workers (counted as six of the eight, as measured), but no less than its longest file, which
+one worker runs. A file the map does not list is weighted by its size. To refresh a map after
+the suite changes shape, run the suite with `--junitxml` and pass the report to
 `scripts/ci-shards.py --update-durations` (add `--emulators` for a run with them).
 
 Cargo builds in the runner's local `target/` directory, incrementally (`CARGO_INCREMENTAL=1`).
