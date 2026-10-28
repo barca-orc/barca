@@ -24,6 +24,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   decisions every run makes. Since 0.34.0 a one-key cache lookup compiled its SQL again for
   every key (the move from `turso` to libSQL lost the statement cache); a reader now compiles
   it once, and the keys of a partitioned step are looked up a few thousand to a query.
+- `GET /runs` and `barca history` read each listed run's first failed step from a new partial
+  index, `idx_mat_failed`, instead of every row of the run: 115k rows for a run of a 115k-key
+  node, read again on each poll of the web UI's runs list. Opening an older metadata DB
+  builds the index once, about ten seconds for 3M rows.
 
 ## 0.34.0 (2026-10-27)
 

@@ -182,8 +182,10 @@ every database from before 0.29.2 (#629):
   (run_id, attempts) WHERE attempts IS NULL OR attempts != 1` (a run's attempt count, `barca
   history`: the run's rows counted by `idx_mat_run`, corrected by these) and `idx_mat_evicted
   (artifact_path) WHERE evicted_at IS NOT NULL` (the results the cache size limit deleted, every
-  dry run). Opening an older database builds them, a few seconds for 400k rows; older binaries
-  ignore them. A node's partition-key rows (`<node>[...]`) are read as the range `node_id >=
+  dry run), and, added after 0.34.0, `idx_mat_failed (run_id, id) WHERE status = 'failed'`
+  (a run's first failed step, for every run `GET /runs` and `barca history` list; without it
+  that read every row of each run). Opening an older database builds them, a few seconds for
+  400k rows and about ten for 3M; older binaries ignore them. A node's partition-key rows (`<node>[...]`) are read as the range `node_id >=
   '<node>[' AND node_id < '<node>\'` of `idx_mat_node_run`.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
   `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,

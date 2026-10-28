@@ -3095,6 +3095,9 @@ pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, B
         .next())
 }
 
+/// A run's first failed step and its error, read from `idx_mat_failed` ([`read_runs`]).
+const FAILURE_INDEXED: &str = "(SELECT node_id || char(31) || COALESCE(error_type, '') || char(31) || COALESCE(error_message, '') FROM materializations INDEXED BY idx_mat_failed WHERE run_id = runs.run_id AND status = 'failed' ORDER BY id LIMIT 1)";
+
 async fn read_runs(
     db_path: &str,
     run_id: Option<&str>,
@@ -3153,10 +3156,14 @@ async fn read_runs(
     };
     // The first failed step and its error, joined by the unit separator (a byte no node id,
     // error type or message line holds).
-    let failure = if names.contains("run_id") && names.contains("error_type") {
-        "(SELECT node_id || char(31) || COALESCE(error_type, '') || char(31) || COALESCE(error_message, '') FROM materializations WHERE run_id = runs.run_id AND status = 'failed' ORDER BY id LIMIT 1)"
-    } else {
+    let failure = if !(names.contains("run_id") && names.contains("error_type")) {
         "NULL"
+    } else if has_index(&conn, "idx_mat_failed").await? {
+        // Named: without statistics SQLite's planner picks `idx_mat_run` and reads every row
+        // of the run to check its status.
+        FAILURE_INDEXED
+    } else {
+        "(SELECT node_id || char(31) || COALESCE(error_type, '') || char(31) || COALESCE(error_message, '') FROM materializations WHERE run_id = runs.run_id AND status = 'failed' ORDER BY id LIMIT 1)"
     };
     let mut rows = conn
         .query(
@@ -6073,5 +6080,58 @@ mod lookup_tests {
                 None
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod failure_index_tests {
+    use super::*;
+
+    /// The runs list reads each run's first failure from `idx_mat_failed`: the plan names it,
+    /// and the answer is the one a scan of the run's rows gives.
+    #[tokio::test]
+    async fn a_runs_first_failure_is_read_from_its_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        create_run(&path, "r", "get", "[]", None, Some(3))
+            .await
+            .unwrap();
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            for (node, status, error) in [
+                ("p.py:ok", "success", ""),
+                ("p.py:first", "failed", "first bad"),
+                ("p.py:second", "failed", "second bad"),
+            ] {
+                conn.execute(
+                    "INSERT INTO materializations (run_id, node_id, status, error_type, \
+                     error_message) VALUES ('r', ?1, ?2, 'ValueError', NULLIF(?3, ''))",
+                    [node, status, error],
+                )
+                .await
+                .unwrap();
+            }
+            let mut plan = conn
+                .query(
+                    &format!("EXPLAIN QUERY PLAN SELECT {FAILURE_INDEXED} FROM runs"),
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut details = Vec::new();
+            while let Some(row) = plan.next().await.unwrap() {
+                details.push(row.get::<String>(3).unwrap());
+            }
+            assert!(
+                details.iter().any(|d| d.contains("idx_mat_failed")),
+                "{details:?}"
+            );
+        }
+        let run = get_run(&path, "r").await.unwrap().unwrap();
+        let failure = run.failure.expect("the run has a failed step");
+        assert_eq!(failure.node, "p.py:first");
+        assert_eq!(failure.error, "ValueError: first bad");
     }
 }

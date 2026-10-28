@@ -124,6 +124,10 @@ pub(crate) const INDEXES: &[&str] = &[
     // Every dry run asks which results the cache size limit deleted: the rows in this index,
     // not a scan of the table.
     "CREATE INDEX IF NOT EXISTS idx_mat_evicted ON materializations(artifact_path) WHERE evicted_at IS NOT NULL",
+    // A run's first failed step, which `GET /runs` and `barca history` show for every run
+    // listed: the rows in this index, not every row of the run (115k for a run of a 115k-key
+    // node, read again on each poll of the runs list).
+    "CREATE INDEX IF NOT EXISTS idx_mat_failed ON materializations(run_id, id) WHERE status = 'failed'",
 ];
 
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
