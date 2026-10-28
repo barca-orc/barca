@@ -1,6 +1,6 @@
 # Direction
 
-Last updated: 2026-10-24, after v0.31.0. The pinned
+Last updated: 2026-10-28, after v0.34.0. The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -67,7 +67,7 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.33.1 | 2026-10-27 | Run result bookkeeping separated from execution; behavioral contracts consolidated | #659, #660 |
 | 0.34.0 | 2026-10-27 | Breaking: unreadable decorator values exit 2; duckdb 2; sink republish on cache hits; failure phases | #567, #662 to #665 |
 
-An open issue with no milestone is unscheduled on purpose (#567); it is scheduled when it becomes the next most important thing.
+An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
 ### Cleanup releases
 
