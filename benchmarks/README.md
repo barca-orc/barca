@@ -220,6 +220,16 @@ and `stats`, locally and with `--server`. `STORE=1` adds a `file://` artifact st
 `RUNS` shrink it. Results: [RESULTS.md](RESULTS.md), "Read routes and inspection at 300
 assets".
 
+### Many partitioned nodes, long history
+
+Not a `hyperfine` run, barca only: `benchmarks/wide_partitions/bench.sh` generates 1,000 nodes
+in ten files, 960 of them partitioned with 1,200 keys each (1.2M keys, from an expression),
+runs four files, gives every key five older results and adds 3,000 runs (2.8M result rows, a
+4 GB metadata DB), then times `barca status` and, while a server run of a fresh file executes
+(115k steps), the slowest answer of `GET /state`, `GET /runs` and `GET /runs/{run_id}` polled
+as the web UI polls them. `KEYS` shrinks it. Results: [RESULTS.md](RESULTS.md), "Read routes
+during a run over many partitioned nodes".
+
 ### Planning pipeline (#250)
 
 Not a `hyperfine` run, barca only: `benchmarks/planning_pipeline/bench.sh [--scale N] [--pool N]`

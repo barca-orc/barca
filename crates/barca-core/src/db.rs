@@ -113,6 +113,131 @@ pub async fn db_guard() -> MutexGuard<'static, ()> {
     DB_LOCK.lock().await
 }
 
+/// [`db_guard`] for an operation on `db_path`; none for a [`ReadView`], which reads beside
+/// the writers instead of taking turns with them.
+pub async fn db_guard_for(db_path: &str) -> Option<MutexGuard<'static, ()>> {
+    if is_read_view(db_path) {
+        return None;
+    }
+    Some(DB_LOCK.lock().await)
+}
+
+/// The paths of the [`ReadView`]s open in this process.
+static READ_VIEWS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// True when `db_path` names a [`ReadView`].
+pub fn is_read_view(db_path: &str) -> bool {
+    READ_VIEWS.lock().unwrap().contains(db_path)
+}
+
+/// How long a connection waits on SQLite's own locks before `database is locked`
+/// ([`wait_when_busy`]): in WAL mode only while the log's index is rebuilt or a checkpoint
+/// truncates the log, which takes milliseconds.
+const BUSY_WAIT: Duration = Duration::from_secs(5);
+
+/// How long [`fold_log`] tries again a checkpoint that a [`ReadView`]'s query kept from
+/// finishing: one query of a read route lasts milliseconds.
+const CHECKPOINT_BUSY_WAIT: Duration = Duration::from_secs(2);
+
+/// The live metadata DB, opened for reading only: a path (a symbolic link to it in a temp
+/// dir, removed on drop) that every reader in this module accepts in place of the database.
+///
+/// A [`DbSnapshot`] copies the database, which costs its size on every change (gigabytes for
+/// a long history, written on Linux in full) and starts every read with a cold page cache. A
+/// view instead reads the database in place: in WAL mode SQLite lets readers in any process
+/// see the last commit while one writer appends, so a view takes neither barca's
+/// cross-process lock nor the process-wide guard, and never waits for a run's writes or makes
+/// one wait. Its connections are read-only (they never write, migrate or checkpoint) and run
+/// each query in its own transaction, so a checkpoint ([`fold_log`]) waits at most for one
+/// query. SQLite resolves the link, so the view shares the database's `-wal` and `-shm`.
+///
+/// Only a database this release uses as it is can be read in place: [`ReadView::open`]
+/// answers `None` for one that is missing, not in WAL mode or would be migrated, and the
+/// caller takes a [`DbSnapshot`] instead.
+pub struct ReadView {
+    path: String,
+    _dir: tempfile::TempDir,
+}
+
+impl ReadView {
+    pub async fn open(db_path: &str) -> Result<Option<Self>, BarcaError> {
+        let Ok(target) = fs::canonicalize(db_path) else {
+            return Ok(None);
+        };
+        if unusable_file(db_path).is_some() || empty_file(db_path) {
+            return Ok(None);
+        }
+        let dir = tempfile::tempdir()
+            .map_err(|e| BarcaError::Db(format!("failed to create read view dir: {e}")))?;
+        let link = dir.path().join("metadata.db");
+        std::os::unix::fs::symlink(&target, &link)
+            .map_err(|e| BarcaError::Db(format!("failed to create read view: {e}")))?;
+        let path = link.display().to_string();
+        let (db, conn) = connect_view(&path).await?;
+        let usable = view_usable(&conn).await;
+        drop(conn);
+        drop(db);
+        if !usable {
+            return Ok(None);
+        }
+        READ_VIEWS.lock().unwrap().insert(path.clone());
+        Ok(Some(Self { path, _dir: dir }))
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Drop for ReadView {
+    fn drop(&mut self) {
+        READ_VIEWS.lock().unwrap().remove(&self.path);
+    }
+}
+
+/// A read-only connection to a [`ReadView`]'s database.
+async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
+    OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let db = Builder::new_local(path)
+        .flags(libsql::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .build()
+        .await
+        .map_err(db_open_error)?;
+    let conn = db.connect().map_err(db_open_error)?;
+    // Before the first query: the first reader after the last writer closed rebuilds the log's
+    // index, and a reader that comes then waits for it instead of failing.
+    wait_when_busy(&conn)?;
+    let _ = conn.execute("PRAGMA cache_size = -32768", ()).await;
+    crate::db_schema::check(&conn)
+        .await
+        .map_err(|e| unusable_at(e, path))?;
+    Ok((db, conn))
+}
+
+/// Whether the database behind `conn` is read as it is: this release's format with nothing
+/// to add, in WAL mode.
+async fn view_usable(conn: &libsql::Connection) -> bool {
+    if !matches!(crate::db_schema::read_version(conn).await, Ok(v) if v == crate::db_schema::VERSION)
+    {
+        return false;
+    }
+    let Ok(schema) = crate::state_validate::Schema::read(conn).await else {
+        return false;
+    };
+    if crate::db_schema::additions_missing_in(&schema) {
+        return false;
+    }
+    let Ok(mut rows) = conn.query("PRAGMA journal_mode", ()).await else {
+        return false;
+    };
+    let mode = match rows.next().await {
+        Ok(Some(row)) => row.get::<String>(0).ok(),
+        _ => None,
+    };
+    mode.is_some_and(|mode| mode.eq_ignore_ascii_case("wal"))
+}
+
 /// The `runs.files` column: a JSON array of paths. Rows written before 0.12 hold the paths
 /// joined by spaces; those are split on whitespace.
 pub fn encode_files(files: &[String]) -> String {
@@ -336,7 +461,8 @@ const DB_FILE_LOCK_WAIT: Duration = Duration::from_secs(60);
 /// order matters: the database is closed before the lock is released.
 pub struct DbHandle {
     _db: libsql::Database,
-    _lock: fs::File,
+    /// None for a [`ReadView`], which reads without the lock.
+    _lock: Option<fs::File>,
 }
 
 /// Take the cross-process lock for `db_path` (a `<db>.lock` file next to it), waiting
@@ -489,8 +615,18 @@ async fn copy_snapshot_bytes(
 pub(crate) async fn fold_log(db_path: &str) -> Result<(), BarcaError> {
     {
         let (_db, conn) = connect(db_path).await?;
-        checkpoint(&conn).await?;
+        // The lock keeps every writer out, not a [`ReadView`]: a reader in the middle of a
+        // query holds the log until the query ends, so a busy checkpoint (and only that) is
+        // tried again for a moment.
+        let deadline = Instant::now() + CHECKPOINT_BUSY_WAIT;
+        while checkpoint_once(&conn).await? {
+            if Instant::now() >= deadline {
+                return Err(checkpoint_busy());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
+
     if !wal_is_clean(db_path) {
         let wal = format!("{db_path}-wal");
         return Err(BarcaError::Db(format!(
@@ -588,13 +724,14 @@ pub struct CacheReader {
     key_rows: std::sync::Mutex<HashMap<String, Option<std::sync::Arc<KeyRows>>>>,
     conn: libsql::Connection,
     _handle: DbHandle,
-    _guard: MutexGuard<'static, ()>,
+    /// None for a [`ReadView`] ([`db_guard_for`]).
+    _guard: Option<MutexGuard<'static, ()>>,
 }
 
 impl CacheReader {
     pub async fn open(db_path: &str) -> Result<Self, BarcaError> {
         // Same order as every other helper: in-process guard first, then the file lock.
-        let guard = db_guard().await;
+        let guard = db_guard_for(db_path).await;
         let (handle, conn) = open_conn(db_path).await?;
         Ok(Self {
             lookup: Default::default(),
@@ -993,10 +1130,20 @@ async fn connect_read_only(
         .await
         .map_err(db_open_error)?;
     let conn = db.connect().map_err(db_open_error)?;
+    wait_when_busy(&conn)?;
     crate::db_schema::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
+}
+
+/// Before a connection's first query: wait for SQLite's own locks instead of failing with
+/// `database is locked`. barca's lock keeps writers apart, but a [`ReadView`] reads beside
+/// them, and the first connection after the last one closed rebuilds the log's index under a
+/// lock for a moment, whichever connection it is.
+fn wait_when_busy(conn: &libsql::Connection) -> Result<(), BarcaError> {
+    conn.busy_timeout(BUSY_WAIT)
+        .map_err(|e| BarcaError::Db(format!("failed to set busy timeout: {e}")))
 }
 
 /// The caller holds the file lock and has checked an existing database read-only.
@@ -1009,6 +1156,7 @@ async fn connect_write(path: &str) -> Result<(libsql::Database, libsql::Connecti
     let conn = db
         .connect()
         .map_err(|e| BarcaError::Db(format!("failed to connect: {e}")))?;
+    wait_when_busy(&conn)?;
     // A page cache of up to 32 MiB (allocated as pages are read). The default is small enough
     // that one pass over the results of a node with 200k partition keys reads its pages from
     // disk several times over: 2.8 s against 0.25 s (benchmarks/keyed_partitions).
@@ -1084,6 +1232,17 @@ pub(crate) async fn open_conn_with_until(
     db_path: &str,
     until: crate::helper_proc::Until<'_>,
 ) -> Result<(DbHandle, libsql::Connection), BarcaError> {
+    if is_read_view(db_path) {
+        until.check()?;
+        let (db, conn) = connect_view(db_path).await?;
+        return Ok((
+            DbHandle {
+                _db: db,
+                _lock: None,
+            },
+            conn,
+        ));
+    }
     let lock = until
         .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
         .await??;
@@ -1092,7 +1251,7 @@ pub(crate) async fn open_conn_with_until(
     Ok((
         DbHandle {
             _db: db,
-            _lock: lock,
+            _lock: Some(lock),
         },
         conn,
     ))
@@ -1101,6 +1260,14 @@ pub(crate) async fn open_conn_with_until(
 /// Fold the write-ahead log into the main database file (`PRAGMA wal_checkpoint(TRUNCATE)`).
 /// No other connection may be open on the file.
 pub(crate) async fn checkpoint(conn: &libsql::Connection) -> Result<(), BarcaError> {
+    if checkpoint_once(conn).await? {
+        return Err(checkpoint_busy());
+    }
+    Ok(())
+}
+
+/// One `PRAGMA wal_checkpoint(TRUNCATE)`: true when another connection kept it from finishing.
+async fn checkpoint_once(conn: &libsql::Connection) -> Result<bool, BarcaError> {
     let failed = |e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}"));
     // The pragma returns one (busy, log_pages, checkpointed_pages) row; busy means another
     // connection kept it from finishing.
@@ -1112,14 +1279,15 @@ pub(crate) async fn checkpoint(conn: &libsql::Connection) -> Result<(), BarcaErr
     while let Some(row) = rows.next().await.map_err(failed)? {
         busy |= row.get::<i64>(0).unwrap_or(0) != 0;
     }
-    if busy {
-        return Err(BarcaError::Db(
-            "wal_checkpoint(TRUNCATE) could not finish: the database is in use by another \
-             connection"
-                .to_string(),
-        ));
-    }
-    Ok(())
+    Ok(busy)
+}
+
+fn checkpoint_busy() -> BarcaError {
+    BarcaError::Db(
+        "wal_checkpoint(TRUNCATE) could not finish: the database is in use by another \
+         connection"
+            .to_string(),
+    )
 }
 
 /// True when the write-ahead log beside `db_path` is absent or empty: the main file alone is
@@ -1200,7 +1368,7 @@ async fn initialized(
     let (db, conn) = connect_write(path).await?;
     let handle = DbHandle {
         _db: db,
-        _lock: lock,
+        _lock: Some(lock),
     };
     let version = match init_schema(&conn).await {
         Ok(()) => crate::db_schema::read_version(&conn).await,
@@ -1251,7 +1419,7 @@ pub async fn start_run(
     node_ids: &[String],
     base_ids: &[String],
 ) -> Result<StartedRun, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (handle, conn, _) = initialized(db_path, db_path)
         .await
         .map_err(|e| named(e, db_path))?;
@@ -1595,7 +1763,7 @@ pub async fn recent_durations(
     base_ids: &[String],
     window: usize,
 ) -> Result<HashMap<String, Vec<f64>>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_h, conn) = open_conn(db_path).await?;
     let mut out = HashMap::new();
     for base in base_ids {
@@ -1717,7 +1885,7 @@ pub async fn insert_logs(
     if lines.is_empty() {
         return Ok(());
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     // Store the entire ordered stream atomically. A failed write must not leave
     // a partial stream that the idempotence check would mistake for a complete one.
@@ -1786,7 +1954,7 @@ const LOG_INSERT_ROWS: usize = 500;
 /// Fetch all persisted log lines for a run, in order. An older database without the
 /// `stream` and `ts` columns reads them as stdout lines with no time.
 pub async fn get_logs(db_path: &str, run_id: &str) -> Result<Vec<LogEntry>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let full = conn
         .query(
@@ -1837,7 +2005,7 @@ pub async fn get_logs(db_path: &str, run_id: &str) -> Result<Vec<LogEntry>, Barc
 
 /// Load the last-fired time (unix epoch seconds) for every scheduled node.
 pub async fn get_schedule_state(db_path: &str) -> Result<HashMap<String, i64>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
         .query("SELECT node_id, last_fired_at FROM schedule_state", ())
@@ -1860,7 +2028,7 @@ pub async fn upsert_schedule_state(
     node_id: &str,
     epoch_secs: i64,
 ) -> Result<(), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
         "INSERT INTO schedule_state (node_id, last_fired_at) VALUES (?1, ?2)
@@ -1885,7 +2053,7 @@ pub struct SchedulePause {
 pub async fn get_schedule_pauses(
     db_path: &str,
 ) -> Result<HashMap<String, SchedulePause>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     if !has_column(&conn, "schedule_state", "paused_at").await? {
         return Ok(HashMap::new());
@@ -1926,7 +2094,7 @@ pub async fn set_schedule_pause(
     pause: Option<SchedulePause>,
     now: i64,
 ) -> Result<(), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let opt = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_default();
     let sql = match pause {
@@ -1968,7 +2136,7 @@ pub struct ScheduleFailures {
 pub async fn get_schedule_failures(
     db_path: &str,
 ) -> Result<HashMap<String, ScheduleFailures>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
         .query(
@@ -2005,7 +2173,7 @@ pub async fn set_schedule_failures(
     node_id: &str,
     state: &ScheduleFailures,
 ) -> Result<(), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let failed = |e| BarcaError::Db(format!("failed to write schedule_failures: {e}"));
     if state.failures == 0 {
@@ -2035,7 +2203,7 @@ pub async fn set_schedule_failures(
 
 /// The highest materialization id recorded so far (0 when there is none).
 pub async fn max_materialization_id(db_path: &str) -> Result<i64, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
         .query(
@@ -2060,7 +2228,7 @@ pub async fn succeeded_since(
     if nodes.is_empty() {
         return Ok(false);
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
         .query(
@@ -2255,7 +2423,7 @@ pub async fn persist_outputs(
 pub async fn load_cost_estimates(
     db_path: &str,
 ) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     cost_estimates_on(&conn, None).await
 }
@@ -2321,7 +2489,7 @@ pub async fn upsert_cost_estimates(
     if estimates.is_empty() {
         return Ok(());
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     for (node_id, est) in estimates {
         let base = crate::StepId::parse(node_id).base_id().to_string();
@@ -2407,7 +2575,7 @@ pub struct NewRun<'a> {
 
 /// Create a new run record at the start of execution.
 pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     insert_run(&conn, db_path, &run).await;
     Ok(())
@@ -2449,7 +2617,7 @@ pub async fn record_unstarted_run(
     status: &str,
     outcome_json: &str,
 ) -> Result<(), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
         "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9) ON CONFLICT(run_id) DO NOTHING",
@@ -2478,7 +2646,7 @@ pub async fn set_run_outcome(
     status: &str,
     outcome_json: &str,
 ) -> Result<bool, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let changed = conn
         .execute(
@@ -2503,7 +2671,7 @@ pub async fn replace_run_outcome(
     status: &str,
     outcome_json: &str,
 ) -> Result<bool, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let changed = conn
         .execute(
@@ -2525,7 +2693,7 @@ pub async fn run_artifact(
     run_id: &str,
     node_id: &str,
 ) -> Result<Option<(String, String)>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
         .query(
@@ -2543,7 +2711,7 @@ pub async fn run_artifact(
 
 /// A run's stored outcome ([`set_run_outcome`]), if it has one.
 pub async fn get_run_outcome(db_path: &str, run_id: &str) -> Result<Option<String>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     if !has_column(&conn, "runs", "outcome_json").await? {
         return Ok(None);
@@ -2826,7 +2994,7 @@ pub async fn alive_running_runs(db_path: &str) -> Vec<AliveRun> {
 /// opens the real one. The owners are judged against `db_path`'s marker directory.
 pub async fn alive_running_runs_in(read_path: &str, db_path: &str) -> Vec<AliveRun> {
     let running = {
-        let _g = db_guard().await;
+        let _g = db_guard_for(db_path).await;
         let Ok((_db, conn)) = open_conn(read_path).await else {
             return Vec::new();
         };
@@ -2856,7 +3024,7 @@ pub(crate) async fn touch_read(db_path: &str, paths: &[String]) {
     if paths.is_empty() || !Path::new(db_path).exists() {
         return;
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let Ok((_db, conn)) = open_conn(db_path).await else {
         return;
     };
@@ -2874,7 +3042,7 @@ pub(crate) async fn adopt_store_digests(db_path: &str, adopted: &[(String, Strin
     if adopted.is_empty() || !Path::new(db_path).exists() {
         return;
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let Ok((_db, conn)) = open_conn(db_path).await else {
         return;
     };
@@ -2942,7 +3110,7 @@ pub(crate) async fn evicted_among(
     if paths.is_empty() || !Path::new(db_path).exists() {
         return out;
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let Ok((_db, conn)) = open_conn(db_path).await else {
         return out;
     };
@@ -2999,7 +3167,7 @@ pub async fn finish_run(
     steps_cached: usize,
     elapsed_seconds: f64,
 ) -> Result<(), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let updated = conn.execute(
         "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
@@ -3031,7 +3199,7 @@ pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecor
 /// materializations and all counters; nobody observed an end time or duration.
 pub async fn reconcile_run(db_path: &str, run_id: &str) -> Result<RunRecord, BarcaError> {
     {
-        let _g = db_guard().await;
+        let _g = db_guard_for(db_path).await;
         let (_db, conn) = open_conn(db_path).await?;
         let mut rows = conn
             .query(
@@ -3103,7 +3271,7 @@ async fn read_runs(
     run_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<RunRecord>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     // A run whose process died is reported as `interrupted`, not as still `running`. Reported,
     // not written: reading history must not change the database (the next run records it).
@@ -3341,7 +3509,7 @@ pub async fn get_run_steps_page(
     run_id: &str,
     limit: Option<usize>,
 ) -> Result<(Vec<RunStep>, StepsPage), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     // Read-only snapshots of older databases may lack later columns: those read as null.
     let mut columns = Vec::new();
@@ -3548,7 +3716,7 @@ pub async fn read_step_rows(
     limit: usize,
     offset: usize,
 ) -> Result<(Vec<StepRow>, usize), BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut select = Vec::new();
     for column in [
@@ -3631,7 +3799,7 @@ pub async fn read_step_rows(
 
 /// Total number of recorded runs (for `barca history` truncation reporting).
 pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn
         .query("SELECT COUNT(*) FROM runs", ())
@@ -3648,7 +3816,7 @@ pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
 
 /// Get aggregated stats for a specific asset/node.
 pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
 
     // Fetch all elapsed times for percentile computation.
@@ -3818,7 +3986,7 @@ pub(crate) async fn changed_bytes_in_run(
     db_path: &str,
     run_id: &str,
 ) -> Result<Vec<String>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut rows = conn.query(
         "SELECT node_id FROM materializations INDEXED BY idx_mat_run WHERE run_id = ?1 AND bytes_changed = 1 ORDER BY node_id",
@@ -3854,7 +4022,7 @@ pub async fn node_histories(
     db_path: &str,
     base_ids: &[String],
 ) -> Result<HashMap<String, NodeHistory>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let mut out = HashMap::new();
     for base in base_ids {
@@ -4100,7 +4268,7 @@ async fn latest_partition_artifacts_scoped(
     base_id: &str,
     local_dir: Option<&str>,
 ) -> Result<Vec<PartitionArtifact>, BarcaError> {
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let (lo, hi) = key_range(base_id);
     let mut rows = conn
@@ -4166,7 +4334,7 @@ pub async fn get_avg_elapsed(
     if node_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     avg_elapsed_on(&conn, node_ids).await
 }
@@ -4218,7 +4386,7 @@ pub async fn get_avg_elapsed_for_partitioned(
     if base_node_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let _g = db_guard().await;
+    let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     partitioned_avg_elapsed_on(&conn, base_node_ids).await
 }
@@ -6133,5 +6301,153 @@ mod failure_index_tests {
         let failure = run.failure.expect("the run has a failed step");
         assert_eq!(failure.node, "p.py:first");
         assert_eq!(failure.error, "ValueError: first bad");
+    }
+}
+
+#[cfg(test)]
+mod read_view_tests {
+    use super::*;
+
+    fn db_in(dir: &tempfile::TempDir) -> String {
+        dir.path().join("metadata.db").display().to_string()
+    }
+
+    async fn execute(path: &str, sql: &str) {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(path).await.unwrap();
+        // A pragma that sets a mode answers a row.
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        while rows.next().await.unwrap().is_some() {}
+    }
+
+    #[tokio::test]
+    async fn a_read_view_reads_the_live_database_while_a_writer_holds_its_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        init_db(&path).await.unwrap();
+        create_run(&path, "before", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        let view = ReadView::open(&path)
+            .await
+            .unwrap()
+            .expect("a current WAL database");
+        assert!(is_read_view(view.path()));
+        // A commit after the view opened is seen: it reads the database, not a copy.
+        create_run(&path, "after", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        // Neither the process-wide guard nor the cross-process lock is taken by a view.
+        let held = lock_db(&path).await.unwrap();
+        let read = tokio::time::timeout(Duration::from_secs(2), async {
+            (
+                get_run(view.path(), "before").await.unwrap(),
+                get_run(view.path(), "after").await.unwrap(),
+            )
+        })
+        .await
+        .expect("a view does not wait for the writer's lock");
+        drop(held);
+        assert!(read.0.is_some() && read.1.is_some());
+        let link = view.path().to_string();
+        drop(view);
+        assert!(!is_read_view(&link));
+    }
+
+    /// Readers in place and a writer meet at SQLite's own locks: the first connection after the
+    /// last one closed rebuilds the log's index under a lock for a moment. Every connection
+    /// waits for it; without that, a run's open failed with `database is locked` while the
+    /// server read the database.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn readers_in_place_and_a_writer_wait_for_each_other_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        init_db(&path).await.unwrap();
+        let view = ReadView::open(&path).await.unwrap().unwrap();
+        let reads = tokio::spawn({
+            let view_path = view.path().to_string();
+            async move {
+                for _ in 0..200 {
+                    get_recent_runs(&view_path, 5)
+                        .await
+                        .expect("a read in place");
+                }
+            }
+        });
+        for i in 0..100 {
+            create_run(&path, &format!("r{i}"), "get", "[]", None, Some(1))
+                .await
+                .expect("a write beside readers in place");
+        }
+        reads.await.unwrap();
+        assert_eq!(get_recent_runs(view.path(), 1000).await.unwrap().len(), 100);
+    }
+
+    #[tokio::test]
+    async fn a_read_view_never_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        init_db(&path).await.unwrap();
+        let view = ReadView::open(&path).await.unwrap().unwrap();
+        let (_db, conn) = open_conn(view.path()).await.unwrap();
+        let wrote = conn
+            .execute(
+                "INSERT INTO logs (run_id, node_id, seq, line) VALUES ('r', 'n', 0, 'l')",
+                (),
+            )
+            .await;
+        assert!(wrote.is_err(), "a view's connection is read-only");
+    }
+
+    #[tokio::test]
+    async fn no_read_view_of_a_database_that_is_missing_old_or_not_in_wal_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        assert!(ReadView::open(&path).await.unwrap().is_none(), "missing");
+        init_db(&path).await.unwrap();
+        // An index this release adds is missing until a writer opens the database.
+        execute(&path, "DROP INDEX idx_mat_failed").await;
+        assert!(
+            ReadView::open(&path).await.unwrap().is_none(),
+            "would be migrated"
+        );
+        init_db(&path).await.unwrap();
+        assert!(ReadView::open(&path).await.unwrap().is_some());
+        execute(&path, "PRAGMA journal_mode=DELETE").await;
+        assert!(
+            ReadView::open(&path).await.unwrap().is_none(),
+            "not in WAL mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_waits_for_a_read_view_query_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        init_db(&path).await.unwrap();
+        create_run(&path, "r", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        let view = ReadView::open(&path).await.unwrap().unwrap();
+        let (_db, reader) = open_conn(view.path()).await.unwrap();
+        // A read in progress: its transaction holds the log.
+        reader.execute("BEGIN", ()).await.unwrap();
+        let mut rows = reader.query("SELECT count(*) FROM runs", ()).await.unwrap();
+        rows.next().await.unwrap();
+        let folding = tokio::spawn({
+            let path = path.clone();
+            async move {
+                let _lock = lock_db(&path).await.unwrap();
+                fold_log(&path).await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(rows);
+        reader.execute("COMMIT", ()).await.unwrap();
+        folding
+            .await
+            .unwrap()
+            .expect("the checkpoint finishes once the read ends");
+        assert!(wal_is_clean(&path));
     }
 }

@@ -63,6 +63,21 @@ Their private payload version changes when their representation changes; incompa
 payloads fall back to ordinary validation. Scheduling loads logical-node priors at startup and exact partition estimates only for
 work that will execute. Both are persisted without loading every historical estimate.
 
+## Reading beside a writer
+
+Every barca process that writes the database, and every read of the CLI, takes barca's
+cross-process lock (`<db>.lock`) for the length of one operation. `barca serve` reads its
+inspection routes beside the writers instead: through read-only connections to the database in
+place, which take neither that lock nor the process-wide guard, so a read never waits for a run's
+writes and never holds one up. This relies on WAL mode, in which SQLite lets readers in any
+process see the last commit while one writer appends; a reader's query is its own transaction,
+so a checkpoint (`wal_checkpoint(TRUNCATE)`, under the lock) waits at most for one query and is
+tried again for up to 2 seconds while one is in progress. Only a database this release reads as
+it is, format 1 with every addition present and in WAL mode, is read in place; any other, and
+every read of a `--read-only` server, goes through a private copy that is migrated instead of
+the original. A read-only connection can create an empty `-wal` beside the database; an empty
+log holds nothing and is not a change.
+
 ## Backups, restore and older binaries
 
 The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).

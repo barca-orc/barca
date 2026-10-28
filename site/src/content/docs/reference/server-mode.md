@@ -326,7 +326,11 @@ The inspection routes (`GET /state`, `/nodes`, `/history`, `/stats/{name}` and t
 CLI and the web UI read) keep what they computed until the sources or the metadata DB change,
 and answer a request whose `If-None-Match` names their last `ETag` with `304` and no body. So
 `barca status --server` against an unchanged project answers in milliseconds, whatever the
-number of partition keys; a finished run or an edit is in the next answer. The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
+number of partition keys; a finished run or an edit is in the next answer. When deciding the
+cache states takes longer than a second (a graph with a million partition keys), a request
+after a change waits that second and is answered with the last result meanwhile; what is
+running is always current. The routes read the metadata DB in place, beside the runs that
+write it (a `--read-only` server reads a private copy). The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
 described at https://barca.sh/reference/server-api/.
 
 See also: [`barca docs scheduling`](/scheduling/), [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).

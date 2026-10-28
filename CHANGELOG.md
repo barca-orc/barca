@@ -34,6 +34,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   keyboard navigation and sorting work as before. A graph of 300 nodes or more is laid out
   off the main thread, and the minimap is left out above 400 nodes, where it was most of the
   cost of a pan.
+- `barca serve`'s read routes no longer stall a run, or wait for one. They read the metadata DB
+  in place, beside the run writing it (SQLite's WAL mode), instead of taking the lock the run
+  needs and copying the whole database first (gigabytes for a long history, written in full
+  on Linux). A `--read-only` server still reads copies. `GET /state` after a change waits at
+  most a second for the new cache states and answers the last ones meanwhile (what is running
+  is always current), and a failure to compute them is answered. On 1,000 partitioned nodes
+  with 2.8M result rows (`benchmarks/wide_partitions`), the slowest read during a 115k-step
+  server run polled as the web UI polls took 2.4 s instead of 53 s, and the run 58.5 s
+  instead of 88.8 s (on a busy machine; 23 to 27 s on a quiet one).
 
 ## 0.34.0 (2026-10-27)
 
