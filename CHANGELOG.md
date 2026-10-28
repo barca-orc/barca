@@ -10,6 +10,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- `barca serve` no longer stops starting runs while it measures `.barca/` against its size
+  limit. A full walk (at start-up without `.barca/gc-state.json`, at least once a day, when
+  over the limit) read every metadata row in one query under barca's lock and looked at the
+  file of every row on one of the server's two event-loop threads: on a project with 465,000
+  artifact files and 2.8M results, a run asked for at start-up was accepted after 209 s and
+  took 232 s. The walk now reads 20,000 rows at a time under the lock, runs on a thread of its
+  own, takes file sizes from the walk instead of looking at each row's file again, and a run
+  that ends while it walks skips its own walk: the same run was accepted at once and took
+  33 s. A full walk of a project with its artifact files in place (465,000 files, 2.8M
+  results) takes 148 to 159 s instead of 280 to 290 s, and plans the same evictions.
 - Runs with a remote artifact store no longer fail when planning takes longer than 10 s: the
   transfer helper's hello is answered as soon as it connects, instead of after planning finishes
   (#702).
