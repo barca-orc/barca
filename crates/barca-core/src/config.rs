@@ -150,6 +150,8 @@ pub struct DiscoveryToml {
 pub struct RemoteToml {
     pub uri: Option<String>,
     pub artifacts_uri: Option<String>,
+    /// Routine metadata backup cadence; final process backups remain enabled.
+    pub backup_interval: Option<String>,
     /// Removed in 0.26.0 with the shared history (RFC-0009); read only to refuse it by name.
     pub state_uri: Option<toml::Value>,
     /// Removed in 0.26.0 with `optimistic` mode (RFC-0009); read only to refuse it by name.
@@ -172,6 +174,82 @@ pub const SHARED_HISTORY_REMOVED_IN: &str = "0.26.0";
 
 /// How many metadata backups are kept, in the store and in the local backup directory each.
 pub const BACKUPS_KEPT: usize = 5;
+
+/// Routine metadata backup policy. `None` disables routine work, never final backups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackupInterval(pub Option<std::time::Duration>);
+
+impl BackupInterval {
+    pub fn parse(raw: &str) -> Result<Self, BarcaError> {
+        let raw = raw.trim();
+        if raw == "off" {
+            return Ok(Self(None));
+        }
+        let (digits, unit) = match raw.as_bytes().last() {
+            Some(b's') => (&raw[..raw.len() - 1], 1u64),
+            Some(b'm') => (&raw[..raw.len() - 1], 60),
+            Some(b'h') => (&raw[..raw.len() - 1], 3600),
+            Some(b'd') => (&raw[..raw.len() - 1], 86400),
+            _ => (raw, 1),
+        };
+        let seconds = (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| digits.parse::<u64>().ok().and_then(|n| n.checked_mul(unit)))
+            .flatten()
+            .filter(|n| *n > 0);
+        if let Some(seconds) = seconds {
+            let duration = std::time::Duration::from_secs(seconds);
+            if std::time::Instant::now().checked_add(duration).is_some() {
+                return Ok(Self(Some(duration)));
+            }
+        }
+        Err(BarcaError::Usage(
+            "backup_interval: expected off or a positive integer duration (s, m, h, d)".into(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod backup_interval_tests {
+    use super::*;
+
+    #[test]
+    fn duration_grammar_is_strict_and_checked() {
+        for (raw, seconds) in [
+            ("1", 1),
+            (" 2s ", 2),
+            ("3m", 180),
+            ("2h", 7200),
+            ("1d", 86400),
+        ] {
+            assert_eq!(
+                BackupInterval::parse(raw).unwrap().0,
+                Some(std::time::Duration::from_secs(seconds))
+            );
+        }
+        assert_eq!(
+            BackupInterval::parse(" off ").unwrap(),
+            BackupInterval(None)
+        );
+        for raw in [
+            "",
+            " ",
+            "0",
+            "0m",
+            "-1",
+            "+1",
+            "1.5m",
+            "1h2m",
+            "1ms",
+            "OFF",
+            "18446744073709551615d",
+        ] {
+            assert!(
+                matches!(BackupInterval::parse(raw), Err(BarcaError::Usage(_))),
+                "{raw:?}"
+            );
+        }
+    }
+}
 
 /// Where the environment name came from (`--env` > `BARCA_ENV` > `default_env` > built-in).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +296,7 @@ pub struct ResolvedConfig {
     /// when a remote store is configured with `[remote] uri` / `BARCA_REMOTE_URI` (RFC-0009).
     /// Backups are taken only when this is set.
     pub backup_uri: Option<String>,
+    pub backup_interval: BackupInterval,
     /// Merged storage options (toml ⊕ env, env keys win), serialized as the
     /// JSON that `BARCA_STORAGE_OPTIONS` carries to child processes.
     pub storage_options_json: Option<String>,
@@ -563,6 +642,18 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     let capacity = capacity_setting(file.execution.as_ref())?;
     let pool_size = pool_setting(file.execution.as_ref())?;
     removed_settings(&remote)?;
+    let backup_interval = match std::env::var("BARCA_BACKUP_INTERVAL") {
+        Ok(raw) => BackupInterval::parse(&raw)
+            .map_err(|e| BarcaError::Usage(format!("BARCA_BACKUP_INTERVAL: {e}")))?,
+        Err(std::env::VarError::NotPresent) => {
+            BackupInterval::parse(remote.backup_interval.as_deref().unwrap_or("1m"))?
+        }
+        Err(_) => {
+            return Err(BarcaError::Usage(
+                "BARCA_BACKUP_INTERVAL must be UTF-8".into(),
+            ));
+        }
+    };
 
     match env_var("BARCA_REMOTE").as_deref() {
         Some("off") => {
@@ -577,6 +668,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 transfer_concurrency: 4,
                 transfer_timeout_secs: 600,
                 backup_uri: None,
+                backup_interval,
                 storage_options_json: None,
                 cache_max_size,
                 cache_max_size_source,
@@ -686,6 +778,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         transfer_concurrency,
         transfer_timeout_secs,
         backup_uri,
+        backup_interval,
         storage_options_json,
         cache_max_size,
         cache_max_size_source,
@@ -924,6 +1017,7 @@ mod tests {
         "BARCA_STORAGE_OPTIONS",
         "BARCA_TRANSFER_CONCURRENCY",
         "BARCA_TRANSFER_TIMEOUT",
+        "BARCA_BACKUP_INTERVAL",
         "BARCA_CACHE_MAX_SIZE",
         "BARCA_SERVER",
         "BARCA_CAPACITY",
@@ -957,6 +1051,44 @@ mod tests {
 
     fn write_toml(dir: &Path, body: &str) {
         std::fs::write(dir.join(CONFIG_FILE), body).unwrap();
+    }
+
+    #[test]
+    fn backup_interval_defaults_overrides_and_rejects_invalid_values() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().backup_interval.0,
+            Some(std::time::Duration::from_secs(60))
+        );
+        write_toml(dir.path(), "[remote]\nbackup_interval = \"2h\"\n");
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().backup_interval.0,
+            Some(std::time::Duration::from_secs(7200))
+        );
+        unsafe {
+            std::env::set_var("BARCA_BACKUP_INTERVAL", "off");
+        }
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().backup_interval.0,
+            None
+        );
+        for raw in ["", "0", "1.2h"] {
+            unsafe {
+                std::env::set_var("BARCA_BACKUP_INTERVAL", raw);
+            }
+            assert!(
+                matches!(resolve_in(None, dir.path()), Err(BarcaError::Usage(message)) if message.contains("BARCA_BACKUP_INTERVAL"))
+            );
+        }
+        unsafe {
+            std::env::remove_var("BARCA_BACKUP_INTERVAL");
+        }
+        write_toml(dir.path(), "[remote]\nbackup_interval = 1\n");
+        assert!(matches!(
+            resolve_in(None, dir.path()),
+            Err(BarcaError::Usage(_))
+        ));
     }
 
     #[test]

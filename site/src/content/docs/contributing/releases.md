@@ -53,8 +53,10 @@ a pre-commit hook.
 
 `.github/workflows/release.yml` runs on a `v*` tag:
 
-1. **Builds the web UI** (`pnpm --dir ui install`, `test`, `build`) and passes `ui/dist` to the
-   later jobs, so the binary embeds it.
+1. **Restores or builds the web UI** in each build job: `ui/dist` comes from the cache CI's
+   `build` job fills, keyed on a hash of `ui/` (Depot Cache is shared across refs), or from
+   `pnpm --dir ui install` and `build` on a miss. The UI's own tests ran in CI's full tier on
+   the release pull request.
 2. **Builds wheels** with maturin for two targets: Linux x86_64 (manylinux) and macOS arm64.
    Each wheel contains the `barca` binary and the Python package.
 3. **Packages a standalone binary** for the same two targets as `barca-linux-x86_64.tar.gz` and
@@ -67,14 +69,17 @@ a pre-commit hook.
    `release-notes` job extracts it alongside the builds, and the GitHub release and the PyPI
    upload both wait on it, so a version with no section publishes nothing. A tag containing
    `rc`, `alpha`, `beta` or `dev` is marked as a pre-release.
-6. **Publishes the wheels and the sdist to PyPI.**
+6. **Publishes the wheels and the sdist to PyPI.** A `wait-pypi` job then polls PyPI until
+   every Linux wheel is listed (the simple index is cached for up to 10 minutes after a
+   publish), and four `verify-published-linux` jobs install the published wheel and the
+   released binary in compiler-free containers once it is.
 7. **Deploys the docs site**, [barca.sh](https://barca.sh), from the tag: a `deploy-site` job
    runs `npm ci`, `npm run build` and `npx wrangler deploy` in `site/` (Node 24; the Worker is
    configured in `site/wrangler.jsonc`). It starts after the GitHub Release and the PyPI upload
    and nothing waits on it, so a failed deploy leaves the release published; rerun the job once
    the cause is fixed. It needs two repository secrets, `CLOUDFLARE_API_TOKEN` (a Cloudflare
-   API token from the "Edit Cloudflare Workers" template) and `CLOUDFLARE_ACCOUNT_ID`, and
-   fails with an error naming whichever is missing.
+   API token from the "Edit Cloudflare Workers" template) and `CLOUDFLARE_ACCOUNT_ID`. With
+   either missing it warns, naming the secret, and deploys nothing; the run stays green.
 
 There are no wheels for Windows, Linux arm64 or macOS x86_64. On those platforms `pip` builds
 from the sdist, which needs a Rust toolchain.

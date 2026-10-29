@@ -100,6 +100,10 @@ pub async fn nodes(
         .await
         .map_err(|e| ApiError::run(e, context("status", &state)))?;
     let mut result = (*kept).clone();
+    let disk_cfg = state.config.resolved.clone();
+    result.disk_usage = tokio::task::spawn_blocking(move || barca_core::gc::disk_usage(&disk_cfg))
+        .await
+        .unwrap_or_default();
     crate::handlers::attach_live_schedules(&state, &mut result.nodes, &dag, &snapshot.path).await?;
     filter.apply(&mut result);
     let rendered = barca_core::report::render_status(result, true, None, None, root().as_deref());

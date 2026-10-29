@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '14'
-  description: 'Normative current wire contract; specification version 14 is independent of package versions.
+  version: '15'
+  description: 'Normative current wire contract; specification version 15 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
@@ -4578,8 +4578,27 @@ components:
       - nodes
       - total
       - truncated
+      - disk_usage
       description: barca status --json --all for the server ledger.
       properties:
+        disk_usage:
+          type: object
+          additionalProperties: false
+          description: Experimental project-wide maintained cache accounting plus bounded backup-directory measurements; no artifact walk. Byte counts are null when unmeasured. size_bytes is the physical estimate; budget_bytes excludes recognized local metadata backups. The scope includes all environments even when nodes are filtered.
+          required: [size_bytes, budget_bytes, backup_bytes, limit_bytes]
+          properties:
+            size_bytes:
+              type: [integer, 'null']
+              minimum: 0
+            budget_bytes:
+              type: [integer, 'null']
+              minimum: 0
+            backup_bytes:
+              type: [integer, 'null']
+              minimum: 0
+            limit_bytes:
+              type: [integer, 'null']
+              minimum: 0
         nodes:
           type: array
           items:

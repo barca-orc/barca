@@ -188,7 +188,10 @@ async fn the_estimate_after_a_walk_is_the_walked_size() {
     let all = envs(&f.project);
     let walked = survey(&f.project, &all).await.unwrap().total;
     let state = read_state(&f.project).unwrap();
-    assert_eq!(estimate(&f.project, &all, &state).await.unwrap(), walked);
+    assert_eq!(
+        estimate(&f.project, &all, &state).await.unwrap().size_bytes,
+        walked
+    );
     // An eviction recorded in the DB is reflected without another walk.
     let gone = f.root().join(&files[0]);
     let bytes = std::fs::metadata(&gone).unwrap().len();
@@ -196,7 +199,7 @@ async fn the_estimate_after_a_walk_is_the_walked_size() {
     mark_evicted(&f.db, &[files[0].as_str()]).await;
     let now = walk(&f.project, true);
     assert_eq!(
-        estimate(&f.project, &all, &state).await.unwrap(),
+        estimate(&f.project, &all, &state).await.unwrap().size_bytes,
         now.other + now.artifacts
     );
     assert!(now.other + now.artifacts < walked + 64 * 1024 - bytes);
@@ -248,13 +251,13 @@ async fn a_result_whose_upload_is_pending_is_never_evicted() {
 #[tokio::test]
 async fn metadata_backups_are_counted_and_never_evicted() {
     // `barca state restore` (#471) needs its copies: `.barca/backups/` and a named
-    // environment's `backups/` count toward the limit but are never deleted.
+    // environment's `backups/` count toward the physical total, outside the cache budget.
     let (f, _files) = project().await;
     let before = f.total().await;
     let backups = [
         ".barca/backups/2026-10-20T00-00-00Z.db",
         ".barca/backups/2026-10-20T00-00-00Z.json",
-        ".barca/backups/2026-10-20T00-01-00Z.db.unsent",
+        ".barca/backups/2026-10-20T00-01-00Z.unsent",
         ".barca/envs/dev/backups/2026-10-20T00-00-00Z.db",
     ];
     for rel in backups {
@@ -264,11 +267,131 @@ async fn metadata_backups_are_counted_and_never_evicted() {
     }
     assert_eq!(f.total().await, before + 2000);
     let result = f.gc(MaxSize::Bytes(1), false).await;
+    assert_eq!(result.backup_bytes, 2000);
+    assert_eq!(
+        result.budget_before_bytes + result.backup_bytes,
+        result.size_bytes
+    );
+    assert_eq!(
+        result.budget_after_bytes + result.backup_bytes,
+        result.after_bytes
+    );
     assert!(!result.evicted.is_empty());
     for rel in backups {
         assert!(f.exists(rel), "{rel} was evicted");
         assert!(paths(&result).iter().all(|(_, p)| !p.contains("backups")));
     }
+}
+
+#[tokio::test]
+async fn backup_growth_does_not_evict_artifacts_and_unrelated_files_still_count() {
+    let (f, _) = project().await;
+    let initial = f.total().await;
+    let backup = f.root().join(".barca/backups/2026-10-20T00-00-00Z.db");
+    std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+    std::fs::write(&backup, vec![0; initial as usize * 10]).unwrap();
+    let limit = initial * 2;
+    assert!(
+        check_in(&f.project, MaxSize::Bytes(limit), &Own::default(), None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let result = f.gc(MaxSize::Bytes(limit), false).await;
+    assert!(result.size_bytes > limit && result.budget_before_bytes < result.target_bytes.unwrap());
+    assert_eq!(result.evicted_files, 0);
+    assert_eq!(result.backup_bytes, initial * 10);
+    // Merely using the backup directory/name somewhere else is no quota bypass.
+    for rel in [
+        ".barca/backups/unrelated.bin",
+        ".barca/other/backups/2026-10-20T00-00-00Z.db",
+    ] {
+        let path = f.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, [0; 1000]).unwrap();
+    }
+    let after = f.gc(MaxSize::Bytes(limit), true).await;
+    assert_eq!(after.backup_bytes, result.backup_bytes);
+    assert_eq!(after.budget_before_bytes, result.budget_before_bytes + 2000);
+}
+
+#[tokio::test]
+async fn legacy_quota_evidence_is_not_reused_with_the_new_budget_meaning() {
+    let (f, _) = project().await;
+    f.total().await;
+    let mut state = read_state(&f.project).unwrap();
+    state.accounting_version = 0;
+    state.measurement = None;
+    state.checked_size = 1;
+    state.checked_limit = 1;
+    state.short_at = now_secs();
+    state.short_size = u64::MAX;
+    write_state(&f.project, &state);
+    let own = Own {
+        wrote_nothing: true,
+        ..Default::default()
+    };
+    let result = check_in(&f.project, MaxSize::Bytes(1), &own, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.evicted_files > 0,
+        "legacy physical evidence incorrectly skipped budget enforcement"
+    );
+    assert_eq!(read_state(&f.project).unwrap().accounting_version, 1);
+}
+
+#[tokio::test]
+async fn status_disk_usage_is_read_only_uses_maintained_budget_and_counts_all_backup_envs() {
+    let f = Fixture::new().await;
+    let unknown = disk_usage_in(&f.project, MaxSize::Bytes(1000));
+    assert!(unknown.budget_bytes.is_none() && unknown.size_bytes.is_none());
+    assert_eq!(unknown.backup_bytes, Some(0));
+    let measured = f.total().await;
+    for rel in [
+        ".barca/backups/2026-10-20T00-00-00Z.db",
+        ".barca/envs/test/backups/2026-10-20T00-00-00Z.db",
+        ".barca/envs/test/backups/.backup-123.tmp",
+    ] {
+        let path = f.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, [0; 1000]).unwrap();
+    }
+    let before = std::fs::read(f.project.barca.join(STATE_FILE)).unwrap();
+    let usage = disk_usage_in(&f.project, MaxSize::Bytes(1000));
+    assert_eq!(usage.budget_bytes, Some(measured));
+    assert_eq!(usage.backup_bytes, Some(3000));
+    assert_eq!(usage.size_bytes, Some(measured + 3000));
+    assert_eq!(
+        before,
+        std::fs::read(f.project.barca.join(STATE_FILE)).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn bounded_backup_measurement_reports_unknown_instead_of_walking_arbitrarily() {
+    let f = Fixture::new().await;
+    let dir = f.project.barca.join("backups");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..4097 {
+        std::fs::write(dir.join(format!("unrelated-{i}")), []).unwrap();
+    }
+    let usage = disk_usage_in(&f.project, MaxSize::Off);
+    assert!(usage.backup_bytes.is_none() && usage.size_bytes.is_none());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_backup_named_symlink_does_not_exempt_its_target_or_follow_it() {
+    let f = Fixture::new().await;
+    let target = f.root().join("external");
+    std::fs::write(&target, vec![0; 1000]).unwrap();
+    let path = f.project.barca.join("backups/2026-10-20T00-00-00Z.db");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    assert_eq!(outside_kind(&f.project.barca, &path), Held::Other);
+    assert_eq!(measure_backups(&f.project), Some(0));
 }
 
 #[tokio::test]

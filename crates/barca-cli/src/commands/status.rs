@@ -23,6 +23,7 @@ pub(crate) async fn status_cmd(
     let mut result =
         barca_core::status::status(&cfg, &targets, &file_args, python, opts.sample, true).await?;
     opts.filter.apply(&mut result);
+    result.disk_usage = barca_core::gc::disk_usage(&cfg);
     let root = super::project_root();
     super::emit(barca_core::report::render_status(
         result,
