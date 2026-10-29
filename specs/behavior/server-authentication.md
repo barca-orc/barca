@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 2. Status: implemented for pending 0.36.0.
+Specification version: 3. Status: implemented for pending 0.36.0.
 Scope: token storage, bootstrap, request authentication, administration and browser access.
 Stream cursor resume remains accepted intent in [RFC-0016](../../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md).
 Exact HTTP shapes belong to [OpenAPI](../interfaces/server-api.openapi.yaml); client
@@ -24,7 +24,9 @@ separate from backed-up metadata. It has a version and owner-only directory/file
   bootstrap connection. Ordinary API tokens survive recovery.
 - Any valid API or bootstrap connection token can list metadata, create named API tokens
   and revoke any token, including itself. Names are 1–128 UTF-8 bytes without controls.
-  Omitted/null expiry is non-expiring; a supplied expiry must be in the future.
+  Omitted/null expiry is non-expiring; a supplied expiry must be in the future when the
+  auth-state lock is held. All expiry decisions use the same private clock; tests inject
+  that clock without a public runtime setting.
 - Creation reclaims expired ordinary tokens before enforcing the limit. The independent
   bootstrap connection slot keeps recovery available when all 1000 ordinary slots are full.
 - Token mode authenticates every API method before route handling or ETag computation.
@@ -87,5 +89,13 @@ TLS deployment or immunity to same-origin scripts.
 ## Open questions and gaps
 
 [CLI/server integration](../../python/tests/test_server_tokens.py) exercises project-root bootstrap,
-real redemption, issued-token execution, Python client access and revocation. Attempt-scoped
-bounded replay remains unimplemented. Full release conformance must pass before 0.36.0.
+real redemption, issued-token execution, Python client access and revocation. It also runs
+two distinct server processes sharing project auth across separate environments: a
+bootstrap redemption race has one winner, and external revoke/bootstrap rotation closes an
+idle stream on the other process without ending its task. Actual backup/restore and restart
+checks preserve revocation and token rotation; a fresh host restoring the same ledger gains
+no credentials. Private-clock tests cover exact API/bootstrap/connection expiry boundaries
+and prove clock rollback cannot resurrect revoked/replaced credentials.
+
+UI/token management and bounded replay are tracked in #730 and #731. Full release
+conformance must pass before 0.36.0; these auth tests do not establish cloud deployment cost.

@@ -1227,6 +1227,17 @@ async fn restore_file(cfg: &ResolvedConfig, file: &Path) -> Result<Restored, Bar
             file.display()
         )));
     }
+    if let Some(parent) = Path::new(&cfg.db_path)
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            BarcaError::Other(format!(
+                "could not create metadata directory {}: {error}. Nothing was changed.",
+                parent.display()
+            ))
+        })?;
+    }
     let staged = PathBuf::from(format!("{}.restore-{}", cfg.db_path, std::process::id()));
     let staged_str = staged.to_string_lossy().into_owned();
     let copied = std::fs::copy(file, &staged).map(drop).and_then(|()| {

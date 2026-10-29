@@ -41,6 +41,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   before copying, hashing and uploading, survives process restarts, and retains dirty
   recorder progress when a request is skipped.
 
+### Bug Fixes
+
+- Restore a metadata file onto a fresh host by creating its destination metadata directory.
+  Restoring ledger backups leaves project authentication state separate and unchanged.
+- Validate token creation expiry while holding the auth-state lock, using the same private
+  clock as bootstrap and validation; deterministic clock tests cover expiry boundaries and rotation.
+
 ### Documentation
 
 - Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including
