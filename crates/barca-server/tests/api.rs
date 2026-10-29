@@ -2390,8 +2390,12 @@ async fn a_kept_state_shows_a_new_run_and_an_edit_at_once() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let (_, after_run, nodes) = state_again(&app, None).await;
     assert_eq!(cache_state(&nodes, "second"), "cached");
-    let (status, ..) = state_again(&app, after_run.as_deref()).await;
-    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    let (status, next_tag, next_body) = state_again(&app, after_run.as_deref()).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_MODIFIED,
+        "ETag changed from {after_run:?} to {next_tag:?}: before={nodes}; after={next_body}"
+    );
 
     // An edit to `second`: stale at once.
     let text = std::fs::read_to_string(&source).unwrap();
