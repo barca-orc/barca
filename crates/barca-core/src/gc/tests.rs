@@ -316,6 +316,33 @@ async fn backup_growth_does_not_evict_artifacts_and_unrelated_files_still_count(
 }
 
 #[tokio::test]
+async fn legacy_quota_evidence_is_not_reused_with_the_new_budget_meaning() {
+    let (f, _) = project().await;
+    f.total().await;
+    let mut state = read_state(&f.project).unwrap();
+    state.accounting_version = 0;
+    state.measurement = None;
+    state.checked_size = 1;
+    state.checked_limit = 1;
+    state.short_at = now_secs();
+    state.short_size = u64::MAX;
+    write_state(&f.project, &state);
+    let own = Own {
+        wrote_nothing: true,
+        ..Default::default()
+    };
+    let result = check_in(&f.project, MaxSize::Bytes(1), &own, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.evicted_files > 0,
+        "legacy physical evidence incorrectly skipped budget enforcement"
+    );
+    assert_eq!(read_state(&f.project).unwrap().accounting_version, 1);
+}
+
+#[tokio::test]
 async fn status_disk_usage_is_read_only_uses_maintained_budget_and_counts_all_backup_envs() {
     let f = Fixture::new().await;
     let unknown = disk_usage_in(&f.project, MaxSize::Bytes(1000));
