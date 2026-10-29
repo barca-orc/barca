@@ -8,6 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- Send server bearer credentials from `BARCA_SERVER_TOKEN`, or Basic credentials from URL
+  userinfo, consistently across execution, ledger, streaming and cancellation requests in the
+  CLI and deprecated Python client. Reject mixed credentials and redirects outside the
+  configured server origin/path, redact reflected credentials in HTTP errors, and keep the
+  reserved bearer variable out of Python helper environments. Server token issuance and
+  validation are not implemented yet.
+
 ### Documentation
 
 - Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including

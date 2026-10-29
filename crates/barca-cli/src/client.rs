@@ -34,12 +34,13 @@ use crate::error::{CliError, Context, ErrorKind, list_hint};
 use barca_core::BarcaError;
 use barca_core::config::{ServerSource, check_server_url, configured_server};
 use barca_core::envelope::ErrorEnvelope;
-use barca_core::http::diagnostic_url;
 use barca_core::outcome::{API_VERSION, Outcome, RunCommand, RunRequest};
 use barca_core::{RunEvent, lines::LineWhen};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+mod transport;
 
 /// How long one ordinary request (not the event stream) may take, connection included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -199,7 +200,7 @@ pub(crate) struct Server {
     url: String,
     /// Safe to print; the original URL is retained for requests and ledger-post identity.
     shown_url: String,
-    http: reqwest::Client,
+    http: transport::Http,
     /// Where the URL came from when it was not typed on the command line.
     source: Option<ServerSource>,
     /// Used because it is configured, without `--server`: errors point at `--local`.
@@ -226,10 +227,19 @@ fn transport_reason(e: &reqwest::Error) -> String {
 
 impl Server {
     fn new(url: String, source: Option<ServerSource>, implicit: bool) -> Result<Self, CliError> {
-        let http = barca_core::http::client(REQUEST_TIMEOUT)
-            .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
+        let token = match std::env::var("BARCA_SERVER_TOKEN") {
+            Ok(token) => Some(token),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(_) => {
+                return Err(CliError::from_prose(
+                    ErrorKind::Usage,
+                    "BARCA_SERVER_TOKEN must be UTF-8",
+                ));
+            }
+        };
+        let http = transport::Http::new(&url, token, REQUEST_TIMEOUT)?;
         Ok(Self {
-            shown_url: diagnostic_url(&url),
+            shown_url: http.shown_url().into(),
             url,
             http,
             source,
@@ -260,10 +270,6 @@ impl Server {
         }
     }
 
-    fn endpoint(&self, path: &str) -> String {
-        format!("{}{path}", self.url)
-    }
-
     /// The server cannot be reached, or the connection broke.
     fn unreachable(&self, e: &reqwest::Error) -> CliError {
         CliError::from_prose(
@@ -273,7 +279,7 @@ impl Server {
                  Check that `barca serve` is running at that URL and reachable from this \
                  machine. {}",
                 self.shown_url,
-                transport_reason(e),
+                self.http.redact(&transport_reason(e)),
                 self.instead()
             ),
         )
@@ -281,6 +287,7 @@ impl Server {
 
     /// The server answered, but not with what barca expects.
     fn unexpected(&self, what: &str, detail: &str) -> CliError {
+        let detail = self.http.redact(detail);
         CliError::from_prose(
             ErrorKind::Infra,
             format!(
@@ -314,10 +321,11 @@ impl Server {
 
     /// A non-2xx answer: the server's envelope, or an unexpected answer.
     fn refusal(&self, status: reqwest::StatusCode, body: &[u8], what: &str) -> CliError {
-        match serde_json::from_slice::<ErrorEnvelope>(body) {
+        let body = self.http.error_body(body);
+        match serde_json::from_slice::<ErrorEnvelope>(&body) {
             Ok(envelope) => envelope,
             Err(_) => {
-                let text = String::from_utf8_lossy(body);
+                let text = String::from_utf8_lossy(&body);
                 let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 let text: String = text.chars().take(200).collect();
                 self.unexpected(what, &format!("HTTP {status}: {text}"))
@@ -327,7 +335,9 @@ impl Server {
 
     async fn get_text(&self, path: &str) -> Result<String, CliError> {
         let what = format!("GET {path}");
-        let (_, body) = self.send(self.http.get(self.endpoint(path)), &what).await?;
+        let (_, body) = self
+            .send(self.http.request(reqwest::Method::GET, path)?, &what)
+            .await?;
         String::from_utf8(body).map_err(|_| self.unexpected(&what, "the body is not UTF-8"))
     }
 
@@ -341,7 +351,7 @@ impl Server {
         let what = format!("POST {path}");
         let request = self
             .http
-            .post(self.endpoint(path))
+            .request(reqwest::Method::POST, path)?
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body.to_string());
         let (_, body) = self.send(request, &what).await?;
@@ -827,12 +837,13 @@ impl<'a> Follow<'a> {
         let response = self
             .server
             .http
-            .get(self.server.endpoint(&self.path))
+            .request(reqwest::Method::GET, &self.path)
+            .map_err(Attempt::Refused)?
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .timeout(STREAM_LIMIT)
             .send()
             .await
-            .map_err(|e| Attempt::Unreachable(transport_reason(&e)))?;
+            .map_err(|e| Attempt::Unreachable(self.server.http.redact(&transport_reason(&e))))?;
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -897,7 +908,7 @@ impl<'a> Follow<'a> {
                     continue;
                 }
                 Ok(Err(e)) => {
-                    self.lose(transport_reason(&e))?;
+                    self.lose(self.server.http.redact(&transport_reason(&e)))?;
                     continue;
                 }
                 Ok(Ok(None)) => {
@@ -1018,8 +1029,11 @@ fn started_at(health: Value) -> Option<String> {
 /// run ended.
 async fn cancel(server: &Server, run_id: &str) {
     let path = format!("/runs/{run_id}");
-    let request = server.http.delete(server.endpoint(&path));
-    if let Err(e) = server.send(request, &format!("DELETE {path}")).await {
+    let result = match server.http.request(reqwest::Method::DELETE, &path) {
+        Ok(request) => server.send(request, &format!("DELETE {path}")).await,
+        Err(error) => Err(error),
+    };
+    if let Err(e) = result {
         barca_core::errln!(
             "[barca] warning: could not cancel run {run_id} on the server: {}",
             e.error
@@ -1077,12 +1091,12 @@ impl Server {
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
-            .map_err(|e| LedgerError::Unreachable(transport_reason(&e)))?;
+            .map_err(|e| LedgerError::Unreachable(self.http.redact(&transport_reason(&e))))?;
         let status = response.status();
         let body = response
             .bytes()
             .await
-            .map_err(|e| LedgerError::Unreachable(transport_reason(&e)))?;
+            .map_err(|e| LedgerError::Unreachable(self.http.redact(&transport_reason(&e))))?;
         if status.is_success() {
             return serde_json::from_slice(&body).map_err(|e| {
                 LedgerError::Unreachable(format!(
@@ -1090,6 +1104,7 @@ impl Server {
                 ))
             });
         }
+        let body = self.http.error_body(&body);
         match serde_json::from_slice::<ErrorEnvelope>(&body) {
             Ok(envelope) if status == reqwest::StatusCode::CONFLICT => {
                 Err(LedgerError::Rejected(Box::new(envelope)))
@@ -1124,7 +1139,8 @@ impl Server {
                 .map_err(|e| barca_core::ledger::LedgerError::Unreachable(e.to_string()))?;
             let request = self
                 .http
-                .post(self.endpoint(path))
+                .request(reqwest::Method::POST, path)
+                .map_err(|e| barca_core::ledger::LedgerError::Unreachable(e.error))?
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body);
             self.ledger_call(request, &format!("POST {path}")).await
@@ -1143,7 +1159,13 @@ impl barca_core::ledger::LedgerTransport for Server {
         '_,
         Result<barca_core::ledger::ServerHealth, barca_core::ledger::LedgerError>,
     > {
-        Box::pin(self.ledger_call(self.http.get(self.endpoint("/health")), "GET /health"))
+        Box::pin(async move {
+            let request = self
+                .http
+                .request(reqwest::Method::GET, "/health")
+                .map_err(|e| barca_core::ledger::LedgerError::Unreachable(e.error))?;
+            self.ledger_call(request, "GET /health").await
+        })
     }
 
     fn lookup<'a>(
@@ -2232,8 +2254,15 @@ mod tests {
             assert!(json.contains("http://host/proxy"));
         }
         assert_eq!(
-            server.endpoint("/health"),
-            "http://alice:secret@host/proxy/health"
+            server
+                .http
+                .request(reqwest::Method::GET, "/health")
+                .unwrap()
+                .build()
+                .unwrap()
+                .url()
+                .as_str(),
+            "http://host/proxy/health"
         );
         assert_eq!(
             barca_core::ledger::LedgerTransport::url(&server),

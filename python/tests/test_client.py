@@ -47,6 +47,10 @@ class FakeResp:
         return self._body
 
 
+def _patch_open(monkeypatch, fake):
+    monkeypatch.setattr(Client, "_open", lambda self, req: fake(req, timeout=self.timeout))
+
+
 def json_urlopen(payload, captured=None):
     body = json.dumps(payload).encode()
 
@@ -61,8 +65,8 @@ def json_urlopen(payload, captured=None):
 
 def test_get_builds_post_url_and_returns_run(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(
-        "barca.client.urllib.request.urlopen",
+    _patch_open(
+        monkeypatch,
         json_urlopen({"run_id": "abc123"}, captured),
     )
     run = Client("http://localhost:9999").get("daily_report")
@@ -74,8 +78,8 @@ def test_get_builds_post_url_and_returns_run(monkeypatch):
 
 def test_get_and_run_hit_correct_paths(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(
-        "barca.client.urllib.request.urlopen",
+    _patch_open(
+        monkeypatch,
         json_urlopen({"run_id": "r1"}, captured),
     )
     c = Client("http://h:1")
@@ -89,8 +93,8 @@ def test_get_and_run_hit_correct_paths(monkeypatch):
 def test_a_target_with_a_path_is_sent_as_one_url_segment(monkeypatch):
     # A full node id is what the server says to use when a name matches several nodes.
     captured: dict = {}
-    monkeypatch.setattr(
-        "barca.client.urllib.request.urlopen",
+    _patch_open(
+        monkeypatch,
         json_urlopen({"run_id": "r1"}, captured),
     )
     c = Client("http://h:1")
@@ -102,8 +106,8 @@ def test_a_target_with_a_path_is_sent_as_one_url_segment(monkeypatch):
 
 def test_read_endpoints_parse_json(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(
-        "barca.client.urllib.request.urlopen",
+    _patch_open(
+        monkeypatch,
         json_urlopen([{"id": "f.py:daily", "cron": "0 5 * * *"}], captured),
     )
     jobs = Client().schedules()
@@ -114,8 +118,8 @@ def test_read_endpoints_parse_json(monkeypatch):
 
 def test_base_url_trailing_slash_is_stripped(monkeypatch):
     captured: dict = {}
-    monkeypatch.setattr(
-        "barca.client.urllib.request.urlopen",
+    _patch_open(
+        monkeypatch,
         json_urlopen({"status": "ok"}, captured),
     )
     Client("http://h:1/").health()
@@ -128,7 +132,7 @@ def test_http_error_body_becomes_barca_error(monkeypatch):
             req.full_url, 404, "Not Found", {}, io.BytesIO(b'{"error":"no such asset"}')
         )
 
-    monkeypatch.setattr("barca.client.urllib.request.urlopen", urlopen)
+    _patch_open(monkeypatch, urlopen)
     with pytest.raises(BarcaError, match="no such asset"):
         Client().get("nope")
 
@@ -137,7 +141,7 @@ def test_connection_refused_becomes_barca_error(monkeypatch):
     def urlopen(req, timeout=None):
         raise urllib.error.URLError("Connection refused")
 
-    monkeypatch.setattr("barca.client.urllib.request.urlopen", urlopen)
+    _patch_open(monkeypatch, urlopen)
     with pytest.raises(BarcaError, match="cannot reach barca server"):
         Client().health()
 
