@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 
 from barca.api import _find_binary
 
@@ -47,7 +48,17 @@ def test_warm_status_does_not_rehash_an_unchanged_store_copy(tmp_path):
         return json.loads(result.stdout)
 
     command("get", "value", "pipeline.py")
-    assert reads.read_text().splitlines(), "the real transfer must exercise the audit hook"
+    artifact = next((store / "default/artifacts").rglob("*.json"))
+    control = subprocess.run(
+        [sys.executable, "-c", "import sys; open(sys.argv[1], 'rb').read()", str(artifact)],
+        cwd=project,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert control.returncode == 0, control.stderr
+    assert reads.read_text().splitlines(), "the payload-read audit hook must be active"
     reads.write_text("")
     first = command("status", "pipeline.py")
     first_reads = reads.read_text().splitlines()
