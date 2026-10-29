@@ -855,7 +855,8 @@ pub fn check_server_url(url: &str, what: &str) -> Result<String, BarcaError> {
     match rest {
         Some(host) if !host.is_empty() && !host.starts_with('/') => Ok(trimmed.to_string()),
         _ => Err(BarcaError::Usage(format!(
-            "{what}: '{url}' is not a server URL\nGive the URL of a running `barca serve`, starting with http:// or https://, e.g. https://barca.example.com."
+            "{what}: '{}' is not a server URL\nGive the URL of a running `barca serve`, starting with http:// or https://, e.g. https://barca.example.com.",
+            crate::http::diagnostic_url(url)
         ))),
     }
 }

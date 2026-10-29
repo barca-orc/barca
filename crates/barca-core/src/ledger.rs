@@ -253,7 +253,9 @@ pub struct Ledger {
 
 impl std::fmt::Debug for Ledger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Ledger").field("url", &self.url()).finish()
+        f.debug_struct("Ledger")
+            .field("url", &crate::http::diagnostic_url(self.url()))
+            .finish()
     }
 }
 
@@ -307,9 +309,17 @@ impl Ledger {
             .get_or_try_init(|| async {
                 match &self.inner.source {
                     Some(source) => {
-                        crate::run_line!(Always, "[barca] server {} ({source})", self.url())
+                        crate::run_line!(
+                            Always,
+                            "[barca] server {} ({source})",
+                            crate::http::diagnostic_url(self.url())
+                        )
                     }
-                    None => crate::run_line!(Always, "[barca] server {}", self.url()),
+                    None => crate::run_line!(
+                        Always,
+                        "[barca] server {}",
+                        crate::http::diagnostic_url(self.url())
+                    ),
                 }
                 self.check_health(cfg).await?;
                 if retry {
@@ -322,7 +332,7 @@ impl Ledger {
     }
 
     async fn check_health(&self, cfg: &crate::config::ResolvedConfig) -> Result<(), BarcaError> {
-        let url = self.url();
+        let url = crate::http::diagnostic_url(self.url());
         if !cfg.remote_artifacts() {
             return Err(BarcaError::Usage(format!(
                 "a server is configured ({url}) but this project has no artifact store: the \
@@ -335,7 +345,7 @@ impl Ledger {
             .transport()
             .health()
             .await
-            .map_err(|e| unreachable_error(url, "GET /health", &e))?;
+            .map_err(|e| unreachable_error(&url, "GET /health", &e))?;
         match health.api_version {
             Some(crate::outcome::API_VERSION) => {}
             other => {
@@ -350,7 +360,7 @@ impl Ledger {
         }
         same_store(
             cfg,
-            url,
+            &url,
             health.store_uri.as_deref(),
             "pass --local to keep this run on this machine",
         )
@@ -418,7 +428,7 @@ impl Ledger {
                 crate::run_line!(
                     Always,
                     "[barca] warning: run {run_id} was not recorded on the server {}: {e}",
-                    self.url()
+                    crate::http::diagnostic_url(self.url())
                 );
                 return Vec::new();
             }
@@ -430,7 +440,7 @@ impl Ledger {
                 "[barca] warning: run {run_id} is not recorded on the server {} yet: some of its \
                  results are not in the artifact store yet (barca status shows them unsynced); \
                  the next command that uploads them sends it{}",
-                self.url(),
+                crate::http::diagnostic_url(self.url()),
                 kept.err()
                     .map(|e| format!(" (could not keep the post: {e})"))
                     .unwrap_or_default()
@@ -445,7 +455,7 @@ impl Ledger {
                     "[barca] warning: run {run_id} was not recorded on the server {}: {}; it \
                      stays on this machine (unsynced) and the next command against the server \
                      sends it again",
-                    self.url(),
+                    crate::http::diagnostic_url(self.url()),
                     e.describe()
                 );
                 Vec::new()
@@ -570,7 +580,7 @@ impl Ledger {
                 Err(e) => crate::run_line!(
                     Always,
                     "[barca] warning: run {run_id} is still not recorded on the server {}: {}",
-                    self.url(),
+                    crate::http::diagnostic_url(self.url()),
                     e.describe()
                 ),
             }
@@ -615,6 +625,7 @@ pub fn same_store(
     store_uri: Option<&str>,
     instead: &str,
 ) -> Result<(), BarcaError> {
+    let url = crate::http::diagnostic_url(url);
     if !cfg.remote_artifacts() {
         return Err(BarcaError::Usage(format!(
             "a server is configured ({url}) but this project has no artifact store: the \
@@ -646,6 +657,7 @@ pub fn normalize_uri(uri: &str) -> String {
 }
 
 fn unreachable_error(url: &str, route: &str, e: &LedgerError) -> BarcaError {
+    let url = crate::http::diagnostic_url(url);
     match e {
         LedgerError::Refused { status, envelope } if (400..500).contains(status) => {
             BarcaError::Usage(format!(
