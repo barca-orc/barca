@@ -1,10 +1,10 @@
-//! Inspection endpoint handlers. Core commands are `async fn`s that run directly on the
-//! server's runtime — handlers simply `.await` them. Runs are in [`crate::runs`].
+//! Inspection endpoint handlers. CPU-heavy status and history reads and snapshot migrations
+//! use the blocking pool so cheap routes remain responsive. Runs are in [`crate::runs`].
 
 use crate::error::ApiError;
 use crate::state::{AppState, Durations, NodeState};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use barca_core::queries;
 use barca_core::results::PlanResult;
@@ -65,11 +65,11 @@ pub(crate) async fn snapshot_db(state: &AppState) -> Result<std::sync::Arc<Snaps
     Ok(state.note_metadata(state.read_snapshot().await)?)
 }
 
-/// A `--read-only` server (`in_place` false) reads copies only: it promises to leave the
-/// database untouched, and even a reader of it in place can create its `-wal` and `-shm`.
-pub(crate) async fn snapshot_of(db_path: &str, in_place: bool) -> Result<SnapshotDb, BarcaError> {
+/// Read a compatible WAL database in place, including on a `--read-only` server.
+/// SQLite can create `-wal` and `-shm`; the reader never migrates or checkpoints the DB.
+pub(crate) async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError> {
     db::directory_check(db_path)?;
-    if in_place && let Some(view) = db::ReadView::open(db_path).await? {
+    if let Some(view) = db::ReadView::open(db_path).await? {
         return Ok(SnapshotDb {
             path: view.path().to_string(),
             _view: Some(view),
@@ -77,6 +77,16 @@ pub(crate) async fn snapshot_of(db_path: &str, in_place: bool) -> Result<Snapsho
             _scratch: None,
         });
     }
+    let db_path = db_path.to_owned();
+    // Schema/index additions on the private copy can also take seconds on a large DB.
+    tokio::task::spawn_blocking(move || {
+        tokio::runtime::Handle::current().block_on(snapshot_copy(&db_path))
+    })
+    .await
+    .map_err(|e| BarcaError::Db(format!("snapshot task failed: {e}")))?
+}
+
+async fn snapshot_copy(db_path: &str) -> Result<SnapshotDb, BarcaError> {
     let (snapshot, scratch, path) = match db::DbSnapshot::take(db_path).await? {
         Some(s) => {
             let path = s.path().to_string();
@@ -98,38 +108,83 @@ pub(crate) async fn snapshot_of(db_path: &str, in_place: bool) -> Result<Snapsho
     })
 }
 
+/// Experimental target selection for `GET /state`.
+#[derive(Default, serde::Deserialize)]
+pub struct StateQuery {
+    /// Experimental: comma-separated target names or full ids; absent/empty means all nodes.
+    pub targets: Option<String>,
+}
+
 /// `GET /state` — every node's cache state (would `barca get` reuse it?), latest
 /// attempt, typical durations, and next scheduled run. Read-only by
 /// construction: the cache check reads the DB through read-only connections ([`SnapshotDb`]).
 ///
 /// The cache states and durations are kept until the sources or the database change
 /// ([`crate::read_cache`]); what runs now and the next fire times are read for every request.
-pub async fn state(State(state): State<AppState>) -> Result<Json<Vec<NodeState>>, ApiError> {
+pub async fn state(
+    State(state): State<AppState>,
+    Query(query): Query<StateQuery>,
+) -> Result<Json<Vec<NodeState>>, ApiError> {
     state.reads.polled();
-    Ok(Json(state_rows(&state).await?))
+    let mut targets: Vec<String> = query
+        .targets
+        .iter()
+        .flat_map(|s| s.split(','))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    targets.sort();
+    targets.dedup();
+    Ok(Json(state_rows_for_targets(&state, &targets).await?))
 }
 
-/// The body of `GET /state`.
+/// The body of `GET /state`, also warmed at startup.
 pub(crate) async fn state_rows(state: &AppState) -> Result<Vec<NodeState>, ApiError> {
+    state_rows_for_targets(state, &[]).await
+}
+
+async fn state_rows_for_targets(
+    state: &AppState,
+    targets: &[String],
+) -> Result<Vec<NodeState>, ApiError> {
     let cfg = &state.config;
     let zone = crate::scheduler::zone_of(cfg);
     let dag = state.inspect_dag().await?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(state).await?;
-    // Together: after a change, each waits a moment for its new value (`read_cache`).
-    let (status, durations) = tokio::join!(
-        whole_status(state, &dag, &db_state, &snapshot),
-        state.cached_durations(&dag, &db_state, {
-            let (dag, snapshot) = (dag.clone(), snapshot.clone());
-            move || async move {
-                let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
-                Ok(durations_from(
-                    db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
-                ))
-            }
+    let (status, durations) = if targets.is_empty() {
+        // Together: after a change, each waits a moment for its new value (`read_cache`).
+        let (status, durations) = tokio::join!(
+            whole_status(state, &dag, &db_state, &snapshot),
+            state.cached_durations(&dag, &db_state, {
+                let (dag, snapshot) = (dag.clone(), snapshot.clone());
+                move || async move {
+                    let ids: Vec<String> =
+                        dag.topo_order().into_iter().map(str::to_string).collect();
+                    Ok(durations_from(
+                        db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
+                    ))
+                }
+            })
+        );
+        (status?, durations?)
+    } else {
+        let status = status_for_targets(state, &dag, &db_state, &snapshot, targets).await?;
+        let ids = status
+            .nodes
+            .iter()
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        let snapshot = snapshot.clone();
+        let durations = crate::read_cache::off_the_workers(move || async move {
+            Ok(durations_from(
+                db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
+            ))
         })
-    );
-    let (status, durations) = (status?, durations?);
+        .await?;
+        (status, std::sync::Arc::new(durations))
+    };
     let runs = crate::running::in_flight(state, Some(&snapshot.path)).await;
     let running = crate::running::by_node(&runs, &status.nodes, &dag);
     Ok(rows(&status.nodes, &durations, &dag, &zone, running))
@@ -144,15 +199,30 @@ pub(crate) async fn whole_status(
     db_state: &crate::read_cache::Stamp,
     snapshot: &std::sync::Arc<SnapshotDb>,
 ) -> Result<std::sync::Arc<barca_core::status::StatusResult>, ApiError> {
+    status_for_targets(state, dag, db_state, snapshot, &[]).await
+}
+
+async fn status_for_targets(
+    state: &AppState,
+    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    db_state: &crate::read_cache::Stamp,
+    snapshot: &std::sync::Arc<SnapshotDb>,
+    targets: &[String],
+) -> Result<std::sync::Arc<barca_core::status::StatusResult>, ApiError> {
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let python = state.config.python.clone();
-    let (graph, snapshot) = (dag.clone(), snapshot.clone());
+    let (graph, snapshot, names) = (dag.clone(), snapshot.clone(), targets.to_vec());
     Ok(state
-        .cached_status(dag, db_state, (Vec::new(), 0, false), move || async move {
-            let _snapshot = snapshot;
-            barca_core::status::status_from_dag(&cfg, &[], &graph, &python, 0, false).await
-        })
+        .cached_status(
+            dag,
+            db_state,
+            (targets.to_vec(), 0, false),
+            move || async move {
+                let _snapshot = snapshot;
+                barca_core::status::status_from_dag(&cfg, &names, &graph, &python, 0, false).await
+            },
+        )
         .await?)
 }
 

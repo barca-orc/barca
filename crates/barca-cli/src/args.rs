@@ -1025,7 +1025,7 @@ pub(crate) enum Cli {
         /// Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error
         #[arg(long, default_value = "local", value_parser = parse_timezone)]
         timezone: String,
-        /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
+        /// Inspect only: refuse runs, never schedule, read compatible WAL metadata in place
         #[arg(long)]
         read_only: bool,
         /// Seconds to wait for runs in flight after SIGTERM or SIGINT before stopping them and

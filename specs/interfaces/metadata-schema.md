@@ -73,9 +73,10 @@ writes and never holds one up. This relies on WAL mode, in which SQLite lets rea
 process see the last commit while one writer appends; a reader's query is its own transaction,
 so a checkpoint (`wal_checkpoint(TRUNCATE)`, under the lock) waits at most for one query and is
 tried again for up to 2 seconds while one is in progress. Only a database this release reads as
-it is, format 1 with every addition present and in WAL mode, is read in place; any other, and
-every read of a `--read-only` server, goes through a private copy that is migrated instead of
-the original. A read-only connection can create an empty `-wal` beside the database; an empty
+it is, format 1 with every addition present and in WAL mode, is read in place, including
+under `--read-only`; any other goes through a private copy, made on the blocking pool and
+migrated instead of the original. Read-only connections can create `-wal` and `-shm`
+beside the database; an empty
 log holds nothing and is not a change.
 
 ## Backups, restore and older binaries

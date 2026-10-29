@@ -284,7 +284,7 @@ default, and any aliases.
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
 | `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
-| `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
+| `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read compatible WAL metadata in place |
 | `--drain-timeout` | `SECONDS` | - | experimental (with the command) | Seconds to wait for runs in flight after SIGTERM or SIGINT before stopping them and putting them back in the run queue for the next start (exit 0; a second signal cancels them instead, exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 requeues them at once |
 | `--max-runs` | `N` | - | experimental (with the command) | How many runs execute at once; the others wait in the run queue, in order. At least 1. Default: [server] max_runs in barca.toml, else one per core. Experimental |
 | `--capacity` | `N` | - | experimental: new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use | The most the weight= of the steps running at once may add up to across every run of this server, admitted first come, first served. At least 1. Default: [server] capacity in barca.toml, else none (each run has only its own). Experimental |
@@ -483,6 +483,10 @@ value of its first key only.
 | `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name ([`barca docs telemetry`](/reference/telemetry/)) | experimental |
 | `BARCA_SERVER_RECONNECT` | seconds a `--server` client following a run (`get`/`run --server`, `logs -f --server`) waits for a server whose stream broke to come back, and follows the same run id there (default 60; `0`: give up at once, exit 3); not a number of seconds is a usage error (exit 2) | experimental |
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr ([`barca docs telemetry`](/reference/telemetry/), "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
+
+The experimental HTTP query `GET /state?targets=a,b` computes only the named nodes and their
+upstream dependencies, including durations. Absent or empty means all nodes; unknown targets
+answer `404`, ambiguous names `409`. It preserves the `NodeState` array shape (OpenAPI owns it).
 
 `[server] url` in `barca.toml` or `BARCA_SERVER` (experimental) points `get` and `run` at a
 server's ledger ([`barca docs server-mode`](/reference/server-mode/)): they still run here, read cache hits from the server

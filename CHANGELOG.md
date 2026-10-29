@@ -8,6 +8,23 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Performance
+
+- `barca serve --read-only` reads current WAL metadata in place, warms status at startup even
+  with an external writer, and moves fallback copies, migrations and duration reads off the
+  request threads. Latest sensor observations use indexed seeks per key; eviction checks
+  group the eviction index before checking for a later restore. On the synthetic #708 fixture
+  (`benchmarks/planning_pipeline/bench_status.py`: 27 files, 373 nodes, seven groups, 500,000
+  observations, 1.15 GB DB), `/state` takes 0.42 s with a writer committing every 0.2 s;
+  concurrent `/health`, `/assets` and `/groups` peak at 0.009 s (19 samples per route).
+  This measures inspection of synthetic history, not the production deployment (#708).
+
+### Features
+
+- Experimental `GET /state?targets=a,b` computes only those nodes and their upstream
+  dependencies, including duration queries; omitted or empty targets keep the whole graph.
+  This lets the UI request status for the open pipeline (#708, #710).
+
 ## 0.35.1 (2026-10-28)
 
 ### Bug Fixes

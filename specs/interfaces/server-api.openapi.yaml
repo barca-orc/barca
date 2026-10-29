@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '13'
-  description: 'Normative current wire contract; specification version 13 is independent of package versions.
+  version: '14'
+  description: 'Normative current wire contract; specification version 14 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
@@ -335,7 +335,8 @@ paths:
             text/plain:
               schema: *id005
       description: Built by the function barca status --json uses, reading the metadata DB in place
-        beside the runs writing it (a --read-only server reads a private copy). When deciding the cache
+        beside the runs writing it, including under --read-only (SQLite can create -wal and -shm;
+        a database requiring migration is copied on the blocking pool and migrated privately). When deciding the cache
         states takes longer than a second, a request after a change is answered after that second with
         the last result while the new one is computed; running is always current. A scheduled node's schedule is the running scheduler's view (GET /schedule), or with no
         scheduler what the metadata DB holds (live false). state and problems keep only the matching
@@ -928,6 +929,15 @@ paths:
     get:
       summary: Node cache state, durations, next scheduled execution and the run working on each node now
       operationId: get_state
+      parameters:
+      - name: targets
+        in: query
+        required: false
+        description: 'Experimental: comma-separated target names or full node ids. Return and compute
+          only their upstream cone, including durations. Absent or empty means every node.
+          An unknown target is 404; an ambiguous name is 409.'
+        schema:
+          type: string
       responses:
         '200':
           description: Response
@@ -943,6 +953,18 @@ paths:
           headers: *id_etag
         '400':
           description: Invalid source/target or wrong node kind
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target name
           content:
             application/json:
               schema:
@@ -966,11 +988,21 @@ paths:
     head:
       summary: Node cache state, durations, next scheduled execution and the run working on each node now (headers only)
       operationId: head_state
+      parameters:
+      - name: targets
+        in: query
+        description: Experimental comma-separated targets, as for GET /state.
+        schema:
+          type: string
       responses:
         '200':
           description: Response
         '400':
           description: Invalid source/target or wrong node kind
+        '404':
+          description: Unknown target
+        '409':
+          description: Ambiguous target name
         '500':
           description: Execution/inspection infrastructure error
         '405':

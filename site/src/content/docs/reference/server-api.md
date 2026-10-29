@@ -374,7 +374,12 @@ A run of every asset refuses an empty loaded asset/sensor set with 400; excluded
 
 ```
 GET /state             → [NodeState, ...]   (dependency order)
+GET /state?targets=a,b → [NodeState, ...]   (only those targets and their upstream dependencies)
 ```
+
+`targets` is experimental: comma-separated names or full node ids. Absent or empty means
+every node. Unknown targets answer `404`; ambiguous names answer `409`. Status and duration queries are limited
+to the selected cone; clients can render `/assets` and `/groups` before requesting it.
 
 Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,
 `cache`, `partitions`, `last_materialization`, `shape`, `env`) plus `durations` — `{ median_seconds,
@@ -383,7 +388,8 @@ fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cac
 `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
 [`barca status`](/reference/cli/#status)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
-check reads a private copy of the metadata DB, so this endpoint never writes it.
+check uses read-only connections to a compatible WAL metadata DB, or a private copy
+when migration is needed; this endpoint never writes the original rows.
 
 `running` is the run working on the node now, whoever started it, or `null`:
 
@@ -427,8 +433,9 @@ that it is still right:
   expression can read anything;
 - nothing of the metadata DB itself: the routes read it in place, through read-only
   connections beside the runs that write it (SQLite's WAL mode), so a read never waits for a
-  run and never holds one up. A `--read-only` server, and a database this release would
-  migrate first, are read through a private copy, taken again when the database changes;
+  run and never holds one up, including under `--read-only`. A database this release would
+  migrate first is read through a private copy, taken on the blocking pool again when the
+  database changes;
 - each `barca status` result (`/state`, `/nodes`, the `running` fields), until the graph or the
   database changes. An answer kept for more than 30 seconds is computed again in the
   background, which bounds how long an artifact deleted by hand, outside barca, still shows as
@@ -552,8 +559,12 @@ status `error` and `"error": "run timed out after Ns (<setting>)\n..."`.
 With `--read-only`, every route that runs, cancels, pauses or resets (`POST /runs` other than a
 dry run, `DELETE /runs/{run_id}`, the schedule pause and resume, `POST /state/reset`, and the older
 trigger routes)
-returns `403`, the scheduler does not start, and every read goes through a private copy of the
-metadata DB — the database is never opened in place, created or written.
+returns `403` and the scheduler does not start. A current WAL metadata database is read in
+place through read-only connections, without writing rows, migrating or checkpointing it.
+SQLite can create `-wal` and `-shm` beside it. A database requiring migration (or not in WAL
+mode) is copied on the blocking pool and migrated privately; a missing DB stays missing.
+Status warms once at startup even with an active external writer, then after settled
+changes while a client polls.
 
 ### Assets
 

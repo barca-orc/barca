@@ -320,7 +320,16 @@ number of partition keys; a finished run or an edit is in the next answer. When 
 cache states takes longer than a second (a graph with a million partition keys), a request
 after a change waits that second and is answered with the last result meanwhile; what is
 running is always current. The routes read the metadata DB in place, beside the runs that
-write it (a `--read-only` server reads a private copy). The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
+write it, including under `--read-only`. A current WAL database is opened through read-only
+connections: its rows are never written, migrated or checkpointed, although SQLite can create
+`-wal` and `-shm` beside it. A database needing migration (or not in WAL mode) is copied
+on the blocking pool and migrated privately. A missing database stays missing.
+Read-only servers warm status once at startup even while another process writes the DB,
+then again after settled changes while clients poll.
+`GET /state?targets=first,second` (experimental) computes only those targets and their upstream
+dependencies, including durations; use full node ids when names are ambiguous. An absent or
+empty `targets` computes every node. Unknown targets answer `404`; ambiguous names answer `409`.
+The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
 described at https://barca.sh/reference/server-api/.
 
 See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.
