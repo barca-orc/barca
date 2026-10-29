@@ -20,6 +20,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- The release helper checks its changed-file allowlist in a fixed locale, so a valid
+  version bump also passes on hosts whose filename collation differs from byte order.
+
 - Server URL userinfo is omitted from CLI errors and announcements, ledger warnings, stream
   drop messages, SQL provenance and doctor output (including JSON and older recorded errors).
   Requests retain their URL credentials, and pending posts keep matching the same server
