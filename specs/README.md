@@ -71,6 +71,9 @@ and CLI contract, with [backup tests](../python/tests/test_store_backup_restore.
 [backend checks](../python/tests/test_state_backends.py) and [signed URL checks](../python/tests/test_signed_urls.py).
 Their accepted designs are [RFC-0009](../site/src/content/docs/rfcs/0009-store-backup-and-restore.md)
 and [RFC-0011](../site/src/content/docs/rfcs/0011-signed-urls.md).
+[RFC-0015](../site/src/content/docs/rfcs/0015-backup-cadence.md) proposes configurable backup
+cadence and separate local-backup accounting for 0.36.0. It is under review, not implemented;
+the current manual and contracts remain the runtime owners.
 Slack configuration/behavior remains in the [telemetry manual](../crates/barca-cli/docs/telemetry.md),
 with [webhook controls](../python/tests/test_telemetry_slack.py); message prose is not a stable surface.
 These owners have not been relocated or copied into new schemas.
