@@ -78,6 +78,9 @@ async fn every_api_path_and_method_authenticates_before_dispatch_or_etag() {
     for method in ["GET", "HEAD", "POST", "DELETE", "OPTIONS"] {
         for path in [
             "/health",
+            "/health/",
+            "/%68ealth",
+            "/ui/%2e%2e/health",
             "/state",
             "/ledger/lookup",
             "/ledger/runs",
@@ -271,4 +274,38 @@ async fn malformed_json_and_invalid_credentials_never_echo_secrets() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn cookies_and_query_tokens_do_not_authenticate() {
+    let root = tempfile::tempdir().unwrap();
+    let router = fixture(root.path(), AuthMode::Token, true);
+    let issued = Store::open(root.path())
+        .unwrap()
+        .create("browser", None)
+        .unwrap();
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header(header::COOKIE, format!("barca_token={}", issued.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(
+            &router,
+            "GET",
+            &format!("/health?token={}", issued.token),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
 }

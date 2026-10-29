@@ -413,6 +413,30 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_bootstrap_redemption_has_exactly_one_winner() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let code = store.bootstrap().unwrap();
+        let barrier = std::sync::Barrier::new(8);
+        let winners = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (store, code, barrier) = (&store, &code, &barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        store.redeem(code).is_ok()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| usize::from(handle.join().unwrap()))
+                .sum::<usize>()
+        });
+        assert_eq!(winners, 1);
+    }
+
+    #[test]
     fn malformed_state_fails_closed_without_overwriting_it() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).unwrap();
