@@ -188,8 +188,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         queue::dispatch(&state);
     }
 
-    // With a store, back the metadata DB up every minute it changed (RFC-0009). Runs back up
-    // at their end too.
+    // Routine timers and served-run ends share the configured backup policy (RFC-0015).
     // The last one is taken after the runs have stopped and recorded themselves.
     let backup_stop = barca_core::CancellationToken::new();
     let mut stop = StopBudget::of(
@@ -423,14 +422,14 @@ async fn backup_every_minute(
     last_budget: std::time::Duration,
 ) {
     let mut tick = tokio::time::interval_at(
-        tokio::time::Instant::now() + BACKUP_INTERVAL,
-        BACKUP_INTERVAL,
+        tokio::time::Instant::now() + cfg.backup_interval.0.unwrap_or(BACKUP_INTERVAL),
+        cfg.backup_interval.0.unwrap_or(BACKUP_INTERVAL),
     );
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut failures = 0u32;
     loop {
         let last = tokio::select! {
-            _ = tick.tick() => false,
+            _ = tick.tick(), if cfg.backup_interval.0.is_some() => false,
             _ = stopping.cancelled() => true,
         };
         let budget = if last { last_budget } else { BACKUP_BUDGET };
@@ -438,17 +437,24 @@ async fn backup_every_minute(
             cancel: None,
             deadline: Some(std::time::Instant::now() + budget),
         };
-        let failed = match barca_core::backup::take(&python, &cfg, None, until).await {
-            Ok(taken) => match taken.upload {
-                Some(Err(why)) => Some(why),
-                Some(Ok(at)) if taken.name.is_some() => {
-                    barca_core::errln!("[barca] backed up the metadata DB to {at}");
-                    None
-                }
-                _ => None,
-            },
-            Err(e) => Some(e.to_string()),
+        let request = if last {
+            barca_core::backup::Request::Final
+        } else {
+            barca_core::backup::Request::Routine
         };
+        let failed =
+            match barca_core::backup::take_requested(&python, &cfg, None, request, until).await {
+                Ok(taken) if taken.skipped => continue,
+                Ok(taken) => match taken.upload {
+                    Some(Err(why)) => Some(why),
+                    Some(Ok(at)) if taken.name.is_some() => {
+                        barca_core::errln!("[barca] backed up the metadata DB to {at}");
+                        None
+                    }
+                    _ => None,
+                },
+                Err(e) => Some(e.to_string()),
+            };
         match failed {
             None => failures = 0,
             Some(why) => {

@@ -4,6 +4,9 @@ description: 'max_size caps what barca keeps on disk. Past the limit, barca evic
 ---
 
 - **Status:** Implemented (0.25.0)
+  Backup accounting is superseded in part by [RFC-0015](/rfcs/0015-backup-cadence/),
+  accepted for 0.36.0: recognized local metadata backups are reported outside the quota;
+  physical totals continue to include them. The original design below records 0.25.0.
 - **Date:** 2026-10-20 (accepted 2026-10-20)
 - **Touches:** barca-core | barca-cli | HTTP server
 - **Supersedes / Related:** Reopens parked #83 (`barca gc`, keep N versions) with a size budget instead of a version count. Relies on the missing-artifact behaviour of #252 (a cached result whose file is gone is refetched or recomputed under the same run hash). Related: #403 (backups under `.barca/backups/`), #390 (pending uploads), #233 (parked artifact I/O bounds).

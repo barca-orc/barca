@@ -2317,6 +2317,7 @@ async fn record_and_publish(
             cfg: session.request.cfg,
             interrupt: &session.request.interrupt,
             trigger: &session.request.options.trigger,
+            server_owned: session.request.options.server_owned,
         },
         |point| trace_point!(session.started.trace, "{point}"),
     )
@@ -4048,6 +4049,7 @@ struct FinalizeRun<'a> {
     cfg: &'a crate::config::ResolvedConfig,
     interrupt: &'a crate::interrupt::Interrupt,
     trigger: &'a crate::outcome::Trigger,
+    server_owned: bool,
 }
 
 async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64, BarcaError> {
@@ -4091,6 +4093,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         cfg,
         interrupt,
         trigger,
+        server_owned,
     } = ctx;
     macro_rules! trace_point {
         ($($arg:tt)*) => { trace(&format!($($arg)*)); };
@@ -4291,12 +4294,19 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     }
     if cfg.backup_uri.is_some() && !nothing_new {
         match final_backup(
-            python,
-            cfg,
-            run_id,
-            &mut ledger,
-            interrupt,
-            &mut was_cancelled,
+            FinalBackup {
+                python,
+                cfg,
+                request: if server_owned {
+                    crate::backup::Request::Routine
+                } else {
+                    crate::backup::Request::Final
+                },
+                run_id,
+                ledger: &mut ledger,
+                interrupt,
+                cancelled: &mut was_cancelled,
+            },
             &trace,
         )
         .await
@@ -4582,15 +4592,29 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
 /// The backup at the end of a run. `Ok(Some(why))` when only its upload failed. Ctrl-C during it
 /// cancels the command (the run is recorded as cancelled); a cancelled run's wrap-up backup
 /// gets [`crate::interrupt::WRAP_UP_LIMIT`], and a second Ctrl-C ends it at once.
+struct FinalBackup<'a, 'run> {
+    python: &'a std::path::Path,
+    cfg: &'a crate::config::ResolvedConfig,
+    request: crate::backup::Request,
+    run_id: &'a str,
+    ledger: &'a mut RunLedger<'run>,
+    interrupt: &'a crate::interrupt::Interrupt,
+    cancelled: &'a mut bool,
+}
+
 async fn final_backup(
-    python: &std::path::Path,
-    cfg: &crate::config::ResolvedConfig,
-    run_id: &str,
-    ledger: &mut RunLedger<'_>,
-    interrupt: &crate::interrupt::Interrupt,
-    cancelled: &mut bool,
+    ctx: FinalBackup<'_, '_>,
     trace: &impl Fn(&str),
 ) -> Result<Option<String>, BarcaError> {
+    let FinalBackup {
+        python,
+        cfg,
+        request,
+        run_id,
+        ledger,
+        interrupt,
+        cancelled,
+    } = ctx;
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
     let started = Instant::now();
     let until = if *cancelled {
@@ -4611,7 +4635,8 @@ async fn final_backup(
             interrupt.cancel.is_cancelled()
         }
     };
-    let taken = match crate::backup::take(python, cfg, Some(run_id), until).await {
+    let taken = match crate::backup::take_requested(python, cfg, Some(run_id), request, until).await
+    {
         Ok(taken) if !(matches!(taken.upload, Some(Err(_))) && stopped()) => taken,
         Ok(_) | Err(BarcaError::Cancelled) => {
             if !wrap_up {

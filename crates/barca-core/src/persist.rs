@@ -211,6 +211,12 @@ impl StepRecorder {
         checkpoint_interval: std::time::Duration,
     ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StepRow>();
+        let checkpoint_interval = backups
+            .as_ref()
+            .and_then(|b| b.cfg.backup_interval.0)
+            .map_or(checkpoint_interval, |interval| {
+                interval.min(checkpoint_interval)
+            });
         let stop = backups
             .as_ref()
             .map_or_else(CancellationToken::new, |p| p.cancel.child_token());
@@ -252,11 +258,12 @@ impl StepRecorder {
                         }
                         let snapshot_generation = generation;
                         let b = backups.as_ref().expect("backups enabled");
-                        let outcome = crate::backup::take(&b.python, &b.cfg, Some(&run_id), helper_proc::Until {
+                        let outcome = crate::backup::take_requested(&b.python, &b.cfg, Some(&run_id), crate::backup::Request::Routine, helper_proc::Until {
                             cancel: Some(&stopped),
                             deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
                         }).await;
                         let failed = match outcome {
+                            Ok(taken) if taken.skipped => continue,
                             Ok(taken) => {
                                 backed_up = snapshot_generation;
                                 match taken.upload {
@@ -1072,6 +1079,8 @@ sys.exit(_state.main())
         let mut cfg = crate::config::resolve_in(None, root).unwrap();
         cfg.db_path = root.join("meta/metadata.db").to_string_lossy().into_owned();
         cfg.backup_uri = Some(root.join("store").to_string_lossy().into_owned());
+        cfg.backup_interval =
+            crate::config::BackupInterval(Some(std::time::Duration::from_millis(250)));
         std::fs::create_dir_all(root.join("meta")).unwrap();
         std::fs::create_dir_all(root.join("store")).unwrap();
         (cfg, python)
@@ -1092,6 +1101,46 @@ sys.exit(_state.main())
     /// The minute checkpoint backs the database up when the run recorded something since the
     /// last one, and only then; a store outage is retried at the next tick (not in a busy
     /// loop) and the copy reaches the store once it is back.
+    #[tokio::test]
+    async fn skipped_checkpoints_keep_progress_dirty_until_admission_is_due() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cfg, python) = backup_test_config(&dir);
+        cfg.backup_interval =
+            crate::config::BackupInterval(Some(std::time::Duration::from_secs(1)));
+        db::init_db(&cfg.db_path).await.unwrap();
+        db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        crate::backup::take(&python, &cfg, Some("r1"), helper_proc::Until::done())
+            .await
+            .unwrap();
+        let recorder = StepRecorder::start_with_intervals(
+            cfg.db_path.clone(),
+            "r1".into(),
+            Some(BackupCheckpoints {
+                python,
+                cfg: cfg.clone(),
+                cancel: CancellationToken::new(),
+            }),
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_millis(20),
+        );
+        recorder.record(Fixture::new().row("f.py:a"));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let local = cfg.local_backup_dir();
+        assert_eq!(backups_in(&local).len(), 1);
+        // No further rows arrive after the skipped checkpoint. The original row must
+        // still cause a later backup, rather than having been marked covered.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while backups_in(&local).len() < 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("skipped checkpoint incorrectly cleared dirty progress");
+        recorder.finish().await.unwrap();
+    }
+
     #[tokio::test]
     async fn the_checkpoint_backs_up_new_progress_and_retries_an_outage() {
         let dir = tempfile::tempdir().unwrap();

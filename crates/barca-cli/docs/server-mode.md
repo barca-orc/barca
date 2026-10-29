@@ -260,6 +260,10 @@ The declared differences:
 - In human mode an error's text is rebuilt from the envelope's fields; in JSON mode the
   envelope is the same.
 - `barca status --server` has no `local` key: it reports the server alone.
+- Status `disk_usage` describes the storage and cache budget of the machine serving the
+  request, across all of its project environments. A local project copy can have different
+  budgeted, backup and physical byte counts, limits or unmeasured values while its graph and
+  cached results are equivalent. The accounting relationship and JSON fields stay the same.
 
 The parity suite (`python/tests/test_server_mode_parity.py`) runs the contract's case table
 once locally and once through `barca serve` on a copy of the same project and compares the

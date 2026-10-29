@@ -1,0 +1,45 @@
+{
+  "synthetic_padding_bytes": 1700000000,
+  "database_bytes": 1701834752,
+  "profile": "fast (optimized, no fat LTO)",
+  "backend": "local directory, same filesystem",
+  "routine_served_run_seconds": [
+    0.08607635088264942,
+    0.0859945029951632,
+    0.08336788788437843
+  ],
+  "not_due_hash_copy_upload_calls": 0,
+  "shutdown_seconds": 6.22493590391241,
+  "newest_backup_bytes": 1701834752,
+  "timing_lines": [
+    "[timing] metadata backup hash: 1701834752 bytes in 3161.976 ms",
+    "[timing] metadata backup copy: 1701834752 bytes in 2915.762 ms (complete=true)",
+    "[timing] metadata backup upload: 1701834752-byte copy in 124.465 ms (confirmed=true)"
+  ],
+  "source_base": "20f59f2023eda0622efa919b5bab1449a2e12cc8",
+  "rust_sources_sha256": {
+    "crates/barca-cli/src/commands/gc.rs": "16c013c52d0440b4daf48407bf62c0b472e97ced3f1cc89e9adb8f47dfddf56e",
+    "crates/barca-cli/src/commands/status.rs": "7d9792b91c38ae4de27ff70189c3ff655955a0e0a1f4dbdcead3858082a6f495",
+    "crates/barca-core/src/backup.rs": "e2042e6f5961a878be6f32451508d52e75f9c685905d14d8e614a4fb68cf108f",
+    "crates/barca-core/src/backup/cadence.rs": "f481bda31d1a30928a23f118f819ee1cefc6efb10090e1084c5e1f285df61350",
+    "crates/barca-core/src/config.rs": "9bb1bc98982d169f8510a518022f0b8865f2f4fd4a1d2f9d53e99bd2bce1d6a8",
+    "crates/barca-core/src/db.rs": "848e40b78b5a002880976806ff9ce30e005baf4a45f3b1759ef3caa8ebea99c2",
+    "crates/barca-core/src/diagnostics.rs": "81aed658720dfb38dd6f2018972e848d19bf78be2d5606dff0418f87deca823c",
+    "crates/barca-core/src/execution.rs": "80a52f5b695b8500124f767757c80a8ac72dbfdb2d6884c235aa8a6fa21a539a",
+    "crates/barca-core/src/gc/mod.rs": "2817c319eb342c0e5544097dc84ec1f3a9859fcd01a853cdf75894380fd260ed",
+    "crates/barca-core/src/gc/tests.rs": "ad4cfe28193ae5bcfb65f8de5c02908fdb64635d2f71d3e9c46a078efe703fe2",
+    "crates/barca-core/src/outcome.rs": "53b1e5daa0a272538914fcbc25994f4338997942169e51aa5eb6baf669d259ae",
+    "crates/barca-core/src/persist.rs": "ffb0d37774d024cfcfbfe0766c57062655b3319469fadd445cef71eb7f63ad5b",
+    "crates/barca-core/src/report.rs": "1937942254a8e7f0c897be11dbf7a48f154fba787a59d13953f1685fc4588ff4",
+    "crates/barca-core/src/status.rs": "d485360d85e05c9d20f6fc3259b2f5e8f7f4256d306b5878b007b6a264b989e9",
+    "crates/barca-server/src/inspect.rs": "bd5f6014023e7a329ac82bdd5fae1b85c4dda97c6c361fa0751ac27d229e0517",
+    "crates/barca-server/src/lib.rs": "16e028143dbe7251ba9308338718b50627b2bf58463a9e36284c61471f4e41b1",
+    "crates/barca-server/src/runs.rs": "6c8486daebf977d1bad69b70e95c2e49da71c611a3be61167aae642984e5134d"
+  },
+  "environment": {
+    "platform": "Linux-7.2.8-200.fc44.x86_64-x86_64-with-glibc2.43",
+    "machine": "x86_64",
+    "logical_cpus": 32,
+    "python": "3.14.8"
+  }
+}
