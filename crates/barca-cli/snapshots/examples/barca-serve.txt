@@ -29,7 +29,7 @@ Options:
           [default: local]
 
       --read-only
-          Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
+          Inspect only: refuse runs, never schedule, read compatible WAL metadata in place
 
       --drain-timeout <SECONDS>
           Shutdown grace period in seconds; unfinished runs requeue (default: config or 30)
