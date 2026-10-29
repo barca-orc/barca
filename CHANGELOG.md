@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.35.2 (2026-10-29)
+
 ### Features
 
 - Make CLI help concise, group root commands by purpose, and add `--examples` on commands
