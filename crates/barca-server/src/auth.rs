@@ -8,6 +8,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use subtle::ConstantTimeEq;
 
@@ -75,6 +76,7 @@ impl Default for State {
 #[derive(Clone)]
 pub struct Store {
     directory: PathBuf,
+    clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
 fn private_file(path: &Path) -> Result<File, Error> {
@@ -180,7 +182,10 @@ impl Store {
         }
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
             .map_err(|_| Error::State)?;
-        let store = Self { directory };
+        let store = Self {
+            directory,
+            clock: Arc::new(Utc::now),
+        };
         store.transaction(false, |_| Ok(()))?;
         Ok(store)
     }
@@ -242,7 +247,7 @@ impl Store {
 
     pub fn bootstrap(&self) -> Result<String, Error> {
         self.transaction(true, |state| {
-            let now = Utc::now();
+            let now = (self.clock)();
             let (issued, record) = issue(
                 "bootstrap",
                 "local bootstrap",
@@ -255,7 +260,7 @@ impl Store {
     }
     pub fn redeem(&self, code: &str) -> Result<Issued, Error> {
         self.transaction(true, |state| {
-            let now = Utc::now();
+            let now = (self.clock)();
             if code.len() > 256
                 || !state
                     .bootstrap
@@ -278,7 +283,7 @@ impl Store {
     pub fn validate(&self, token: &str) -> Result<Metadata, Error> {
         let id = token_id(token, "api").ok_or(Error::Invalid)?;
         self.transaction(false, |state| {
-            let now = Utc::now();
+            let now = (self.clock)();
             state
                 .tokens
                 .iter()
@@ -292,11 +297,11 @@ impl Store {
         if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
             return Err(Error::Name);
         }
-        let now = Utc::now();
-        if expires_at.is_some_and(|end| end <= now) {
-            return Err(Error::Expiry);
-        }
         self.transaction(true, |state| {
+            let now = (self.clock)();
+            if expires_at.is_some_and(|end| end <= now) {
+                return Err(Error::Expiry);
+            }
             state
                 .tokens
                 .retain(|r| r.metadata.expires_at.is_none_or(|end| end > now));
@@ -310,7 +315,7 @@ impl Store {
     }
     pub fn list(&self) -> Result<Vec<Metadata>, Error> {
         self.transaction(false, |state| {
-            let now = Utc::now();
+            let now = (self.clock)();
             Ok(state
                 .tokens
                 .iter()
@@ -338,6 +343,79 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn clocked() -> (
+        tempfile::TempDir,
+        Store,
+        Arc<std::sync::Mutex<DateTime<Utc>>>,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let time = Arc::new(std::sync::Mutex::new(
+            DateTime::parse_from_rfc3339("2026-10-29T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        ));
+        let clock = time.clone();
+        let mut store = Store::open(root.path()).unwrap();
+        store.clock = Arc::new(move || *clock.lock().unwrap());
+        (root, store, time)
+    }
+
+    #[test]
+    fn private_clock_checks_exact_expiry_without_sleeping_or_mutating_state() {
+        let (root, store, clock) = clocked();
+        let initial = *clock.lock().unwrap();
+        let expires = initial + Duration::minutes(1);
+        let token = store.create("short", Some(expires)).unwrap();
+        let path = root.path().join(".barca/auth/state.json");
+        let before = fs::read(&path).unwrap();
+        *clock.lock().unwrap() = expires - Duration::nanoseconds(1);
+        assert!(store.validate(&token.token).is_ok());
+        *clock.lock().unwrap() = expires;
+        assert!(matches!(store.validate(&token.token), Err(Error::Invalid)));
+        assert!(store.list().unwrap().is_empty());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(matches!(
+            store.create("already expired", Some(expires)),
+            Err(Error::Expiry)
+        ));
+        // Revocation remains authoritative even if the host clock moves backwards.
+        store.revoke(&token.metadata.id).unwrap();
+        *clock.lock().unwrap() = initial - Duration::hours(1);
+        assert!(matches!(store.validate(&token.token), Err(Error::Invalid)));
+        assert!(
+            Store::open(root.path())
+                .unwrap()
+                .validate(&token.token)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn private_clock_checks_bootstrap_and_connection_expiry_and_rotation() {
+        let (_root, store, clock) = clocked();
+        let initial = *clock.lock().unwrap();
+        let expired = store.bootstrap().unwrap();
+        *clock.lock().unwrap() = initial + Duration::minutes(15);
+        assert!(matches!(store.redeem(&expired), Err(Error::Invalid)));
+        let code = store.bootstrap().unwrap();
+        *clock.lock().unwrap() += Duration::minutes(15) - Duration::nanoseconds(1);
+        let old = store.redeem(&code).unwrap();
+        assert_eq!(
+            old.metadata.expires_at,
+            Some(*clock.lock().unwrap() + Duration::hours(12))
+        );
+        assert!(matches!(store.redeem(&code), Err(Error::Invalid)));
+        let fresh = store.redeem(&store.bootstrap().unwrap()).unwrap();
+        assert!(matches!(store.validate(&old.token), Err(Error::Invalid)));
+        let expires = fresh.metadata.expires_at.unwrap();
+        *clock.lock().unwrap() = expires - Duration::nanoseconds(1);
+        assert!(store.validate(&fresh.token).is_ok());
+        *clock.lock().unwrap() = expires;
+        assert!(matches!(store.validate(&fresh.token), Err(Error::Invalid)));
+        *clock.lock().unwrap() = initial;
+        assert!(matches!(store.validate(&old.token), Err(Error::Invalid)));
+    }
 
     #[test]
     fn issuance_persists_only_digests_and_public_metadata() {

@@ -58,6 +58,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Restore a metadata file onto a fresh host by creating its destination metadata directory.
+  Restoring ledger backups leaves project authentication state separate and unchanged.
+- Validate token creation expiry while holding the auth-state lock, using the same private
+  clock as bootstrap and validation; deterministic clock tests cover expiry boundaries and rotation.
+
 - A batched step's DuckDB, Arrow or polars table is split into keys sorted by every column, so
   a refresh that returns the same rows in another order keeps its `cutoff=True` consumers
   cached; before, a parallel producer's row order changed the artifact bytes and reran them.
