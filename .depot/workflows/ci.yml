@@ -20,14 +20,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # What runs where. The required checks are `CI / test` and `CI / backends`, the two aggregator
-# jobs at the end of each group below; they report on every event.
+# jobs at the end of each group below; they report on every event. Three tiers:
 #
-# - pull_request: the fast set only (`checks`, `clippy`, `changes`), so a PR can enter the
-#   merge queue about a minute after a push. Everything else is skipped, and the aggregators
-#   accept those skips. A PR labelled `ci-full` runs the full set, as the queue does.
-# - merge_group: the full set. Here every job must succeed.
+# - fast (a pull request): `checks`, `clippy`, `changes` only, so a PR can enter the merge
+#   queue about a minute after a push. Everything else is skipped, and the aggregators
+#   accept those skips.
+# - merge (a merge group): the fast set plus `rust-tests`, the wheel `build` and one `python`
+#   job running the quick subset in scripts/fast-tests.txt. About two minutes; this is the
+#   gate every merge to main passes.
+# - full (a release): everything, with the object-store emulators, the duckdb 1.x rerun and
+#   the real minute checkpoint test on. A release PR (head branch `release/v*`) runs it as
+#   its PR run, and its merge group (head commit `chore(release): ...`) runs it again. A PR
+#   labelled `ci-full` runs it too.
 #
-# The full-set jobs carry `if: ${{ github.event_name != 'pull_request' || contains(...) }}`.
+# The tier conditions, repeated on the jobs because a job-level `if` cannot read `env`:
+#   full  = (pull_request && (head_ref starts with release/v || label ci-full))
+#           || (merge_group && head commit message contains "chore(release)")
+#   merge = merge_group || full
 #
 # Sandbox sizes: Depot bills per vCPU-second, so a larger sandbox costs the same CPU time and
 # only shortens the wall time. Jobs that compile or run tests in parallel use more CPUs.
@@ -35,18 +44,24 @@ env:
   # Python test shards in the backends check (scripts/ci-shards.py). Three are as fast as four
   # (the longest test files set the floor) and cost one sandbox less.
   PYTHON_SHARDS: 3
-  # What the aggregators run on the results of the jobs they need. In a full run any result
-  # but success fails the required check. In a PR's fast run, a skipped full-set job is
-  # expected; a failed or cancelled one still fails it.
+  # What the aggregators run on the results of the jobs they need. A job the tier runs must
+  # succeed; a job the tier skips may be skipped. A failed or cancelled job always fails the
+  # check.
   CHECK_NEEDS: |
     import json, os, sys
-    full = os.environ["FULL"] == "true"
+    tier = os.environ["TIER"]
+    runs = {
+        "fast": {"checks", "clippy", "changes"},
+        "merge": {"checks", "clippy", "changes", "rust-tests", "build", "python"},
+    }.get(tier)  # None: full, every job runs
     results = {job: v["result"] for job, v in json.loads(os.environ["RESULTS"]).items()}
-    ok = {"success"} if full else {"success", "skipped"}
     for job, result in results.items():
         print(f"{job}: {result}")
-    bad = {job: r for job, r in results.items() if r not in ok}
-    sys.exit(f"not every job this check needs succeeded: {bad}" if bad else 0)
+    bad = {
+        job: r for job, r in results.items()
+        if r != "success" and not (r == "skipped" and runs is not None and job not in runs)
+    }
+    sys.exit(f"tier {tier}: not every job this check needs succeeded: {bad}" if bad else 0)
 
 jobs:
   # ---- CI / test -------------------------------------------------------------------------
@@ -156,7 +171,8 @@ jobs:
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
   rust-tests:
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    # Tier merge and up.
+    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) }}
     runs-on: depot-ubuntu-24.04-8
     # See clippy (#637).
     timeout-minutes: 30
@@ -221,7 +237,9 @@ jobs:
 
   integration:
     # The shell integration tests and benchmark examples, against the wheel `build` makes.
+    # Tier full only.
     needs: build
+    if: ${{ (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)')) }}
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     steps:
@@ -280,7 +298,7 @@ jobs:
       - name: Every test job succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
-          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+          TIER: ${{ ((github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)'))) && 'full' || (github.event_name == 'merge_group' && 'merge' || 'fast') }}
         run: python3 -c "$CHECK_NEEDS"
 
   # ---- CI / backends ---------------------------------------------------------------------
@@ -290,12 +308,11 @@ jobs:
   #         └───── proxy (nginx/Traefik and server-mode shell tests)
   #   ui (typecheck, lint, unit tests)
   #
-  # The object-store emulators, the duckdb 1.x rerun and the real minute checkpoint test run
-  # only when the change can affect them (scripts/ci-changes.py lists the paths) and on a
-  # release branch; the checkpoint test also on a PR labelled `ci-full`. A release's merge
-  # group turns them all on too: its version bump touches pyproject.toml. Without the
-  # emulators the backend conformance tests skip (python/tests/emulators.py); without the
-  # checkpoint part, BARCA_TEST_MINUTE_CHECKPOINT=0 skips python/tests/test_minute_checkpoints.py.
+  # In the merge tier `python` is one job running scripts/fast-tests.txt. In the full tier it
+  # is the shards, with the object-store emulators, the duckdb 1.x rerun and the real minute
+  # checkpoint test all on (`scripts/ci-changes.py --all`). Without the emulators the backend
+  # conformance tests skip (python/tests/emulators.py); without the checkpoint part,
+  # BARCA_TEST_MINUTE_CHECKPOINT=0 skips python/tests/test_minute_checkpoints.py.
   changes:
     runs-on: depot-ubuntu-latest
     timeout-minutes: 10
@@ -306,49 +323,52 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Full history: the change is the diff from the PR's (or merge group's) base.
-          fetch-depth: 0
 
       - name: Decide which optional parts run
         id: decide
         env:
-          HEAD_REF: ${{ github.head_ref }}
-          CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}
-          # A merge group can hold several PRs; its base is main before all of them.
-          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        # The reasons go to the check's summary as well as the log.
+          TIER: ${{ ((github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)'))) && 'full' || (github.event_name == 'merge_group' && 'merge' || 'fast') }}
+        # The tier and the reasons go to the check's summary as well as the log.
         run: |
-          if [[ "$HEAD_REF" == release/v* ]]; then
+          echo "tier=$TIER" >> "$GITHUB_OUTPUT"
+          if [ "$TIER" = full ]; then
             python3 scripts/ci-changes.py --all >> "$GITHUB_OUTPUT" 2> why.txt
           else
-            on=(); [ "$CI_FULL" = true ] && on=(--on checkpoint)
-            python3 scripts/ci-changes.py --base "$BASE" "${on[@]}" >> "$GITHUB_OUTPUT" 2> why.txt
+            printf 'emulators=false\nduckdb1=false\ncheckpoint=false\n' >> "$GITHUB_OUTPUT"
+            echo "tier $TIER: the optional parts run in the full tier (a release)" > why.txt
           fi
           cat why.txt "$GITHUB_OUTPUT"
           { echo '```'; cat why.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Every test file is in exactly one shard
-        run: python3 scripts/ci-shards.py --shards "$PYTHON_SHARDS" --check
+      - name: Every test file is in exactly one shard, and the fast subset exists
+        run: |
+          python3 scripts/ci-shards.py --shards "$PYTHON_SHARDS" --check
+          while read -r f; do test -f "python/tests/$f" || { echo "scripts/fast-tests.txt: no python/tests/$f"; exit 1; }; done \
+            < <(grep -v '^#' scripts/fast-tests.txt | grep .)
 
       - name: Shard matrix
         id: matrix
         env:
+          TIER: ${{ steps.decide.outputs.tier }}
           DUCKDB1: ${{ steps.decide.outputs.duckdb1 }}
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import json, os
           n = int(os.environ["PYTHON_SHARDS"])
-          include = [{"name": f"{i}/{n}", "shard": i, "duckdb": "2"} for i in range(1, n + 1)]
-          if os.environ["DUCKDB1"] == "true":
-              include.append({"name": "duckdb 1.x", "shard": 0, "duckdb": "1"})
+          if os.environ["TIER"] == "full":
+              include = [{"name": f"{i}/{n}", "shard": i, "duckdb": "2"} for i in range(1, n + 1)]
+              if os.environ["DUCKDB1"] == "true":
+                  include.append({"name": "duckdb 1.x", "shard": 0, "duckdb": "1"})
+          else:
+              include = [{"name": "fast", "shard": "fast", "duckdb": "2"}]
           print("matrix=" + json.dumps({"include": include}))
           PY
           cat "$GITHUB_OUTPUT"
 
   ui:
     # The web UI's own checks. The build job builds `ui/dist` (or restores it) on its own.
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    # Tier full only.
+    if: ${{ (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)')) }}
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 15
     steps:
@@ -375,7 +395,8 @@ jobs:
     # Builds the wheel once, for both checks: the integration tests, the Python shards and
     # the proxy tests. It does not wait for `changes`. The wheel is built with the `fast`
     # profile (no whole-program LTO); release wheels (release workflow) keep `--release`.
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    # Tier merge and up.
+    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) }}
     runs-on: depot-ubuntu-24.04-16
     # See clippy (#637).
     timeout-minutes: 40
@@ -476,7 +497,9 @@ jobs:
 
   proxy:
     # The shell tests that need the UI-embedded binary, beside the Python shards.
+    # Tier full only.
     needs: build
+    if: ${{ (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)')) }}
     runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -506,8 +529,9 @@ jobs:
         run: bash tests/integration/test_server_mode.sh
 
   python:
-    # The Python suite, split by file into shards balanced by recorded duration
-    # (scripts/ci-shards.py), plus the duckdb 1.x rerun when the change needs it.
+    # Merge tier: one job, the quick subset in scripts/fast-tests.txt. Full tier: the suite
+    # split by file into shards balanced by recorded duration (scripts/ci-shards.py), plus
+    # the duckdb 1.x rerun.
     name: python (${{ matrix.name }})
     needs: [changes, build]
     runs-on: depot-ubuntu-24.04-8
@@ -578,7 +602,10 @@ jobs:
           EMULATORS: ${{ needs.changes.outputs.emulators }}
           CHECKPOINT: ${{ needs.changes.outputs.checkpoint }}
         run: |
-          if [ "$SHARD" = 0 ]; then
+          if [ "$SHARD" = fast ]; then
+            # The merge tier: the quick subset scripts/check-fast.sh runs locally too.
+            grep -v '^#' scripts/fast-tests.txt | grep . | sed 's#^#python/tests/#' > test-files.txt
+          elif [ "$SHARD" = 0 ]; then
             # barca supports duckdb>=1.4,<3 (#567): every test file that mentions DuckDB runs
             # again on the newest 1.x.
             grep -li duckdb python/tests/test_*.py > test-files.txt
@@ -673,5 +700,5 @@ jobs:
       - name: Every backends job succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
-          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+          TIER: ${{ ((github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)'))) && 'full' || (github.event_name == 'merge_group' && 'merge' || 'fast') }}
         run: python3 -c "$CHECK_NEEDS"

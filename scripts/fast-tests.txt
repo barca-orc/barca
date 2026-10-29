@@ -1,0 +1,24 @@
+# The quick Python tests: under about 2 s each, about 20 s in all, across the worker,
+# artifacts, protocol, storage, hashing, decorators and the CLI's errors. Chosen from a timed
+# full run. scripts/check-fast.sh runs them before a push and CI's merge tier runs them on
+# every merge group (.depot/workflows/ci.yml); the full suite runs on a release. One file
+# name per line, relative to python/tests/.
+test_adaptive_executor.py
+test_artifacts.py
+test_csv_outputs.py
+test_ctrl_c_worker.py
+test_decorator_arguments.py
+test_decorator_names_not_barcas.py
+test_errors.py
+test_get_output_shape.py
+test_helper_hashing.py
+test_identity.py
+test_input_parameters.py
+test_protocol_handshake.py
+test_runtime.py
+test_static_barca_bindings.py
+test_storage.py
+test_ui_schema.py
+test_usage_errors.py
+test_warning_dedupe.py
+test_worker_artifacts.py

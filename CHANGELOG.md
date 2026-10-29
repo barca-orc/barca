@@ -8,6 +8,18 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Documentation
+
+- CI runs in three tiers: a pull request runs the static checks, a merge group runs those plus
+  the Rust tests, the wheel and the quick Python subset in `scripts/fast-tests.txt` (about two
+  minutes), and a release PR and its merge group run everything, with the object-store
+  emulators, the duckdb 1.x rerun and the minute checkpoint test on. `scripts/check-fast.sh`
+  builds the venv's barca with the `fast` profile instead of `--release`, and runs the same
+  quick subset. The release workflow builds the UI inside each wheel job from a cache keyed
+  on `ui/` instead of waiting on a separate job, waits for the published wheel on PyPI once
+  instead of in each verification job, and skips the barca.sh deploy with a warning when the
+  Cloudflare secrets are missing instead of failing the run.
+
 ## 0.35.3 (2026-10-29)
 
 ### Bug Fixes
