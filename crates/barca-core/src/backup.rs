@@ -1,8 +1,9 @@
 //! Metadata backups and `barca state restore` (RFC-0009).
 //!
 //! With a remote store (`[remote] uri`), the store is this machine's backup and read-through
-//! cache. The metadata database is copied on the minute checkpoint of a run, once when a run
-//! ends, and every minute from `barca serve`: to `<backups>/<name>.db` beside the database
+//! cache. Routine checkpoints, served-run ends and the server timer share a configurable
+//! admission interval (default one minute). Final standalone/server backups bypass it.
+//! Copies go to `<backups>/<name>.db` beside the database
 //! (`.barca/backups/`) and then to `{uri}/{env}/state/backups/<name>.db` in the store, each with
 //! a `<name>.json` sidecar ([`Sidecar`]). Names are the UTC time to the millisecond and a short
 //! suffix ([`name_at`]). A copy that would be the same bytes as the newest one
@@ -30,6 +31,9 @@ use crate::helper_proc::{OutputFailed, run_to_output};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+mod cadence;
+pub use cadence::Request;
 
 /// What a backup's `<name>.json` sidecar says about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,6 +267,8 @@ async fn previous_run(db_path: &str, run_id: &str) -> Option<(String, String)> {
 /// What one backup did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Taken {
+    /// Admission skipped expensive work; this result proves no backup coverage.
+    pub skipped: bool,
     /// The copy written now, or `None` when the database was still the newest copy.
     pub name: Option<String>,
     /// Its size, when one was written.
@@ -283,7 +289,18 @@ pub async fn take(
     run_id: Option<&str>,
     until: Until<'_>,
 ) -> Result<Taken, BarcaError> {
+    take_requested(python, cfg, run_id, Request::Final, until).await
+}
+
+pub async fn take_requested(
+    python: &Path,
+    cfg: &ResolvedConfig,
+    run_id: Option<&str>,
+    request: Request,
+    until: Until<'_>,
+) -> Result<Taken, BarcaError> {
     let mut taken = Taken {
+        skipped: false,
         name: None,
         size_bytes: 0,
         upload: None,
@@ -294,6 +311,10 @@ pub async fn take(
     if !Path::new(&cfg.db_path).exists() {
         return Ok(taken);
     }
+    let Some(_admission) = cadence::admit(cfg, request, until).await? else {
+        taken.skipped = true;
+        return Ok(taken);
+    };
     let dir = cfg.local_backup_dir();
     std::fs::create_dir_all(&dir).map_err(|e| {
         BarcaError::Other(format!(
@@ -1358,6 +1379,49 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn routine_admission_precedes_copy_and_failed_uploads_consume_the_interval() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = cfg(dir.path());
+        let python = python(dir.path());
+        cfg.backup_interval =
+            crate::config::BackupInterval(Some(std::time::Duration::from_secs(3600)));
+        with_runs(&cfg, 1).await;
+        // A missing local store is a real upload failure, with an unsent local copy.
+        cfg.backup_uri = Some(
+            dir.path()
+                .join("missing/default/state/backups")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let first = take_requested(
+            &python,
+            &cfg,
+            Some("first"),
+            Request::Routine,
+            Until::done(),
+        )
+        .await
+        .unwrap();
+        assert!(!first.skipped && first.name.is_some());
+        assert!(matches!(first.upload, Some(Err(_))));
+        // A copy attempt would fail on these invalid DB bytes. Not-due admission must
+        // return without even opening/hashing them, and cannot claim unchanged coverage.
+        std::fs::write(&cfg.db_path, b"not a database").unwrap();
+        let skipped = take_requested(
+            &python,
+            &cfg,
+            Some("later"),
+            Request::Routine,
+            Until::done(),
+        )
+        .await
+        .unwrap();
+        assert!(skipped.skipped && skipped.name.is_none() && skipped.upload.is_none());
+        assert!(take(&python, &cfg, None, Until::done()).await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn a_backup_is_written_both_places_and_skipped_when_nothing_changed() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = cfg(dir.path());
@@ -1388,6 +1452,7 @@ mod tests {
         assert_eq!(
             again,
             Taken {
+                skipped: false,
                 name: None,
                 size_bytes: 0,
                 upload: None

@@ -486,6 +486,7 @@ value of its first key only.
 | `BARCA_REQUIRE_ENV` | `1` makes `--env` or `BARCA_ENV` required for every command that reads or writes an environment (exit 2 without it); `0` turns `require_env = true` in `barca.toml` off; anything else exits 2 | experimental |
 | `BARCA_REMOTE` | `off` disables remote artifacts and history backups for this process; unset/empty retains normal config; other values are usage errors | stable |
 | `BARCA_REMOTE_URI` | remote root for artifacts and metadata backups (`[remote].uri`) | stable |
+| `BARCA_BACKUP_INTERVAL` | overrides `[remote].backup_interval`: positive whole duration in seconds or with s/m/h/d suffix, or off; default 1m; routine requests share the interval before copy/hash/upload, final backups remain; invalid values exit 2 | experimental |
 | `BARCA_TRANSFER_CONCURRENCY` | positive integer: concurrent artifact transfers (`[remote].transfer_concurrency`, default 4); invalid values exit 3 | stable |
 | `BARCA_TRANSFER_TIMEOUT` | positive integer seconds per transfer attempt (`[remote].transfer_timeout`, default 600); invalid values exit 3 | stable |
 | `BARCA_STORAGE_OPTIONS` | JSON object keyed by protocol, merged over `[remote.storage_options.*]` | stable |

@@ -123,6 +123,7 @@ uri = "s3://my-bucket/barca/my-project"
 
 transfer_concurrency = 4    # artifact uploads and downloads in flight at once (at least 1)
 transfer_timeout = 600      # seconds one transfer attempt may run (at least 1)
+backup_interval = "1m"     # routine metadata backups; "off" retains final backups
 
 # Passed to fsspec.filesystem(protocol, ...), one table per protocol: s3, gcs, abfs.
 [remote.storage_options.s3]
@@ -152,6 +153,7 @@ url = "https://barca.internal.example.com"
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
+| `[remote].backup_interval` | `"1m"` | Routine metadata backups: positive whole seconds or s/m/h/d suffix, or `off`. Final backups remain. Invalid values exit 2. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
 | `[server].url` | none | The `barca serve` that is the team's ledger (`BARCA_SERVER` overrides it): `http://` or `https://`, with any proxy path prefix. `get` and `run` run here and read and post through its ledger (requires `[remote]` pointing at the server's store); `status`, `history` and `stats` answer from it; `sql` resolves its views from it; a bare `--server` runs the command there; `--local` ignores it. See [Server mode](#server-mode) and [Server Mode](/reference/server-mode/). |
 
@@ -226,6 +228,7 @@ Variables that override `barca.toml`:
 | `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage and history backups on. |
 | `BARCA_TRANSFER_CONCURRENCY` | `[remote].transfer_concurrency` | A positive integer. In 0.18.0 an invalid value exits 3, not 2. |
 | `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt. In 0.18.0 an invalid value exits 3, not 2. |
+| `BARCA_BACKUP_INTERVAL` | `[remote].backup_interval` | Overrides routine backup cadence, including served-run completion; `off` retains final CLI/server shutdown backups. |
 | `BARCA_STORAGE_OPTIONS` | `[remote.storage_options.*]` | JSON keyed by protocol, merged over the toml tables key by key. |
 | `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`). Overridden by both of the above. |
 | `BARCA_SERVER` | `[server].url` | The server a bare `--server` uses. Overridden by `--server <url>`. |

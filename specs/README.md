@@ -73,7 +73,9 @@ Their accepted designs are [RFC-0009](../site/src/content/docs/rfcs/0009-store-b
 and [RFC-0011](../site/src/content/docs/rfcs/0011-signed-urls.md).
 [RFC-0015](../site/src/content/docs/rfcs/0015-backup-cadence.md) accepts configurable backup
 cadence and separate local-backup accounting for 0.36.0. It is accepted intent, not implemented;
-the current manual and contracts remain the runtime owners.
+the current manual and contracts remain the runtime owners. Cadence conformance is exercised
+by [backup cadence](../python/tests/test_backup_cadence.py), the core admission tests and
+the recorder's skipped-progress test. Separate backup accounting remains implementation work.
 Slack configuration/behavior remains in the [telemetry manual](../crates/barca-cli/docs/telemetry.md),
 with [webhook controls](../python/tests/test_telemetry_slack.py); message prose is not a stable surface.
 These owners have not been relocated or copied into new schemas.

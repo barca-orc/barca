@@ -8,6 +8,19 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Served runs' end-of-run metadata backups now share the routine backup interval. Completion
+  still records the run locally, but no longer promises an immediate remote metadata copy.
+  Standalone final backups and the server's graceful-shutdown backup remain enabled.
+
+### Features
+
+- Configure routine metadata backup cadence with `[remote] backup_interval` or
+  `BARCA_BACKUP_INTERVAL` (default `"1m"`, or `"off"`). A shared per-database gate applies
+  before copying, hashing and uploading, survives process restarts, and retains dirty
+  recorder progress when a request is skipped.
+
 ### Documentation
 
 - Record the accepted configurable metadata backup cadence and separate local-backup

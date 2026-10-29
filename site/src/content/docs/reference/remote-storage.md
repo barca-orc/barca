@@ -160,13 +160,38 @@ Each machine works on its own `.barca/metadata.db`, and it is the truth for that
 nothing is ever downloaded before a run. With a store configured by `[remote] uri` or
 `BARCA_REMOTE_URI`, the database is backed up:
 
-- by `barca get` and `barca run`, on a one-minute checkpoint when the run recorded something
+- by `barca get` and `barca run`, on a routine checkpoint when the run recorded something
   since the last backup, and once when the run ends. A run that recorded no new result takes no
   backup at its end: nothing failed or was uploaded, and every step it ran was a sensor whose
   value the store already held (a warm `get` whose data did not change). Its run row goes with
   the next backup;
-- by `barca serve`, every minute in which the database changed, and once when it shuts down
+- by `barca serve`, at its routine interval when the database changed, and once when it shuts down
   (not with `--read-only`).
+
+Routine checkpoints default to one minute. Set `[remote] backup_interval = "1h"` or
+`BARCA_BACKUP_INTERVAL=1h` to limit routine work to once an hour per database. The environment
+variable overrides TOML. Values are positive whole seconds, optionally suffixed `s`, `m`,
+`h` or `d`, or `off`; surrounding whitespace is ignored. Empty, zero, negative, fractional,
+compound, overflowing or unknown durations, and non-string TOML values, are usage errors
+(exit 2). Restart the server after changing the setting.
+
+Server timer ticks, recorder checkpoints and the end of server-owned runs share one limit
+before copying, hashing or uploading. Attempts consume the interval even on failure; skipped
+requests retain dirty progress for a later checkpoint. Missed ticks are skipped. A server
+restart retains the previous attempt time. `off` disables routine copies and retries, while
+standalone commands' final backups and the server's graceful-shutdown backup remain enabled.
+Final attempts bypass the interval and update its timestamp. An abrupt kill cannot promise
+a final backup, and graceful shutdown retains its bounded backup budget.
+
+**0.36.0 upgrade:** rapid consecutive served-run completions no longer force separate backups.
+A completed served run can be recorded locally without yet being in the remote metadata
+backup. Standalone final backups retain the behavior described above.
+
+Backups remain whole uncompressed database copies, including whole-copy hashing and upload.
+At 1.7 GB, changed-state routine uploads can approach 102 GB/hour at `1m`, or 1.7 GB/hour at
+`1h`, plus final backups and retries. Five local copies occupy about 8.5 GB in addition to
+the live database, WAL and temporary copy. These are byte-volume estimates, not throughput
+measurements. A longer interval increases the recovery window.
 
 A machine with a server configured (`[server] url` or `BARCA_SERVER`) takes no backups, with or
 without `--local`: the server is the ledger and backs up its own database (`barca docs
@@ -610,6 +635,7 @@ file it was writing.
 |---|---|---|---|
 | `transfer_concurrency` | `BARCA_TRANSFER_CONCURRENCY` | 4 | Uploads/downloads in flight at once |
 | `transfer_timeout` | `BARCA_TRANSFER_TIMEOUT` | 600 | Seconds one transfer attempt may run (counted from when it starts) |
+| `backup_interval` | `BARCA_BACKUP_INTERVAL` | `"1m"` | Routine metadata backup cadence; `off` disables routine work, final backups remain |
 
 ## Failures
 
