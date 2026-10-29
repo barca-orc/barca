@@ -350,6 +350,17 @@ The function returns either:
   relation. barca splits it into one table per key; a key with no rows gets an empty table with
   the schema. DuckDB relations, polars and Arrow tables stream through DuckDB's
   `COPY ... PARTITION_BY`, so the result is not held in Python memory; pandas is split in memory.
+  Streamed partitions follow DuckDB's all-column ordering. DuckDB 2 uses `COPY ... ORDER_BY`
+  to sort within each partition while retaining the completed-file move shortcut. DuckDB 1.x
+  re-reads and sorts each split partition, adding read/write overhead. Rows remain in DuckDB
+  and the producer's thread setting is unchanged. Multi-file partitions and schemas containing
+  BIT or BIGNUM (including nested values) also use the sorted rewrite path. On DuckDB 2,
+  the producer materializes once in a temporary DuckDB table with its own settings; only
+  serialization disables statistics propagation, preventing file-count-dependent Parquet
+  nullability. The optimizer setting is restored and the temporary table is dropped.
+  Values that compare equal but have different representations (signed zero, distinct NaNs,
+  or strings under a case-insensitive collation) still require producer normalization for
+  byte stability. The returned relation's row order is not preserved.
 
 ```python
 import pandas as pd

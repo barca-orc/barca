@@ -82,6 +82,16 @@ def scored(retailer: list[str], cleaned: duckdb.DuckDBPyRelation) -> duckdb.Duck
     return cleaned.aggregate("retailer, sum(amount) AS total")
 ```
 
+Streamed table results sort each partition by all columns. DuckDB 2 uses its native
+`COPY ... ORDER_BY` partition writer and retains the completed-file move shortcut; DuckDB
+1.x re-reads and sorts each split partition, adding read/write overhead. The producer query
+keeps its configured threads. Multi-file partitions and schemas containing BIT/BIGNUM
+also use the sorted rewrite path. On DuckDB 2, the producer materializes once with its own
+settings; serialization temporarily disables statistics propagation so Parquet nullability
+is independent of split file count, then restores the setting and drops the temporary table.
+Values that compare equal under DuckDB's active ordering but have different representations
+still need producer normalization for byte stability.
+
 ### What stays the same
 
 - **Only keys that need to run are passed in.** With a keyed sensor where 3 of 200k

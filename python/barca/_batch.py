@@ -22,6 +22,7 @@ dimension names, sorted.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 
@@ -317,9 +318,42 @@ def _split_pandas(df, dims: list[str], wanted: dict) -> dict:
     return out
 
 
+def _can_order_copy_type(dtype) -> bool:
+    # DuckDB 2's partition ORDER_BY crashes on BIT/BIGNUM, including nested values.
+    if dtype.id in ("bit", "bignum", "varint"):
+        return False
+    if dtype.id in ("list", "array", "struct", "map", "union"):
+        return all(
+            _can_order_copy_type(child) for _, child in dtype.children if hasattr(child, "id")
+        )
+    return True
+
+
+@contextmanager
+def _partition_rows(con, name: str):
+    # Execute the producer with its optimizer settings before normalizing writer metadata.
+    rows = "__barca_partition_rows"
+    con.execute(f'CREATE TEMP TABLE "{rows}" AS SELECT * FROM "{name}"')
+    try:
+        optimizers = con.execute("SELECT current_setting('disabled_optimizers')").fetchall()[0][0]
+        disabled = [item for item in optimizers.split(",") if item]
+        if "statistics_propagation" not in disabled:
+            disabled.append("statistics_propagation")
+        try:
+            # DuckDB 2 otherwise derives REQUIRED/OPTIONAL from single-file versus
+            # multi-file statistics, changing identical partitions' Parquet bytes.
+            con.execute("SET disabled_optimizers = ?", [",".join(disabled)])
+            yield rows
+        finally:
+            con.execute("SET disabled_optimizers = ?", [optimizers])
+    finally:
+        con.execute(f'DROP TABLE "{rows}"')
+
+
 def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path) -> dict:
     """Stream a table into one parquet file per key with DuckDB's ``COPY ... PARTITION_BY``."""
     import shutil
+    import duckdb
     from urllib.parse import unquote
 
     from barca import _duckdb
@@ -338,41 +372,65 @@ def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True, exist_ok=True)
         dim_list = ", ".join(q(d) for d in dims)
-        con.execute(
-            f"COPY (SELECT * FROM {q(name)} ORDER BY {dim_list}) TO '{staging}' "
-            f"(FORMAT parquet, PARTITION_BY ({dim_list}), WRITE_PARTITION_COLUMNS true, "
-            f"OVERWRITE_OR_IGNORE true)"
+        # ORDER BY on the input does not preserve order through PARTITION_BY.
+        # DuckDB 2 can sort inside its partition writer; 1.x needs a rewrite.
+        ordered_copy = int(duckdb.__version__.split(".")[0]) >= 2 and all(
+            _can_order_copy_type(dtype) for dtype in rel.types
         )
-        empty = None
-        out: dict = {}
-        for root, _dirs, files in os.walk(staging):
-            parquet = sorted(f for f in files if f.endswith(".parquet"))
-            if not parquet:
-                continue
-            rel_dir = Path(root).relative_to(staging)
-            values = {}
-            for part in rel_dir.parts:
-                d, _, v = part.partition("=")
-                values[unquote(d)] = unquote(v)
-            if len(dims) == 1:
-                n = values.get(dims[0])
-                if n is None:
-                    raise ValueError(
-                        f"the batched call returned rows with no {dims[0]} (null); every row "
-                        f"needs a key"
+        order_option = (
+            ", ORDER_BY (" + ", ".join(q(c) for c in rel.columns) + ")" if ordered_copy else ""
+        )
+        rows = (
+            _partition_rows(con, name)
+            if int(duckdb.__version__.split(".")[0]) >= 2
+            else nullcontext(name)
+        )
+        with rows as write_name:
+            con.execute(
+                f"COPY (SELECT * FROM {q(write_name)} ORDER BY {dim_list}) TO '{staging}' "
+                f"(FORMAT parquet, PARTITION_BY ({dim_list}), WRITE_PARTITION_COLUMNS true, "
+                f"OVERWRITE_OR_IGNORE true{order_option})"
+            )
+            empty = None
+            out: dict = {}
+            for root, _dirs, files in os.walk(staging):
+                parquet = sorted(f for f in files if f.endswith(".parquet"))
+                if not parquet:
+                    continue
+                rel_dir = Path(root).relative_to(staging)
+                values = {}
+                for part in rel_dir.parts:
+                    d, _, v = part.partition("=")
+                    values[unquote(d)] = unquote(v)
+                if len(dims) == 1:
+                    n = values.get(dims[0])
+                    if n is None:
+                        raise ValueError(
+                            f"the batched call returned rows with no {dims[0]} (null); every row "
+                            f"needs a key"
+                        )
+                else:
+                    n = tuple(values.get(d) for d in dims)
+                if n not in wanted:
+                    raise _extra(n if len(dims) > 1 else (n,), dims)
+                paths = [str(Path(root) / f) for f in parquet]
+                if not ordered_copy or len(paths) > 1:
+                    # Native ordering is per file; a large key can span overlapping files.
+                    ordered = str(Path(root) / "__ordered.parquet")
+                    con.read_parquet(paths, hive_partitioning=False).order("ALL").write_parquet(
+                        ordered
                     )
-            else:
-                n = tuple(values.get(d) for d in dims)
-            if n not in wanted:
-                raise _extra(n if len(dims) > 1 else (n,), dims)
-            out[n] = ("parquet", [str(Path(root) / f) for f in parquet])
-        if len(out) < len(wanted):
-            # A key with no rows: an empty table with the schema.
-            empty = staging / "__empty.parquet"
-            con.execute(f"COPY (SELECT * FROM {q(name)} LIMIT 0) TO '{empty}' (FORMAT parquet)")
-            for n in wanted:
-                out.setdefault(n, ("parquet", [str(empty)]))
-        return out
+                    paths = [ordered]
+                out[n] = ("parquet", paths)
+            if len(out) < len(wanted):
+                # A key with no rows: an empty table with the schema.
+                empty = staging / "__empty.parquet"
+                con.execute(
+                    f"COPY (SELECT * FROM {q(write_name)} LIMIT 0) TO '{empty}' (FORMAT parquet)"
+                )
+                for n in wanted:
+                    out.setdefault(n, ("parquet", [str(empty)]))
+            return out
     finally:
         try:
             con.execute(f"drop view if exists {q(name)}")

@@ -52,6 +52,17 @@ Batch selection groups stale keys without changing their individual result ident
 Explicit selection narrows keys before grouping. Group order and explicit `batches(...)`
 boundaries must not depend on how a worker pool happens to divide streams.
 
+Streamed table results (DuckDB, Arrow and Polars) use DuckDB's all-column ordering. DuckDB 2
+uses the native ordered partition writer; DuckDB 1.x re-sorts each split partition before
+publishing. Multi-file partitions and BIT/BIGNUM schemas also require a sorted rewrite.
+DuckDB 2 materializes the producer with its configured settings, then serializes with
+statistics propagation disabled so Parquet nullability does not depend on split file count.
+The optimizer setting must be restored and the temporary table dropped on success or failure.
+Parallel partition writes must not introduce row-order noise among rows that
+compare differently under that ordering. Comparator ties with different representations
+(such as signed zero or a case-insensitive collation) require producer normalization for
+byte stability. Completed single-file Parquet partitions retain the move shortcut.
+
 The durable unit remains a key's result, not the entire batch. Failures are reported through
 existing exit codes and per-key history. `Failed(reason)` expresses a key-level failure;
 it does not turn an invalid/missing batch result into a success.
@@ -127,6 +138,7 @@ Conformance: [task CLI](../../python/tests/test_task_logs.py),
 [progress](../../python/tests/test_progress_counts.py).
 
 Conformance: [batched partitions](../../python/tests/test_batched_partitions.py),
+[stable partition artifacts](../../python/tests/test_partition_artifact_stability.py),
 including `test_a_call_that_raises_fails_every_key_and_a_retry_reruns_only_failed_keys`
 and `test_worker_death_retries_every_unfinished_key_of_the_call`.
 Grouping syntax and experimental status:
