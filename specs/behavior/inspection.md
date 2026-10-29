@@ -51,6 +51,12 @@ while polled. Evidence: `read_cache` unit tests, the router's
 `state_targets_select_only_the_requested_upstream_cone`, and the synthetic GB-class
 [`bench_status.py`](../../benchmarks/planning_pipeline/bench_status.py) measurement.
 
+The grouped UI and sidebar render from graph/group metadata before cache status is available.
+Pending state is not presented as never-run or cached. Status arrival preserves row and graph
+geometry; a status error does not hide the graph. Pipeline/group views ask only for their
+upstream cone, while All pipelines asks for everything. Evidence:
+[`state-loading.spec.ts`](../../ui/e2e/state-loading.spec.ts).
+
 A database change can invalidate cached inspection even after an unchanged sensor run.
 Cold and post-run inspection can rebuild per-key state:
 [#656](https://github.com/barca-orc/barca/issues/656). Millisecond cached responses are not a

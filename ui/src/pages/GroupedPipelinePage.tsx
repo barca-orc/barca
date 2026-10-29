@@ -39,7 +39,7 @@ import { ApiError } from '@/lib/api'
 import { inPipeline } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
-import { UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
+import { PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import {
   groupTree,
   PREVIEW_FAILURE,
@@ -109,7 +109,7 @@ export function GroupedPipelinePage() {
   const byId = useMemo(() => new Map(states.map((s) => [s.id, s])), [states])
   const projected = useMemo(
     () => projectGroups(assets, tree, scope),
-    [assets, scope],
+    [assets, scope, tree],
   )
   const entries = useMemo<GraphEntry[]>(
     () =>
@@ -123,12 +123,14 @@ export function GroupedPipelinePage() {
       Object.fromEntries(
         entries.map((entry) => [
           entry.id,
-          entry.kind === 'group'
-            ? groupHealth(groupLeaves(entry.id, tree), byId)
-            : memberHealth(byId.get(entry.id)),
+          groupLeaves(entry.id, tree).some(id => !byId.has(id)) && !stateQuery.isError
+            ? PENDING_GRAPH_STATE
+            : entry.kind === 'group'
+              ? groupHealth(groupLeaves(entry.id, tree), byId)
+              : memberHealth(byId.get(entry.id)),
         ]),
       ),
-    [entries, byId],
+    [entries, byId, tree, stateQuery.isError],
   )
   const visible = entries.filter((entry) => {
     const needle = query.trim().toLowerCase()
@@ -161,7 +163,10 @@ export function GroupedPipelinePage() {
   const output = selectedGroup
     ? byId.get(groupOutput(selectedGroup.id, tree))
     : undefined
-  const groupStatus = selectedGroup ? groupHealth(leaves, byId) : undefined
+  const groupStatus = selectedGroup
+    ? leaves.some(id => !byId.has(id)) && !stateQuery.isError
+      ? PENDING_GRAPH_STATE : groupHealth(leaves, byId)
+    : undefined
   // How many nodes in view a run is working on now, whoever started it.
   const runningHere = runningCount(
     scope ? groupLeaves(scope, tree) : assets.map((a) => a.id),
@@ -227,10 +232,10 @@ export function GroupedPipelinePage() {
   })
 
   const loading =
-    assetQuery.isPlaceholderData || !assetQuery.data || !stateQuery.data
-  const error = assetQuery.isError || stateQuery.isError
+    assetQuery.isPlaceholderData || !assetQuery.data || !groupsQuery.data
+  const error = assetQuery.isError || groupsQuery.isError
   // What to do about it, when the server says (e.g. a metadata DB barca cannot use).
-  const failure = stateQuery.error ?? assetQuery.error
+  const failure = assetQuery.error ?? groupsQuery.error
   const title = scope
     ? tree.groups.get(scope)!.name
     : pipeline === 'modeling.py'
@@ -390,7 +395,7 @@ export function GroupedPipelinePage() {
         <div className="barca-table-empty">
           <p>
             Can't load pipeline:{' '}
-            {stateQuery.error?.message ?? assetQuery.error?.message}
+            {failure?.message}
           </p>
           {failure instanceof ApiError && failure.remediation && <p>{failure.remediation}</p>}
           {/* A metadata database that cannot be read or migrated is mended by starting over. */}
@@ -399,6 +404,16 @@ export function GroupedPipelinePage() {
       ) : loading ? (
         <p className="barca-table-empty">Loading pipeline…</p>
       ) : (
+        <>
+        {stateQuery.isError && (
+          <div className="barca-graph-tools" role="status">
+            Asset state unavailable: {stateQuery.error.message}
+            {stateQuery.error instanceof ApiError && stateQuery.error.remediation && (
+              <span> {stateQuery.error.remediation}</span>
+            )}
+            <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />
+          </div>
+        )}
         <div className={graph ? 'barca-graph-wrap' : 'barca-assets-split'}>
           {graph ? (
             <div className="barca-graph-canvas">
@@ -437,6 +452,13 @@ export function GroupedPipelinePage() {
           ) : (
             <div className="barca-view-body barca-table-scroll" ref={scroller}>
               <table className="barca-table barca-group-table">
+                <colgroup>
+                  <col style={{ width: '34%' }} />
+                  <col style={{ width: '24%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '22%' }} />
+                  <col style={{ width: '4%' }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -589,13 +611,13 @@ export function GroupedPipelinePage() {
                   <span>{shortName(groupOutput(selectedGroup.id, tree))}</span>
                   <ChevronRight size={14} />
                 </button>
-                {output && (
+                {output ? (
                   <StatusBadge
                     status={memberHealth(output).status}
                     label={memberHealth(output).label}
                     size="sm"
                   />
-                )}
+                ) : <StatusBadge status="skipped" label={stateQuery.isError ? 'State unavailable' : 'Checking…'} size="sm" />}
               </Section>
               <Section title="Members">
                 <KeyValue label="assets">
@@ -655,6 +677,7 @@ export function GroupedPipelinePage() {
             />
           )}
         </div>
+        </>
       )}
     </div>
   )

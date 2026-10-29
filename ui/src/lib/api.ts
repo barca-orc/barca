@@ -85,7 +85,11 @@ export const api = {
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema`),
   plan: () => request<PlanResult>('/plan'),
-  state: () => request<NodeState[]>('/state'),
+  state: (targets?: string[], signal?: AbortSignal) =>
+    request<NodeState[]>(
+      targets ? `/state?${new URLSearchParams({ targets: targets.join(',') })}` : '/state',
+      { signal },
+    ),
   runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
   runDetail: (id: string) => request<RunView>(`/runs/${encodeURIComponent(id)}`),
   startRun,

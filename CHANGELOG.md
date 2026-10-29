@@ -8,6 +8,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- The assets page and sidebar render groups, graph layout and pipeline counts from metadata
+  before status arrives. Cache state shows as checking and fills in without moving rows or
+  graph nodes; a status error leaves the graph visible. Opening a pipeline or group requests
+  only its upstream status cone, while All pipelines requests the whole graph (#710).
+
 ### Performance
 
 - `barca serve --read-only` reads current WAL metadata in place, warms status at startup even

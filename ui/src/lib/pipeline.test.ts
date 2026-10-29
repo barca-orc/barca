@@ -62,6 +62,17 @@ describe('pipelineSummaries', () => {
     expect(byFile['pipeline/p02_reconcile.py']).toBe('failed')
     expect(byFile['other/p01_dims.py']).toBe('cached')
   })
+
+  it('counts metadata before status arrives and keeps other pipelines when only one cone is loaded', () => {
+    const assets = nodes.map(n => ({ id: n.id }))
+    const pending = pipelineSummaries([], assets)
+    expect(pending.map(p => p.total)).toEqual([1, 2, 2])
+    expect(pending.every(p => p.worst === 'unknown')).toBe(true)
+    const partial = pipelineSummaries(nodes.filter(n => n.id.startsWith('pipeline/p02')), assets)
+    expect(partial.map(p => p.total)).toEqual([1, 2, 2])
+    expect(partial.find(p => p.file === 'pipeline/p02_reconcile.py')?.worst).toBe('failed')
+    expect(partial.find(p => p.file === 'pipeline/p01_dims.py')?.worst).toBe('unknown')
+  })
 })
 
 describe('inPipeline', () => {

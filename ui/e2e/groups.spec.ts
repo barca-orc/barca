@@ -26,7 +26,7 @@ const assets = names.map((name) => ({
 test.beforeEach(async ({ page }) => {
   await page.route('**/groups', route => route.fulfill({ json: metadata }))
   await page.route('**/assets', (route) => route.fulfill({ json: assets }))
-  await page.route('**/state', (route) =>
+  await page.route(/\/state(?:\?.*)?$/, (route) =>
     route.fulfill({
       json: assets.map((asset) => ({
         ...asset,
@@ -177,7 +177,7 @@ test('a different Python pipeline uses server groups and keeps ungrouped nodes v
   await page.route('**/groups', route => route.fulfill({ json: [
     { id: 'group:forecast.py:training', name: 'Forecast training', description: '', members: ['forecast.py:rows', 'forecast.py:model'], output: 'forecast.py:model' },
   ] }))
-  await page.route('**/state', route => route.fulfill({ json: [] }))
+  await page.route(/\/state(?:\?.*)?$/, route => route.fulfill({ json: [] }))
   await page.goto('/ui/#/assets?pipeline=forecast.py&view=graph')
   await expect(page.locator('.react-flow__node')).toHaveCount(2)
   await expect(page.getByRole('button', { name: 'Preview failed check' })).toHaveCount(0)
