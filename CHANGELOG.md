@@ -26,6 +26,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   before copying, hashing and uploading, survives process restarts, and retains dirty
   recorder progress when a request is skipped.
 
+## 0.35.3 (2026-10-29)
+
 ### Bug Fixes
 
 - A batched step's DuckDB, Arrow or polars table is split into keys sorted by every column, so
