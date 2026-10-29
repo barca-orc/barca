@@ -25,6 +25,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   graph nodes; a status error leaves the graph visible. Opening a pipeline or group requests
   only its upstream status cone, while All pipelines requests the whole graph (#710).
 
+### Documentation
+
+- Bring DIRECTION.md through 0.35.1 and record the decided order after it: the
+  0.35.2 server/UI fixes, 0.36.0 backup/credential/resume RFCs, then feedback cleanup.
+  Keep unresolved partition costs open and distinguish approved direction from shipped behavior.
+
 ### Performance
 
 - `barca serve --read-only` reads current WAL metadata in place, warms status at startup even

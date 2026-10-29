@@ -1,6 +1,6 @@
 # Direction
 
-Last updated: 2026-10-28, after v0.34.0. The pinned
+Last updated: 2026-10-29, after v0.35.1; 0.35.2 is pending. The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -24,19 +24,29 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 An issue's milestone is the release it ships in; the items below are the order.
 
-The four priorities set at the 2026-10-20 re-triage have shipped, in 0.24.2 to 0.29.1 (2026-10-20 and 2026-10-21):
+The decisions in [#707](https://github.com/barca-orc/barca/issues/707) set this order:
 
-1. **Correctness and recovery.** Shipped: the last two hash holes (#295), a worker killed by the kernel named by its signal (#433), failed steps' real duration in telemetry (#437), a tick that duplicated an API-started run (#432), all in 0.24.2; linear cold partition scaling (#345) in 0.24.3; a partitioned target that returns every key (#287) and a size limit for `.barca/` (#457) in 0.25.0; the corrupt shared-history blob (#243), gone with the pull in 0.26.0.
-2. **Everyday use.** Shipped: paths by default in `barca get` output (#404) in 0.25.0; a remote store that fails soft after the work is done (#390), metadata backups with `barca state restore` (RFC-0009, #403), signed links to results in a bucket (RFC-0011, #452) and Slack messages when a job starts failing or recovers (RFC-0010, #450) in 0.26.0; logs you can join to a trace under `serve` (#434) in 0.27.0; current numbers on the comparison pages (#65) in 0.28.3; a limit on how many heavy steps run at once (#436), what changed in a stale node (#558) and the last run's target in `barca history` (#555) in 0.29.0.
-3. **Server mode.** Shipped in 0.27.0: the server is the ledger (RFC-0007), with drain on shutdown (#190), one run contract over HTTP (#393) with pause and resume for a schedule (#435), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
-4. **Freshness under serve.** Shipped in 0.28.0: `Always` and `Manual` have their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
+1. **0.35.2: make inspection and everyday server use usable.** Ship #708 (read-only WAL
+   inspection, bounded history queries, work off request threads), #710 (metadata before
+   scoped status), #709 (grouped-page and node-panel run actions), and #706's credential
+   masking. Rebase and merge the first-use documentation (#650) and concise help (#651).
+   Recheck #654–656 rather than inferring completion from newer releases. The recheck in
+   #716 still reproduces duplicate overlapping asset work, large bootstrap memory and
+   expensive cold/post-run inspection; those issues stay open with current measurements.
+   The real planning fixture has 116 nodes and scales table rows; its smoke run is separate
+   from the synthetic 1,000-node/1.2M-key coordinator workload.
+2. **0.36.0: server mode behind a proxy (#706).** Decide and implement the backup-cadence
+   and client-credential RFCs, plus `Last-Event-ID` stream resume. Include the cost of
+   hashing and remotely checking every artifact during status. Userinfo remains supported;
+   bearer credentials reach every client request. UI-issued tokens require an explicit
+   decision on the built-in-auth non-goal before the authentication design is accepted.
+3. **Then the cleanup week.** Triage #666 into 0.36.1 or 0.37.0: a failed key must not stop
+   independent keys' downstream work. Batch the small feedback in #668, #671, #672 and #673.
+   Keep #674 (incremental fan-ins) parked pending discussion, alongside #667, #669, #670,
+   #675 and #676. Final scheduling follows the 0.36.0 RFC decisions.
 
-**0.32.0** is the batched-partition release (RFC-0013, #643): fewer calls over large key sets,
-with per-key caching unchanged. It also resolves the docs leftovers (#606), including the decision to
-retain the deprecated HTTP aliases for Python `Client` compatibility. It removes the production debug
-output (#645) with a database-dependency update checked against older database fixtures.
-The next work is the cleanup checklist below; no new capability priority has been set.
-DuckDB 2 (#567): barca supports duckdb 1.x and 2.x (`duckdb>=1.4,<3`), with CI on both.
+RFC-0014 pipeline fuzzing is deferred, with no action on its working branch. It has no
+scheduled release. DuckDB 1.x and 2.x remain supported (`duckdb>=1.4,<3`), with CI on both.
 
 ### Release sequence
 
@@ -66,6 +76,10 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.33.0 | 2026-10-25 | Bounded DAG coordination; sensor `(True, value)` always counts as changed | #652 |
 | 0.33.1 | 2026-10-27 | Run result bookkeeping separated from execution; behavioral contracts consolidated | #659, #660 |
 | 0.34.0 | 2026-10-27 | Breaking: unreadable decorator values exit 2; duckdb 2; sink republish on cache hits; failure phases | #567, #662 to #665 |
+| 0.35.0 | 2026-10-28 | Batched cache lookups, shared computed partition domains, responsive server reads and large-graph UI | [Release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.0) |
+| 0.35.1 | 2026-10-28 | Cache-size accounting off request threads; transfer-helper handshake before planning | #702, [release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.1) |
+| 0.35.2 | pending | Read-only status, metadata-first UI, run actions, credential masking and first-use/help docs | #708, #710, #709, #706 part 3, #650, #651 |
+| 0.36.0 | planned | Configurable backups, proxy credentials and UI token design, resumable streams and store inspection costs | #706 |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
@@ -85,12 +99,30 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- **Event stream resume:** whether `Last-Event-ID` resume should replace the current
-  drop-is-infra-error rule remains unscheduled. Route alias retention is decided below.
+- **Authentication boundary, due by 0.36.0 (#706):** UI-issued tokens are requested. The
+  credential RFC must explicitly reopen #187 (built-in authentication) or explain how a proxy
+  validates server-issued opaque tokens. The standing non-goal remains until that decision.
+- **Backup accounting and store inspection, due by 0.36.0 (#706):** choose eviction under
+  the cache limit or explicit reporting outside it for local backups, and bound/reuse artifact
+  integrity evidence without making `cached` mean unchecked. Record the cost as the DB grows.
+- **Stream-resume details, due by 0.36.0 (#706):** `Last-Event-ID` is the chosen direction;
+  the RFC must settle replay retention, authentication and expired-cursor behavior.
 
 Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s, exit 1 after a forced stop; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
 
 ## Decided, October 2026
+
+**After 0.35.1 (2026-10-29, #707).** Approved direction; public RFCs and implementation are
+still required for the 0.36.0 changes:
+
+- Backups: `[remote] backup_interval` / `BARCA_BACKUP_INTERVAL`, default `"1m"`, with `"off"`
+  for external volume backups; retain the shutdown backup. Explain whole-DB copy/upload cost.
+- Credentials: support URL userinfo and `BARCA_SERVER_TOKEN` bearer headers on every request,
+  including health, streams, cancellation and ledger traffic. Tokens can be generated in the
+  UI; resolve the authentication boundary above in the RFC.
+- Streams: `Last-Event-ID` resume replaces treating every dropped connection as an infra error.
+- Partial failure: a failed key does not stop other keys' downstream work (#666).
+- Fuzzing is deferred. Incremental fan-ins (#674) need more discussion before scheduling.
 
 **HTTP aliases (0.32.0, #606).** Keep the deprecated `POST /run`, `POST /run/{target}`,
 `POST /get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}` and
@@ -128,6 +160,6 @@ Named refresh groups; a schema contract on sinks; OTLP export; email notificatio
 
 - An issue states one observable problem and what done looks like. No process vocabulary, no ledger of CI runs.
 - Labels: `bug` or `enhancement`, one `area:*`, `parked` for closed ideas. Nothing else.
-- Milestones are releases, one per row of the release sequence, with a due date. The four items above are the order within and between them, not milestones. A decision in "Decided" is the answer to a design question; reopen it with a reason, not a re-ask. A question nobody has answered is listed under "Open questions" with the release it must be decided by.
+- Milestones are releases, one per row of the release sequence, with a due date. The priorities above are the order within and between them, not milestones. A decision in "Decided" is the answer to a design question; reopen it with a reason, not a re-ask. A question nobody has answered is listed under "Open questions" with the release it must be decided by.
 - Design that touches the public surface is an RFC on the site. A design PR is decided within a week: merged as Accepted, or closed with a sentence saying why.
-- `specs/` holds the four boundary specifications and their index. Implementation notes live in the PR that made them.
+- `specs/README.md` inventories the behavioral and interface specifications, proposed designs and engineering notes. Implementation evidence lives in the PR that made the change.
