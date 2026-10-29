@@ -1,0 +1,59 @@
+Query cached results with SQL (DuckDB) — each asset is a named view
+
+Usage: barca sql [OPTIONS] <QUERY> [FILES]...
+
+Arguments:
+  <QUERY>
+          The SQL query (DuckDB dialect); quote it as one argument
+
+  [FILES]...
+          Python files or directories; default: discover the project
+
+Options:
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+  -l, --limit <LIMIT>
+          Maximum number of rows to return
+
+          [default: 100]
+
+      --all
+          Return every row (no limit)
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Use independent local state; ignore the configured server
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca sql "select * from revenue"                       # one view per asset, using its declared name or function fallback
+  barca sql "select region, sum(amount) from orders group by 1"   # any DuckDB SQL over cached results
+  barca sql "select * from orders o join revenue r using (region)" # join assets
+  barca sql "select * from weekly where partition = 'week=w1'"   # partitioned: one view, a partition column
+  barca sql "select status from validate"                  # a task's last result is a view too
+  barca sql "select * from orders" pipeline.py              # only nodes in this file become views
+  barca sql "select * from orders" --limit 20               # first 20 rows (default: at most 100)
+  barca sql "select * from orders" --all                    # every row
+  barca sql "select * from orders" --json                   # {columns, rows, total, truncated, hint?}
+  barca sql "select * from orders" --env dev                # results cached in another environment
+  barca sql "select target, status, elapsed_seconds from barca.runs where status = 'failed' order by started_at desc limit 10"
+  barca sql "select node_id, elapsed_seconds, size_bytes from barca.materializations order by created_at desc"
+  barca sql "select name, state, reason from barca.nodes where state <> 'cached'"
+  barca sql "select * from revenue" --local                # this machine's results, not a configured server's
+  barca sql "select * from revenue" --server https://barca.example.com   # views resolved by that server
+
+More: barca docs sql

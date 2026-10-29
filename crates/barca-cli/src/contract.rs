@@ -3,7 +3,8 @@
 //! Two things are compared against checked-in files, so any change to the CLI surface fails
 //! `cargo test -p barca` until the files are updated in the same change:
 //!
-//! - `snapshots/help/<command>.txt`: the exact `--help` output of the top level and of every
+//! - `snapshots/help/<command>.txt` and `snapshots/examples/<command>.txt`: the exact
+//!   `--help` and `--examples` output of the top level and of every
 //!   subcommand, rendered at a fixed width of 100 columns (what the binary prints: clap is built
 //!   without `wrap_help`, so it never reads the terminal width).
 //! - the generated blocks in `docs/contract.md`: the command table, every command's arguments
@@ -242,9 +243,13 @@ fn first_difference(expected: &str, actual: &str) -> String {
 
 /// What `barca <path...> --help` prints.
 fn render_help(path: &[&str]) -> String {
+    render_help_flag(path, "--help")
+}
+
+fn render_help_flag(path: &[&str], flag: &str) -> String {
     let mut argv = vec!["barca"];
     argv.extend_from_slice(path);
-    argv.push("--help");
+    argv.push(flag);
     let err = match Cli::command()
         .term_width(HELP_WIDTH)
         .try_get_matches_from(argv)
@@ -304,16 +309,23 @@ fn help_output_matches_the_snapshots() {
         let path: Vec<&str> = path.iter().map(String::as_str).collect();
         let file = format!("{name}.txt");
         check_file(&dir.join(&file), &render_help(&path));
+        check_file(
+            &crate_dir().join("snapshots/examples").join(&file),
+            &render_help_flag(&path, "--examples"),
+        );
         expected_files.push(file);
     }
-    // A snapshot for a command that no longer exists is a removed command: fail on it too.
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let file = entry.unwrap().file_name().to_string_lossy().to_string();
-        if !expected_files.contains(&file) {
-            if updating() {
-                std::fs::remove_file(dir.join(&file)).unwrap();
-            } else {
-                panic!("snapshots/help/{file} has no matching command.\n\n{UPDATE_HINT}");
+    // Removing a command removes both views of its help.
+    for kind in ["help", "examples"] {
+        let dir = crate_dir().join("snapshots").join(kind);
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let file = entry.unwrap().file_name().to_string_lossy().to_string();
+            if !expected_files.contains(&file) {
+                if updating() {
+                    std::fs::remove_file(dir.join(&file)).unwrap();
+                } else {
+                    panic!("snapshots/{kind}/{file} has no matching command.\n\n{UPDATE_HINT}");
+                }
             }
         }
     }

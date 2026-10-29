@@ -1,0 +1,56 @@
+List all discovered definitions (assets, tasks, sensors) with their deps
+
+Usage: barca list [OPTIONS] [FILES]...
+
+Arguments:
+  [FILES]...
+          Python files or directories; default: discover the project
+
+Options:
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --groups
+          Show the organizational hierarchy (groups are never executable nodes)
+
+  -l, --limit <LIMIT>
+          Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
+
+      --all
+          Show every node (no limit)
+
+      --fields <FIELDS>
+          Select JSON fields as a comma-separated list; implies --json
+
+          [possible values: id, kind, freshness, schedule, inputs, env, next_fire]
+
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Use independent local state; ignore the configured server
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca list                         # project nodes (human table: at most 100)
+  barca list pipelines/              # only files under pipelines/ (trailing / marks a directory)
+  barca list .                       # the current directory and below
+  barca list pipeline.py             # nodes, including qualified/aliased Barca decorators
+  barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated, root}
+  barca list pipeline.py --groups --json  # organizational groups, separate from executable nodes
+  barca list pipeline.py --pretty    # the table, even when piped
+  barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
+  barca list big.py --limit 20       # first 20 nodes (topological order)
+  barca list big.py --all            # every node in the human table (default: at most 100)
+  barca list a.py b.py               # several files form one DAG
+  barca list --server --json         # the nodes deployed on the configured barca server
+
+More: barca docs assets, barca docs agents

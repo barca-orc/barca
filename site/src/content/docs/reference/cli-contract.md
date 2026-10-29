@@ -89,21 +89,24 @@ outside the `GENERATED` blocks is written by hand.
 
 ## Commands
 
-`barca <command> --help` (or `-h`) prints each command's flags and runnable examples. Shorthand:
+`barca <command> --help` (or `-h`) prints concise flags, common examples and manual pointers.
+`barca <command> --examples` prints the full runnable example collection. Both exit 0 on
+stdout without loading a project or executing work; they also work on nested commands such
+as `barca state restore --examples`. Detailed semantics live in `barca docs <topic>`. Shorthand:
 `barca file.py [flags]` is `barca get file.py [flags]` (stable).
 
 <!-- BEGIN GENERATED commands -->
 | Command | Arguments | Stability | Purpose |
 |---|---|---|---|
-| `barca get` | `[<ARGS>...]` | stable | Get assets — cache-aware, runs only the needed subgraph; prints their artifact paths |
-| `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
+| `barca get` | `[<ARGS>...]` | stable | Get assets; reuse unchanged results and print their artifact paths |
+| `barca run` | `<ARGS>...` | stable | Run a task and its dependencies; the task runs every time |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
 | `barca doctor` | `[<FILES>...]` | experimental: new prerequisite report; check names and provider-specific data may evolve | Diagnose project prerequisites without running pipeline steps |
 | `barca logs` | `[<RUN_ID>]` | stable | Read a run's recorded step output (stdout and stderr), without progress messages |
 | `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility | Run a long-running HTTP server exposing the orchestrator as a JSON API |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility | Manage runs, schedules and results on a server |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
@@ -154,68 +157,73 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
+| `--examples` | - | - | stable | Show all command examples without running anything |
 | `-V, --version` | - | - | stable | Print version |
 
 #### barca get
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project ([`barca docs discovery`](/reference/discovery/)) |
-| `-o, --output` | `path\|value\|url\|json\|pretty` | - | stable | What to print: artifact paths (the default), values, or signed URLs. Alone, -o path\|value\|url prints only that; with --json, it chooses what `final_output` holds |
-| `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at most 7d). Experimental |
+| `<ARGS>...` | - | - | stable | Target(s), then optional files/directories; omit files to discover the project |
+| `-o, --output` | `path\|value\|url\|json\|pretty` | - | stable | Choose the result output mode (see possible values) |
+| `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | Signed URL lifetime: 30m, 12h, 7d or seconds (default: 1h; maximum: 7d) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select partition keys across the cone: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Every partitioned node with a named dimension computes only those keys (--refresh too); a fan-in over them is skipped. Works without a target |
-| `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use | Override `batch=` for this run: `none` (one key per call), `all` or a whole number, for every node that declares `batch=`; `NODE=V` (repeatable) for one node only. Nodes without `batch=` are never batched. Experimental |
-| `--refresh` | comma-separated names | - | stable | Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade) |
-| `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
-| `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
-| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
-| `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
-| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
+| `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use | Override declared batching: none, all, N or NODE=N (experimental) |
+| `--refresh` | comma-separated names | - | stable | Recompute named assets and their downstream dependents: --refresh a,b |
+| `--no-cascade` | - | default `false` | stable | Refresh only named assets; cached downstream results may be outdated |
+| `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
+| `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
+| `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca run
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | required | stable | TARGET[,TARGET...] [file.py\|dir/ ...] — one or more target tasks, comma-separated; no files reads the whole project ([`barca docs discovery`](/reference/discovery/)) |
-| `--refresh` | comma-separated names | - | stable | Upstream assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the task's cone re-materializes too (see --no-cascade) |
-| `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
-| `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
-| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select partition keys across the task's cone, as for `barca get --partition`: every partitioned node with a named dimension computes only those keys |
-| `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use | Override `batch=` for this run, as for `barca get --batch`. Experimental |
-| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
-| `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
+| `<ARGS>...` | - | required | stable | Target(s), then optional files/directories; omit files to discover the project |
+| `--refresh` | comma-separated names | - | stable | Recompute named assets and their downstream dependents: --refresh a,b |
+| `--no-cascade` | - | default `false` | stable | Refresh only named assets; cached downstream results may be outdated |
+| `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
+| `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use | Override declared batching: none, all, N or NODE=N (experimental) |
+| `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
+| `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Choose the result output mode (see possible values) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
-| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca plan
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
-| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | experimental (with the command) | Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep the selected keys, and fan-ins over them are left out (listed in partition_selection) |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | experimental (with the command) | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
 | `--json` | - | default `false` | experimental (with the command) | Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing |
 | `--pretty` | - | default `false` | experimental (with the command) | Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing (there is no table form) |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca doctor
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to inspect (default: discovered project sources) |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental (with the command) | Also check a barca server: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url). A configured server is checked without it |
-| `--local` | - | default `false` | experimental (with the command) | Check this machine only, without the configured server |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca logs
 
@@ -228,9 +236,10 @@ default, and any aliases.
 | `--timestamps` | - | default `false` | stable | Text output: put each line's arrival time (UTC, milliseconds) before it. JSON always has it as `ts` |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | stable | Environment whose history to read |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca history
 
@@ -246,50 +255,54 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit); with a RUN_ID, every step it recorded |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
-| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca gc
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `--max-size` | `SIZE` | - | experimental (with the command) | A limit for this run in place of the configured one: 20GB, 500MB, 20GiB, bytes, 10% (of the filesystem) or off (only leftovers and superseded results) |
-| `--dry-run` | - | default `false` | experimental (with the command) | Print what would be evicted without deleting anything |
+| `--dry-run` | - | default `false` | experimental (with the command) | Preview cached and planned work; execute nothing and record no run |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | experimental (with the command) | Evict only this environment's results (leftovers are shared by all) |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca stats
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<TARGET>` | - | required | stable | Target asset function name |
-| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
+| `<FILES>...` | - | - | stable | Python files or directories; default: discover the project |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`, `max_rss_bytes` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones |
-| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`, `max_rss_bytes` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca serve
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)). With --watch, files added later are not picked up until restart |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
-| `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication |
-| `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
-| `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
-| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
+| `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | Bind address; 0.0.0.0 exposes the unauthenticated API |
+| `--watch` | - | default `false` | experimental (with the command) | Reload changed source files; restart to discover new files |
+| `--no-schedule` | - | default `false` | experimental (with the command) | Disable scheduled runs |
+| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Cron timezone: local, utc or an IANA name such as America/New_York |
 | `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read compatible WAL metadata in place |
-| `--drain-timeout` | `SECONDS` | - | experimental (with the command) | Seconds to wait for runs in flight after SIGTERM or SIGINT before stopping them and putting them back in the run queue for the next start (exit 0; a second signal cancels them instead, exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 requeues them at once |
-| `--max-runs` | `N` | - | experimental (with the command) | How many runs execute at once; the others wait in the run queue, in order. At least 1. Default: [server] max_runs in barca.toml, else one per core. Experimental |
-| `--capacity` | `N` | - | experimental: new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use | The most the weight= of the steps running at once may add up to across every run of this server, admitted first come, first served. At least 1. Default: [server] capacity in barca.toml, else none (each run has only its own). Experimental |
-| `--run-timeout` | `SECONDS` | - | experimental (with the command) | Seconds a run may take before the server stops it (recorded as an error, steps that finished stay cached). 0: no limit. Default: [server] run_timeout_seconds in barca.toml, else no limit; Schedule(..., timeout_seconds=N) wins for its ticks |
-| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
+| `--drain-timeout` | `SECONDS` | - | experimental (with the command) | Shutdown grace period in seconds; unfinished runs requeue (default: config or 30) |
+| `--max-runs` | `N` | - | experimental (with the command) | Maximum concurrent runs; others queue (default: config or CPU count) |
+| `--capacity` | `N` | - | experimental: new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use | Limit total running step weight across server runs (experimental) |
+| `--run-timeout` | `SECONDS` | - | experimental (with the command) | Run time limit in seconds; 0 disables it (default: config or unlimited) |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca queue
 
@@ -298,60 +311,64 @@ default, and any aliases.
 | `<ACTION>` | - | - | experimental (with the command) | pause: queued runs wait until resumed (runs in flight go on); resume: they start again. Omit to show the queue |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | experimental (with the command) | The server's environment, checked against it (as for the other --server commands) |
-| `--server` | `URL` | - | experimental (with the command) | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental (with the command) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca list
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
+| `<FILES>...` | - | - | stable | Python files or directories; default: discover the project |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--groups` | - | default `false` | experimental: Organizational group hierarchy and metadata shape are experimental | Show the organizational hierarchy (groups are never executable nodes) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca status
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional; no files reads the whole project ([`barca docs discovery`](/reference/discovery/)) |
+| `<ARGS>...` | - | - | stable | Target(s), then optional files/directories; omit files to discover the project |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, unknown, always_runs. The summary still counts every node |
 | `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
-| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca sql
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<QUERY>` | - | required | experimental (with the command) | The SQL query (DuckDB dialect); quote it as one argument |
-| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see [`barca docs discovery`](/reference/discovery/)) |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | default `100` | experimental (with the command) | Maximum number of rows to return |
 | `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
-| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
-| `--server` | `URL` | - | experimental: new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here) |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental: new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca state
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| - | - | - | - | no arguments besides `-h, --help` |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca state backups
 
@@ -359,16 +376,18 @@ default, and any aliases.
 |---|---|---|---|---|
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca state restore
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `--from` | `N\|NAME\|PATH` | - | stable | Which backup: its index in `barca state backups` (1 = newest) or its name; default the newest. Or the path of a database file, such as one `barca state reset` moved aside |
+| `--from` | `N\|NAME\|PATH` | - | stable | Backup index (1 = newest), name or database path; default: newest backup |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
+| `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca state reset
 
@@ -377,7 +396,8 @@ default, and any aliases.
 | `-y, --yes` | - | default `false` | experimental (with the command) | Do not ask: required when stdin is not a terminal |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
-| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca docs
 
@@ -387,13 +407,14 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Print every topic in one stream |
 | `--json` | - | default `false` | stable | Emit JSON instead of markdown |
 | `--pretty` | - | default `false` | stable | Print markdown, the default even when piped (accepted like every read command's --pretty) |
-| `--fields` | comma-separated: `name`, `summary`, `content` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `topics`, or on the one topic. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `name`, `summary`, `content` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca version
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| - | - | - | - | no arguments besides `-h, --help` |
+| `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca help
 

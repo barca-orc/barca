@@ -3,39 +3,24 @@ Parse source files and emit the execution plan as JSON
 Usage: barca plan [OPTIONS] [FILES]...
 
 Arguments:
-  [FILES]...  Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
+  [FILES]...  Python files or directories; default: discover the project
 
 Options:
       --partition <KEY=VALUE[,VALUE]|JSON>
-          Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep the selected keys, and fan-ins over them are left out (listed in partition_selection)
+          Select keys, e.g. customer=acme; affected collect() fan-ins are skipped
       --json
           Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing
       --pretty
           Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing (there is no table form)
   -h, --help
-          Print help
+          Show concise command help
+      --examples
+          Show all command examples without running anything
 
 Examples:
   barca plan                          # the whole project
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
-  barca plan pipeline.py --partition region=emea   # only the emea keys; skipped fan-ins listed
-  barca plan pipeline.py --json       # the same JSON: --json and --pretty are accepted and change nothing
 
-Output: always pretty-printed JSON, with or without --json / --pretty {plan_version, total_steps, pool_size, capacity, capacity_source,
-weights, phases: [{reason, streams: [{stream_id, steps}]}], warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
-plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
-stderr (barca docs assets, "Unused inputs").
-With --partition, the plan holds only the selected keys of each narrowed node, leaves out the
-fan-ins over them and gains partition_selection, as `barca get --partition` (barca docs partitions).
-`plan_version` is 1: the plan document format, independent of the package and database versions.
-`reason` is an object: {"type": "initial"} or {"type": "fan_in", "node_id": ...}.
-Planning uses the execution pool size (available cores, or BARCA_POOL_SIZE).
-`pool_size`, `capacity` (the most the weight= of the steps running at once may add up to:
-BARCA_CAPACITY, [execution] capacity, or the pool size, named in `capacity_source`) and
-`weights` ({node: weight} for each node with weight= above 1) show how many steps run at once
-(experimental; barca docs assets, "Heavy steps").
-Parsing is static; partitions(<expression>) evaluates Python while loading its keys.
-Planning reads no state and takes no --env.
-Experimental: the layout may change between releases (barca docs contract).
+All examples: barca plan --examples
 More: barca docs agents

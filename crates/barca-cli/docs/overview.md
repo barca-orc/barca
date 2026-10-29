@@ -6,6 +6,10 @@ and run `barca` anywhere in the project: it finds every file that imports barca
 runs only what is stale, and caches every output. `partitions(<expression>)` evaluates
 Python to resolve its keys and can import the pipeline module during loading.
 
+Discover commands with `barca --help`; use `barca <command> --help` for concise usage,
+`barca <command> --examples` for the full example collection, and `barca docs` for the
+topic index (`--json` for machine-readable discovery). Load only the topic you need.
+
 ## Mental model
 
 - `@asset` — a cached function. Same code + same inputs → served from cache.

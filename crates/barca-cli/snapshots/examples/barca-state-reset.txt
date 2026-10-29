@@ -1,0 +1,30 @@
+Start the metadata database over: move it aside and create an empty one (experimental)
+
+Usage: barca state reset [OPTIONS]
+
+Options:
+  -y, --yes
+          Do not ask: required when stdin is not a terminal
+
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca state reset                    # asks first in a terminal
+  barca state reset --yes              # no question (scripts, agents)
+  barca state reset --yes --json       # {database, moved_to, moved, undo}
+  barca state reset --yes --env dev    # another environment's database
+
+More: barca docs remote

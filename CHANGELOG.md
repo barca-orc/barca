@@ -38,6 +38,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Make CLI help concise, group root commands by purpose, and add `--examples` on commands
+  and nested commands for the complete tested example collection. Detailed behavior stays
+  in the built-in manual; help and examples run without loading a project.
+
 - Experimental `GET /state?targets=a,b` computes only those nodes and their upstream
   dependencies, including duration queries; omitted or empty targets keep the whole graph.
   This lets the UI request status for the open pipeline (#708, #710).

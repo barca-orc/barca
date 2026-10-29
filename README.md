@@ -158,8 +158,8 @@ unchanged, so steps can be called and unit tested as ordinary Python.
 The target comes first, then files or directories. Both are optional: with no files, barca
 reads every `.py` file under the project root that imports barca (`barca docs discovery`).
 `get` is for assets and uses the cache; `run` is for tasks, which always run, and their
-upstream assets come from the cache. Every `barca <command> --help` ends with runnable
-examples.
+upstream assets come from the cache. Use `barca <command> --help` for concise usage, `barca <command> --examples` for the full
+runnable example collection, and `barca docs <topic>` for detailed behavior.
 
 | Command | What it does |
 |---|---|

@@ -1,0 +1,32 @@
+Put a metadata backup in place of the local database (the current one is kept aside)
+
+Usage: barca state restore [OPTIONS]
+
+Options:
+      --from <N|NAME|PATH>
+          Backup index (1 = newest), name or database path; default: newest backup
+
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca state restore                  # this machine's newest backup (the newest if it has none)
+  barca state restore --from 1         # the newest, whichever machine took it
+  barca state restore --from 2         # the second newest
+  barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
+  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id, host, project}
+  barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # a file barca state reset moved aside
+
+More: barca docs remote

@@ -12,6 +12,10 @@ For a short version to load once, read `barca docs skill`: the same rules in abo
 in the Agent Skills format (it is `SKILL.md` at the repository root). To install it as a skill,
 save it as a file, for example `barca docs skill > .claude/skills/barca/SKILL.md`.
 
+Discover commands with `barca --help`; use `barca <command> --help` for concise usage,
+`barca <command> --examples` for the full example collection, and `barca docs` for the
+topic index (`--json` for machine-readable discovery). Load only the topic you need.
+
 ## Output format: JSON unless stdout is a terminal
 
 `get`, `run`, `logs`, `list`, `status`, `history` and `stats` pick their stdout format by one rule, first match wins:

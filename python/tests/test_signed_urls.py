@@ -693,7 +693,13 @@ def test_python_api_and_cli_help_name_the_feature():
     help_text = subprocess.run(
         [_find_binary(), "get", "--help"], capture_output=True, text=True, check=True
     ).stdout
-    assert "-o url" in help_text and "--expires" in help_text
+    # Flags stay discoverable in concise help; detailed recipes live in --examples.
+    assert "--output" in help_text and "url" in help_text and "--expires" in help_text
+    assert "barca get --examples" in help_text
+    examples = subprocess.run(
+        [_find_binary(), "get", "--examples"], capture_output=True, text=True, check=True
+    ).stdout
+    assert "-o url" in examples and "--expires" in examples
 
 
 if __name__ == "__main__":  # pragma: no cover

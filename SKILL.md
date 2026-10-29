@@ -10,6 +10,10 @@ barca runs Python functions decorated with `@asset` (cached), `@task` (always ru
 under `.barca/`. Ask the `barca` CLI what exists, what is cached and what ran. Full reference:
 `barca docs agents`.
 
+Discover commands with `barca --help`; use `barca <command> --help` for concise usage,
+`barca <command> --examples` for the full example collection, and `barca docs` for the
+topic index (`--json` for machine-readable discovery). Load only the topic you need.
+
 ## The loop
 
 ```bash

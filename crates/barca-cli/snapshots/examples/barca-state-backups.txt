@@ -1,0 +1,27 @@
+List the metadata backups, local and in the store, newest first
+
+Usage: barca state backups [OPTIONS]
+
+Options:
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca state backups                  # table in a terminal, JSON when piped
+  barca state backups --json           # {backups, local_dir, store, store_error?}
+  barca state backups --pretty         # the table, even when piped
+  barca state backups --env dev        # another environment's backups
+
+More: barca docs remote

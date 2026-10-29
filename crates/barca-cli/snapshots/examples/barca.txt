@@ -1,0 +1,48 @@
+Run Python tasks and cache assets, locally or on a server.
+
+Usage: barca <COMMAND>
+
+Run:
+  get       Get an asset; reuse unchanged results
+  run       Run a task and its dependencies
+  serve     Manage runs, schedules and results on a server
+
+Inspect:
+  list      Discover assets, tasks and dependencies
+  status    See what is cached or needs updating
+  history   Inspect previous runs
+  logs      Read a run's output
+
+Tools:
+  plan      Inspect the execution plan as JSON
+  doctor    Check project prerequisites
+  stats     Inspect asset execution statistics
+  sql       Query cached results with SQL
+  queue     Inspect or control the server queue
+  gc        Free cache space
+  state     Manage metadata backups
+
+Learn:
+  docs      Read the built-in manual or list topics
+  version   Print version information
+  help      Show command help
+
+Options:
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+  -V, --version
+          Print version
+
+Examples:
+  barca get report                            # get an asset; reuse unchanged results
+  barca run publish                           # run a task and its dependencies
+  barca get report --partition customer=acme   # select one partition
+  barca get report --server http://host:8274   # run deployed code there
+
+Learn: barca <command> --help | barca <command> --examples | barca docs <topic>
+Agents: barca docs skill; full contract: barca docs agents
+Output: --json for structured results; --pretty for people; BARCA_OUTPUT sets the default.

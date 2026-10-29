@@ -1,192 +1,50 @@
-Get assets — cache-aware, runs only the needed subgraph; prints their artifact paths
-
-If the first positional arg ends in .py, all args are treated as files (no target — gets every asset and sensor; tasks are skipped, use `barca run` for them). Otherwise, the first arg is the target asset name (or several, comma-separated: `a,b`) and the rest are files.
-
-Each completed step writes a fully materialized artifact (never a lazy in-memory handle). If one computation should produce several cacheable outputs, define multiple assets or split the work inside a single step before returning.
+Get assets; reuse unchanged results and print their artifact paths
 
 Usage: barca get [OPTIONS] [ARGS]...
 
 Arguments:
-  [ARGS]...
-          [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`)
+  [ARGS]...  Target(s), then optional files/directories; omit files to discover the project
 
 Options:
   -o, --output <OUTPUT>
-          What to print: artifact paths (the default), values, or signed URLs. Alone, -o path|value|url prints only that; with --json, it chooses what `final_output` holds
-
-          Possible values:
-          - path:   Artifact paths, one per line (one per selected partition key); the default
-          - value:  The value, pretty-printed (a mapping of key to value for a partitioned target)
-          - url:    A signed HTTPS URL to each artifact in the store, one per line (experimental)
-          - json:   One-line JSON, as --json
-          - pretty: Summary and paths for people, as --pretty
-
+          Choose the result output mode (see possible values) [possible values: path, value, url, json, pretty]
       --expires <DURATION>
-          With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at most 7d). Experimental
-
+          Signed URL lifetime: 30m, 12h, 7d or seconds (default: 1h; maximum: 7d)
       --json
           Emit JSON on stdout (the default when stdout is not a terminal)
-
       --pretty
           Emit human-readable output (the default when stdout is a terminal)
-
       --partition <KEY=VALUE[,VALUE]|JSON>
-          Select partition keys across the cone: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Every partitioned node with a named dimension computes only those keys (--refresh too); a fan-in over them is skipped. Works without a target
-
+          Select keys, e.g. customer=acme; affected collect() fan-ins are skipped
       --batch <[NODE=]none|all|N>
-          Override `batch=` for this run: `none` (one key per call), `all` or a whole number, for every node that declares `batch=`; `NODE=V` (repeatable) for one node only. Nodes without `batch=` are never batched. Experimental
-
+          Override declared batching: none, all, N or NODE=N (experimental)
       --refresh <REFRESH>
-          Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade)
-
+          Recompute named assets and their downstream dependents: --refresh a,b
       --no-cascade
-          With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns
-
+          Refresh only named assets; cached downstream results may be outdated
       --refresh-all
-          Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
-
+          Recompute every asset needed by the target
       --dry-run
-          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run
-
+          Preview cached and planned work; execute nothing and record no run
       --agent
-          Agent-friendly output: plain structured progress lines instead of visual progress bar
-
+          Print plain structured progress on stderr
       --fields <FIELDS>
-          Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones
-
-          [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight, batch]
-
+          Select JSON fields as a comma-separated list; implies --json [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight, batch]
       --env <ENV>
-          Environment name (separates cache/state per environment)
-
+          Use a separate cache and history for this environment
       --server [<URL>]
-          Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger), status, history, stats and logs are answered by a configured server, and sql resolves its views from it (the query always runs here)
-
+          Use a server (URL or configured); get/run execute its deployed code
       --local
-          Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server
-
+          Use independent local state; ignore the configured server
   -h, --help
-          Print help (see a summary with '-h')
+          Show concise command help
+      --examples
+          Show all command examples without running anything
 
 Examples:
-  BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
-  barca get total                          # find `total` anywhere in the project and get it
-  barca get total pipeline.py --json --fields id,status,elapsed_seconds,attempts   # timing and retries
-  barca get total pipelines/               # only read files under pipelines/
-  barca get                                # every asset and sensor in the project, never tasks
-  barca get pipeline.py                    # every asset and sensor, never tasks; prints the last asset's path
-  barca get total pipeline.py              # one target and only its upstream cone
-  barca get total,orders pipeline.py       # several targets in one run; shared upstream runs once
-  barca get total pipeline.py other.py     # target defined across several files
-  barca get orders pipeline.py --refresh orders --json  # check recomputed artifact bytes
-  barca get total pipeline.py --refresh-all        # recompute everything in that cone
-  barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
-  barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
-  barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
-  barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store
-  barca get scored pipeline.py --dry-run --json  # partitions.changed: per key, what changed (a dict sensor's new value)
-  barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
-  barca get total pipeline.py --pretty     # summary and artifact path for humans (the default in a terminal)
-  barca get total pipeline.py -o path      # only the artifact path, one per line (pipe it to xargs cat)
-  barca get total pipeline.py -o value     # only the value, pretty-printed (json, parquet, CSV, pickle)
-  barca get total pipeline.py -o value --json   # the JSON result with the value in final_output
-  barca get total pipeline.py -o url       # a signed HTTPS link to the result in the store (1 hour)
-  barca get total pipeline.py -o url --expires 7d   # a link that works for 7 days (the maximum)
-  barca get sales pipeline.py -o url --partition region=emea --expires 30m   # one key's link
-  barca get sales pipeline.py              # a partitioned target: one path per key
-  barca get scored pipeline.py             # with @sink("exports/scored/"): writes the keys that ran as a Hive dataset (barca docs sinks)
-  barca get sales pipeline.py --partition region=emea,amer   # only these keys: computed and returned
-  barca get margin pipeline.py --partition region=apac   # upstream partitioned assets compute apac only
-  barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only that key
-  barca get pipeline.py --partition region=emea   # no target: every asset and sensor, for emea only
-  barca get pipeline.py --partition region=emea --dry-run   # what runs for emea, which fan-ins are skipped
-  barca get scored pipeline.py --batch all       # a backfill: every key that needs to run in one call (batch= nodes only)
-  barca get scored pipeline.py --batch 20        # at most 20 keys per call, in key order
-  barca get scored pipeline.py --batch none      # one key per call, to find the key that fails
-  barca get scored pipeline.py --batch scored=all --batch cleaned=100   # per node; repeatable
-  barca get scored pipeline.py --dry-run --batch 20   # "500 keys in 25 calls (batch=20)" in the WHY column
-  barca get total pipeline.py --agent      # plain progress lines on stderr
-  barca get total pipeline.py --env dev    # separate cache and state per environment
-  barca list pipeline.py                   # not sure of the name? list assets and tasks first
-  BARCA_OUTPUT=json barca get total pipeline.py   # env override for CI; a flag still wins
-  barca get total pipeline.py --fields id,status   # JSON with each entry of `steps` trimmed to these keys
-  barca get total --server                 # run it on the configured barca server; prints here as a local run
-  barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
-  barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
+  barca get report
+  barca get report --dry-run --json
+  barca get report --partition customer=acme
 
-Output format: --json / --pretty, else BARCA_OUTPUT=json|pretty, else the terminal decides
-(TTY -> pretty, piped -> JSON). get returns artifact paths: the pretty summary lists the path (a
-small json value is previewed under it in a terminal), and in JSON final_output is the pointer
-{"_barca_artifact": {"path", "format", "size_bytes"}} for every format. -o path prints only
-the paths, one per line; -o value prints only the value. With --json, -o path|value choose what
-final_output holds (-o path is the default). -o json|pretty are older spellings of --json|--pretty.
--o url (experimental) prints a signed HTTPS URL per result instead of its path: anyone with the
-link can download the artifact from the store until it expires (--expires, default 1h, at most
-7d; it cannot be revoked sooner). With --json each _barca_artifact pointer gains url and
-url_expires_at. It needs a cloud store (s3://, gs://, abfs://; a local store is exit 2). A result
-whose upload is pending (`local only`) is uploaded first; one that still is not in the store, or
-credentials that cannot sign, is exit 3 (barca docs remote).
-A partitioned target returns every key, sorted: final_output is an object keyed by partition key
-("region=emea") and -o path prints one path per key. When some keys fail the run fails (exit 1)
-and final_output in the failed result line holds the keys that succeeded. Past 1000 keys, without
---partition, final_output is {"_barca_partitions": {keys, computed, cached, outputs, truncated,
-hint}}: outputs lists only the keys this run computed, and -o path prints those with a note on
-stderr (barca docs partitions, "Many keys"); --partition returns every key it selects.
---partition region=emea,amer (or a JSON object for compound keys) selects keys across the whole
-cone: every partitioned node with a named dimension, upstream and downstream, computes and returns
-only those keys, and --refresh refreshes only them; the rest is planned as without the flag. A
-selected key has the run hash and artifact of a full run, so a later full run serves it from cache.
-A node that collect()s a narrowed node is not run (status skipped, reason partition_selection,
-one note on stderr), nor is anything below it; it does not change the exit code. JSON gains
-partition_selection {selection, nodes: [{id, selected, skipped}], skipped_nodes}. A value no node
-with that dimension has, a dimension no node in the cone has, or a target --partition would skip
-is exit 2 (barca docs partitions, "Selecting keys").
---batch overrides batch= (RFC-0013, experimental) for this run: `none`, `all` or N for every node
-that declares batch=, `NODE=V` (repeatable) for one. A node without batch= is never batched (its
-function takes one key); naming one, or an unknown node, is exit 2. Batching groups only the keys
-that need to run and never changes a run hash: a key computed in a call of 1000 is a cache hit for
---batch none. The dry run adds `batch` {grouping, keys, calls} to such a step and "N keys in M
-calls (batch=V)" to its WHY (barca docs partitions, "Processing many keys per call").
-JSON is one line on stdout with status ("success"), run_id,
-steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
-(ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
-secrets redacted). `warnings` is always an array: plan-time warnings for the steps this command
-planned, [] when there are none; each is {kind, node, param, message} and is also one
-`[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
-function never uses (barca docs assets, "Unused inputs"). Warnings never change the exit code.
---dry-run reports the same list. The Python API (barca.get) loads the value for you.
-Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
-target, each {status: success, final_output} or {status: failed, failed_node, error}. Every target
-runs even if another fails; exit 1 if any failed. -o path prints each target's paths in order.
-Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated list of assets in
-the cone (the target itself may be named) and also re-runs everything downstream of them;
---no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
-A cached step whose artifact file is gone is computed again when something needs to read it (a
-step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
-warning on stderr (reason `evicted` when the cache size limit deleted it). A missing artifact that
-nothing reads is left alone (barca docs cache).
-After the run, if .barca/ is over [cache] max_size (default 10% of the filesystem;
-BARCA_CACHE_MAX_SIZE), barca evicts what is least needed down to 80% of it, never this command's
-own results; stderr says what, and JSON gains `cache` (barca gc, barca docs cache "Disk use").
-Completed steps are recorded during the run; remote results require confirmed upload.
-With an artifact store, an upload that fails after every step succeeded is a warning, not a
-failure: exit 0, JSON `uploads` {pending, error, nodes}, the result is kept on this machine
-(`unsynced` in barca status) and the next get or run uploads it first (barca docs remote).
-Use `barca status pipeline.py` in another terminal to inspect recorded progress. With a store
-([remote] uri), the metadata DB is backed up there every minute and when the run ends; a failed
-backup upload is a warning (barca docs remote). A cached target that is missing from the store, or
-different there, is uploaded from this machine without a step running.
-Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
-sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
-`barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
-The target comes before the files: `barca get pipeline.py total` exits 2 and prints
-`barca get total pipeline.py`.
-Errors: in JSON mode stderr contains one JSON error object {error, code, kind, remediation},
-plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 usage error,
-3 barca/infra failure, 130 cancelled. A failed step still prints a stdout result line with
-status "failed" and failed_node. Stderr ends with the failed step, its first error line,
-and the count of skipped downstream nodes.
-A required history-write failure exits 3 and preserves previously committed history.
-A @sink that cannot be written fails its step (exit 1, a SinkError); a dataset sink (a path ending
-in /) deletes the keys its asset no longer has after the run (barca docs sinks).
+All examples: barca get --examples
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents

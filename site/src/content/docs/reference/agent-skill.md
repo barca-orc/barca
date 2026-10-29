@@ -7,6 +7,8 @@ Barca ships a short [Agent Skills](https://agentskills.io/) file for AI coding a
 [`SKILL.md`](https://github.com/barca-orc/barca/blob/main/SKILL.md) at the repository root. In
 the repository it is a short guide and covers what an agent needs before its first command:
 
+- discovery: concise `barca --help`, command usage with `barca <command> --help`, full
+  examples with `barca <command> --examples`, and targeted topics via `barca docs`;
 - when to use barca, and the loop: `barca list` and `barca status` to see what exists and what is
   cached, `--dry-run` to preview, `barca get` (assets) and `barca run` (tasks) to execute, and
   `barca sql` to look at a cached result without running anything;

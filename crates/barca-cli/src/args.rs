@@ -90,10 +90,12 @@ pub(crate) struct ServerFlags {
         default_missing_value = "",
         conflicts_with = "local"
     )]
+    #[arg(help = "Use a server (URL or configured); get/run execute its deployed code", long_help = None)]
     pub(crate) server: Option<String>,
     /// Ignore any configured server for this command: run against this machine's own ledger and
     /// records; nothing is read from or sent to the server
     #[arg(long)]
+    #[arg(help = "Use independent local state; ignore the configured server", long_help = None)]
     pub(crate) local: bool,
 }
 
@@ -105,18 +107,76 @@ pub(crate) struct ServerFlags {
 // topic in crates/barca-cli/docs/.
 
 const TOP_HELP: &str = "\
-Quick start:
-  barca list                        # discover every asset, task and dependency in the project
-  barca list pipeline.py            # ... or only those in one file
-  barca get total pipeline.py       # run only what `total` needs (cached on re-run)
-  barca run deploy pipeline.py      # run a task and its dependency cone
-  barca docs                        # built-in manual: concepts, formats, examples
+Examples:
+  barca get report                            # get an asset; reuse unchanged results
+  barca run publish                           # run a task and its dependencies
+  barca get report --partition customer=acme   # select one partition
+  barca get report --server http://host:8274   # run deployed code there
 
-Output: results go to stdout as tables/summaries in a terminal and as JSON when piped or
-captured; --json / --pretty (or BARCA_OUTPUT=json|pretty) override. Progress and errors go to
-stderr. In JSON mode an error is one JSON line on stderr: {error, code, kind, remediation}.
-Exit codes: 0 ok, 1 step failed, 2 usage error, 3 barca/infra failure, 130 cancelled.
-Scripts and AI agents: barca docs skill (short, start here), barca docs agents (full contract)";
+Learn: barca <command> --help | barca <command> --examples | barca docs <topic>
+Agents: barca docs skill; full contract: barca docs agents
+Output: --json for structured results; --pretty for people; BARCA_OUTPUT sets the default.";
+
+const ROOT_HELP: &str = "\
+{about}
+
+Usage: {usage}
+
+Run:
+  get       Get an asset; reuse unchanged results
+  run       Run a task and its dependencies
+  serve     Manage runs, schedules and results on a server
+
+Inspect:
+  list      Discover assets, tasks and dependencies
+  status    See what is cached or needs updating
+  history   Inspect previous runs
+  logs      Read a run's output
+
+Tools:
+  plan      Inspect the execution plan as JSON
+  doctor    Check project prerequisites
+  stats     Inspect asset execution statistics
+  sql       Query cached results with SQL
+  queue     Inspect or control the server queue
+  gc        Free cache space
+  state     Manage metadata backups
+
+Learn:
+  docs      Read the built-in manual or list topics
+  version   Print version information
+  help      Show command help
+
+Options:
+{options}{after-help}";
+
+/// Default help is a small recipe; --examples retains every tested example.
+fn quick_help(name: &str, examples: &str) -> String {
+    let selected: Vec<&str> = match name {
+        "get" => vec![
+            "  barca get report",
+            "  barca get report --dry-run --json",
+            "  barca get report --partition customer=acme",
+        ],
+        "run" => vec![
+            "  barca run publish",
+            "  barca run publish --server http://host:8274",
+        ],
+        _ => examples
+            .lines()
+            .filter(|line| line.trim_start().starts_with("barca "))
+            .take(3)
+            .collect(),
+    };
+    let more = examples
+        .lines()
+        .find(|line| line.starts_with("More:"))
+        .unwrap_or("More: barca docs");
+    format!(
+        "Examples:\n{}\n\nAll examples: barca {name} --examples\n{more}",
+        selected.join("\n")
+    )
+}
 
 const GET_HELP: &str = "\
 Examples:
@@ -164,82 +224,8 @@ Examples:
   barca get total --server                 # run it on the configured barca server; prints here as a local run
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
   barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
+  barca get --examples                     # the complete example collection; runs nothing
 
-Output format: --json / --pretty, else BARCA_OUTPUT=json|pretty, else the terminal decides
-(TTY -> pretty, piped -> JSON). get returns artifact paths: the pretty summary lists the path (a
-small json value is previewed under it in a terminal), and in JSON final_output is the pointer
-{\"_barca_artifact\": {\"path\", \"format\", \"size_bytes\"}} for every format. -o path prints only
-the paths, one per line; -o value prints only the value. With --json, -o path|value choose what
-final_output holds (-o path is the default). -o json|pretty are older spellings of --json|--pretty.
--o url (experimental) prints a signed HTTPS URL per result instead of its path: anyone with the
-link can download the artifact from the store until it expires (--expires, default 1h, at most
-7d; it cannot be revoked sooner). With --json each _barca_artifact pointer gains url and
-url_expires_at. It needs a cloud store (s3://, gs://, abfs://; a local store is exit 2). A result
-whose upload is pending (`local only`) is uploaded first; one that still is not in the store, or
-credentials that cannot sign, is exit 3 (barca docs remote).
-A partitioned target returns every key, sorted: final_output is an object keyed by partition key
-(\"region=emea\") and -o path prints one path per key. When some keys fail the run fails (exit 1)
-and final_output in the failed result line holds the keys that succeeded. Past 1000 keys, without
---partition, final_output is {\"_barca_partitions\": {keys, computed, cached, outputs, truncated,
-hint}}: outputs lists only the keys this run computed, and -o path prints those with a note on
-stderr (barca docs partitions, \"Many keys\"); --partition returns every key it selects.
---partition region=emea,amer (or a JSON object for compound keys) selects keys across the whole
-cone: every partitioned node with a named dimension, upstream and downstream, computes and returns
-only those keys, and --refresh refreshes only them; the rest is planned as without the flag. A
-selected key has the run hash and artifact of a full run, so a later full run serves it from cache.
-A node that collect()s a narrowed node is not run (status skipped, reason partition_selection,
-one note on stderr), nor is anything below it; it does not change the exit code. JSON gains
-partition_selection {selection, nodes: [{id, selected, skipped}], skipped_nodes}. A value no node
-with that dimension has, a dimension no node in the cone has, or a target --partition would skip
-is exit 2 (barca docs partitions, \"Selecting keys\").
---batch overrides batch= (RFC-0013, experimental) for this run: `none`, `all` or N for every node
-that declares batch=, `NODE=V` (repeatable) for one. A node without batch= is never batched (its
-function takes one key); naming one, or an unknown node, is exit 2. Batching groups only the keys
-that need to run and never changes a run hash: a key computed in a call of 1000 is a cache hit for
---batch none. The dry run adds `batch` {grouping, keys, calls} to such a step and \"N keys in M
-calls (batch=V)\" to its WHY (barca docs partitions, \"Processing many keys per call\").
-JSON is one line on stdout with status (\"success\"), run_id,
-steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
-(ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
-secrets redacted). `warnings` is always an array: plan-time warnings for the steps this command
-planned, [] when there are none; each is {kind, node, param, message} and is also one
-`[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
-function never uses (barca docs assets, \"Unused inputs\"). Warnings never change the exit code.
---dry-run reports the same list. The Python API (barca.get) loads the value for you.
-Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
-target, each {status: success, final_output} or {status: failed, failed_node, error}. Every target
-runs even if another fails; exit 1 if any failed. -o path prints each target's paths in order.
-Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated list of assets in
-the cone (the target itself may be named) and also re-runs everything downstream of them;
---no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
-A cached step whose artifact file is gone is computed again when something needs to read it (a
-step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
-warning on stderr (reason `evicted` when the cache size limit deleted it). A missing artifact that
-nothing reads is left alone (barca docs cache).
-After the run, if .barca/ is over [cache] max_size (default 10% of the filesystem;
-BARCA_CACHE_MAX_SIZE), barca evicts what is least needed down to 80% of it, never this command's
-own results; stderr says what, and JSON gains `cache` (barca gc, barca docs cache \"Disk use\").
-Completed steps are recorded during the run; remote results require confirmed upload.
-With an artifact store, an upload that fails after every step succeeded is a warning, not a
-failure: exit 0, JSON `uploads` {pending, error, nodes}, the result is kept on this machine
-(`unsynced` in barca status) and the next get or run uploads it first (barca docs remote).
-Use `barca status pipeline.py` in another terminal to inspect recorded progress. With a store
-([remote] uri), the metadata DB is backed up there every minute and when the run ends; a failed
-backup upload is a warning (barca docs remote). A cached target that is missing from the store, or
-different there, is uploaded from this machine without a step running.
-Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
-sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
-`barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
-The target comes before the files: `barca get pipeline.py total` exits 2 and prints
-`barca get total pipeline.py`.
-Errors: in JSON mode stderr contains one JSON error object {error, code, kind, remediation},
-plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 usage error,
-3 barca/infra failure, 130 cancelled. A failed step still prints a stdout result line with
-status \"failed\" and failed_node. Stderr ends with the failed step, its first error line,
-and the count of skipped downstream nodes.
-A required history-write failure exits 3 and preserves previously committed history.
-A @sink that cannot be written fails its step (exit 1, a SinkError); a dataset sink (a path ending
-in /) deletes the keys its asset no longer has after the run (barca docs sinks).
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents";
 
 const RUN_HELP: &str = "\
@@ -263,33 +249,6 @@ Examples:
   barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
-Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure
-skips only what depends on it); exit 1 if any failed. JSON output then carries `targets`, keyed by
-target, instead of `final_output` (see barca get --help, barca docs agents).
-`warnings` is always an array, as on `barca get`: plan-time warnings for the steps in the cone, such
-as an input a step never uses (barca docs assets); [] when there are none.
-A partitioned task returns every key in final_output, keyed by partition key, with tables as JSON rows.
---partition selects partition keys across the task's cone as on `barca get` (barca docs
-partitions, \"Selecting keys\"); a task the selection would skip is exit 2.
-
---refresh takes ONE comma-separated list (`--refresh a,b`), never `--refresh a b`. It re-runs the
-assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
-so fresh data reaches the task. --no-cascade re-runs only the named assets; cached assets
-downstream of them then do not reflect the refresh, and barca warns. A name that is not an
-upstream asset is an error.
-An upstream asset that is cached but whose artifact file is gone is computed again before the task
-reads it (reason `artifact_missing`, a warning on stderr; `evicted` when the cache size limit
-deleted it), so a deleted artifact does not fail the run (barca docs cache). Afterwards .barca/ is
-kept under [cache] max_size, as after `barca get` (barca gc).
-The target must be a task; use `barca get` for assets. The target comes before the files:
-`barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
-error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
-No files: barca reads every file in the project that imports barca (barca docs discovery).
-Errors: in JSON mode stderr contains one JSON error object {error, code, kind, remediation}
-(see barca docs agents). Exit 1 step failed, 2 usage error, 3 barca/infra failure, 130 cancelled.
-A raising task, or one that calls sys.exit(), fails the run: exit 1, and the stdout JSON line has
-status \"failed\" and failed_node. Stderr ends with the failed step, its first error line,
-and the count of skipped downstream nodes.
 More: barca docs tasks, barca docs cache, barca docs agents";
 
 const PLAN_HELP: &str = "\
@@ -300,22 +259,6 @@ Examples:
   barca plan pipeline.py --partition region=emea   # only the emea keys; skipped fan-ins listed
   barca plan pipeline.py --json       # the same JSON: --json and --pretty are accepted and change nothing
 
-Output: always pretty-printed JSON, with or without --json / --pretty {plan_version, total_steps, pool_size, capacity, capacity_source,
-weights, phases: [{reason, streams: [{stream_id, steps}]}], warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
-plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
-stderr (barca docs assets, \"Unused inputs\").
-With --partition, the plan holds only the selected keys of each narrowed node, leaves out the
-fan-ins over them and gains partition_selection, as `barca get --partition` (barca docs partitions).
-`plan_version` is 1: the plan document format, independent of the package and database versions.
-`reason` is an object: {\"type\": \"initial\"} or {\"type\": \"fan_in\", \"node_id\": ...}.
-Planning uses the execution pool size (available cores, or BARCA_POOL_SIZE).
-`pool_size`, `capacity` (the most the weight= of the steps running at once may add up to:
-BARCA_CAPACITY, [execution] capacity, or the pool size, named in `capacity_source`) and
-`weights` ({node: weight} for each node with weight= above 1) show how many steps run at once
-(experimental; barca docs assets, \"Heavy steps\").
-Parsing is static; partitions(<expression>) evaluates Python while loading its keys.
-Planning reads no state and takes no --env.
-Experimental: the layout may change between releases (barca docs contract).
 More: barca docs agents";
 
 const DOCTOR_HELP: &str = "\
@@ -327,14 +270,6 @@ Examples:
   barca doctor --server http://127.0.0.1:8274 --json   # a server named here
   barca doctor --local                 # this machine only, even with a server configured
 
-Checks project root, Python, config, backups, cache writability, metadata integrity,
-static source parsing, and configured stores. Never imports pipeline modules or evaluates
-dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
-3 when a prerequisite fails. Store probes list but never create buckets or objects.
-With a server configured (BARCA_SERVER, [server] url) or --server, doctor also checks it: its
-URL, barca and API version against this client, its store against this project's [remote],
-whether it is draining, files it failed to load, its scheduler (schedules paused or failing),
-and the runs this machine has not posted to it yet. Each failed check says what to do.
 More: barca docs doctor";
 
 const LOGS_HELP: &str = "\
@@ -352,16 +287,6 @@ Examples:
   barca logs --server -f                # follow the newest running run on the server
   barca logs 7f30b3e9 --local           # this machine's records, despite a configured server
 
-Replace the example id with run_id from barca run/get --json or barca history. Without a run
-id, barca reads the newest run in barca history (running or finished) and names it on stderr:
-barca: logs of the most recent run: <run_id> (<command> <target>, <status>, started <time>).
-With -f and no run id it follows the newest running run (else the most recent run).
-Records what steps write to stdout and to stderr (Python logging, warnings, tracebacks of
-failed attempts); not native writes to the descriptors or subprocess output. Reads the
-recorded lines; does not execute or import pipeline code. With a configured server it reads
-the server's runs; --local reads this machine's. -f exits when the run ends: 0 when it
-succeeded, 130 when it was cancelled, 1 otherwise. Unknown runs and ambiguous or unrecorded
-step names are usage errors; a recorded step that printed nothing returns no lines.
 More: barca docs logs";
 
 const HISTORY_HELP: &str = "\
@@ -389,26 +314,6 @@ Examples:
   barca history 7f30b3e9 --all --json # every step the run recorded
   barca history --status failed --json --fields run_id,failed_node,error   # why each run failed
 
---reconcile is an explicit write: first verify the run stopped. It refuses a proven live
-owner and terminal rows. It prints only that run, preserving progress and cached results;
-no end time or duration is invented. Ordinary history inspection never reconciles an
-unknown owner automatically.
-Newest first. When more runs exist than are shown, JSON says `\"truncated\": true` with the
-`total`, and the table prints a one-line note on stderr. In JSON, `files` is an array: the .py
-files the run was given. TARGET in the table is the run's job by function name (`all` for a
-run without targets), cut at 24 characters with `…`; JSON `job` holds it in full: `all`, or the
-resolved node ids sorted and comma-separated (null for runs recorded before 0.29.0).
-JSON returns every item unless --limit is given; human tables keep their default bound.
-A failed run's row ends with its first failed step and the first line of its error; JSON has it
-as `failure: {node, error}` and as the flat `failed_node` and `error` (null otherwise).
-Filters combine with AND, and --limit, `total` and `truncated` count the runs they keep. With a
-RUN_ID, the run in detail: the steps it executed or that failed (cached steps are counted, not
-listed) with their peak memory (PEAK_RSS, `max_rss_bytes`), each failed step's traceback and
-the last 20 lines it printed (`output_tail`), and a hint naming `barca logs RUN_ID --step STEP
---stream stderr`. A run of many partition keys records a step per key it computed: the first
-1000 are listed, failed ones always (with their output tail), and `steps_page` gives the
-`total` and whether the list is `truncated` (a note on stderr in the table). Replace the example
-id with a run_id from barca history.
 More: barca docs agents, barca docs cache";
 
 const GC_HELP: &str = "\
@@ -420,12 +325,6 @@ Examples:
   barca gc --json                 # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}
   barca gc --env dev              # only the dev environment's results (leftovers are shared)
 
-Order: leftovers (dead processes' staging, *.moved-aside* directories, sql-cache copies), then
-superseded results, then local copies the artifact store holds, then the least recently read
-results. Never: the metadata DBs, a storeless Manual node's current result, or (while another
-run is in progress on this .barca/) anything but leftovers and superseded results. An evicted
-result is fetched or computed again when something needs it. The store is never touched.
-Exit 3 only when a metadata DB cannot be read; a file that cannot be deleted is skipped.
 More: barca docs cache (\"Disk use\")";
 
 const STATS_HELP: &str = "\
@@ -462,41 +361,6 @@ Examples:
   barca serve pipeline.py --run-timeout 0    # no run timeout (the default)
   barca serve pipeline.py --env prod         # .barca/envs/prod/metadata.db, named on the startup line
 
-Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
-can reach the port can trigger runs, so keep it on a private network or behind a proxy.
-Invalid sources and their graph dependents are excluded; healthy definitions and schedules
-continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
---watch restores repaired configured sources; one-shot commands remain strict.
-From another machine, `--server <url>` on get, run, status, list, history, stats and logs runs
-the command on this server and prints it there as a local run would; `barca sql` resolves its
-views from the server and runs the query on that machine (barca docs server-mode).
-`serve` itself always runs here: --server on it is a usage error.
-The first line names the env, the artifact store and the metadata DB with its format:
-[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>).
-A writer sets an existing DB up before it binds: one it cannot use (empty, not SQLite,
-a newer format, a malformed schema) or cannot open exits 3 naming the file and what to do.
-A --read-only server keeps serving and reports it in /health metadata_error, and its routes
-answer with an error whose reason is metadata_unusable. /health scheduler_enabled says
-whether the scheduler is running.
-With a store ([remote] uri), the metadata DB is backed up there every minute it changed
-(barca docs remote); barca state restore refuses to run while the server is up.
-Every accepted run is recorded in the run queue (barca queue) before the server answers; a
-restart resumes the queued runs in order, under their run ids ([barca] resuming N queued runs).
-SIGTERM or SIGINT drains: the queue pauses (new runs are still accepted, queued for the next
-start), the scheduler stops, /health says draining, and runs in flight finish (uploads included)
-for up to --drain-timeout seconds (default 30, [server] drain_timeout in barca.toml). Exit 0
-when they all finished. At the deadline the rest are stopped and put back at the head of the
-queue, to start again from the beginning after the restart: exit 0. A second signal cancels
-them instead, with reason \"server shutdown\": exit 1. Under a supervisor (process 1 of a
-container, systemd, Kubernetes) the startup prints the stop grace period it needs:
-[barca] stop grace: allow at least N s between SIGTERM and SIGKILL (...).
---capacity N ([server] capacity) admits the weight= of the steps of every run against one budget,
-first come first served across runs: a light run proceeds beside a heavy one, and a heavy step
-is never overtaken by lighter ones. /health and /queue show it (capacity: in_use, waiting).
---run-timeout SECONDS ([server] run_timeout_seconds, Schedule(..., timeout_seconds=N) per
-schedule) stops a run that takes longer; none by default. The run is recorded as an error:
-run timed out after Ns (<setting>).
-Lines go to stderr as text; BARCA_LOG=json writes them to stdout as JSON (barca docs telemetry).
 More: barca docs scheduling";
 
 const QUEUE_HELP: &str = "\
@@ -507,11 +371,6 @@ Examples:
   barca queue resume --server          # queued runs start again, in order
   barca queue                          # the server in BARCA_SERVER or [server] url
 
-Every run a server accepts (POST /runs, --server, the UI, a scheduled tick) joins its run queue,
-recorded in the metadata DB, and starts in order when fewer than --max-runs run. While paused,
-new runs and ticks still join the queue; nothing new starts. A restart keeps the queue and the
-pause: queued runs resume under their run ids. Exit 2 with no server configured or on a
---read-only server (pause and resume), 3 when the server cannot be reached. Experimental.
 More: barca docs scheduling";
 
 const LIST_HELP: &str = "\
@@ -529,19 +388,6 @@ Examples:
   barca list a.py b.py               # several files form one DAG
   barca list --server --json         # the nodes deployed on the configured barca server
 
-An ENV column (and `env` in JSON) lists the environment variables each node declares with
-@asset(env=[...]); their values are part of the run hash. `freshness` is `always`, `manual` or
-`schedule`; a scheduled node also has `schedule` (the cron expression) and `next_fire`.
-`next_fire` (NEXT FIRE (LOCAL TIME) in the table) is the next match of the cron expression in
-this machine's local time, which is when `barca serve` fires it unless the server was started
-with --timezone. `list` does not know a server's zone: GET /schedule on the running server
-reports the times it will fire at (barca docs scheduling).
-`list` reads no state, so it takes no --env.
-
-Node ids are relative to the project root (`root` in JSON; barca docs discovery).
-Run this first to confirm barca discovered your nodes. When more nodes exist than are shown,
-JSON says `\"truncated\": true` with the `total`, and the table prints a note on stderr.
-JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs assets, barca docs agents";
 
 const STATUS_HELP: &str = "\
@@ -564,29 +410,6 @@ Examples:
   barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
   barca status --problems --server         # what needs attention on the configured server
 
-Cache state per node: cached, unsynced (cached here, its upload to the artifact store still
-pending: reason `local_only`), stale (ran before; code or inputs changed, or its artifact file is
-gone and a run would read it: reason `artifact_missing`, or `evicted` when the cache size limit
-deleted it), never_run, partial
-(some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
-sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
-(the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
-With a server configured (BARCA_SERVER, [server] url) and no --local, the server answers, each
-node gets `local` (a copy is here), and a result computed here whose ledger post is pending is
-unsynced: reason `not_in_ledger` (barca docs server-mode).
-No steps execute; nothing is written. partitions(<expression>) may import the source to resolve
-keys. With a store, a cached node is `unsynced` unless this machine's copy, the store's object and
-the recorded digest agree: reason `local_only`, `store_only` or `mismatch` (barca docs remote). Shape (rows, columns, type) is read from the
-artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
-requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
-cannot be reached is a `note` on each shape, not a failed command.
---problems keeps the nodes that need attention: every state but cached and always_runs, a task
-or sensor whose last run failed, and a schedule that is paused or failing (max_failures reached).
---state keeps the named states. Either way the summary counts every node, and the JSON says
-which filter applied in `filter`. A failed node's error is `last_materialization.error`, and its
-first line is in the WHY column. A scheduled node has `schedule` (cron, next fire, failures,
-paused): from a server, its scheduler's view; on this machine, what the metadata DB holds.
-JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs status, barca docs agents";
 
 const SQL_HELP: &str = "\
@@ -607,26 +430,6 @@ Examples:
   barca sql \"select * from revenue\" --local                # this machine's results, not a configured server's
   barca sql \"select * from revenue\" --server https://barca.example.com   # views resolved by that server
 
-Every asset, sensor and task with a result on disk is a view named after its declared name
-(or its function name when unnamed; full id, quoted, when two nodes share a name; stderr says so).
-An asset whose code or inputs changed is still queryable at its last result, with a note on stderr.
-Only parquet, CSV and json results can be queried; pickles cannot. Runs in an in-memory DuckDB over
-artifact files; no pipeline step runs and no new run is recorded. Install SQL support: uv add 'barca[sql]'.
-partitions(<expression>) may evaluate Python while loading its keys.
-Partitioned views include current known keys only; removed keys stay in history. Unknown derived
-keys require their source to materialize first. Zero current keys have no result view.
-With remote storage, the artifacts of the views a query names are downloaded into
-.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Explicit SQL
-COPY ... TO writes the requested output file.
-barca's own records are tables in the barca schema: barca.runs (barca history --json),
-barca.materializations (one row per step result) and barca.nodes (barca status --json, flattened);
-`show tables` lists them with the views.
-With a server configured (barca docs server-mode), the views and barca's tables come from the
-server's ledger and the query runs here, over the store you share with it; --local uses this
-machine's records. The server never runs SQL. An unreachable server exits 3.
-Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
-the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
-Experimental: barca docs contract.
 More: barca docs sql";
 
 const STATE_HELP: &str = "\
@@ -640,13 +443,6 @@ Examples:
   barca state backups --env dev        # another environment's backups
   barca state reset --yes              # start over with an empty database (the old one is kept aside)
 
-With a remote store ([remote] uri), the metadata DB is backed up every minute of a run, when the
-run ends, and every minute from barca serve: to .barca/backups/ and to
-{uri}/{env}/state/backups/, five copies kept in each. Nothing is ever downloaded before a run.
-restore never runs by itself: it validates the copy, moves the current database to
-metadata.db.pre-restore and puts the copy in its place. No backup: exit 2. Refused while
-barca serve is using the environment: exit 3. reset moves the database aside to
-metadata.db.reset-<UTC> and starts empty; nothing is deleted.
 More: barca docs remote";
 
 const STATE_BACKUPS_HELP: &str = "\
@@ -656,12 +452,6 @@ Examples:
   barca state backups --pretty         # the table, even when piped
   barca state backups --env dev        # another environment's backups
 
-Newest first. `where` is local, store or both; `agree` says whether the two copies of a backup
-match (null with one copy). `host` and `project` name the machine and project directory that
-took it, `mine` whether it was this one (null for a backup from barca 0.28 or earlier). A store
-that cannot be listed is a warning on stderr and `store_error` in JSON; the local copies are
-still listed. A backup another machine took after this one's newest is a warning on stderr:
-two machines on one store are not supported (use a server).
 More: barca docs remote";
 
 const STATE_RESTORE_HELP: &str = "\
@@ -673,14 +463,6 @@ Examples:
   barca state restore --json           # {restored, from, source, pre_restore, rows, run_id, host, project}
   barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # a file barca state reset moved aside
 
-The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca
-can use): the local copy when there is one, else the store's. A copy that fails is a usage error
-naming the next newest, and nothing changes. Then the current database moves to
-metadata.db.pre-restore (replacing an older one) and the copy takes its place; one line on
-stderr says what was restored and from where. Stop barca get/run in this project first.
-Exit 2: no backup, unknown --from, a copy that is not valid. Exit 3: barca serve is running.
---from also takes the path of a database file (the one barca state reset moved aside), with its
--wal beside it when there is one.
 More: barca docs remote";
 
 const STATE_RESET_HELP: &str = "\
@@ -690,13 +472,6 @@ Examples:
   barca state reset --yes --json       # {database, moved_to, moved, undo}
   barca state reset --yes --env dev    # another environment's database
 
-Moves .barca/metadata.db and its -wal and -shm aside to metadata.db.reset-<UTC> in the same
-directory and creates an empty database in its place: run history, cache records, partition
-keys and schedule pauses start over. Nothing is deleted and artifacts are left alone (the cache
-limit evicts what nothing references). Undo: barca state restore --from <the moved file>.
-For a database that cannot be opened (corrupt, or a format this barca does not read) too.
-Without --yes and not in a terminal: exit 2. Exit 3: a run is in progress, or barca serve is
-using the environment (reset from its UI, or POST /state/reset).
 More: barca docs remote";
 
 const DOCS_HELP: &str = "\
@@ -711,25 +486,24 @@ Examples:
   barca docs --fields name      # JSON index with only topic names
   barca docs cache --pretty     # markdown, the default even when piped
 
-Topics are compiled into the binary: offline, and always matching this version.";
+More: barca docs";
 
 #[derive(Parser)]
 #[command(
     name = "barca",
-    about = "Invisible asset orchestrator. Discover a project's assets and tasks with `barca list <file.py>`",
-    long_about = "Barca runs Python asset graphs with caching by run hash.\n\
-                  Every asset output is fully materialized to an artifact file at step \
-                  boundaries (json, pickle, parquet, or CSV) — that persistence is the cache \
-                  checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations \
-                  are written as parquet; parameter type annotations choose how downstream \
-                  steps read it back (pandas by default, or polars, pyarrow, duckdb) but do \
-                  not skip materialization. Start with `barca list` (run inside the project) to discover a \
-                  project's assets and tasks; run `barca docs` for the manual.",
+    about = "Run Python tasks and cache assets, locally or on a server.",
+    disable_help_flag = true,
+    arg = clap::Arg::new("help").short('h').long("help").global(true)
+        .action(clap::ArgAction::HelpShort).help("Show concise command help"),
+    arg = clap::Arg::new("examples").long("examples").global(true)
+        .action(clap::ArgAction::HelpLong).help("Show all command examples without running anything"),
+    help_template = ROOT_HELP,
     after_help = TOP_HELP,
+    after_long_help = TOP_HELP,
     version
 )]
 pub(crate) enum Cli {
-    /// Get assets — cache-aware, runs only the needed subgraph; prints their artifact paths
+    /// Get assets; reuse unchanged results and print their artifact paths
     ///
     /// If the first positional arg ends in .py, all args are treated as files
     /// (no target — gets every asset and sensor; tasks are skipped, use `barca run` for
@@ -739,18 +513,21 @@ pub(crate) enum Cli {
     /// Each completed step writes a fully materialized artifact (never a lazy in-memory
     /// handle). If one computation should produce several cacheable outputs, define
     /// multiple assets or split the work inside a single step before returning.
-    #[command(after_help = GET_HELP)]
+    #[command(after_help = quick_help("get", GET_HELP), after_long_help = GET_HELP, long_about = None)]
     Get {
         /// [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional: no target gets every asset
         /// and sensor; no files reads the whole project (`barca docs discovery`)
+        #[arg(help = "Target(s), then optional files/directories; omit files to discover the project", long_help = None)]
         args: Vec<String>,
         /// What to print: artifact paths (the default), values, or signed URLs. Alone,
         /// -o path|value|url prints only that; with --json, it chooses what `final_output` holds
         #[arg(short, long)]
+        #[arg(help = "Choose the result output mode (see possible values)", long_help = None)]
         output: Option<GetOutput>,
         /// With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at
         /// most 7d). Experimental
         #[arg(long, value_name = "DURATION")]
+        #[arg(help = "Signed URL lifetime: 30m, 12h, 7d or seconds (default: 1h; maximum: 7d)", long_help = None)]
         expires: Option<String>,
         #[command(flatten)]
         format: FormatFlags,
@@ -759,102 +536,124 @@ pub(crate) enum Cli {
         /// with a named dimension computes only those keys (--refresh too); a fan-in over them
         /// is skipped. Works without a target
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
+        #[arg(help = "Select keys, e.g. customer=acme; affected collect() fan-ins are skipped", long_help = None)]
         partition: Option<String>,
         /// Override `batch=` for this run: `none` (one key per call), `all` or a whole number,
         /// for every node that declares `batch=`; `NODE=V` (repeatable) for one node only.
         /// Nodes without `batch=` are never batched. Experimental
         #[arg(long, value_name = "[NODE=]none|all|N")]
+        #[arg(help = "Override declared batching: none, all, N or NODE=N (experimental)", long_help = None)]
         batch: Vec<String>,
         /// Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not
         /// `--refresh a b`); the target itself may be named. Every asset downstream of them in
         /// the target's cone re-materializes too (see --no-cascade)
         #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
+        #[arg(help = "Recompute named assets and their downstream dependents: --refresh a,b", long_help = None)]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns
         #[arg(long, requires = "refresh")]
+        #[arg(help = "Refresh only named assets; cached downstream results may be outdated", long_help = None)]
         no_cascade: bool,
         /// Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
         #[arg(long)]
+        #[arg(help = "Recompute every asset needed by the target", long_help = None)]
         refresh_all: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
         /// executing steps or recording a run
         #[arg(long)]
+        #[arg(help = "Preview cached and planned work; execute nothing and record no run", long_help = None)]
         dry_run: bool,
         /// Agent-friendly output: plain structured progress lines instead of visual progress bar
         #[arg(long)]
+        #[arg(help = "Print plain structured progress on stderr", long_help = None)]
         agent: bool,
         /// Keep only these keys (comma-separated) on each entry of `steps` in the JSON output.
         /// Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error
         /// listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::STEP_FIELDS))]
+        #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
     },
-    /// Run a task and its dependency cone — the task always re-runs
+    /// Run a task and its dependencies; the task runs every time
     ///
     /// The task always re-runs. Upstream assets are served from cache when fresh
     /// (same as `barca get`). Use `--refresh` to force re-materialize specific
     /// upstream assets, or `--refresh-all` to refresh the entire upstream cone.
-    #[command(after_help = RUN_HELP)]
+    #[command(after_help = quick_help("run", RUN_HELP), after_long_help = RUN_HELP, long_about = None)]
     Run {
         /// TARGET[,TARGET...] [file.py|dir/ ...] — one or more target tasks, comma-separated; no
         /// files reads the whole project (`barca docs discovery`)
         #[arg(required = true)]
+        #[arg(help = "Target(s), then optional files/directories; omit files to discover the project", long_help = None)]
         args: Vec<String>,
         /// Upstream assets to force re-materialize, as ONE comma-separated list
         /// (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the
         /// task's cone re-materializes too (see --no-cascade)
         #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
+        #[arg(help = "Recompute named assets and their downstream dependents: --refresh a,b", long_help = None)]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns
         #[arg(long, requires = "refresh")]
+        #[arg(help = "Refresh only named assets; cached downstream results may be outdated", long_help = None)]
         no_cascade: bool,
         /// Force re-materialize EVERY asset in the task's cone (nothing comes from cache)
         #[arg(long)]
+        #[arg(help = "Recompute every asset needed by the target", long_help = None)]
         refresh_all: bool,
         /// Select partition keys across the task's cone, as for `barca get --partition`: every
         /// partitioned node with a named dimension computes only those keys
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
+        #[arg(help = "Select keys, e.g. customer=acme; affected collect() fan-ins are skipped", long_help = None)]
         partition: Option<String>,
         /// Override `batch=` for this run, as for `barca get --batch`. Experimental
         #[arg(long, value_name = "[NODE=]none|all|N")]
+        #[arg(help = "Override declared batching: none, all, N or NODE=N (experimental)", long_help = None)]
         batch: Vec<String>,
         /// Show what this command would do (each step cached or will-run, and why) without
         /// executing steps or recording a run
         #[arg(long)]
+        #[arg(help = "Preview cached and planned work; execute nothing and record no run", long_help = None)]
         dry_run: bool,
         /// Output format (kept for compatibility; --json / --pretty are the canonical spelling)
         #[arg(short, long, conflicts_with_all = ["json", "pretty"])]
+        #[arg(help = "Choose the result output mode (see possible values)", long_help = None)]
         output: Option<OutputMode>,
         #[command(flatten)]
         format: FormatFlags,
         /// Agent-friendly output: plain structured progress lines instead of visual progress bar
         #[arg(long)]
+        #[arg(help = "Print plain structured progress on stderr", long_help = None)]
         agent: bool,
         /// Keep only these keys (comma-separated) on each entry of `steps` in the JSON output.
         /// Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::STEP_FIELDS))]
+        #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
     },
     /// Parse source files and emit the execution plan as JSON
-    #[command(after_help = PLAN_HELP)]
+    #[command(after_help = quick_help("plan", PLAN_HELP), after_long_help = PLAN_HELP, long_about = None)]
     Plan {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
         files: Vec<PathBuf>,
         /// Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep
         /// the selected keys, and fan-ins over them are left out (listed in partition_selection)
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
+        #[arg(help = "Select keys, e.g. customer=acme; affected collect() fan-ins are skipped", long_help = None)]
         partition: Option<String>,
         /// Accepted for symmetry with the other commands: the plan is always pretty-printed
         /// JSON, so this changes nothing
@@ -866,14 +665,16 @@ pub(crate) enum Cli {
         pretty: bool,
     },
     /// Diagnose project prerequisites without running pipeline steps
-    #[command(after_help = DOCTOR_HELP)]
+    #[command(after_help = quick_help("doctor", DOCTOR_HELP), after_long_help = DOCTOR_HELP, long_about = None)]
     Doctor {
         /// Python files or directories to inspect (default: discovered project sources)
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
         files: Vec<PathBuf>,
         #[command(flatten)]
         format: FormatFlags,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         /// Also check a barca server: the URL given, or with no URL the configured one
         /// (BARCA_SERVER, else [server] url). A configured server is checked without it
@@ -884,13 +685,15 @@ pub(crate) enum Cli {
             default_missing_value = "",
             conflicts_with = "local"
         )]
+        #[arg(help = "Use a server (URL or configured); get/run execute its deployed code", long_help = None)]
         server: Option<String>,
         /// Check this machine only, without the configured server
         #[arg(long)]
+        #[arg(help = "Use independent local state; ignore the configured server", long_help = None)]
         local: bool,
     },
     /// Read a run's recorded step output (stdout and stderr), without progress messages
-    #[command(after_help = LOGS_HELP)]
+    #[command(after_help = quick_help("logs", LOGS_HELP), after_long_help = LOGS_HELP, long_about = None)]
     Logs {
         /// Exact run id from get/run JSON or history (default: the most recent run; with
         /// --follow, the newest running run)
@@ -914,12 +717,13 @@ pub(crate) enum Cli {
         format: FormatFlags,
         /// Environment whose history to read
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
     },
     /// Show recent run history, or one run's steps and errors
-    #[command(after_help = HISTORY_HELP)]
+    #[command(after_help = quick_help("history", HISTORY_HELP), after_long_help = HISTORY_HELP, long_about = None)]
     History {
         /// One run in detail: its fields, the steps it recorded (the first 1000, failed steps
         /// always; --limit and --all change it), and each failed step's error, traceback and
@@ -956,9 +760,11 @@ pub(crate) enum Cli {
         /// Output JSON with only these keys (comma-separated) on each entry of `runs`.
         /// Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::HISTORY_FIELDS))]
+        #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
@@ -967,7 +773,7 @@ pub(crate) enum Cli {
     ///
     /// The same eviction barca runs after every get and run once .barca/ is over
     /// `[cache] max_size` (default 10% of the filesystem), on demand.
-    #[command(after_help = GC_HELP)]
+    #[command(after_help = quick_help("gc", GC_HELP), after_long_help = GC_HELP, long_about = None)]
     Gc {
         /// A limit for this run in place of the configured one: 20GB, 500MB, 20GiB, bytes,
         /// 10% (of the filesystem) or off (only leftovers and superseded results)
@@ -975,55 +781,65 @@ pub(crate) enum Cli {
         max_size: Option<String>,
         /// Print what would be evicted without deleting anything
         #[arg(long)]
+        #[arg(help = "Preview cached and planned work; execute nothing and record no run", long_help = None)]
         dry_run: bool,
         #[command(flatten)]
         format: FormatFlags,
         /// Evict only this environment's results (leftovers are shared by all)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
     },
     /// Show execution statistics for an asset
-    #[command(after_help = STATS_HELP)]
+    #[command(after_help = quick_help("stats", STATS_HELP), after_long_help = STATS_HELP, long_about = None)]
     Stats {
         /// Target asset function name
         target: String,
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
         files: Vec<PathBuf>,
         #[command(flatten)]
         format: FormatFlags,
         /// Output JSON with only these keys (comma-separated) on each entry of `recent_runs`.
         /// Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::STATS_FIELDS))]
+        #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
     },
-    /// Run a long-running HTTP server exposing the orchestrator as a JSON API
+    /// Manage runs, schedules and results on a server
     ///
     /// Binds to 127.0.0.1 by default (local only); --host changes the address.
     /// There is no authentication. POST /run and /get trigger async runs; poll
     /// GET /status/<run_id> for results.
-    #[command(after_help = SERVE_HELP)]
+    #[command(after_help = quick_help("serve", SERVE_HELP), after_long_help = SERVE_HELP, long_about = None)]
     Serve {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
         files: Vec<PathBuf>,
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
         port: u16,
         /// IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication
         #[arg(long, default_value = "127.0.0.1")]
+        #[arg(help = "Bind address; 0.0.0.0 exposes the unauthenticated API", long_help = None)]
         host: std::net::IpAddr,
         /// Dev mode: re-parse the DAG when source files change
         #[arg(long)]
+        #[arg(help = "Reload changed source files; restart to discover new files", long_help = None)]
         watch: bool,
         /// Disable the cron scheduler (Schedule(...) assets will not auto-fire)
         #[arg(long)]
+        #[arg(help = "Disable scheduled runs", long_help = None)]
         no_schedule: bool,
         /// Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error
         #[arg(long, default_value = "local", value_parser = parse_timezone)]
+        #[arg(help = "Cron timezone: local, utc or an IANA name such as America/New_York", long_help = None)]
         timezone: String,
         /// Inspect only: refuse runs, never schedule, read compatible WAL metadata in place
         #[arg(long)]
@@ -1033,30 +849,35 @@ pub(crate) enum Cli {
         /// cancels them instead, exit 1). Default: [server] drain_timeout in barca.toml, else
         /// 30. 0 requeues them at once
         #[arg(long, value_name = "SECONDS")]
+        #[arg(help = "Shutdown grace period in seconds; unfinished runs requeue (default: config or 30)", long_help = None)]
         drain_timeout: Option<u64>,
         /// How many runs execute at once; the others wait in the run queue, in order. At least
         /// 1. Default: [server] max_runs in barca.toml, else one per core. Experimental
         #[arg(long, value_name = "N", value_parser = parse_max_runs)]
+        #[arg(help = "Maximum concurrent runs; others queue (default: config or CPU count)", long_help = None)]
         max_runs: Option<usize>,
         /// The most the weight= of the steps running at once may add up to across every run
         /// of this server, admitted first come, first served. At least 1. Default: [server]
         /// capacity in barca.toml, else none (each run has only its own). Experimental
         #[arg(long, value_name = "N", value_parser = parse_capacity)]
+        #[arg(help = "Limit total running step weight across server runs (experimental)", long_help = None)]
         capacity: Option<usize>,
         /// Seconds a run may take before the server stops it (recorded as an error, steps that
         /// finished stay cached). 0: no limit. Default: [server] run_timeout_seconds in
         /// barca.toml, else no limit; Schedule(..., timeout_seconds=N) wins for its ticks
         #[arg(long, value_name = "SECONDS")]
+        #[arg(help = "Run time limit in seconds; 0 disables it (default: config or unlimited)", long_help = None)]
         run_timeout: Option<u64>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
     },
     /// Show a barca server's run queue, or pause or resume it (experimental)
     ///
     /// The queue holds the runs a server accepted and has not finished, in order. It lives on
     /// the server: the command needs one (--server URL, BARCA_SERVER or [server] url).
-    #[command(after_help = QUEUE_HELP)]
+    #[command(after_help = quick_help("queue", QUEUE_HELP), after_long_help = QUEUE_HELP, long_about = None)]
     Queue {
         /// pause: queued runs wait until resumed (runs in flight go on); resume: they start
         /// again. Omit to show the queue
@@ -1066,6 +887,7 @@ pub(crate) enum Cli {
         format: FormatFlags,
         /// The server's environment, checked against it (as for the other --server commands)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
@@ -1074,9 +896,10 @@ pub(crate) enum Cli {
     ///
     /// Scheduled definitions also show their next fire time, computed in this
     /// machine's local time (a server started with --timezone fires in that zone).
-    #[command(after_help = LIST_HELP)]
+    #[command(after_help = quick_help("list", LIST_HELP), after_long_help = LIST_HELP, long_about = None)]
     List {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
         files: Vec<PathBuf>,
         #[command(flatten)]
         format: FormatFlags,
@@ -1092,6 +915,7 @@ pub(crate) enum Cli {
         /// Output JSON with only these keys (comma-separated) on each entry of `nodes`.
         /// Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::LIST_FIELDS))]
+        #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
         #[command(flatten)]
         server: ServerFlags,
@@ -1102,10 +926,11 @@ pub(crate) enum Cli {
     /// artifact would each tell you. If the first positional arg ends in .py, all args are files;
     /// otherwise the first is a target (or several, comma-separated: `a,b`) and only the
     /// upstream cones of the targets are shown.
-    #[command(after_help = STATUS_HELP)]
+    #[command(after_help = quick_help("status", STATUS_HELP), after_long_help = STATUS_HELP, long_about = None)]
     Status {
         /// [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional; no files reads the whole
         /// project (`barca docs discovery`)
+        #[arg(help = "Target(s), then optional files/directories; omit files to discover the project", long_help = None)]
         args: Vec<String>,
         #[command(flatten)]
         format: FormatFlags,
@@ -1118,6 +943,7 @@ pub(crate) enum Cli {
         /// Output JSON with only these keys (comma-separated) on each entry of `nodes`.
         /// Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::STATUS_FIELDS))]
+        #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
         /// Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles
         /// are never sampled)
@@ -1133,6 +959,7 @@ pub(crate) enum Cli {
         problems: bool,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
@@ -1141,12 +968,13 @@ pub(crate) enum Cli {
     ///
     /// No pipeline step executes or new run is recorded. Partition expressions may evaluate
     /// Python; explicit SQL COPY can write files.
-    #[command(after_help = SQL_HELP)]
+    #[command(after_help = quick_help("sql", SQL_HELP), after_long_help = SQL_HELP, long_about = None)]
     Sql {
         /// The SQL query (DuckDB dialect); quote it as one argument
         query: String,
         /// Python files or directories to read (default: every .py file under the project root
         /// that imports barca; see `barca docs discovery`)
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
         files: Vec<PathBuf>,
         #[command(flatten)]
         format: FormatFlags,
@@ -1158,6 +986,7 @@ pub(crate) enum Cli {
         all: bool,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
         #[command(flatten)]
         server: ServerFlags,
@@ -1167,7 +996,7 @@ pub(crate) enum Cli {
     /// With a remote store, the metadata DB is backed up on the minute checkpoint and at the
     /// end of each run, five copies kept locally and in the store. Nothing is restored unless
     /// you ask.
-    #[command(after_help = STATE_HELP, subcommand_required = true)]
+    #[command(after_help = quick_help("state", STATE_HELP), after_long_help = STATE_HELP, long_about = None, subcommand_required = true)]
     State {
         #[command(subcommand)]
         command: StateCommand,
@@ -1176,7 +1005,7 @@ pub(crate) enum Cli {
     ///
     /// Topics are compiled into the binary, so this works offline and always matches the
     /// installed version. With no topic it prints an index.
-    #[command(after_help = DOCS_HELP)]
+    #[command(after_help = quick_help("docs", DOCS_HELP), after_long_help = DOCS_HELP, long_about = None)]
     Docs {
         /// Topic to show (omit for the index), e.g. types, cache, examples/duckdb
         topic: Option<String>,
@@ -1193,6 +1022,7 @@ pub(crate) enum Cli {
         /// Output JSON with only these keys (comma-separated) on each entry of `topics`, or on
         /// the one topic. Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::DOCS_FIELDS))]
+        #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
     },
     /// Print version information
@@ -1212,30 +1042,33 @@ pub(crate) enum QueueAction {
 #[derive(clap::Subcommand)]
 pub(crate) enum StateCommand {
     /// List the metadata backups, local and in the store, newest first
-    #[command(after_help = STATE_BACKUPS_HELP)]
+    #[command(after_help = quick_help("state backups", STATE_BACKUPS_HELP), after_long_help = STATE_BACKUPS_HELP, long_about = None)]
     Backups {
         #[command(flatten)]
         format: FormatFlags,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
     },
     /// Put a metadata backup in place of the local database (the current one is kept aside)
-    #[command(after_help = STATE_RESTORE_HELP)]
+    #[command(after_help = quick_help("state restore", STATE_RESTORE_HELP), after_long_help = STATE_RESTORE_HELP, long_about = None)]
     Restore {
         /// Which backup: its index in `barca state backups` (1 = newest) or its name; default
         /// the newest. Or the path of a database file, such as one `barca state reset` moved
         /// aside
         #[arg(long, value_name = "N|NAME|PATH")]
+        #[arg(help = "Backup index (1 = newest), name or database path; default: newest backup", long_help = None)]
         from: Option<String>,
         #[command(flatten)]
         format: FormatFlags,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
     },
     /// Start the metadata database over: move it aside and create an empty one (experimental)
-    #[command(after_help = STATE_RESET_HELP)]
+    #[command(after_help = quick_help("state reset", STATE_RESET_HELP), after_long_help = STATE_RESET_HELP, long_about = None)]
     Reset {
         /// Do not ask: required when stdin is not a terminal
         #[arg(long, short = 'y')]
@@ -1244,6 +1077,7 @@ pub(crate) enum StateCommand {
         format: FormatFlags,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
     },
 }

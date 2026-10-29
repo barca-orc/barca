@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regenerate the CLI contract snapshots after a deliberate change to the CLI surface:
 #
-#   - crates/barca-cli/snapshots/help/*.txt            `--help` of every command
+#   - crates/barca-cli/snapshots/help/*.txt            concise `--help` of every command
+#   - crates/barca-cli/snapshots/examples/*.txt        full `--examples` of every command
 #   - crates/barca-cli/docs/contract.md                generated tables (commands, flags, exit
 #                                                      codes, JSON schemas, --agent lines)
 #   - python/tests/snapshots/cli_contract/*.txt        JSON output schemas and the error envelope

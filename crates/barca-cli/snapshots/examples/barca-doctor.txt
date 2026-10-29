@@ -1,0 +1,39 @@
+Diagnose project prerequisites without running pipeline steps
+
+Usage: barca doctor [OPTIONS] [FILES]...
+
+Arguments:
+  [FILES]...
+          Python files or directories; default: discover the project
+
+Options:
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Use independent local state; ignore the configured server
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca doctor                      # diagnose the discovered project
+  barca doctor pipeline.py --json    # structured checks, no steps executed
+  barca doctor src/ --env local --pretty   # selected sources and environment
+  barca doctor --server                # also the configured server: version, store, load errors, schedules
+  barca doctor --server http://127.0.0.1:8274 --json   # a server named here
+  barca doctor --local                 # this machine only, even with a server configured
+
+More: barca docs doctor
