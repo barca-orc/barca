@@ -15,6 +15,7 @@ use barca_core::envelope::{Context, ErrorEnvelope, ErrorKind};
 /// can use `?` directly.
 #[derive(Debug)]
 pub enum ApiError {
+    EventCursor(crate::replay::CursorError),
     /// A core engine error (parse/dag/db/worker).
     Barca(BarcaError),
     /// A core engine error of a command run with this context (its remediation names it).
@@ -29,7 +30,10 @@ pub enum ApiError {
     BadRequest(String),
     /// The server is draining before it stops and admits no new run: `503` with a
     /// `Retry-After` of this many seconds.
-    Unavailable { message: String, retry_after: u64 },
+    Unavailable {
+        message: String,
+        retry_after: u64,
+    },
 }
 
 impl From<BarcaError> for ApiError {
@@ -49,6 +53,27 @@ impl ApiError {
         let usage =
             |status, msg: String| (status, ErrorEnvelope::from_prose(ErrorKind::Usage, msg));
         match self {
+            ApiError::EventCursor(error) => {
+                let status = match error {
+                    crate::replay::CursorError::Invalid => StatusCode::BAD_REQUEST,
+                    crate::replay::CursorError::Mismatch => StatusCode::CONFLICT,
+                    crate::replay::CursorError::Expired => StatusCode::GONE,
+                };
+                let mut envelope = ErrorEnvelope::from_prose(
+                    ErrorKind::Infra,
+                    match error {
+                        crate::replay::CursorError::Invalid => "invalid event cursor",
+                        crate::replay::CursorError::Mismatch => {
+                            "event cursor belongs to another run attempt"
+                        }
+                        crate::replay::CursorError::Expired => {
+                            "event replay is incomplete; read the existing run outcome and recorded logs"
+                        }
+                    },
+                );
+                envelope.reason = Some(error.reason().into());
+                (status, envelope)
+            }
             ApiError::NotFound(msg) => usage(StatusCode::NOT_FOUND, msg),
             ApiError::Conflict(msg) => usage(StatusCode::CONFLICT, msg),
             ApiError::Forbidden(msg) => usage(StatusCode::FORBIDDEN, msg),
@@ -81,6 +106,7 @@ fn engine(err: BarcaError, ctx: &Context) -> (StatusCode, ErrorEnvelope) {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let event_cursor = matches!(&self, ApiError::EventCursor(_));
         // A draining server says when to try again (`Retry-After`, in seconds).
         let retry_after = match &self {
             ApiError::Unavailable { retry_after, .. } => Some(*retry_after),
@@ -88,6 +114,12 @@ impl IntoResponse for ApiError {
         };
         let (status, envelope) = self.parts();
         let mut response = (status, Json(envelope.to_json())).into_response();
+        if event_cursor {
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                "no-store".parse().unwrap(),
+            );
+        }
         if let Some(secs) = retry_after {
             response
                 .headers_mut()

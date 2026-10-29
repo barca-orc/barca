@@ -1407,7 +1407,12 @@ async fn read_events(
         .filter_map(|frame| {
             let id = frame.lines().find_map(|l| l.strip_prefix("id: "))?;
             let data = frame.lines().find_map(|l| l.strip_prefix("data: "))?;
-            Some((id.parse().unwrap(), serde_json::from_str(data).unwrap()))
+            let (epoch, sequence) = id.split_once(':').expect("attempt-scoped event cursor");
+            assert_eq!(epoch.len(), 32);
+            Some((
+                sequence.parse::<u64>().unwrap() - 1,
+                serde_json::from_str(data).unwrap(),
+            ))
         })
         .collect()
 }

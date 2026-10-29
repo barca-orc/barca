@@ -217,6 +217,7 @@ async fn ensure_db(state: &AppState) -> Result<(), barca_core::BarcaError> {
 /// start it when the queue lets it. A run that cannot be recorded is refused (`500`): it would
 /// not survive a restart.
 pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError> {
+    let channel = state.replay.channel()?;
     let run_id = db::generate_run_id();
     let accepted_at = now_ts();
     {
@@ -234,7 +235,7 @@ pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError
                 "could not record the run in the run queue: {e}"
             )))
         })?;
-        track(state, &run_id, &spec, accepted_at);
+        track(state, &run_id, &spec, accepted_at, channel);
         state.queue.waiting.lock().unwrap().push_back(Waiting {
             run_id: run_id.clone(),
             spec,
@@ -259,7 +260,7 @@ pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError
 }
 
 /// The live record and event channel of a run that joins the queue.
-fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64) {
+fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, channel: RunChannel) {
     // Child of the server-wide shutdown token: DELETE /runs/{id} cancels just this run;
     // a forced stop cancels all of them.
     let cancel = state.shutdown.child_token();
@@ -283,7 +284,7 @@ fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64) {
             cancel_requested: false,
         },
     );
-    state.events.insert(run_id.to_string(), RunChannel::new());
+    state.events.insert(run_id.to_string(), channel);
 }
 
 /// Start the runs at the head of the queue while there is room: not paused, not draining, fewer
@@ -330,7 +331,13 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
     for row in rows {
         match (row.state, load(&row.spec)) {
             (QueueState::Queued, Ok((spec, accepted_at))) => {
-                track(state, &row.run_id, &spec, accepted_at);
+                track(
+                    state,
+                    &row.run_id,
+                    &spec,
+                    accepted_at,
+                    state.replay.channel()?,
+                );
                 state.queue.waiting.lock().unwrap().push_back(Waiting {
                     run_id: row.run_id,
                     spec,
@@ -354,7 +361,13 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
                              are cached)",
                             row.run_id
                         );
-                        track(state, &row.run_id, &spec, accepted_at);
+                        track(
+                            state,
+                            &row.run_id,
+                            &spec,
+                            accepted_at,
+                            state.replay.channel()?,
+                        );
                         state.queue.waiting.lock().unwrap().push_back(Waiting {
                             run_id: row.run_id,
                             spec,
