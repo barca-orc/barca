@@ -15,7 +15,8 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 - Distributing one run across machines. A remote store holds artifacts and a backup; the server holds the ledger.
 - Sharing state without a server. Two machines writing one bucket is not supported; a store without a server is one machine's backup and cache.
 - Running code sent by a client on the server (experiments, overlays, namespaces).
-- Built-in authentication. The server sits behind a proxy that authenticates.
+- Built-in user accounts and SSO/OIDC providers. Opt-in API tokens issued and validated by
+  barca are the approved 0.36.0 exception (#187); existing proxy deployments remain supported.
 - More than one project root per server.
 - A worker pool or engine shared across runs; warm workers across runs.
 - Approval gates or workflows that wait on external events.
@@ -26,11 +27,11 @@ An issue's milestone is the release it ships in; the items below are the order.
 
 The decisions in [#707](https://github.com/barca-orc/barca/issues/707) set this order:
 
-1. **0.35.2: make inspection and everyday server use usable.** Ship #708 (read-only WAL
+1. **Shipped in 0.35.2: inspection and everyday server use.** Includes #708 (read-only WAL
    inspection, bounded history queries, work off request threads), #710 (metadata before
    scoped status), #709 (grouped-page and node-panel run actions), and #706's credential
-   masking. Rebase and merge the first-use documentation (#650) and concise help (#651).
-   Recheck #654–656 rather than inferring completion from newer releases. The recheck in
+   masking, first-use documentation (#650) and concise help (#651).
+   Rechecked #654–656 against the newer implementation. The evidence in
    #716 still reproduces duplicate overlapping asset work, large bootstrap memory and
    expensive cold/post-run inspection; those issues stay open with current measurements.
    The real planning fixture has 116 nodes and scales table rows; its smoke run is separate
@@ -43,8 +44,9 @@ The decisions in [#707](https://github.com/barca-orc/barca/issues/707) set this 
 3. **0.36.0: server mode behind a proxy (#706).** Decide and implement the backup-cadence
    and client-credential RFCs, plus `Last-Event-ID` stream resume. Include the cost of
    hashing and remotely checking every artifact during status. Userinfo remains supported;
-   bearer credentials reach every client request. UI-issued tokens require an explicit
-   decision on the built-in-auth non-goal before the authentication design is accepted.
+   bearer credentials reach every client request. The user chose barca-issued and
+   barca-validated UI tokens in an opt-in mode with no user-account system (#187). The auth
+   RFC must specify bootstrap access, browser security and revocation explicitly.
 4. **Then the cleanup week.** Triage #666 into 0.36.1 or 0.37.0: a failed key must not stop
    independent keys' downstream work. Batch the small feedback in #668, #671, #672 and #673.
    Keep #674 (incremental fan-ins) parked pending discussion, alongside #667, #669, #670,
@@ -85,7 +87,7 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.35.1 | 2026-10-28 | Cache-size accounting off request threads; transfer-helper handshake before planning | #702, [release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.1) |
 | 0.35.2 | 2026-10-29 | Read-only status, metadata-first UI, run actions, credential masking and first-use/help docs | #708, #710, #709, #706 part 3, #650, #651 |
 | 0.35.3 | pending | Streamed batched partitions sort by all columns, so a refresh with the same rows in another order keeps cutoff consumers cached | [#721](https://github.com/barca-orc/barca/pull/721) |
-| 0.36.0 | planned | Configurable backups, proxy credentials and UI token design, resumable streams and store inspection costs | #706 |
+| 0.36.0 | planned | Configurable backups, proxy credentials and UI token design, resumable streams and store inspection costs | #706, #187 |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
@@ -105,11 +107,10 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- **Authentication boundary, due by 0.36.0 (#706):** UI-issued tokens are requested. The
-  credential RFC must explicitly reopen #187 (built-in authentication) or explain how a proxy
-  validates server-issued opaque tokens. The standing non-goal remains until that decision.
-- **Backup accounting and store inspection, due by 0.36.0 (#706):** choose eviction under
-  the cache limit or explicit reporting outside it for local backups, and bound/reuse artifact
+- **Token management and browser access, due by 0.36.0 (#706, #187):** barca is the chosen
+  issuer and validator. The auth RFC must define bootstrap access, browser sessions/CSRF,
+  persistence and revocation, including active streams. No user-account system.
+- **Store inspection, due by 0.36.0 (#706):** bound/reuse artifact
   integrity evidence without making `cached` mean unchecked. Record the cost as the DB grows.
 - **Stream-resume details, due by 0.36.0 (#706):** `Last-Event-ID` is the chosen direction;
   the RFC must settle replay retention, authentication and expired-cursor behavior.
@@ -123,9 +124,13 @@ still required for the 0.36.0 changes:
 
 - Backups: `[remote] backup_interval` / `BARCA_BACKUP_INTERVAL`, default `"1m"`, with `"off"`
   for external volume backups; retain the shutdown backup. Explain whole-DB copy/upload cost.
+  RFC-0015 chooses separate reporting of recognized local backups outside the cache budget,
+  retaining the five-copy rotation. Routine served-run backups share the cadence gate;
+  standalone final backups remain. This is accepted intent for 0.36.0, not implemented.
 - Credentials: support URL userinfo and `BARCA_SERVER_TOKEN` bearer headers on every request,
   including health, streams, cancellation and ledger traffic. Tokens can be generated in the
-  UI; resolve the authentication boundary above in the RFC.
+  UI and validated by barca in an opt-in mode with no user-account system. #187 is reopened
+  for this scope; the RFC records its security and lifecycle details.
 - Streams: `Last-Event-ID` resume replaces treating every dropped connection as an infra error.
 - Partial failure: a failed key does not stop other keys' downstream work (#666).
 - Fuzzing is deferred. Incremental fan-ins (#674) need more discussion before scheduling.

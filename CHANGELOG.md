@@ -17,6 +17,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   Values that compare equal but differ in representation (`-0.0` and `0.0`, distinct NaNs,
   strings under a case-insensitive collation) still need normalizing in the step.
 
+### Documentation
+
+- Record the accepted configurable metadata backup cadence and separate local-backup
+  accounting design in RFC-0015 for #706. Runtime behavior is unchanged.
+
 ## 0.35.2 (2026-10-29)
 
 ### Features
