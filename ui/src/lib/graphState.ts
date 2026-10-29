@@ -6,6 +6,7 @@ import type { NodeState, StatusKind } from './types'
 
 export interface GraphState { status: StatusKind; label: string; hint: string }
 export const UNKNOWN_GRAPH_STATE: GraphState = { status: 'skipped', label: 'State unavailable', hint: 'Asset state has not been loaded.' }
+export const PENDING_GRAPH_STATE: GraphState = { status: 'skipped', label: 'Checking…', hint: 'Cache state is being checked.' }
 
 /** Resting colors describe cache state; a failed latest attempt takes priority. A node a run
  * is working on pulses (running) or waits (queued) instead. */

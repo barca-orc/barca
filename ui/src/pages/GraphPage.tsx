@@ -7,7 +7,7 @@ import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useQueryClient } from '@tanstack/react-query'
-import { graphState, liveGraphState, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
+import { graphState, liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
 import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
 import { useRunStream } from '@/hooks/useRunStream'
@@ -91,10 +91,11 @@ export function GraphPage() {
   )
 
   const visualStates = useMemo(() => {
-    const base = Object.fromEntries((stateQuery.isError ? [] : stateQuery.data ?? []).map(n => [n.id, graphState(n)]))
+    const base = Object.fromEntries(assets.map(a => [a.id, stateQuery.isError ? UNKNOWN_GRAPH_STATE : PENDING_GRAPH_STATE]))
+    if (!stateQuery.isError) for (const node of stateQuery.data ?? []) base[node.id] = graphState(node)
     if (stream.running) for (const [id, status] of Object.entries(statuses)) base[id] = liveGraphState(status)
     return base
-  }, [stateQuery.data, stateQuery.isError, statuses, stream.running])
+  }, [assets, stateQuery.data, stateQuery.isError, statuses, stream.running])
   useEffect(() => {
     if (run && !stream.running) void queryClient.invalidateQueries({queryKey:['state']})
   }, [run, stream.running, queryClient])

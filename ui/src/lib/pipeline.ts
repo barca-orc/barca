@@ -46,14 +46,19 @@ export interface PipelineSummary extends Pipeline {
   running: number
 }
 
-/** One summary per source file, sorted by file path, from `GET /state`. */
-export function pipelineSummaries(nodes: NodeState[]): PipelineSummary[] {
+/** Counts come from graph metadata; status may still be pending or cover only one cone. */
+export function pipelineSummaries(
+  nodes: NodeState[],
+  assets: readonly Pick<ListNode, 'id'>[] = nodes,
+): PipelineSummary[] {
+  const states = new Map(nodes.map(node => [node.id, node]))
   const byFile = new Map<string, PipelineSummary>()
-  for (const n of nodes) {
-    const file = sourceFile(n.id)
-    const severity = severityOf(n)
+  for (const asset of assets) {
+    const file = sourceFile(asset.id)
+    const n = states.get(asset.id)
+    const severity = n ? severityOf(n) : 'unknown'
     const p = byFile.get(file)
-    const running = n.running ? 1 : 0
+    const running = n?.running ? 1 : 0
     if (!p) {
       byFile.set(file, { file, name: pipelineName(file), total: 1, worst: severity, running })
     } else {

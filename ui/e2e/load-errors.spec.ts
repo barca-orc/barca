@@ -12,7 +12,7 @@ test('unloaded sources and dependents remain visible beside healthy graph nodes'
   await page.route('**/assets', route => route.fulfill({ json: [
     { id: 'pipeline.py:healthy', kind: 'asset', freshness: 'always', env: [], inputs: [] },
   ] }))
-  await page.route('**/state', route => route.fulfill({ json: [] }))
+  await page.route(/\/state(?:\?.*)?$/, route => route.fulfill({ json: [] }))
   await page.goto('/ui/#/graph')
   const alert = page.getByRole('alert')
   await expect(alert).toContainText('broken.py')

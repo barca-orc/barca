@@ -148,6 +148,9 @@
 .barca-group-row-name > svg {
   color: var(--text-muted);
 }
+.barca-group-table {
+  table-layout: fixed;
+}
 .barca-group-table td {
   padding-top: 14px;
   padding-bottom: 14px;

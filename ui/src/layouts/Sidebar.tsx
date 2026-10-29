@@ -3,6 +3,7 @@ import { Layers } from 'lucide-react'
 import { ResetDatabaseButton, StatusDot } from '@/components'
 import { useHealth } from '@/hooks/useHealth'
 import { useAssetStates } from '@/hooks/useAssetStates'
+import { useAssets } from '@/hooks/useAssets'
 import { severityStatus } from '@/lib/assetTable'
 import { pipelineSummaries } from '@/lib/pipeline'
 import markUrl from '@/assets/brand/mark.svg'
@@ -12,8 +13,10 @@ const FILTERABLE = ['/assets', '/graph', '/tasks', '/sensors', '/schedules']
 
 export function Sidebar() {
   const { data: nodes } = useAssetStates()
+  const assetQuery = useAssets()
+  const assets = assetQuery.isPlaceholderData ? undefined : assetQuery.data
   const { data: health } = useHealth()
-  const pipelines = pipelineSummaries(nodes ?? [])
+  const pipelines = pipelineSummaries(nodes ?? [], assets ?? [])
   const location = useLocation()
   const navigate = useNavigate()
   const [params] = useSearchParams()
@@ -46,8 +49,8 @@ export function Sidebar() {
         <span>Pipelines</span>
       </div>
       <div className="barca-pipes">
-        {!nodes && <span className="barca-pipe-empty">loading…</span>}
-        {nodes && pipelines.length === 0 && (
+        {!assets && <span className="barca-pipe-empty">loading…</span>}
+        {assets && pipelines.length === 0 && (
           <span className="barca-pipe-empty">no pipelines served</span>
         )}
         {pipelines.length > 1 && (
@@ -58,7 +61,7 @@ export function Sidebar() {
           >
             <Layers size={12} />
             <span className="barca-pipe-name">All pipelines</span>
-            <span className="barca-pipe-count">{nodes?.length}</span>
+            <span className="barca-pipe-count">{assets?.length}</span>
           </button>
         )}
         {pipelines.map((p) => (

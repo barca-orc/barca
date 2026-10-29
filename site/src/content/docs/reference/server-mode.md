@@ -339,6 +339,10 @@ then again after settled changes while clients poll.
 `GET /state?targets=first,second` (experimental) computes only those targets and their upstream
 dependencies, including durations; use full node ids when names are ambiguous. An absent or
 empty `targets` computes every node. Unknown targets answer `404`; ambiguous names answer `409`.
+The UI renders the graph, groups and sidebar counts from `/assets` and `/groups` first,
+shows cache states as checking while `/state` runs, then fills them in without moving the
+graph. A selected pipeline or group requests only its upstream cone; All pipelines requests
+the whole graph. A status error leaves source metadata visible with the error above it.
 The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
 described at https://barca.sh/reference/server-api/.
 

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 const assets=['source','normalize','validate','score','report'].map((name,i,names)=>({id:`demo.py:${name}`,kind:'asset',freshness: 'always',env:[],inputs:i?[`demo.py:${names[i-1]}`]:[]}))
 test('linear intermediates remain visible with persistent status and deep links',async({page})=>{
   await page.route('**/assets',route=>route.fulfill({json:assets}))
-  await page.route('**/state',route=>route.fulfill({json:assets.map((a,i)=>({...a,name:a.id.split(':')[1],partitioned:false,cache:{state:i===4?'never_run':'cached',reason:'materialized',detail:'demo'},last_materialization:i===2?{status:'failed',error:'validation failed',created_at:'today',elapsed_seconds:null,run_hash:null,artifact:null,format:null,size_bytes:null}:null,shape:null,env:[],durations:null,next_run:null}))}))
+  await page.route(/\/state(?:\?.*)?$/,route=>route.fulfill({json:assets.map((a,i)=>({...a,name:a.id.split(':')[1],partitioned:false,cache:{state:i===4?'never_run':'cached',reason:'materialized',detail:'demo'},last_materialization:i===2?{status:'failed',error:'validation failed',created_at:'today',elapsed_seconds:null,run_hash:null,artifact:null,format:null,size_bytes:null}:null,shape:null,env:[],durations:null,next_run:null}))}))
   await page.goto('/ui/#/graph')
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
   await expect(page.getByRole('button',{name:'Overview',exact:true})).toHaveCount(0)
@@ -18,7 +18,7 @@ test('linear intermediates remain visible with persistent status and deep links'
 
 test('failed state requests leave nodes neutral and fully visible',async({page})=>{
   await page.route('**/assets',route=>route.fulfill({json:assets}))
-  await page.route('**/state',route=>route.fulfill({status:503,json:{error:'unavailable'}}))
+  await page.route(/\/state(?:\?.*)?$/,route=>route.fulfill({status:503,json:{error:'unavailable'}}))
   await page.goto('/ui/#/graph')
   await expect(page.getByText('Asset state unavailable; colors are neutral.')).toBeVisible()
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
