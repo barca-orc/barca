@@ -104,8 +104,7 @@ Design questions nobody has answered yet, the issue each blocks, and the release
 - **Token management and browser access, due by 0.36.0 (#706, #187):** barca is the chosen
   issuer and validator. The auth RFC must define bootstrap access, browser sessions/CSRF,
   persistence and revocation, including active streams. No user-account system.
-- **Backup accounting and store inspection, due by 0.36.0 (#706):** choose eviction under
-  the cache limit or explicit reporting outside it for local backups, and bound/reuse artifact
+- **Store inspection, due by 0.36.0 (#706):** bound/reuse artifact
   integrity evidence without making `cached` mean unchecked. Record the cost as the DB grows.
 - **Stream-resume details, due by 0.36.0 (#706):** `Last-Event-ID` is the chosen direction;
   the RFC must settle replay retention, authentication and expired-cursor behavior.
@@ -119,6 +118,9 @@ still required for the 0.36.0 changes:
 
 - Backups: `[remote] backup_interval` / `BARCA_BACKUP_INTERVAL`, default `"1m"`, with `"off"`
   for external volume backups; retain the shutdown backup. Explain whole-DB copy/upload cost.
+  RFC-0015 chooses separate reporting of recognized local backups outside the cache budget,
+  retaining the five-copy rotation. Routine served-run backups share the cadence gate;
+  standalone final backups remain. This is accepted intent for 0.36.0, not implemented.
 - Credentials: support URL userinfo and `BARCA_SERVER_TOKEN` bearer headers on every request,
   including health, streams, cancellation and ledger traffic. Tokens can be generated in the
   UI and validated by barca in an opt-in mode with no user-account system. #187 is reopened

@@ -10,8 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Documentation
 
-- Propose configurable metadata backup cadence and separate local-backup accounting in
-  RFC-0015 for #706. The design is under review; runtime behavior is unchanged.
+- Record the accepted configurable metadata backup cadence and separate local-backup
+  accounting design in RFC-0015 for #706. Runtime behavior is unchanged.
 
 ## 0.35.2 (2026-10-29)
 

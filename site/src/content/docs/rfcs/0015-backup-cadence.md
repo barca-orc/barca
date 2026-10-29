@@ -3,7 +3,7 @@ title: 'RFC-0015: Configurable Metadata Backup Cadence'
 description: 'Control routine whole-database backups, retain the final shutdown backup, and report local backup storage outside the cache budget.'
 ---
 
-- **Status:** Under Review; proposed for 0.36.0, not implemented
+- **Status:** Accepted for 0.36.0; not implemented
 - **Date:** 2026-10-29
 - **Touches:** barca-core | barca-cli | HTTP server
 - **Supersedes / Related:** Amends the cadence and local disk accounting in
@@ -23,7 +23,7 @@ Keep the existing five-copy local rotation and restore behavior. Exclude recogni
 metadata backups from the cache budget and report their bytes separately, alongside the
 physical total. They still consume disk space; they are not made invisible to diagnostics.
 
-This is proposed behavior. The current manual and contracts continue to describe the
+This is accepted intent, not implemented behavior. The current manual and contracts continue to describe the
 implemented behavior until the implementation lands.
 
 ## 2. Motivation
