@@ -82,6 +82,11 @@ def scored(retailer: list[str], cleaned: duckdb.DuckDBPyRelation) -> duckdb.Duck
     return cleaned.aggregate("retailer, sum(amount) AS total")
 ```
 
+Each key's rows are sorted by every column, not kept in the order the step produced them:
+the same rows in any order give the same artifact bytes, so a `cutoff=True` consumer of an
+unchanged key stays cached. Values that compare equal but differ in representation (signed
+zero, distinct NaNs, case-insensitive collations) still need normalizing in the step.
+
 ### What stays the same
 
 - **Only keys that need to run are passed in.** With a keyed sensor where 3 of 200k

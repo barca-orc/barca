@@ -350,6 +350,13 @@ The function returns either:
   relation. barca splits it into one table per key; a key with no rows gets an empty table with
   the schema. DuckDB relations, polars and Arrow tables stream through DuckDB's
   `COPY ... PARTITION_BY`, so the result is not held in Python memory; pandas is split in memory.
+  Each key's rows are sorted by every column (DuckDB's `ORDER BY ALL`), not kept in the order
+  the step produced them, so the same rows in any order give the same artifact bytes and a
+  `cutoff=True` consumer stays cached. Values that compare equal but differ in representation
+  (`-0.0` and `0.0`, distinct NaNs, strings under a case-insensitive collation) can still
+  change the bytes; normalize them in the step. DuckDB 2 sorts while it writes; DuckDB 1.x, a
+  key written as several files and tables with a BIT or BIGNUM column are read back and
+  rewritten sorted, one extra pass over that key.
 
 ```python
 import pandas as pd
