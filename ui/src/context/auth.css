@@ -1,0 +1,16 @@
+.barca-auth-screen { min-height: 100dvh; display: flow-root; }
+.barca-connect { max-width: 480px; margin: 12vh auto; padding: 24px; color: var(--text-default); }
+.barca-connect h1 { color: var(--text-strong); margin-bottom: 16px; }
+.barca-connect p { margin: 16px 0; line-height: 1.6; }
+.barca-auth-form { display: flex; flex-direction: column; gap: 16px; max-width: 520px; margin: 20px 0; }
+.barca-auth-form label { display: flex; flex-direction: column; gap: 8px; }
+.barca-auth-form input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-raised); color: var(--text-strong); font: inherit; }
+.barca-auth-form button { align-self: flex-start; }
+.barca-token-secret { display: block; width: 100%; box-sizing: border-box; padding: 12px; overflow-wrap: anywhere; white-space: pre-wrap; background: var(--bg-raised); border: 1px solid var(--border-strong); }
+.barca-token-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border-subtle); }
+.barca-token-row p { margin: 4px 0; }
+
+.barca-tokens-page { overflow: auto; padding: 24px; }
+.barca-tokens-page h1 { margin: 0 0 24px; font-size: var(--text-2xl); color: var(--text-strong); }
+
+.barca-token-row strong { overflow-wrap: anywhere; }
