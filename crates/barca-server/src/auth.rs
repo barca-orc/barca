@@ -30,15 +30,23 @@ pub enum Error {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, rename = "TokenMetadata")
+)]
 pub struct Metadata {
     pub id: String,
     pub name: String,
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub created_at: DateTime<Utc>,
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
     pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// Secret is returned once by issuance; it is never persisted or included in Debug.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, rename = "IssuedToken"))]
 pub struct Issued {
     #[serde(flatten)]
     pub metadata: Metadata,

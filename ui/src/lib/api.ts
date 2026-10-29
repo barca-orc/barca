@@ -5,7 +5,7 @@
    apiBase.ts); in dev, Vite proxies non-/ui paths to barca serve.
    ============================================================ */
 
-import { API_BASE, apiUrl } from './apiBase'
+import { connectionToken, redactCredential, serverFetch } from './credentials'
 
 import type {
   NodeGroup,
@@ -22,6 +22,8 @@ import type {
   ScheduleJob,
   ResetResult,
   QueueView,
+  TokenMetadata,
+  IssuedToken,
 } from './types'
 
 
@@ -46,11 +48,12 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(API_BASE, path), {
+async function request<T>(path: string, init?: RequestInit, auth?: { token?: string | null; secret?: string }): Promise<T> {
+  const token = auth?.token === undefined ? connectionToken() : auth.token
+  const res = await serverFetch(path, {
     headers: { 'content-type': 'application/json' },
     ...init,
-  })
+  }, token)
   if (!res.ok) {
     let message = res.statusText
     let remediation: string | null = null
@@ -62,14 +65,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         remediation?: string | null
         reason?: string
       }
-      if (body.error) message = body.error
-      if (body.remediation) remediation = body.remediation
-      if (body.reason) reason = body.reason
+      if (typeof body.error === 'string') message = body.error
+      if (typeof body.remediation === 'string') remediation = body.remediation
+      if (typeof body.reason === 'string') reason = body.reason
     } catch {
       // non-JSON error body; keep statusText
     }
-    throw new ApiError(res.status, message, remediation, reason)
+    throw new ApiError(res.status, redactCredential(redactCredential(message, token), auth?.secret ?? null), redactCredential(redactCredential(remediation ?? '', token), auth?.secret ?? null) || null, reason)
   }
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
 
@@ -78,7 +82,15 @@ function startRun(body: RunRequest): Promise<RunHandle> {
   return request<RunHandle>('/runs', { method: 'POST', body: JSON.stringify(body) })
 }
 
+export type { TokenMetadata, IssuedToken } from './types'
+
 export const api = {
+  authStatus: (signal?: AbortSignal) => request<{ mode: 'off' | 'token' }>('/auth/status', { signal }, { token: null }),
+  bootstrap: (code: string) => request<IssuedToken>('/auth/bootstrap', { method: 'POST', body: JSON.stringify({ code }) }, { token: null, secret: code }),
+  checkToken: (token: string) => request<Health>('/health', undefined, { token }),
+  tokens: () => request<{ tokens: TokenMetadata[] }>('/auth/tokens'),
+  createToken: (name: string, expires_at: string | null) => request<IssuedToken>('/auth/tokens', { method: 'POST', body: JSON.stringify({ name, expires_at }) }),
+  revokeToken: (id: string) => request<void>(`/auth/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   health: () => request<Health>('/health'),
   groups: () => request<NodeGroup[]>('/groups'),
   assets: () => request<ListNode[]>('/assets'),
