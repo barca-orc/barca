@@ -14,6 +14,7 @@
 // Print with `barca_core::outln!` / `errln!`, which cannot panic on a closed pipe (#286).
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
+pub mod auth;
 mod error;
 mod handlers;
 mod inspect;
