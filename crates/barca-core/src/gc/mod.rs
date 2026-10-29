@@ -1694,7 +1694,8 @@ async fn check_in(
         }
         // Eviction could not get under the limit a moment ago and nothing has grown since:
         // planning again would find the same.
-        let stuck = now_secs().saturating_sub(state.short_at) < STUCK_FOR.as_secs()
+        let stuck = state.accounting_version == 1
+            && now_secs().saturating_sub(state.short_at) < STUCK_FOR.as_secs()
             && size
                 <= state
                     .short_size

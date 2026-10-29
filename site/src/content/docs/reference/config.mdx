@@ -142,7 +142,7 @@ url = "https://barca.internal.example.com"
 | `require_env` | `false` | `true`: a command that reads or writes an environment exits 2 unless `--env` or `BARCA_ENV` names it, even with `default_env` set. See [Environments](#environments---env). |
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
-| `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
+| `[cache].max_size` | 10% of the filesystem | Size budget for `.barca/` excluding recognized local metadata backups; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
 | `[execution].capacity` | the pool size | Experimental. The most the `weight=` of the steps running at once may add up to; a whole number of at least 1. A step heavier than it runs alone. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight). |
 | `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it puts them back at the head of its run queue (they start again after the restart) and exits 0. `0` requeues at once; a second signal cancels them instead. `--drain-timeout` overrides it. |
 | `[execution].pool_size` | the cores, or the capacity when smaller | How many worker processes a run starts at most; a whole number of at least 1. Without it a run starts no more workers than its capacity (every step weighs at least 1). `BARCA_POOL_SIZE` overrides it. `barca plan` (`pool_source`) and `barca doctor` say which applied. |
@@ -175,12 +175,15 @@ had none: every new run hash added a file and kept the old one).
 
 - `KB`, `MB`, `GB`, `TB` are decimal (`20GB` is 20 × 10⁹ bytes); `KiB`, `MiB`, `GiB`, `TiB` are
   binary; a bare number is bytes. A percentage is of the filesystem's size, read at each check.
-- The size is everything under `.barca/`, every environment, the metadata databases included
-  (they are counted, never deleted).
+- Budgeted size covers `.barca/` across every environment, including the metadata databases
+  (counted, never deleted), except recognized local metadata backup files. Those restore
+  copies, their owned sidecars, markers and temporary copies keep the five-copy rotation
+  and are reported outside the budget. Physical totals and free-space usage include them.
+  Unrelated files in backup directories and other directories named `backups` remain budgeted.
 
 After every `barca get` and `barca run`, after every run under `barca serve`, and once a minute
 under `barca serve`, barca checks the size. Over the limit, it deletes files in this order
-until `.barca/` is at or below 80% of the limit:
+until budgeted bytes are at or below 80% of the limit:
 
 1. **Leftovers**: staging directories of processes that are no longer running, `*.moved-aside*`
    directories, artifact files no metadata row names (what `barca state reset` and
