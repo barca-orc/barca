@@ -8,11 +8,39 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Served runs' end-of-run metadata backups now share the routine backup interval. Completion
+  still records the run locally, but no longer promises an immediate remote metadata copy.
+  Standalone final backups and the server's graceful-shutdown backup remain enabled.
+
+### Features
+
+- Report local metadata backups outside the cache budget while retaining the five-copy
+  rotation. Doctor and GC distinguish budgeted, backup and physical bytes; status adds an
+  experimental project-wide `disk_usage` summary using maintained cache accounting without
+  walking artifacts. Physical totals continue to include backups.
+
+- Configure routine metadata backup cadence with `[remote] backup_interval` or
+  `BARCA_BACKUP_INTERVAL` (default `"1m"`, or `"off"`). A shared per-database gate applies
+  before copying, hashing and uploading, survives process restarts, and retains dirty
+  recorder progress when a request is skipped.
+
 ### Documentation
 
 - Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including
   bootstrap, browser credential handling, revocation and bounded replay. Runtime behavior is
   unchanged; implementation is still required for 0.36.0.
+
+- CI runs in three tiers: a pull request runs the static checks, a merge group runs those plus
+  the Rust tests, the wheel and the quick Python subset in `scripts/fast-tests.txt` (about two
+  minutes), and a release PR and its merge group run everything, with the object-store
+  emulators, the duckdb 1.x rerun and the minute checkpoint test on. `scripts/check-fast.sh`
+  builds the venv's barca with the `fast` profile instead of `--release`, and runs the same
+  quick subset. The release workflow builds the UI inside each wheel job from a cache keyed
+  on `ui/` instead of waiting on a separate job, waits for the published wheel on PyPI once
+  instead of in each verification job, and skips the barca.sh deploy with a warning when the
+  Cloudflare secrets are missing instead of failing the run.
 
 ## 0.35.3 (2026-10-29)
 

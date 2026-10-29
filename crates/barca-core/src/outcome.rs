@@ -93,6 +93,8 @@ pub fn rfc3339(epoch: i64) -> String {
 /// caller, so the id a server answers with is the database id) and what started it.
 #[derive(Clone, Debug, Default)]
 pub struct RunOptions {
+    /// A served run's end is routine; the server owns the final shutdown backup.
+    pub server_owned: bool,
     /// The run id to use; a new one when `None`.
     pub run_id: Option<String>,
     pub trigger: Trigger,

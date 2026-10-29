@@ -18,6 +18,8 @@ Normalized, because they differ by design (the declared differences, listed in
   and `<n>s`. A step's `import_seconds` is reported only when its import took over a second,
   so whether the key is there at all depends on load: it is dropped from both sides.
 - The hint of `barca history RUN_ID` names the server it read (`--server <url>`): dropped.
+- `disk_usage` measures each host's storage and cache budget, not graph equivalence. Its
+  fields and accounting invariants are checked, then host-specific counts are normalized.
 
 Each copy computes its own artifacts, so an artifact's `size_bytes` and `content_hash` read
 `<size_bytes>` and `<content_hash>` (the planning pipeline writes parquet whose bytes vary).
@@ -127,6 +129,17 @@ def _text(s: str, roots: list[str]) -> str:
 
 
 def _value(v, roots: list[str], key: str = ""):
+    if key == "disk_usage" and isinstance(v, dict):
+        assert set(v) == {"size_bytes", "budget_bytes", "backup_bytes", "limit_bytes"}
+        assert all(
+            x is None or (isinstance(x, int) and not isinstance(x, bool) and x >= 0)
+            for x in v.values()
+        )
+        measured = v["budget_bytes"] is not None and v["backup_bytes"] is not None
+        assert (v["size_bytes"] is not None) == measured
+        if measured:
+            assert v["size_bytes"] == v["budget_bytes"] + v["backup_bytes"]
+        return {k: "<host-bytes>" for k in v}
     if isinstance(v, dict) and v.get("partitioned") is True:
         v = {**v, "last_materialization": "<key>", "shape": "<key>"}
     if isinstance(v, dict):
