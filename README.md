@@ -1,7 +1,7 @@
 <h1 align="center">barca</h1>
 
-<p align="center"><strong>An embedded orchestrator for Python: a binary and a directory, like DuckDB or SQLite.<br />
-No server, no config; it runs what changed and caches the rest.</strong></p>
+<p align="center"><strong>Run Python tasks. Cache assets. Recompute only the partitions that changed.<br />
+Start locally; add one server to manage runs across machines.</strong></p>
 
 <p align="center">
   <a href="https://barca.sh">Docs</a> ·
@@ -22,10 +22,20 @@ No server, no config; it runs what changed and caches the rest.</strong></p>
 > **Status: pre-1.0.** A breaking change to the CLI ships in a minor release with a "Breaking"
 > line in the [changelog](CHANGELOG.md).
 
-You mark Python functions with `@asset`, `@sensor` or `@task` and declare their inputs. The
-`barca` binary, written in Rust, reads your source without importing it, works out what is
-stale, and runs it in Python worker processes. Every result is a file under `.barca/`.
-`barca serve` adds cron schedules, an HTTP API and a web UI when you want them.
+Barca runs Python functions and keeps their results and run history together. Use `@asset`
+for a cached result, `@task` for an action that runs every time, and partitions for work
+that should be cached separately by customer, date or another key. Declare dependencies
+with `inputs={"parameter": upstream_function}`.
+
+| You want to | Start with |
+|---|---|
+| Get an asset and reuse unchanged results | `barca get summary` |
+| Run a task and reuse its cached inputs | `barca run publish` |
+| Get one partition | `barca get report --partition customer=acme` |
+| Manage runs on one server | `barca serve`, then `barca get summary --server http://host:8274` |
+
+Local use needs no server or configuration. A server adds a shared run history, schedules
+and a web UI. [Getting Started](https://barca.sh/getting-started/) covers each path.
 
 <p align="center">
   <img alt="A terminal: barca get runs two steps, a second barca get runs none, and after an edit barca status marks summary stale with the reason changed: code" src="https://raw.githubusercontent.com/barca-orc/barca/main/site/public/readme/terminal.svg" width="820" />
@@ -33,8 +43,8 @@ stale, and runs it in Python worker processes. Every result is a file under `.ba
 
 ## Why barca
 
-- **Reads your code without importing it.** The graph comes from parsing the source, so `list`,
-  `status` and `--dry-run` do not run your modules.
+- **Discovers dependencies from source.** The graph comes from parsing Python. Computed
+  partition keys and batch groups can import your module to resolve their values.
 - **One install, no server.** `uv add barca` brings the binary, the decorators and a Python API;
   the state is one directory, `.barca/`.
 - **Recomputes only what changed.** An asset runs again when its code, the project code it

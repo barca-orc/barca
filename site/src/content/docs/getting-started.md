@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-description: Install barca, run two assets, see them cached, and find out what reruns when the code changes.
+description: Run cached assets, tasks and partitions locally, then run the same project on a server.
 ---
 
 ## Install
@@ -10,12 +10,11 @@ You need Python 3.12 or later. With [uv](https://docs.astral.sh/uv/):
 ```bash
 uv init --app my-project
 cd my-project
-uv add 'barca[sql]'
+uv add barca
 ```
 
-uv is recommended, not required. `pip install 'barca[sql]'` in a virtualenv works the same
-way; then type `barca` wherever this page says `uv run barca`. The `sql` extra installs DuckDB for
-`barca sql`. Wheels exist for macOS on Apple Silicon and for Linux on x86-64 and arm64, glibc
+uv is recommended, not required. `pip install barca` in a virtualenv works the same
+way; then type `barca` wherever this page says `uv run barca`. The asset, task, partition and server examples need no optional extras. Wheels exist for macOS on Apple Silicon and for Linux on x86-64 and arm64, glibc
 and musl.
 
 ## Write two assets
@@ -96,20 +95,11 @@ recorded result, so barca printed the same file in `.barca/artifacts/`.
 
 ## See what barca sees
 
-Three commands show what barca found and what is cached. None of them runs a step.
+Two commands show what barca found and what is cached. None of them runs a step.
 
 ```bash
 uv run barca list      # every asset, sensor and task, with its inputs
 uv run barca status    # per node: cached or stale and why, last run, shape of the result
-uv run barca sql "select count(*) as n, sum(x) as total from raw_data"
-```
-
-`barca sql` queries the cached results with DuckDB. Each asset is a view named after its
-function:
-
-```
-n  total
-3  6
 ```
 
 With no file argument these commands read every `.py` file in the project that imports barca.
@@ -173,6 +163,87 @@ Run 15134f24969a | got 'summary' in 0.068s (1 step, 1 phase)
 
 One step ran. `raw_data` did not change, so its result came from the cache. If you had
 edited `raw_data` instead, both would have run: `raw_data` is an input of `summary`.
+
+## Run an action every time
+
+Add this to `pipeline.py`:
+
+```python
+from barca import task
+
+
+@task(inputs={"value": summary})
+def publish(value: dict) -> dict:
+    print(f"Publishing {value}")
+    return value
+```
+
+```bash
+uv run barca run publish pipeline.py
+uv run barca run publish pipeline.py
+```
+
+`publish` runs both times. Its upstream assets still use their cache. Use `get` for a
+result and `run` for an action; `inputs=` connects both kinds of function the same way.
+
+## Cache work separately by key
+
+Add an asset with two customer partitions:
+
+```python
+from barca import partitions
+
+
+@asset(partitions={"customer": partitions(["acme", "globex"])})
+def report(customer: str) -> dict:
+    return {"customer": customer, "score": len(customer)}
+```
+
+```bash
+uv run barca get report pipeline.py
+uv run barca get report pipeline.py --partition customer=acme
+```
+
+The first command computes both keys. The second reuses `acme`'s result. Each key has its
+own cache entry. To react to changes in external data for individual keys, use a sensor
+and `partitions_from`; see [Partitions](/workflows/03-parametrized-assets-and-partitions/).
+
+## Run on another machine
+
+On the machine with the project and its dependencies installed:
+
+```bash
+uv run barca serve pipeline.py --host 0.0.0.0
+```
+
+On your laptop:
+
+```bash
+uv run barca get summary --server http://barca.internal:8274
+uv run barca run publish --server http://barca.internal:8274
+uv run barca history --server http://barca.internal:8274
+```
+
+Replace the URL with your server's address. These commands execute the **server's copy of
+the code**, print the result here, and keep the run history there. They do not upload local
+edits. The web UI is at the same address. Keep the server on a private network or behind
+an authenticating proxy; it has no login.
+
+Remote execution needs no shared bucket. If you also want laptops to compute locally
+against the same cache and history, follow [Share Results With a Team](/team-server/).
+`--local` uses an independent local history; it does not mean local execution with shared
+server state.
+
+## Query cached results when you need SQL
+
+SQL is optional. Install DuckDB support when you want to query asset results as tables:
+
+```bash
+uv add 'barca[sql]'
+uv run barca sql "select count(*) as n, sum(x) as total from raw_data"
+```
+
+Each asset becomes a view named after its function. This query returns `n = 3`, `total = 6`.
 
 ## What to read next
 
