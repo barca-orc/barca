@@ -58,6 +58,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca gc [--dry-run] [--max-size SIZE]` | Evict cached results to keep `.barca/` under `[cache] max_size` (default 10% of the filesystem; barca also does this after every `get` and `run`) (`barca docs cache`, "Disk use"). |
 | `barca state backups` / `barca state restore` | List the metadata backups, or put one back in place of the local database (`barca docs remote`). |
 | `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). `--server` on get/run/status/list/history/stats runs them there (`barca docs server-mode`). |
+| `barca tokens bootstrap` | On the deployed host, print a one-use bootstrap code for opt-in project token access (`barca docs server-mode`). |
 | `barca queue [pause\|resume] --server` | A server's run queue: the runs running and waiting, kept across restarts; pause it before a deploy (`barca docs scheduling`). |
 | `barca docs [topic]` | This manual. |
 | `barca version` | Print the installed version (also `barca --version`). |

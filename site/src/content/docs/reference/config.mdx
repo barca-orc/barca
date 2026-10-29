@@ -155,6 +155,7 @@ url = "https://barca.internal.example.com"
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
 | `[remote].backup_interval` | `"1m"` | Routine metadata backups: positive whole seconds or s/m/h/d suffix, or `off`. Final backups remain. Invalid values exit 2. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
+| `[server].auth` | `"off"` | Opt-in project bearer authentication: `"off"` or `"token"`; `BARCA_SERVER_AUTH` overrides it, `serve --auth` overrides both. Local `tokens bootstrap` grants initial access; see [Server Mode](/reference/server-mode/). |
 | `[server].url` | none | The `barca serve` that is the team's ledger (`BARCA_SERVER` overrides it): `http://` or `https://`, with any proxy path prefix. `get` and `run` run here and read and post through its ledger (requires `[remote]` pointing at the server's store); `status`, `history` and `stats` answer from it; `sql` resolves its views from it; a bare `--server` runs the command there; `--local` ignores it. See [Server mode](#server-mode) and [Server Mode](/reference/server-mode/). |
 
 An unknown key or a malformed file is a usage error (exit 2) that names the key and lists the
@@ -225,6 +226,7 @@ Variables that override `barca.toml`:
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
 | `BARCA_REQUIRE_ENV` | `require_env` | `1` (or `true`, `yes`) requires `--env` or `BARCA_ENV`; `0` (or `false`, `no`) does not; anything else exits 2. |
 | `BARCA_CAPACITY` | `[execution].capacity` | Experimental. A whole number of at least 1; anything else exits 2. |
+| `BARCA_SERVER_AUTH` | server authentication mode, `off` (default) or `token`; overrides `[server] auth`, overridden by `serve --auth`; invalid values are exit 2 (`barca docs server-mode`) | experimental |
 | `BARCA_SERVER_TOKEN` | server-only bearer credential for every CLI and deprecated Python Client request; nonempty ASCII without whitespace or control characters; cannot be combined with URL userinfo; invalid credentials are exit 2; removed from Python helper environments (`barca docs server-mode`) | experimental |
 | `BARCA_SERVER_RECONNECT` | none | Experimental. Seconds a `--server` client following a run (and `logs -f --server`) waits for a restarting server to come back (default 60; `0` gives up at once). Not a number of seconds exits 2. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |

@@ -247,7 +247,11 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         "route or verb changed without normative contract update"
     );
     assert_eq!(contract()["openapi"], "3.1.0");
-    assert_eq!(contract()["security"], json!([]));
+    assert_eq!(contract()["security"], json!([{}, {"projectToken": []}]));
+    assert_eq!(
+        contract()["components"]["securitySchemes"]["projectToken"]["scheme"],
+        "bearer"
+    );
     let mut operation_ids = BTreeSet::new();
     for methods in contract()["paths"].as_object().unwrap().values() {
         for operation in methods.as_object().unwrap().values() {

@@ -399,6 +399,7 @@ pub struct JobStatus {
 /// Cloneable application state shared across all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
+    pub auth: Arc<crate::auth_http::Access>,
     pub loaded: Arc<tokio::sync::Mutex<Option<LoadedSources>>>,
     pub load_errors: Arc<RwLock<Vec<barca_core::load::LoadError>>>,
     pub config: Arc<ServeConfig>,
@@ -462,6 +463,7 @@ impl AppState {
             Arc::new(barca_core::capacity::SharedCapacity::new(total, source))
         });
         Self {
+            auth: Arc::new(crate::auth_http::Access::new(&config.resolved)),
             capacity,
             loaded: Arc::new(tokio::sync::Mutex::new(None)),
             load_errors: Arc::new(RwLock::new(Vec::new())),

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 pub(crate) async fn serve_cmd(
     env: Option<&str>,
+    auth: Option<barca_core::config::AuthMode>,
     files: Vec<PathBuf>,
     host: std::net::IpAddr,
     port: u16,
@@ -23,6 +24,9 @@ pub(crate) async fn serve_cmd(
     use crate::error::{CliError, ErrorKind};
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
     let mut resolved = barca_core::config::resolve(env).map_err(engine)?;
+    if let Some(mode) = auth {
+        resolved.server_auth = mode;
+    }
     // `--drain-timeout` > `[server] drain_timeout` > 30 s.
     if let Some(secs) = drain_timeout {
         resolved.drain_timeout_secs = secs;

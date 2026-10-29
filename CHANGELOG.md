@@ -16,12 +16,17 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Opt into server-issued project bearer tokens with `[server] auth = "token"`,
+  `BARCA_SERVER_AUTH`, or `serve --auth`. Local `tokens bootstrap` creates a one-use recovery
+  grant; HTTP token creation/list/revocation works in read-only mode, stores digests outside
+  metadata backups, and closes revoked or expired event streams. UI token management and
+  cursor resume remain pending.
+
 - Send server bearer credentials from `BARCA_SERVER_TOKEN`, or Basic credentials from URL
   userinfo, consistently across execution, ledger, streaming and cancellation requests in the
   CLI and deprecated Python client. Reject mixed credentials and redirects outside the
   configured server origin/path, redact reflected credentials in HTTP errors, and keep the
-  reserved bearer variable out of Python helper environments. Server token issuance and
-  validation are not implemented yet.
+  reserved bearer variable out of Python helper environments.
 
 - Report local metadata backups outside the cache budget while retaining the five-copy
   rotation. Doctor and GC distinguish budgeted, backup and physical bytes; status adds an
@@ -36,8 +41,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ### Documentation
 
 - Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including
-  bootstrap, browser credential handling, revocation and bounded replay. Runtime behavior is
-  unchanged; implementation is still required for 0.36.0.
+  bootstrap, browser credential handling, revocation and bounded replay. Browser token
+  management and cursor replay remain to be implemented for 0.36.0.
 
 - CI runs in three tiers: a pull request runs the static checks, a merge group runs those plus
   the Rust tests, the wheel and the quick Python subset in `scripts/fast-tests.txt` (about two

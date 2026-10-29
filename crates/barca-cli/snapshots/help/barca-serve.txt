@@ -6,6 +6,7 @@ Arguments:
   [FILES]...  Python files or directories; default: discover the project
 
 Options:
+      --auth <AUTH>              Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth
   -p, --port <PORT>              Port to bind on [default: 8274]
       --host <HOST>              Bind address; 0.0.0.0 exposes the unauthenticated API [default: 127.0.0.1]
       --watch                    Reload changed source files; restart to discover new files

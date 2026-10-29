@@ -41,6 +41,16 @@ pub fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn(etag));
     Router::new()
         .merge(reads)
+        .route("/auth/status", get(crate::auth_http::status))
+        .route("/auth/bootstrap", post(crate::auth_http::bootstrap))
+        .route(
+            "/auth/tokens",
+            get(crate::auth_http::list).post(crate::auth_http::create),
+        )
+        .route(
+            "/auth/tokens/{id}",
+            axum::routing::delete(crate::auth_http::revoke),
+        )
         // The ledger: what a local run on another machine asks and posts (RFC-0007).
         .route("/ledger/lookup", post(ledger::lookup))
         .route("/ledger/runs", post(ledger::post_run))
@@ -72,6 +82,10 @@ pub fn router(state: AppState) -> Router {
         // Everything else is a JSON 404, like the errors of the routes above.
         .fallback(handlers::no_route)
         .method_not_allowed_fallback(handlers::wrong_method)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth_http::authorize,
+        ))
         .with_state(state)
 }
 

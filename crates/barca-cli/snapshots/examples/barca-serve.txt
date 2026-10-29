@@ -7,6 +7,9 @@ Arguments:
           Python files or directories; default: discover the project
 
 Options:
+      --auth <AUTH>
+          Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth
+
   -p, --port <PORT>
           Port to bind on
 

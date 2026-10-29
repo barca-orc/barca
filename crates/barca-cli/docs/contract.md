@@ -45,7 +45,7 @@ outside the `GENERATED` blocks is written by hand.
 |---|---|
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
-| `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
+| `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
 | `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences `barca docs server-mode` lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
@@ -88,6 +88,8 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 <!-- BEGIN GENERATED commands -->
 | Command | Arguments | Stability | Purpose |
 |---|---|---|---|
+| `barca tokens` | - | experimental: new in 0.36 (RFC-0016): local bootstrap for opt-in project token access | Manage project authentication on the deployed host |
+| `barca tokens bootstrap` | - | experimental: prints a one-use bootstrap credential; token formats may evolve | Print a one-use 15-minute bootstrap code; replaces any unconsumed grant |
 | `barca get` | `[<ARGS>...]` | stable | Get assets; reuse unchanged results and print their artifact paths |
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependencies; the task runs every time |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
@@ -96,7 +98,7 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility | Manage runs, schedules and results on a server |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility | Manage runs, schedules and results on a server |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
@@ -149,6 +151,18 @@ default, and any aliases.
 |---|---|---|---|---|
 | `--examples` | - | - | stable | Show all command examples without running anything |
 | `-V, --version` | - | - | stable | Print version |
+
+#### barca tokens
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
+
+#### barca tokens bootstrap
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca get
 
@@ -281,6 +295,7 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
+| `--auth` | `AUTH` | - | experimental (with the command) | Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth |
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
 | `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | Bind address; 0.0.0.0 exposes the unauthenticated API |
 | `--watch` | - | default `false` | experimental (with the command) | Reload changed source files; restart to discover new files |
@@ -493,6 +508,7 @@ value of its first key only.
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
 | `BARCA_UI_URL` | base URL of the web UI; Slack posts link the run id to it | experimental |
 | `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name (`barca docs telemetry`) | experimental |
+| `BARCA_SERVER_AUTH` | server authentication mode, `off` (default) or `token`; overrides `[server] auth`, overridden by `serve --auth`; invalid values are exit 2 (`barca docs server-mode`) | experimental |
 | `BARCA_SERVER_TOKEN` | server-only bearer credential for every CLI and deprecated Python Client request; nonempty ASCII without whitespace or control characters; cannot be combined with URL userinfo; invalid credentials are exit 2; removed from Python helper environments (`barca docs server-mode`) | experimental |
 | `BARCA_SERVER_RECONNECT` | seconds a `--server` client following a run (`get`/`run --server`, `logs -f --server`) waits for a server whose stream broke to come back, and follows the same run id there (default 60; `0`: give up at once, exit 3); not a number of seconds is a usage error (exit 2) | experimental |
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
@@ -2527,7 +2543,9 @@ and `error`, `kind` and the exit code are those of any failed step (`step_failed
 future release may add a value; a client should treat an unknown one like a failure in barca.
 
 `reason` (string) is present only on an error a client may handle on its own, and names it
-stably; any other error has no `reason` key. The one value so far is `metadata_unusable`
+stably; any other error has no `reason` key. Authentication failures use
+`authentication_required` or `invalid_token` (`kind` `infra`, exit 3; HTTP 401 with
+`WWW-Authenticate: Bearer`). Another value is `metadata_unusable`
 (`kind` `infra`, exit 3): the metadata DB is there but this barca cannot use it (empty, not a
 SQLite file, a newer format, a malformed schema). `error` names the file and `remediation` says
 to upgrade barca, put a backup back with `barca state restore`, or start over with

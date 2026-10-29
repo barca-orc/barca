@@ -166,7 +166,7 @@ pub struct ErrorEnvelope {
     /// `step_failed` only: the failing step's artifact directory (local path or URI).
     pub artifact_dir: Option<String>,
     /// A stable name for an error a client may handle on its own, when barca has one:
-    /// `metadata_unusable` (the metadata DB cannot be used). Absent from the JSON otherwise.
+    /// `metadata_unusable`, `authentication_required` or `invalid_token`. Absent otherwise.
     pub reason: Option<String>,
     /// Human-mode text (the existing prose).
     prose: String,

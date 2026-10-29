@@ -317,7 +317,7 @@ constructing one warns, and it will be removed in a later minor release.
 ## Deploying and the HTTP routes
 
 Run `barca serve --host 0.0.0.0` behind a private network or an authenticating, TLS-terminating
-proxy; there is no built-in authentication (https://barca.sh/deploying/). Point clients at the
+proxy; authentication defaults off (https://barca.sh/deploying/). Point clients at the
 proxy's URL, prefix included; `https://` works for every request, ledger ones included.
 Server URL userinfo is omitted from printed addresses in errors, announcements, ledger
 warnings, stream-drop messages, SQL provenance and doctor output, including JSON. For example,
@@ -332,8 +332,48 @@ sends Basic credentials. Combining userinfo with `BARCA_SERVER_TOKEN` is a usage
 These rules apply to URLs from `--server`, `BARCA_SERVER` and `[server] url` alike.
 Redirects must stay within the configured origin and proxy path. Known credentials reflected
 in HTTP errors are redacted. The reserved `BARCA_SERVER_TOKEN` variable is removed from
-Python worker and transfer-helper environments. Built-in server token issuance and validation
-remain unimplemented; this is client transport support for authenticating proxies.
+Python worker and transfer-helper environments.
+
+### Opt-in project tokens
+
+Set `[server] auth = "token"` in `barca.toml`, `BARCA_SERVER_AUTH=token`, or
+`barca serve --auth token` (flag beats environment, environment beats TOML). The default
+is `off`; only `off` and `token` are valid. Use TLS at the proxy for remote connections.
+In token mode every API request, including health probes and event streams, needs a bearer
+credential. The exact static UI files and `GET /auth/status` remain public.
+
+On the deployed host, inside the deployed project, run:
+
+```bash
+barca tokens bootstrap
+```
+
+This local-only command prints one secret code to stdout. It replaces the previous
+unconsumed code and expires after 15 minutes. `POST /auth/bootstrap` with JSON
+`{"code":"<bootstrap code>"}` consumes it once and returns a connection token expiring
+in 12 hours. Use that token as a bearer credential to create a named API token with
+`POST /auth/tokens`, JSON `{"name":"laptop"}`. An optional future UTC `expires_at` sets
+an expiry; omitted or null means **no expiry**. Creation returns the secret once.
+The UI Connect/token-management screens are not implemented yet; these HTTP operations
+are available to API clients.
+
+Every token grants the server's full capabilities, including token management. There are
+no accounts or roles. Read-only mode still prevents pipeline writes but allows token
+administration. `GET /auth/tokens` lists metadata; `DELETE /auth/tokens/{id}` revokes
+idempotently. Losing every token is recoverable with a new local bootstrap. A reserved
+bootstrap connection slot remains available at the 1000 ordinary token limit.
+
+Auth state lives in owner-only `.barca/auth/`, shared across project environments and
+separate from metadata backups. Preserve it separately when migrating; restoring metadata
+cannot resurrect a revoked token. Unreadable/corrupt auth state fails closed. Secrets never
+belong in URLs, logs, committed configuration or shell arguments. URL Basic credentials
+and Barca bearer mode cannot share one Authorization header; a layered proxy must forward
+bearer credentials and use another mechanism for its own outer authentication.
+
+Missing, invalid, revoked or expired tokens return 401 with `WWW-Authenticate: Bearer` and
+the infra/exit-3 envelope. Token responses use `Cache-Control: no-store`. Revocation closes
+local event streams; external changes and expiry are checked within one second even when
+streams are idle. Auth-off mode rejects token administration.
 
 | Route | Body | Answer |
 |---|---|---|

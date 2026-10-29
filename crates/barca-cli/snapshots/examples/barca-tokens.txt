@@ -1,0 +1,17 @@
+Manage project authentication on the deployed host
+
+Usage: barca tokens <COMMAND>
+
+Commands:
+  bootstrap  Print a one-use 15-minute bootstrap code; replaces any unconsumed grant
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca tokens bootstrap    # print a one-use bootstrap code

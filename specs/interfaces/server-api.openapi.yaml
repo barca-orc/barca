@@ -2,10 +2,12 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '15'
-  description: 'Normative current wire contract; specification version 15 is independent of package versions.
-    Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
-    is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
+  version: '16'
+  description: 'Normative current wire contract; specification version 16 is independent of package versions.
+    Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
+    including health, HEAD, ETag and SSE; read-only is an independent operating mode.
+    Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
+    consumes its own one-use local credential. No cookies or CORS credentials are accepted. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
     /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset, and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases retained for Python Client compatibility. Conformance: crates/barca-server/tests/openapi.rs
@@ -14,13 +16,145 @@ jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
 - url: http://127.0.0.1:8274
   description: Default local listener; configurable host/port, reverse proxies may add a prefix.
-security: []
+security:
+- {}
+- projectToken: []
+x-authentication: Bearer authentication is mandatory when [server] auth is token; off preserves unauthenticated and proxy deployments.
 paths:
+  /auth/status:
+    get:
+      summary: Public authentication mode
+      operationId: get_auth_status
+      security: []
+      responses:
+        '200':
+          description: Mode only; no project data
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [mode]
+                properties:
+                  mode: {type: string, enum: [off, token]}
+    head:
+      summary: Authentication metadata headers (requires a token in token mode)
+      operationId: head_auth_status
+      responses:
+        '200': {description: Headers only}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/AuthOff'}
+        '500': {$ref: '#/components/responses/AuthUnavailable'}
+  /auth/bootstrap:
+    post:
+      summary: Exchange a one-use local bootstrap code for a 12-hour connection token
+      operationId: post_auth_bootstrap
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: {type: string}
+      responses:
+        '200':
+          description: Bootstrap consumed; credential shown once; Cache-Control no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IssuedToken'}
+        '400': {$ref: '#/components/responses/AuthBadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/AuthOff'}
+        '500': {$ref: '#/components/responses/AuthUnavailable'}
+  /auth/tokens:
+    get:
+      summary: List active token metadata, including the bootstrap connection
+      operationId: get_auth_tokens
+      responses:
+        '200':
+          description: Public metadata only; Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [tokens]
+                properties:
+                  tokens:
+                    type: array
+                    maxItems: 1001
+                    items: {$ref: '#/components/schemas/TokenMetadata'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/AuthOff'}
+        '500': {$ref: '#/components/responses/AuthUnavailable'}
+    post:
+      summary: Create a full-capability named API token; permitted with read-only ledger mode
+      operationId: post_auth_tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, description: At most 128 UTF-8 bytes; no control characters}
+                expires_at:
+                  type: [string, 'null']
+                  format: date-time
+                  description: Future expiry; omitted or null means non-expiring
+      responses:
+        '201':
+          description: Secret shown once; Cache-Control no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IssuedToken'}
+        '400': {$ref: '#/components/responses/AuthBadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/AuthOff'}
+        '409':
+          description: 1000 ordinary tokens; revoke an unused token to make space
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500': {$ref: '#/components/responses/AuthUnavailable'}
+    head:
+      summary: Authentication metadata headers (requires a token in token mode)
+      operationId: head_auth_tokens
+      responses:
+        '200': {description: Headers only}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/AuthOff'}
+        '500': {$ref: '#/components/responses/AuthUnavailable'}
+  /auth/tokens/{id}:
+    delete:
+      summary: Idempotently revoke a token; close its event streams
+      operationId: delete_auth_token
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+      responses:
+        '204': {description: Revoked or already absent; Cache-Control no-store}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/AuthOff'}
+        '500': {$ref: '#/components/responses/AuthUnavailable'}
   /health:
     get:
       summary: Server liveness and operating modes
       operationId: get_health
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: &id_etag
@@ -52,7 +186,7 @@ paths:
               schema: &id003
                 type: string
               description: Methods accepted by this route
-      description: Liveness, not readiness or authentication. The API has no authentication.
+      description: Liveness; requires a bearer credential when token authentication is enabled.
         status is draining from the first SIGTERM or SIGINT until the server exits; the
         response stays 200. started_at changes when the server restarts (a client following a run
         tells a restart by it); queue counts the runs waiting and running. Read-only mode refuses mutating routes; it does not restrict inspection access.
@@ -65,6 +199,8 @@ paths:
       summary: Server liveness and operating modes (headers only)
       operationId: head_health
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '405':
@@ -75,6 +211,8 @@ paths:
       summary: The deployed tree
       operationId: get_project
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -117,6 +255,8 @@ paths:
       summary: The deployed tree (headers only)
       operationId: head_project
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -131,6 +271,8 @@ paths:
       summary: Static plan of the served DAG
       operationId: get_plan
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -167,6 +309,8 @@ paths:
       summary: Static plan of the served DAG (headers only)
       operationId: head_plan
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '400':
@@ -184,6 +328,8 @@ paths:
         served graph and reported in health load_errors, while healthy executable nodes remain available.
       operationId: get_groups
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -219,6 +365,8 @@ paths:
       summary: List organizational groups (headers only)
       operationId: head_groups
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '400':
@@ -233,6 +381,8 @@ paths:
       summary: barca list --json --all
       operationId: get_list
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -273,6 +423,8 @@ paths:
       summary: barca list --json --all (headers only)
       operationId: head_list
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -287,6 +439,8 @@ paths:
       summary: barca status --json for the ledger
       operationId: get_nodes
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -373,6 +527,8 @@ paths:
       summary: barca status --json for the ledger (headers only)
       operationId: head_nodes
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '404':
@@ -392,6 +548,8 @@ paths:
       summary: barca history --json
       operationId: get_history
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -469,6 +627,8 @@ paths:
       summary: barca history --json (headers only)
       operationId: head_history
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -484,6 +644,8 @@ paths:
       summary: Which result each barca sql view reads in the ledger
       operationId: get_sql_views
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -522,7 +684,7 @@ paths:
                 type: string
       description: barca sql with a server resolves its views here and runs the query on the client,
         over the store paths this returns. The server runs no SQL (DuckDB reads and writes files, and
-        the API has no authentication). Built by the function a local barca sql uses, against a private
+        token mode requires authentication). Built by the function a local barca sql uses, against a private
         snapshot of the metadata DB, so view names, stale results and current partition keys follow the
         same rules.
       parameters:
@@ -536,6 +698,8 @@ paths:
       summary: Which result each barca sql view reads in the ledger (headers only)
       operationId: head_sql_views
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -560,6 +724,8 @@ paths:
       summary: Step results, newest first, one page at a time
       operationId: get_materializations
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -617,6 +783,8 @@ paths:
       summary: Step results, newest first, one page at a time (headers only)
       operationId: head_materializations
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -648,6 +816,8 @@ paths:
       summary: barca stats --json
       operationId: get_stats_name
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -706,6 +876,8 @@ paths:
       summary: barca stats --json (headers only)
       operationId: head_stats_name
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '404':
@@ -725,6 +897,8 @@ paths:
       summary: List assets, tasks and sensors
       operationId: get_assets
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -764,6 +938,8 @@ paths:
       summary: List assets, tasks and sensors (headers only)
       operationId: head_assets
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '400':
@@ -778,6 +954,8 @@ paths:
       summary: Node summary and materialization statistics
       operationId: get_assets_name
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -835,6 +1013,8 @@ paths:
       summary: Node summary and materialization statistics (headers only)
       operationId: head_assets_name
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '400':
@@ -854,6 +1034,8 @@ paths:
       summary: Inspect selected node and direct input artifacts
       operationId: get_assets_name_schema
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -911,6 +1093,8 @@ paths:
       summary: Inspect selected node and direct input artifacts (headers only)
       operationId: head_assets_name_schema
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '400':
@@ -939,6 +1123,8 @@ paths:
         schema:
           type: string
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -995,6 +1181,8 @@ paths:
         schema:
           type: string
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '400':
@@ -1018,6 +1206,8 @@ paths:
         left alone. Works on a database that cannot be opened or migrated (it is moved as it is).
         Undo with barca state restore --from <moved_to> while the server is stopped. No request body.'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: What was moved and how to undo it
           content:
@@ -1072,6 +1262,8 @@ paths:
       summary: The run queue
       operationId: get_queue
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           content:
@@ -1102,6 +1294,8 @@ paths:
       summary: The run queue (headers only)
       operationId: head_queue
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -1118,6 +1312,8 @@ paths:
       summary: Pause the run queue
       operationId: post_queue_pause
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The queue, paused
           content:
@@ -1155,6 +1351,8 @@ paths:
       summary: Resume the run queue
       operationId: post_queue_resume
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The queue, resumed
           content:
@@ -1191,6 +1389,8 @@ paths:
       summary: Scheduler job registry
       operationId: get_schedule
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -1217,6 +1417,8 @@ paths:
       summary: Scheduler job registry (headers only)
       operationId: head_schedule
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '405':
@@ -1227,6 +1429,8 @@ paths:
       summary: Pause one schedule
       operationId: post_schedule_id_pause
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The job's schedule entry
           content:
@@ -1294,6 +1498,8 @@ paths:
       summary: Resume one schedule
       operationId: post_schedule_id_resume
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The job's schedule entry
           content:
@@ -1350,6 +1556,8 @@ paths:
       summary: Materialize every asset and sensor
       operationId: post_run
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           content:
@@ -1394,6 +1602,8 @@ paths:
       summary: Run one task and refresh its upstream assets
       operationId: post_run_target
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           content:
@@ -1455,6 +1665,8 @@ paths:
       summary: Cancel an in-flight run by polling handle
       operationId: delete_run_target
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           content:
@@ -1510,6 +1722,8 @@ paths:
       summary: Materialize one asset or sensor
       operationId: post_get_target
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           content:
@@ -1572,6 +1786,8 @@ paths:
       summary: Poll a retained live run handle
       operationId: get_status_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           content:
@@ -1614,6 +1830,8 @@ paths:
       summary: Poll a retained live run handle (headers only)
       operationId: head_status_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '404':
@@ -1638,6 +1856,8 @@ paths:
             schema:
               $ref: '#/components/schemas/LedgerLookup'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: One entry per pair asked, in the order asked
           content:
@@ -1681,6 +1901,8 @@ paths:
             schema:
               $ref: '#/components/schemas/LedgerPost'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '201':
           description: Recorded (or already recorded for this client run id)
           content:
@@ -1741,6 +1963,8 @@ paths:
       summary: List durable history joined with retained live runs
       operationId: get_runs
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -1796,6 +2020,8 @@ paths:
       summary: List durable history joined with retained live runs (headers only)
       operationId: head_runs
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -1816,6 +2042,8 @@ paths:
             schema:
               $ref: '#/components/schemas/RunRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '202':
           description: Accepted and recorded in the run queue; stream GET /runs/{run_id}/events
           content:
@@ -1882,6 +2110,8 @@ paths:
       summary: One run, with its outcome once finished
       operationId: get_runs_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -1949,6 +2179,8 @@ paths:
       summary: One run, with its outcome once finished (headers only)
       operationId: head_runs_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '404':
@@ -1965,6 +2197,8 @@ paths:
       summary: Cancel a pending or running run
       operationId: delete_runs_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Cancelling; the stream ends with a cancelled outcome
           content:
@@ -2017,6 +2251,8 @@ paths:
       summary: Stream a run's events
       operationId: get_runs_run_id_events
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Server-Sent Events stream
           content:
@@ -2070,6 +2306,8 @@ paths:
       summary: Stream a run's events (headers only)
       operationId: head_runs_run_id_events
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Server-Sent Events stream
           headers: *id028
@@ -2086,6 +2324,8 @@ paths:
       summary: A finished run's final artifact
       operationId: get_runs_run_id_output
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The artifact bytes; Content-Type by format
           content:
@@ -2146,6 +2386,8 @@ paths:
       summary: A finished run's final artifact (headers only)
       operationId: head_runs_run_id_output
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The artifact bytes; Content-Type by format
         '404':
@@ -2166,6 +2408,8 @@ paths:
       summary: A run's recorded output lines
       operationId: get_runs_run_id_logs
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The run's status and its recorded lines in order, filtered by step and stream
           headers: *id_etag
@@ -2235,6 +2479,8 @@ paths:
       summary: A run's recorded output lines (headers only)
       operationId: head_runs_run_id_logs
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '404':
@@ -2261,6 +2507,8 @@ paths:
       summary: Read persisted output lines
       operationId: get_logs_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
           headers: *id_etag
@@ -2307,6 +2555,8 @@ paths:
       summary: Read persisted output lines (headers only)
       operationId: head_logs_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '500':
@@ -2322,6 +2572,8 @@ paths:
       summary: Stream lifecycle and log events for a retained handle
       operationId: get_events_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Server-Sent Events stream
           content:
@@ -2374,6 +2626,8 @@ paths:
       summary: Stream lifecycle and log events for a retained handle (headers only)
       operationId: head_events_run_id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '404':
@@ -2392,6 +2646,8 @@ paths:
       summary: Redirect to UI
       operationId: get_root_redirect
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '303':
           description: Redirect
           headers: &id037
@@ -2409,6 +2665,8 @@ paths:
       summary: Redirect to UI (headers only)
       operationId: head_root_redirect
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '303':
           description: Redirect
           headers: *id037
@@ -2419,6 +2677,8 @@ paths:
       summary: Redirect to UI
       operationId: get_ui_redirect
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '303':
           description: Redirect
           headers: &id038
@@ -2436,6 +2696,8 @@ paths:
       summary: Redirect to UI (headers only)
       operationId: head_ui_redirect
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '303':
           description: Redirect
           headers: *id038
@@ -2446,6 +2708,8 @@ paths:
       summary: Embedded UI document or static asset
       operationId: get_ui_index
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Embedded UI content
           headers:
@@ -2511,6 +2775,8 @@ paths:
       summary: Embedded UI document or static asset (headers only)
       operationId: head_ui_index
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '405':
@@ -2523,6 +2789,8 @@ paths:
       summary: Embedded UI document or static asset
       operationId: get_ui_path
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Embedded UI content
           headers:
@@ -2601,6 +2869,8 @@ paths:
       summary: Embedded UI document or static asset (headers only)
       operationId: head_ui_path
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Response
         '405':
@@ -2612,7 +2882,53 @@ paths:
           description: UI not embedded or asset missing
       parameters: *id041
 components:
+  securitySchemes:
+    projectToken:
+      type: http
+      scheme: bearer
+      description: Project-wide opaque token; opt-in, no accounts or roles
+  responses:
+    Unauthorized:
+      description: Missing, invalid, revoked or expired token in token mode; code 3 infra envelope with authentication_required or invalid_token reason
+      headers:
+        WWW-Authenticate:
+          schema: {type: string, const: Bearer}
+        Cache-Control:
+          schema: {type: string, const: no-store}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    AuthBadRequest:
+      description: Invalid JSON, token name or future expiry; sanitized usage envelope; Cache-Control no-store
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    AuthOff:
+      description: Token administration disabled in auth-off mode; Cache-Control no-store
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    AuthUnavailable:
+      description: Authentication state unavailable; fail closed; Cache-Control no-store
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    TokenMetadata:
+      type: object
+      required: [id, name, created_at, expires_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: [string, 'null'], format: date-time}
+    IssuedToken:
+      allOf:
+      - {$ref: '#/components/schemas/TokenMetadata'}
+      - type: object
+        required: [token]
+        properties:
+          token: {type: string, description: Secret returned once; never logged or stored verbatim}
     Error:
       type: object
       additionalProperties: false
@@ -2666,6 +2982,8 @@ components:
           type: string
           enum:
           - metadata_unusable
+          - authentication_required
+          - invalid_token
     Health:
       type: object
       additionalProperties: false

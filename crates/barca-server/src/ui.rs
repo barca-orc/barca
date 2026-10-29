@@ -26,6 +26,14 @@ fn embedded(path: &str) -> Option<Cow<'static, [u8]>> {
     UiAssets::get(path).map(|f| f.data)
 }
 
+/// Only actual embedded files and the exact entry routes are public.
+pub(crate) fn public(path: &str) -> bool {
+    matches!(path, "/" | "/ui" | "/ui/")
+        || path
+            .strip_prefix("/ui/")
+            .is_some_and(|name| embedded(name).is_some())
+}
+
 /// `GET /` and `GET /ui` → `ui/`. Relative, so behind nginx at `/barca/` the
 /// browser lands on `/barca/ui/`.
 pub async fn redirect_to_ui() -> Redirect {

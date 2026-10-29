@@ -16,9 +16,10 @@ and next scheduled run, refreshed every 10 seconds. Failed and stale nodes are l
 
 Three facts shape every deployment:
 
-- **It binds `127.0.0.1` by default, with no authentication.** `--host 0.0.0.0` (or `--host ::`
+- **It binds `127.0.0.1` by default, with authentication off.** `--host 0.0.0.0` (or `--host ::`
   for IPv6) makes it reachable through another interface. Anyone who can reach the port can
-  start runs, so use a private network and authenticate at a proxy.
+  start runs unless you enable `--auth token` or authenticate at a proxy; use a private network and TLS.
+  Project tokens and local bootstrap are documented in [Server Mode](/reference/server-mode/#opt-in-project-tokens).
 - **State is the `.barca/` directory in the project.** It holds the cache, the run history
   and the scheduler's last fire times. Keep it on storage that survives a restart.
 - **One instance per project.** Runs in progress and their live events are held in the
@@ -273,7 +274,7 @@ What each part is for:
   owns the namespace. On Linux, `network_mode: host` for barca and a proxy on the host is an
   alternative.
 
-The published port above is bound to the host's loopback. Barca has no authentication, so
+The published port above is bound to the host's loopback. Authentication defaults off, so
 before you bind it to anything wider, add [authentication](#authentication) at the proxy.
 
 ### Containers with a memory limit

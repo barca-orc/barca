@@ -55,6 +55,16 @@ pub(crate) enum GetOutput {
     Pretty,
 }
 
+#[derive(clap::Subcommand, Debug)]
+pub(crate) enum TokenCommand {
+    /// Print a one-use 15-minute bootstrap code; replaces any unconsumed grant
+    #[command(
+        after_help = "Examples:\n  barca tokens bootstrap    # on the deployed host, in the project root",
+        after_long_help = "Examples:\n  barca tokens bootstrap    # on the deployed host, in the project root"
+    )]
+    Bootstrap,
+}
+
 /// `--stream` on logs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum LogStreamArg {
@@ -141,6 +151,7 @@ Tools:
   queue     Inspect or control the server queue
   gc        Free cache space
   state     Manage metadata backups
+  tokens    Bootstrap project token access
 
 Learn:
   docs      Read the built-in manual or list topics
@@ -503,6 +514,16 @@ More: barca docs";
     version
 )]
 pub(crate) enum Cli {
+    /// Manage project authentication on the deployed host
+    #[command(
+        after_help = "Examples:\n  barca tokens bootstrap    # print a one-use bootstrap code",
+        after_long_help = "Examples:\n  barca tokens bootstrap    # print a one-use bootstrap code"
+    )]
+    Tokens {
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
+
     /// Get assets; reuse unchanged results and print their artifact paths
     ///
     /// If the first positional arg ends in .py, all args are treated as files
@@ -815,17 +836,20 @@ pub(crate) enum Cli {
     /// Manage runs, schedules and results on a server
     ///
     /// Binds to 127.0.0.1 by default (local only); --host changes the address.
-    /// There is no authentication. POST /run and /get trigger async runs; poll
+    /// Authentication is opt-in with --auth token. POST /run and /get trigger async runs; poll
     /// GET /status/<run_id> for results.
     #[command(after_help = quick_help("serve", SERVE_HELP), after_long_help = SERVE_HELP, long_about = None)]
     Serve {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart
         #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
         files: Vec<PathBuf>,
+        /// Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth
+        #[arg(long)]
+        auth: Option<barca_core::config::AuthMode>,
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
         port: u16,
-        /// IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication
+        /// IP address to bind on; 0.0.0.0 (or ::) listens on every interface. Use --auth token to require bearer credentials
         #[arg(long, default_value = "127.0.0.1")]
         #[arg(help = "Bind address; 0.0.0.0 exposes the unauthenticated API", long_help = None)]
         host: std::net::IpAddr,

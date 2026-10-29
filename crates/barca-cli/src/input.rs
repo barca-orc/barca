@@ -207,7 +207,7 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             | crate::StateCommand::Restore { format, .. }
             | crate::StateCommand::Reset { format, .. } => is_json(*format),
         },
-        Cli::Serve { .. } | Cli::Version => false,
+        Cli::Serve { .. } | Cli::Tokens { .. } | Cli::Version => false,
     }
 }
 
@@ -231,6 +231,7 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::State { .. } => ("state", Vec::new()),
         Cli::Docs { .. } => ("docs", Vec::new()),
         Cli::Version => ("version", Vec::new()),
+        Cli::Tokens { .. } => ("tokens", Vec::new()),
     };
     Context { command, files }
 }
@@ -492,7 +493,8 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         | Cli::Queue { .. }
         | Cli::State { .. }
         | Cli::Docs { .. }
-        | Cli::Version => {}
+        | Cli::Version
+        | Cli::Tokens { .. } => {}
     }
     Ok(())
 }

@@ -135,6 +135,21 @@ fn main() {
         CliError::from_barca(e, &ctx).emit(json)
     }
 
+    if matches!(
+        cli,
+        Cli::Tokens {
+            command: TokenCommand::Bootstrap
+        }
+    ) {
+        let root = std::env::current_dir()
+            .unwrap_or_else(|e| CliError::from_prose(ErrorKind::Infra, e.to_string()).emit(false));
+        match barca_server::auth::Store::open(&root).and_then(|store| store.bootstrap()) {
+            Ok(code) => barca_core::outln!("{code}"),
+            Err(error) => CliError::from_prose(ErrorKind::Infra, error.to_string()).emit(false),
+        }
+        finish(false);
+    }
+
     // A configured server without `--server` (and without `--local`): `get` and `run` run here
     // against its ledger; `status`, `history` and `stats` answer from it (RFC-0007 §4.1).
     let configured = match server_flags(&cli).map_or(Ok(None), client::configured) {
@@ -912,6 +927,7 @@ async fn run_cli(
         }
         Cli::Serve {
             files,
+            auth,
             port,
             host,
             watch,
@@ -926,6 +942,7 @@ async fn run_cli(
         } => {
             serve_cmd(
                 env.as_deref(),
+                auth,
                 files,
                 host,
                 port,
@@ -943,6 +960,7 @@ async fn run_cli(
             .await
         }
         // Answered in main() before the runtime is built — never reaches here.
+        Cli::Tokens { .. } => unreachable!("tokens is handled before runtime construction"),
         Cli::Version => unreachable!("version is handled before runtime construction"),
         Cli::Docs { .. } => unreachable!("docs is handled before runtime construction"),
     }
