@@ -4,7 +4,9 @@ checks[] : object
 checks[].data : object
 checks[].data.artifacts : string  (optional)
 checks[].data.available_bytes : integer  (optional)
+checks[].data.backup_bytes : integer  (optional)
 checks[].data.barca_version : string  (optional)
+checks[].data.budget_bytes : integer  (optional)
 checks[].data.capacity : integer  (optional)
 checks[].data.enabled : boolean  (optional)
 checks[].data.executable : string  (optional)

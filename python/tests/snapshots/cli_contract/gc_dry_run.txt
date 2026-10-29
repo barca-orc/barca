@@ -1,5 +1,8 @@
 # barca gc --max-size 1 --dry-run --json  (stdout, exit 0)
 after_bytes : integer
+backup_bytes : integer
+budget_after_bytes : integer
+budget_before_bytes : integer
 dry_run : boolean
 evicted : array
 evicted[] : object

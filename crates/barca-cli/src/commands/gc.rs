@@ -36,7 +36,10 @@ fn render(r: &GcResult) {
         None => " (no limit: leftovers and superseded results only)".to_string(),
     };
     if r.evicted.is_empty() {
-        barca_core::outln!("nothing to evict: {}{limit}", human(r.size_bytes));
+        barca_core::outln!(
+            "nothing to evict: {} budgeted{limit}",
+            human(r.budget_before_bytes)
+        );
     } else {
         barca_core::outln!(
             "{} {} file{} ({}), leaving {}{limit}:",
@@ -44,7 +47,7 @@ fn render(r: &GcResult) {
             r.evicted_files,
             if r.evicted_files == 1 { "" } else { "s" },
             human(r.evicted_bytes),
-            human(r.after_bytes),
+            human(r.budget_after_bytes),
         );
         for tier in &r.tiers {
             let name = match tier.tier.as_str() {
@@ -62,7 +65,12 @@ fn render(r: &GcResult) {
         }
     }
     // Over the target after evicting what could go: say what holds the rest.
-    if r.target_bytes.is_some_and(|t| r.after_bytes > t) && !r.held.is_empty() {
+    barca_core::outln!(
+        "{} metadata backups outside the budget; {} physical total",
+        human(r.backup_bytes),
+        human(r.after_bytes)
+    );
+    if r.target_bytes.is_some_and(|t| r.budget_after_bytes > t) && !r.held.is_empty() {
         let parts: Vec<String> = r
             .held
             .iter()
@@ -72,7 +80,7 @@ fn render(r: &GcResult) {
                     "unreferenced" => "files no result names (kept while a run is in flight or for a minute after they are written)",
                     "metadata" => "metadata databases (never evicted)",
                     "db_copies" => "databases moved aside by state reset/restore (never evicted; delete them once you no longer need to undo)",
-                    "backups" => "metadata backups (never evicted)",
+                    "backups" => "metadata backups (outside the budget; never evicted)",
                     _ => "other",
                 };
                 format!("{} {words}", human(h.bytes))

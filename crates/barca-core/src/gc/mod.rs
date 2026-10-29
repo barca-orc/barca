@@ -1,7 +1,8 @@
 //! A size limit for `.barca/` (RFC-0012): measure, plan with [`plan::plan`], evict.
 //!
 //! `[cache] max_size` (or `BARCA_CACHE_MAX_SIZE`, default 10% of the filesystem) bounds
-//! everything under the project's `.barca/`, every environment included. After every `get` and
+//! everything under the project's `.barca/` except recognized local metadata backups,
+//! every environment included (RFC-0015). Physical totals retain backup bytes. After every `get` and
 //! `run`, after every run under `serve` and on `serve`'s minute checkpoint, [`after_command`]
 //! checks the size; past the limit it evicts, in the order [`plan`] defines, down to
 //! [`LOW_WATERMARK_PERCENT`] of it. `barca gc` ([`gc`]) runs the same plan on demand.
@@ -321,8 +322,101 @@ fn envs(project: &Project) -> Vec<EnvDb> {
 
 // ─── Measuring ──────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct Measurement {
+    size_bytes: u64,
+    backup_bytes: u64,
+}
+
+impl Measurement {
+    fn budget_bytes(self) -> u64 {
+        self.size_bytes.saturating_sub(self.backup_bytes)
+    }
+}
+
+/// Project-wide storage, using maintained cache evidence and a bounded backup survey.
+/// No artifact walk or database scan is performed by status.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiskUsage {
+    pub size_bytes: Option<u64>,
+    pub budget_bytes: Option<u64>,
+    pub backup_bytes: Option<u64>,
+    pub limit_bytes: Option<u64>,
+}
+
+pub fn disk_usage(cfg: &ResolvedConfig) -> DiskUsage {
+    let Ok(project) = Project::here() else {
+        return DiskUsage::default();
+    };
+    disk_usage_in(&project, cfg.cache_max_size)
+}
+
+fn disk_usage_in(project: &Project, max_size: MaxSize) -> DiskUsage {
+    let backup_bytes = measure_backups(project);
+    let budget_bytes = read_state(project)
+        .and_then(|s| s.measurement)
+        .map(Measurement::budget_bytes);
+    DiskUsage {
+        size_bytes: budget_bytes
+            .zip(backup_bytes)
+            .map(|(budget, backups)| budget.saturating_add(backups)),
+        budget_bytes,
+        backup_bytes,
+        limit_bytes: max_size.resolve(&project.barca),
+    }
+}
+
+/// Fixed backup layout only; unexpected large directories return unknown rather than
+/// walking without a bound. Symlinks are never followed or exempted from the budget.
+fn measure_backups(project: &Project) -> Option<u64> {
+    const MAX_ENTRIES: usize = 4096;
+    fn entries(path: &Path) -> Option<Option<std::fs::ReadDir>> {
+        match std::fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(None),
+            Ok(meta) if !meta.is_dir() => return None,
+            Err(_) => return None,
+            _ => {}
+        }
+        std::fs::read_dir(path).ok().map(Some)
+    }
+    let mut remaining = MAX_ENTRIES;
+    let mut directories = vec![project.barca.join("backups")];
+    if let Some(envs) = entries(&project.barca.join("envs"))? {
+        for env in envs {
+            remaining = remaining.checked_sub(1)?;
+            let env = env.ok()?;
+            if env.file_type().ok()?.is_dir() {
+                directories.push(env.path().join("backups"));
+            }
+        }
+    }
+    let mut bytes = 0u64;
+    for dir in directories {
+        if let Some(files) = entries(&dir)? {
+            for file in files {
+                remaining = remaining.checked_sub(1)?;
+                let file = file.ok()?;
+                let rel = file.path();
+                if crate::backup::owned_local_file(rel.strip_prefix(&project.barca).ok()?) {
+                    let meta = std::fs::symlink_metadata(&rel).ok()?;
+                    if meta.is_file() {
+                        bytes = bytes.saturating_add(meta.len());
+                    }
+                }
+            }
+        }
+    }
+    Some(bytes)
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct State {
+    /// Physical/cache accounting at the last maintained measurement (RFC-0015).
+    #[serde(default)]
+    measurement: Option<Measurement>,
+    /// Version 1 excludes owned metadata backups from quota comparisons.
+    #[serde(default)]
+    accounting_version: u32,
     /// Seconds since the epoch of the last full walk.
     surveyed_at: u64,
     /// Bytes in the artifact directories minus what the DBs say is there, at that walk.
@@ -455,10 +549,20 @@ fn now_secs() -> u64 {
 /// Record that a check found `size` under `limit` ([`State::checked_size`]).
 fn checked(project: &Project, size: u64, limit: u64) {
     if let Some(mut state) = read_state(project)
-        && (state.checked_size, state.checked_limit) != (size, limit)
+        && ((state.checked_size, state.checked_limit) != (size, limit)
+            || state.accounting_version != 1)
     {
         state.checked_size = size;
         state.checked_limit = limit;
+        state.accounting_version = 1;
+        write_state(project, &state);
+    }
+}
+
+fn record_measurement(project: &Project, measured: Measurement) {
+    if let Some(mut state) = read_state(project) {
+        state.measurement = Some(measured);
+        state.accounting_version = 1;
         write_state(project, &state);
     }
 }
@@ -548,7 +652,9 @@ impl Held {
 /// What a file outside the artifact directories is, by its path below `.barca/`.
 fn outside_kind(barca: &Path, path: &Path) -> Held {
     let rel = path.strip_prefix(barca).unwrap_or(path);
-    if rel.components().any(|c| c.as_os_str() == "backups") {
+    if crate::backup::owned_local_file(rel)
+        && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+    {
         return Held::Backups;
     }
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -855,7 +961,11 @@ async fn scan<T>(
 const SCAN_CHUNK: usize = 20_000;
 
 /// The fast size: recorded sizes, the small directories, and the last walk's correction.
-async fn estimate(project: &Project, envs: &[EnvDb], state: &State) -> Result<u64, BarcaError> {
+async fn estimate(
+    project: &Project,
+    envs: &[EnvDb],
+    state: &State,
+) -> Result<Measurement, BarcaError> {
     let mut recorded = 0u64;
     let mut updated = BTreeMap::new();
     for env in envs {
@@ -896,12 +1006,17 @@ async fn estimate(project: &Project, envs: &[EnvDb], state: &State) -> Result<u6
         recorded = recorded.saturating_add(estimate.bytes);
         updated.insert(env.db_path.clone(), estimate);
     }
+    let walked = walk(project, false);
+    let measured = Measurement {
+        size_bytes: (recorded as i64 + state.artifact_adjust).max(0) as u64 + walked.other,
+        backup_bytes: walked.outside.get(&Held::Backups).copied().unwrap_or(0),
+    };
     if let Some(mut latest) = read_state(project) {
         latest.recorded = updated;
+        latest.measurement = Some(measured);
         write_state(project, &latest);
     }
-    let other = walk(project, false).other;
-    Ok((recorded as i64 + state.artifact_adjust).max(0) as u64 + other)
+    Ok(measured)
 }
 
 /// Everything a plan needs, from a full walk.
@@ -1133,6 +1248,11 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
     write_state(
         project,
         &State {
+            measurement: Some(Measurement {
+                size_bytes: walked.other + walked.artifacts,
+                backup_bytes: walked.outside.get(&Held::Backups).copied().unwrap_or(0),
+            }),
+            accounting_version: 1,
             surveyed_at: now_secs(),
             recorded: BTreeMap::new(),
             artifact_adjust: walked.artifacts as i64 - recorded as i64,
@@ -1552,29 +1672,37 @@ async fn check_in(
         .is_some_and(|s| now_secs().saturating_sub(s.surveyed_at) < SURVEY_EVERY.as_secs());
     if let (true, Some(state)) = (fresh, &state) {
         if own.wrote_nothing
+            && state.accounting_version == 1
             && state.checked_limit == limit
             && state.checked_size > 0
             && state.checked_size <= limit
         {
-            remember(state.checked_size, limit);
+            remember(
+                state
+                    .measurement
+                    .map_or(state.checked_size, |m| m.size_bytes),
+                limit,
+            );
             return Ok(None);
         }
-        let size = estimate(project, &envs, state).await?;
-        remember(size, limit);
+        let measured = estimate(project, &envs, state).await?;
+        let size = measured.budget_bytes();
+        remember(measured.size_bytes, limit);
         if size <= limit {
             checked(project, size, limit);
             return Ok(None);
         }
         // Eviction could not get under the limit a moment ago and nothing has grown since:
         // planning again would find the same.
-        let stuck = now_secs().saturating_sub(state.short_at) < STUCK_FOR.as_secs()
+        let stuck = state.accounting_version == 1
+            && now_secs().saturating_sub(state.short_at) < STUCK_FOR.as_secs()
             && size
                 <= state
                     .short_size
                     .saturating_add((limit / 100).max(STUCK_SLACK));
         if stuck {
             return Ok(Some(CacheReport {
-                size_bytes: size,
+                size_bytes: measured.size_bytes,
                 limit_bytes: limit,
                 evicted_files: 0,
                 evicted_bytes: 0,
@@ -1588,15 +1716,17 @@ async fn check_in(
         return Ok(None);
     };
     let survey = survey(project, &envs).await?;
+    let backup_bytes = survey.held.get(&Held::Backups).copied().unwrap_or(0);
+    let budget_bytes = survey.total.saturating_sub(backup_bytes);
     remember(survey.total, limit);
-    if survey.total <= limit {
-        checked(project, survey.total, limit);
+    if budget_bytes <= limit {
+        checked(project, budget_bytes, limit);
         return Ok(None);
     }
     let pinned = pinned_except(&project.root, pin.map(|p| p.id));
     let (protect, restricted) = protections(project, &envs, &survey.rows, own, &pinned).await;
     let plan = plan::plan(
-        survey.total,
+        budget_bytes,
         &survey.rows,
         &survey.leftovers,
         &protect,
@@ -1621,7 +1751,7 @@ async fn check_in(
     if !done.evicted.is_empty() {
         crate::errln!(
             "[barca] cache {} over its {} limit; evicted {} file{} ({}): {}",
-            size::human(survey.total),
+            size::human(budget_bytes),
             size::human(limit),
             done.evicted.len(),
             if done.evicted.len() == 1 { "" } else { "s" },
@@ -1631,14 +1761,25 @@ async fn check_in(
     }
     if short && restricted.is_none() && done.evicted.len() == evictable {
         if protect.manual_known {
-            warn_working_set(size_after, limit);
+            warn_working_set(size_after.saturating_sub(backup_bytes), limit);
         }
         if let Some(mut state) = read_state(project) {
             state.short_at = now_secs();
-            state.short_size = size_after;
+            state.short_size = size_after.saturating_sub(backup_bytes);
+            state.measurement = Some(Measurement {
+                size_bytes: size_after,
+                backup_bytes,
+            });
             write_state(project, &state);
         }
     }
+    record_measurement(
+        project,
+        Measurement {
+            size_bytes: size_after,
+            backup_bytes,
+        },
+    );
     Ok(Some(CacheReport {
         size_bytes: size_after,
         limit_bytes: limit,
@@ -1726,6 +1867,10 @@ pub struct GcResult {
     pub dry_run: bool,
     /// Bytes under `.barca/` before.
     pub size_bytes: u64,
+    /// Bytes subject to the cache quota; excludes recognized metadata backups.
+    pub budget_before_bytes: u64,
+    pub budget_after_bytes: u64,
+    pub backup_bytes: u64,
     /// The limit (`null` when off: then only leftovers and superseded results are evicted).
     pub limit_bytes: Option<u64>,
     /// What eviction aims for: [`LOW_WATERMARK_PERCENT`] of the limit (`null` when off).
@@ -1782,6 +1927,8 @@ async fn gc_in(
         }
     };
     let pinned = pinned_except(&project.root, None);
+    let backup_bytes = survey.held.get(&Held::Backups).copied().unwrap_or(0);
+    let budget_before_bytes = survey.total.saturating_sub(backup_bytes);
     let (mut protect, restricted) =
         protections(project, &envs, &survey.rows, &Own::default(), &pinned).await;
     let goal = match limit {
@@ -1794,7 +1941,7 @@ async fn gc_in(
         }
     };
     let plan = plan::plan(
-        survey.total,
+        budget_before_bytes,
         &survey.rows,
         &survey.leftovers,
         &protect,
@@ -1814,9 +1961,21 @@ async fn gc_in(
     if let Some(limit) = limit {
         remember(survey.total.saturating_sub(evicted_bytes), limit);
     }
+    if !opts.dry_run {
+        record_measurement(
+            project,
+            Measurement {
+                size_bytes: survey.total.saturating_sub(evicted_bytes),
+                backup_bytes,
+            },
+        );
+    }
     Ok(GcResult {
         dry_run: opts.dry_run,
         size_bytes: survey.total,
+        budget_before_bytes,
+        budget_after_bytes: budget_before_bytes.saturating_sub(evicted_bytes),
+        backup_bytes,
         limit_bytes: limit,
         target_bytes: limit.map(target_of),
         after_bytes: survey.total.saturating_sub(evicted_bytes),
@@ -1867,6 +2026,8 @@ pub fn bytes_under(dir: &Path) -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
     pub size_bytes: u64,
+    pub budget_bytes: u64,
+    pub backup_bytes: u64,
     pub limit_bytes: Option<u64>,
     /// The configured limit as written (`10% of the filesystem`, `20 GB`, `off`).
     pub max_size: String,
@@ -1881,8 +2042,12 @@ pub fn usage(cfg: &ResolvedConfig) -> Result<Usage, BarcaError> {
     let project = Project::here()?;
     let walked = walk(&project, true);
     let fs = size::filesystem(&project.barca);
+    let size_bytes = walked.other + walked.artifacts;
+    let backup_bytes = walked.outside.get(&Held::Backups).copied().unwrap_or(0);
     Ok(Usage {
-        size_bytes: walked.other + walked.artifacts,
+        size_bytes,
+        budget_bytes: size_bytes.saturating_sub(backup_bytes),
+        backup_bytes,
         limit_bytes: cfg.cache_max_size.resolve(&project.barca),
         max_size: cfg.cache_max_size.describe(),
         source: cfg.cache_max_size_source.to_string(),
