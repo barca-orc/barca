@@ -1769,7 +1769,14 @@ pub(crate) async fn logs(
         follow.complete_logs = true;
         // Not live (404): the run ended, or it is not one the server started; its recorded
         // lines answer.
-        if follow.open().await? {
+        let live = match follow.open().await {
+            Ok(live) => live,
+            Err(error) => {
+                let here = format!("barca logs {run_id} --local");
+                return Err(here_instead(error, &run_id, env, &here).await);
+            }
+        };
+        if live {
             let status = follow_events(&mut follow, args).await?;
             follow_ended(&run_id, &status);
             barca_core::term::exit(follow_exit_code(&status));
