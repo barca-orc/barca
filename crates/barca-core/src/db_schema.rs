@@ -109,6 +109,8 @@ pub(crate) const LOCAL_MATERIALIZATION_COLUMNS: &[&str] = &["evicted_at", "last_
 
 /// Indexes added after version 1 was introduced; created with the additive columns.
 pub(crate) const INDEXES: &[&str] = &[
+    // Status reads one observation per sensor key, independent of its history length.
+    "CREATE INDEX IF NOT EXISTS idx_mat_output_latest ON materializations(node_id, id DESC) WHERE status = 'success' AND output_hash IS NOT NULL",
     // A sensor reads only its latest successful observation, across definition changes.
     "CREATE INDEX IF NOT EXISTS idx_mat_node_latest ON materializations(node_id, id DESC) WHERE status = 'success' AND artifact_path IS NOT NULL",
     // Eviction and `last_read_at` address results by artifact path.

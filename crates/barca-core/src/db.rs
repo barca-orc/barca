@@ -174,7 +174,7 @@ impl ReadView {
         std::os::unix::fs::symlink(&target, &link)
             .map_err(|e| BarcaError::Db(format!("failed to create read view: {e}")))?;
         let path = link.display().to_string();
-        let (db, conn) = connect_view(&path).await?;
+        let (db, conn) = connect_view(&path).await.map_err(|e| named(e, db_path))?;
         let usable = view_usable(&conn).await;
         drop(conn);
         drop(db);
@@ -1459,12 +1459,15 @@ fn named(error: BarcaError, shown: &str) -> BarcaError {
     }
 }
 
-/// The format version of the metadata DB at `path`, read from a private snapshot without
-/// writing the file: `None` when there is no database yet. A database this release cannot use
+/// The format version of the metadata DB at `path`, read in place when compatible, otherwise
+/// from a private snapshot without writing the file: `None` when there is no database yet. A database this release cannot use
 /// is [`BarcaError::MetadataUnusable`] naming `path`. For a read-only server, which never
 /// migrates the file itself.
 pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
     directory_check(path)?;
+    if ReadView::open(path).await?.is_some() {
+        return Ok(Some(crate::db_schema::VERSION));
+    }
     let Some(snapshot) = DbSnapshot::take(path).await? else {
         return Ok(None);
     };
@@ -1731,20 +1734,28 @@ impl DbSnapshot {
             None
         };
 
-        let dir = tempfile::tempdir()
-            .map_err(|e| BarcaError::Db(format!("failed to create snapshot dir: {e}")))?;
-        let copy = dir.path().join("metadata.db");
-        fs::copy(db_path, &copy)
-            .map_err(|e| BarcaError::Db(format!("failed to snapshot DB: {e}")))?;
-        let wal = format!("{db_path}-wal");
-        if Path::new(&wal).exists() {
-            fs::copy(&wal, dir.path().join("metadata.db-wal"))
-                .map_err(|e| BarcaError::Db(format!("failed to snapshot DB WAL: {e}")))?;
-        }
-        Ok(Some(Self {
-            path: copy.display().to_string(),
-            _dir: dir,
-        }))
+        let db_path = db_path.to_owned();
+        tokio::task::spawn_blocking(move || {
+            // Keep the writer lock until both files have been copied, even if the caller
+            // is cancelled while the blocking operation is running.
+            let _lock = _lock;
+            let dir = tempfile::tempdir()
+                .map_err(|e| BarcaError::Db(format!("failed to create snapshot dir: {e}")))?;
+            let copy = dir.path().join("metadata.db");
+            fs::copy(&db_path, &copy)
+                .map_err(|e| BarcaError::Db(format!("failed to snapshot DB: {e}")))?;
+            let wal = format!("{db_path}-wal");
+            if Path::new(&wal).exists() {
+                fs::copy(&wal, dir.path().join("metadata.db-wal"))
+                    .map_err(|e| BarcaError::Db(format!("failed to snapshot DB WAL: {e}")))?;
+            }
+            Ok(Some(Self {
+                path: copy.display().to_string(),
+                _dir: dir,
+            }))
+        })
+        .await
+        .map_err(|e| BarcaError::Db(format!("snapshot task failed: {e}")))?
     }
 
     pub fn path(&self) -> &str {
@@ -2371,40 +2382,41 @@ pub async fn last_output_hashes(
 ) -> Result<HashMap<String, String>, BarcaError> {
     let mut out = HashMap::new();
     for base in base_ids {
-        // The node's own rows, then its keys' (`base[...]`): two seeks of the node id index, where
-        // `node_id = ?1 OR node_id LIKE ?2` scanned the whole table once per sensor.
+        // One seek for the base and two per recorded partition: skip directly to the next
+        // node id instead of scanning every observation in each key's history.
         let (lo, hi) = key_range(base);
-        let mut found: Vec<(i64, String, String)> = Vec::new();
         for (sql, params) in [
             (
-                "SELECT id, node_id, COALESCE(observation_hash, output_hash) FROM materializations INDEXED BY idx_mat_node_run \
-                 WHERE node_id = ?1 AND status = 'success' AND output_hash IS NOT NULL",
+                "SELECT node_id, COALESCE(observation_hash, output_hash) FROM materializations \
+                 INDEXED BY idx_mat_output_latest WHERE node_id = ?1 AND status = 'success' \
+                 AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1",
                 vec![base.to_string()],
             ),
             (
-                "SELECT id, node_id, COALESCE(observation_hash, output_hash) FROM materializations INDEXED BY idx_mat_node_run \
+                "WITH RECURSIVE nodes(node_id) AS ( \
+                 SELECT (SELECT node_id FROM materializations INDEXED BY idx_mat_output_latest \
                  WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
-                 AND output_hash IS NOT NULL",
-                vec![lo.clone(), hi.clone()],
+                 AND output_hash IS NOT NULL ORDER BY node_id LIMIT 1) UNION ALL \
+                 SELECT (SELECT node_id FROM materializations INDEXED BY idx_mat_output_latest \
+                 WHERE node_id > nodes.node_id AND node_id < ?2 AND status = 'success' \
+                 AND output_hash IS NOT NULL ORDER BY node_id LIMIT 1) \
+                 FROM nodes WHERE node_id IS NOT NULL) \
+                 SELECT node_id, (SELECT COALESCE(observation_hash, output_hash) \
+                 FROM materializations INDEXED BY idx_mat_output_latest \
+                 WHERE node_id = nodes.node_id AND status = 'success' \
+                 AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) \
+                 FROM nodes WHERE node_id IS NOT NULL",
+                vec![lo, hi],
             ),
         ] {
             let Ok(mut rows) = cache.conn().query(sql, params).await else {
                 return Ok(HashMap::new());
             };
             while let Ok(Some(row)) = rows.next().await {
-                if let (Ok(id), Ok(node), Ok(h)) = (
-                    row.get::<i64>(0),
-                    row.get::<String>(1),
-                    row.get::<String>(2),
-                ) {
-                    found.push((id, node, h));
+                if let (Ok(node), Ok(hash)) = (row.get::<String>(0), row.get::<String>(1)) {
+                    out.insert(node, hash);
                 }
             }
-        }
-        // The latest row of each node id wins.
-        found.sort_unstable_by_key(|(id, ..)| *id);
-        for (_, node, h) in found {
-            out.insert(node, h);
         }
     }
     Ok(out)
@@ -3141,9 +3153,12 @@ pub(crate) async fn evicted_paths(cache: &CacheReader) -> std::collections::Hash
     let Ok(mut rows) = cache
         .conn()
         .query(
-            "SELECT m.artifact_path FROM materializations m WHERE m.evicted_at IS NOT NULL \
-             AND m.status = 'success' AND m.id = (SELECT MAX(id) FROM materializations n \
-             WHERE n.artifact_path = m.artifact_path AND n.status = 'success')",
+            "WITH evicted AS (SELECT artifact_path, MAX(id) AS id \
+             FROM materializations INDEXED BY idx_mat_evicted WHERE evicted_at IS NOT NULL \
+             AND status = 'success' GROUP BY artifact_path) \
+             SELECT e.artifact_path FROM evicted e WHERE NOT EXISTS ( \
+             SELECT 1 FROM materializations n INDEXED BY idx_mat_path \
+             WHERE n.artifact_path = e.artifact_path AND n.status = 'success' AND n.id > e.id)",
             (),
         )
         .await
@@ -4427,6 +4442,48 @@ async fn partitioned_avg_elapsed_on(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn status_history_queries_are_bounded_and_keep_each_partition() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        let cache = super::CacheReader::open(&path).await.unwrap();
+        cache.conn().execute(
+            "WITH RECURSIVE history(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM history WHERE n < 500000) \
+             INSERT INTO materializations(node_id, run_hash, output_hash, artifact_path, evicted_at) \
+             SELECT 'sensor', 'run', 'old', 'restored', 'yesterday' FROM history", (),
+        ).await.unwrap();
+        cache.conn().execute(
+            "INSERT INTO materializations(node_id, output_hash, observation_hash, artifact_path, evicted_at) VALUES \
+             ('sensor', 'bytes', 'revision', 'restored', NULL), \
+             ('sensor[key=a]', 'a-old', NULL, 'a', NULL), \
+             ('sensor[key=b]', 'b', NULL, 'b', 'yesterday'), \
+             ('sensor[key=a]', 'a', NULL, 'a', NULL), \
+             ('other', 'other', NULL, 'other', NULL)", (),
+        ).await.unwrap();
+        let started = std::time::Instant::now();
+        let hashes = super::last_output_hashes(&cache, &["sensor"])
+            .await
+            .unwrap();
+        assert_eq!(
+            hashes,
+            std::collections::HashMap::from([
+                ("sensor".into(), "revision".into()),
+                ("sensor[key=a]".into(), "a".into()),
+                ("sensor[key=b]".into(), "b".into()),
+            ])
+        );
+        assert_eq!(
+            super::evicted_paths(&cache).await,
+            std::collections::HashSet::from(["b".into()])
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "status queries took {:?} for 500k historical rows",
+            started.elapsed()
+        );
+    }
+
     #[tokio::test]
     async fn with_tx_commits_a_body_that_succeeds_and_rolls_back_one_that_fails() {
         use crate::BarcaError;

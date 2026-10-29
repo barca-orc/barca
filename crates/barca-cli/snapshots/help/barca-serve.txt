@@ -31,7 +31,7 @@ Options:
           [default: local]
 
       --read-only
-          Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
+          Inspect only: refuse runs, never schedule, read compatible WAL metadata in place
 
       --drain-timeout <SECONDS>
           Seconds to wait for runs in flight after SIGTERM or SIGINT before stopping them and putting them back in the run queue for the next start (exit 0; a second signal cancels them instead, exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 requeues them at once

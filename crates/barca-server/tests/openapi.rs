@@ -431,6 +431,8 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/assets/first", "/assets/{name}"),
         ("/assets/first/schema", "/assets/{name}/schema"),
         ("/state", "/state"),
+        ("/state?targets=first", "/state"),
+        ("/state?targets=second,first", "/state"),
         ("/schedule", "/schedule"),
         ("/runs?limit=0", "/runs"),
         ("/logs/missing", "/logs/{run_id}"),
@@ -452,6 +454,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         checked(&router, "HEAD", url, path, 200).await;
         checked(&router, "PUT", url, path, 405).await;
     }
+    checked(&router, "GET", "/state?targets=missing", "/state", 404).await;
     assert!(
         !dir.path().join("metadata.db").exists(),
         "inspection created source history"

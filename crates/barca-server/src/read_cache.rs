@@ -10,8 +10,8 @@
 //!   sees an edit, and, for a graph with dynamic partition keys (`partitions(<expression>)`,
 //!   which can read anything), at least every [`DYNAMIC_KEYS_MAX_AGE`].
 //! - **The metadata DB to read** ([`AppState::read_snapshot`]): the database itself, read in
-//!   place beside the runs writing it ([`barca_core::db::ReadView`]), or for a `--read-only`
-//!   server or a database this release would migrate first, one private copy shared by every
+//!   place beside the runs writing it ([`barca_core::db::ReadView`]), or for a
+//!   database this release would migrate first, one private copy shared by every
 //!   request until the database or its WAL changes on disk.
 //! - **Status results** ([`AppState::cached_status`]): what `barca status` computes, per graph,
 //!   database state and request. One older than [`STATUS_MAX_AGE`] is computed again in the
@@ -289,9 +289,10 @@ pub(crate) async fn keep_warm(state: AppState) {
         });
         if busy
             || (started && !state.reads.polled_within(WARM_WHILE_POLLED))
-            || !state
-                .db_state()
-                .settled(SystemTime::now(), WARM_AFTER_STILL)
+            || ((started || !state.config.read_only)
+                && !state
+                    .db_state()
+                    .settled(SystemTime::now(), WARM_AFTER_STILL))
         {
             continue;
         }
@@ -346,8 +347,7 @@ impl AppState {
         {
             return Ok(s.snapshot.clone());
         }
-        let snapshot =
-            Arc::new(crate::handlers::snapshot_of(db_path, !self.config.read_only).await?);
+        let snapshot = Arc::new(crate::handlers::snapshot_of(db_path).await?);
         // Taken after the stamp: a write in between makes the next request take another copy.
         *shared = now
             .settled(SystemTime::now(), DB_SETTLED)
@@ -559,7 +559,7 @@ impl AppState {
         let mut caught_up = self.reads.caught_up.subscribe();
         let latest = self.reads.latest_durations.lock().unwrap().clone();
         let Some(latest) = latest else {
-            let durations = Arc::new(compute().await?);
+            let durations = Arc::new(off_the_workers(compute).await?);
             self.keep_durations(&key, &durations);
             return Ok(durations);
         };
@@ -573,7 +573,7 @@ impl AppState {
         {
             let state = self.clone();
             tokio::spawn(async move {
-                if let Ok(durations) = compute().await {
+                if let Ok(durations) = off_the_workers(compute).await {
                     state.keep_durations(&key, &Arc::new(durations));
                 }
                 state
@@ -631,10 +631,11 @@ impl AppState {
 /// Run `compute()` on a blocking-pool thread: deciding the cache state of 200k keys takes
 /// seconds of CPU with few waits, and on a runtime worker it would hold up the requests queued
 /// behind it there (a `/health` waited for a whole status computation).
-async fn off_the_workers<F, Fut>(compute: F) -> Result<StatusResult, BarcaError>
+pub(crate) async fn off_the_workers<F, Fut, T>(compute: F) -> Result<T, BarcaError>
 where
     F: FnOnce() -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<StatusResult, BarcaError>> + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, BarcaError>> + Send + 'static,
+    T: Send + 'static,
 {
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || runtime.block_on(compute()))
@@ -698,11 +699,14 @@ mod tests {
     }
 
     async fn poll(state: &AppState) -> Vec<crate::state::NodeState> {
-        crate::handlers::state(axum::extract::State(state.clone()))
-            .await
-            .map_err(|e| format!("{e:?}"))
-            .unwrap()
-            .0
+        crate::handlers::state(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(Default::default()),
+        )
+        .await
+        .map_err(|e| format!("{e:?}"))
+        .unwrap()
+        .0
     }
 
     fn loads(state: &AppState) -> (usize, usize) {
@@ -878,10 +882,9 @@ mod tests {
         );
     }
 
-    /// A server reads the live database in place; a `--read-only` one reads a copy, so that it
-    /// never creates or touches the database's files.
+    /// Both server modes read a current WAL database in place without migrating it.
     #[tokio::test]
-    async fn only_a_server_that_writes_reads_the_database_in_place() {
+    async fn read_only_server_reads_current_schema_in_place() {
         for read_only in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let state = state_with(dir.path(), read_only);
@@ -889,11 +892,90 @@ mod tests {
                 .await
                 .unwrap();
             let snapshot = state.read_snapshot().await.unwrap();
-            assert_eq!(
+            assert!(
                 barca_core::db::is_read_view(&snapshot.path),
-                !read_only,
                 "read_only = {read_only}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn read_only_warms_at_start_even_when_the_writer_never_settles() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_with(dir.path(), true);
+        barca_core::db::init_db(&state.config.resolved.db_path)
+            .await
+            .unwrap();
+        // A future mtime makes the database persistently unsettled without a racing writer.
+        std::fs::File::open(&state.config.resolved.db_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(SystemTime::now() + Duration::from_secs(3600)),
+            )
+            .unwrap();
+        assert!(
+            !state
+                .db_state()
+                .settled(SystemTime::now(), WARM_AFTER_STILL)
+        );
+        let warming = tokio::spawn(keep_warm(state.clone()));
+        let warmed = tokio::time::timeout(Duration::from_secs(5), async {
+            while loads(&state).1 == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        if warmed.is_err() {
+            state.shutdown.cancel();
+            warming.await.unwrap();
+            panic!("the first status was not computed without a client or a settled DB");
+        }
+        // A client keeps warming active; the writer's next settled change is picked up.
+        poll(&state).await;
+        let before = loads(&state).1;
+        std::fs::File::open(&state.config.resolved.db_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(5)),
+            )
+            .unwrap();
+        let refreshed = tokio::time::timeout(Duration::from_secs(5), async {
+            while loads(&state).1 <= before {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        state.shutdown.cancel();
+        warming.await.unwrap();
+        refreshed.expect("a settled change is warmed again while a client polls");
+    }
+
+    #[tokio::test]
+    async fn health_and_graph_routes_answer_while_large_status_computes() {
+        use axum::extract::State;
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_with(dir.path(), true);
+        let mut source = String::from("from barca import asset\n");
+        for i in 0..1000 {
+            source.push_str(&format!("@asset()\ndef node_{i}():\n    return {i}\n"));
+        }
+        std::fs::write(&state.config.files[0], source).unwrap();
+        barca_core::db::init_db(&state.config.resolved.db_path)
+            .await
+            .unwrap();
+        let computing = tokio::spawn({
+            let state = state.clone();
+            async move { crate::handlers::state_rows(&state).await.unwrap() }
+        });
+        tokio::task::yield_now().await;
+        for _ in 0..3 {
+            let started = Instant::now();
+            let _ = crate::handlers::health(State(state.clone())).await;
+            let _ = crate::handlers::assets(State(state.clone())).await.unwrap();
+            assert!(started.elapsed() < Duration::from_secs(1));
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(computing.await.unwrap().len(), 1000);
     }
 }

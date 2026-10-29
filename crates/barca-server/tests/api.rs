@@ -76,6 +76,53 @@ async fn health_reports_ok_and_version() {
 }
 
 #[tokio::test]
+async fn state_targets_select_only_the_requested_upstream_cone() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    std::fs::write(
+        &config.files[0],
+        format!("{FIXTURE}\n@asset()\ndef unrelated():\n    return 3\n"),
+    )
+    .unwrap();
+    let router = app(config);
+    let (status, first) = send(&router, "GET", "/state?targets=first").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first.as_array().unwrap().len(), 1);
+    assert_eq!(first[0]["name"], "first");
+    let (status, second) = send(&router, "GET", "/state?targets=second").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(second.as_array().unwrap().len(), 2);
+    assert!(
+        second
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["name"] != "unrelated")
+    );
+    let (_, repeated) = send(&router, "GET", "/state?targets=first,first").await;
+    assert_eq!(
+        repeated, first,
+        "a targeted request does not reuse another cone"
+    );
+    for route in ["/state", "/state?targets="] {
+        assert_eq!(
+            send(&router, "GET", route)
+                .await
+                .1
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+    assert_eq!(
+        send(&router, "GET", "/state?targets=missing").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert!(!dir.path().join("metadata.db").exists());
+}
+
+#[tokio::test]
 async fn schedule_endpoint_returns_json_array() {
     // `app()` does not spawn the scheduler, so the registry is empty — this
     // asserts the route is wired and returns a well-formed (empty) array.

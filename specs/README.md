@@ -54,7 +54,7 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 
 | Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 13 | [Router](../crates/barca-server/tests/openapi.rs), [Python client](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 14 | [Router](../crates/barca-server/tests/openapi.rs), [Python client](../python/tests/test_http_openapi_client.py) |
 | Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-core/tests/grammar_spec.rs), [argument owner](../crates/barca-core/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
 | CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
 | Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-core/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
