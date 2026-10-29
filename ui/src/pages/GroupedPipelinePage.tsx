@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import {
   ArrowLeft,
   ArrowDown,
@@ -34,12 +34,13 @@ import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
+import { useNodeRun } from '@/hooks/useNodeRun'
 import { connection } from '@/lib/connection'
 import { ApiError } from '@/lib/api'
 import { inPipeline } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
-import { PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
+import { liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import {
   groupTree,
   PREVIEW_FAILURE,
@@ -107,6 +108,8 @@ export function GroupedPipelinePage() {
     [stateQuery.data, preview],
   )
   const byId = useMemo(() => new Map(states.map((s) => [s.id, s])), [states])
+  const selectedAsset = assets.find(a => a.id === selected) ?? null
+  const nodeRun = useNodeRun(selectedAsset)
   const projected = useMemo(
     () => projectGroups(assets, tree, scope),
     [assets, scope, tree],
@@ -121,16 +124,19 @@ export function GroupedPipelinePage() {
   const visualStates = useMemo<Record<string, GraphState>>(
     () =>
       Object.fromEntries(
-        entries.map((entry) => [
-          entry.id,
-          groupLeaves(entry.id, tree).some(id => !byId.has(id)) && !stateQuery.isError
-            ? PENDING_GRAPH_STATE
-            : entry.kind === 'group'
-              ? groupHealth(groupLeaves(entry.id, tree), byId)
-              : memberHealth(byId.get(entry.id)),
-        ]),
+        entries.map((entry) => {
+          const leaves = groupLeaves(entry.id, tree)
+          const liveStatus = nodeRun.statuses[entry.id]
+          const health = entry.kind === 'group'
+            ? groupHealth(leaves, byId, nodeRun.statuses)
+            : liveStatus
+              ? liveGraphState(liveStatus)
+              : memberHealth(byId.get(entry.id))
+          const pending = leaves.some(id => !byId.has(id)) && !stateQuery.isError
+          return [entry.id, pending && !['running', 'queued'].includes(health.status) ? PENDING_GRAPH_STATE : health]
+        }),
       ),
-    [entries, byId, tree, stateQuery.isError],
+    [entries, byId, tree, stateQuery.isError, nodeRun.statuses],
   )
   const visible = entries.filter((entry) => {
     const needle = query.trim().toLowerCase()
@@ -163,14 +169,16 @@ export function GroupedPipelinePage() {
   const output = selectedGroup
     ? byId.get(groupOutput(selectedGroup.id, tree))
     : undefined
+  const selectedGroupHealth = groupHealth(leaves, byId, nodeRun.statuses)
   const groupStatus = selectedGroup
-    ? leaves.some(id => !byId.has(id)) && !stateQuery.isError
-      ? PENDING_GRAPH_STATE : groupHealth(leaves, byId)
+    ? leaves.some(id => !byId.has(id)) && !stateQuery.isError && selectedGroupHealth.status !== 'running'
+      ? PENDING_GRAPH_STATE : selectedGroupHealth
     : undefined
   // How many nodes in view a run is working on now, whoever started it.
   const runningHere = runningCount(
     scope ? groupLeaves(scope, tree) : assets.map((a) => a.id),
     byId,
+    nodeRun.statuses,
   )
 
   const update = (changes: Record<string, string | null>) => {
@@ -261,6 +269,7 @@ export function GroupedPipelinePage() {
             )}
           </div>
           <div className="barca-view-actions">
+            {nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
             <ConnectionBadge
               connection={connection(healthQuery.data, healthQuery.isError)}
             />
@@ -391,6 +400,7 @@ export function GroupedPipelinePage() {
         )}
       </div>
 
+      {nodeRun.action.error && !selectedNode && <p role="alert">Could not start run: {nodeRun.action.error.message}</p>}
       {error ? (
         <div className="barca-table-empty">
           <p>
@@ -661,6 +671,7 @@ export function GroupedPipelinePage() {
           )}
           {!selectedGroup && selectedNode && (
             <NodePanel
+              runAction={nodeRun.action}
               node={selectedNode}
               nodes={states}
               nowMs={stateQuery.dataUpdatedAt}

@@ -57,6 +57,14 @@ geometry; a status error does not hide the graph. Pipeline/group views ask only 
 upstream cone, while All pipelines asks for everything. Evidence:
 [`state-loading.spec.ts`](../../ui/e2e/state-loading.spec.ts).
 
+The grouped list and graph expose one shared run action for the selected member in the
+topbar and node panel. Assets and sensors use cache-aware `get`; tasks use `run`. Read-only
+mode disables both controls. An accepted target and its containing groups show live activity
+before the first SSE event; completed runs refresh status/history, and View run opens the
+durable run. Ungrouped node panels use the same action. Evidence:
+[`grouped-run.spec.ts`](../../ui/e2e/grouped-run.spec.ts), including real run admission,
+completion, history/logs, read-only controls, held-first-event activity and admission errors.
+
 A database change can invalidate cached inspection even after an unchanged sensor run.
 Cold and post-run inspection can rebuild per-key state:
 [#656](https://github.com/barca-orc/barca/issues/656). Millisecond cached responses are not a
