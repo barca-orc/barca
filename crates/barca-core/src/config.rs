@@ -110,11 +110,32 @@ pub struct CacheToml {
     pub max_size: Option<toml::Value>,
 }
 
+/// Whether the server requires project API tokens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    #[default]
+    Off,
+    Token,
+}
+impl std::str::FromStr for AuthMode {
+    type Err = String;
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "off" => Ok(Self::Off),
+            "token" => Ok(Self::Token),
+            _ => Err("server auth must be off or token".into()),
+        }
+    }
+}
+
 /// `[server]`: the `barca serve` this project's commands talk to (RFC-0007), and how
 /// `barca serve` behaves.
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ServerToml {
+    /// Opt-in bearer authentication for this project.
+    pub auth: Option<AuthMode>,
     /// The server's base URL, `http://` or `https://`, with any proxy prefix.
     pub url: Option<String>,
     /// Seconds a stopping server waits for in-flight runs before it cancels them
@@ -273,6 +294,8 @@ impl EnvSource {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
+    /// Project root used for project-wide state, independent of environment.
+    pub project_root: PathBuf,
     /// Explicit process-wide remote-off override; historical remote results stay
     /// recorded but cannot be read by this process.
     pub remote_off: bool,
@@ -311,6 +334,8 @@ pub struct ResolvedConfig {
     /// `[server] max_runs`: how many runs `barca serve` executes at once (`None`: one per
     /// core). Only `serve` reads it.
     pub server_max_runs: Option<usize>,
+    /// Authentication mode; defaults to off.
+    pub server_auth: AuthMode,
     /// `[server] capacity`: the weight budget every run of `barca serve` shares (`None`: each
     /// run has only its own). Only `serve` reads it.
     pub server_capacity: Option<(usize, &'static str)>,
@@ -561,6 +586,19 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         .as_ref()
         .and_then(|server| server.drain_timeout)
         .unwrap_or(DEFAULT_DRAIN_TIMEOUT_SECS);
+    let server_auth = match std::env::var("BARCA_SERVER_AUTH") {
+        Ok(raw) => raw.parse().map_err(BarcaError::Usage)?,
+        Err(std::env::VarError::NotPresent) => file
+            .server
+            .as_ref()
+            .and_then(|server| server.auth)
+            .unwrap_or_default(),
+        Err(_) => {
+            return Err(BarcaError::Usage(
+                "BARCA_SERVER_AUTH must be off or token".into(),
+            ));
+        }
+    };
     let server_max_runs = file.server.as_ref().and_then(|server| server.max_runs);
     if server_max_runs == Some(0) {
         return Err(BarcaError::Usage(
@@ -659,6 +697,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         Some("off") => {
             let local = crate::db::env_local_paths(&env);
             return Ok(ResolvedConfig {
+                project_root: cwd.to_path_buf(),
                 remote_off: true,
                 env,
                 env_source,
@@ -674,6 +713,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 cache_max_size_source,
                 drain_timeout_secs,
                 server_max_runs,
+                server_auth,
                 server_capacity,
                 server_run_timeout_secs,
                 server_url: env_var("BARCA_SERVER").or_else(|| {
@@ -769,6 +809,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     let storage_options_json = merge_storage_options(remote.storage_options.as_ref())?;
 
     Ok(ResolvedConfig {
+        project_root: cwd.to_path_buf(),
         remote_off: false,
         env,
         env_source,
@@ -784,6 +825,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         cache_max_size_source,
         drain_timeout_secs,
         server_max_runs,
+        server_auth,
         server_capacity,
         server_run_timeout_secs,
         server_url,
@@ -1020,6 +1062,7 @@ mod tests {
         "BARCA_BACKUP_INTERVAL",
         "BARCA_CACHE_MAX_SIZE",
         "BARCA_SERVER",
+        "BARCA_SERVER_AUTH",
         "BARCA_CAPACITY",
         "BARCA_REQUIRE_ENV",
         "BARCA_POOL_SIZE",
@@ -1113,6 +1156,32 @@ mod tests {
         assert!(cfg.storage_options_json.is_none());
         assert!(cfg.artifact_root.contains(".barca/envs/dev/artifacts"));
         assert!(cfg.db_path.contains(".barca/envs/dev/metadata.db"));
+    }
+
+    #[test]
+    fn server_auth_is_opt_in_and_env_overrides_toml_across_environments() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().server_auth,
+            AuthMode::Off
+        );
+        write_toml(dir.path(), "[server]\nauth = \"token\"\n");
+        let prod = resolve_in(Some("prod"), dir.path()).unwrap();
+        assert_eq!(prod.server_auth, AuthMode::Token);
+        assert_eq!(prod.project_root, dir.path());
+        unsafe { std::env::set_var("BARCA_SERVER_AUTH", "off") };
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().server_auth,
+            AuthMode::Off
+        );
+        for invalid in ["", "on", "TOKEN", " token "] {
+            unsafe { std::env::set_var("BARCA_SERVER_AUTH", invalid) };
+            assert!(matches!(
+                resolve_in(None, dir.path()),
+                Err(BarcaError::Usage(_))
+            ));
+        }
     }
 
     #[test]

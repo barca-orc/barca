@@ -43,6 +43,7 @@ from approved decisions.
 | [Inspection](behavior/inspection.md) | Validity, execution, availability and current counts | Implemented behavior; explicit checking and independent status tracking are approved design only |
 | [Performance](behavior/performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |
 | [Python runtime](behavior/python-runtime.md) | Cached modules, process-local DuckDB state and temporary input views | Implemented; real worker connection controls |
+| [Server authentication](behavior/server-authentication.md) | Project token storage, local bootstrap and request protection | Implemented for pending 0.36.0; UI and cursor resume remain intent |
 | [Cache decisions](behavior/cache-decisions.md) | Reuse, provenance, early cutoff and durable run records | Implemented; selection deviation remains explicit |
 
 Each owner links its exact conformance sources and records known limitations. Existing wire
@@ -54,7 +55,7 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 
 | Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 15 | [Router](../crates/barca-server/tests/openapi.rs), [Python client](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 16 | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
 | Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-core/tests/grammar_spec.rs), [argument owner](../crates/barca-core/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
 | CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
 | Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-core/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
@@ -86,7 +87,8 @@ These owners have not been relocated or copied into new schemas.
 [RFC-0016](../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md) records
 the bootstrap, token lifecycle, browser credential and event-resume boundaries for #706 and
 #187. The accepted design preserves the user-chosen opt-in Barca issuance/validation boundary
-without accounts. Server issuance/validation and replay remain unimplemented. Client transport now implements
+without accounts. Server issuance/validation now follows [project token authentication](behavior/server-authentication.md);
+UI token management and cursor replay remain unimplemented. Client transport now implements
 `BARCA_SERVER_TOKEN` and URL Basic credentials, scoped redirects and error redaction, as
 documented in the [server-mode manual](../crates/barca-cli/docs/server-mode.md) and checked by
 [authenticated proxy tests](../python/tests/test_server_credentials.py).

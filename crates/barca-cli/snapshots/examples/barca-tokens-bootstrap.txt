@@ -1,0 +1,13 @@
+Print a one-use 15-minute bootstrap code; replaces any unconsumed grant
+
+Usage: barca tokens bootstrap
+
+Options:
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca tokens bootstrap    # on the deployed host, in the project root

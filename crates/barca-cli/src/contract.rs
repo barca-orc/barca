@@ -40,6 +40,14 @@ const HELP_WIDTH: usize = 100;
 /// `docs <TOPIC>`); `barca` is the top level.
 pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
+        "tokens",
+        "new in 0.36 (RFC-0016): local bootstrap for opt-in project token access",
+    ),
+    (
+        "tokens bootstrap",
+        "prints a one-use bootstrap credential; token formats may evolve",
+    ),
+    (
         "doctor",
         "new prerequisite report; check names and provider-specific data may evolve",
     ),
@@ -89,7 +97,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "serve",
-        "the HTTP API and scheduler are young: no auth, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility",
+        "the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility",
     ),
     (
         "serve --capacity",

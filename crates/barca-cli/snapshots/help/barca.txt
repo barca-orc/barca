@@ -21,6 +21,7 @@ Tools:
   queue     Inspect or control the server queue
   gc        Free cache space
   state     Manage metadata backups
+  tokens    Bootstrap project token access
 
 Learn:
   docs      Read the built-in manual or list topics

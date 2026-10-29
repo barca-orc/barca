@@ -15,6 +15,7 @@
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 pub mod auth;
+mod auth_http;
 mod error;
 mod handlers;
 mod inspect;
@@ -156,6 +157,13 @@ pub enum Stopped {
 /// second signal comes first, they are cancelled (workers terminated, runs recorded
 /// `cancelled` with reason `server shutdown`) and [`Stopped::Forced`] is returned.
 pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
+    if config.resolved.server_auth == barca_core::config::AuthMode::Token {
+        auth::Store::open(&config.resolved.project_root)
+            .map_err(|error| ServeError::Load(barca_core::BarcaError::Other(error.to_string())))?;
+        barca_core::errln!(
+            "[barca] token authentication enabled; run `barca tokens bootstrap` on this host to connect"
+        );
+    }
     // Before anything starts: an unknown zone must not become local time (#289).
     check_timezone(&config.timezone).map_err(ServeError::Timezone)?;
     // Before the address is announced, so a signal sent as soon as the server is seen to be

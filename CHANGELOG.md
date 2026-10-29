@@ -16,6 +16,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Opt into server-issued project bearer tokens with `[server] auth = "token"`,
+  `BARCA_SERVER_AUTH`, or `serve --auth`. Local `tokens bootstrap` creates a one-use recovery
+  grant; HTTP token creation/list/revocation works in read-only mode, stores digests outside
+  metadata backups, and closes revoked or expired event streams. UI token management and
+  cursor resume remain pending.
+
 - Send server bearer credentials from `BARCA_SERVER_TOKEN`, or Basic credentials from URL
   userinfo, consistently across execution, ledger, streaming and cancellation requests in the
   CLI and deprecated Python client. Reject mixed credentials and redirects outside the
