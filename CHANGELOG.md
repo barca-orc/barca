@@ -28,6 +28,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Documentation
 
+- Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including
+  bootstrap, browser credential handling, revocation and bounded replay. Runtime behavior is
+  unchanged; implementation is still required for 0.36.0.
+
 - CI runs in three tiers: a pull request runs the static checks, a merge group runs those plus
   the Rust tests, the wheel and the quick Python subset in `scripts/fast-tests.txt` (about two
   minutes), and a release PR and its merge group run everything, with the object-store

@@ -157,6 +157,7 @@ export default defineConfig({
             { label: 'RFC-0012: A Size Limit for .barca', slug: 'rfcs/0012-cache-size-limit' },
             { label: 'RFC-0013: Batched Partitions', slug: 'rfcs/0013-batched-partitions' },
             { label: 'RFC-0015: Metadata Backup Cadence', slug: 'rfcs/0015-backup-cadence' },
+            { label: 'RFC-0016: Tokens & Stream Resume', slug: 'rfcs/0016-server-tokens-and-stream-resume' },
           ],
         },
       ],
