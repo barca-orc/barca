@@ -8,6 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- A batched step's DuckDB, Arrow or polars table is split into keys sorted by every column, so
+  a refresh that returns the same rows in another order keeps its `cutoff=True` consumers
+  cached; before, a parallel producer's row order changed the artifact bytes and reran them.
+  The first refresh after upgrading rewrites each key's artifact and reruns its consumers once.
+  Values that compare equal but differ in representation (`-0.0` and `0.0`, distinct NaNs,
+  strings under a case-insensitive collation) still need normalizing in the step.
+
 ## 0.35.2 (2026-10-29)
 
 ### Features
