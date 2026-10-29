@@ -16,6 +16,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Send server bearer credentials from `BARCA_SERVER_TOKEN`, or Basic credentials from URL
+  userinfo, consistently across execution, ledger, streaming and cancellation requests in the
+  CLI and deprecated Python client. Reject mixed credentials and redirects outside the
+  configured server origin/path, redact reflected credentials in HTTP errors, and keep the
+  reserved bearer variable out of Python helper environments. Server token issuance and
+  validation are not implemented yet.
+
 - Report local metadata backups outside the cache budget while retaining the five-copy
   rotation. Doctor and GC distinguish budgeted, backup and physical bytes; status adds an
   experimental project-wide `disk_usage` summary using maintained cache accounting without

@@ -33,6 +33,9 @@ pub(crate) fn python_module_std(
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new(python);
     cmd.args(["-m", module]);
+    // This credential belongs to the coordinator's HTTP client, not user-code workers or
+    // artifact/metadata helpers. Store credentials have their separate configuration below.
+    cmd.env_remove("BARCA_SERVER_TOKEN");
     if let Some(options) = storage_options {
         cmd.env("BARCA_STORAGE_OPTIONS", options);
     }

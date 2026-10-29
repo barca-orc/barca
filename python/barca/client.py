@@ -22,7 +22,9 @@ third-party dependencies.
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import time
 import warnings
 import urllib.error
@@ -33,6 +35,46 @@ from typing import Any
 from barca.api import BarcaError
 
 DEFAULT_URL = "http://127.0.0.1:8274"
+
+
+def _server_scope(base: str, destination: str) -> bool:
+    def origin(parts):
+        return (
+            parts.scheme,
+            parts.hostname,
+            parts.port or (443 if parts.scheme == "https" else 80),
+        )
+
+    try:
+        here, there = urllib.parse.urlsplit(base), urllib.parse.urlsplit(destination)
+        prefix = here.path.rstrip("/")
+        decoded_prefix = urllib.parse.unquote(prefix)
+        decoded = urllib.parse.unquote(there.path)
+        return (
+            origin(here) == origin(there)
+            and there.username is None
+            and there.password is None
+            and not any(part in (".", "..") for part in decoded.split("/"))
+            and (not prefix or there.path == prefix or there.path.startswith(prefix + "/"))
+            and (
+                not decoded_prefix
+                or decoded == decoded_prefix
+                or decoded.startswith(decoded_prefix + "/")
+            )
+        )
+    except ValueError:
+        return False
+
+
+class _ServerRedirects(urllib.request.HTTPRedirectHandler):
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _server_scope(self.base_url, newurl):
+            raise urllib.error.URLError("server redirect left the configured origin or proxy path")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
 
 # Terminal run states reported by ``GET /status``.
 _TERMINAL = {"complete", "failed", "cancelled"}
@@ -88,27 +130,101 @@ class Client:
             DeprecationWarning,
             stacklevel=2,
         )
-        self.base_url = base_url.rstrip("/")
+        try:
+            parts = urllib.parse.urlsplit(base_url.rstrip("/"))
+            if (
+                parts.scheme not in ("http", "https")
+                or not parts.hostname
+                or "?" in base_url
+                or "#" in base_url
+            ):
+                raise ValueError
+            _ = parts.port
+            user = urllib.parse.unquote(parts.username or "", errors="strict")
+            password = urllib.parse.unquote(parts.password or "", errors="strict")
+        except (ValueError, UnicodeError):
+            raise BarcaError("invalid server URL (host, port or proxy path)") from None
+        has_basic = parts.username is not None or parts.password is not None
+        token = os.environ.get("BARCA_SERVER_TOKEN")
+        if token is not None and has_basic:
+            raise BarcaError("BARCA_SERVER_TOKEN and server URL userinfo cannot be combined")
+        self._authorization = None
+        self._secrets: list[str] = []
+        if token is not None:
+            if (
+                not token
+                or not token.isascii()
+                or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in token)
+            ):
+                raise BarcaError(
+                    "BARCA_SERVER_TOKEN must be nonempty ASCII without whitespace or control characters"
+                )
+            try:
+                token.encode("latin-1")
+            except UnicodeError:
+                raise BarcaError("BARCA_SERVER_TOKEN is not a valid authorization header") from None
+            self._authorization = f"Bearer {token}"
+            self._secrets.append(token)
+        elif has_basic:
+            if ":" in user or any(ord(c) < 32 or ord(c) == 127 for c in user + password):
+                raise BarcaError(
+                    "server Basic credentials contain an invalid username or control character"
+                )
+            encoded = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
+            self._authorization = f"Basic {encoded}"
+            self._secrets.extend([encoded, password or user, parts.password or user])
+        if self._authorization:
+            self._secrets.append(self._authorization)
+        self._secrets = sorted({s for s in self._secrets if s}, key=len, reverse=True)
+        self.base_url = urllib.parse.urlunsplit(
+            (parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path.rstrip("/"), "", "")
+        )
+        self._raw_url = base_url.rstrip("/")
+        self._opener = urllib.request.build_opener(_ServerRedirects(self.base_url))
         self.timeout = timeout
 
     # ── transport ──────────────────────────────────────────────────────────
 
+    def _redact(self, text: str) -> str:
+        text = text.replace(self._raw_url, self.base_url)
+        for secret in self._secrets:
+            text = text.replace(secret, "<redacted>")
+        return text
+
+    def _error_value(self, value):
+        if isinstance(value, str):
+            return self._redact(value)
+        if isinstance(value, dict):
+            return {key: self._error_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._error_value(item) for item in value]
+        return value
+
+    def _open(self, req):
+        return self._opener.open(req, timeout=self.timeout)
+
     def _request(self, method: str, path: str) -> Any:
         url = f"{self.base_url}{path}"
-        req = urllib.request.Request(url, method=method)
+        if not _server_scope(self.base_url, url):
+            raise BarcaError("server request left the configured origin or proxy path")
+        headers = {"Authorization": self._authorization} if self._authorization else {}
+        req = urllib.request.Request(url, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with self._open(req) as resp:
                 body = resp.read()
         except urllib.error.HTTPError as e:
             # The API returns {"error": "..."} bodies on failure.
             detail = e.read().decode("utf-8", "replace")
             try:
-                detail = json.loads(detail).get("error", detail)
+                value = self._error_value(json.loads(detail))
+                detail = value.get("error", value) if isinstance(value, dict) else value
             except (json.JSONDecodeError, AttributeError):
-                pass
-            raise BarcaError(f"{method} {path} failed ({e.code}): {detail}") from e
+                detail = self._redact(detail)
+            raise BarcaError(f"{method} {path} failed ({e.code}): {detail}") from None
         except urllib.error.URLError as e:
-            raise BarcaError(f"cannot reach barca server at {self.base_url}: {e.reason}") from e
+            raise BarcaError(
+                f"cannot reach barca server at {self.base_url}: {self._redact(str(e.reason))}"
+            ) from None
 
         if not body:
             return None

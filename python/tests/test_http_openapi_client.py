@@ -102,16 +102,16 @@ def annual() -> None:
 
 
 def test_real_client_requests_and_terminal_parsing_match_openapi(server, monkeypatch):
-    original = urllib.request.urlopen
+    original = server._open
     seen = set()
 
-    def checked_urlopen(request, timeout=None):
+    def checked_open(request):
         method = request.get_method()
         template, op = operation(method, request.full_url)
         assert request.data is None, "current Client triggers are bodyless"
         seen.add((method, template))
         try:
-            with original(request, timeout=timeout) as response:
+            with original(request) as response:
                 body = response.read()
                 assert response.headers.get_content_type() == "application/json"
                 validate(
@@ -129,7 +129,7 @@ def test_real_client_requests_and_terminal_parsing_match_openapi(server, monkeyp
             error.fp = io.BytesIO(body)
             raise
 
-    monkeypatch.setattr("barca.client.urllib.request.urlopen", checked_urlopen)
+    monkeypatch.setattr(server, "_open", checked_open)
     assert server.health()["status"] == "ok"
     assert server.assets()
     assert server.asset("value")["asset"]["id"].endswith(":value")

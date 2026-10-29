@@ -324,6 +324,17 @@ warnings, stream-drop messages, SQL provenance and doctor output, including JSON
 `https://user:password@host/barca` prints as `https://host/barca`. Requests retain the configured
 credentials; the display change does not change authentication or pending-post matching.
 
+For a bearer-authenticated proxy, set `BARCA_SERVER_TOKEN` in the client environment.
+The CLI and deprecated Python `Client` send it as `Authorization: Bearer` on every server
+request, including ledger requests, event streams and cancellation. URL userinfo instead
+sends Basic credentials. Combining userinfo with `BARCA_SERVER_TOKEN` is a usage error
+(exit 2); a present token must be nonempty ASCII without whitespace or control characters.
+These rules apply to URLs from `--server`, `BARCA_SERVER` and `[server] url` alike.
+Redirects must stay within the configured origin and proxy path. Known credentials reflected
+in HTTP errors are redacted. The reserved `BARCA_SERVER_TOKEN` variable is removed from
+Python worker and transfer-helper environments. Built-in server token issuance and validation
+remain unimplemented; this is client transport support for authenticating proxies.
+
 | Route | Body | Answer |
 |---|---|---|
 | `POST /ledger/lookup` | `{"hashes": [{"node_id", "run_hash"}]}` | `{"results": [{"node_id", "run_hash", "exists", "path", "format", "size_bytes", "digest"}]}`, one per pair, in order; only `exists: false` for a miss |

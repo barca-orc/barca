@@ -204,6 +204,7 @@ dependencies = [
  "barca-server",
  "chrono",
  "clap",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
