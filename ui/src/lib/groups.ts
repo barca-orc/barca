@@ -1,7 +1,7 @@
 /** Organizational metadata, independent of execution. */
-import type { ListNode, NodeState } from './types'
+import type { ListNode, NodeState, StatusKind } from './types'
 import { shortName, type GraphEntry } from './graph'
-import { graphState, UNKNOWN_GRAPH_STATE, type GraphState } from './graphState'
+import { graphState, liveGraphState, UNKNOWN_GRAPH_STATE, type GraphState } from './graphState'
 import { runningCount, runningGraphState } from './running'
 
 import type { NodeGroup } from './types'
@@ -69,10 +69,11 @@ export function memberHealth(node: NodeState | undefined): GraphState {
 export function groupHealth(
   ids: string[],
   states: Map<string, NodeState>,
+  live: Record<string, StatusKind> = {},
 ): GraphState {
-  const members = ids.map((id) => memberHealth(states.get(id)))
+  const members = ids.map((id) => live[id] ? liveGraphState(live[id]) : memberHealth(states.get(id)))
   // Work in progress comes first: the group pulses while a run is inside it.
-  const running = runningCount(ids, states)
+  const running = runningCount(ids, states, live)
   if (running)
     return {
       status: 'running',

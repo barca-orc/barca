@@ -85,8 +85,8 @@ export function runHref(runId: string): string {
 }
 
 /** How many of `ids` a run is working on now. */
-export function runningCount(ids: string[], byId: Map<string, NodeState>): number {
-  return ids.filter((id) => byId.get(id)?.running).length
+export function runningCount(ids: string[], byId: Map<string, NodeState>, live: Record<string, StatusKind> = {}): number {
+  return ids.filter((id) => byId.get(id)?.running || live[id] === 'running' || live[id] === 'queued').length
 }
 
 /** The distinct runs in progress, by the nodes they are working on. */

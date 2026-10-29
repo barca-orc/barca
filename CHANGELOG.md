@@ -10,6 +10,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- The grouped assets page now runs the selected node from the topbar in both list and graph
+  views, and every node panel has the same action: cache-aware `get` for assets and sensors,
+  `run` for tasks. Read-only servers disable both controls. Accepted runs show as running
+  before the first stream event; their details are available through View run (#709).
+
 - The assets page and sidebar render groups, graph layout and pipeline counts from metadata
   before status arrives. Cache state shows as checking and fills in without moving rows or
   graph nodes; a status error leaves the graph visible. Opening a pipeline or group requests
