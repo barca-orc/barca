@@ -8,11 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
-### Documentation
+### Features
 
-- Simplify first-use documentation around cached assets, tasks, partitions and remote
-  execution. Start with the base install; make SQL and shared-store setup optional, and
-  distinguish server execution from local computation against shared server state.
+- Make CLI help concise, group root commands by purpose, and add `--examples` on commands
+  and nested commands for the complete tested example collection. Detailed behavior stays
+  in the built-in manual; help and examples run without loading a project.
+
+- Experimental `GET /state?targets=a,b` computes only those nodes and their upstream
+  dependencies, including duration queries; omitted or empty targets keep the whole graph.
+  This lets the UI request status for the open pipeline (#708, #710).
 
 ### Bug Fixes
 
@@ -31,12 +35,6 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   graph nodes; a status error leaves the graph visible. Opening a pipeline or group requests
   only its upstream status cone, while All pipelines requests the whole graph (#710).
 
-### Documentation
-
-- Bring DIRECTION.md through 0.35.1 and record the decided order after it: the
-  0.35.2 server/UI fixes, 0.36.0 backup/credential/resume RFCs, then feedback cleanup.
-  Keep unresolved partition costs open and distinguish approved direction from shipped behavior.
-
 ### Performance
 
 - `barca serve --read-only` reads current WAL metadata in place, warms status at startup even
@@ -48,17 +46,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   concurrent `/health`, `/assets` and `/groups` peak at 0.009 s (19 samples per route).
   This measures inspection of synthetic history, not the production deployment (#708).
 
-### Features
-
-- Make CLI help concise, group root commands by purpose, and add `--examples` on commands
-  and nested commands for the complete tested example collection. Detailed behavior stays
-  in the built-in manual; help and examples run without loading a project.
-
-- Experimental `GET /state?targets=a,b` computes only those nodes and their upstream
-  dependencies, including duration queries; omitted or empty targets keep the whole graph.
-  This lets the UI request status for the open pipeline (#708, #710).
-
 ### Documentation
+
+- Simplify first-use documentation around cached assets, tasks, partitions and remote
+  execution. Start with the base install; make SQL and shared-store setup optional, and
+  distinguish server execution from local computation against shared server state.
+
+- Bring DIRECTION.md through 0.35.1 and record the decided order after it: the
+  0.35.2 server/UI fixes, 0.36.0 backup/credential/resume RFCs, then feedback cleanup.
+  Keep unresolved partition costs open and distinguish approved direction from shipped behavior.
 
 - Record reproducible overlap, bootstrap and inspection measurements for #654–656,
   including a synthetic 1,000-node/1.2-million-key workload. These gaps remain open;
