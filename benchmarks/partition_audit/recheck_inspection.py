@@ -106,8 +106,8 @@ def main():
                 measure(f"invalidated_{index + 1}", "/state")
                 measure(f"immediate_repeat_{index + 1}", "/state")
             time.sleep(5)
-            measure("after_5s_quiet", "/state")
-            measure("quiet_immediate_repeat", "/state")
+            measure("after_5s_pause", "/state")
+            measure("pause_immediate_repeat", "/state")
             print(
                 json.dumps(
                     {

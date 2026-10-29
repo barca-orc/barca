@@ -3,6 +3,8 @@
 Two clients request the same uncached asset while it is still executing. Tasks
 provide the control: two explicitly requested task executions must remain two.
 This reports observed behavior, rather than asserting that deduplication exists.
+WIDE=1 deploys the 1,000-node/1.2M-key synthetic graph and requests the same
+single root key twice; the small default separately supplies the task control.
 """
 
 import concurrent.futures
@@ -20,9 +22,7 @@ import urllib.request
 def main():
     binary = str(Path(os.environ["BARCA_BIN"]).resolve())
     root = Path(os.environ["PROJECTS_DIR"]).resolve()
-    root.mkdir(parents=True, exist_ok=False)
-    (root / "barca.toml").write_text("")
-    (root / "pipeline.py").write_text("""from barca import asset, task
+    source = """from barca import asset, task
 import os
 import time
 
@@ -42,7 +42,32 @@ def shared():
 @task()
 def explicit():
     return record("task")
-""")
+"""
+    cases = (("asset", "get", "shared"), ("task", "run", "explicit"))
+    selection = []
+    if os.environ.get("WIDE") == "1":
+        from wide_graph import generate
+
+        helper = source.split("@asset()", 1)[0]
+        generate(root, 1000, 1200)
+        pipeline = root / "pipeline.py"
+        source = pipeline.read_text().replace(
+            "def n0_dim_item_catalog(key: list[str]):\n",
+            'def n0_dim_item_catalog(key: list[str]):\n    record("asset")\n',
+            1,
+        )
+        assert '    record("asset")' in source
+        pipeline.write_text(source + "\n" + helper)
+        cases = (("asset", "get", "n0_dim_item_catalog"),)
+        selection = ["--partition", "key=0"]
+        print(
+            json.dumps({"nodes": 1000, "partition_keys": 1200000, "selected_keys_per_request": 1}),
+            flush=True,
+        )
+    else:
+        root.mkdir(parents=True, exist_ok=False)
+        (root / "barca.toml").write_text("")
+        (root / "pipeline.py").write_text(source)
     env = os.environ.copy()
     for key in ("BARCA_SERVER", "BARCA_REMOTE_URI", "BARCA_ENV", "BARCA_OUTPUT"):
         env.pop(key, None)
@@ -79,11 +104,11 @@ def explicit():
                 except OSError:
                     assert time.monotonic() < deadline, "server did not start"
                     time.sleep(0.05)
-            for kind, command, target in (("asset", "get", "shared"), ("task", "run", "explicit")):
+            for kind, command, target in cases:
 
                 def request():
                     return subprocess.run(
-                        [binary, command, target, "--server", url, "--json"],
+                        [binary, command, target, *selection, "--server", url, "--json"],
                         cwd=root,
                         env=env,
                         capture_output=True,
@@ -102,7 +127,7 @@ def explicit():
                     identities = db.execute(
                         "SELECT node_id, run_hash, COUNT(*) FROM materializations "
                         "WHERE node_id LIKE ? GROUP BY node_id, run_hash",
-                        ("%" + target,),
+                        ("%" + target + "%",),
                     ).fetchall()
                 print(
                     json.dumps(
