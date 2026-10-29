@@ -1,0 +1,4 @@
+{"nodes": 1000, "keys_per_node": 1200, "partition_keys": 1200000, "edges": 2209}
+{"case": "seed", "seconds": 385.268, "exit_code": 0, "coordinator_peak_kib": 4623952, "coordinator_cpu_ms": 256263.102, "steps": 1200000, "worker_calls": 2000}
+{"case": "unchanged", "seconds": 4.233, "exit_code": 0, "coordinator_peak_kib": 1212044, "coordinator_cpu_ms": 2419.384, "steps": 0, "worker_calls": 0}
+{"case": "refresh", "seconds": 477.64, "exit_code": 0, "coordinator_peak_kib": 4621860, "coordinator_cpu_ms": 254928.85, "steps": 1200000, "worker_calls": 2000}

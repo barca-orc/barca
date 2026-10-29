@@ -1,0 +1,5 @@
+scale 1: forecast 216 rows, 0.0 MB parquet; generated in 1.4 s; pool 4
+  cold run, 42 tasks        1.8 s  114 steps  peak RSS tree    1020 MB, largest process    268 MB
+  get, 2 leaf assets        1.1 s    2 steps  peak RSS tree     360 MB, largest process    175 MB
+  warm run, 42 tasks        1.8 s   42 steps  peak RSS tree     851 MB, largest process    219 MB
+  forecast_reconciled: 216 rows, 0.0 MB artifact

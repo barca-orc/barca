@@ -1,0 +1,15 @@
+{"case": "cold", "route": "/state", "seconds": 4.556606, "response_bytes": 2763, "rss_kib": 951688, "peak_kib": 1218200, "health_samples_during_request": 214}
+{"case": "cached", "route": "/state", "seconds": 1.002487, "response_bytes": 2763, "rss_kib": 1560912, "peak_kib": 1560912, "health_samples_during_request": 46}
+{"case": "legacy_cold", "route": "/nodes?sample=0", "seconds": 8.050675, "response_bytes": 5421, "rss_kib": 1848304, "peak_kib": 2203040, "health_samples_during_request": 384}
+{"case": "legacy_cached", "route": "/nodes?sample=0", "seconds": 0.000388, "response_bytes": 5421, "rss_kib": 1848304, "peak_kib": 2203040, "health_samples_during_request": 0}
+{"case": "invalidated_1", "route": "/state", "seconds": 1.004482, "response_bytes": 2763, "rss_kib": 1848340, "peak_kib": 2203040, "health_samples_during_request": 47}
+{"case": "recached_1", "route": "/state", "seconds": 1.042806, "response_bytes": 2763, "rss_kib": 2055928, "peak_kib": 2203040, "health_samples_during_request": 49}
+{"case": "invalidated_2", "route": "/state", "seconds": 0.517874, "response_bytes": 2763, "rss_kib": 1676808, "peak_kib": 2203040, "health_samples_during_request": 25}
+{"case": "recached_2", "route": "/state", "seconds": 1.00325, "response_bytes": 2763, "rss_kib": 1828364, "peak_kib": 2203040, "health_samples_during_request": 48}
+{"case": "invalidated_3", "route": "/state", "seconds": 1.003341, "response_bytes": 2763, "rss_kib": 2070904, "peak_kib": 2203040, "health_samples_during_request": 48}
+{"case": "recached_3", "route": "/state", "seconds": 0.323658, "response_bytes": 2763, "rss_kib": 1787624, "peak_kib": 2203040, "health_samples_during_request": 16}
+{"case": "invalidated_4", "route": "/state", "seconds": 1.00265, "response_bytes": 2764, "rss_kib": 1787656, "peak_kib": 2203040, "health_samples_during_request": 48}
+{"case": "recached_4", "route": "/state", "seconds": 1.00234, "response_bytes": 2764, "rss_kib": 1944152, "peak_kib": 2203040, "health_samples_during_request": 48}
+{"case": "invalidated_5", "route": "/state", "seconds": 0.365219, "response_bytes": 2763, "rss_kib": 1676852, "peak_kib": 2203040, "health_samples_during_request": 17}
+{"case": "recached_5", "route": "/state", "seconds": 1.0027, "response_bytes": 2763, "rss_kib": 1722180, "peak_kib": 2203040, "health_samples_during_request": 48}
+{"health_samples": 1120, "health_max_seconds": 0.014954, "health_errors": []}

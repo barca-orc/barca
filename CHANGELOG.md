@@ -46,6 +46,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   dependencies, including duration queries; omitted or empty targets keep the whole graph.
   This lets the UI request status for the open pipeline (#708, #710).
 
+### Documentation
+
+- Record reproducible overlap, bootstrap and inspection measurements for #654–656,
+  including a synthetic 1,000-node/1.2-million-key workload. These gaps remain open;
+  the benchmark records distinguish coordinator memory, worker costs and responsive
+  health checks from expensive status recomputation.
+
 ## 0.35.1 (2026-10-28)
 
 ### Bug Fixes
