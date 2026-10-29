@@ -1,6 +1,6 @@
 # Direction
 
-Last updated: 2026-10-29, after v0.35.2. The pinned
+Last updated: 2026-10-29, after v0.35.2; 0.35.3 is pending. The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -36,13 +36,18 @@ The decisions in [#707](https://github.com/barca-orc/barca/issues/707) set this 
    expensive cold/post-run inspection; those issues stay open with current measurements.
    The real planning fixture has 116 nodes and scales table rows; its smoke run is separate
    from the synthetic 1,000-node/1.2M-key coordinator workload.
-2. **0.36.0: server mode behind a proxy (#706).** Decide and implement the backup-cadence
+2. **0.35.3: stable streamed partition artifacts (#721).** A batched DuckDB, Arrow or Polars
+   result with the same rows in another physical order produced different Parquet bytes, so an
+   unchanged refresh reran its cutoff consumers (26 of 32 keys on a million-row fixture). Each
+   streamed partition is now sorted by all columns before it is hashed. The first refresh after
+   upgrading rewrites existing partition artifacts and reruns their consumers once.
+3. **0.36.0: server mode behind a proxy (#706).** Decide and implement the backup-cadence
    and client-credential RFCs, plus `Last-Event-ID` stream resume. Include the cost of
    hashing and remotely checking every artifact during status. Userinfo remains supported;
    bearer credentials reach every client request. The user chose barca-issued and
    barca-validated UI tokens in an opt-in mode with no user-account system (#187). The auth
    RFC must specify bootstrap access, browser security and revocation explicitly.
-3. **Then the cleanup week.** Triage #666 into 0.36.1 or 0.37.0: a failed key must not stop
+4. **Then the cleanup week.** Triage #666 into 0.36.1 or 0.37.0: a failed key must not stop
    independent keys' downstream work. Batch the small feedback in #668, #671, #672 and #673.
    Keep #674 (incremental fan-ins) parked pending discussion, alongside #667, #669, #670,
    #675 and #676. Final scheduling follows the 0.36.0 RFC decisions.
@@ -81,6 +86,7 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.35.0 | 2026-10-28 | Batched cache lookups, shared computed partition domains, responsive server reads and large-graph UI | [Release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.0) |
 | 0.35.1 | 2026-10-28 | Cache-size accounting off request threads; transfer-helper handshake before planning | #702, [release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.1) |
 | 0.35.2 | 2026-10-29 | Read-only status, metadata-first UI, run actions, credential masking and first-use/help docs | #708, #710, #709, #706 part 3, #650, #651 |
+| 0.35.3 | pending | Streamed batched partitions sort by all columns, so a refresh with the same rows in another order keeps cutoff consumers cached | [#721](https://github.com/barca-orc/barca/pull/721) |
 | 0.36.0 | planned | Configurable backups, proxy credentials and UI token design, resumable streams and store inspection costs | #706, #187 |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.

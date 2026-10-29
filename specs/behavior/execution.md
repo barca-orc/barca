@@ -52,6 +52,12 @@ Batch selection groups stale keys without changing their individual result ident
 Explicit selection narrows keys before grouping. Group order and explicit `batches(...)`
 boundaries must not depend on how a worker pool happens to divide streams.
 
+A table result (DuckDB, Arrow or polars) is split into one artifact per key whose rows are
+sorted by every column. The artifact bytes of a key depend only on its rows and schema: not
+on the order the step produced them, on the number of files the writer used, or on the
+worker's DuckDB settings, which the split leaves as it found them. Values that compare equal
+but differ in representation are not normalized; that is the step's job.
+
 The durable unit remains a key's result, not the entire batch. Failures are reported through
 existing exit codes and per-key history. `Failed(reason)` expresses a key-level failure;
 it does not turn an invalid/missing batch result into a success.
@@ -127,6 +133,7 @@ Conformance: [task CLI](../../python/tests/test_task_logs.py),
 [progress](../../python/tests/test_progress_counts.py).
 
 Conformance: [batched partitions](../../python/tests/test_batched_partitions.py),
+[stable partition artifacts](../../python/tests/test_partition_artifact_stability.py),
 including `test_a_call_that_raises_fails_every_key_and_a_retry_reruns_only_failed_keys`
 and `test_worker_death_retries_every_unfinished_key_of_the_call`.
 Grouping syntax and experimental status:
