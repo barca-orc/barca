@@ -16,6 +16,9 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResult {
+    /// Project-wide maintained cache accounting, filled by status entry points only.
+    #[serde(default)]
+    pub disk_usage: crate::gc::DiskUsage,
     /// The target name, when status was scoped to one node's upstream cone (`null` for the
     /// whole DAG or for several targets).
     pub target: Option<String>,
@@ -703,6 +706,7 @@ pub(crate) async fn status_from_dag_with_membership(
     let summary = StatusSummary::of(&nodes);
     Ok((
         StatusResult {
+            disk_usage: Default::default(),
             targets: explained.target_names(),
             target: explained.target,
             nodes,
@@ -1461,6 +1465,7 @@ mod tests {
             node("never_run", None),
         ];
         let mut result = StatusResult {
+            disk_usage: Default::default(),
             target: None,
             targets: vec![],
             summary: StatusSummary::of(&nodes),
@@ -1564,6 +1569,7 @@ mod tests {
         asset.cache.reason = "failed".into();
         let nodes = vec![task, asset, node("cached", None)];
         let mut result = StatusResult {
+            disk_usage: Default::default(),
             target: None,
             targets: vec![],
             summary: StatusSummary::of(&nodes),

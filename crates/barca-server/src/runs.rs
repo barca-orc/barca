@@ -521,6 +521,7 @@ async fn execute(
                 cancel: cancel.clone(),
                 event_tx: Some(event_tx),
                 options: RunOptions {
+                    server_owned: true,
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
                     shared_capacity: state.capacity.clone(),

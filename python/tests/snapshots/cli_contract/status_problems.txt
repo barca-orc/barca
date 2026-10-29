@@ -1,4 +1,9 @@
 # barca status pipeline.py --problems --json  (stdout, exit 0)
+disk_usage : object
+disk_usage.backup_bytes : integer
+disk_usage.budget_bytes : integer
+disk_usage.limit_bytes : integer
+disk_usage.size_bytes : integer
 filter : object
 filter.problems : boolean
 nodes : array

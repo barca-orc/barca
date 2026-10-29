@@ -66,14 +66,14 @@ fn cache_size(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
             let limit = match usage.limit_bytes {
                 Some(limit) => format!(
                     "{} of its {} limit ({}, {})",
-                    human(usage.size_bytes),
+                    human(usage.budget_bytes),
                     human(limit),
                     usage.max_size,
                     usage.source
                 ),
                 None => format!(
                     "{}, no limit ([cache] max_size is off; {})",
-                    human(usage.size_bytes),
+                    human(usage.budget_bytes),
                     usage.source
                 ),
             };
@@ -90,7 +90,11 @@ fn cache_size(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
             report.add(
                 "cache_size",
                 true,
-                format!("{limit}{free}"),
+                format!(
+                    "{limit}; {} metadata backups outside the budget; {} physical total{free}",
+                    human(usage.backup_bytes),
+                    human(usage.size_bytes)
+                ),
                 serde_json::to_value(&usage).unwrap_or(Value::Null),
             );
         }
