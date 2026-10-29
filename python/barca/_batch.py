@@ -318,43 +318,39 @@ def _split_pandas(df, dims: list[str], wanted: dict) -> dict:
     return out
 
 
-def _can_order_copy_type(dtype) -> bool:
-    # DuckDB 2's partition ORDER_BY crashes on BIT/BIGNUM, including nested values.
+def _native_order(dtype) -> bool:
+    """Whether DuckDB 2's partition writer can sort a column of this type (it crashes on
+    BIT and BIGNUM, also nested in a list, struct, map or union)."""
     if dtype.id in ("bit", "bignum", "varint"):
         return False
     if dtype.id in ("list", "array", "struct", "map", "union"):
-        return all(
-            _can_order_copy_type(child) for _, child in dtype.children if hasattr(child, "id")
-        )
+        return all(_native_order(child) for _, child in dtype.children if hasattr(child, "id"))
     return True
 
 
 @contextmanager
-def _partition_rows(con, name: str):
-    # Execute the producer with its optimizer settings before normalizing writer metadata.
-    rows = "__barca_partition_rows"
-    con.execute(f'CREATE TEMP TABLE "{rows}" AS SELECT * FROM "{name}"')
+def _without_statistics_propagation(con):
+    """DuckDB 2's Parquet writer marks a column REQUIRED when plan statistics prove it has no
+    nulls, and a key's statistics differ between its single-file and multi-file writes. The
+    same rows must give the same bytes, so no write of the split sees them."""
+    before = con.execute("SELECT current_setting('disabled_optimizers')").fetchall()[0][0]
+    disabled = [item for item in before.split(",") if item]
+    if "statistics_propagation" in disabled:
+        yield
+        return
+    con.execute("SET disabled_optimizers = ?", [",".join([*disabled, "statistics_propagation"])])
     try:
-        optimizers = con.execute("SELECT current_setting('disabled_optimizers')").fetchall()[0][0]
-        disabled = [item for item in optimizers.split(",") if item]
-        if "statistics_propagation" not in disabled:
-            disabled.append("statistics_propagation")
-        try:
-            # DuckDB 2 otherwise derives REQUIRED/OPTIONAL from single-file versus
-            # multi-file statistics, changing identical partitions' Parquet bytes.
-            con.execute("SET disabled_optimizers = ?", [",".join(disabled)])
-            yield rows
-        finally:
-            con.execute("SET disabled_optimizers = ?", [optimizers])
+        yield
     finally:
-        con.execute(f'DROP TABLE "{rows}"')
+        con.execute("SET disabled_optimizers = ?", [before])
 
 
 def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path) -> dict:
     """Stream a table into one parquet file per key with DuckDB's ``COPY ... PARTITION_BY``."""
     import shutil
-    import duckdb
     from urllib.parse import unquote
+
+    import duckdb
 
     from barca import _duckdb
 
@@ -372,24 +368,18 @@ def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True, exist_ok=True)
         dim_list = ", ".join(q(d) for d in dims)
-        # ORDER BY on the input does not preserve order through PARTITION_BY.
-        # DuckDB 2 can sort inside its partition writer; 1.x needs a rewrite.
-        ordered_copy = int(duckdb.__version__.split(".")[0]) >= 2 and all(
-            _can_order_copy_type(dtype) for dtype in rel.types
-        )
-        order_option = (
-            ", ORDER_BY (" + ", ".join(q(c) for c in rel.columns) + ")" if ordered_copy else ""
-        )
-        rows = (
-            _partition_rows(con, name)
-            if int(duckdb.__version__.split(".")[0]) >= 2
-            else nullcontext(name)
-        )
-        with rows as write_name:
+        # Equal rows must give equal bytes whatever order the producer emitted them in, so
+        # each key is sorted by every column. DuckDB 2's partition writer sorts each file it
+        # writes (ORDER_BY); a key that spans several files, DuckDB 1.x and the types the
+        # writer cannot sort are read back and rewritten sorted. Feeding the writer rows
+        # grouped by key keeps a key in one file, so most keys skip that second pass.
+        native = int(duckdb.__version__.split(".")[0]) >= 2 and all(map(_native_order, rel.types))
+        order_by = f", ORDER_BY ({', '.join(q(c) for c in rel.columns)})" if native else ""
+        with _without_statistics_propagation(con) if native else nullcontext():
             con.execute(
-                f"COPY (SELECT * FROM {q(write_name)} ORDER BY {dim_list}) TO '{staging}' "
+                f"COPY (SELECT * FROM {q(name)} ORDER BY {dim_list}) TO '{staging}' "
                 f"(FORMAT parquet, PARTITION_BY ({dim_list}), WRITE_PARTITION_COLUMNS true, "
-                f"OVERWRITE_OR_IGNORE true{order_option})"
+                f"OVERWRITE_OR_IGNORE true{order_by})"
             )
             empty = None
             out: dict = {}
@@ -414,20 +404,19 @@ def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path
                 if n not in wanted:
                     raise _extra(n if len(dims) > 1 else (n,), dims)
                 paths = [str(Path(root) / f) for f in parquet]
-                if not ordered_copy or len(paths) > 1:
-                    # Native ordering is per file; a large key can span overlapping files.
+                if not native or len(paths) > 1:
                     ordered = str(Path(root) / "__ordered.parquet")
                     con.read_parquet(paths, hive_partitioning=False).order("ALL").write_parquet(
                         ordered
                     )
+                    for path in paths:
+                        os.remove(path)
                     paths = [ordered]
                 out[n] = ("parquet", paths)
             if len(out) < len(wanted):
                 # A key with no rows: an empty table with the schema.
                 empty = staging / "__empty.parquet"
-                con.execute(
-                    f"COPY (SELECT * FROM {q(write_name)} LIMIT 0) TO '{empty}' (FORMAT parquet)"
-                )
+                con.execute(f"COPY (SELECT * FROM {q(name)} LIMIT 0) TO '{empty}' (FORMAT parquet)")
                 for n in wanted:
                     out.setdefault(n, ("parquet", [str(empty)]))
             return out

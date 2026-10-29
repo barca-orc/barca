@@ -52,16 +52,11 @@ Batch selection groups stale keys without changing their individual result ident
 Explicit selection narrows keys before grouping. Group order and explicit `batches(...)`
 boundaries must not depend on how a worker pool happens to divide streams.
 
-Streamed table results (DuckDB, Arrow and Polars) use DuckDB's all-column ordering. DuckDB 2
-uses the native ordered partition writer; DuckDB 1.x re-sorts each split partition before
-publishing. Multi-file partitions and BIT/BIGNUM schemas also require a sorted rewrite.
-DuckDB 2 materializes the producer with its configured settings, then serializes with
-statistics propagation disabled so Parquet nullability does not depend on split file count.
-The optimizer setting must be restored and the temporary table dropped on success or failure.
-Parallel partition writes must not introduce row-order noise among rows that
-compare differently under that ordering. Comparator ties with different representations
-(such as signed zero or a case-insensitive collation) require producer normalization for
-byte stability. Completed single-file Parquet partitions retain the move shortcut.
+A table result (DuckDB, Arrow or polars) is split into one artifact per key whose rows are
+sorted by every column. The artifact bytes of a key depend only on its rows and schema: not
+on the order the step produced them, on the number of files the writer used, or on the
+worker's DuckDB settings, which the split leaves as it found them. Values that compare equal
+but differ in representation are not normalized; that is the step's job.
 
 The durable unit remains a key's result, not the entire batch. Failures are reported through
 existing exit codes and per-key history. `Failed(reason)` expresses a key-level failure;
