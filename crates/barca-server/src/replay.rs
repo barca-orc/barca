@@ -399,6 +399,70 @@ mod tests {
             total_bytes,
         })
     }
+    /// Explicit cost probe: excluded from ordinary tests, no timing assertion.
+    #[tokio::test]
+    #[ignore = "cost probe; run explicitly with --profile fast --ignored --nocapture"]
+    async fn replay_retention_and_reconnect_cost_probe() {
+        let hub = ReplayHub::default();
+        let channels: Vec<_> = (0..8).map(|_| hub.channel().unwrap()).collect();
+        let payload = "x".repeat(256 * 1024);
+        let started = std::time::Instant::now();
+        for _ in 0..128 {
+            for channel in &channels {
+                channel.emit(RunEvent::log(
+                    "p.py:a".into(),
+                    payload.clone(),
+                    barca_core::LogStream::Stdout,
+                ));
+            }
+        }
+        let emission_us = started.elapsed().as_micros();
+        let (retained_bytes, retained_events, cursor) = {
+            let locked = hub.inner.lock().unwrap();
+            assert!(locked.bytes <= 64 * 1024 * 1024);
+            for window in locked.windows.values() {
+                assert!(window.bytes <= 16 * 1024 * 1024);
+                assert!(window.rows.len() <= 65_536);
+            }
+            let window = &locked.windows[&channels[7].lease.id];
+            let first = window.rows.front().unwrap();
+            (
+                locked.bytes,
+                locked.oldest.len(),
+                format!("{}:{}", first.epoch, first.sequence - 1),
+            )
+        };
+        let mut samples = Vec::new();
+        for _ in 0..1000 {
+            let started = std::time::Instant::now();
+            let mut stream = channels[7].resume(Some(&cursor)).unwrap().unwrap();
+            assert!(stream.next().await.is_some());
+            samples.push(started.elapsed().as_nanos());
+        }
+        samples.sort_unstable();
+        assert_eq!(hub.inner.lock().unwrap().bytes, retained_bytes);
+        let rss = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|line| line.starts_with("VmRSS:"))
+                    .map(str::to_string)
+            });
+        barca_core::outln!(
+            "{}",
+            serde_json::json!({
+                "emitted_events": 1024, "payload_bytes": payload.len(), "emission_us": emission_us,
+                "retained_bytes": retained_bytes, "retained_events": retained_events,
+                "reconnect_samples": samples.len(), "reconnect_p50_ns": samples[500],
+                "reconnect_p95_ns": samples[950], "reconnect_max_ns": samples[999], "process_rss": rss,
+            })
+        );
+        drop(channels);
+        assert_eq!(hub.inner.lock().unwrap().bytes, 0);
+        assert!(hub.inner.lock().unwrap().oldest.is_empty());
+    }
+
     async fn collect(channel: &RunChannel, after: Option<&str>) -> Vec<Frame> {
         channel.resume(after).unwrap().unwrap().collect().await
     }

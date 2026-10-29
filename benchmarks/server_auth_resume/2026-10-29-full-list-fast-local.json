@@ -1,0 +1,39 @@
+{
+  "platform": "Linux-7.2.8-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "binary_sha256": "a3f536cd0d587b386540e318519e04bbcceb454ab51c1f6cb187ae3beacf6123",
+  "transport": "urllib loopback TCP, new connection per request",
+  "modes": {
+    "off": {
+      "health": {
+        "samples": 200,
+        "p50_us": 193.495,
+        "p95_us": 273.142,
+        "max_us": 517.645
+      },
+      "reconnect_headers": {
+        "samples": 200,
+        "p50_us": 114.827,
+        "p95_us": 282.222,
+        "max_us": 607.413
+      },
+      "token_state_unchanged": true,
+      "ordinary_token_records": 0
+    },
+    "token": {
+      "health": {
+        "samples": 200,
+        "p50_us": 1200.866,
+        "p95_us": 1864.928,
+        "max_us": 2841.54
+      },
+      "reconnect_headers": {
+        "samples": 200,
+        "p50_us": 1201.316,
+        "p95_us": 1467.189,
+        "max_us": 2124.37
+      },
+      "token_state_unchanged": true,
+      "ordinary_token_records": 1000
+    }
+  }
+}

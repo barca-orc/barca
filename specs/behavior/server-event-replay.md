@@ -3,7 +3,7 @@
 ## Scope and status
 
 Specification version: 1. Status: server, CLI and browser implementation for pending 0.36.0;
-cost probes remain incomplete. Scope: in-memory event retention, cursor validation,
+cost probes are recorded in the benchmark fixture. Scope: in-memory event retention, cursor validation,
 replay/live attachment and subscriber lifetime. Exact HTTP shapes belong to
 [OpenAPI](../interfaces/server-api.openapi.yaml); accepted full behavior is
 [RFC-0016](../../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md).
@@ -71,5 +71,7 @@ keeps native payloads and route inventory checked.
 CLI capability negotiation, successful-event acknowledgement, canonical-outcome polling,
 complete-log gap errors and old-server fallback have executable client tests. Browser tests
 cover authenticated expired replay, visible gap notice and canonical completion without
-resubmission. Python proxy integration covers Basic/Bearer reconnection after a partial frame. Retention/reconnect/auth latency and memory cost probes are
-also still required. Current server tests do not prove those client or benchmark obligations.
+resubmission. Python proxy integration covers Basic/Bearer reconnection after a partial frame. [Cost probes](../../benchmarks/server_auth_resume/README.md) record real authenticated
+loopback requests/reconnects at the full token limit and large-event retention, with explicit
+measurement limits. Cross-process auth/restore/clock conformance is tracked by the separate
+authentication owner; real proxy/cloud latency is not established by these local results.
