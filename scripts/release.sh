@@ -105,7 +105,7 @@ if command -v uv >/dev/null 2>&1; then
         die "uv.lock does not match the bumped pyproject.toml"
 fi
 expected="CHANGELOG.md Cargo.lock crates/barca-cli/Cargo.toml crates/barca-core/Cargo.toml crates/barca-server/Cargo.toml pyproject.toml python/barca/__init__.py uv.lock"
-changed="$(git -C "$tree" diff --name-only | sort | tr '\n' ' ' | sed 's/ $//')"
+changed="$(git -C "$tree" diff --name-only | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
 [ "$changed" = "$expected" ] || die "unexpected files changed: $changed"
 git -C "$tree" diff --stat >&2
 
