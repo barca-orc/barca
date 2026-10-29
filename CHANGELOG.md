@@ -10,6 +10,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Server URL userinfo is omitted from CLI errors and announcements, ledger warnings, stream
+  drop messages, SQL provenance and doctor output (including JSON and older recorded errors).
+  Requests retain their URL credentials, and pending posts keep matching the same server
+  (#706, credential masking).
+
 - The grouped assets page now runs the selected node from the topbar in both list and graph
   views, and every node panel has the same action: cache-aware `get` for assets and sensors,
   `run` for tasks. Read-only servers disable both controls. Accepted runs show as running

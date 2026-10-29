@@ -7,6 +7,19 @@
 
 use std::time::Duration;
 
+/// A server URL for diagnostics: omit authority userinfo, preserving its host and proxy path.
+/// This also handles malformed URLs, which must be safe to name in validation errors.
+pub fn diagnostic_url(url: &str) -> String {
+    let start = url.find("://").map_or(0, |i| i + 3);
+    let end = url[start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| start + i);
+    match url[start..end].rfind('@') {
+        Some(at) => format!("{}{}", &url[..start], &url[start + at + 1..]),
+        None => url.to_string(),
+    }
+}
+
 /// A client for HTTPS requests, each bounded by `timeout` from connecting to the last byte of
 /// the reply. Building one reads the system's root certificates, so build it once and reuse it.
 ///
@@ -23,4 +36,31 @@ pub fn client(timeout: Duration) -> Result<reqwest::Client, String> {
         .map_err(|_| {
             "cannot set up the HTTPS client (TLS or the system's root certificates)".to_string()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn diagnostic_urls_omit_only_authority_credentials_even_when_invalid() {
+        for (url, shown) in [
+            ("http://alice:secret@host/proxy", "http://host/proxy"),
+            ("https://token@host", "https://host"),
+            (
+                "http://a:s%40cret@[::1]:8274/barca/",
+                "http://[::1]:8274/barca/",
+            ),
+            ("https://a:b@c@host/proxy", "https://host/proxy"),
+            ("http://a:b@host:bad/proxy", "http://host:bad/proxy"),
+            ("a:b@host", "host"),
+            ("ftp://a:b@host", "ftp://host"),
+            (
+                "https://host/path@revision?q=a@b#c@d",
+                "https://host/path@revision?q=a@b#c@d",
+            ),
+            ("https://host/proxy", "https://host/proxy"),
+            ("", ""),
+        ] {
+            assert_eq!(super::diagnostic_url(url), shown);
+        }
+    }
 }

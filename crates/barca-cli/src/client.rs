@@ -34,6 +34,7 @@ use crate::error::{CliError, Context, ErrorKind, list_hint};
 use barca_core::BarcaError;
 use barca_core::config::{ServerSource, check_server_url, configured_server};
 use barca_core::envelope::ErrorEnvelope;
+use barca_core::http::diagnostic_url;
 use barca_core::outcome::{API_VERSION, Outcome, RunCommand, RunRequest};
 use barca_core::{RunEvent, lines::LineWhen};
 use serde_json::{Value, json};
@@ -196,6 +197,8 @@ pub(crate) fn refuse_on_local_commands(args: &[String]) -> Option<CliError> {
 pub(crate) struct Server {
     /// The base URL, with any proxy prefix and without a trailing `/`.
     url: String,
+    /// Safe to print; the original URL is retained for requests and ledger-post identity.
+    shown_url: String,
     http: reqwest::Client,
     /// Where the URL came from when it was not typed on the command line.
     source: Option<ServerSource>,
@@ -226,6 +229,7 @@ impl Server {
         let http = barca_core::http::client(REQUEST_TIMEOUT)
             .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
         Ok(Self {
+            shown_url: diagnostic_url(&url),
             url,
             http,
             source,
@@ -237,7 +241,7 @@ impl Server {
     /// not name.
     pub(crate) fn announce(&self) {
         if let Some(source) = self.source {
-            barca_core::errln!("[barca] server {} ({})", self.url, source.describe());
+            barca_core::errln!("[barca] server {} ({})", self.shown_url, source.describe());
         }
     }
 
@@ -268,7 +272,7 @@ impl Server {
                 "error: cannot reach the barca server at {}: {}\n\
                  Check that `barca serve` is running at that URL and reachable from this \
                  machine. {}",
-                self.url,
+                self.shown_url,
                 transport_reason(e),
                 self.instead()
             ),
@@ -283,7 +287,7 @@ impl Server {
                 "error: the barca server at {} answered {what} unexpectedly: {detail}\n\
                  Check that the URL points at `barca serve` (including any proxy prefix) and \
                  that the server runs the same barca version as this machine.",
-                self.url
+                self.shown_url
             ),
         )
     }
@@ -359,7 +363,7 @@ impl Server {
                         "error: the barca server at {} speaks API version {v}; this barca \
                          ({}) speaks version {API_VERSION}\n\
                          Install the same barca version here and on the server.",
-                        self.url,
+                        self.shown_url,
                         env!("CARGO_PKG_VERSION")
                     ),
                 ));
@@ -380,7 +384,7 @@ impl Server {
                 format!(
                     "error: --env {env}: the server at {} runs environment '{server_env}'\n\
                      A server serves one environment. Leave out --env, or pass --env {server_env}.",
-                    self.url
+                    self.shown_url
                 ),
             ));
         }
@@ -443,7 +447,7 @@ impl Server {
                          The server runs its deployed files: {}. Name one of them, or leave out \
                          the files to use all of them.",
                         name.display(),
-                        self.url,
+                        self.shown_url,
                         list.join(", ")
                     ),
                 ));
@@ -660,7 +664,7 @@ fn dropped(server: &Server, run_id: &str, why: &str) -> CliError {
             "error: lost the event stream of run {run_id} on the barca server at {}: {why}\n\
              The run continues on the server. See how it ended with `barca history --server {}` \
              (run {run_id}), or GET {}/runs/{run_id}.",
-            server.url, server.url, server.url
+            server.shown_url, server.shown_url, server.shown_url
         ),
     )
 }
@@ -1425,7 +1429,7 @@ pub(crate) async fn logs(
                         "error: no run is recorded on the barca server at {} yet
                          Start one (`barca run --server ...`), or read this machine's runs \
                          with --local.",
-                        server.url
+                        server.shown_url
                     ),
                 ));
             };
@@ -1625,10 +1629,10 @@ pub(crate) async fn queue(
     match action {
         Some(QueueAction::Pause) => barca_core::errln!(
             "[barca] run queue paused on {}: queued runs wait until `barca queue resume`",
-            server.url
+            server.shown_url
         ),
         Some(QueueAction::Resume) => {
-            barca_core::errln!("[barca] run queue resumed on {}", server.url)
+            barca_core::errln!("[barca] run queue resumed on {}", server.shown_url)
         }
         None => {}
     }
@@ -1739,8 +1743,13 @@ pub(crate) async fn sql(
     } else {
         "leave out --server to query this machine's own results"
     };
-    barca_core::ledger::same_store(&cfg, &server.url, health["store_uri"].as_str(), instead)
-        .map_err(here)?;
+    barca_core::ledger::same_store(
+        &cfg,
+        &server.shown_url,
+        health["store_uri"].as_str(),
+        instead,
+    )
+    .map_err(here)?;
     let files = server.deployed_files(files).await?;
     let mut path = "/sql/views".to_string();
     if !files.is_empty() {
@@ -1764,7 +1773,7 @@ pub(crate) async fn sql(
             .map_err(|e| server.unexpected("GET /history", &e.to_string()))?;
         let total = body["total"].as_u64().map_or(rows.len(), |t| t as usize);
         runs = tables::runs(Some(&rows));
-        runs.note = tables::truncated_note(tables::RUNS, rows.len(), total, &server.url);
+        runs.note = tables::truncated_note(tables::RUNS, rows.len(), total, &server.shown_url);
     }
     let mut steps = tables::materializations(None);
     if tables::named(query, tables::MATERIALIZATIONS) {
@@ -1775,8 +1784,12 @@ pub(crate) async fn sql(
                 .map_err(|e| server.unexpected("GET /materializations", &e.to_string()))?;
         let total = body["total"].as_u64().map_or(rows.len(), |t| t as usize);
         steps = tables::materializations(Some(&rows));
-        steps.note =
-            tables::truncated_note(tables::MATERIALIZATIONS, rows.len(), total, &server.url);
+        steps.note = tables::truncated_note(
+            tables::MATERIALIZATIONS,
+            rows.len(),
+            total,
+            &server.shown_url,
+        );
     }
     let mut nodes = tables::nodes(None);
     if tables::named(query, tables::NODES) {
@@ -1794,7 +1807,7 @@ pub(crate) async fn sql(
 
     let python = barca_core::commands::find_python();
     let origin = barca_core::sql::Origin::Server {
-        url: server.url.clone(),
+        url: server.shown_url.clone(),
         pending,
     };
     let result = barca_core::sql::run(
@@ -1857,8 +1870,8 @@ pub(crate) async fn doctor_checks(
 ) {
     let source = server.source.map(ServerSource::describe);
     let named = match source {
-        Some(source) => format!("{} ({source})", server.url),
-        None => server.url.clone(),
+        Some(source) => format!("{} ({source})", server.shown_url),
+        None => server.shown_url.clone(),
     };
     let cfg = barca_core::config::resolve(env).ok();
     let health = match server.get_json("/health").await {
@@ -1874,7 +1887,7 @@ pub(crate) async fn doctor_checks(
                 "server",
                 false,
                 format!("{}\n{}", e.error.trim_start_matches("error: "), fix.trim()),
-                json!({"url": server.url, "source": source, "reachable": false}),
+                json!({"url": server.shown_url, "source": source, "reachable": false}),
             );
             unsynced_posts(server, report, cfg.as_ref()).await;
             return;
@@ -1884,7 +1897,7 @@ pub(crate) async fn doctor_checks(
         "server",
         true,
         format!("{named} answers"),
-        json!({"url": server.url, "source": source, "reachable": true}),
+        json!({"url": server.shown_url, "source": source, "reachable": true}),
     );
 
     // Versions: the API version must match; another barca version with the same API works.
@@ -2162,7 +2175,8 @@ async fn unsynced_posts(
         .collect();
     let runs: Vec<&str> = pending.iter().map(|p| p.client_run_id.as_str()).collect();
     let data = json!({"unsynced": runs.len(), "runs": runs,
-                      "last_error": pending.last().and_then(|p| p.error.clone())});
+                      "last_error": pending.last().and_then(|p| p.error.as_ref())
+                          .map(|e| e.replace(&server.url, &server.shown_url))});
     if pending.is_empty() {
         report.add(
             "server_posts",
@@ -2175,7 +2189,15 @@ async fn unsynced_posts(
     let why = pending
         .last()
         .and_then(|p| p.error.as_deref())
-        .map(|e| format!(" (last: {})", e.lines().next().unwrap_or(e)))
+        .map(|e| {
+            format!(
+                " (last: {})",
+                e.lines()
+                    .next()
+                    .unwrap_or(e)
+                    .replace(&server.url, &server.shown_url)
+            )
+        })
         .unwrap_or_default();
     report.add(
         "server_posts",
@@ -2196,6 +2218,28 @@ async fn unsynced_posts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unexpected_answers_and_dropped_streams_keep_credentials_out_of_every_error_field() {
+        let server = Server::new("http://alice:secret@host/proxy".into(), None, false).unwrap();
+        for error in [
+            server.unexpected("GET /health", "HTTP 404"),
+            dropped(&server, "run", "the stream closed"),
+        ] {
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(!json.contains("secret"));
+            assert!(!json.contains("alice"));
+            assert!(json.contains("http://host/proxy"));
+        }
+        assert_eq!(
+            server.endpoint("/health"),
+            "http://alice:secret@host/proxy/health"
+        );
+        assert_eq!(
+            barca_core::ledger::LedgerTransport::url(&server),
+            "http://alice:secret@host/proxy"
+        );
+    }
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()

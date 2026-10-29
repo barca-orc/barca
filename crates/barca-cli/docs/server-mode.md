@@ -301,6 +301,10 @@ constructing one warns, and it will be removed in a later minor release.
 Run `barca serve --host 0.0.0.0` behind a private network or an authenticating, TLS-terminating
 proxy; there is no built-in authentication (https://barca.sh/deploying/). Point clients at the
 proxy's URL, prefix included; `https://` works for every request, ledger ones included.
+Server URL userinfo is omitted from printed addresses in errors, announcements, ledger
+warnings, stream-drop messages, SQL provenance and doctor output, including JSON. For example,
+`https://user:password@host/barca` prints as `https://host/barca`. Requests retain the configured
+credentials; the display change does not change authentication or pending-post matching.
 
 | Route | Body | Answer |
 |---|---|---|

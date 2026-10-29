@@ -38,6 +38,9 @@ API version), `server_store` (the server's `store_uri` against this project's `[
 machine's `ledger_posts` rows for that URL in state `unsynced`, read from a snapshot). A failed
 check's `detail` ends with a remediation line. Server checks only read: no request changes the
 server and no pending post is sent. `--server` with no URL and none configured is a usage error.
+Printed server URLs omit userinfo in `detail` and `data`, including errors read from older
+pending-post records. Matching pending posts still uses the original configured URL.
+Conformance: [`test_server_url_redaction.py`](../../python/tests/test_server_url_redaction.py).
 
 Identity lookup uses the selected storage driver's credentials. Report effective identity
 when available; report configured context and an explicit unresolved lookup otherwise.

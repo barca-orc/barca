@@ -486,6 +486,11 @@ unexpectedly or speaks another API version is exit 3 naming its URL, with `--loc
 remediation; a server whose store is not this project's `[remote]` (or a project with no
 `[remote]`) is exit 2 naming both.
 
+Printed server URLs omit authority userinfo (`https://user:password@host/prefix` prints as
+`https://host/prefix`), including error/remediation text, announcements, ledger warnings,
+stream-drop messages, SQL provenance and doctor JSON. Network authentication and pending-post
+identity still use the configured URL; response schemas are unchanged.
+
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID`, `BARCA_WORKER_AGENT` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
 contract. `BARCA_TEST_*` variables are hooks for barca's own test suite, also not part of the
