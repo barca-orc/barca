@@ -3,6 +3,7 @@
 import json
 
 from .test_cache_limit import barca, gc
+from .test_serve_robustness import Server
 
 
 def test_gc_doctor_and_scoped_status_distinguish_backups_from_budget(tmp_path):
@@ -54,3 +55,34 @@ def test_status_before_a_cache_measurement_reports_unknown_without_creating_stat
     assert usage["size_bytes"] is None and usage["budget_bytes"] is None
     assert usage["backup_bytes"] == 0
     assert not (tmp_path / ".barca").exists()
+
+
+def test_server_status_reports_server_storage_instead_of_client_storage(tmp_path):
+    client, deployed = tmp_path / "client", tmp_path / "deployed"
+    for root, backup_bytes in [(client, 7), (deployed, 500)]:
+        root.mkdir()
+        (root / "barca.toml").write_text('[cache]\nmax_size = "10MB"\n')
+        (root / "pipeline.py").write_text(
+            "from barca import asset\n@asset()\ndef value():\n    return 42\n"
+        )
+        backup = root / ".barca/backups/2026-10-20T00-00-00Z.db"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(bytes(backup_bytes))
+    server = Server(deployed)
+    try:
+        local = json.loads(barca(client, "status", "pipeline.py", "--json").stdout)
+        remote = json.loads(
+            barca(
+                client,
+                "status",
+                "pipeline.py",
+                "--json",
+                "--server",
+                f"http://127.0.0.1:{server.port}",
+            ).stdout
+        )
+        assert local["disk_usage"]["backup_bytes"] == 7
+        assert remote["disk_usage"]["backup_bytes"] == 500
+        assert local["root"] != remote["root"]
+    finally:
+        server.stop()
