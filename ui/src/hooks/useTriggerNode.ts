@@ -8,7 +8,7 @@ import type { ListNode } from '@/lib/types'
  * an asset or sensor (cache-aware). No "materialize".
  */
 export function useTriggerNode(
-  asset: ListNode | null,
+  asset: Pick<ListNode, 'id' | 'kind'> | null,
   onTrigger: (handle: string, nodeId: string) => void,
 ) {
   const getTrigger = useTriggerGet()

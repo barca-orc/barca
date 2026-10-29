@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
 import {
   Chip,
@@ -18,6 +18,8 @@ import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
+import { useNodeRun } from '@/hooks/useNodeRun'
+import { liveGraphState } from '@/lib/graphState'
 import { connection } from '@/lib/connection'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
@@ -155,6 +157,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   // The node shown in the side panel (?node=<id>).
   const selectedId = params.get('node')
   const selectedNode = data?.find((n) => n.id === selectedId) ?? null
+  const nodeRun = useNodeRun(selectedNode, selectedNode !== null)
   const setSelected = (id: string | null) => {
     const p = new URLSearchParams(params)
     if (id === null) p.delete('node')
@@ -209,6 +212,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             )}
           </div>
           <div className="barca-view-actions">
+            {nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
             <ConnectionBadge connection={connection(health, healthError)} />
           </div>
@@ -308,6 +312,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
               {win.items.map(({ index }) => {
                 const r = visible[index]
                 if (!r) return null
+                const liveStatus = nodeRun.statuses[r.id]
                 return (
                 <tr
                   key={r.id}
@@ -329,7 +334,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                     <div className="barca-cell-sub">{r.file}</div>
                   </td>
                   <td title={r.running ? undefined : r.stateHint}>
-                    {r.running ? (
+                    {liveStatus ? (
+                      <StatusBadge status={liveStatus} label={liveGraphState(liveStatus).label} />
+                    ) : r.running ? (
                       <RunningBadge running={r.running} nowMs={now} />
                     ) : (
                       <StatusBadge status={severityStatus(r.severity)} label={r.stateLabel} size="sm" />
@@ -365,6 +372,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
       </div>
       {selectedNode && (
         <NodePanel
+          runAction={nodeRun.action}
           node={selectedNode}
           nodes={data ?? []}
           nowMs={dataUpdatedAt}

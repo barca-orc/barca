@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { GitBranch, X } from 'lucide-react'
+import { GitBranch, Play, X } from 'lucide-react'
 import { Button, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { startedBy } from '@/lib/running'
 import { ArtifactSchema } from './ArtifactSchema'
@@ -9,6 +9,7 @@ import { buildRows, formatAgo, formatSeconds, severityStatus } from '@/lib/asset
 import { freshnessLabel } from '@/lib/status'
 import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
 import type { NodeState } from '@/lib/types'
+import type { NodeRunAction } from '@/hooks/useNodeRun'
 
 interface NodePanelProps {
   node: NodeState
@@ -18,6 +19,7 @@ interface NodePanelProps {
   onSelect: (id: string) => void
   onOpenGraph: (id: string) => void
   onClose: () => void
+  runAction: NodeRunAction
 }
 
 /**
@@ -25,7 +27,7 @@ interface NodePanelProps {
  * attempt, run history, lineage and declared metadata. All from existing
  * endpoints — `/state` (passed in) and `/assets/{id}` (fetched here).
  */
-export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }: NodePanelProps) {
+export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
   const { data: detail, isLoading, isError } = useAssetDetail(node.id)
   const [row] = buildRows([node], nowMs)
   const last = node.last_materialization
@@ -53,6 +55,11 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
       subtitle={row?.file}
       actions={
         <>
+          <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
+            disabled={runAction.readOnly} loading={runAction.triggering}
+            title={runAction.title} onClick={runAction.fire}>
+            {runAction.verb}
+          </Button>
           <IconButton label="Open in graph" size="sm" onClick={() => onOpenGraph(node.id)}>
             <GitBranch size={14} />
           </IconButton>
@@ -63,7 +70,10 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
       }
     >
       <div className="barca-node-summary">
-        {row && <StatusBadge status={severityStatus(row.severity)} label={row.stateLabel} />}
+        {runAction.liveState ? (
+          <StatusBadge status={runAction.liveState.status} label={runAction.liveState.label} />
+        ) : row && <StatusBadge status={severityStatus(row.severity)} label={row.stateLabel} />}
+        {runAction.error && <p className="barca-note" role="alert">Could not start run: {runAction.error.message}</p>}
         {node.running && (
           <KeyValue label="now">
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}
