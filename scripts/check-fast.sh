@@ -15,11 +15,13 @@
 #   clippy      cargo clippy --workspace --all-targets -- -D warnings
 #   cargo-test  cargo nextest run --workspace + doc tests when cargo-nextest is installed,
 #               else cargo test
-#   build       maturin develop --release into the venv, when Rust or UI sources are newer
-#               than the venv's barca binary (the Python tests run that binary)
-#   python      a fast subset, the test files changed since the base, tests that name a changed
-#               python/barca module, and test_cli_contract.py / test_docs_examples.py when the
-#               CLI surface or the manual changed
+#   build       maturin develop --profile fast into the venv (the release optimization level
+#               without LTO, incremental; what CI's wheel uses), when Rust or UI sources are
+#               newer than the venv's barca binary (the Python tests run that binary)
+#   python      the fast subset (scripts/fast-tests.txt, the same files CI's merge tier runs),
+#               the test files changed since the base, tests that name a changed python/barca
+#               module, and test_cli_contract.py / test_docs_examples.py when the CLI surface
+#               or the manual changed
 #
 # Not run (CI runs them): tests/integration/*.sh, the benchmark smoke tests, the UI checks, the
 # duckdb 1.x pass, and the object-store emulator tests (they skip without BARCA_TEST_*). The
@@ -118,7 +120,7 @@ else
     if [ ! -x "$BIN" ] || [ -n "$(find crates ui/src Cargo.toml Cargo.lock -newer "$BIN" -type f -print -quit 2>/dev/null)" ]; then
         if command -v maturin >/dev/null || [ -x "$(dirname "$PY")/maturin" ]; then
             MATURIN=$(command -v "$(dirname "$PY")/maturin" || command -v maturin)
-            step build "$MATURIN" develop --uv --release --extras test
+            step build "$MATURIN" develop --uv --profile fast --extras test
         else
             FAILED=1
             RESULTS+=("FAIL  build  (the venv's barca is stale and maturin is not installed)")
@@ -127,29 +129,9 @@ else
         skip build "the venv's barca is newer than the Rust sources"
     fi
 
-    # Quick tests (under ~2s each, about 20s in all) across the worker, artifacts, protocol,
-    # storage, hashing, decorators and the CLI's errors. Chosen from a timed full run.
-    FAST=(
-        test_adaptive_executor.py
-        test_artifacts.py
-        test_csv_outputs.py
-        test_ctrl_c_worker.py
-        test_decorator_arguments.py
-        test_decorator_names_not_barcas.py
-        test_errors.py
-        test_get_output_shape.py
-        test_helper_hashing.py
-        test_identity.py
-        test_input_parameters.py
-        test_protocol_handshake.py
-        test_runtime.py
-        test_static_barca_bindings.py
-        test_storage.py
-        test_ui_schema.py
-        test_usage_errors.py
-        test_warning_dedupe.py
-        test_worker_artifacts.py
-    )
+    # The quick subset, shared with CI's merge tier (.depot/workflows/ci.yml).
+    FAST=()
+    while IFS= read -r f; do FAST+=("$f"); done < <(grep -v '^#' scripts/fast-tests.txt | grep .)
     SELECTED=()
     if [ "$PYTHON_MODE" = all ]; then
         SELECTED=(python/tests)

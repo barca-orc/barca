@@ -158,23 +158,29 @@ the merge queue. It does not run on push to `main`: `main` only moves to a merge
 commit, which the queue has just tested. The required checks are `CI / test` and
 `CI / backends`. Each is a job that passes when the jobs it needs succeeded.
 
-The merge group's run gates the merge. A pull request runs only the fast set, so it can enter
-the queue about a minute after a push:
+CI runs in three tiers. A pull request runs the fast tier, so it can enter the queue about a
+minute after a push. A merge group runs the merge tier, which gates the merge, in about two
+minutes. A release runs the full tier twice: as the `release/v*` pull request's own run, and
+again in that pull request's merge group (recognized by its head commit, `chore(release): ...`).
+A pull request labelled `ci-full` runs the full tier too, on its next push.
 
-| Job | Check | Pull request | Merge group |
-| --- | --- | --- | --- |
-| **checks**: the CHANGELOG check, the specification checks and the TLA+ models | test | yes | yes |
-| **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes |
-| **changes**: which optional parts the change needs (`scripts/ci-changes.py`); every test file is in exactly one shard (`scripts/ci-shards.py --check`) | backends | yes | yes |
-| **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes |
-| **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes |
-| **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | yes |
-| **ui**: the web UI's typecheck, lint and unit tests | backends | | yes |
-| **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | yes |
-| **python**: the Python suite in shards | backends | | yes |
+| Job | Check | Fast (pull request) | Merge (merge group) | Full (release, `ci-full`) |
+| --- | --- | --- | --- | --- |
+| **checks**: the CHANGELOG check, the specification checks and the TLA+ models | test | yes | yes | yes |
+| **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes | yes |
+| **changes**: the tier and its optional parts; every test file is in exactly one shard (`scripts/ci-shards.py --check`) and every file in `scripts/fast-tests.txt` exists | backends | yes | yes | yes |
+| **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes | yes |
+| **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes | yes |
+| **python (fast)**: the quick subset in `scripts/fast-tests.txt`, about 20 s of tests | backends | | yes | |
+| **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | | yes |
+| **ui**: the web UI's typecheck, lint and unit tests | backends | | | yes |
+| **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | | yes |
+| **python (1/3 .. 3/3, duckdb 1.x)**: the whole Python suite in shards, with the emulators, the duckdb 1.x rerun and the minute checkpoint test | backends | | | yes |
 
-A pull request labelled `ci-full` runs the full set too, on its next push. Release wheels are
-built by the release workflow with `--release`, not by CI.
+The trade: a merge to `main` is checked by the Rust tests and the quick Python subset only, so
+a failure the full tier finds on a release pull request is in one of the pull requests merged
+since the previous release. Fix it there (or revert) and push to the release branch. Release
+wheels are built by the release workflow with `--release`, not by CI.
 
 No crate has a runnable doctest, so `cargo test --doc` does not run.
 
@@ -186,9 +192,8 @@ file's duration are written to the check's summary. API tests use a separate tem
 working directory per test, keeping `.barca` databases and artifacts isolated from other
 workers.
 
-Three parts run only when the change touches a path `scripts/ci-changes.py` lists and on a
-`release/v*` branch (whose version bump touches `pyproject.toml`, so its merge group runs them
-too):
+Three parts run in the full tier only (`scripts/ci-changes.py --all` turns them on; the
+script's `--base` mode, which picks parts from the changed paths, is kept for local use):
 
 - **Object-store emulators.** Each shard starts MinIO, fake-gcs-server and Azurite and sets the
   three `BARCA_TEST_*` endpoints, so the backend conformance and transfer fault tests run.
@@ -196,11 +201,10 @@ too):
 - **duckdb 1.x.** An extra `python (duckdb 1.x)` job runs every test file that mentions duckdb
   again with the newest duckdb 1.x.
 - **The minute checkpoint.** `python/tests/test_minute_checkpoints.py` waits about two minutes
-  on the real one-minute metadata backup timer. It runs when the change touches the
-  checkpoint's code (the step recorder, backups, `barca state`, `barca._state`) and on a pull
-  request labelled `ci-full`; otherwise the shards set `BARCA_TEST_MINUTE_CHECKPOINT=0` and it
-  skips. Locally, with the variable unset, it runs. The checkpoint's logic is also covered in
-  seconds by a Rust unit test in `crates/barca-core/src/persist.rs` on a short interval.
+  on the real one-minute metadata backup timer. Outside the full tier the shards set
+  `BARCA_TEST_MINUTE_CHECKPOINT=0` and it skips. Locally, with the variable unset, it runs. The
+  checkpoint's logic is also covered in seconds by a Rust unit test in
+  `crates/barca-core/src/persist.rs` on a short interval.
 
 `scripts/ci-test-durations.json` holds each test file's duration, with and without the
 emulators, and the shard split balances on the map that matches the run (counting the minute

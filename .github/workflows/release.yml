@@ -16,30 +16,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The web UI is built once and embedded in every wheel's barca binary
-  # (crates/barca-server/src/ui.rs embeds ui/dist at compile time), and shipped
-  # prebuilt in the sdist so building from source does not need Node.
-  build-ui:
-    runs-on: depot-ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: ui/package.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
-      - name: Build the UI
-        run: |
-          pnpm --dir ui install --frozen-lockfile
-          pnpm --dir ui test
-          pnpm --dir ui build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ui-dist
-          path: ui/dist/
+  # The web UI is embedded in every wheel's barca binary (crates/barca-server/src/ui.rs embeds
+  # ui/dist at compile time) and shipped prebuilt in the sdist so building from source does
+  # not need Node. Each build job restores ui/dist from the cache CI's `build` job fills,
+  # keyed on a hash of ui/ (Depot Cache is shared across refs, so a tag finds the entry the
+  # release PR's merge group wrote), or builds it; no job waits on a separate UI build. The
+  # UI's own tests ran in CI's full tier on the release PR.
 
   # CHANGELOG.md is the source of release notes: the release body is the version's
   # `## <version> (<date>)` section plus an install line. This runs first and the GitHub
@@ -61,7 +43,6 @@ jobs:
           path: RELEASE_NOTES.md
 
   build-wheels:
-    needs: build-ui
     strategy:
       fail-fast: false
       matrix:
@@ -96,10 +77,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - name: Restore the web UI build
+        id: ui-dist
+        uses: actions/cache@v4
         with:
-          name: ui-dist
           path: ui/dist
+          key: ui-dist-v1-${{ hashFiles('ui/**') }}
+      - if: steps.ui-dist.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+      - if: steps.ui-dist.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Build the web UI
+        if: steps.ui-dist.outputs.cache-hit != 'true'
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui build
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -175,15 +173,31 @@ jobs:
           path: barca-${{ matrix.name }}.tar.gz
 
   build-sdist:
-    needs: build-ui
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - name: Restore the web UI build
+        id: ui-dist
+        uses: actions/cache@v4
         with:
-          name: ui-dist
           path: ui/dist
+          key: ui-dist-v1-${{ hashFiles('ui/**') }}
+      - if: steps.ui-dist.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+      - if: steps.ui-dist.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Build the web UI
+        if: steps.ui-dist.outputs.cache-hit != 'true'
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui build
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -244,47 +258,74 @@ jobs:
   # Deploys the docs site, barca.sh (Cloudflare Workers, site/wrangler.jsonc), from the tag.
   # It runs after the release and the PyPI upload and nothing waits on it, so a failed deploy
   # never blocks or fails a release; rerun this job, or deploy by hand with
-  # `cd site && npm ci && npm run deploy`.
+  # `cd site && npm ci && npm run deploy`. Without the Cloudflare secrets the job warns and
+  # does nothing (a job-level `if` cannot read secrets), so a repository without them still
+  # gets a green release run.
   deploy-site:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [release, publish-pypi]
     runs-on: depot-ubuntu-24.04
     steps:
       - name: Check the Cloudflare secrets
+        id: secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          missing=0
+          present=true
           for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
             if [ -z "${!name}" ]; then
-              echo "::error::The repository secret $name is not set, so barca.sh was not deployed. Add it under Settings > Secrets and variables > Actions and rerun this job."
-              missing=1
+              echo "::warning::The repository secret $name is not set, so barca.sh was not deployed. Add it under Settings > Secrets and variables > Actions and rerun this job, or deploy by hand: cd site && npm ci && npm run deploy"
+              present=false
             fi
           done
-          exit "$missing"
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+          echo "present=$present" >> "$GITHUB_OUTPUT"
+      - if: steps.secrets.outputs.present == 'true'
+        uses: actions/checkout@v4
+      - if: steps.secrets.outputs.present == 'true'
+        uses: actions/setup-node@v4
         with:
           # astro needs Node >= 22.22; 24 matches the UI build above.
           node-version: 24
           cache: npm
           cache-dependency-path: site/package-lock.json
       - name: Build the site
+        if: steps.secrets.outputs.present == 'true'
         working-directory: site
         run: |
           npm ci
           npm run build
       - name: Deploy to Cloudflare
+        if: steps.secrets.outputs.present == 'true'
         working-directory: site
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy
 
+  # One sandbox waits for PyPI's CDN to serve the new version (its simple index is cached for up
+  # to 10 minutes after a publish, #480) and for every Linux wheel to be listed, so the four
+  # verification sandboxes below start once the install can succeed instead of each polling.
+  wait-pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish-pypi
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for the published wheels on PyPI
+        run: |
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          for architecture in x86_64 aarch64; do
+            for libc in gnu musl; do
+              python3 scripts/wait-pypi-wheel.py --version "$VERSION" --architecture "$architecture" --libc "$libc"
+            done
+          done
+
   verify-published-linux:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [release, publish-pypi]
+    needs: [release, publish-pypi, wait-pypi]
     timeout-minutes: 34
     strategy:
       fail-fast: false

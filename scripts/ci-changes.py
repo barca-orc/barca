@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Decide which optional parts of the `backends` CI job a change needs.
 
-Three parts of `.depot/workflows/ci.yml` run only when a change can affect them:
+Three parts of `.depot/workflows/ci.yml` run in its full tier (a release; `--all`). The
+`--base` mode below, which picks the parts a change can affect, is for local use:
 
 - **emulators**: the object-store emulators (MinIO, fake-gcs-server, Azurite) and the
   `BARCA_TEST_*` variables that make the backend conformance tests run instead of skip.
