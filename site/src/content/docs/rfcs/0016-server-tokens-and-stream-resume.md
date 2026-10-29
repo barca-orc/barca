@@ -177,8 +177,11 @@ a constant-time comparison. Do not build JWT verification, signing keys, OAuth o
 Public token metadata: `id`, `name`, `created_at`, nullable `expires_at`. Names have at most
 128 UTF-8 bytes and no control characters. Creation accepts a name and optional future expiry;
 it returns metadata and the secret once. List never returns secrets or digests. Revoke is
-idempotent; unknown/revoked IDs reveal no secret. Bound active records to 1000 per project,
-returning a conflict with remediation if full. Consumed/expired bootstrap grants are discarded.
+idempotent; unknown/revoked IDs reveal no secret. Bound ordinary API records to 1000 per
+project, returning a conflict with remediation if full. Reserve one additional short-lived
+bootstrap-connection slot so a full token list cannot lock out local recovery. Redeeming a
+new bootstrap grant replaces the previous bootstrap connection, without revoking ordinary
+API tokens. Consumed/expired bootstrap grants are discarded.
 Do not write `last_used` on every request or turn authentication into another metadata writer.
 
 Proposed HTTP surface (experimental; implementation must update OpenAPI and conformance):
@@ -212,7 +215,7 @@ different data. The run handle and event epoch have different purposes.
 
 A request without `Last-Event-ID` asks for the stream from its beginning. A request with a
 valid cursor starts strictly after that event. Retain a bounded serialized replay window:
-at most 4096 events or 16 MiB per run, and 64 MiB across replay windows, whichever applies
+at most 65,536 events or 16 MiB per run, and 64 MiB across replay windows, whichever applies
 first. Evict oldest retained events first, including from active runs if required. Finished
 runs retain replay only while their existing age/memory eviction permits it. Do not create a
 durable event archive, copy full backlogs per subscriber, or add an unbounded slow-client queue.
@@ -259,9 +262,14 @@ Network errors, transient proxy failures and EOF before a terminal event can rec
 401/403 stop immediately. On 404/204, read the existing run's canonical outcome; if it is
 still pending/running, continue bounded reconnection. On epoch mismatch, inspect that run:
 follow a new live/requeued attempt with an explicit restart message and a fresh cursor,
-never by creating another run. On expiration, retrieve a terminal outcome if available;
-otherwise exit 3 with a replay-gap message and a pointer to run history/logs. Do not silently
-claim complete log delivery or resubmit work to repair an event gap.
+never by creating another run. On expiration, warn that replay is incomplete and follow
+the existing run by polling its view until the canonical outcome is available. Use one
+non-overlapping poll every two seconds, observe cancellation, and apply the reconnect window
+to transport outages rather than to healthy polling of a long run. An execution command
+still returns its canonical outcome; losing progress events does not turn successful work
+into a failed run. A command promising complete ordered log delivery must report an
+unfillable log gap explicitly, rather than claiming a complete transcript. Do not resubmit
+work to repair an event gap.
 
 The UI replaces native EventSource with a fetch stream so credentials, cursor headers and
 HTTP errors use the same transport as every other request. Preserve reducer/state behavior
@@ -285,7 +293,8 @@ errors and bounded replay as 0.36.0 upgrade behavior; auth remains opt-in.
 - Exercise the full router in auth-off/token modes: every method, HEAD/ETag, encoded paths,
   UI/static exceptions, health, ledger, SSE and cancellation. Test 401/403 envelopes and no
   mutation or project-data disclosure before authorization.
-- Test one-time bootstrap races, expiry/clock changes, atomic state writes, permissions,
+- Test one-time bootstrap races and recovery with a full ordinary-token list,
+  expiry/clock changes, atomic state writes, permissions,
   malformed state, token rotation, restart, metadata restore independence, and revocation
   of active/idle streams across processes. Use injected private clocks, not public test knobs.
 - Browser tests cover Connect, reload/disconnect, one-time secret display, creation/list/
@@ -295,6 +304,8 @@ errors and bounded replay as 0.36.0 upgrade behavior; auth remains opt-in.
   drops between frames and inside UTF-8/CRLF frames,
   exact-once rendering within a retained attempt, terminal reconnect, epoch changes,
   malformed/future/expired cursors, slow subscribers, oversized events and bounded retention.
+  Expiration while a run is still active must keep following that run to its real outcome,
+  with a gap notice and without another submission, including beyond the reconnect window.
   A proxy drops real authenticated streams in integration tests without duplicating tasks.
 - Benchmark small authenticated requests and reconnects, and large-event retention. Add no
   per-request token-file walk, metadata hash or write. No changes to worker/transfer wire
