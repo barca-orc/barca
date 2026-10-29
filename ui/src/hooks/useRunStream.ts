@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { reduceRunEvent, endRunStream, isNewFrame, EMPTY_RUN_STATE, type RunStreamState } from '@/lib/runStream'
-import { API_BASE, apiUrl } from '@/lib/apiBase'
+import { followEvents } from '@/lib/eventStream'
 import type { RunEvent } from '@/lib/types'
 
 /** A run we've subscribed to but haven't heard from yet. */
@@ -27,44 +27,25 @@ export function useRunStream(handle: string | null): RunStreamState {
 
   useEffect(() => {
     if (!handle) return
-    const es = new EventSource(apiUrl(API_BASE, `/runs/${encodeURIComponent(handle)}/events`))
+    const controller = new AbortController()
     let lastId: number | null = null
-    let finished = false
     const update = (step: (state: RunStreamState) => RunStreamState) =>
       setTagged((prev) => ({
         handle,
         state: step(prev.handle === handle ? prev.state : STARTING),
       }))
 
-    es.onmessage = (e) => {
-      if (!isNewFrame(lastId, e.lastEventId)) return
+    void followEvents(`/runs/${encodeURIComponent(handle)}/events`, (frame) => {
+      if (!isNewFrame(lastId, frame.id)) return true
       let event: RunEvent
-      try {
-        event = JSON.parse(e.data) as RunEvent
-      } catch {
-        return
-      }
-      const id = Number(e.lastEventId)
-      if (e.lastEventId !== '' && Number.isInteger(id)) lastId = id
-      update((state) => reduceRunEvent(state, event))
-      if (event.type === 'run_finished') {
-        finished = true
-        es.close()
-      }
-    }
+      try { event = JSON.parse(frame.data) as RunEvent } catch { return true }
+      const id = Number(frame.id)
+      if (frame.id !== '' && Number.isInteger(id)) lastId = id
+      update(state => reduceRunEvent(state, event))
+      return event.type !== 'run_finished'
+    }, () => update(endRunStream), controller.signal)
 
-    es.onerror = () => {
-      if (finished) {
-        es.close()
-        return
-      }
-      // A transient drop: the browser reconnects and the replay is deduplicated
-      // above. A refused stream (404: the run is no longer live here) closes the
-      // EventSource for good; stop showing the run as running.
-      if (es.readyState === EventSource.CLOSED) update(endRunStream)
-    }
-
-    return () => es.close()
+    return () => controller.abort()
   }, [handle])
 
   if (!handle) return EMPTY_RUN_STATE

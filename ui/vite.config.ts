@@ -6,7 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 // barca serve binds 127.0.0.1:8274 by default and serves the built UI at /ui/.
 // Dev mirrors that: Vite serves the app at /ui/ and proxies every other path
 // (the API) to barca serve, so the frontend stays same-origin with no CORS.
-const BARCA_SERVE = 'http://127.0.0.1:8274'
+const BARCA_SERVE = process.env.BARCA_DEV_SERVER ?? 'http://127.0.0.1:8274'
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
@@ -20,7 +20,7 @@ export default defineConfig(({ command }) => ({
     },
   },
   // Playwright specs in e2e/ run with `pnpm test:e2e`, not vitest.
-  test: { exclude: ['e2e/**', 'node_modules/**'] },
+  test: { exclude: ['e2e/**', 'e2e-auth/**', 'node_modules/**'] },
   server: {
     proxy: {
       // Everything outside /ui/ is the API.

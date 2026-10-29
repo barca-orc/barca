@@ -2,9 +2,9 @@
 
 ## Scope and status
 
-Specification version: 1. Status: implemented for pending 0.36.0.
-Scope: server-side token storage, bootstrap, request authentication and administration. Browser Connect/token management and
-stream cursor resume remain accepted intent in [RFC-0016](../../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md).
+Specification version: 2. Status: implemented for pending 0.36.0.
+Scope: token storage, bootstrap, request authentication, administration and browser access.
+Stream cursor resume remains accepted intent in [RFC-0016](../../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md).
 Exact HTTP shapes belong to [OpenAPI](../interfaces/server-api.openapi.yaml); client
 credential rules belong to the [manual](../../crates/barca-cli/docs/server-mode.md).
 
@@ -35,6 +35,21 @@ separate from backed-up metadata. It has a version and owner-only directory/file
 - Local revocation notifies open SSE responses; idle responses also revalidate at one-second
   intervals for external revocation and expiry. Invalid credentials terminate the response.
 
+### Browser connection
+
+Connect accepts a bootstrap code or an existing token. A successful connection keeps only
+its API/connection token in memory and tab session storage keyed by origin and API prefix.
+Disconnect clears credentials and query data before showing Connect; it does not revoke.
+Authentication failure clears the current connection. A late failure for an older token must
+not erase a replacement credential. Creating a token shows its secret only in that page's
+transient state; reload does not recover the secret. The form explicitly states no expiry
+when no future expiry is chosen. All tokens grant full project/token-management capabilities.
+
+Token-mode fetches omit cookies. Browser request URLs stay within this origin and project
+prefix, and redirects are rejected. Fetch-based SSE shares these credentials; closing a view
+aborts its reader and reconnect timer. Same-origin script access to session storage is an
+accepted tradeoff; untrusted projects require separate origins.
+
 ## Invariants
 
 - **INV-AUTH-SECRET:** issue at least 256 bits of OS randomness; persist only domain-separated
@@ -62,11 +77,15 @@ stores, revocation and corrupt/symlink state. [Router tests](../../crates/barca-
 cover method/path authorization, ETag ordering, read-only administration, revocation,
 secret-safe errors and OpenAPI response schemas. [Stream tests](../../crates/barca-server/src/auth_http.rs)
 cover idle local/external revocation and expiry through the real response middleware.
-These tests do not prove browser behavior or TLS deployment.
+[Browser tests](../../ui/e2e-auth/connection.spec.ts) drive real bootstrap, authenticated task
+streaming, token creation, one-time display, API-token connection, reload, disconnect and
+revocation. [Credential tests](../../ui/src/lib/credentials.test.ts) check scope, headers,
+redirect refusal and storage failures; [stream tests](../../ui/src/lib/eventStream.test.ts)
+check incremental decoding, abort and terminal authentication failure. These do not prove
+TLS deployment or immunity to same-origin scripts.
 
 ## Open questions and gaps
 
 [CLI/server integration](../../python/tests/test_server_tokens.py) exercises project-root bootstrap,
-real redemption, issued-token execution, Python client access and revocation. UI credential
-handling/token management and attempt-scoped bounded replay are not yet implemented. Full
-release conformance must pass before 0.36.0.
+real redemption, issued-token execution, Python client access and revocation. Attempt-scoped
+bounded replay remains unimplemented. Full release conformance must pass before 0.36.0.

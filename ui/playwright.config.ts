@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { defineConfig } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 
@@ -7,7 +8,7 @@ const fixture = fileURLToPath(new URL('./e2e/fixture', import.meta.url))
 // Two servers, as in development: `barca serve` on the fixture project (API on
 // :8274, which vite.config.ts proxies to) and the Vite dev server at /ui/.
 // Build the binary first (`cargo build -p barca`), or point BARCA_BIN at one.
-const barca = process.env.BARCA_BIN ?? `${root}/target/debug/barca`
+const barca = process.env.BARCA_BIN ?? (existsSync(`${root}/target-local/debug/barca`) ? `${root}/target-local/debug/barca` : `${root}/target/debug/barca`)
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,

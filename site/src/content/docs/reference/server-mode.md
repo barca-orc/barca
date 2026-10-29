@@ -364,8 +364,17 @@ unconsumed code and expires after 15 minutes. `POST /auth/bootstrap` with JSON
 in 12 hours. Use that token as a bearer credential to create a named API token with
 `POST /auth/tokens`, JSON `{"name":"laptop"}`. An optional future UTC `expires_at` sets
 an expiry; omitted or null means **no expiry**. Creation returns the secret once.
-The UI Connect/token-management screens are not implemented yet; these HTTP operations
-are available to API clients.
+The UI Connect screen accepts either a bootstrap code or an existing API token. Open
+**API tokens** in the sidebar to create named tokens, copy each secret once, list metadata,
+and revoke credentials. Tokens have no expiry unless you choose one; the creation form
+states this explicitly. A bootstrap connection expires after 12 hours.
+
+The browser keeps its connection in memory and tab-scoped session storage, keyed by server
+origin and project prefix. Reloading retains the connection; **Disconnect** clears it and
+the UI data cache without revoking the token. Authentication failure returns to Connect.
+Token-mode requests, including fetch-based event streams, omit cookies and reject redirects.
+No credential goes into a URL or localStorage. A script running in the same origin can read
+tab storage: host untrusted projects on separate origins, and use TLS for remote access.
 
 Every token grants the server's full capabilities, including token management. There are
 no accounts or roles. Read-only mode still prevents pipeline writes but allows token

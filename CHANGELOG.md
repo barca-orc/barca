@@ -16,11 +16,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Connect the UI with a bootstrap code or API token, manage named tokens, and show new
+  secrets once with explicit expiry choices. Tab-scoped credentials cover ordinary requests
+  and fetch-based event streams; disconnect/revocation clears the connection and UI cache.
+
 - Opt into server-issued project bearer tokens with `[server] auth = "token"`,
   `BARCA_SERVER_AUTH`, or `serve --auth`. Local `tokens bootstrap` creates a one-use recovery
   grant; HTTP token creation/list/revocation works in read-only mode, stores digests outside
-  metadata backups, and closes revoked or expired event streams. UI token management and
-  cursor resume remain pending.
+  metadata backups, and closes revoked or expired event streams. Cursor resume remains pending.
 
 - Send server bearer credentials from `BARCA_SERVER_TOKEN`, or Basic credentials from URL
   userinfo, consistently across execution, ledger, streaming and cancellation requests in the
@@ -41,8 +44,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ### Documentation
 
 - Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including
-  bootstrap, browser credential handling, revocation and bounded replay. Browser token
-  management and cursor replay remain to be implemented for 0.36.0.
+  bootstrap, browser credential handling, revocation and bounded replay. Cursor replay remains to be implemented for 0.36.0.
 
 - CI runs in three tiers: a pull request runs the static checks, a merge group runs those plus
   the Rust tests, the wheel and the quick Python subset in `scripts/fast-tests.txt` (about two

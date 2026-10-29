@@ -71,3 +71,18 @@ maturin develop --release           # the binary now embeds ui/dist
 ```
 
 A binary built without `ui/dist` still works; `/ui/` then explains how to build the UI.
+
+## Token authentication checks
+
+`pnpm --dir ui test:e2e` runs the existing browser suite, then the dedicated token-mode
+suite. To run only token mode:
+
+```bash
+BARCA_BIN="$PWD/.venv/bin/barca" pnpm --dir ui test:e2e:auth
+```
+
+Build that binary from this branch first. The auth suite starts isolated servers on ports
+8376 and 5276 and drives local bootstrap, streamed execution, token creation, reload,
+disconnect and revocation against the real server. Credential-bearing traces are disabled.
+Vite's `BARCA_DEV_SERVER` override is for this isolated development/test proxy; normal dev
+continues to use port 8274.

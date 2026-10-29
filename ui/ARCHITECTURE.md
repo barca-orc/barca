@@ -30,7 +30,11 @@ that once made a failed run render nothing.
 
 The domain lives in Rust; the frontend's business logic is deliberately thin.
 
-- `lib/api.ts` — typed `fetch` wrappers over the barca-server HTTP API.
+- `lib/api.ts` — typed request wrappers over the barca-server HTTP API.
+- `lib/credentials.ts` — tab-scoped credentials, request scope and the shared fetch transport.
+- `lib/eventStream.ts` — incremental fetch-SSE decoding, abort and reconnect lifecycle.
+- `context/AuthGate.tsx` — authentication discovery and the Connect screen; project queries
+  mount only after the server mode/connection is known.
 - `lib/types.ts` — re-exports the **generated** wire types and adds the few
   frontend-only / ad-hoc-JSON types (`StatusKind`, `LogLine`, `Health`,
   `RunHandle`, `AssetDetail`, `NodeStats`, `ErrorEnvelope`, `RunOutcome`,

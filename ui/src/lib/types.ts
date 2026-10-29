@@ -190,3 +190,6 @@ export type StatusKind =
   | 'queued'
   | 'skipped'
   | 'pending'
+
+export type { TokenMetadata } from './generated/TokenMetadata'
+export type { IssuedToken } from './generated/IssuedToken'

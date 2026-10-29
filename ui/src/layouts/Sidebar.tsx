@@ -6,6 +6,7 @@ import { useAssetStates } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { severityStatus } from '@/lib/assetTable'
 import { pipelineSummaries } from '@/lib/pipeline'
+import { authMode, connect } from '@/lib/credentials'
 import markUrl from '@/assets/brand/mark.svg'
 
 /** Pages that can show one pipeline; elsewhere a pipeline click opens Assets. */
@@ -86,6 +87,7 @@ export function Sidebar() {
       </div>
       <div className="barca-side-foot">
         <Link className="barca-nav" to="/docs">Docs</Link>
+        {authMode() === 'token' && <><Link className="barca-nav" to="/tokens">API tokens</Link><button className="barca-nav" onClick={() => connect(null)}>Disconnect</button></>}
         <ResetDatabaseButton readOnly={health?.read_only ?? false} />
       </div>
     </aside>
