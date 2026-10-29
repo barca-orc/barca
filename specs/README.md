@@ -54,7 +54,7 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 
 | Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 14 | [Router](../crates/barca-server/tests/openapi.rs), [Python client](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 15 | [Router](../crates/barca-server/tests/openapi.rs), [Python client](../python/tests/test_http_openapi_client.py) |
 | Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-core/tests/grammar_spec.rs), [argument owner](../crates/barca-core/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
 | CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
 | Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-core/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
@@ -64,7 +64,7 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 | Upload ownership/receipts | [Receipts](interfaces/artifact-upload-receipts.md) | Implemented, specification 2; concurrent input read isolation is explicitly not guaranteed | [Controlled overlaps](../python/tests/test_upload_snapshot_receipts.py), [cancellation](../python/tests/test_remote_cancel.py), [pending uploads](../python/tests/test_fail_soft_uploads.py) |
 | Metadata compatibility | [Metadata](interfaces/metadata-schema.md) | Implemented policy specification 1; database format 1, legacy 0 | [Admission](../crates/barca-core/src/db_schema.rs), [validation](../crates/barca-core/src/state_validate.rs), [compatibility](../python/tests/test_metadata_compat.py) |
 | Task results and recorded output | [Task output](interfaces/task-output.md) | Implemented, specification 5 | [Task/stdout](../python/tests/test_task_logs.py), [live logs](../python/tests/test_live_logs.py) |
-| Project/credential diagnostics | [Doctor](interfaces/doctor.md) | Implemented, specification 1; check data experimental | [No-execution](../python/tests/test_doctor.py), [identity](../python/tests/test_identity.py), [server](../python/tests/test_debugging_problems.py) |
+| Project/credential diagnostics | [Doctor](interfaces/doctor.md) | Implemented, specification 2; check data experimental | [No-execution](../python/tests/test_doctor.py), [identity](../python/tests/test_identity.py), [server](../python/tests/test_debugging_problems.py) |
 
 Backup/restore layout and signed URLs remain owned by the [remote manual](../crates/barca-cli/docs/remote.md)
 and CLI contract, with [backup tests](../python/tests/test_store_backup_restore.py),
@@ -72,10 +72,11 @@ and CLI contract, with [backup tests](../python/tests/test_store_backup_restore.
 Their accepted designs are [RFC-0009](../site/src/content/docs/rfcs/0009-store-backup-and-restore.md)
 and [RFC-0011](../site/src/content/docs/rfcs/0011-signed-urls.md).
 [RFC-0015](../site/src/content/docs/rfcs/0015-backup-cadence.md) accepts configurable backup
-cadence and separate local-backup accounting for 0.36.0. It is accepted intent, not implemented;
-the current manual and contracts remain the runtime owners. Cadence conformance is exercised
-by [backup cadence](../python/tests/test_backup_cadence.py), the core admission tests and
-the recorder's skipped-progress test. Separate backup accounting remains implementation work.
+cadence and separate local-backup accounting for 0.36.0. The manual and CLI contract own
+the implementation, which is not yet released. Conformance includes
+[backup cadence](../python/tests/test_backup_cadence.py),
+[backup accounting](../python/tests/test_backup_storage_accounting.py), the core admission
+and GC tests, and the recorder's skipped-progress test.
 Slack configuration/behavior remains in the [telemetry manual](../crates/barca-cli/docs/telemetry.md),
 with [webhook controls](../python/tests/test_telemetry_slack.py); message prose is not a stable surface.
 These owners have not been relocated or copied into new schemas.

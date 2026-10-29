@@ -16,6 +16,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Report local metadata backups outside the cache budget while retaining the five-copy
+  rotation. Doctor and GC distinguish budgeted, backup and physical bytes; status adds an
+  experimental project-wide `disk_usage` summary using maintained cache accounting without
+  walking artifacts. Physical totals continue to include backups.
+
 - Configure routine metadata backup cadence with `[remote] backup_interval` or
   `BARCA_BACKUP_INTERVAL` (default `"1m"`, or `"off"`). A shared per-database gate applies
   before copying, hashing and uploading, survives process restarts, and retains dirty

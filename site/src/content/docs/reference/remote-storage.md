@@ -789,7 +789,9 @@ Know before sharing:
   (see "How often the store is checked").
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
-- `.barca/artifacts/` has no size cap (see Failures).
+- `.barca/artifacts/` is subject to the project cache budget (`barca docs cache`). Recognized
+  local metadata backups are reported outside that budget and retained by their five-copy
+  rotation. Physical totals and filesystem free space still include them.
 
 ## Diagnose configuration
 

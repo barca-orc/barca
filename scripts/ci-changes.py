@@ -89,6 +89,7 @@ DUCKDB1 = ALWAYS + [
 # takes, the helper process that runs it, the store side, `barca state backups|restore`, and
 # the test with the helpers it imports.
 CHECKPOINT = ALWAYS + [
+    "crates/barca-core/src/db.rs",
     "crates/barca-core/src/config.rs",
     "crates/barca-core/src/backup/*",
     "crates/barca-server/src/lib.rs",

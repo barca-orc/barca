@@ -549,12 +549,29 @@ pub(crate) async fn copy_for_backup(
     // Finish the admitted WAL checkpoint safely, then observe cancellation again.
     fold_log(db_path).await?;
     until.check()?;
+    let tracing = std::env::var_os("BARCA_TRACE_TIMING").is_some();
+    let hashing = Instant::now();
     let digest = file_sha256(Path::new(db_path))
         .map_err(|e| BarcaError::Db(format!("failed to read {db_path} for a backup: {e}")))?;
+    let bytes = tracing.then(|| fs::metadata(db_path).map(|m| m.len()).unwrap_or(0));
+    if let Some(bytes) = bytes {
+        crate::errln!(
+            "[timing] metadata backup hash: {bytes} bytes in {:.3} ms",
+            hashing.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     if unless == Some(digest.as_str()) {
         return Ok(None);
     }
+    let copying = Instant::now();
     let copied = copy_snapshot_bytes(db_path, copy, until).await;
+    if let Some(bytes) = bytes {
+        crate::errln!(
+            "[timing] metadata backup copy: {bytes} bytes in {:.3} ms (complete={})",
+            copying.elapsed().as_secs_f64() * 1000.0,
+            copied.is_ok()
+        );
+    }
     if copied.is_err() {
         let _ = fs::remove_file(copy);
     }

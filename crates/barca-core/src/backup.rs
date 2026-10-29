@@ -196,6 +196,55 @@ fn unsent_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.unsent", stem(name)))
 }
 
+/// Files owned by the local backup layout, relative to the project's `.barca/`.
+/// A directory merely named `backups` and unrelated files are not quota exemptions.
+pub(crate) fn owned_local_file(rel: &Path) -> bool {
+    let Some(parts): Option<Vec<_>> = rel.iter().map(|p| p.to_str()).collect() else {
+        return false;
+    };
+    let name = match parts.as_slice() {
+        ["backups", name] => *name,
+        ["envs", env, "backups", name]
+            if !env.is_empty()
+                && env
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) =>
+        {
+            *name
+        }
+        _ => return false,
+    };
+    if matches!(
+        name,
+        ".covered-run" | ".admission.lock" | ".last-attempt" | ".last-attempt.tmp"
+    ) {
+        return true;
+    }
+    if is_backup_name(name) {
+        return true;
+    }
+    for suffix in [".json", ".unsent"] {
+        if let Some(stem) = name.strip_suffix(suffix)
+            && is_backup_name(&format!("{stem}.db"))
+        {
+            return true;
+        }
+    }
+    if let Some(stem) = name
+        .strip_prefix('.')
+        .and_then(|s| s.strip_suffix(".json.tmp"))
+    {
+        return is_backup_name(&format!("{stem}.db"));
+    }
+    let tmp = name
+        .strip_suffix("-wal")
+        .or_else(|| name.strip_suffix("-shm"))
+        .unwrap_or(name);
+    tmp.strip_prefix(".backup-")
+        .and_then(|s| s.strip_suffix(".tmp"))
+        .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The backups in `dir`, newest first.
 fn local_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -346,7 +395,18 @@ pub async fn take_requested(
             _ => return Ok(taken),
         },
     };
+    let uploading = std::time::Instant::now();
     taken.upload = Some(upload(python, cfg, &dir, &name, store_dir, until).await);
+    if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
+        let bytes = std::fs::metadata(dir.join(&name))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        crate::errln!(
+            "[timing] metadata backup upload: {bytes}-byte copy in {:.3} ms (confirmed={})",
+            uploading.elapsed().as_secs_f64() * 1000.0,
+            matches!(taken.upload, Some(Ok(_)))
+        );
+    }
     Ok(taken)
 }
 

@@ -1305,6 +1305,11 @@ fetched) is still exit 3.
 <!-- BEGIN GENERATED schema status_unsynced -->
 | Key | Type | Present |
 |---|---|---|
+| `disk_usage` | object | always |
+| `disk_usage.backup_bytes` | integer | always |
+| `disk_usage.budget_bytes` | integer | always |
+| `disk_usage.limit_bytes` | integer | always |
+| `disk_usage.size_bytes` | integer | always |
 | `nodes` | array | always |
 | `nodes[]` | object | always |
 | `nodes[].cache` | object | always |
@@ -1652,6 +1657,12 @@ view. Excluded historical remote artifacts are not fetched for that view.
 
 ### status
 
+Experimental `disk_usage` reports project-wide `size_bytes`, `budget_bytes`, `backup_bytes`
+and `limit_bytes`. Physical size includes backups; budget excludes recognized local metadata
+backup files. Budgeted bytes use maintained GC accounting, and backup measurements inspect
+at most 4096 directory entries. Unknown counts are `null`. No artifact walk is added to
+status, and node selection does not narrow this storage scope.
+
 The status document: the same envelope keys as `list` (`total`, `truncated`, `hint`) beside
 `target`, `targets`, `nodes` and `summary`. `target` is the one target given (`null` for the whole
 file or several targets); `targets` lists every target given (`[]` for the whole file). `summary`
@@ -1660,6 +1671,11 @@ counts every node even when `nodes` is truncated.
 <!-- BEGIN GENERATED schema status -->
 | Key | Type | Present |
 |---|---|---|
+| `disk_usage` | object | always |
+| `disk_usage.backup_bytes` | integer | always |
+| `disk_usage.budget_bytes` | integer | always |
+| `disk_usage.limit_bytes` | integer | always |
+| `disk_usage.size_bytes` | integer | always |
 | `nodes` | array | always |
 | `nodes[]` | object | always |
 | `nodes[].cache` | object | always |
@@ -1765,6 +1781,11 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 <!-- BEGIN GENERATED schema status_problems -->
 | Key | Type | Present |
 |---|---|---|
+| `disk_usage` | object | always |
+| `disk_usage.backup_bytes` | integer | always |
+| `disk_usage.budget_bytes` | integer | always |
+| `disk_usage.limit_bytes` | integer | always |
+| `disk_usage.size_bytes` | integer | always |
 | `filter` | object | always |
 | `filter.problems` | boolean | always |
 | `nodes` | array | always |
@@ -1819,6 +1840,11 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 <!-- BEGIN GENERATED schema status_changed -->
 | Key | Type | Present |
 |---|---|---|
+| `disk_usage` | object | always |
+| `disk_usage.backup_bytes` | integer | always |
+| `disk_usage.budget_bytes` | integer | always |
+| `disk_usage.limit_bytes` | integer | always |
+| `disk_usage.size_bytes` | integer | always |
 | `nodes` | array | always |
 | `nodes[]` | object | always |
 | `nodes[].cache` | object | always |
@@ -2212,6 +2238,9 @@ recorded before 0.31 hold the worker's peak over every step it had run, not the 
 | Key | Type | Present |
 |---|---|---|
 | `after_bytes` | integer | always |
+| `backup_bytes` | integer | always |
+| `budget_after_bytes` | integer | always |
+| `budget_before_bytes` | integer | always |
 | `dry_run` | boolean | always |
 | `evicted` | array | always |
 | `evicted[]` | object | always |
@@ -2238,7 +2267,9 @@ recorded before 0.31 hold the worker's peak over every step it had run, not the 
 | `tiers[].tier` | string | always |
 <!-- END GENERATED schema gc_dry_run -->
 
-- `size_bytes` is `.barca/` before, `after_bytes` after (predicted, with `--dry-run`).
+- `size_bytes` is `.barca/` before, `after_bytes` after (predicted, with `--dry-run`), including
+  backups. `budget_before_bytes` and `budget_after_bytes` exclude recognized local metadata
+  `backup_bytes`. Limits and targets apply to budgeted bytes; backups remain retained.
   `limit_bytes` and `target_bytes` (80% of the limit) are `null` with the limit `off`.
 - `evicted[]` lists every entry in eviction order: `tier` is `leftovers`, `superseded`,
   `store_held` or `current`; `path` is relative to the project root; `node` is set for a result.
@@ -2625,6 +2656,11 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 <!-- BEGIN GENERATED schema status_bytes_changed -->
 | Key | Type | Present |
 |---|---|---|
+| `disk_usage` | object | always |
+| `disk_usage.backup_bytes` | integer | always |
+| `disk_usage.budget_bytes` | integer | always |
+| `disk_usage.limit_bytes` | integer | always |
+| `disk_usage.size_bytes` | integer | always |
 | `nodes` | array | always |
 | `nodes[]` | object | always |
 | `nodes[].cache` | object | always |
@@ -2745,7 +2781,9 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].data` | object | always |
 | `checks[].data.artifacts` | string | sometimes |
 | `checks[].data.available_bytes` | integer | sometimes |
+| `checks[].data.backup_bytes` | integer | sometimes |
 | `checks[].data.barca_version` | string | sometimes |
+| `checks[].data.budget_bytes` | integer | sometimes |
 | `checks[].data.capacity` | integer | sometimes |
 | `checks[].data.enabled` | boolean | sometimes |
 | `checks[].data.executable` | string | sometimes |

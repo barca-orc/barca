@@ -352,6 +352,17 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
         s.always_runs
     )
     .unwrap();
+    let usage = &result.disk_usage;
+    let bytes = |n: Option<u64>| {
+        n.map(crate::gc::size::human)
+            .unwrap_or_else(|| "unmeasured".to_string())
+    };
+    let limit = usage
+        .limit_bytes
+        .map(crate::gc::size::human)
+        .unwrap_or_else(|| "off".to_string());
+    writeln!(&mut rendered, "Cache: {} budgeted (limit {limit}); {} metadata backups outside the budget; {} physical total",
+        bytes(usage.budget_bytes), bytes(usage.backup_bytes), bytes(usage.size_bytes)).unwrap();
     rendered
 }
 

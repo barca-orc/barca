@@ -1,6 +1,6 @@
 # Project diagnostics
 
-Implemented boundary, specification 1. CLI help and output schema ownership remains in
+Implemented boundary, specification 2. CLI help and output schema ownership remains in
 [the CLI contract](../../crates/barca-cli/docs/contract.md). Check names and provider-specific
 identity fields are experimental.
 
@@ -16,8 +16,12 @@ arguments exit 2. Human output has one line per check.
 
 Checks cover root, configuration, environment, state mode, local cache writability,
 metadata snapshot integrity, the size of `.barca/` against its limit and the free space on its
-filesystem (`cache_size`, informational: always `ok`; `data` has `size_bytes`, `limit_bytes`,
-`max_size`, `source`, `filesystem_bytes`, `available_bytes`; RFC-0012), the capacity the steps of
+filesystem (`cache_size`, informational: always `ok`; `data` has `size_bytes`, `budget_bytes`,
+`backup_bytes`, `limit_bytes`,
+`max_size`, `source`, `filesystem_bytes`, `available_bytes`; RFC-0012 amended by RFC-0015).
+Physical `size_bytes` includes recognized local metadata backups; `budget_bytes` excludes
+them and is compared with the cache limit. Backup restore copies are reported outside the
+quota and retained. The checks also report the capacity the steps of
 a run share (`capacity`, informational: always `ok`; `data` has `capacity`, `pool_size`, `source`,
 `pool_source`; experimental, #436, #628), the capacity every run of `barca serve` shares when
 `[server] capacity` is set (`server_capacity`, informational; `data` has `capacity`, `pool_size`,

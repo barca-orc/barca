@@ -4,6 +4,17 @@ One read-only view of every node: what it is, whether it is cached and why, when
 and what its artifact looks like. It answers in one call what would otherwise take `barca list`,
 `--dry-run`, `barca history` and a script that opens the artifact.
 
+The experimental `disk_usage` summary reports project-wide storage across all environments,
+even when node selection or filters narrow the graph: `budget_bytes`, `backup_bytes`,
+physical `size_bytes` and `limit_bytes`. Recognized local metadata backups are outside the
+cache budget and included in the physical total. Human output shows the same distinction.
+Budgeted bytes use the last maintained GC measurement; status does not walk artifacts or
+refresh that measurement. Backup directories are checked directly with a bounded survey
+(at most 4096 directory entries across environments and backup files). Unmeasured counts,
+including an incomplete backup survey, are `null` and displayed as unmeasured. Use `barca
+doctor` or `barca gc --dry-run` for a full measurement. Server status reports server storage.
+The UI's `/state` node array does no additional disk-accounting work.
+
 ```python
 import pandas as pd
 from barca import asset, task

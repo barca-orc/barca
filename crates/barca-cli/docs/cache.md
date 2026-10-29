@@ -878,8 +878,12 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
   deployed. An invalid value is a usage error (exit 2) naming where it came from.
 - `KB`, `MB`, `GB`, `TB` are decimal (`GB` = 10^9 bytes); `KiB`, `MiB`, `GiB`, `TiB` are binary;
   a bare number is bytes. A percentage is of the filesystem's size, read at each check.
-- The size is everything under `.barca/`, every environment included: artifacts, the metadata
-  DBs, staging, `sql-cache/`, `range-cache/`. The DBs are counted and never deleted.
+- The budget covers `.barca/` across every environment: artifacts, metadata DBs, staging,
+  `sql-cache/` and `range-cache/`, excluding recognized local metadata backups. The DBs are
+  counted and never deleted. Backup files, owned sidecars, unsent markers and temporary
+  copies in `.barca/backups/` and `.barca/envs/<env>/backups/` are reported separately,
+  outside this budget; the five-copy rotation stays. Unrelated files and directories merely
+  named `backups` remain budgeted. Physical totals still include backup storage.
 
 **When.** At the end of `barca get` and `barca run` (after results are recorded and uploads have
 finished), after every run under `barca serve`, and once a minute under `barca serve`. When
@@ -914,7 +918,8 @@ the limit:
   metadata DB): its row may not be written yet;
 - the metadata DBs, their logs, locks and backups, and the databases `barca state reset` and
   `barca state restore` moved aside (`metadata.db.reset-<UTC>`, `metadata.db.pre-restore`):
-  counted, never deleted. Nothing outside `.barca/` is ever deleted, and the artifact store is
+  never deleted. Backups are outside the budget; the DBs and moved-aside copies are counted.
+  Nothing outside `.barca/` is ever deleted, and the artifact store is
   never touched.
 
 **After `barca state reset` or `barca state restore`.** The artifacts the old database named stay
@@ -935,6 +940,7 @@ this machine's database does not name; evicting it costs a download.
 
 Under `--json` the run result gains `"cache": {"size_bytes", "limit_bytes", "evicted_files",
 "evicted_bytes"}` (sizes after eviction); the key is absent when nothing was over the limit. If
+backups exist, `size_bytes` includes them; only budgeted bytes trigger eviction. If
 everything that may be evicted is not enough, barca says so once per process:
 `[barca] warning: cache working set 26 GB is larger than max_size 20 GB; results will be
 recomputed often`.
@@ -961,6 +967,12 @@ barca gc --max-size off         # no limit: every leftover and superseded result
 barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, held, ...}
 ```
 
+GC JSON keeps `size_bytes` and `after_bytes` as physical totals including backups.
+`budget_before_bytes` and `budget_after_bytes` exclude `backup_bytes`; the limit and 80%
+target apply to those budgeted bytes. Human output labels backups as outside the budget.
+`barca doctor` reports `budget_bytes`, `backup_bytes` and physical `size_bytes` in its
+cache-size check. Excluding backups is not a free-space guarantee: they still occupy disk.
+
 `--dry-run` lists exactly what `barca gc` then deletes (the same order, from the same
 measurement), unless something changes in between. With the limit `off`, `barca gc` evicts every
 leftover and superseded result, which never costs a recompute of anything current. `--env NAME`
@@ -976,7 +988,8 @@ moved-aside copies and the backups are never evicted (`evictable: false`); delet
 `metadata.db.reset-<UTC>` yourself once you no longer need to undo the reset:
 
 ```
-nothing to evict: 355 KB of 1 KB
+nothing to evict: 355 KB budgeted of 1 KB
+0 B metadata backups outside the budget; 355 KB physical total
 held by: 115 KB metadata databases (never evicted), 111 KB databases moved aside by state reset/restore (never evicted; delete them once you no longer need to undo), 2 B other
 ```
 
