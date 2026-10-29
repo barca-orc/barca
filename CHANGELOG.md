@@ -8,6 +8,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Documentation
+
+- Bring DIRECTION.md through 0.35.1 and record the decided order after it: the
+  0.35.2 server/UI fixes, 0.36.0 backup/credential/resume RFCs, then feedback cleanup.
+  Keep unresolved partition costs open and distinguish approved direction from shipped behavior.
+
 ### Bug Fixes
 
 - Server URL userinfo is omitted from CLI errors and announcements, ledger warnings, stream
