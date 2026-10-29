@@ -107,31 +107,30 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- **Token management and browser access, due by 0.36.0 (#706, #187):** barca is the chosen
-  issuer and validator. The auth RFC must define bootstrap access, browser sessions/CSRF,
-  persistence and revocation, including active streams. No user-account system.
 - **Store inspection, due by 0.36.0 (#706):** bound/reuse artifact
   integrity evidence without making `cached` mean unchecked. Record the cost as the DB grows.
-- **Stream-resume details, due by 0.36.0 (#706):** `Last-Event-ID` is the chosen direction;
-  the RFC must settle replay retention, authentication and expired-cursor behavior.
 
 Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s, exit 1 after a forced stop; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
 
 ## Decided, October 2026
 
-**After 0.35.1 (2026-10-29, #707).** Approved direction; public RFCs and implementation are
-still required for the 0.36.0 changes:
+**After 0.35.1 (2026-10-29, #707).** The RFCs record the accepted 0.36.0 designs;
+implementation and publication are still required:
 
 - Backups: `[remote] backup_interval` / `BARCA_BACKUP_INTERVAL`, default `"1m"`, with `"off"`
   for external volume backups; retain the shutdown backup. Explain whole-DB copy/upload cost.
   RFC-0015 chooses separate reporting of recognized local backups outside the cache budget,
   retaining the five-copy rotation. Routine served-run backups share the cadence gate;
-  standalone final backups remain. This is accepted intent for 0.36.0, not implemented.
+  standalone final backups remain. Publication as part of 0.36.0 is still required.
 - Credentials: support URL userinfo and `BARCA_SERVER_TOKEN` bearer headers on every request,
   including health, streams, cancellation and ledger traffic. Tokens can be generated in the
   UI and validated by barca in an opt-in mode with no user-account system. #187 is reopened
-  for this scope; the RFC records its security and lifecycle details.
+  for this scope. RFC-0016 specifies local bootstrap, tab-scoped browser bearer access,
+  token persistence and revocation, without account or cookie-session systems. This remains
+  unreleased design intent until implementation and conformance land.
 - Streams: `Last-Event-ID` resume replaces treating every dropped connection as an infra error.
+  RFC-0016 binds cursors to an attempt and bounds replay. After expiration, execution clients
+  follow the existing run's canonical outcome with a gap notice; they do not resubmit work.
 - Partial failure: a failed key does not stop other keys' downstream work (#666).
 - Fuzzing is deferred. Incremental fan-ins (#674) need more discussion before scheduling.
 

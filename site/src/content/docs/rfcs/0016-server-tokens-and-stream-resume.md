@@ -3,7 +3,7 @@ title: 'RFC-0016: Server Tokens and Resumable Run Events'
 description: 'Opt-in Barca-issued API tokens, browser token management without accounts, consistent client credentials, and attempt-scoped Last-Event-ID replay.'
 ---
 
-- **Status:** Under Review; proposed for 0.36.0, not implemented
+- **Status:** Accepted for 0.36.0; not implemented
 - **Date:** 2026-10-29
 - **Touches:** barca-core | barca-cli | python/barca | HTTP server | UI
 - **Related:** [#706](https://github.com/barca-orc/barca/issues/706),
@@ -20,9 +20,10 @@ bounded scope. Accounts, passwords, SSO/OIDC, per-user ownership and a roles sys
 outside it. Existing unauthenticated servers and externally authenticated proxies remain
 the default.
 
-This RFC proposes the remaining details: one-time local bootstrap, project-wide token
+This RFC settles the remaining details: one-time local bootstrap, project-wide token
 records, browser bearer credentials, revocation of live streams, and bounded event replay.
-Those details are not shipped or already approved merely because token ownership is decided.
+These are accepted design intent, not shipped behavior. Current contracts remain the
+runtime owners until implementation and executable conformance land.
 
 `BARCA_SERVER_TOKEN` supplies bearer credentials to every server request. URL userinfo stays
 supported for Basic-auth proxies. Run streams resume after the last completely processed
@@ -184,7 +185,7 @@ new bootstrap grant replaces the previous bootstrap connection, without revoking
 API tokens. Consumed/expired bootstrap grants are discarded.
 Do not write `last_used` on every request or turn authentication into another metadata writer.
 
-Proposed HTTP surface (experimental; implementation must update OpenAPI and conformance):
+Planned HTTP surface (experimental; implementation must update OpenAPI and conformance):
 
 | Method and route | Credential / result |
 |---|---|
@@ -314,15 +315,23 @@ errors and bounded replay as 0.36.0 upgrade behavior; auth remains opt-in.
   work remains a separate 0.36.0 requirement before publication. Experimental server-mode
   docs must state these remaining deployment/stability limits rather than imply readiness.
 
-## 8. Alternatives and review points
+## 8. Alternatives and decisions
 
 Proxy-owned issuance/validation was considered; the user chose Barca ownership. Token-file
 configuration without UI issuance does not meet that decision. Accounts and OAuth add a
 different product and remain excluded.
 
 HttpOnly cookie sessions could reduce token exposure to page scripts, but require cookie
-scope, CSRF tokens, login/logout and session lifecycle. This proposal chooses tab-scoped
-bearer access and documents its script-storage tradeoff. Review that choice before acceptance.
-Also review shared full-access token management, non-expiring API tokens, read-only auth
-administration, the one-second cross-process revocation bound, and explicit replay expiration.
-The defaults, routes and CLI names above are proposals until this design merges.
+scope, CSRF tokens, login/logout and session lifecycle. Choose tab-scoped bearer access for
+this account-free API-token mode, with no ambient Barca credentials; the script-storage
+tradeoff above remains explicit. A later cookie mode needs its own design and protection.
+
+Use shared full-access tokens rather than introducing a roles/account model. Permit
+non-expiring API tokens for unattended clients, with explicit UI disclosure and revocation.
+Allow token administration on a read-only ledger server because it does not mutate pipeline
+state. Reserve bootstrap recovery capacity independently of the ordinary token cap.
+
+Choose a one-second cross-process revocation bound and immediate local invalidation, without
+making every request a metadata writer. Bound replay by volume rather than promising an
+unlimited transcript. An execution command falls back to following the existing outcome
+after a gap, so memory pressure or a long disconnection never requires another task submission.

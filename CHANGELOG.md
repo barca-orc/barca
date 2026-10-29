@@ -10,9 +10,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Documentation
 
-- Propose RFC-0016 for opt-in server tokens and attempt-scoped event-stream resume, including
+- Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including
   bootstrap, browser credential handling, revocation and bounded replay. Runtime behavior is
-  unchanged; the detailed design is under review.
+  unchanged; implementation is still required for 0.36.0.
 
 ## 0.35.3 (2026-10-29)
 

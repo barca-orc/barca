@@ -80,10 +80,10 @@ These owners have not been relocated or copied into new schemas.
 
 ## Approved ownership design and unapproved ideas
 
-[RFC-0016](../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md) proposes
+[RFC-0016](../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md) records
 the bootstrap, token lifecycle, browser credential and event-resume boundaries for #706 and
-#187. Only opt-in Barca issuance/validation without accounts is already user-approved;
-the detailed design is under review and implements no routes or authentication behavior.
+#187. The accepted design preserves the user-chosen opt-in Barca issuance/validation boundary
+without accounts. This design-only change implements no routes or authentication behavior.
 Current HTTP/CLI contracts remain authoritative until implementation and conformance land.
 
 [Architecture map and cleanup sequence](../docs/engineering/architecture-cleanup.md) connects the inspected
