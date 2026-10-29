@@ -2,8 +2,8 @@
 
 ## Scope and status
 
-Specification version: 1. Status: server implementation for pending 0.36.0; client integration
-and cost probes remain incomplete. Scope: in-memory event retention, cursor validation,
+Specification version: 1. Status: server, CLI and browser implementation for pending 0.36.0;
+cost probes remain incomplete. Scope: in-memory event retention, cursor validation,
 replay/live attachment and subscriber lifetime. Exact HTTP shapes belong to
 [OpenAPI](../interfaces/server-api.openapi.yaml); accepted full behavior is
 [RFC-0016](../../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md).
@@ -68,7 +68,8 @@ keeps native payloads and route inventory checked.
 
 ## Open questions and gaps
 
-CLI capability negotiation, event acknowledgement, canonical-outcome polling after a gap,
-complete-log gap reporting, UI cursor resume/gap notices and real proxy-drop integration
-remain required before 0.36.0. Retention/reconnect/auth latency and memory cost probes are
+CLI capability negotiation, successful-event acknowledgement, canonical-outcome polling,
+complete-log gap errors and old-server fallback have executable client tests. Browser tests
+cover authenticated expired replay, visible gap notice and canonical completion without
+resubmission. Python proxy integration covers Basic/Bearer reconnection after a partial frame. Retention/reconnect/auth latency and memory cost probes are
 also still required. Current server tests do not prove those client or benchmark obligations.

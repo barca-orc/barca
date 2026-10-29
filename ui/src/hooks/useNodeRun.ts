@@ -56,5 +56,5 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, showTopba
     fire, verb, triggering, readOnly, title, error: trigger.error,
     liveState: liveStatus ? liveGraphState(liveStatus) : undefined,
   }
-  return { action, run, statuses }
+  return { action, run, statuses, stream }
 }

@@ -1,3 +1,4 @@
+import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useOutletContext, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
@@ -104,6 +105,7 @@ export function GraphPage() {
 
   return (
     <div className="barca-view">
+      <StreamNotice notice={stream.notice} runId={run?.handle} />
       <div className="barca-view-head">
         <div className="barca-view-bar">
           <div className="barca-view-title">

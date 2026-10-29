@@ -1,3 +1,4 @@
+import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
@@ -199,6 +200,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
 
   return (
     <div className="barca-view">
+      <StreamNotice notice={nodeRun.stream.notice} runId={nodeRun.run?.handle} />
       <div className="barca-view-head">
         <div className="barca-view-bar">
           <div className="barca-view-title">
