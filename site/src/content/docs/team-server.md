@@ -6,6 +6,27 @@ description: One barca serve and one bucket give a whole team the same cache and
 Once one person has computed something, nobody else has to compute it again. You run one
 `barca serve` that everyone points at, and you keep using `barca get` exactly as before.
 
+## Only need to run on the server?
+
+Start `barca serve --host 0.0.0.0` in the deployed project, then use these commands from
+your laptop (replace the address with your server):
+
+```bash
+barca get revenue --server http://barca.internal:8274
+barca run publish --server http://barca.internal:8274
+barca history --server http://barca.internal:8274
+```
+
+This executes the server's copy of the project and keeps results and history there. It
+needs no bucket on your laptop and does not upload local edits. Keep the server on a
+private network or behind an authenticating proxy; it has no login.
+
+## Also want laptops to compute against the same cache?
+
+Follow the three steps below. With this setup, plain `barca get` computes on the laptop
+and records the run on the server; `barca get --server` computes on the server. Both use
+one shared record of results and runs. `--local` deliberately uses a separate local record.
+
 You need:
 
 - a machine your team can reach, such as a small VM or a box on your VPN or Tailscale
