@@ -25,4 +25,12 @@ inputs: Array<string>,
 /**
  * Declared environment variable names (`@asset(env=[...])`), in declaration order.
  */
-env: Array<string>, };
+env: Array<string>,
+/**
+ * Source file of the definition, as in the id.
+ */
+file: string,
+/**
+ * 1-based line of the definition's first decorator.
+ */
+line: number, };

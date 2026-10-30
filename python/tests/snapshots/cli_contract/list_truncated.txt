@@ -3,10 +3,12 @@ hint : string
 nodes : array
 nodes[] : object
 nodes[].env : array
+nodes[].file : string
 nodes[].freshness : string
 nodes[].id : string
 nodes[].inputs : array
 nodes[].kind : string
+nodes[].line : integer
 root : string
 total : integer
 truncated : boolean

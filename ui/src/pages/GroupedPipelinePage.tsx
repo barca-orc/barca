@@ -104,7 +104,7 @@ export function GroupedPipelinePage() {
   const assetQuery = useAssets()
   const stateQuery = useAssetStates()
   const healthQuery = useHealth()
-  const [dir, setDir] = useState<LayoutDir>('LR')
+  const dir: LayoutDir = params.get('dir') === 'TB' ? 'TB' : 'LR'
   const canvas = useRef<GraphCanvasHandle>(null)
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -463,7 +463,7 @@ export function GroupedPipelinePage() {
               <>
                 <IconButton
                   label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
-                  onClick={() => setDir(dir === 'LR' ? 'TB' : 'LR')}
+                  onClick={() => { const next = new URLSearchParams(params); if (dir === 'LR') next.set('dir', 'TB'); else next.delete('dir'); setParams(next, { replace: true }) }}
                 >
                   {dir === 'LR' ? <ArrowDown size={15} /> : <ArrowRight size={15} />}
                 </IconButton>

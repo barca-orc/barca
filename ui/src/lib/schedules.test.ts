@@ -37,7 +37,7 @@ function asset(id: string, cron: string | null, kind: ListNode['kind'] = 'task')
     kind,
     ...(cron ? { freshness: 'schedule' as const, schedule: cron } : { freshness: 'always' as const }),
     inputs: [],
-    env: [],
+    env: [], file: 'p.py', line: 1,
   }
 }
 

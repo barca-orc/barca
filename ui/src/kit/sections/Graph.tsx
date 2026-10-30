@@ -52,7 +52,7 @@ const DENSE_MAP = domainMap(
       id: `file_${f}.py:n${n}`,
       kind: 'asset' as const,
       freshness: 'always' as const,
-      env: [],
+      env: [], file: 'p.py', line: 1,
       inputs: Array.from({ length: f }, (_, up) => `file_${up}.py:n${n}`),
     })),
   ).flat(),

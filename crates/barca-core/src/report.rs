@@ -137,6 +137,11 @@ pub struct ListNode {
     pub next_fire: Option<String>,
     pub inputs: Vec<String>,
     pub env: Vec<String>,
+    /// Source file of the definition, as in the id.
+    pub file: String,
+    /// 1-based line of the definition's first decorator.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub line: usize,
 }
 
 impl ListNode {
@@ -156,6 +161,8 @@ impl ListNode {
             next_fire: next_fire.cloned(),
             inputs: a.inputs.clone(),
             env: a.env.clone(),
+            file: a.file.clone(),
+            line: a.line,
         }
     }
 }

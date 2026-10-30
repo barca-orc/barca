@@ -19,7 +19,7 @@ const inspected: ListNode = {
   id: 'pipeline.py:orders_enriched',
   kind: 'asset',
   freshness: 'always',
-  env: [],
+  env: [], file: 'p.py', line: 1,
   inputs: ['pipeline.py:orders_clean', 'pipeline.py:fx_rates'],
 }
 

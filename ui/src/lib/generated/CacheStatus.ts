@@ -25,9 +25,15 @@ run_hash?: string | null,
  */
 artifact?: string | null,
 /**
- * A `stale` node: what changed in its run hash since its last successful materialization
+ * A `stale` or failed node: what changed in its run hash since its last successful materialization
  * (`code`, `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`,
  * `sensor ID`, `env NAME`, `kind`). Absent when that materialization recorded no components
  * (before 0.29.0).
  */
-changed?: Array<string> | null, };
+changed?: Array<string> | null,
+/**
+ * What moved the run hash, by cause: any of `code_changed`, `inputs_changed`, `env_changed`
+ * (from `changed`) and `upstream_stale` (an input is not cached yet). Set on `stale` nodes
+ * and on a failed node that once succeeded; absent when the cause is not recorded.
+ */
+change_causes?: Array<"code_changed" | "inputs_changed" | "env_changed" | "upstream_stale">, };

@@ -1,9 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
 import type { RunSummary } from './types'
-import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, updateRuns, visibleRuns, type RunsMsg } from './runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
+
+describe('run filters in the URL', () => {
+  it('round-trips, and a default leaves no parameter', () => {
+    const filters = { filter: 'failed' as const, query: 'orders', hour: 3_600_000 }
+    const written = writeRunFilters(new URLSearchParams('run=r1'), filters)
+    expect(written.toString()).toBe('run=r1&status=failed&q=orders&hour=3600000')
+    expect(parseRunFilters(written)).toEqual(filters)
+    expect(writeRunFilters(written, { filter: 'all', query: '', hour: null }).toString()).toBe('run=r1')
+  })
+  it('ignores what it cannot mean', () => {
+    expect(parseRunFilters(new URLSearchParams('status=x&hour=soon'))).toEqual({ filter: 'all', query: '', hour: null })
+  })
+})
 
 describe('runs program', () => {
   it('selects and closes through the URL, replacing a resolved handle', () => {

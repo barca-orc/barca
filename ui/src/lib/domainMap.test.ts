@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { domainFile, domainMap } from './domainMap'
 import type { ListNode } from './types'
 
-const node = (id: string, inputs: string[] = []): ListNode => ({ id, kind: 'asset', freshness: 'always', env: [], inputs })
+const node = (id: string, inputs: string[] = []): ListNode => ({ id, kind: 'asset', freshness: 'always', env: [], file: 'p.py', line: 1, inputs })
 const filler = (file: string, count: number) => Array.from({ length: count }, (_, i) => node(`${file}:n${i}`))
 
 describe('domainMap', () => {

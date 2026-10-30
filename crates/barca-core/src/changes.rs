@@ -207,9 +207,45 @@ pub fn summary(changed: &[String]) -> String {
     }
 }
 
+/// The named components of `changed` by cause, in a fixed order: `code_changed` (the function,
+/// its decorators, helpers, kind), `inputs_changed` (an upstream, a sensor, a source value),
+/// `env_changed` (a declared variable). A component this function does not know counts as code.
+pub fn causes(changed: &[String]) -> Vec<String> {
+    let has = |cause: &str| {
+        changed.iter().any(|c| {
+            let is = match c.split(' ').next().unwrap_or(c) {
+                "input" | "sensor" | "value" => "inputs_changed",
+                "env" => "env_changed",
+                _ => "code_changed",
+            };
+            is == cause
+        })
+    };
+    ["code_changed", "inputs_changed", "env_changed"]
+        .into_iter()
+        .filter(|cause| has(cause))
+        .map(String::from)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn causes_split_code_inputs_and_env() {
+        let of = |v: &[&str]| causes(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            of(&["code", "decorator argument cron", "helper a.py:b", "kind"]),
+            ["code_changed"]
+        );
+        assert_eq!(
+            of(&["input a.py:x", "sensor a.py:s", "value a.py:v"]),
+            ["inputs_changed"]
+        );
+        assert_eq!(of(&["env TOKEN", "code"]), ["code_changed", "env_changed"]);
+        assert!(of(&[]).is_empty());
+    }
 
     fn node(source_text: &str, cone_parts: &[(&str, &str)]) -> ExtractedNode {
         ExtractedNode {
@@ -233,6 +269,7 @@ mod tests {
             is_unsafe: false,
             source_file: "pipeline.py".to_string(),
             byte_offset: 0,
+            line: 0,
             source_text: source_text.to_string(),
             cone_hash: String::new(),
             cone_parts: cone_parts

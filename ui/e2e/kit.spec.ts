@@ -25,7 +25,7 @@ test('kit page renders every primitive', async ({ page }) => {
     await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
   }
   // A chip is a toggle: pressing it flips aria-pressed.
-  const chip = page.getByRole('button', { name: /assets/ })
+  const chip = page.getByRole('button', { name: /^\d+ assets$/ })
   await expect(chip).toHaveAttribute('aria-pressed', 'false')
   await chip.click()
   await expect(chip).toHaveAttribute('aria-pressed', 'true')

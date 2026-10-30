@@ -7,6 +7,8 @@ disk_usage.size_bytes : integer
 nodes : array
 nodes[] : object
 nodes[].cache : object
+nodes[].cache.change_causes : array  (optional)
+nodes[].cache.change_causes[] : string
 nodes[].cache.changed : array  (optional)
 nodes[].cache.changed[] : string
 nodes[].cache.detail : string

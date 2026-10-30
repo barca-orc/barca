@@ -28,10 +28,10 @@ export function GraphPage() {
   const stateQuery = useAssetStates()
   const queryClient = useQueryClient()
   const { data: health } = useHealth()
-  const [dir, setDir] = useState<LayoutDir>('LR')
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
   const [searchParams, setSearchParams] = useSearchParams()
   const selected = searchParams.get('focus')
+  const dir: LayoutDir = searchParams.get('dir') === 'TB' ? 'TB' : 'LR'
   const setSelected = (id: string | null) => {
     const next = new URLSearchParams(searchParams)
     if (id) next.set('focus', id)
@@ -103,7 +103,7 @@ export function GraphPage() {
             <ViewToggle />
             <IconButton
               label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
-              onClick={() => setDir((d) => (d === 'LR' ? 'TB' : 'LR'))}
+              onClick={() => { const next = new URLSearchParams(searchParams); if (dir === 'LR') next.set('dir', 'TB'); else next.delete('dir'); setSearchParams(next, { replace: true }) }}
             >
               {dir === 'LR' ? <ArrowDown size={15} /> : <ArrowRight size={15} />}
             </IconButton>

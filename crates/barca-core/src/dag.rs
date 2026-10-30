@@ -1082,6 +1082,7 @@ mod tests {
             is_unsafe: false,
             source_file: "test.py".to_string(),
             byte_offset: 0,
+            line: 0,
             source_text: "def a(): return 1".to_string(),
             cone_hash: String::new(),
             cone_parts: Vec::new(),

@@ -26,7 +26,8 @@ import { Spec, Variant } from '../Kit'
 import { SidebarView } from '@/layouts/Sidebar'
 import type { PipelineSummary } from '@/lib/pipeline'
 import type { SidebarGroup } from '@/lib/sidebar'
-import { ConfirmDialog } from '@/components'
+import { CommandPaletteView, ConfirmDialog } from '@/components'
+import { paletteActions, paletteIndex, searchPalette } from '@/lib/palette'
 import { runButton } from '@/lib/runTarget'
 
 /** Every primitive in components/, in each state it has. */
@@ -101,12 +102,18 @@ const [query, setQuery] = useState('')
       <StatusBadge status="success" subtle={false} />
     </Spec>
 
+    <Spec title="CommandPaletteView" note="⌘K: results, and nothing found.">
+      {[{ label: 'results', query: 'inv', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: 'billing.py:invoices_00', kind: 'asset' }, { id: 'billing.py:check__invoices_00', kind: 'task' }], [], [])], 'inv') }, { label: 'nothing found', query: 'zzz', items: [] }].map((v) => (
+        <Variant key={v.label} label={v.label}><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><CommandPaletteView query={v.query} items={v.items} active={0} onQuery={() => {}} onMove={() => {}} onPick={() => {}} onClose={() => {}} /></div></Variant>
+      ))}
+    </Spec>
+
     <Spec title="ConfirmDialog" note="Run all asks first; the labels are runButton()'s. A pipeline or a node runs at once.">
-      <Variant label="run all"><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><ConfirmDialog {...runButton({ kind: 'all', nodes: 8070 }).confirm!} onConfirm={() => {}} onCancel={() => {}} /></div></Variant>
+      <Variant label="run all"><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><ConfirmDialog {...runButton({ kind: 'all', assets: 8069, sensors: 1 }).confirm!} onConfirm={() => {}} onCancel={() => {}} /></div></Variant>
     </Spec>
 
     <Spec title="Topbar Run labels" note="runButton() for each target: what it runs and how much.">
-      {[runButton({ kind: 'node', name: 'invoices_00' }), runButton({ kind: 'pipeline', file: 'billing.py', nodes: 506 }), runButton({ kind: 'all', nodes: 8070 }), runButton({ kind: 'none', hint: 'Select a node to run' })].map((b) => (
+      {[runButton({ kind: 'node', name: 'invoices_00' }), runButton({ kind: 'pipeline', file: 'billing.py', assets: 505, sensors: 1 }), runButton({ kind: 'all', assets: 8069, sensors: 1 }), runButton({ kind: 'none', hint: 'Select a node to run' })].map((b) => (
         <Variant key={b.label} label={b.title}><Button variant="signal" size="sm">{b.label}</Button></Variant>
       ))}
     </Spec>

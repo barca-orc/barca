@@ -861,6 +861,8 @@ mod tests {
             freshness: Freshness::Schedule(CronExpr(cron.to_string())),
             inputs: vec![],
             env: vec![],
+            file: "p.py".into(),
+            line: 1,
         }
     }
 
@@ -1014,6 +1016,8 @@ mod tests {
             freshness: Freshness::Always,
             inputs: vec![],
             env: vec![],
+            file: "p.py".into(),
+            line: 1,
         }];
         assert!(jobs_from_summaries(summaries).is_empty());
     }

@@ -119,6 +119,9 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, an asset reading a sensor with no recorded output, or an asset reading an `@asset(cutoff=True)` that would run first (and what depends on any of them) | `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending` |
 | `always_runs` | tasks and sensors are never cached | `task`, `sensor` |
 
+- `cache.change_causes` (on a `stale` node, and a failed one that once succeeded) sorts the same
+  evidence by cause: `code_changed`, `inputs_changed`, `env_changed`, `upstream_stale`. It is
+  absent when the last success recorded no components. `cache.reason` keeps its values.
 - `changed`: the run hash differs from the last successful materialization. `cache.changed` lists
   what differs, and `detail` and the table's WHY column name the first and count the rest
   (`changed: helper pipelines/common.py:bucket_ltv (+1 more)`):

@@ -145,8 +145,18 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
             nodes.push(extracted);
         }
     }
+    fill_lines(&mut nodes, source);
 
     Ok(nodes)
+}
+
+/// Each node's 1-based line, from one pass over the file: a project can put thousands of nodes
+/// in one file, so a scan per node would be quadratic.
+fn fill_lines(nodes: &mut [ExtractedNode], source: &str) {
+    let newlines: Vec<usize> = source.match_indices('\n').map(|(at, _)| at).collect();
+    for node in nodes {
+        node.line = newlines.partition_point(|&at| at < node.byte_offset) + 1;
+    }
 }
 
 /// Parse organizational metadata and nodes together, without importing the module.
@@ -178,6 +188,7 @@ pub(crate) fn extract_pipeline(
             nodes.push(node);
         }
     }
+    fill_lines(&mut nodes, source);
     Ok((
         nodes,
         crate::groups::extract_body_with_names(body, file, &names)?,
@@ -501,6 +512,7 @@ fn try_extract_function(
         is_unsafe,
         source_file: file_path.to_string(),
         byte_offset: start,
+        line: 0, // filled from the file's line starts in `fill_lines`
         source_text,
         cone_hash: String::new(), // computed after extraction in extract_nodes()
         cone_parts: Vec::new(),
@@ -1676,6 +1688,13 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_node_records_the_line_of_its_first_decorator() {
+        let src = "from barca import asset\n\n\n@asset()\ndef a() -> int:\n    return 1\n\n@asset()\ndef b() -> int:\n    return 2\n";
+        let nodes = extract_nodes(src, "p.py").unwrap();
+        assert_eq!(nodes.iter().map(|n| n.line).collect::<Vec<_>>(), [4, 8]);
+    }
 
     #[test]
     fn a_syntax_error_names_its_line_and_column_not_a_byte_range() {

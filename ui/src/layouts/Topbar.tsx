@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, useSearchParams } from 'react-router'
-import { Sun, Moon, Play } from 'lucide-react'
+import { Sun, Moon, Play, Search } from 'lucide-react'
 import { Button, ConfirmDialog, ConnectionBadge, IconButton, RunsInProgress } from '@/components'
 import { useTheme } from '@/context/theme'
 import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
 
+import { CommandPalette } from './CommandPalette'
 import type { TopbarRun } from './shellContext'
 import { NAV_ITEMS } from './nav'
 
@@ -17,10 +18,22 @@ interface TopbarProps {
 export function Topbar({ run }: TopbarProps) {
   const { theme, toggleTheme } = useTheme()
   const [confirming, setConfirming] = useState(false)
+  const [palette, setPalette] = useState(false)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPalette((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const [params] = useSearchParams()
   const health = useHealth()
   const pipeline = params.get('pipeline')
   const keep = pipeline ? `?pipeline=${encodeURIComponent(pipeline)}` : ''
+  const startRun = () => (run?.confirm ? setConfirming(true) : run?.onRun())
   return (
     <header className="barca-topbar">
       <nav className="barca-primary-nav" aria-label="Main navigation">
@@ -32,6 +45,9 @@ export function Topbar({ run }: TopbarProps) {
       </nav>
 
       <div className="barca-top-actions">
+        <IconButton label="Search (⌘K)" onClick={() => setPalette(true)}>
+          <Search size={15} />
+        </IconButton>
         <ConnectionBadge connection={connection(health.data, health.isError)} />
         <RunsInProgress />
         <IconButton
@@ -48,11 +64,12 @@ export function Topbar({ run }: TopbarProps) {
             loading={run.loading}
             disabled={run.disabled}
             title={run.title}
-            onClick={() => (run.confirm ? setConfirming(true) : run.onRun())}
+            onClick={startRun}
           >
             <span className="barca-top-run">{run.label}</span>
           </Button>
         )}
+        {palette && <CommandPalette run={run} onRun={startRun} onClose={() => setPalette(false)} />}
         {run?.confirm && confirming && (
           <ConfirmDialog
             {...run.confirm}
