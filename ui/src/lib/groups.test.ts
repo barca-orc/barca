@@ -1,6 +1,9 @@
 import metadata from '../../e2e/group-metadata.json'
 import { describe, expect, it } from 'vitest'
 import {
+  compareEntries,
+  distinctNames,
+  parseEntrySort,
   groupTree,
   PREVIEW_FAILURE,
   groupHealth,
@@ -124,5 +127,30 @@ describe('organizational groups', () => {
     const fold = projectGroups(assets, tree, 'group:modeling.py:fold_01')
     expect(fold.external).toContain('modeling.py:data__raw_rows')
     expect(assets).toEqual(original)
+  })
+})
+
+describe('table names', () => {
+  it('shows the part that distinguishes a row', () => {
+    const names = distinctNames(['b.py:billing__raw__invoices_00', 'b.py:check__billing__raw__invoices_00'])
+    expect([...names.values()]).toEqual(['invoices_00', 'check__invoices_00'])
+  })
+  it('never repeats a label', () => {
+    const ids = ['b.py:raw__x', 'b.py:clean__x', 'a.py:raw__x', 'b.py:y']
+    const names = distinctNames(ids)
+    expect(names.get('b.py:y')).toBe('y')
+    expect(new Set(names.values()).size).toBe(ids.length)
+  })
+})
+
+describe('entry order', () => {
+  const rank = (name: string, failed = 0, stale = 0, lastSuccessAt: string | null = null) => ({ name, failed, stale, lastSuccessAt })
+  it('is worst first, then by name', () => {
+    const rows = [rank('a_10'), rank('a_2'), rank('z', 0, 3), rank('y', 1)]
+    expect(rows.sort((a, b) => compareEntries('worst', a, b)).map((r) => r.name)).toEqual(['y', 'z', 'a_2', 'a_10'])
+  })
+  it('reads the sort from the URL', () => {
+    expect(parseEntrySort('name')).toBe('name')
+    expect(parseEntrySort('bogus')).toBe('worst')
   })
 })

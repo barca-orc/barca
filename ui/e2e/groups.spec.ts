@@ -149,7 +149,7 @@ test('table groups support search, arrow selection and Enter to open', async ({
   await page.keyboard.press('ArrowDown')
   await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Enter')
-  await expect(rows).toHaveCount(6)
+  await expect(rows).toHaveCount(2)
   await page.getByRole('button', { name: 'Modeling', exact: true }).click()
   await expect(rows).toHaveCount(5)
   await page
@@ -193,4 +193,46 @@ test('a different Python pipeline uses server groups and keeps ungrouped nodes v
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Forecast training')
   await page.getByRole('button', { name: 'List', exact: true }).click()
   await expect(page.locator('.barca-group-table tbody tr')).toHaveCount(2)
+})
+
+test('groups open worst first, a sort is kept in the URL, and rows read by their distinct part', async ({ page }) => {
+  await page.goto('/ui/#/assets?pipeline=modeling.py&preview=failed')
+  const rows = page.locator('.barca-group-table tbody tr')
+  await expect(rows.first()).toContainText('Cross-validation')
+  await expect(page.getByRole('columnheader', { name: 'Failures' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Output' })).toHaveCount(0)
+  await page.getByLabel('Sort').selectOption('name')
+  await expect(page).toHaveURL(/sort=name/)
+  await page.goto('/ui/#/assets?pipeline=modeling.py&group=group:modeling.py:split')
+  await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Contents' })).toHaveCount(0)
+})
+
+test('failures are grouped by cause and a row can be muted', async ({ page }) => {
+  await page.goto('/ui/#/assets?pipeline=modeling.py&preview=failed&show=failures')
+  await expect(page.locator('.barca-failure-cause')).toHaveCount(1)
+  await expect(page.locator('.barca-failure-cause')).toContainText('1 failed')
+  await page.getByRole('button', { name: /^Mute / }).click()
+  await expect(page.getByRole('button', { name: 'Muted · 1' })).toBeVisible()
+  await expect(page.locator('.barca-failure-cause')).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Muted · 1' })).toBeVisible()
+})
+
+test('a failure row retries its node and opens its run', async ({ page }) => {
+  const started: unknown[] = []
+  await page.route('**/runs', (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    started.push(route.request().postDataJSON())
+    return route.fulfill({ status: 202, json: { run_id: '41', status: 'running', position: null } })
+  })
+  await page.route('**/assets/modeling*', (route) => route.fulfill({
+    json: { asset: {}, stats: { recent_runs: [{ status: 'failed', run_id: '41' }] } },
+  }))
+  await page.goto('/ui/#/assets?pipeline=modeling.py&preview=failed&show=failures')
+  await page.getByRole('button', { name: /^Retry / }).click()
+  await expect(page.getByRole('status').filter({ hasText: /^Retrying / })).toBeVisible()
+  expect(started).toHaveLength(1)
+  await page.getByRole('button', { name: /^Open run of / }).click()
+  await expect(page).toHaveURL(/#\/runs\?run=41/)
 })

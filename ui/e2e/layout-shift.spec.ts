@@ -29,7 +29,7 @@ test('assets page: loading the table', async ({ page }) => {
 })
 
 test('tasks page: opening a node panel', async ({ page }) => {
-  await page.goto('/ui/#/tasks')
+  await page.goto('/ui/#/tasks?state=all')
   await expect(page.getByRole('row', { name: /say_hello/ })).toBeVisible()
   await takeShifts(page)
   await page.getByRole('row', { name: /say_hello/ }).click()

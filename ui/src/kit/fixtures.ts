@@ -7,7 +7,7 @@
  */
 
 import type { Connection } from '@/lib/connection'
-import type { HealthCounts } from '@/lib/health'
+import type { Failure, HealthCounts } from '@/lib/health'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Severity } from '@/lib/assetTable'
 import type { Remote } from '@/lib/remote'
@@ -370,3 +370,21 @@ export const healthStates: Record<string, HealthCounts> = {
   checking: counts({ pending: 640 }),
   empty: counts({}),
 }
+
+// ── Failures ──────────────────────────────────────────────────────────────────
+
+const failureOf = (id: string, headline: string, impact: number | null, kind: Failure['kind'] = 'asset'): Failure => ({
+  id: `billing.py:${id}`, name: id, kind, headline, error: `${headline}\n  File "billing.py", line 12`,
+  at: sqlTime(3_600), failingSince: sqlTime(50_400), failures: 3, impact, missingKeys: null,
+})
+
+/** The Failures view's list: causes with several members, a leaf, and a graph still loading. */
+export const failureLists = {
+  'by cause': [
+    failureOf('invoices_00', 'row count fell 64% day over day', 40),
+    failureOf('invoices_01', 'row count fell 12% day over day', 8),
+    failureOf('check__ledger', "KeyError: 'currency'", 0, 'task'),
+  ],
+  'graph loading': [failureOf('invoices_00', 'row count fell 64% day over day', null)],
+  nothing: [],
+} satisfies Record<string, Failure[]>

@@ -265,3 +265,28 @@
 }
 .barca-lineage-picker button:hover { background: var(--bg-hover); }
 .barca-lineage-picker button span { color: var(--text-faint); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A cause heading in the failures list. */
+.barca-failure-cause td {
+  background: var(--bg-hover);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.barca-failure-cause strong {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-strong);
+  margin-right: 12px;
+}
+.barca-failure-actions { display: flex; gap: 2px; justify-content: flex-end; }
+.barca-failure-table tr[data-muted] td { opacity: 0.55; }
+.barca-failure-notice {
+  caption-side: top;
+  text-align: left;
+  padding: 4px 12px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.barca-sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}

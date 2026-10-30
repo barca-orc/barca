@@ -3,7 +3,9 @@ import type { CacheStatus, NodeState } from './types'
 import { buildRows } from './assetTable'
 import {
   EMPTY_FILTERS,
+  NEEDS_ATTENTION,
   applyFilters,
+  onDefaultStates,
   facetCounts,
   isFiltered,
   parseFilters,
@@ -126,5 +128,16 @@ describe('URL round-trip', () => {
   it('ignores values it does not know', () => {
     const p = new URLSearchParams('state=failed,bogus&kind=widget&ran=sometime')
     expect(parseFilters(p)).toEqual({ ...EMPTY_FILTERS, states: ['failed'] })
+  })
+})
+
+describe('a page that defaults to what needs attention', () => {
+  it('applies the default until the URL says all', () => {
+    const f = parseFilters(new URLSearchParams(), NEEDS_ATTENTION)
+    expect(onDefaultStates(f, NEEDS_ATTENTION)).toBe(true)
+    expect(writeFilters(new URLSearchParams(), f, NEEDS_ATTENTION).has('state')).toBe(false)
+    const all = writeFilters(new URLSearchParams(), EMPTY_FILTERS, NEEDS_ATTENTION)
+    expect(all.get('state')).toBe('all')
+    expect(parseFilters(all, NEEDS_ATTENTION).states).toEqual([])
   })
 })

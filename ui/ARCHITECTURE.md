@@ -100,6 +100,7 @@ folds its flags into the union at the edge.
 |---|---|---|---|
 | Tokens | `lib/tokensPage.ts` | `pages/TokensView.tsx` | `pages/TokensPage.tsx` |
 | Runs | `lib/runsPage.ts` | `pages/RunsView.tsx` | `pages/RunsPage.tsx` |
+| Failures view | `lib/failuresView.ts` | `pages/FailuresView.tsx` | `pages/GroupedPipelinePage.tsx` |
 
 Any screen of such a page is a value: construct a model and a `Remote`, render the view. The kit
 page does that for each state, and `replay(update, model, msgs)` tests a sequence of messages

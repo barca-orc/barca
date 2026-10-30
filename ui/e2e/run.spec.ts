@@ -76,7 +76,7 @@ test.describe('topbar Run', () => {
   })
 
   test('is absent on pages with nothing to run', async ({ page }) => {
-    await page.goto('/ui/#/tasks')
+    await page.goto('/ui/#/tasks?state=all')
     await expect(page.getByRole('banner')).toBeVisible()
     await expect(topbarRun(page)).toHaveCount(0)
   })
@@ -87,7 +87,7 @@ test.describe('node panel', () => {
     // Build a history with a spread of durations.
     await seedRuns(request, 'say_hello', 8)
 
-    await page.goto('/ui/#/tasks')
+    await page.goto('/ui/#/tasks?state=all')
     await page.getByRole('row', { name: /say_hello/ }).click()
 
     const hist = page.locator('.barca-hist')
