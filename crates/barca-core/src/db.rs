@@ -1178,6 +1178,9 @@ async fn connect_write(path: &str) -> Result<(libsql::Database, libsql::Connecti
     // that one pass over the results of a node with 200k partition keys reads its pages from
     // disk several times over: 2.8 s against 0.25 s (benchmarks/keyed_partitions).
     let _ = conn.execute("PRAGMA cache_size = -32768", ()).await;
+    // A checkpoint hands back the log file past this size. It otherwise stays at the size the
+    // largest transaction left it.
+    let _ = conn.query("PRAGMA journal_size_limit = 67108864", ()).await;
     crate::db_schema::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
@@ -1284,7 +1287,7 @@ pub(crate) async fn checkpoint(conn: &libsql::Connection) -> Result<(), BarcaErr
 }
 
 /// One `PRAGMA wal_checkpoint(TRUNCATE)`: true when another connection kept it from finishing.
-async fn checkpoint_once(conn: &libsql::Connection) -> Result<bool, BarcaError> {
+pub(crate) async fn checkpoint_once(conn: &libsql::Connection) -> Result<bool, BarcaError> {
     let failed = |e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}"));
     // The pragma returns one (busy, log_pages, checkpointed_pages) row; busy means another
     // connection kept it from finishing.
@@ -1435,6 +1438,7 @@ pub async fn start_run(
     run: NewRun<'_>,
     node_ids: &[String],
     base_ids: &[String],
+    definitions: &[(String, String)],
 ) -> Result<StartedRun, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (handle, conn, _) = initialized(db_path, db_path)
@@ -1442,6 +1446,7 @@ pub async fn start_run(
         .map_err(|e| named(e, db_path))?;
     let started = async {
         insert_run(&conn, db_path, &run).await;
+        record_definitions(&conn, definitions).await;
         Ok(StartedRun {
             cost_estimates: {
                 let ids: std::collections::BTreeSet<_> =
@@ -2332,7 +2337,54 @@ pub(crate) async fn last_success_components(cache: &CacheReader, node_id: &str) 
         .await
         .ok()?;
     let row = rows.next().await.ok()??;
-    row.get::<String>(0).ok().filter(|c| !c.is_empty())
+    let recorded = row.get::<String>(0).ok().filter(|c| !c.is_empty())?;
+    drop(rows);
+    let mut own: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&recorded).ok()?;
+    let Some(definition) = own.remove(crate::changes::DEFINITION_KEY) else {
+        return Some(recorded);
+    };
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT components FROM definition_components WHERE definition_hash = ?1",
+            [definition.as_str()?.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    let mut all: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&row.get::<String>(0).ok()?).ok()?;
+    all.append(&mut own);
+    serde_json::to_string(&all).ok()
+}
+
+/// Record the definitions a starting run may name ([`crate::changes::definition_rows`]). Most runs
+/// find them all there and write nothing. Without its row a step says a plain `changed`, so a
+/// failure here is no reason to fail the run.
+async fn record_definitions(conn: &libsql::Connection, definitions: &[(String, String)]) {
+    let Ok(mut rows) = conn
+        .query("SELECT definition_hash FROM definition_components", ())
+        .await
+    else {
+        return;
+    };
+    let mut known = std::collections::HashSet::new();
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(hash) = row.get::<String>(0) {
+            known.insert(hash);
+        }
+    }
+    drop(rows);
+    for (hash, components) in definitions.iter().filter(|(h, _)| !known.contains(h)) {
+        let _ = conn
+            .execute(
+                "INSERT OR IGNORE INTO definition_components (definition_hash, components) \
+                 VALUES (?1, ?2)",
+                [hash.as_str(), components.as_str()],
+            )
+            .await;
+    }
 }
 
 /// The object this machine knows to be in the artifact store for `node_id` (a display id) at

@@ -179,7 +179,14 @@ every database from before 0.29.2 (#629):
   `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`, `sensor ID`,
   `env NAME`, `kind`), which `barca status` and `--dry-run` compare to say what changed. Never
   part of a cache key. Older rows, failed rows and rows a server's ledger receives from a client
-  keep `NULL`, and their nodes report a plain `changed`.
+  keep `NULL`, and their nodes report a plain `changed`. From 0.37.1 a row holds only the digests
+  that are its own (`input`, `sensor`, `value`, `env`) and names the rest with the key
+  `@definition`, a node's definition hash.
+- `definition_components (definition_hash, components)` (0.37.1), primary key `definition_hash`: the
+  digests of a definition (`code`, `decorator ...`, `helper ...`, `kind`) as a JSON object, once. A
+  starting run writes those it lacks. A row whose definition is not there reports a plain
+  `changed`. An older binary ignores the table, and reads a newer row as having lost those
+  components, so its `changed` lists them until the node next runs; digests decide nothing.
 - `materializations.batch_id` (TEXT, nullable, 0.32.0, RFC-0013): the run-local call id
   shared by the keys computed in one batched function call. History groups these rows for
   display; cache lookup and run hashes remain per key. Unbatched and older rows have NULL.
@@ -246,6 +253,20 @@ records when a step, `barca get` or `barca sql` last read the result. Both descr
 machine's disk: they are not in `STEP_COLUMNS` (a backup need not have them), and
 schema validation treats them as nullable columns an older barca may lack. Rows are never deleted
 by eviction.
+
+## Bounded size
+
+The database keeps to its own share of `[cache] max_size`, a tenth up to 1 GiB (`barca docs cache`,
+"The metadata database"; `crates/barca-core/src/metadata_size.rs`). Past it, in order: `components`
+of superseded rows and oversized older ones become `NULL`, `runs.outcome_json` becomes `NULL` but
+for the last 100 runs, rows older than their node's latest success whose artifact is evicted or
+which have none are deleted, and all but the last 1000 runs are deleted with their logs. A row
+naming a file on disk, a node's latest success and later rows, and a node's newest `bytes_changed`
+row stay. A `materializations.run_id` can therefore name a run that is gone, and a run's rows can be
+gone while its `runs` row stays. Nothing a cache decision needs is lost: a deleted row costs a
+recompute. `VACUUM`, the only way the file shrinks, comes before any row is deleted and needs no
+run alive. Connections set `journal_size_limit` to 64 MiB, so a checkpoint hands back a large log.
+Conformance: the tests in `metadata_size.rs`.
 
 A version-1 database written by an earlier release that lacks an additive column or index of
 this release (these, or `bytes_changed`) gains them when it is opened for writing

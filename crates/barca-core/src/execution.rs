@@ -747,6 +747,15 @@ async fn open_state(
     // One visit to the database: initialize it, record the run, and read the cost estimates
     // and the average step times the progress bar's ETA is made of.
     let (node_ids, base_ids) = eta_ids(exec_plan);
+    let definitions = crate::changes::definition_rows(
+        &prepared.dag,
+        exec_plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .map(|st| st.step_id.base_id()),
+    );
     let db::StartedRun {
         cost_estimates,
         avg_elapsed,
@@ -764,6 +773,7 @@ async fn open_state(
         },
         &node_ids,
         &base_ids,
+        &definitions,
     )
     .await?;
     if let Some(tx) = &request.event_tx {

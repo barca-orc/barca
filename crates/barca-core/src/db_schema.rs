@@ -70,8 +70,10 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     "evicted_at TEXT",
     "last_read_at TEXT",
     // A short digest of each component of the run hash, as a JSON object (#558, 0.29.0): what
-    // `barca status` and `--dry-run` compare to say what changed. NULL on older rows, failed
-    // rows and rows a server's ledger received from a client.
+    // `barca status` and `--dry-run` compare to say what changed. Those of the definition are in
+    // `definition_components`, named by the `@definition` key; rows from before 0.37.1 hold them
+    // here. NULL on older rows, failed rows, rows a server's ledger received from a client and
+    // rows `crate::metadata_size` trimmed.
     "components TEXT",
     // The batched call (RFC-0013, 0.32.0) that computed the key: the keys of one call share it.
     // NULL for a step that ran on its own.
@@ -174,6 +176,14 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     // The run hash each `@sink` of a step last published (#662, 0.34.0), so a cache hit
     // under another run hash republishes its sinks from the cached artifact.
     ("sink_publications", crate::sink_publications::CREATE),
+    // The component digests of a definition, once: the rows of its keys name it (`crate::changes`).
+    (
+        "definition_components",
+        "CREATE TABLE IF NOT EXISTS definition_components (
+            definition_hash TEXT PRIMARY KEY,
+            components TEXT NOT NULL
+        )",
+    ),
 ];
 
 /// Create every table of [`ADDED_TABLES`] that is missing.

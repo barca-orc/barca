@@ -42,6 +42,7 @@ pub mod keyed;
 pub mod ledger;
 pub mod lines;
 pub mod load;
+mod metadata_size;
 mod mismatch;
 pub mod model;
 pub mod outcome;

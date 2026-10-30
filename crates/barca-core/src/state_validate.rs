@@ -123,6 +123,7 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         "notifications",
         &["job", "integration", "posted_at", "state", "message_ref"],
     ),
+    ("definition_components", &["definition_hash", "components"]),
     (
         "pending_uploads",
         &[
