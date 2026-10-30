@@ -10,7 +10,7 @@ import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, t
 import { QueuePanel } from './QueuePanel'
 import './runs.css'
 
-function RunPanel({ id, onClose, onResolved }: { id: string; onClose: () => void; onResolved: (id: string) => void }) {
+function RunPanel({ id, eventGap, onClose, onResolved }: { id: string; eventGap: boolean; onClose: () => void; onResolved: (id: string) => void }) {
   const { data, error, isError, refetch } = useRunDetail(id)
   const durableId = data?.run_id
   useEffect(() => {
@@ -63,6 +63,7 @@ function RunPanel({ id, onClose, onResolved }: { id: string; onClose: () => void
             {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length} of {data.steps_page.total} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
           </Section>
           <Section title="Logs">
+            {eventGap && runIsLive(data.status) && <p role="status" className="barca-note">Live event replay was incomplete. These logs may show only a retained tail until the run finishes.</p>}
             <LogViewer lines={data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts }))} live={runIsLive(data.status)} height={280} />
           </Section>
           {result !== null && result !== undefined && (
@@ -89,6 +90,7 @@ export function RunsPage() {
   }, [setParams])
   const select = (id: string | null) => {
     const next = new URLSearchParams(params)
+    next.delete('event_gap')
     if (id) next.set('run', id)
     else next.delete('run')
     setParams(next)
@@ -121,7 +123,7 @@ export function RunsPage() {
             {limit < 1000 && <Button size="sm" onClick={() => setLimit(Math.min(limit + 100, 1000))}>Load more</Button>}
           </div>}
         </div>
-        {selected && <RunPanel key={selected} id={selected} onResolved={resolve} onClose={() => select(null)} />}
+        {selected && <RunPanel key={selected} id={selected} eventGap={params.get('event_gap') === '1'} onResolved={resolve} onClose={() => select(null)} />}
       </div>
     </div>
   )

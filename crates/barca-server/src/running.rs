@@ -77,7 +77,7 @@ pub(crate) struct InFlight {
     /// Waiting for a run slot.
     pub pending: bool,
     /// The run's events so far; `None` for a CLI run (no stream reaches this server).
-    pub events: Option<Vec<RunEvent>>,
+    pub progress: Option<ProgressSnapshot>,
 }
 
 /// Every run in flight: this server's (pending or running), then the CLI runs in the
@@ -97,7 +97,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             command: r.command.clone(),
             nodes: r.nodes.clone(),
             pending: r.status == RunStatus::Pending,
-            events: state.events.get(&r.handle).map(|c| c.snapshot()),
+            progress: state.events.get(&r.handle).map(|c| c.progress()),
         })
         .collect();
     let Some(read_path) = read_path else {
@@ -128,7 +128,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             command: alive.command,
             nodes,
             pending: false,
-            events: None,
+            progress: None,
         });
     }
     runs
@@ -136,7 +136,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
 
 /// What one run's events say about its steps.
 #[derive(Default)]
-struct Progress {
+pub(crate) struct Progress {
     /// Nodes that printed a line or finished a step (any key).
     touched: HashSet<String>,
     /// Unpartitioned nodes whose step finished.
@@ -145,33 +145,46 @@ struct Progress {
     keys_done: HashMap<String, HashSet<String>>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ProgressSnapshot {
+    pub touched: HashSet<String>,
+    pub finished: HashSet<String>,
+    pub keys_done: HashMap<String, usize>,
+}
 impl Progress {
-    fn of(events: &[RunEvent]) -> Self {
-        let mut p = Progress::default();
-        for event in events {
-            match event {
-                RunEvent::Log { node_id, .. } => {
-                    p.touched
-                        .insert(StepId::parse(node_id).base_id().to_string());
-                }
-                RunEvent::StepFinished { node_id, ok, .. } => {
-                    let id = StepId::parse(node_id);
-                    // A `parallel()` child is not a step of the plan.
-                    if id.partition.0.contains_key("_branch") {
-                        continue;
-                    }
-                    let base = id.base_id().to_string();
-                    p.touched.insert(base.clone());
-                    if id.partition.0.is_empty() {
-                        p.finished.insert(base);
-                    } else if *ok {
-                        p.keys_done.entry(base).or_default().insert(id.display());
-                    }
-                }
-                _ => {}
+    pub(crate) fn observe(&mut self, event: &RunEvent) {
+        match event {
+            RunEvent::Log { node_id, .. } => {
+                self.touched
+                    .insert(StepId::parse(node_id).base_id().to_string());
             }
+            RunEvent::StepFinished { node_id, ok, .. } => {
+                let id = StepId::parse(node_id);
+                // A `parallel()` child is not a step of the plan.
+                if id.partition.0.contains_key("_branch") {
+                    return;
+                }
+                let base = id.base_id().to_string();
+                self.touched.insert(base.clone());
+                if id.partition.0.is_empty() {
+                    self.finished.insert(base);
+                } else if *ok {
+                    self.keys_done.entry(base).or_default().insert(id.display());
+                }
+            }
+            _ => {}
         }
-        p
+    }
+    pub(crate) fn snapshot(&self) -> ProgressSnapshot {
+        ProgressSnapshot {
+            touched: self.touched.clone(),
+            finished: self.finished.clone(),
+            keys_done: self
+                .keys_done
+                .iter()
+                .map(|(node, keys)| (node.clone(), keys.len()))
+                .collect(),
+        }
     }
 }
 
@@ -190,7 +203,7 @@ fn covered<'a>(
             .map(|n| n.id.as_str())
             .collect();
     }
-    let wanted: HashSet<&str> = if run.events.is_some() {
+    let wanted: HashSet<&str> = if run.progress.is_some() {
         let targets: Vec<&str> = run.nodes.iter().map(String::as_str).collect();
         dag.subgraph_many(&targets).into_iter().collect()
     } else {
@@ -215,7 +228,7 @@ pub(crate) fn by_node(
     for run in runs {
         let covered = covered(run, nodes, dag);
         let in_run: HashSet<&str> = covered.iter().copied().collect();
-        let progress = run.events.as_deref().map(Progress::of);
+        let progress = run.progress.as_ref();
         // Keys done of a partitioned node: its cached keys, or this run's own, whichever is
         // further along (the cache state is read from a snapshot that may lag the events).
         let keys = |n: &NodeStatus| {
@@ -224,7 +237,8 @@ pub(crate) fn by_node(
             let mine = progress
                 .as_ref()
                 .and_then(|p| p.keys_done.get(&n.id))
-                .map_or(0, HashSet::len);
+                .copied()
+                .unwrap_or(0);
             (cached.max(mine).min(total), total)
         };
         let finished = |id: &str| -> bool {
@@ -239,7 +253,7 @@ pub(crate) fn by_node(
                 // until the run gets past it).
                 Some(p) if n.partitioned => {
                     let (done, total) = keys(n);
-                    let mine = p.keys_done.get(id).map_or(0, HashSet::len);
+                    let mine = p.keys_done.get(id).copied().unwrap_or(0);
                     (total > 0 && (mine >= total || (mine > 0 && done >= total)))
                         || dag
                             .downstream(id)

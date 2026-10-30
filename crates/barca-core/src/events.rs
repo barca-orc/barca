@@ -5,7 +5,7 @@
 //! durable history lives in the DB (runs, materializations, logs tables).
 //!
 //! The server's `GET /runs/{run_id}/events` sends each one as the `data:` of a server-sent
-//! event, with a per-run sequence number as its `id:`. A client reads them back with
+//! event, with an attempt-scoped epoch and sequence as its `id:`. A client reads them back with
 //! [`RunEvent::parse`].
 
 use crate::lines::LineWhen;

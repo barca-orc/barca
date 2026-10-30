@@ -57,6 +57,7 @@ import type { NodeKind } from './generated/NodeKind'
 
 /** GET /health — ad-hoc JSON, not a Rust struct. */
 export interface Health {
+  capabilities?: { event_resume?: number }
   status: string
   version: string
   /** `barca serve --read-only`: run and cancel endpoints are refused. */
@@ -104,7 +105,7 @@ export interface ErrorEnvelope {
   traceback?: string | null
   artifact_dir?: string | null
   /** A stable name for an error a client may handle: `metadata_unusable`. Absent otherwise. */
-  reason?: 'metadata_unusable'
+  reason?: 'metadata_unusable' | 'authentication_required' | 'invalid_token' | 'invalid_event_cursor' | 'event_cursor_mismatch' | 'event_cursor_expired'
 }
 
 /**

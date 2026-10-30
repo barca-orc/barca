@@ -1,7 +1,6 @@
 //! Shared server state and in-memory run tracking.
 
 use barca_core::CancellationToken;
-use barca_core::RunEvent;
 use barca_core::db;
 use barca_core::results::{AssetSummary, GetResult, PlanResult};
 use dashmap::DashMap;
@@ -10,7 +9,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use tokio::sync::Semaphore;
 
 /// How many runs may execute concurrently by default (one per available core).
@@ -256,116 +255,7 @@ pub struct Durations {
     pub samples: usize,
 }
 
-/// Live event channel for one run. Every event is numbered (the SSE `id:`) and kept for the
-/// run's lifetime, so a subscriber reads the whole run from the start whenever it connects,
-/// and a subscriber that falls behind reads on from where it was: nothing is dropped and
-/// nothing is sent twice. Durable history lives in the DB; this is the live tap.
-#[derive(Clone)]
-pub struct RunChannel {
-    backlog: Arc<Mutex<Vec<RunEvent>>>,
-    /// How many events have been emitted; subscribers wait on it. Held only by the channel's
-    /// handles, so when the last one is dropped the subscribers see it closed.
-    emitted: Arc<tokio::sync::watch::Sender<usize>>,
-    /// About how many bytes the backlog holds ([`RunEvent::approx_bytes`]): what a finished
-    /// run costs the server's memory budget (#623).
-    bytes: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl Default for RunChannel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RunChannel {
-    pub fn new() -> Self {
-        Self {
-            backlog: Arc::new(Mutex::new(Vec::new())),
-            emitted: Arc::new(tokio::sync::watch::channel(0).0),
-            bytes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        }
-    }
-
-    /// About how many bytes the events emitted so far hold.
-    pub fn bytes(&self) -> usize {
-        self.bytes.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Record an event and wake the subscribers.
-    pub fn emit(&self, event: RunEvent) {
-        self.bytes
-            .fetch_add(event.approx_bytes(), std::sync::atomic::Ordering::Relaxed);
-        let mut backlog = self.backlog.lock().unwrap();
-        backlog.push(event);
-        self.emitted.send_replace(backlog.len());
-    }
-
-    /// Every event emitted so far, in order.
-    pub fn snapshot(&self) -> Vec<RunEvent> {
-        self.backlog.lock().unwrap().clone()
-    }
-
-    /// The events from number `from` on, each with its number, as they are emitted. Ends after
-    /// the run's terminal `run_finished`, or, once every event emitted has been sent, when the
-    /// channel is dropped (server shutdown, eviction) before the run finished.
-    pub fn subscribe(
-        &self,
-        from: usize,
-    ) -> impl futures::Stream<Item = (usize, RunEvent)> + Send + 'static + use<> {
-        struct Cursor {
-            next: usize,
-            ready: std::collections::VecDeque<(usize, RunEvent)>,
-            done: bool,
-            closed: bool,
-            emitted: tokio::sync::watch::Receiver<usize>,
-            backlog: Arc<Mutex<Vec<RunEvent>>>,
-        }
-        let cursor = Cursor {
-            next: from,
-            ready: Default::default(),
-            done: false,
-            closed: false,
-            emitted: self.emitted.subscribe(),
-            backlog: self.backlog.clone(),
-        };
-        futures::stream::unfold(cursor, |mut cursor| async move {
-            loop {
-                if let Some(item) = cursor.ready.pop_front() {
-                    cursor.done = item.1.is_terminal();
-                    return Some((item, cursor));
-                }
-                if cursor.done {
-                    return None;
-                }
-                // Mark the current count seen before reading, so an emit after the read
-                // wakes `changed` below.
-                cursor.emitted.borrow_and_update();
-                {
-                    let backlog = cursor.backlog.lock().unwrap();
-                    if backlog.len() > cursor.next {
-                        let from = cursor.next;
-                        cursor.ready.extend(
-                            backlog[from..]
-                                .iter()
-                                .cloned()
-                                .enumerate()
-                                .map(|(i, e)| (from + i, e)),
-                        );
-                        cursor.next = backlog.len();
-                        continue;
-                    }
-                }
-                if cursor.closed {
-                    return None;
-                }
-                if cursor.emitted.changed().await.is_err() {
-                    // Dropped: send what is left, then end.
-                    cursor.closed = true;
-                }
-            }
-        })
-    }
-}
+pub(crate) use crate::replay::RunChannel;
 
 /// Durable, mutable view of one scheduled job, published by the scheduler and
 /// read by `GET /schedule`. The volatile bits (next fire time, live run status)
@@ -399,6 +289,7 @@ pub struct JobStatus {
 /// Cloneable application state shared across all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
+    pub replay: crate::replay::ReplayHub,
     pub auth: Arc<crate::auth_http::Access>,
     pub loaded: Arc<tokio::sync::Mutex<Option<LoadedSources>>>,
     pub load_errors: Arc<RwLock<Vec<barca_core::load::LoadError>>>,
@@ -465,6 +356,7 @@ impl AppState {
         Self {
             auth: Arc::new(crate::auth_http::Access::new(&config.resolved)),
             capacity,
+            replay: Default::default(),
             loaded: Arc::new(tokio::sync::Mutex::new(None)),
             load_errors: Arc::new(RwLock::new(Vec::new())),
             config: Arc::new(config),

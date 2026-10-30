@@ -28,6 +28,12 @@ def token_in_worker(): return os.environ.get("BARCA_SERVER_TOKEN")
 @task()
 def job(): return 1
 @task()
+def streaming():
+    for i in range(8):
+        print(f"café-{i}", flush=True)
+        time.sleep(0.15)
+    return 8
+@task()
 def slow():
     Path("slow.started").touch()
     while not Path("release").exists(): time.sleep(0.02)
@@ -51,7 +57,15 @@ def proxy(tmp_path, request):
         if request.param == "bearer"
         else "Basic " + base64.b64encode(b"alice:s3cret").decode()
     )
-    state = {"calls": [], "redirect": None, "reflect": False}
+    state = {
+        "calls": [],
+        "redirect": None,
+        "reflect": False,
+        "drop_streams": 0,
+        "drop_utf8": False,
+        "expire_streams": False,
+        "cursors": [],
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def forward(self):
@@ -72,13 +86,26 @@ def proxy(tmp_path, request):
                 return
             assert self.path.startswith("/project/")
             route = self.path.removeprefix("/project")
+            if route.endswith("/events") and state["expire_streams"]:
+                self.send_response(410)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"kind":"infra","code":3,"reason":"event_cursor_expired"}')
+                return
             size = int(self.headers.get("Content-Length", "0"))
             data = self.rfile.read(size) if size else None
             upstream = urllib.request.Request(
                 f"http://127.0.0.1:{backend.port}{route}",
                 data=data,
                 method=self.command,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    **(
+                        {"Last-Event-ID": self.headers["Last-Event-ID"]}
+                        if "Last-Event-ID" in self.headers
+                        else {}
+                    ),
+                },
             )
             try:
                 response = urllib.request.urlopen(upstream, timeout=15)
@@ -92,7 +119,25 @@ def proxy(tmp_path, request):
                 self.end_headers()
                 try:
                     if route.endswith("/events"):
-                        while chunk := response.read(1024):
+                        state["cursors"].append(self.headers.get("Last-Event-ID"))
+                        if state["drop_streams"]:
+                            state["drop_streams"] -= 1
+                            # Deliver one whole event, then only a prefix of the next.
+                            frame = bytearray()
+                            while chunk := response.read(1):
+                                frame.extend(chunk)
+                                self.wfile.write(chunk)
+                                self.wfile.flush()
+                                if state["drop_utf8"]:
+                                    if frame.endswith(b"caf\xc3"):
+                                        break
+                                elif frame.endswith(b"\n\n") or frame.endswith(b"\r\n\r\n"):
+                                    break
+                            if not state["drop_utf8"]:
+                                self.wfile.write(response.read(7))
+                            self.wfile.flush()
+                            return
+                        while chunk := response.read1(1024):
                             self.wfile.write(chunk)
                             self.wfile.flush()
                     else:
@@ -237,3 +282,68 @@ def test_the_reserved_bearer_token_is_not_inherited_by_workers(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["final_output"] is None
+
+
+@pytest.mark.parametrize("partial_utf8", [False, True])
+def test_authenticated_proxy_drop_resumes_without_duplicate_logs_or_work(proxy, partial_utf8):
+    client, _, _, env, expected, state = proxy
+    state["drop_streams"] = 1
+    state["drop_utf8"] = partial_utf8
+    result = cli(
+        client,
+        env | {"BARCA_SERVER_RECONNECT": "10"},
+        "run",
+        "streaming",
+        "pipeline.py",
+        "--server",
+        "--pretty",
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(state["cursors"]) == 2, state["cursors"]
+    assert state["cursors"][0] is None
+    assert state["cursors"][1] is not None
+    for i in range(8):
+        assert result.stderr.count(f"café-{i}") == 1, result.stderr
+    assert (
+        sum(method == "POST" and path == "/project/runs" for method, path, _ in state["calls"]) == 1
+    ), state["calls"]
+    assert all(authorization == expected for _, _, authorization in state["calls"])
+
+
+def test_expired_replay_keeps_healthy_run_following_and_authenticated_cancellation(proxy):
+    client, deployed, _, env, expected, state = proxy
+    state["expire_streams"] = True
+    following = subprocess.Popen(
+        [_find_binary(), "run", "slow", "pipeline.py", "--server", "--json"],
+        cwd=client,
+        env=env | {"BARCA_SERVER_RECONNECT": "1"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        wait_for(lambda: (deployed / "slow.started").exists(), "remote slow task")
+        wait_for(
+            lambda: sum(
+                method == "GET" and "/runs/" in path and not path.endswith("/events")
+                for method, path, _ in state["calls"]
+            )
+            >= 2,
+            "healthy outcome polls beyond the outage window",
+        )
+        assert following.poll() is None
+        following.send_signal(signal.SIGINT)
+        stdout, stderr = following.communicate(timeout=20)
+        assert following.returncode == 130, (stdout, stderr)
+        assert "event replay is incomplete" in stderr
+        assert any(method == "DELETE" for method, _, _ in state["calls"])
+        assert (
+            sum(method == "POST" and path == "/project/runs" for method, path, _ in state["calls"])
+            == 1
+        )
+        assert all(authorization == expected for _, _, authorization in state["calls"])
+    finally:
+        if following.poll() is None:
+            following.send_signal(signal.SIGCONT)
+            following.kill()
+            following.wait(timeout=5)

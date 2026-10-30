@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '16'
-  description: 'Normative current wire contract; specification version 16 is independent of package versions.
+  version: '17'
+  description: 'Normative current wire contract; specification version 17 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -2251,6 +2251,17 @@ paths:
       summary: Stream a run's events
       operationId: get_runs_run_id_events
       responses:
+        '204': {description: Terminal event already consumed; Cache-Control no-store}
+        '409':
+          description: Cursor belongs to another attempt; event_cursor_mismatch infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '410':
+          description: Replay is incomplete; event_cursor_expired infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -2290,12 +2301,22 @@ paths:
                 $ref: '#/components/schemas/Error'
             text/plain:
               schema: *id027
-      description: 'Server-sent events; each data frame is RunEvent JSON (x-event-schema) and each has
-        an id: its number in the run, from 0. A subscriber receives the run from its first event, every
-        event once however slowly it reads; the stream ends after run_finished. Keepalive comments every
-        15 seconds. 404 once the run is no longer live on this server (GET /runs/{run_id} answers then).
-        A connection dropped mid-run is not resumed (Last-Event-ID is future work); the run goes on.'
+      description: 'RunEvent JSON with IDs <32-lowercase-hex-epoch>:<one-based-sequence>.
+        Last-Event-ID resumes strictly after its event. Each attempt has a new epoch.
+        Retention is at most 65536 events or 16 MiB per run, 64 MiB across windows.
+        Lagging readers close; reconnect reports 410 instead of skipping missing data.
+        Invalid, overlong, zero, overflowed or future cursors are 400 invalid_event_cursor.
+        A different epoch is 409; an already-consumed terminal event is 204.
+        Heartbeat comments have no ID. Canonical outcome and persisted logs are independent.'
       parameters: &id030
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+          pattern: '^[0-9a-f]{32}:[1-9][0-9]*$'
+        description: Last completely processed event, scoped to this run attempt
       - name: run_id
         in: path
         required: true
@@ -2306,6 +2327,17 @@ paths:
       summary: Stream a run's events (headers only)
       operationId: head_runs_run_id_events
       responses:
+        '204': {description: Terminal event already consumed; Cache-Control no-store}
+        '409':
+          description: Cursor belongs to another attempt; event_cursor_mismatch infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '410':
+          description: Replay is incomplete; event_cursor_expired infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -2572,6 +2604,17 @@ paths:
       summary: Stream lifecycle and log events for a retained handle
       operationId: get_events_run_id
       responses:
+        '204': {description: Terminal event already consumed; Cache-Control no-store}
+        '409':
+          description: Cursor belongs to another attempt; event_cursor_mismatch infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '410':
+          description: Replay is incomplete; event_cursor_expired infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -2610,11 +2653,22 @@ paths:
                 $ref: '#/components/schemas/Error'
             text/plain:
               schema: *id003
-      description: SSE data frames contain RunEvent JSON (x-event-schema). Backlog then live delivery;
-        no event names/IDs. Keepalive comments every 15 seconds. Handle-only, no durable replay after
-        restart. Deprecated alias of GET /runs/{run_id}/events, retained for Python Client compatibility; run_id is
-        the database run id.
+      description: 'RunEvent JSON with IDs <32-lowercase-hex-epoch>:<one-based-sequence>.
+        Last-Event-ID resumes strictly after its event. Each attempt has a new epoch.
+        Retention is at most 65536 events or 16 MiB per run, 64 MiB across windows.
+        Lagging readers close; reconnect reports 410 instead of skipping missing data.
+        Invalid, overlong, zero, overflowed or future cursors are 400 invalid_event_cursor.
+        A different epoch is 409; an already-consumed terminal event is 204.
+        Heartbeat comments have no ID. Canonical outcome and persisted logs are independent.'
       parameters: &id036
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+          pattern: '^[0-9a-f]{32}:[1-9][0-9]*$'
+        description: Last completely processed event, scoped to this run attempt
       - name: run_id
         in: path
         required: true
@@ -2626,6 +2680,17 @@ paths:
       summary: Stream lifecycle and log events for a retained handle (headers only)
       operationId: head_events_run_id
       responses:
+        '204': {description: Terminal event already consumed; Cache-Control no-store}
+        '409':
+          description: Cursor belongs to another attempt; event_cursor_mismatch infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '410':
+          description: Replay is incomplete; event_cursor_expired infra envelope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -2984,6 +3049,9 @@ components:
           - metadata_unusable
           - authentication_required
           - invalid_token
+          - invalid_event_cursor
+          - event_cursor_mismatch
+          - event_cursor_expired
     Health:
       type: object
       additionalProperties: false
@@ -3001,6 +3069,11 @@ components:
       - started_at
       - queue
       properties:
+        capabilities:
+          type: object
+          required: [event_resume]
+          properties:
+            event_resume: {type: integer, const: 1}
         started_at:
           type: string
           description: When this server process started, RFC 3339 UTC with milliseconds.

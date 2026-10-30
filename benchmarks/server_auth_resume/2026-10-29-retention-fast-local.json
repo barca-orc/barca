@@ -1,0 +1,15 @@
+{
+  "emission_us": 84004,
+  "emitted_events": 1024,
+  "payload_bytes": 262144,
+  "process_rss": "VmRSS:\t   81084 kB",
+  "reconnect_max_ns": 5610,
+  "reconnect_p50_ns": 170,
+  "reconnect_p95_ns": 180,
+  "reconnect_samples": 1000,
+  "retained_bytes": 66870435,
+  "retained_events": 255,
+  "profile": "fast",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "replay_source_sha256": "36261af3b9f3fb41e33f9bb1333456e8a9478adc61d4ea73f2c92a9d2ec7eb46"
+}

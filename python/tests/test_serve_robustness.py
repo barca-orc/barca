@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -289,8 +290,8 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
         urllib.request.urlopen(f"{base}/events/{run}", timeout=WAIT) for run in (done, going)
     ]
     for stream in streams:
-        # Each event is numbered: `id: 0`, then its data.
-        assert stream.readline() == b"id: 0\n", "the stream has started"
+        # The first event carries a random attempt epoch and one-based sequence.
+        assert re.fullmatch(rb"id: [0-9a-f]{32}:1\n", stream.readline()), "the stream has started"
         assert stream.readline().startswith(b"data:")
 
     server.proc.send_signal(sig)
@@ -397,6 +398,7 @@ def test_stop_reaps_parallel_parent_and_active_children(project, stop_signal):
     """parallel() freezes its parent with SIGSTOP; cancellation must reap it too."""
     (project / "pipeline.py").write_text("""
 import os
+import re
 import time
 from functools import partial
 from email.message import Message

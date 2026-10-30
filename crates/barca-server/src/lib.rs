@@ -23,6 +23,7 @@ mod ledger;
 mod pause;
 mod queue;
 mod read_cache;
+mod replay;
 mod reset;
 mod routes;
 mod running;

@@ -10,6 +10,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- Server event IDs use an attempt epoch and one-based sequence. Replay is bounded to
+  65,536 events or 16 MiB per run, 64 MiB across windows; expired replay returns 410,
+  another attempt returns 409, and malformed/old numeric cursors return 400. CLI and browser
+  clients resume acknowledged events; expired replay warns and follows the canonical outcome.
+  `logs -f --server` exits 3 on an unfillable transcript gap. Older servers keep replay-count fallback.
+
 - Served runs' end-of-run metadata backups now share the routine backup interval. Completion
   still records the run locally, but no longer promises an immediate remote metadata copy.
   Standalone final backups and the server's graceful-shutdown backup remain enabled.
@@ -51,7 +57,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ### Documentation
 
 - Record RFC-0016's accepted design for opt-in server tokens and attempt-scoped event-stream resume, including
-  bootstrap, browser credential handling, revocation and bounded replay. Cursor replay remains to be implemented for 0.36.0.
+  bootstrap, browser credential handling, revocation and bounded replay. The implementation adds bounded replay with CLI and browser recovery.
 
 - CI runs in three tiers: a pull request runs the static checks, a merge group runs those plus
   the Rust tests, the wheel and the quick Python subset in `scripts/fast-tests.txt` (about two
