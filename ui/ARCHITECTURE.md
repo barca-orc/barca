@@ -66,7 +66,8 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre alone, no React: what `graphLayout.worker.ts` runs off the main thread | — |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `mergeStates` for the sidebar | `pipeline.test.ts` |
-| `lib/health.ts` | `healthCounts`, `failures`, `failedUpstream`, `consumersOf` — what is broken in a scope and why | `health.test.ts` |
+| `lib/health.ts` | `healthCounts`, `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
+| `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
 | `lib/runTarget.ts` | `runTarget`, `runButton` — what the topbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
@@ -153,7 +154,7 @@ The look of the UI is defined in three places, in this order:
 
 1. **Tokens** (`styles/tokens/`): colors, type scale, spacing, radius, elevation, motion, and
    the light theme. The only place a color or a size is written as a value.
-2. **Primitives** (`components/`): `Button`, `IconButton`, `Tag`, `Chip`/`ChipGroup`, `Select`,
+2. **Primitives** (`components/`): `Button`, `IconButton`, `Age`/`LastSuccess`, `Tag`, `Chip`/`ChipGroup`, `Select`,
    `SearchInput`, `StatusDot`/`StatusBadge`, `Skeleton`, `ConnectionBadge`, and `SidePanel` with
    `Section` and `KeyValue`. Their CSS is inline (tokens as `var(--…)`) or, where it needs
    pseudo-classes, in `styles/components.css`.

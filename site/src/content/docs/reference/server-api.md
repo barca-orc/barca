@@ -291,6 +291,9 @@ that had already finished are kept, and the run ends `cancelled` (in its events,
 newest first. `limit` defaults to 100 and is bounded to 1–1000. It includes runs from the CLI,
 HTTP and the scheduler in this environment's local metadata DB, plus queued server runs. There
 is no source filter: a historical run remains visible even when its pipeline is no longer served.
+Each row has `first_failure`: `{ node_id, error }`, the run's first failed step (with its partition
+key) and the first line of its error, or `null` when no step failed. `error` is only a run-level
+error, so a run whose steps failed usually has `first_failure` and `error: null`.
 
 `GET /runs?status=running` lists only the runs in flight, newest first: this server's pending
 and running runs, and the `barca get` / `barca run` commands running on the same `.barca/`
@@ -301,7 +304,7 @@ the nodes it is working on now as `[{node_id, step, partitions}]` (see `running`
 Each summary has `id` and `run_id` (the database run id), `handle` (the same id while the
 server keeps the run in memory, `null` otherwise), `command`, `files`, `target`, `status`,
 `triggered_by`, `scheduled_at`, `schedule_id`, UTC `started_at` and `finished_at`,
-`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, and `error`; with
+`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, `error` and `first_failure`; with
 `?status=running`, also `active_steps`.
 
 The UI's **Runs** view lists this history and shows what started each run; each run opens its
@@ -389,7 +392,11 @@ to the selected cone; clients can render `/assets` and `/groups` before requesti
 Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,
 `cache`, `partitions`, `last_materialization`, `shape`, `env`) plus `durations` — `{ median_seconds,
 p95_seconds, samples }` over the last 20 successful runs, or `null` — and `next_run`, the next cron
-fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
+fire time in unix seconds for scheduled nodes. `last_success_at` is when its newest successful
+result was written (UTC `YYYY-MM-DD HH:MM:SS`, like `last_materialization.created_at`), or `null`.
+`failing_since` is the first failed attempt after its last clean run, and `consecutive_failures` how
+many runs in a row failed it; they are `null` and `0` unless its latest attempts failed. An attempt
+is a run: one with a failed key is one failed attempt, even if other keys succeeded. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
 `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
 [`barca status`](/reference/cli/#status)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache

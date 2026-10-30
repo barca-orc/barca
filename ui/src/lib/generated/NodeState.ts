@@ -24,6 +24,20 @@ next_run: number | null,
  */
 running: NodeRunning | null,
 /**
+ * When its newest successful result was written (UTC `YYYY-MM-DD HH:MM:SS`, like
+ * `last_materialization.created_at`); `null` if it never succeeded.
+ */
+last_success_at: string | null,
+/**
+ * The first failed attempt after its last clean run; `null` unless its latest attempts
+ * failed.
+ */
+failing_since: string | null,
+/**
+ * How many runs in a row failed it, up to now (`0` when its latest attempt did not fail).
+ */
+consecutive_failures: number,
+/**
  * Node id, e.g. `pipeline.py:clean`.
  */
 id: string,

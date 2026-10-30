@@ -118,10 +118,37 @@ export interface Failure {
   error: string
   /** When the failed attempt was recorded (UTC, `YYYY-MM-DD HH:MM:SS`). */
   at: string | null
+  /** The first failed attempt after its last clean run. */
+  failingSince: string | null
+  /** Runs in a row that failed it. */
+  failures: number
   /** How many nodes downstream of it, transitively, are waiting on it. */
   impact: number
   /** For a partitioned node: how many keys have no cached result. */
   missingKeys: number | null
+}
+
+/** How late a group is: its members' worst, so one old failure is not averaged away. */
+export interface ScopeAge {
+  /** The oldest member's last success; null when no member has succeeded. */
+  lastSuccessAt: string | null
+  failingSince: string | null
+  /** The most runs in a row that failed one member. */
+  failures: number
+}
+
+/** The ages of `ids`, for those with a loaded state. Times are compared as they are recorded. */
+export function scopeAge(ids: readonly string[], byId: ReadonlyMap<string, NodeState>): ScopeAge {
+  const age: ScopeAge = { lastSuccessAt: null, failingSince: null, failures: 0 }
+  const older = (a: string | null, b: string | null) => (a === null || (b !== null && b < a) ? b ?? a : a)
+  for (const id of ids) {
+    const node = byId.get(id)
+    if (!node) continue
+    age.lastSuccessAt = older(age.lastSuccessAt, node.last_success_at)
+    age.failingSince = older(age.failingSince, node.failing_since)
+    age.failures = Math.max(age.failures, node.consecutive_failures)
+  }
+  return age
 }
 
 /** The first line of an error, without the traceback barca records after it. */
@@ -147,6 +174,8 @@ export function failures(nodes: readonly NodeState[], consumers: ReadonlyMap<str
         headline: headline(error),
         error,
         at: n.last_materialization?.created_at ?? null,
+        failingSince: n.failing_since,
+        failures: n.consecutive_failures,
         impact: downstreamIds(n.id, consumers).size,
         missingKeys: n.partitions ? n.partitions.missing : null,
       }

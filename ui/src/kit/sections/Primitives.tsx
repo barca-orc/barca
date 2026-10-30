@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Play, X } from 'lucide-react'
 import {
+  Age,
   Button,
   Chip,
   ChipGroup,
@@ -8,6 +9,7 @@ import {
   HealthBar,
   IconButton,
   KeyValue,
+  LastSuccess,
   SearchInput,
   Section,
   Select,
@@ -17,7 +19,7 @@ import {
   StatusDot,
   Tag,
 } from '@/components'
-import { STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
+import { NOW_MS, STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
 import { Spec, Variant } from '../Kit'
 import { ConfirmDialog } from '@/components'
 import { runButton } from '@/lib/runTarget'
@@ -101,6 +103,12 @@ export function Primitives() {
       <Variant label="wide, every bucket named"><HealthBar counts={healthStates['failed and stale']!} labelLimit={6} width={200} /></Variant>
     </Spec>
 
+    <Spec title="Age / LastSuccess" note="Relative, absolute UTC on hover; a failing row adds since when and how many runs.">
+      <Variant label="minutes"><Age at={new Date(NOW_MS - 300_000).toISOString()} nowMs={NOW_MS} /></Variant>
+      <Variant label="healthy"><LastSuccess at={new Date(NOW_MS - 3_600_000).toISOString()} failingSince={null} failures={0} nowMs={NOW_MS} /></Variant>
+      <Variant label="failing"><LastSuccess at={new Date(NOW_MS - 172_800_000).toISOString()} failingSince={new Date(NOW_MS - 50_400_000).toISOString()} failures={3} nowMs={NOW_MS} /></Variant>
+      <Variant label="never succeeded"><LastSuccess at={null} failingSince={new Date(NOW_MS - 3_600_000).toISOString()} failures={1} nowMs={NOW_MS} /></Variant>
+    </Spec>
     <Spec title="ConnectionBadge">
       {variants(connections).map((kind) => (
         <ConnectionBadge key={kind} connection={connections[kind]} />

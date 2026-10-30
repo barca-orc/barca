@@ -1,12 +1,13 @@
 import { Fragment, useEffect, useMemo } from 'react'
 import { Link } from 'react-router'
 import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
-import { Button, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { Age, Button, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { startedBy } from '@/lib/running'
 import { ArtifactSchema } from './ArtifactSchema'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
-import { buildRows, formatAgo, formatSeconds, severityStatus } from '@/lib/assetTable'
+import { buildRows, formatSeconds, severityStatus } from '@/lib/assetTable'
+import { formatAbsolute } from '@/lib/time'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline } from '@/lib/health'
@@ -108,8 +109,10 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               <CircleAlert size={14} />
               <strong>{headline(last.error)}</strong>
             </div>
-            <p className="barca-note" title={`${last.created_at} UTC`}>
-              Failed {formatAgo(last.created_at, nowMs)}
+            <p className="barca-note">
+              Failed <Age at={last.created_at} nowMs={nowMs} />
+              {node.failing_since && node.consecutive_failures > 1 && <> · failing since <Age at={node.failing_since} nowMs={nowMs} /> · {node.consecutive_failures} runs</>}
+              {node.last_success_at ? <> · last success <Age at={node.last_success_at} nowMs={nowMs} /></> : <> · never succeeded</>}
               {failedRun && <> · <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>open the run</Link></>}
             </p>
             {last.error && last.error.trim().includes('\n') && (
@@ -175,7 +178,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                 <strong>{last.elapsed_seconds !== null ? formatSeconds(last.elapsed_seconds) : '–'}</strong>
               </div>
             </div>
-            <p className="barca-attempt-time" title={`${last.created_at} UTC`}>{formatAgo(last.created_at, nowMs)} · {last.created_at} UTC</p>
+            <p className="barca-attempt-time"><Age at={last.created_at} nowMs={nowMs} /> · {formatAbsolute(last.created_at)}</p>
             {last.elapsed_seconds !== null && (
               <div
                 className="barca-hist"
@@ -279,7 +282,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                     <span className={r.status === 'failed' ? 'barca-cell-failed' : undefined}>
                       {r.status}
                     </span>
-                    <span>{formatAgo(r.created_at, nowMs)}</span>
+                    <Age at={r.created_at} nowMs={nowMs} />
                     <span>{r.elapsed_seconds !== null ? formatSeconds(r.elapsed_seconds) : '–'}</span>
                     {r.attempts > 1 && <span>{r.attempts} attempts</span>}
                   </div>

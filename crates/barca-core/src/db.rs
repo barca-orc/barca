@@ -4038,6 +4038,104 @@ pub(crate) async fn changed_bytes_in_run(
     Ok(nodes)
 }
 
+/// How late a node is, from its materialization rows (keys of a partitioned node count toward
+/// their base id). Timestamps are as recorded: UTC `YYYY-MM-DD HH:MM:SS`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeAge {
+    /// When its newest successful row was written.
+    pub last_success_at: Option<String>,
+    /// The first failed attempt after its last clean run: `None` unless its latest attempts failed.
+    pub failing_since: Option<String>,
+    /// How many runs in a row failed it, up to now. A run counts once however many keys failed.
+    pub consecutive_failures: u32,
+}
+
+/// The base id of a materialization row's node id (`<base>[k=v]` for a key).
+fn base_of(node_id: &str) -> &str {
+    node_id.split_once('[').map_or(node_id, |(base, _)| base)
+}
+
+/// [`NodeAge`] of every node with history. One read of `idx_mat_failed`, then one pass over the
+/// successful rows: an attempt is a run, and a run with a failed key is a failed attempt even
+/// when other keys succeeded. Rows without a run id (an older barca's) are each their own attempt.
+/// Read-only; the caller ensures the DB exists.
+pub async fn node_ages(db_path: &str) -> Result<HashMap<String, NodeAge>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_h, conn) = open_conn(db_path).await?;
+    let failure = |e| BarcaError::Db(format!("failed to read node ages: {e}"));
+    let attempt = |run: Option<String>, id: i64| run.unwrap_or_else(|| format!("#{id}"));
+    // base id -> run -> (its newest failed row, its earliest failure's time).
+    let mut failed: HashMap<String, HashMap<String, (i64, String)>> = HashMap::new();
+    let mut rows = conn
+        .query(
+            "SELECT id, node_id, run_id, created_at FROM materializations \
+             WHERE status = 'failed' ORDER BY run_id, id",
+            (),
+        )
+        .await
+        .map_err(failure)?;
+    while let Some(row) = rows.next().await.map_err(failure)? {
+        let id = row.get::<i64>(0).unwrap_or_default();
+        let node = row.get::<String>(1).unwrap_or_default();
+        let run = attempt(row.get::<String>(2).ok().filter(|r| !r.is_empty()), id);
+        let at = row.get::<String>(3).unwrap_or_default();
+        failed
+            .entry(base_of(&node).to_string())
+            .or_default()
+            .entry(run)
+            .and_modify(|seen| seen.0 = seen.0.max(id))
+            .or_insert((id, at));
+    }
+    drop(rows);
+    // base id -> (newest successful row and its time, newest row of a run that did not fail it).
+    let mut success: HashMap<String, (i64, String, i64)> = HashMap::new();
+    let mut rows = conn
+        .query(
+            "SELECT id, node_id, run_id, created_at FROM materializations \
+             WHERE status = 'success'",
+            (),
+        )
+        .await
+        .map_err(failure)?;
+    while let Some(row) = rows.next().await.map_err(failure)? {
+        let id = row.get::<i64>(0).unwrap_or_default();
+        let node = row.get::<String>(1).unwrap_or_default();
+        let base = base_of(&node);
+        let clean = failed.get(base).is_none_or(|runs| {
+            let run = row.get::<String>(2).ok().filter(|r| !r.is_empty());
+            run.is_none_or(|r| !runs.contains_key(&r))
+        });
+        let entry = match success.get_mut(base) {
+            Some(entry) => entry,
+            None => success.entry(base.to_string()).or_default(),
+        };
+        if id > entry.0 {
+            entry.0 = id;
+            entry.1 = row.get::<String>(3).unwrap_or_default();
+        }
+        if clean {
+            entry.2 = entry.2.max(id);
+        }
+    }
+    let mut out: HashMap<String, NodeAge> = HashMap::with_capacity(success.len());
+    for (base, runs) in failed {
+        let clean = success.get(&base).map_or(0, |s| s.2);
+        let trailing = runs.values().filter(|(newest, _)| *newest > clean);
+        out.insert(
+            base,
+            NodeAge {
+                last_success_at: None,
+                failing_since: trailing.clone().map(|(_, at)| at.clone()).min(),
+                consecutive_failures: trailing.count() as u32,
+            },
+        );
+    }
+    for (base, (_, at, _)) in success {
+        out.entry(base).or_default().last_success_at = Some(at);
+    }
+    Ok(out)
+}
+
 /// What the metadata DB knows about one node (all partition keys of a partitioned node).
 #[derive(Debug, Clone, Default)]
 pub struct NodeHistory {
@@ -6328,6 +6426,66 @@ mod lookup_tests {
 #[cfg(test)]
 mod failure_index_tests {
     use super::*;
+
+    /// Age is counted in runs: a run with a failed key is one failed attempt, a clean run ends
+    /// the streak, and a key's row counts toward its base node.
+    #[tokio::test]
+    async fn a_nodes_age_counts_failed_runs_since_its_last_clean_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            for (run, node, status, at) in [
+                ("r1", "p.py:recovered", "failed", "2026-01-01 00:00:00"),
+                ("r2", "p.py:recovered", "success", "2026-01-02 00:00:00"),
+                ("r1", "p.py:failing", "success", "2026-01-01 00:00:00"),
+                ("r2", "p.py:failing", "failed", "2026-01-02 00:00:00"),
+                ("r3", "p.py:failing", "failed", "2026-01-03 00:00:00"),
+                ("r1", "p.py:keys[d=1]", "success", "2026-01-01 00:00:00"),
+                ("r1", "p.py:keys[d=2]", "success", "2026-01-01 00:00:00"),
+                ("r2", "p.py:keys[d=1]", "failed", "2026-01-02 00:00:00"),
+                ("r2", "p.py:keys[d=2]", "success", "2026-01-02 12:00:00"),
+                ("r2", "p.py:keys[d=3]", "failed", "2026-01-02 13:00:00"),
+                ("r1", "p.py:never", "failed", "2026-01-01 00:00:00"),
+            ] {
+                conn.execute(
+                    "INSERT INTO materializations (run_id, node_id, status, created_at) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    [run, node, status, at],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let ages = node_ages(&path).await.unwrap();
+        let age = |id: &str, ok: Option<&str>, since: Option<&str>, n: u32| {
+            assert_eq!(
+                ages[id],
+                NodeAge {
+                    last_success_at: ok.map(str::to_string),
+                    failing_since: since.map(str::to_string),
+                    consecutive_failures: n,
+                },
+                "{id}"
+            );
+        };
+        age("p.py:recovered", Some("2026-01-02 00:00:00"), None, 0);
+        age(
+            "p.py:failing",
+            Some("2026-01-01 00:00:00"),
+            Some("2026-01-02 00:00:00"),
+            2,
+        );
+        age(
+            "p.py:keys",
+            Some("2026-01-02 12:00:00"),
+            Some("2026-01-02 00:00:00"),
+            1,
+        );
+        age("p.py:never", None, Some("2026-01-01 00:00:00"), 1);
+    }
 
     /// The runs list reads each run's first failure from `idx_mat_failed`: the plan names it,
     /// and the answer is the one a scan of the run's rows gives.

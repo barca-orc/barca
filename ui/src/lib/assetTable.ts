@@ -9,7 +9,10 @@
  */
 
 import { match } from 'ts-pattern'
+import { formatAgo, parseTime } from './time'
 import type { CacheStatus, NodeRunning, NodeState, StatusKind } from './types'
+
+export { formatAgo } from './time'
 
 /** How much a node needs attention, most urgent first. */
 export type Severity =
@@ -49,6 +52,12 @@ export interface AssetRow {
   last: { status: string; ago: string; error: string | null } | null
   /** When the latest attempt was recorded (ms since epoch). */
   lastAtMs: number | null
+  /** When it last succeeded; null if it never did. */
+  lastSuccessAt: string | null
+  /** The first failed attempt after its last clean run, while it fails. */
+  failingSince: string | null
+  /** Runs in a row that failed it. */
+  failures: number
   /** Median of recent successful runs, formatted; null if it never succeeded. */
   typical: string | null
   typicalSeconds: number | null
@@ -156,7 +165,10 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         last: last
           ? { status: last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
           : null,
-        lastAtMs: last ? parseUtc(last.created_at) : null,
+        lastAtMs: last ? parseTime(last.created_at) : null,
+        lastSuccessAt: n.last_success_at,
+        failingSince: n.failing_since,
+        failures: n.consecutive_failures,
         typical: n.durations ? formatSeconds(n.durations.median_seconds) : null,
         typicalSeconds: n.durations?.median_seconds ?? null,
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
@@ -169,14 +181,14 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
 
 // ── Sorting ───────────────────────────────────────────────────────────────────
 
-export type SortKey = 'name' | 'state' | 'last' | 'typical' | 'next'
+export type SortKey = 'name' | 'state' | 'last' | 'success' | 'typical' | 'next'
 export type SortDir = 'asc' | 'desc'
 export interface Sort {
   key: SortKey
   dir: SortDir
 }
 
-export const SORT_KEYS: readonly SortKey[] = ['name', 'state', 'last', 'typical', 'next']
+export const SORT_KEYS: readonly SortKey[] = ['name', 'state', 'last', 'success', 'typical', 'next']
 
 /** What needs attention first. */
 export const DEFAULT_SORT: Sort = { key: 'state', dir: 'asc' }
@@ -184,7 +196,7 @@ export const DEFAULT_SORT: Sort = { key: 'state', dir: 'asc' }
 /** The direction a column sorts in on its first click: the useful end first. */
 function firstDir(key: SortKey): SortDir {
   return match(key)
-    .with('name', 'state', 'next', (): SortDir => 'asc') // A→Z, most urgent, soonest
+    .with('name', 'state', 'next', 'success', (): SortDir => 'asc') // A→Z, most urgent, soonest, latest
     .with('last', 'typical', (): SortDir => 'desc') // most recent, slowest
     .exhaustive()
 }
@@ -207,6 +219,7 @@ function sortValue(row: AssetRow, key: SortKey): string | number | null {
     .with('name', () => row.name)
     .with('state', () => RANK[row.severity])
     .with('last', () => row.lastAtMs)
+    .with('success', () => (row.lastSuccessAt === null ? null : parseTime(row.lastSuccessAt)))
     .with('typical', () => row.typicalSeconds)
     .with('next', () => row.nextRunMs)
     .exhaustive()
@@ -249,20 +262,4 @@ export function formatSeconds(s: number): string {
   if (s < 60) return `${s.toFixed(1)}s`
   if (s < 3600) return `${(s / 60).toFixed(1)}m`
   return `${(s / 3600).toFixed(1)}h`
-}
-
-/** `created_at` is UTC `YYYY-MM-DD HH:MM:SS` (SQLite `datetime('now')`). */
-function parseUtc(createdAt: string): number | null {
-  const t = Date.parse(`${createdAt.replace(' ', 'T')}Z`)
-  return Number.isNaN(t) ? null : t
-}
-
-export function formatAgo(createdAt: string, nowMs: number): string {
-  const t = parseUtc(createdAt)
-  if (t === null) return createdAt
-  const s = Math.max(0, (nowMs - t) / 1000)
-  if (s < 60) return 'just now'
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86400)}d ago`
 }

@@ -52,7 +52,7 @@ function node(id: string, running: NodeRunning | null = null, failed = false): N
     shape: null,
     env: [],
     durations: null,
-    next_run: null,
+    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
     running,
   }
 }

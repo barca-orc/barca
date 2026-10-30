@@ -242,6 +242,14 @@ pub struct NodeState {
     pub next_run: Option<i64>,
     /// The run working on this node now, whoever started it (`null` when none is).
     pub running: Option<crate::running::NodeRunning>,
+    /// When its newest successful result was written (UTC `YYYY-MM-DD HH:MM:SS`, like
+    /// `last_materialization.created_at`); `null` if it never succeeded.
+    pub last_success_at: Option<String>,
+    /// The first failed attempt after its last clean run; `null` unless its latest attempts
+    /// failed.
+    pub failing_since: Option<String>,
+    /// How many runs in a row failed it, up to now (`0` when its latest attempt did not fail).
+    pub consecutive_failures: u32,
 }
 
 /// Median and p95 wall time over a node's most recent successful materializations.

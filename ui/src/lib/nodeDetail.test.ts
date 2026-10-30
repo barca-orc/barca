@@ -14,7 +14,7 @@ function node(id: string, inputs: string[] = []): NodeState {
     shape: null,
     env: [],
     durations: null,
-    next_run: null,
+    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
   }
 }
