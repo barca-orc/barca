@@ -879,6 +879,22 @@ pub(crate) enum RunOutcome {
     Cancelled,
 }
 
+/// A batched node's calls in a run, so its per-key `step:` lines read as one computation.
+pub(crate) fn batch_line(node: &str, b: &crate::results::BatchExecution) -> String {
+    let calls = if b.calls == 1 { "call" } else { "calls" };
+    let keys = if b.keys == 1 { "key" } else { "keys" };
+    format!(
+        "[barca] batch:{node} {} {calls}, {} {keys} | import {:.1}s, load {:.1}s, compute {:.1}s, split {:.1}s, write {:.1}s",
+        b.calls,
+        b.keys,
+        b.import_seconds,
+        b.load_seconds,
+        b.compute_seconds,
+        b.split_seconds,
+        b.write_seconds
+    )
+}
+
 /// The last progress line of a run that executed steps, with or without `--agent`:
 /// `[barca] N/M steps | done in Xs` (`failed in`, `cancelled after`).
 pub(crate) fn end_of_run_line(

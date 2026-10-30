@@ -12,8 +12,8 @@ use crate::helper_proc;
 use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
 use crate::recover::{self, Work};
 use crate::report::{
-    RunOutcome, cached_step_line, end_of_run_line, env_suffix, failed_step_line, fmt_eta, kind_str,
-    merge_partition_reports, reconcile_total, report_for, stale_warning,
+    RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
+    fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning,
 };
 use crate::targets::{
     blocking_failure, final_output_of, plan_for_targets, resolve_targets, short_name,
@@ -212,6 +212,7 @@ impl Executed {
             targets: self.targets,
             cache: r.cache,
             uploads: r.uploads,
+            metadata_seconds: r.metadata_seconds,
             partition_selection: r.partition_selection,
         }
     }
@@ -371,6 +372,8 @@ struct RunState {
     transfer_error: Option<String>,
     /// What this run left unpublished in the artifact store (#390), for the run JSON.
     uploads: Option<crate::results::UploadsReport>,
+    /// Coordinator time recording results, when the run made a batched call, for the run JSON.
+    metadata_seconds: Option<f64>,
     /// Targets whose copy here and copy in the store differed, re-uploaded from here without
     /// a step running (RFC-0009 `mismatch`); each gets the changed-bytes warning.
     repaired_mismatches: Vec<String>,
@@ -443,6 +446,7 @@ async fn execute_started(
                 key_summary: None,
                 cache: None,
                 uploads: None,
+                metadata_seconds: None,
                 partition_selection: None,
             },
             targets: prepared.blocked,
@@ -2306,6 +2310,7 @@ async fn record_and_publish(
             store_paths: &mut session.state.store_paths,
             transfer_error: &mut session.state.transfer_error,
             uploads: &mut session.state.uploads,
+            metadata_seconds: &mut session.state.metadata_seconds,
             cached_node_ids: &session.state.cached_node_ids,
             t0: session.started.trace.start,
             cost_model: &session.cost_model,
@@ -2464,6 +2469,7 @@ async fn return_outputs(
             key_summary,
             cache: None,
             uploads: session.state.uploads.take(),
+            metadata_seconds: session.state.metadata_seconds,
             partition_selection: session.state.narrowing.as_ref().map(|n| n.report()),
         },
         targets: outcomes
@@ -3808,6 +3814,7 @@ async fn dispatch_phase(
     let run_hashes = decide_state.run_hashes();
     let on_step_cb: crate::io_loop::StepCallback<'_> = Box::new(
         |node_id: &str, artifact: &serde_json::Value, attempts: u32| {
+            let handling = std::time::Instant::now();
             // Hand the finished step to the recorder. The worker reports a step only after
             // its artifact is in place (an atomic rename), so the row never points at a
             // missing file. Steps without a run hash are parallel() children, which are
@@ -3951,6 +3958,7 @@ async fn dispatch_phase(
                     }
                 );
             }
+            recorder.note_busy(handling);
         },
     );
 
@@ -4037,6 +4045,7 @@ struct FinalizeRun<'a> {
     store_paths: &'a mut HashMap<String, String>,
     transfer_error: &'a mut Option<String>,
     uploads: &'a mut Option<crate::results::UploadsReport>,
+    metadata_seconds: &'a mut Option<f64>,
     cached_node_ids: &'a std::collections::HashSet<String>,
     t0: Instant,
     cost_model: &'a crate::cost::CostModel,
@@ -4082,6 +4091,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         store_paths,
         transfer_error,
         uploads,
+        metadata_seconds,
         cached_node_ids,
         t0,
         cost_model,
@@ -4108,8 +4118,17 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     macro_rules! trace_point {
         ($($arg:tt)*) => { trace(&format!($($arg)*)); };
     }
+    let batch_lines: Vec<String> = results
+        .batch_execution
+        .iter()
+        .map(|(node, calls)| batch_line(node, calls))
+        .collect();
+    for line in &batch_lines {
+        logs_buffer.push_note(line.clone());
+    }
     stop_workers(
         StopProgress {
+            batch_lines: &batch_lines,
             pool,
             pb,
             agent_mode,
@@ -4189,6 +4208,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     // Stop the step recorder before persistence: the ledger below writes whatever it had not
     // written yet, and the backup checkpoints the WAL, which requires no other open handle
     // on the file.
+    let recording = recorder.busy_seconds();
     let recorder_error = recorder.finish().await.err();
     trace_point!("recorder_stopped");
 
@@ -4221,7 +4241,17 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         },
         &evidence,
     );
+    let writing_ledger = std::time::Instant::now();
     persist_run(db_path, &ledger).await?;
+    if !batch_lines.is_empty() {
+        let seconds = recording + writing_ledger.elapsed().as_secs_f64();
+        *metadata_seconds = Some(seconds);
+        let line = format!("[barca] metadata {seconds:.1}s recording this run's results");
+        logs_buffer.push_note(line.clone());
+        if pb.is_some() || agent_mode {
+            crate::run_line!(Always, "{line}");
+        }
+    }
     if let Some(error) = recorder_error {
         crate::run_line!(
             Always,
@@ -4402,6 +4432,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
 const STORE_PREFLIGHT_FIX: &str = concat!("Nothing ran. ", crate::store_sync::store_check_fix!());
 
 struct StopProgress<'a> {
+    batch_lines: &'a [String],
     pool: crate::io_loop::WorkerPool,
     pb: &'a Option<indicatif::ProgressBar>,
     agent_mode: bool,
@@ -4415,6 +4446,7 @@ struct StopProgress<'a> {
 }
 async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
     let StopProgress {
+        batch_lines,
         mut pool,
         pb,
         agent_mode,
@@ -4453,6 +4485,9 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         );
     }
     if (pb.is_some() || agent_mode) && steps_executed > 0 {
+        for line in batch_lines {
+            crate::run_line!(Always, "{line}");
+        }
         let outcome = if cancel.is_cancelled() {
             RunOutcome::Cancelled
         } else if phase_error.is_some() || step_failure.is_some() {

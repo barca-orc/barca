@@ -145,6 +145,103 @@ def test_one_call_receives_every_key_and_each_key_is_its_own_step(keys5):
     assert "pipeline.py:scored[5 keys]" in pretty
 
 
+def test_a_run_reports_calls_and_where_their_time_went(keys5):
+    scored(keys5, "2")
+    done = run(keys5, "get", "scored", "pipeline.py", "--json", "--agent")
+    assert done.returncode == 0, done.stderr
+    result = json.loads(done.stdout)
+    steps = {s["id"]: s for s in result["steps"]}
+    assert "batch_execution" not in steps["pipeline.py:versions"]
+    assert "batch_execution" not in steps["pipeline.py:cleaned"]
+    calls = steps["pipeline.py:scored"]["batch_execution"]
+    assert (calls["calls"], calls["keys"]) == (3, 5)
+    for phase in ("import", "load", "compute", "split", "write"):
+        assert calls[f"{phase}_seconds"] >= 0
+    assert calls["write_seconds"] > 0
+    assert result["metadata_seconds"] > 0
+
+    # One line for the node beside its per-key lines, kept in the run's logs too.
+    lines = done.stderr.splitlines()
+    summary = [line for line in lines if line.startswith("[barca] batch:")]
+    assert len(summary) == 1
+    assert summary[0].startswith("[barca] batch:pipeline.py:scored 3 calls, 5 keys | import ")
+    end_of_run = next(line for line in lines if " steps | done " in line)
+    assert lines.index(summary[0]) < lines.index(end_of_run)
+    logs = run(keys5, "logs", result["run_id"])
+    assert summary[0] in logs.stdout + logs.stderr
+    assert "[barca] metadata " in logs.stdout + logs.stderr
+
+    # Nothing ran in a call: no totals, no lines.
+    again = run(keys5, "get", "scored", "pipeline.py", "--json", "--agent")
+    assert "[barca] batch:" not in again.stderr
+    assert "metadata_seconds" not in json.loads(again.stdout)
+
+
+FAILING_KEYS = """
+@asset(partitions={"retailer": partitions_from(cleaned)}, batch=2)
+def scored(retailer: list[str], cleaned: dict[str, dict]) -> dict:
+    bad = (HERE / "bad.txt").exists()
+    return {r: Failed(f"no plan for {r}") if bad and r in ("r2", "r4") else {"r": r} for r in retailer}
+"""
+
+
+def test_a_partitioned_node_reports_its_failed_keys_and_its_runs(keys5):
+    from . import served
+    from .test_http_openapi_client import validate
+
+    write(keys5, FAILING_KEYS)
+    assert run(keys5, "get", "scored", "pipeline.py").returncode == 0
+    (keys5 / "bad.txt").touch()
+    # New inputs: every key has to run again, and r2 and r4 have no result for them.
+    set_versions(keys5, {f"r{i}": "b" for i in range(1, 6)})
+    failing = run(keys5, "get", "scored", "pipeline.py", "--json")
+    assert failing.returncode == 1, failing.stderr
+
+    stats = json.loads(run(keys5, "stats", "scored", "pipeline.py", "--json").stdout)
+    assert stats["total_runs"] == 2
+    [latest, first] = stats["recent_runs"]
+    assert (latest["status"], latest["keys"], latest["failed_keys"]) == ("failed", 5, 2)
+    assert (first["status"], first["keys"], first["failed_keys"]) == ("success", 5, 0)
+
+    with served.Serve(keys5, "--no-schedule", env=env()) as serve:
+        serve.ready()
+        state = {n["name"]: n for n in serve.get("/state")}
+        partitions = state["scored"]["partitions"]
+        assert partitions["failed"] == 2
+        assert partitions["failed_keys"] == ["retailer=r2", "retailer=r4"]
+        assert "failed" not in state["cleaned"]["partitions"]
+
+        failed = serve.get("/assets/scored/partitions?status=failed")
+        validate({"$ref": "#/components/schemas/PartitionKeys"}, failed)
+        assert [k["key"] for k in failed["keys"]] == ["retailer=r2", "retailer=r4"]
+        assert (failed["total"], failed["recorded"], failed["failed"]) == (2, 5, 2)
+        # The key's own value does not split one problem into a group per key.
+        assert failed["errors"] == [{"error": "BatchKeyFailed: no plan for <key>", "keys": 2}]
+        found = serve.get("/assets/scored/partitions?q=R3&limit=1")
+        assert [k["key"] for k in found["keys"]] == ["retailer=r3"] and found["keys"][0][
+            "artifact_path"
+        ]
+        page = serve.get("/assets/scored/partitions?limit=2&offset=4")
+        assert [k["key"] for k in page["keys"]] == ["retailer=r5"] and page["total"] == 5
+
+        view = serve.get(f"/runs/{latest['run_id']}")
+        validate({"$ref": "#/components/schemas/RunView"}, view)
+        # Failed nodes first, the rest of the run after it.
+        summary, *others = view["steps_page"]["nodes"]
+        assert {n["node_id"] for n in others} == {"pipeline.py:versions", "pipeline.py:cleaned"}
+        assert summary["node_id"] == "pipeline.py:scored"
+        assert (summary["keys"], summary["failed"], summary["calls"]) == (5, 2, 3)
+
+    # The fix: only the failed keys run, and nothing is reported failed any more.
+    (keys5 / "bad.txt").unlink()
+    fixed = get(keys5, "scored")
+    assert fixed["steps_executed"] == 3, "the versions sensor and the two failed keys"
+    status = json.loads(run(keys5, "status", "pipeline.py", "--json").stdout)
+    nodes = status["nodes"] if isinstance(status, dict) else status
+    [node] = [n for n in nodes if n["name"] == "scored"]
+    assert "failed" not in node["partitions"]
+
+
 def test_only_stale_keys_are_grouped(keys5):
     scored(keys5, '"all"')
     get(keys5, "scored")

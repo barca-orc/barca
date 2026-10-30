@@ -50,7 +50,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight, batch]
+          [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight, batch, batch_execution]
 
       --env <ENV>
           Use a separate cache and history for this environment

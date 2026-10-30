@@ -666,6 +666,7 @@ mod tests {
             warnings: vec![],
             cache: None,
             uploads: None,
+            metadata_seconds: None,
             partition_selection: None,
         }
     }
@@ -716,6 +717,7 @@ mod tests {
             warnings: vec![],
             cache: None,
             uploads: None,
+            metadata_seconds: None,
             targets: vec![
                 (
                     "zeta".into(),

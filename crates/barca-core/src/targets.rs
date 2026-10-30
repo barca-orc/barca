@@ -758,6 +758,23 @@ def lone() -> int:
     }
 
     #[test]
+    fn a_batched_node_has_one_line_with_its_calls_keys_and_phases() {
+        let b = crate::results::BatchExecution {
+            calls: 1,
+            keys: 3077,
+            import_seconds: 0.12,
+            load_seconds: 1.2,
+            compute_seconds: 8.44,
+            split_seconds: 3.1,
+            write_seconds: 14.2,
+        };
+        assert_eq!(
+            crate::report::batch_line("p.py:orders", &b),
+            "[barca] batch:p.py:orders 1 call, 3077 keys | import 0.1s, load 1.2s, compute 8.4s, split 3.1s, write 14.2s"
+        );
+    }
+
+    #[test]
     fn end_of_run_line_is_one_format_and_never_says_done_on_failure() {
         assert_eq!(
             end_of_run_line(3, 3, 1.26, RunOutcome::Done),
@@ -879,6 +896,7 @@ def lone() -> int:
             ],
             cache: None,
             uploads: None,
+            metadata_seconds: None,
             partition_selection: None,
         };
         let s = serde_json::to_string(&r).unwrap();

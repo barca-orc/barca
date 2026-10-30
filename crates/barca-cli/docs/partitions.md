@@ -281,7 +281,10 @@ partial   17 of 20 keys cached; will run: retailer=r03 (input pipeline.py:orders
 
 $ barca get scored pipeline.py
 [pipeline.py:orders[batch=b1]] reading orders of 3 retailers
+[barca] batch:pipeline.py:orders 1 call, 3 keys | import 0.0s, load 0.0s, compute 0.0s, split 0.0s, write 0.0s
+[barca] batch:pipeline.py:scored 1 call, 3 keys | import 0.0s, load 0.0s, compute 0.2s, split 0.0s, write 0.0s
 [barca] 7/41 steps | done in 0.3s
+[barca] metadata 0.0s recording this run's results
 Run 3bc29e9a2595 | got 'scored' in 0.277s (7 steps, 2 phases)
 ...
 
@@ -409,6 +412,22 @@ def scored(retailer: list[str], cleaned: dict[str, pd.DataFrame]) -> dict:
 
 ### Seeing calls
 
+- **Progress:** the bar and `--agent` count keys, so a run reports thousands of
+  `step:...[key] completed 0.0s` lines however few calls it makes. Each batched node also gets
+  one line before the end-of-run line: `[barca] batch:<node> 7 calls, 3077 keys | import 0.1s, load
+  1.2s, compute 8.4s, split 3.1s, write 14.2s`. Each number is a sum over the node's calls, which
+  can run in parallel, so they can add up to more than the run's wall time. A later
+  `[barca] metadata 2.1s recording this run's results` is the coordinator handling each finished
+  key and writing the metadata DB; part of it overlaps the workers rather than adding to the wall
+  time. These lines are also in `barca logs RUN_ID`, with or without `--pretty`.
+- **JSON:** a batched step of a real run gains `batch_execution` `{calls, keys, import_seconds,
+  load_seconds, compute_seconds, split_seconds, write_seconds}`, and the run gains
+  `metadata_seconds` on success. `compute` is the function call. A lazy table input is read during
+  it, and a returned DuckDB relation runs during `split`, so read the two together for such a
+  step. `write` is writing and hashing each key's artifact and sinks.
+- **What is not counted:** a call that wrote no key (it raised, or every key failed) is not in
+  these totals; its time is in its keys' `elapsed_seconds` as before. A key's `elapsed_seconds` is
+  its share of the call plus its own write, not the time of a call of its own.
 - **History:** `barca history RUN_ID` lists a call as `scored[N keys]` with its total time and the
   call's peak memory, its keys under it (the first 10; `--json` lists every key, each with the
   call's id in `batch`).
@@ -418,6 +437,11 @@ def scored(retailer: list[str], cleaned: dict[str, pd.DataFrame]) -> dict:
 - **Dry run:** a batched step gains `batch` `{grouping, keys, calls}` in JSON and "3 keys in 1
   call (batch=all)" in its WHY column. `calls` is `null` for `batches(...)`/`batches_by(...)` over
   more keys than the dry run lists (20).
+- **Failed keys:** `barca status --json` and `GET /state` give a node's `partitions.failed` and
+  the first 20 `failed_keys`, the keys whose latest attempt failed. `GET /assets/{name}/partitions`
+  pages through the keys that have an attempt (`?status=failed`, `?q=`) and groups the failures'
+  errors. `barca history RUN_ID --json` adds `steps_page.nodes`: each node's keys, failed keys,
+  summed time and calls over the whole run, however few keys `steps` lists.
 - **Peak memory** is measured per call (each key of a call reports the call's peak), to tune `N`.
 - **Telemetry:** with `BARCA_TELEMETRY=datadog` and ddtrace in the worker, one `barca.execute`
   span per call, with `barca.batch.keys`; the coordinator's spans stay per node and per key.

@@ -41,6 +41,11 @@ pub struct GetResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub uploads: Option<UploadsReport>,
+    /// Coordinator seconds spent recording results (handling each finished step and writing
+    /// the metadata DB), when the run made a batched call. Absent otherwise. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub metadata_seconds: Option<f64>,
     /// `--partition`: the selection, each narrowed node's selected and skipped key counts, and
     /// the nodes the selection did not run. Absent without `--partition`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,6 +192,9 @@ pub struct MultiResult {
     /// See [`GetResult::uploads`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploads: Option<UploadsReport>,
+    /// See [`GetResult::metadata_seconds`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_seconds: Option<f64>,
     /// See [`GetResult::partition_selection`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition_selection: Option<PartitionSelectionReport>,
@@ -346,6 +354,29 @@ pub struct StepReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub batch: Option<BatchPlan>,
+    /// A real run of a node whose keys ran in batched calls (RFC-0013): how many calls made how
+    /// many keys, and where their time went. Absent otherwise. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub batch_execution: Option<BatchExecution>,
+}
+
+/// A node's batched calls in one run, summed over the calls that wrote at least one key.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct BatchExecution {
+    pub calls: usize,
+    /// The keys those calls wrote.
+    pub keys: usize,
+    pub import_seconds: f64,
+    /// Reading input artifacts. A lazy input is read in `compute_seconds` instead.
+    pub load_seconds: f64,
+    /// The function call. A returned lazy relation is computed in `split_seconds` instead.
+    pub compute_seconds: f64,
+    /// Dividing the result into keys.
+    pub split_seconds: f64,
+    /// Writing and hashing each key's artifact and sinks, in the worker.
+    pub write_seconds: f64,
 }
 
 /// How a dry run groups a batched node's keys into calls (RFC-0013).

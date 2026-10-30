@@ -70,7 +70,8 @@ export interface AssetRow {
 
 /** A failed latest attempt outranks any cache state — it's the thing to look at. */
 export function severityOf(node: NodeState): Severity {
-  if (node.last_materialization?.status === 'failed') return 'failed'
+  // A partitioned node's last materialization is one key: its failed keys are counted.
+  if (node.last_materialization?.status === 'failed' || node.partitions?.failed) return 'failed'
   return match(node.cache.state)
     .with('cached', (): Severity => 'cached')
     .with('unsynced', (): Severity => 'unsynced')
@@ -80,6 +81,18 @@ export function severityOf(node: NodeState): Severity {
     .with('unknown', (): Severity => 'unknown')
     .with('always_runs', (): Severity => 'always_runs')
     .exhaustive()
+}
+
+/** `40 of 3,077 keys failed`, for a node with failed keys. */
+export function failedKeysLabel(node: NodeState): string | null {
+  const p = node.partitions
+  return p?.failed ? `${p.failed.toLocaleString()} of ${p.total.toLocaleString()} keys failed` : null
+}
+
+/** A partitioned node's keys as parts of a whole. Parts add up to `total`. */
+export function keyBreakdown(p: NonNullable<NodeState['partitions']>): { cached: number; failed: number; stale: number; total: number } {
+  const failed = p.failed ?? 0
+  return { cached: p.cached, failed, stale: Math.max(p.total - p.cached - failed, 0), total: p.total }
 }
 
 /** Severity → the design system's status vocabulary (colors). */
@@ -127,7 +140,7 @@ function cacheLabel(node: NodeState): string {
     .with('never_run', () => 'Not run')
     .with('partial', () =>
       node.partitions
-        ? `Stale (${node.partitions.cached.toLocaleString()} of ${node.partitions.total.toLocaleString()} keys)`
+        ? `${node.partitions.missing.toLocaleString()} of ${node.partitions.total.toLocaleString()} keys stale`
         : 'Stale (some keys)',
     )
     .with('unknown', () => 'Unknown')
@@ -159,17 +172,18 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         partitioned: n.partitioned,
         severity,
         // One word; the reason, and whether a good result remains, is in the hint and the panel.
-        stateLabel: severity === 'failed' ? 'Failed' : label,
+        stateLabel: severity === 'failed' ? failedKeysLabel(n) ?? 'Failed' : label,
         stateHint:
           severity === 'failed' ? `The latest attempt failed. ${n.cache.detail}` : n.cache.detail,
         last: last
-          ? { status: last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
+          ? { status: n.partitions?.failed ? 'failed' : last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
           : null,
         lastAtMs: last ? parseTime(last.created_at) : null,
         lastSuccessAt: n.last_success_at,
         failingSince: n.failing_since,
         failures: n.consecutive_failures,
-        typical: n.durations ? formatSeconds(n.durations.median_seconds) : null,
+        // Recorded per key, whichever call computed it.
+        typical: n.durations ? `${formatSeconds(n.durations.median_seconds)}${n.partitioned ? ' / key' : ''}` : null,
         typicalSeconds: n.durations?.median_seconds ?? null,
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
         nextRunMs: n.next_run === null ? null : n.next_run * 1000,

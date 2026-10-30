@@ -26,6 +26,11 @@ cache?: CacheReport | null,
  */
 uploads?: UploadsReport,
 /**
+ * Coordinator seconds spent recording results (handling each finished step and writing
+ * the metadata DB), when the run made a batched call. Absent otherwise. Experimental.
+ */
+metadata_seconds?: number,
+/**
  * `--partition`: the selection, each narrowed node's selected and skipped key counts, and
  * the nodes the selection did not run. Absent without `--partition`.
  */

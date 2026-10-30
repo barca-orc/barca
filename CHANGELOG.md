@@ -8,6 +8,25 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- A batched run says how many function calls it made. Each batched node gets one line before the
+  end-of-run line, also kept in `barca logs`: `[barca] batch:p.py:orders 7 calls, 3077 keys |
+  import 0.1s, load 1.2s, compute 8.4s, split 3.1s, write 14.2s`, then `[barca] metadata 2.1s
+  recording this run's results`. `get`/`run` JSON gains `steps[].batch_execution` and
+  `metadata_seconds` (experimental). The per-key `step:` lines are unchanged.
+- The UI works with partitions at scale. A node with failed keys reads `40 of 3,077 keys failed`
+  instead of stale, and its panel shows cached, failed and stale keys, the errors grouped, and a
+  searchable list of keys. A run lists its nodes with keys, failures and calls, failed first, in
+  place of a flat list of keys. `GET /assets/{name}/partitions` is new; `barca status --json` and
+  `GET /state` gain `partitions.failed` and `failed_keys`, and `barca history RUN_ID --json` gains
+  `steps_page.nodes` (experimental).
+
+### Bug Fixes
+
+- `barca stats`, and the UI's history of a node, reported no runs for a partitioned node. It now
+  counts runs, with time summed over the run's keys and `keys` and `failed_keys` on each entry.
+
 ## 0.37.1 (2026-10-30)
 
 ### Bug Fixes

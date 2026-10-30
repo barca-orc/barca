@@ -79,6 +79,8 @@ outside the `GENERATED` blocks is written by hand.
 | `require_env` in `barca.toml`, `BARCA_REQUIRE_ENV` and the `[barca] note: no --env given, ...` line | new in 0.31 (#627): which commands count as touching an environment, and when the note is printed, may change after field use |
 | `@asset(deterministic=False)` | new in 0.31 (#627): may be extended to other decorators |
 | `max_rss_bytes` and `median_max_rss_bytes` in `barca stats`, `steps[].max_rss_bytes` and `steps[].output_tail` in `barca history RUN_ID` | new in 0.31 (#627): what the peak covers (the worker's baseline is included) and how many lines the tail keeps may change |
+| `partitions.failed` and `partitions.failed_keys` in `status --json`, `steps_page.nodes` in `history RUN_ID --json`, `recent_runs[].keys` and `recent_runs[].failed_keys` in `stats --json` | new in the next release: what counts as a failed key (its latest attempt failed, with no later success) may change after field use |
+| `steps[].batch_execution` and `metadata_seconds` in `get`/`run` JSON, the `[barca] batch:<node> ...` and `[barca] metadata ...` lines | new in the next release (RFC-0013): which phases are reported and what each one covers may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 ### Accepted exceptions
@@ -190,7 +192,7 @@ default, and any aliases.
 | `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
 | `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -211,7 +213,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -294,7 +296,7 @@ default, and any aliases.
 | `<FILES>...` | - | - | stable | Python files or directories; default: discover the project |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`, `max_rss_bytes` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`, `max_rss_bytes`, `keys`, `failed_keys` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -2609,6 +2611,8 @@ placeholders:
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` ([`barca docs remote`](/reference/remote-storage/), "Ctrl-C") | stable |
+| `[barca] batch:<node> <n> call(s), <n> key(s) \| import <secs>s, load <secs>s, compute <secs>s, split <secs>s, write <secs>s` | before the end-of-run line, one per node whose keys ran in batched calls, with `--agent` or a progress bar; also recorded in the run's logs (`barca docs partitions`, "Seeing calls") | experimental |
+| `[barca] metadata <secs>s recording this run's results` | after the end-of-run line of a run with such a node, with `--agent` or a progress bar; also recorded in the run's logs | experimental |
 | `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get` and `run` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>)` | once at startup of `serve`, always, after its metadata DB is set up: the line above plus the database and its format (`PRAGMA user_version`). `(unusable)` in place of `(db format <n>)` when it cannot be used (a writer then exits 3), `(not created yet)` when there is no database yet (the first run creates it) | experimental |
 | `[barca] note: no --env given, so this uses env <env> (<source>); this project has <n> environments (<names>). Pass --env NAME or set BARCA_ENV; require_env = true in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required` | once per command that reads or writes an environment (every mode), when neither `--env` nor `BARCA_ENV` names one and the project has more than one (`.barca/metadata.db` and the directories of `.barca/envs/`) | experimental |

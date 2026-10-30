@@ -51,6 +51,12 @@ fn uploads_field(out: &mut Value, uploads: Option<&crate::results::UploadsReport
         );
     }
 }
+/// `metadata_seconds` on a run's JSON, when the run made a batched call.
+fn metadata_field(out: &mut Value, seconds: Option<f64>) {
+    if let (Value::Object(obj), Some(seconds)) = (out, seconds) {
+        obj.insert("metadata_seconds".into(), seconds.into());
+    }
+}
 /// The stdout JSON body of a successful single-target `barca get --json` / `barca run --json`,
 /// before `--fields`. A served run's `outcome` is this body.
 pub fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
@@ -68,6 +74,7 @@ pub fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
         obj.insert("cache".into(), serde_json::json!(cache));
     }
     uploads_field(&mut out, result.uploads.as_ref());
+    metadata_field(&mut out, result.metadata_seconds);
     selection_field(&mut out, result.partition_selection.as_ref());
     out
 }
@@ -1401,6 +1408,7 @@ fn multi_run(result: &MultiResult) -> Value {
         obj.insert("cache".into(), serde_json::json!(cache));
     }
     uploads_field(&mut run, result.uploads.as_ref());
+    metadata_field(&mut run, result.metadata_seconds);
     selection_field(&mut run, result.partition_selection.as_ref());
     run
 }

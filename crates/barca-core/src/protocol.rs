@@ -173,6 +173,21 @@ pub struct ArtifactRef {
     pub batch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_keys: Option<u64>,
+    /// A key of a batched call: writing its artifact and sinks. Included in nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_seconds: Option<f64>,
+    /// What the batched call spent before its keys were written; on the first key it wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_phases: Option<BatchPhases>,
+}
+
+/// Where one batched call's time went before its keys were written (RFC-0013).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct BatchPhases {
+    pub import_seconds: f64,
+    pub load_seconds: f64,
+    pub compute_seconds: f64,
+    pub split_seconds: f64,
 }
 
 /// Outcome of a single `@sink` write. A sink that fails fails its step (0.30.0), so a
@@ -581,6 +596,8 @@ mod tests {
                 frame_type: None,
                 batch: None,
                 batch_keys: None,
+                write_seconds: None,
+                batch_phases: None,
 
                 sinks: Vec::new(),
             }),
@@ -666,6 +683,8 @@ mod tests {
                 frame_type: None,
                 batch: None,
                 batch_keys: None,
+                write_seconds: None,
+                batch_phases: None,
 
                 sinks: vec![
                     SinkOutcome {
@@ -863,6 +882,8 @@ mod tests {
                     frame_type: None,
                     batch: None,
                     batch_keys: None,
+                    write_seconds: None,
+                    batch_phases: None,
 
                     sinks: Vec::new(),
                 }),

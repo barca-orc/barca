@@ -1,5 +1,5 @@
 import { match } from 'ts-pattern'
-import { severityOf } from './assetTable'
+import { failedKeysLabel, severityOf } from './assetTable'
 import { statusMeta } from './status'
 import { runningGraphState } from './running'
 import type { NodeState, StatusKind } from './types'
@@ -14,11 +14,14 @@ export function graphState(node: NodeState): GraphState {
   // A run working on the node now (whoever started it) outranks its resting state.
   if (node.running) return runningGraphState(node.running)
   const state = match(severityOf(node))
-    .with('failed', () => ({ status: 'failed' as const, label: 'Failed' }))
+    .with('failed', () => ({ status: 'failed' as const, label: failedKeysLabel(node) ?? 'Failed' }))
     .with('cached', () => ({ status: 'success' as const, label: 'Healthy' }))
     .with('unsynced', () => ({ status: 'warning' as const, label: 'Unsynced' }))
     .with('stale', () => ({ status: 'warning' as const, label: 'Stale' }))
-    .with('partial', () => ({ status: 'warning' as const, label: 'Stale (some keys)' }))
+    .with('partial', () => ({
+      status: 'warning' as const,
+      label: node.partitions ? `${node.partitions.missing.toLocaleString()} of ${node.partitions.total.toLocaleString()} keys stale` : 'Stale (some keys)',
+    }))
     .with('never_run', () => ({ status: 'skipped' as const, label: 'Not run' }))
     .with('always_runs', () => ({ status: 'skipped' as const, label: 'Always runs' }))
     .with('unknown', () => ({ status: 'skipped' as const, label: 'State unknown' }))

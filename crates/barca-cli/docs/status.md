@@ -404,7 +404,9 @@ visible under `--json`; task prints remain accessible through `barca logs`.
 Completion lines retain their existing final-attempt duration. `history --json` adds
 `attempts`, the total attempts in recorded materialization rows (zero for an all-cached
 run; upload-failure rows from earlier versions retain their transfer-attempt counts). `stats` shows
-attempts per recorded materialization and its stored final-attempt duration.
+attempts per recorded materialization and its stored final-attempt duration. For a partitioned
+node (`barca stats scored`) an execution is a run: `total_runs` counts runs, `elapsed_seconds` and
+`cpu_seconds` sum its keys, and each `recent_runs` entry adds `keys` and `failed_keys`.
 Timeout errors name the step id, including its partition key.
 
 Older read-only snapshots without attempt metadata report a null history attempt total.

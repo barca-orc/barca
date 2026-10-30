@@ -96,6 +96,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "undeclared_env",
     "weight",
     "batch",
+    "batch_execution",
 ];
 
 /// Item fields of `recent_runs[]` in `barca stats --json`.
@@ -108,6 +109,8 @@ pub const STATS_FIELDS: &[&str] = &[
     "run_id",
     "cpu_seconds",
     "max_rss_bytes",
+    "keys",
+    "failed_keys",
 ];
 
 /// Item fields of `barca status --json` (`nodes[]`). `partitions` appears only on partitioned
@@ -246,6 +249,7 @@ mod tests {
             undeclared_env: Some(vec![String::new()]),
             weight: Some(2),
             batch: Some(Default::default()),
+            batch_execution: Some(Default::default()),
         };
         assert_eq!(keys(&serde_json::to_value(step).unwrap()), set(STEP_FIELDS));
     }
@@ -261,6 +265,8 @@ mod tests {
             run_id: None,
             cpu_seconds: None,
             max_rss_bytes: None,
+            keys: Some(0),
+            failed_keys: Some(0),
         };
         assert_eq!(keys(&serde_json::to_value(e).unwrap()), set(STATS_FIELDS));
     }
@@ -288,6 +294,8 @@ mod tests {
                 cached: 0,
                 missing: 0,
                 missing_keys: vec![],
+                failed: 0,
+                failed_keys: vec![],
                 changed: None,
             }),
             last_materialization: None,

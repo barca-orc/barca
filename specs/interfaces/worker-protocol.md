@@ -56,7 +56,10 @@ are the keys of one function call, rather than separate invocations: partition a
 become lists, and `aligned_inputs` names upstream inputs assembled as keyed dicts or lazy
 tables. The worker reports each key separately through the existing result journal;
 successful artifacts additionally carry `batch` (the call id) and `batch_keys` (the call's
-key count). A worker dying during a call fails every unfinished key in it. Weight and
+key count), plus `write_seconds` (writing that key's artifact and sinks). The first key a
+call writes also carries `batch_phases` (`import_seconds`, `load_seconds`,
+`compute_seconds`, `split_seconds`), so a coordinator counts each call that wrote a key once.
+A worker dying during a call fails every unfinished key in it. Weight and
 retry admission apply once per call. Frames without `call` retain sequential execution.
 Conformance: `python/tests/test_batched_partitions.py` exercises the real worker, per-key
 cache identities, failures and retries, and server execution.

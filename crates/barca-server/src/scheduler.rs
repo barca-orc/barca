@@ -1477,6 +1477,7 @@ mod tests {
             key_summary: None,
             cache: None,
             uploads: None,
+            metadata_seconds: None,
             partition_selection: None,
         });
     }

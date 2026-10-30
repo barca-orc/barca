@@ -12,6 +12,8 @@ use crate::db;
 use crate::dispatch;
 use crate::helper_proc;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
 
 /// Record as `cancelled` a run that was already recorded with its outcome, because Ctrl-C
@@ -180,6 +182,12 @@ pub(crate) struct StepRecorder {
     tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
     stop: CancellationToken,
     task: Option<tokio::task::JoinHandle<()>>,
+    /// Nanoseconds spent handling finished steps and writing their rows.
+    busy: Arc<AtomicU64>,
+}
+
+fn add_busy(busy: &AtomicU64, since: std::time::Instant) {
+    busy.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
 }
 
 impl StepRecorder {
@@ -221,6 +229,8 @@ impl StepRecorder {
             .as_ref()
             .map_or_else(CancellationToken::new, |p| p.cancel.child_token());
         let stopped = stop.clone();
+        let busy = Arc::new(AtomicU64::new(0));
+        let writes = busy.clone();
         let task = tokio::spawn(async move {
             let mut next_write = tokio::time::Instant::now() + record_interval;
             let mut pending = Vec::new();
@@ -241,10 +251,13 @@ impl StepRecorder {
                     _ = tokio::time::sleep_until(next_write), if !pending.is_empty() => {
                         while let Ok(row) = rx.try_recv() { pending.push(row); }
                         // A successful no-op replay never marks unchanged state dirty.
-                        if let Ok(inserted) = record_steps_with_until(
+                        let writing = std::time::Instant::now();
+                        let recorded = record_steps_with_until(
                             &db_path, &run_id, &pending,
                             helper_proc::Until::cancelled(&stopped),
-                        ).await {
+                        ).await;
+                        add_busy(&writes, writing);
+                        if let Ok(inserted) = recorded {
                             generation += inserted;
                             pending.clear();
                         }
@@ -297,7 +310,18 @@ impl StepRecorder {
             tx,
             stop,
             task: Some(task),
+            busy,
         }
+    }
+
+    /// Count coordinator time spent on a finished step since `since`.
+    pub(crate) fn note_busy(&self, since: std::time::Instant) {
+        add_busy(&self.busy, since);
+    }
+
+    /// The time counted by [`Self::note_busy`] and the row writes so far.
+    pub(crate) fn busy_seconds(&self) -> f64 {
+        std::time::Duration::from_nanos(self.busy.load(Ordering::Relaxed)).as_secs_f64()
     }
 
     /// Queue a finished step. Never blocks.
@@ -1006,6 +1030,7 @@ mod persist_tests {
             tx,
             stop: CancellationToken::new(),
             task: Some(tokio::spawn(async {})),
+            busy: Arc::new(AtomicU64::new(0)),
         };
         let fx = Fixture::new();
         let mut sensor = fx.row("f.py:a");

@@ -1,16 +1,44 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
 import { formatSeconds } from '@/lib/assetTable'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
+import { shortName } from '@/lib/graph'
 import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, triggeredByLabel } from '@/lib/runs'
-import { activityBarLabel, activityTicks, canLoadMore, hourLabel, runActivity, runFailed, runFailureLine, runProgress, runRowError, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
-import type { RunList, RunView } from '@/lib/types'
+import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runNodeLine, runFailed, runFailureLine, runProgress, runRowError, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import type { RunNodeGroup } from '@/lib/runsPage'
+import type { RunList, RunStep, RunView } from '@/lib/types'
 import './runs.css'
 
 /** One run's details, for any state of its request. */
+function StepList({ steps }: { steps: readonly RunStep[] }) {
+  return <ul className="barca-run-steps">
+    {steps.map((step, index) => <li key={`${step.node_id}:${index}`}>
+      <code>{step.node_id}</code>
+      <div><StatusBadge size="sm" status={step.status === 'cached' ? 'skipped' : runStatus(step.status)} label={step.status} />
+        {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}</div>
+      {step.error && <p className="barca-run-error">{step.error}</p>}
+    </li>)}
+  </ul>
+}
+
+/** One node of a run with partitioned steps; its keys render only once it is opened. */
+function RunNodeRow({ group: { summary, steps } }: { group: RunNodeGroup }) {
+  const [open, setOpen] = useState(summary.failed > 0)
+  const hidden = summary.keys - steps.length
+  return <details className="barca-run-node" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <summary>
+      <code>{shortName(summary.node_id)}</code>
+      <StatusBadge size="sm" status={summary.failed ? 'failed' : 'success'} label={runNodeLine(summary)} />
+      <span>{formatSeconds(summary.elapsed_seconds)}</span>
+    </summary>
+    {open && <StepList steps={steps} />}
+    {open && hidden > 0 && <p className="barca-note">{hidden.toLocaleString()} more keys not listed here.</p>}
+  </details>
+}
+
 export function RunPanelView({ id, run, eventGap = false, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; dispatch: Dispatch<RunsMsg> }) {
   const retry = <Button size="sm" onClick={() => dispatch({ type: 'retry_detail' })}>Retry</Button>
   return (
@@ -57,14 +85,9 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
     </Section>
     <Section title="Steps">
       {data.steps.length === 0 ? <p className="barca-note">{runIsLive(data.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p> : (
-        <ul className="barca-run-steps">
-          {data.steps.map((step, index) => <li key={`${step.node_id}:${index}`}>
-            <code>{step.node_id}</code>
-            <div><StatusBadge size="sm" status={step.status === 'cached' ? 'skipped' : runStatus(step.status)} label={step.status} />
-              {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}</div>
-            {step.error && <p className="barca-run-error">{step.error}</p>}
-          </li>)}
-        </ul>
+        data.steps_page?.nodes?.length
+          ? <div className="barca-run-nodes">{groupRunSteps(data.steps, data.steps_page.nodes).map((group) => <RunNodeRow key={group.summary.node_id} group={group} />)}</div>
+          : <StepList steps={data.steps} />
       )}
       {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length} of {data.steps_page.total} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
     </Section>

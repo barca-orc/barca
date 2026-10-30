@@ -627,3 +627,19 @@
 .barca-keys summary { cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); margin: 4px 0; }
 .barca-keys code { display: block; max-height: 160px; overflow: auto; white-space: pre; font-size: var(--text-2xs); }
 .barca-sidepanel-title h2 { overflow-wrap: normal; word-break: normal; }
+
+/* A partitioned node's keys. */
+.barca-node-keys { display: flex; flex-direction: column; gap: 6px; }
+.barca-keys-bar { display: flex; height: 6px; overflow: hidden; border-radius: 3px; background: var(--border-default); }
+.barca-keys-bar .is-cached { background: var(--status-success, var(--text-muted)); }
+.barca-keys-bar .is-failed { background: var(--status-failed); }
+.barca-keys-bar .is-stale { background: var(--status-warning, var(--text-muted)); }
+.barca-keys-errors { list-style: none; margin: 4px 0; padding: 0; font-size: var(--text-sm); }
+.barca-keys-errors li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; }
+.barca-keys-errors .barca-error-line { flex: 1; min-width: 0; }
+.barca-keys-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.barca-keys-tools .barca-search { flex: 1; min-width: 0; }
+.barca-keys-list { list-style: none; margin: 0 0 6px; padding: 0; max-height: 320px; overflow: auto; }
+.barca-keys-list li { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--border-default); }
+.barca-keys-list code { font-size: var(--text-xs); overflow-wrap: anywhere; }
+.barca-keys-list li.is-failed code { color: var(--status-failed); }

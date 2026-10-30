@@ -6,6 +6,14 @@ export type PartitionState = { total: number, cached: number, missing: number,
  */
 missing_keys: Array<string>,
 /**
+ * How many of `missing` last failed, rather than never having run or going stale.
+ */
+failed?: number,
+/**
+ * The first of them in key order, capped at 20.
+ */
+failed_keys?: Array<string>,
+/**
  * For each key of `missing_keys` with an earlier successful result, what changed in its
  * run hash since then (`value ID` when a dict `partitions_from` source returned a new value
  * for it). A new key is absent. Absent when no key has an earlier result.
