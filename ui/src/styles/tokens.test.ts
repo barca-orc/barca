@@ -43,6 +43,21 @@ describe('design tokens', () => {
     }
   })
 
+  it('keeps faint text readable on every dark background', () => {
+    const tokens = readFileSync(join(SRC, 'styles', 'tokens', 'colors.css'), 'utf8')
+    const hex = (name: string) => tokens.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`))![1]!
+    const luminance = (color: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16) / 255)
+        .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)) as [number, number, number]
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    for (const bg of ['c-ink-900', 'c-ink-850', 'c-ink-800', 'c-ink-700', 'c-ink-600']) {
+      const ratio = (luminance(hex('c-ink-150')) + 0.05) / (luminance(hex(bg)) + 0.05)
+      expect(ratio, bg).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(tokens).toMatch(/--text-faint:\s*var\(--c-ink-150\)/)
+  })
+
   it('sets font sizes from the type scale', () => {
     const hits: string[] = []
     for (const path of css) {

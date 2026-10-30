@@ -15,10 +15,10 @@ import {
 import {
   Age,
   Button,
-  ConnectionBadge,
   HealthBar,
   LastSuccess,
   IconButton,
+  MiddleName,
   KeyValue,
   RunningBadge,
   SearchInput,
@@ -30,6 +30,7 @@ import {
   TableSpacer,
   ResetDatabaseButton,
   Select,
+  ViewToggle,
 } from '@/components'
 import { isCheck, nodeKindLabel } from '@/lib/status'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
@@ -43,7 +44,6 @@ import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
-import { connection } from '@/lib/connection'
 import { api, ApiError, metadataUnusable } from '@/lib/api'
 import { formatSeconds } from '@/lib/assetTable'
 import { INITIAL_FAILURES, MUTED_KEY, failureTable, parseMuted, updateFailures, type FailuresEffect } from '@/lib/failuresView'
@@ -96,7 +96,6 @@ export function GroupedPipelinePage() {
   const query = params.get('q') ?? ''
   const hasDemoPreview = (groupsQuery.data ?? []).some(g => g.members.includes(PREVIEW_FAILURE)) && (!pipeline || pipeline === 'modeling.py')
   const preview = hasDemoPreview && params.get('preview') === 'failed'
-  const attention = params.get('attention') === '1'
   const sort = parseEntrySort(params.get('sort'))
   const assetQuery = useAssets()
   const stateQuery = useAssetStates()
@@ -214,20 +213,11 @@ export function GroupedPipelinePage() {
     // rankOf reads only what is listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, sort, byId, leavesOf, nodeRun.statuses])
-  const visibleEntries = [...sortedEntries.filter((entry) => {
-    const matches =
-      !needle ||
-      `${entry.name} ${entry.outputName ?? ''} ${leaves(entry.id).join(' ')}`
-        .toLowerCase()
-        .includes(needle)
-    return (
-      matches &&
-      (!attention ||
-        ['failed', 'warning', 'skipped'].includes(
-          (visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE).status,
-        ))
-    )
-  }), ...hits.filter((hit) => !attention || ['failed', 'warning', 'skipped'].includes((visualStates[hit.id] ?? UNKNOWN_GRAPH_STATE).status))]
+  const visibleEntries = [
+    ...sortedEntries.filter((entry) => !needle
+      || `${entry.name} ${entry.outputName ?? ''} ${leaves(entry.id).join(' ')}`.toLowerCase().includes(needle)),
+    ...hits,
+  ]
   const isHit = new Set(hits.map((h) => h.id))
   const visibleFailures = needle
     ? failureList.filter((f) => `${f.id} ${f.headline}`.toLowerCase().includes(needle))
@@ -309,14 +299,13 @@ export function GroupedPipelinePage() {
   const select = (id: string | null) =>
     update({ [graph ? 'focus' : 'node']: id })
   const openGroup = (id: string | null) =>
-    update({ group: id, node: null, focus: null, q: null, attention: null, show: null })
+    update({ group: id, node: null, focus: null, q: null, show: null })
   const revealNode = (id: string) =>
     update({
       group: tree.parents.get(id) ?? null,
       node: graph ? null : id,
       focus: graph ? id : null,
       q: null,
-      attention: null,
       show: null,
     })
   const setMode = (mode: 'groups' | 'flat' | 'failures') =>
@@ -373,7 +362,6 @@ export function GroupedPipelinePage() {
   // What to do about it, when the server says (e.g. a metadata DB barca cannot use).
   const failure = assetQuery.error ?? groupsQuery.error
   const rootName = pipeline === 'modeling.py' ? 'Modeling' : pipeline ? pipelineName(pipeline) : 'All pipelines'
-  const title = scope ? tree.groups.get(scope)!.name : rootName
   const pathOf = (id: string) => groupPath(tree.parents.get(id) ?? null, tree).map((g) => g.name).join(' › ')
 
   return (
@@ -381,91 +369,55 @@ export function GroupedPipelinePage() {
       <StreamNotice notice={nodeRun.stream.notice} runId={nodeRun.run?.handle} />
       <div className="barca-view-head">
         <div className="barca-view-bar">
-          <div className="barca-view-title">
-            <h1>{title}</h1>
-            <span className="barca-count">
-              {scopeIds.length.toLocaleString()} nodes
-              {!flat && show === 'items' && ` · ${entries.length} ${scope ? 'items' : 'groups'}`}
-            </span>
-            {runningHere > 0 && (
-              <span className="barca-count barca-count-running">
-                <StatusDot status="running" size={6} />
-                {runningHere} running
-              </span>
-            )}
-          </div>
-          <div className="barca-view-actions">
-            {nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
-            <ConnectionBadge
-              connection={connection(healthQuery.data, healthQuery.isError)}
-            />
-            {graph && (
-              <>
-                <IconButton
-                  label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
-                  onClick={() => setDir(dir === 'LR' ? 'TB' : 'LR')}
-                >
-                  {dir === 'LR' ? (
-                    <ArrowDown size={15} />
-                  ) : (
-                    <ArrowRight size={15} />
-                  )}
-                </IconButton>
-                <IconButton
-                  label="Fit to screen"
-                  onClick={() => canvas.current?.fit()}
-                >
-                  <Maximize size={15} />
-                </IconButton>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="barca-group-toolbar">
+          {/* The breadcrumb is the title: the page says where it is once. */}
           <nav className="barca-group-crumbs" aria-label="Group breadcrumb">
             {scope && (
-              <IconButton
-                label="Up one level"
-                size="sm"
-                onClick={() => openGroup(tree.parents.get(scope) ?? null)}
-              >
+              <IconButton label="Up one level" size="sm" onClick={() => openGroup(tree.parents.get(scope) ?? null)}>
                 <ArrowLeft size={14} />
               </IconButton>
             )}
-            <button
-              type="button"
-              onClick={() => openGroup(null)}
-              aria-current={!scope ? 'page' : undefined}
-            >
-              {rootName}
-            </button>
+            {scope
+              ? <button type="button" onClick={() => openGroup(null)}>{rootName}</button>
+              : <h1 aria-current="page">{rootName}</h1>}
             {path.map((group, index) => (
               <span key={group.id}>
                 <ChevronRight size={12} />
-                <button
-                  type="button"
-                  onClick={() => openGroup(group.id)}
-                  aria-current={index === path.length - 1 ? 'page' : undefined}
-                >
-                  {group.name}
-                </button>
+                {index === path.length - 1
+                  ? <h1 aria-current="page">{group.name}</h1>
+                  : <button type="button" onClick={() => openGroup(group.id)}>{group.name}</button>}
               </span>
             ))}
           </nav>
+          <span className="barca-count">
+            {scopeIds.length.toLocaleString()} nodes
+            {!flat && show === 'items' && ` · ${entries.length} ${scope ? 'items' : 'groups'}`}
+          </span>
+          {runningHere > 0 && (
+            <span className="barca-count barca-count-running">
+              <StatusDot status="running" size={6} />
+              {runningHere} running
+            </span>
+          )}
           <div className="barca-scope-health" title="Every node in view, by state">
-            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={4} width={140} />}
+            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={100} />}
           </div>
           {scope && projected.external.length > 0 && !flat && show === 'items' && (
             <span className="barca-group-external" title={projected.external.map(shortName).join(', ')}>
               External inputs · {projected.external.length}
             </span>
           )}
-          <div className="barca-group-options">
-            <div
-              className="barca-view-toggle"
-              role="group"
-              aria-label="Grouping"
+          <div className="barca-view-actions">
+            {nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
+            {hasDemoPreview && <button
+              type="button"
+              className="barca-preview-toggle"
+              aria-pressed={preview}
+              onClick={() => update({ preview: preview ? null : 'failed' })}
             >
+              <StatusDot status={preview ? 'failed' : 'skipped'} size={6} />
+              Preview failed check
+            </button>}
+            <div className="barca-view-toggle" role="group" aria-label="Grouping">
               <button
                 type="button"
                 aria-pressed={!flat && show === 'items'}
@@ -474,11 +426,7 @@ export function GroupedPipelinePage() {
               >
                 Groups
               </button>
-              <button
-                type="button"
-                aria-pressed={flat}
-                onClick={() => setMode('flat')}
-              >
+              <button type="button" aria-pressed={flat} onClick={() => setMode('flat')}>
                 All nodes
               </button>
               <button
@@ -490,15 +438,20 @@ export function GroupedPipelinePage() {
                 Failures{stateQuery.data ? ` · ${failureList.length}` : ''}
               </button>
             </div>
-            {hasDemoPreview && <button
-              type="button"
-              className="barca-preview-toggle"
-              aria-pressed={preview}
-              onClick={() => update({ preview: preview ? null : 'failed' })}
-            >
-              <StatusDot status={preview ? 'failed' : 'skipped'} size={6} />
-              Preview failed check
-            </button>}
+            {show === 'items' && <ViewToggle />}
+            {graph && (
+              <>
+                <IconButton
+                  label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
+                  onClick={() => setDir(dir === 'LR' ? 'TB' : 'LR')}
+                >
+                  {dir === 'LR' ? <ArrowDown size={15} /> : <ArrowRight size={15} />}
+                </IconButton>
+                <IconButton label="Fit to screen" onClick={() => canvas.current?.fit()}>
+                  <Maximize size={15} />
+                </IconButton>
+              </>
+            )}
           </div>
         </div>
         {preview && (
@@ -516,16 +469,6 @@ export function GroupedPipelinePage() {
               value={query}
               onChange={(q) => update({ q: q || null })}
             />
-            {show === 'items' && (
-              <button
-                type="button"
-                className="barca-preview-toggle"
-                aria-pressed={attention}
-                onClick={() => update({ attention: attention ? null : '1' })}
-              >
-                Needs attention
-              </button>
-            )}
             {show === 'items' && (
               <Select
                 label="Sort"
@@ -702,7 +645,7 @@ export function GroupedPipelinePage() {
                         <td>
                           <div className="barca-group-row-name">
                             {group && <FolderOpen size={15} />}
-                            <strong title={entry.id}>{labels.get(entry.id) ?? entry.name}</strong>
+                            <strong><MiddleName name={labels.get(entry.id) ?? entry.name ?? entry.id} title={entry.id} /></strong>
                             {group ? (
                               nestedGroups > 0 && <span className="barca-cell-sub">{nestedGroups} groups</span>
                             ) : (

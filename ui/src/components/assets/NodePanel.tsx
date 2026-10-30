@@ -1,13 +1,12 @@
 import { Fragment, useEffect, useMemo } from 'react'
 import { Link } from 'react-router'
 import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
-import { Age, Button, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { startedBy } from '@/lib/running'
 import { ArtifactSchema } from './ArtifactSchema'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { buildRows, formatSeconds, severityStatus } from '@/lib/assetTable'
-import { formatAbsolute } from '@/lib/time'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline } from '@/lib/health'
@@ -73,7 +72,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       label={`${node.name} details`}
       title={<Breakable name={node.name} />}
       badge={<Tag size="sm">{nodeKindLabel(node)}</Tag>}
-      subtitle={row?.file}
+      subtitle={<span className="barca-wrap">{node.id}</span>}
       actions={
         <>
           <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
@@ -107,7 +106,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           <div className="barca-why" role="group" aria-label="Why it failed">
             <div className="barca-why-head">
               <CircleAlert size={14} />
-              <strong>{headline(last.error)}</strong>
+              <ErrorLine error={last.error} large />
             </div>
             <p className="barca-note">
               Failed <Age at={last.created_at} nowMs={nowMs} />
@@ -115,12 +114,6 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               {node.last_success_at ? <> · last success <Age at={node.last_success_at} nowMs={nowMs} /></> : <> · never succeeded</>}
               {failedRun && <> · <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>open the run</Link></>}
             </p>
-            {last.error && last.error.trim().includes('\n') && (
-              <details>
-                <summary>Traceback</summary>
-                <pre className="barca-error">{last.error}</pre>
-              </details>
-            )}
           </div>
         )}
         {blockedBy.length > 0 && (
@@ -168,17 +161,12 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       <Section title="Last attempt">
         {last ? (
           <>
-            <div className="barca-attempt-summary">
-              <div>
-                <span className="barca-metric-label">Outcome</span>
-                <strong className={last.status === 'failed' ? 'barca-cell-failed' : undefined}>{last.status}</strong>
-              </div>
-              <div>
-                <span className="barca-metric-label">Duration</span>
-                <strong>{last.elapsed_seconds !== null ? formatSeconds(last.elapsed_seconds) : '–'}</strong>
-              </div>
-            </div>
-            <p className="barca-attempt-time"><Age at={last.created_at} nowMs={nowMs} /> · {formatAbsolute(last.created_at)}</p>
+            <p className="barca-stat-row">
+              <span className={last.status === 'failed' ? 'barca-cell-failed' : undefined}>{last.status}</span>
+              {' · '}<Age at={last.created_at} nowMs={nowMs} />
+              {' · '}{last.elapsed_seconds !== null ? formatSeconds(last.elapsed_seconds) : '–'}
+              {stats && <> · {stats.total_runs.toLocaleString()} {stats.total_runs === 1 ? 'run' : 'runs'}</>}
+            </p>
             {last.elapsed_seconds !== null && (
               <div
                 className="barca-hist"

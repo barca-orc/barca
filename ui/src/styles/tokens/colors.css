@@ -19,6 +19,7 @@
   --c-ink-400:    #313B34;
   --c-ink-300:    #475149;
   --c-ink-200:    #6A746C;
+  --c-ink-150:    #848E87;  /* faint text: 4.5:1 on every dark background */
   --c-ink-100:    #97A19A;
   --c-ink-050:    #C2CCC5;
   --c-white:      #E9F1EC;  /* near-white, faint green cast */
@@ -94,7 +95,7 @@
   --text-strong:   var(--c-white);
   --text-default:  var(--c-ink-050);
   --text-muted:    var(--c-ink-100);
-  --text-faint:    var(--c-ink-200);
+  --text-faint:    var(--c-ink-150);
   --text-disabled: var(--c-ink-300);
   --text-on-signal: var(--c-black);
   --text-link:     var(--c-white);

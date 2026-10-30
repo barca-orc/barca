@@ -68,6 +68,8 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `mergeStates` for the sidebar | `pipeline.test.ts` |
 | `lib/health.ts` | `healthCounts`, `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
+| `lib/sidebar.ts` | `updateSidebar`, `fileGroups` — the sidebar's collapse and the tree of groups under a file | `sidebar.test.ts` |
+| `lib/names.ts` | `splitMiddle` — a long name's cuttable head and its kept tail (`MiddleName`) | `names.test.ts` |
 | `lib/runTarget.ts` | `runTarget`, `runButton` — what the topbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
@@ -156,7 +158,7 @@ The look of the UI is defined in three places, in this order:
 1. **Tokens** (`styles/tokens/`): colors, type scale, spacing, radius, elevation, motion, and
    the light theme. The only place a color or a size is written as a value.
 2. **Primitives** (`components/`): `Button`, `IconButton`, `Age`/`LastSuccess`, `Tag`, `Chip`/`ChipGroup`, `Select`,
-   `SearchInput`, `StatusDot`/`StatusBadge`, `Skeleton`, `ConnectionBadge`, and `SidePanel` with
+   `SearchInput`, `StatusDot`/`StatusBadge`, `Skeleton`, `ConnectionBadge`, `ErrorLine`, `MiddleName`, and `SidePanel` with
    `Section` and `KeyValue`. Their CSS is inline (tokens as `var(--…)`) or, where it needs
    pseudo-classes, in `styles/components.css`.
 3. **Pages** (`pages/`, `layouts/`): compose primitives; `styles/shell.css` holds page layout

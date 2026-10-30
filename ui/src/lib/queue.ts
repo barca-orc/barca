@@ -17,6 +17,11 @@ export function queuePollInterval(view: QueueView | undefined): number {
   return view && (view.running.length > 0 || view.queued.length > 0) ? QUEUE_POLL_BUSY_MS : QUEUE_POLL_IDLE_MS
 }
 
+/** Whether the queue has anything to say: work, or a state that holds work back. */
+export function queueMatters(view: QueueView): boolean {
+  return view.running.length > 0 || view.queued.length > 0 || view.paused || view.draining || waitingRows(view.capacity).length > 0
+}
+
 /** Whether new runs start. Draining wins over paused: nothing starts until the next server start. */
 export type QueueState =
   | { kind: 'open' }

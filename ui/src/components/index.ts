@@ -55,3 +55,8 @@ export { TableSpacer } from './TableWindow'
 
 export { HealthBar } from './HealthBar'
 export type { HealthBarProps } from './HealthBar'
+
+export { MiddleName } from './MiddleName'
+export { ErrorLine } from './ErrorLine'
+export type { ErrorLineProps } from './ErrorLine'
+export { ViewToggle } from './ViewToggle'

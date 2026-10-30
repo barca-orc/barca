@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
-import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, RUNS_MAX, runActivity, runProgress, runRowError, stepName, updateRuns, visibleRuns, type RunsMsg } from './runsPage'
+import type { RunSummary } from './types'
+import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, updateRuns, visibleRuns, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
@@ -82,5 +83,13 @@ describe('run list telemetry', () => {
     const ticks = activityTicks(day.hours)
     expect(ticks.length).toBeGreaterThanOrEqual(3)
     expect(ticks.every((t) => t.index < 22)).toBe(true)
+  })
+})
+
+describe('runFailureLine', () => {
+  const run = { status: 'failed', error: null, first_failure: { node_id: 'p.py:orders', error: 'KeyError: x\ntrace' } } as unknown as RunSummary
+  it('says where a run stopped and why', () => expect(runFailureLine(run)).toBe('stopped at orders · KeyError: x'))
+  it('is nothing for a run with nothing to say', () => {
+    expect(runFailureLine({ ...run, status: 'success', first_failure: null })).toBeNull()
   })
 })

@@ -55,7 +55,7 @@
 .barca-sidepanel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .barca-sidepanel-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .barca-sidepanel-title h2 {
-  margin: 0; font-family: var(--font-sans); font-size: var(--text-xl); font-weight: var(--weight-semibold);
+  margin: 0; font-family: var(--font-sans); font-size: var(--text-lg); font-weight: var(--weight-semibold);
   color: var(--text-strong); word-break: break-all;
 }
 .barca-sidepanel-actions { display: flex; gap: 4px; flex: none; }
