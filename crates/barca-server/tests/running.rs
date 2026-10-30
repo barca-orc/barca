@@ -195,8 +195,27 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     );
 
     wait_for(&app, "after", "cleared", Value::is_null).await;
+    // A step finishing clears its progress before the run persists its outcome and
+    // leaves the queue. Observe run-level clearing on its own poll boundary too.
+    let finishing = Instant::now();
+    loop {
+        let runs = in_flight(&app).await;
+        if runs.is_empty() {
+            break;
+        }
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(runs[0]["id"], run_id.as_str(), "{runs:?}");
+        assert!(
+            finishing.elapsed() < Duration::from_secs(60),
+            "run never cleared: {runs:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (status, finished) = send(&app, "GET", &format!("/runs/{run_id}"), None).await;
+    assert_eq!(status, StatusCode::OK, "{finished}");
+    assert_eq!(finished["status"], "success", "{finished}");
+    assert_eq!(finished["outcome"]["status"], "success", "{finished}");
     assert!(running_of(&app, "slow").await.is_null());
-    assert!(in_flight(&app).await.is_empty());
     let (_, detail) = send(&app, "GET", "/assets/slow", None).await;
     assert!(detail["running"].is_null(), "{detail}");
 }
