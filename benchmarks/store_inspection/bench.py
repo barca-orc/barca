@@ -150,6 +150,7 @@ def main():
                 "UPDATE materializations SET output_hash = ?, artifact_size_bytes = ? WHERE status = 'success'",
                 (digest, local.stat().st_size),
             )
+        time.sleep(1.05)  # Measure cold verification after filesystem timestamps settle.
         traces.write_text("")
         cold = cli()
         cold_hashes = [json.loads(line) for line in traces.read_text().splitlines()]

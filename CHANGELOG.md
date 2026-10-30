@@ -66,6 +66,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Avoid retaining inspection evidence for files changed within the last second, preventing
+  rapid delete/recreate identity collisions from preserving stale local values.
+
 - Restore a metadata file onto a fresh host by creating its destination metadata directory.
   Restoring ledger backups leaves project authentication state separate and unchanged.
 - Validate token creation expiry while holding the auth-state lock, using the same private

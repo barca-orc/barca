@@ -19,7 +19,7 @@ stopped in `finally` and the synthetic files remain under the worktree for teard
 The same current Python helpers serve both native binaries: the old native request selects
 the unchanged strict helper path, and the new request opts into inspection evidence. The
 source/binary fingerprints, dependencies, CPU affinity, load, worker count and sample counts
-are in [the final raw result](2026-10-30-confirmed-transfers-fast-local.json).
+are in [the final raw result](2026-10-30-settled-fast-local.json).
 The benchmark copies each native binary without modifying its bytes and selects the same
 benchmark Python interpreter through PATH for both helpers. This is a warm local-directory-store fast
 profile comparison, not a cloud-network, TLS, release-wheel, cold-filesystem or 8.6 GB
@@ -31,9 +31,9 @@ Each artifact copy is 1,074,624,287 bytes. Shapes describe 134,217,728 rows of o
 
 | Operation | Before | After |
 |---|---:|---:|
-| Cold CLI status | 3.83 s | 2.00 s |
-| Warm CLI status, three samples | 3.61–4.20 s | 80–82 ms |
-| Metadata-invalidated `/state`, three samples | 2.59–6.82 s | 43–82 ms |
+| Cold CLI status | 3.06 s | 1.14 s |
+| Warm CLI status, three samples | 2.61–2.64 s | 82–94 ms |
+| Metadata-invalidated `/state`, three samples | 2.52–4.50 s | 41–78 ms |
 | Python artifact-hash bytes over warm CLI samples | 3,223,872,861 | 0 |
 | Python artifact-hash bytes over invalidated state samples | 4,298,497,148 | 0 |
 
@@ -51,6 +51,9 @@ read view. The fix keys the cache to the stable project/environment instead. The
 mtime-preserving edits, fixed remote expiry, backwards clocks, storage scope, strict-ledger
 bypass, corruption, bounded retention, concurrent writers/readers and nonblocking write locks.
 
-The [earlier measurement](2026-10-29-fast-local.json) predates the final transfer-invalidation
-and verified-local-shape corrections. The final run includes those corrections; load varied
-from 11.4 to 20.3 during this run, so ranges are observations rather than latency guarantees.
+The [initial measurement](2026-10-29-fast-local.json) predates transfer invalidation and
+verified-local-shape corrections. The [transfer-corrected measurement](2026-10-30-confirmed-transfers-fast-local.json)
+predates the timestamp settling guard. The final run includes all three corrections and
+waits 1.05 seconds after fixture writes before measuring cold verification. Recently changed
+files bypass evidence lookup and retention; a settled observation is required before reuse.
+This avoids keeping stale evidence when inode and timestamp fields collide within one tick.

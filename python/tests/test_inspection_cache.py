@@ -5,12 +5,14 @@ import json
 import os
 
 import threading
+import time
 from barca import _inspection_cache as memo
 
 
 def test_file_evidence_persists_and_invalidates_on_replacement(tmp_path):
     artifact, database = tmp_path / "value.json", tmp_path / "cache.json"
     artifact.write_text("42")
+    time.sleep(1.05)  # Unchanged-file reuse begins after the filesystem timestamp settles.
     calls = []
 
     def read():
@@ -248,6 +250,7 @@ def test_busy_invalidation_uses_a_nonblocking_remote_epoch_without_losing_local_
     path = str(tmp_path / "cache.json")
     local = tmp_path / "value"
     local.write_text("42")
+    time.sleep(1.05)
     cache = memo.Cache(path)
     cache.remote("store", "one", None, lambda: {"size": 1})
     cache.local("shape", local, None, lambda: {"type": "int"})
@@ -315,3 +318,32 @@ def test_equal_clock_ticks_do_not_allow_a_pre_repair_observation_to_return(tmp_p
     clock[0] = 11.0
     current = memo.Cache(path, clock=lambda: clock[0])
     assert current.remote("store", "one", None, lambda: {"size": 2}) == {"size": 2}
+
+
+def test_recent_identical_file_identity_is_not_reused_after_recreation(tmp_path, monkeypatch):
+    artifact = tmp_path / "value"
+    artifact.write_text("99")
+    stamp = memo.fingerprint(artifact)
+    now = [stamp[-1] / 1_000_000_000]
+    # Model inode reuse within one filesystem timestamp tick. The bytes change, while
+    # every stat identity field exposed to the cache remains identical.
+    monkeypatch.setattr(memo, "fingerprint", lambda path: stamp)
+    cache = memo.Cache(None, clock=lambda: now[0])
+    assert cache.local("shape", artifact, None, lambda: {"value": artifact.read_text()}) == {
+        "value": "99"
+    }
+    artifact.unlink()
+    artifact.write_text("77")
+    assert cache.local("shape", artifact, None, lambda: {"value": artifact.read_text()}) == {
+        "value": "77"
+    }
+    # Evidence observed before timestamps settle must not become reusable just by aging.
+    now[0] += 2
+    assert cache.local("shape", artifact, None, lambda: {"value": artifact.read_text()}) == {
+        "value": "77"
+    }
+
+    def unexpected():
+        raise AssertionError("settled unchanged files should still reuse evidence")
+
+    assert cache.local("shape", artifact, None, unexpected) == {"value": "77"}
