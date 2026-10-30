@@ -27,7 +27,7 @@ def main():
         tier(
             event,
             os.environ.get("CI_HEAD_REF", ""),
-            json.loads(os.environ.get("CI_LABELS", "[]")) or [],
+            json.loads(os.environ.get("CI_LABELS") or "[]") or [],
             message,
         )
     )
