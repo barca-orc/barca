@@ -11,7 +11,7 @@ import { headline } from './health'
 import { only, type Next } from './program'
 import { parseRunStatus, runIsLive } from './runs'
 import { parseTime } from './time'
-import type { FirstFailure, RunSummary } from './types'
+import type { FirstFailure, RunNodeSummary, RunStep, RunSummary } from './types'
 
 export const RUNS_PAGE_SIZE = 100
 export const RUNS_MAX = 1000
@@ -161,6 +161,39 @@ export function runProgress(run: RunSummary): { steps: string; stoppedAt: string
     stoppedAt: run.first_failure && runFailed(run.status) ? stepName(run.first_failure.node_id) : null,
     title: `${run.steps_executed.toLocaleString()} ran · ${run.steps_cached.toLocaleString()} cached${run.first_failure ? ` · stopped at ${run.first_failure.node_id}` : ''}`,
   }
+}
+
+/** A run's steps by node: its totals, and the keys the page lists, failed ones first. */
+export interface RunNodeGroup {
+  summary: RunNodeSummary
+  steps: RunStep[]
+}
+
+/**
+ * Group a run's listed steps under the summary of every step it recorded (`steps_page.nodes`). A
+ * page lists at most some of a node's keys, so counts come from the summary, never the page.
+ */
+export function groupRunSteps(steps: readonly RunStep[], nodes: readonly RunNodeSummary[]): RunNodeGroup[] {
+  const byNode = new Map<string, RunStep[]>()
+  for (const step of steps) {
+    const key = step.node_id.indexOf('[')
+    const base = key < 0 ? step.node_id : step.node_id.slice(0, key)
+    const listed = byNode.get(base)
+    if (listed) listed.push(step)
+    else byNode.set(base, [step])
+  }
+  return nodes.map((summary) => ({
+    summary,
+    steps: (byNode.get(summary.node_id) ?? []).slice().sort((a, b) => Number(b.status === 'failed') - Number(a.status === 'failed')),
+  }))
+}
+
+/** `3,077 keys · 40 failed · 7 calls`. */
+export function runNodeLine(n: RunNodeSummary): string {
+  const parts = [`${n.keys.toLocaleString()} key${n.keys === 1 ? '' : 's'}`]
+  if (n.failed) parts.push(`${n.failed.toLocaleString()} failed`)
+  if (n.calls) parts.push(`${n.calls.toLocaleString()} call${n.calls === 1 ? '' : 's'}`)
+  return parts.join(' · ')
 }
 
 /** One hour of the activity strip. */

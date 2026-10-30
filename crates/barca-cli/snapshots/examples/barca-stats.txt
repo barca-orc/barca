@@ -19,7 +19,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: elapsed_seconds, status, created_at, error_message, attempts, run_id, cpu_seconds, max_rss_bytes]
+          [possible values: elapsed_seconds, status, created_at, error_message, attempts, run_id, cpu_seconds, max_rss_bytes, keys, failed_keys]
 
       --env <ENV>
           Use a separate cache and history for this environment

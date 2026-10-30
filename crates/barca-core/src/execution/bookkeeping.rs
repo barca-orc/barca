@@ -7,8 +7,8 @@ use crate::cache::DecideState;
 use crate::dag::Dag;
 use crate::dispatch::{OutputRef, StepFailure};
 use crate::persist::RunLedger;
-use crate::results::StepReport;
-use std::collections::{HashMap, HashSet};
+use crate::results::{BatchExecution, StepReport};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Default)]
 pub(super) struct RunResults {
@@ -27,6 +27,8 @@ pub(super) struct RunResults {
     pub(super) durations: HashMap<String, (f64, f64)>,
     /// Each executed key's run-local batched call identity (RFC-0013).
     pub(super) batches: HashMap<String, String>,
+    /// Each batched node's calls in this run, by base id, sorted for the end-of-run lines.
+    pub(super) batch_execution: BTreeMap<String, BatchExecution>,
 }
 
 /// The terminal projection's owned scratch data. Constructed after recorder shutdown, so it
@@ -92,6 +94,7 @@ impl RunResults {
     ) -> OutputRef {
         // Attempts belong to this exact lease, including its partition key.
         self.attempts.insert(node_id.to_string(), attempts);
+        self.record_batch_call(node_id, artifact_val);
         if let Some(observation) = artifact_val.get("source_observation") {
             self.observations
                 .insert(node_id.to_string(), observation.clone());
@@ -137,6 +140,32 @@ impl RunResults {
             self.clocks.insert(node_id.to_string(), (finished, wall));
         }
         oref
+    }
+
+    /// Add a written key of a batched call to its node's totals. The call's own phases come
+    /// once, on the first key it wrote, so that key also counts the call.
+    fn record_batch_call(&mut self, node_id: &str, artifact_val: &serde_json::Value) {
+        if artifact_val.get("batch").is_none() {
+            return;
+        }
+        let base = crate::StepId::parse(node_id).base_id().to_string();
+        let total = self.batch_execution.entry(base).or_default();
+        total.keys += 1;
+        total.write_seconds += artifact_val
+            .get("write_seconds")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let Some(phases) = artifact_val
+            .get("batch_phases")
+            .and_then(|v| serde_json::from_value::<crate::protocol::BatchPhases>(v.clone()).ok())
+        else {
+            return;
+        };
+        total.calls += 1;
+        total.import_seconds += phases.import_seconds;
+        total.load_seconds += phases.load_seconds;
+        total.compute_seconds += phases.compute_seconds;
+        total.split_seconds += phases.split_seconds;
     }
 
     /// What the steps that ran and wrote their sinks published: each declared sink of the
@@ -223,6 +252,7 @@ impl RunResults {
                 report.elapsed_seconds = Some(*elapsed);
                 report.import_seconds = (*imports > 1.0).then_some(*imports);
             }
+            report.batch_execution = self.batch_execution.get(&report.id).cloned();
         }
     }
 

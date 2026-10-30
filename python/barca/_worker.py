@@ -1029,6 +1029,8 @@ def _materialize(
     sink_outcomes = _write_sinks(result, step, node_id, fmt)
     if sink_outcomes:
         artifact["sinks"] = sink_outcomes
+    if extra and "batch" in extra:
+        artifact["write_seconds"] = time.perf_counter() - _ser_wall0
     if before_emit is not None:
         before_emit()
     _emit("result", node_id=node_id, artifact=artifact, elapsed=elapsed)
@@ -1662,6 +1664,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
         _ctrl_c_interrupts_the_step()
 
         phase = LOAD_INPUTS
+        load_start = time.perf_counter()
         param_types = first.get("param_types") or {}
         kwargs: dict[str, Any] = {d: [st["direct_kwargs"][d] for st in steps] for d in dims}
         aligned = set(first.get("aligned_inputs") or [])
@@ -1712,6 +1715,7 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
         activate_source_path(source)
         timeout = first.get("timeout_seconds", 0)
         phase = USER_CODE
+        compute_start = time.perf_counter()
         with _captured(emitter, err_emitter):
             if timeout and timeout > 0:
                 result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=log_id)
@@ -1725,7 +1729,9 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
         )
         explicit = first.get("serializer")
         phase = SPLIT_OUTPUT
+        split_start = time.perf_counter()
         values = _batch.split(result, keys, dims, staging)
+        split_end = time.perf_counter()
     except BaseException as exc:
         _ctrl_c_does_nothing()
         survives = _worker_survives(exc, imported)
@@ -1739,6 +1745,13 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
     wall = time.perf_counter() - t0
     cpu = time.process_time() - c0
     share = wall / max(n, 1)
+    # Once per call, on the first key written: the coordinator adds the calls of a node up.
+    phases = {
+        "import_seconds": import_seconds or 0.0,
+        "load_seconds": compute_start - load_start,
+        "compute_seconds": split_start - compute_start,
+        "split_seconds": split_end - split_start,
+    }
     ok = True
     key_phase = SPLIT_OUTPUT
     try:
@@ -1781,8 +1794,13 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
                         "rss_window": rss_window,
                     },
                     prewritten=prewritten,
-                    extra={"batch": call_id, "batch_keys": n},
+                    extra={
+                        "batch": call_id,
+                        "batch_keys": n,
+                        **({"batch_phases": phases} if phases else {}),
+                    },
                 )
+                phases = None
                 reported.add(node_id)
             except (BrokenPipeError, ConnectionResetError):
                 raise

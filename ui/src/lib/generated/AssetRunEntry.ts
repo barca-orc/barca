@@ -24,4 +24,9 @@ cpu_seconds: number | null,
 /**
  * The worker process's peak RSS while the step ran, in bytes; `null` when not recorded.
  */
-max_rss_bytes: number | null, };
+max_rss_bytes: number | null,
+/**
+ * A partitioned node's entry is one run: the keys it recorded, and how many failed.
+ * Absent otherwise.
+ */
+keys?: number, failed_keys?: number, };

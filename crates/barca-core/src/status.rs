@@ -386,6 +386,10 @@ pub struct CacheStatus {
     pub change_causes: Option<Vec<String>>,
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionState {
@@ -394,6 +398,14 @@ pub struct PartitionState {
     pub missing: usize,
     /// Keys without a cached result, capped at 20.
     pub missing_keys: Vec<String>,
+    /// How many of `missing` last failed, rather than never having run or going stale.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
+    pub failed: usize,
+    /// The first of them in key order, capped at 20.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<String>>", optional))]
+    pub failed_keys: Vec<String>,
     /// For each key of `missing_keys` with an earlier successful result, what changed in its
     /// run hash since then (`value ID` when a dict `partitions_from` source returned a new value
     /// for it). A new key is absent. Absent when no key has an earlier result.
@@ -627,6 +639,12 @@ pub(crate) async fn status_from_dag_with_membership(
         Vec::new()
     };
 
+    let failed_keys = if Path::new(&cfg.db_path).exists() {
+        db::failed_partition_keys(&cfg.db_path).await?
+    } else {
+        HashMap::new()
+    };
+
     let mut nodes: Vec<NodeStatus> = Vec::new();
     let mut states: HashMap<String, String> = HashMap::new();
     for id in ids {
@@ -650,6 +668,13 @@ pub(crate) async fn status_from_dag_with_membership(
                 cached: p.cached,
                 missing: p.will_run,
                 missing_keys: p.will_run_keys.clone(),
+                // A key that failed and is cached again through an older result is not missing.
+                failed: failed_keys.get(id).map_or(0, |f| f.count.min(p.will_run)),
+                failed_keys: if p.will_run > 0 {
+                    failed_keys.get(id).map_or(Vec::new(), |f| f.keys.clone())
+                } else {
+                    Vec::new()
+                },
                 changed: p.changed.clone(),
             });
         let mut cache = cache_status(report, &inputs, &states, &history);

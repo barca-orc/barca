@@ -434,6 +434,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/groups", "/groups"),
         ("/assets/first", "/assets/{name}"),
         ("/assets/first/schema", "/assets/{name}/schema"),
+        ("/assets/first/partitions", "/assets/{name}/partitions"),
         ("/state", "/state"),
         ("/state?targets=first", "/state"),
         ("/state?targets=second,first", "/state"),

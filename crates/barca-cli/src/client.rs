@@ -1704,6 +1704,7 @@ pub(crate) async fn run_detail(
         None => barca_core::db::StepsPage {
             total: steps.len(),
             truncated: false,
+            nodes: Vec::new(),
         },
     };
     let detail = barca_core::queries::RunDetail {

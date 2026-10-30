@@ -27,6 +27,7 @@ pub fn router(state: AppState) -> Router {
         .route("/assets", get(handlers::assets))
         .route("/assets/{name}", get(handlers::asset_detail))
         .route("/assets/{name}/schema", get(handlers::asset_schema))
+        .route("/assets/{name}/partitions", get(inspect::partitions))
         // The run contract's reads; the middleware leaves the other methods alone.
         .route("/runs", get(runs::list).post(runs::create))
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))

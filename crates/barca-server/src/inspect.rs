@@ -224,6 +224,41 @@ pub async fn materializations(
     })))
 }
 
+/// The most keys one `GET /assets/{name}/partitions` lists.
+const PARTITION_KEYS_MAX: usize = 1000;
+
+#[derive(Debug, Deserialize)]
+pub struct PartitionsQuery {
+    /// `success` or `failed`: the key's latest attempt.
+    pub status: Option<String>,
+    /// A substring of the key.
+    pub q: Option<String>,
+    /// Keys to return (default 100, at most [`PARTITION_KEYS_MAX`]).
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// `GET /assets/{name}/partitions` — a node's keys with a recorded attempt, each with its latest.
+pub async fn partitions(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<PartitionsQuery>,
+) -> Result<Json<barca_core::db::PartitionKeys>, ApiError> {
+    let dag = state.loaded_dag().await?;
+    let id = barca_core::targets::find_target_id(&dag, &name)
+        .map_err(|e| ApiError::run(e, context("partitions", &state)))?;
+    let snapshot = snapshot_db(&state).await?;
+    let filter = barca_core::db::PartitionKeysFilter {
+        status: query.status,
+        query: query.q.filter(|q| !q.is_empty()),
+        limit: query.limit.unwrap_or(100).min(PARTITION_KEYS_MAX),
+        offset: query.offset.unwrap_or(0),
+    };
+    Ok(Json(
+        barca_core::db::partition_keys(&snapshot.path, &id, &filter).await?,
+    ))
+}
+
 /// `GET /stats/{name}` — `barca stats --json`.
 pub async fn stats(
     State(state): State<AppState>,

@@ -4,6 +4,7 @@ import { CircleAlert, Copy, GitBranch, Play, X } from 'lucide-react'
 import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { startedBy } from '@/lib/running'
 import { ArtifactSchema } from './ArtifactSchema'
+import { NodeKeys } from './NodeKeys'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
@@ -50,7 +51,10 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const last = node.last_materialization
   const stats = detail?.stats
   const bars = stats ? historyBars(stats.recent_runs) : []
-  const histogram = stats ? durationHistogram(stats.recent_runs, last?.elapsed_seconds ?? null) : []
+  // A partitioned node's last materialization is one key; its last attempt is the whole run.
+  const lastRun = node.partitioned ? stats?.recent_runs[0] : undefined
+  const lastElapsed = lastRun ? lastRun.elapsed_seconds : last?.elapsed_seconds ?? null
+  const histogram = stats ? durationHistogram(stats.recent_runs, lastElapsed) : []
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
   const upstream = node.inputs
     .map((id) => byId.get(id))
@@ -60,6 +64,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const impact = useMemo(() => downstreamIds(node.id, consumers).size, [node.id, consumers])
   const inputs = useMemo(() => new Map(graph.map((n) => [n.id, n.inputs])), [graph])
   const failed = memberHealth(node).status === 'failed'
+  const failedKeys = node.partitions?.failed ?? 0
   // Why a node that did not fail is not up to date: something it reads failed.
   const blockedBy = useMemo(() => (failed ? [] : failedUpstream(node.id, inputs, byId)), [failed, node.id, inputs, byId])
   const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
@@ -112,7 +117,13 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
         {/* A failure's cache detail repeats its error; the block below says it once. */}
         {!(failed && last) && <p className="barca-note">{node.cache.detail}</p>}
-        {failed && last && (
+        {failedKeys > 0 && (
+          <p className="barca-note">
+            {failedRun && <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>Open the run</Link>}
+            {node.last_success_at && <> · last success <Age at={node.last_success_at} nowMs={nowMs} /></>}
+          </p>
+        )}
+        {failed && last && failedKeys === 0 && (
           <div className="barca-why" role="group" aria-label="Why it failed">
             <div className="barca-why-head">
               <CircleAlert size={14} />
@@ -146,24 +157,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {node.cache.changed && node.cache.changed.length > 0 && (
           <KeyValue label="changed">{node.cache.changed.join(', ')}</KeyValue>
         )}
-        {node.partitions && (
-          <>
-            <KeyValue label="partitions">
-              {node.partitions.cached.toLocaleString()} of {node.partitions.total.toLocaleString()} cached
-              {node.partitions.missing > 0 && ` · ${node.partitions.missing.toLocaleString()} without a result`}
-            </KeyValue>
-            {node.partitions.missing_keys.length > 0 && (
-              <details className="barca-keys">
-                <summary>
-                  {node.partitions.missing > node.partitions.missing_keys.length
-                    ? `First ${node.partitions.missing_keys.length} keys without a result`
-                    : 'Keys without a result'}
-                </summary>
-                <code className="barca-wrap">{node.partitions.missing_keys.join('\n')}</code>
-              </details>
-            )}
-          </>
-        )}
+        {node.partitions && <NodeKeys key={node.id} id={node.id} partitions={node.partitions} nowMs={nowMs} />}
         {definition && definition.line > 0 && (
           <KeyValue label="source">
             {editor ? <a className="barca-link" href={editor} title="Open in VS Code">{definition.file}:{definition.line}</a> : <code>{definition.file}:{definition.line}</code>}
@@ -179,12 +173,13 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {last ? (
           <>
             <p className="barca-stat-row">
-              <span className={last.status === 'failed' ? 'barca-cell-failed' : undefined}>{last.status}</span>
-              {' · '}<Age at={last.created_at} nowMs={nowMs} />
-              {' · '}{last.elapsed_seconds !== null ? formatSeconds(last.elapsed_seconds) : '–'}
+              <span className={(lastRun ?? last).status === 'failed' ? 'barca-cell-failed' : undefined}>{(lastRun ?? last).status}</span>
+              {' · '}<Age at={(lastRun ?? last).created_at} nowMs={nowMs} />
+              {' · '}{lastElapsed !== null ? formatSeconds(lastElapsed) : '–'}
+              {lastRun?.keys != null && <> · {lastRun.keys.toLocaleString()} keys{lastRun.failed_keys ? `, ${lastRun.failed_keys.toLocaleString()} failed` : ''}</>}
               {stats && <> · {stats.total_runs.toLocaleString()} {stats.total_runs === 1 ? 'run' : 'runs'}</>}
             </p>
-            {last.elapsed_seconds !== null && (
+            {lastElapsed !== null && (
               <div
                 className="barca-hist"
                 aria-label="Distribution of successful run durations; the last attempt is highlighted"
@@ -213,6 +208,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                 )}
               </div>
             )}
+            {last.partition && <KeyValue label={lastRun ? 'one key' : 'partition'}>{last.partition}</KeyValue>}
             {last.format && (
               <KeyValue label="output">
                 {last.format}
@@ -224,7 +220,6 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                 <code className="barca-wrap">{artifact}</code> <CopyButton label="Copy artifact path" text={artifact} />
               </KeyValue>
             )}
-            {last.partition && <KeyValue label="partition">{last.partition}</KeyValue>}
             {last.error && !failed && <pre className="barca-error">{last.error}</pre>}
           </>
         ) : (
@@ -294,6 +289,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                     </span>
                     <Age at={r.created_at} nowMs={nowMs} />
                     <span>{r.elapsed_seconds !== null ? formatSeconds(r.elapsed_seconds) : '–'}</span>
+                    {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}
                     {r.attempts > 1 && <span>{r.attempts} attempts</span>}
                   </div>
                   {r.error_message && (

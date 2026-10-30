@@ -166,7 +166,7 @@ describe('buildRows', () => {
     )
     const fetch = rows.find((r) => r.name === 'fetch')!
     const fresh = rows.find((r) => r.name === 'new')!
-    expect(fetch.stateLabel).toBe('Stale (3 of 5 keys)')
+    expect(fetch.stateLabel).toBe('2 of 5 keys stale')
     expect(fresh.stateLabel).toBe('Not run')
     expect(fresh.last).toBeNull()
     expect(fresh.typical).toBeNull()

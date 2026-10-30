@@ -11,6 +11,7 @@ import type {
   NodeGroup,
   ListNode,
   AssetDetail,
+  PartitionKeys,
   NodeState,
   NodeStatus,
   PlanResult,
@@ -101,6 +102,13 @@ export const api = {
   groups: () => request<NodeGroup[]>('/groups'),
   assets: () => request<ListNode[]>('/assets'),
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
+  /** A partitioned node's keys, each with its latest attempt. */
+  partitionKeys: (name: string, filter: { status?: 'failed'; q?: string; limit: number }) => {
+    const params = new URLSearchParams({ limit: String(filter.limit) })
+    if (filter.status) params.set('status', filter.status)
+    if (filter.q) params.set('q', filter.q)
+    return request<PartitionKeys>(`/assets/${encodeURIComponent(name)}/partitions?${params}`)
+  },
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema?sample=${PREVIEW_ROWS}`),
   project: () => request<{ root: string | null }>('/project'),
   plan: () => request<PlanResult>('/plan'),

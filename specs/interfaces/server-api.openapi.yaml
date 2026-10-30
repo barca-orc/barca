@@ -1116,6 +1116,111 @@ paths:
           description: Registered path with unsupported method; Allow header identifies supported methods
           headers: *id016
       parameters: *id017
+  /assets/{name}/partitions:
+    get:
+      summary: A partitioned node's keys with their latest attempt
+      operationId: get_assets_name_partitions
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartitionKeys'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '400':
+          description: Invalid source/target or wrong node kind
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: *id003
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target or terminal run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Execution/inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id016_keys
+            Allow:
+              schema: *id003
+              description: Methods accepted by this route
+      parameters: &id017_keys
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+      - name: status
+        in: query
+        required: false
+        description: A key's latest attempt.
+        schema:
+          type: string
+          enum: [success, failed]
+      - name: q
+        in: query
+        required: false
+        description: A substring of the key, in any case.
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        description: Keys to return. Default 100, at most 1000.
+        schema:
+          type: integer
+          minimum: 0
+      - name: offset
+        in: query
+        required: false
+        description: Matching keys to skip, in key order.
+        schema:
+          type: integer
+          minimum: 0
+    head:
+      summary: A partitioned node's keys with their latest attempt (headers only)
+      operationId: head_assets_name_partitions
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '400':
+          description: Invalid source/target or wrong node kind
+        '404':
+          description: Resource not found
+        '409':
+          description: Ambiguous target or terminal run
+        '500':
+          description: Execution/inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id016_keys
+      parameters: *id017_keys
   /state:
     get:
       summary: Node cache state, durations, next scheduled execution and the run working on each node now
@@ -3576,6 +3681,8 @@ components:
       properties:
         batch:
           $ref: '#/components/schemas/BatchPlan'
+        batch_execution:
+          $ref: '#/components/schemas/BatchExecution'
         id: *id003
         kind:
           type: string
@@ -3863,6 +3970,68 @@ components:
           type: array
           items: *id003
           maxItems: 20
+        failed:
+          type: integer
+          minimum: 1
+          description: How many of missing last failed. Absent when none did.
+        failed_keys:
+          type: array
+          items: *id003
+          maxItems: 20
+          description: The first of them in key order. Absent when none did.
+    PartitionKeys:
+      type: object
+      additionalProperties: false
+      required: [keys, total, recorded, failed, errors]
+      description: One page of a node's keys that have a recorded attempt, in key order. A key
+        that never ran has none and is listed by NodeStatus.partitions.missing_keys.
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [key, status, created_at, elapsed_seconds, error, run_id, artifact_path, size_bytes]
+            properties:
+              key: *id003
+              status: *id003
+              created_at: *id003
+              elapsed_seconds:
+                type: [number, "null"]
+              error:
+                type: [string, "null"]
+              run_id:
+                type: [string, "null"]
+              artifact_path:
+                type: [string, "null"]
+              size_bytes:
+                type: [integer, "null"]
+        total:
+          type: integer
+          minimum: 0
+          description: Keys matching status and q.
+        recorded:
+          type: integer
+          minimum: 0
+          description: Every key with a recorded attempt, whatever the filters.
+        failed:
+          type: integer
+          minimum: 0
+          description: Those whose latest attempt failed.
+        errors:
+          type: array
+          maxItems: 20
+          description: The failed keys' first error lines with the key's values replaced by <key>,
+            most common first.
+          items:
+            type: object
+            additionalProperties: false
+            required: [error, keys]
+            properties:
+              error: *id003
+              keys:
+                type: integer
+                minimum: 1
     Materialization:
       type: object
       additionalProperties: false
@@ -4167,6 +4336,14 @@ components:
       - cpu_seconds
       - max_rss_bytes
       properties:
+        keys:
+          type: integer
+          minimum: 0
+          description: A partitioned node's entry is one run, its keys recorded in it.
+        failed_keys:
+          type: integer
+          minimum: 0
+          description: How many of them failed.
         elapsed_seconds:
           anyOf:
           - *id045
@@ -4759,6 +4936,29 @@ components:
       - manual
       description: 'What started a run: a cron tick, an HTTP request, a laptop posting to the ledger,
         or a command typed on a machine.'
+    BatchExecution:
+      type: object
+      additionalProperties: false
+      description: A real run of a node whose keys ran in batched calls, summed over the calls that
+        wrote at least one key. The phases of parallel calls overlap. Experimental.
+      required: [calls, keys, import_seconds, load_seconds, compute_seconds, split_seconds, write_seconds]
+      properties:
+        calls:
+          type: integer
+          minimum: 0
+        keys:
+          type: integer
+          minimum: 0
+        import_seconds:
+          type: number
+        load_seconds:
+          type: number
+        compute_seconds:
+          type: number
+        split_seconds:
+          type: number
+        write_seconds:
+          type: number
     BatchPlan:
       type: object
       additionalProperties: false
@@ -4863,6 +5063,10 @@ components:
             type: number
           steps_executed: *id056
           phases: *id056
+          metadata_seconds:
+            type: number
+            description: Coordinator seconds spent recording results, when the run made a batched
+              call. Experimental.
           final_output:
             description: 'Single target: the value, or an artifact pointer for binary formats. A
               partitioned target: an object keyed by partition key; past 1000 keys with no partition
@@ -5021,6 +5225,21 @@ components:
           properties:
             total: *id056
             truncated: *id059
+            nodes:
+              type: array
+              description: Per node over every recorded step, listed or not, failed nodes first;
+                absent when no node has more than one step. Experimental.
+              items:
+                type: object
+                additionalProperties: false
+                required: [node_id, keys, failed, elapsed_seconds, calls]
+                properties:
+                  node_id: *id003
+                  keys: *id056
+                  failed: *id056
+                  elapsed_seconds:
+                    type: number
+                  calls: *id056
         logs:
           type: array
           items:
