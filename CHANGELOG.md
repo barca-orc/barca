@@ -10,6 +10,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- The UI has a command palette (`⌘K`) for any node, group, file or run, plus Run and Open graph.
+  The node panel says what changed (`Failed after a code change`, `Same code, new input`), links
+  the definition (`billing.py:142`, opens in VS Code), copies the artifact path and shows the
+  first rows. Runs filters and the graph direction live in the URL (`?status=`, `?q=`, `?hour=`,
+  `?dir=`). The Run button counts assets and sensors, which is what a get runs.
+- `barca list --json` and `GET /assets` gain `file` and `line`; `cache.change_causes` in `barca
+  status --json` and `GET /state` splits a stale or failed node's change into `code_changed`,
+  `inputs_changed`, `env_changed` and `upstream_stale`, and `cache.changed` is now also set on a
+  failed node that once succeeded. `GET /assets/{name}/schema` takes `?sample=N` (at most 20).
 - The UI's graph answers a question: All pipelines is a map of files (one weighted edge per pair
   of dependent files, drawn for the selected card when there are too many to read), a pipeline
   of one group opens that group, unconnected members lie in a grid, inputs from outside a group

@@ -1,6 +1,7 @@
 /**
- * The Runs page as a program (`lib/program.ts`). The selected run lives in the URL (`?run=`),
- * so selecting one is an effect (a navigation), and the page reads it back as input.
+ * The Runs page as a program (`lib/program.ts`). The selected run and the filters live in the
+ * URL (`?run=`, `?status=`, `?q=`, `?hour=`), so changing one is an effect (a navigation), and
+ * the page reads it back as input.
  * Pure; `pages/RunsPage.tsx` runs it and `pages/RunsView.tsx` renders it.
  */
 
@@ -46,10 +47,41 @@ export type RunsMsg =
 export type RunsEffect =
   /** Set `?run=` (`null` removes it); `replace` keeps the history entry. */
   | { type: 'navigate'; run: string | null; replace: boolean }
+  /** Write the filters to the URL, replacing the history entry. */
+  | { type: 'filters'; filters: RunFilters }
   | { type: 'refetch_list' }
   | { type: 'refetch_detail' }
 
+/** The part of the model the URL owns. */
+export type RunFilters = Pick<RunsModel, 'filter' | 'query' | 'hour'>
+
 export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', query: '', hour: null }
+
+/** The filters a URL names; anything it cannot mean is the default. */
+export function parseRunFilters(params: URLSearchParams): RunFilters {
+  const status = params.get('status')
+  const hour = Number(params.get('hour'))
+  return {
+    filter: status === 'failed' || status === 'live' ? status : 'all',
+    query: params.get('q') ?? '',
+    hour: params.get('hour') !== null && Number.isFinite(hour) ? hour : null,
+  }
+}
+
+/** `params` with `filters` written; a default leaves its parameter out. */
+export function writeRunFilters(params: URLSearchParams, { filter, query, hour }: RunFilters): URLSearchParams {
+  const next = new URLSearchParams(params)
+  const put = (key: string, value: string | null) => (value ? next.set(key, value) : next.delete(key))
+  put('status', filter === 'all' ? null : filter)
+  put('q', query || null)
+  put('hour', hour === null ? null : String(hour))
+  return next
+}
+
+const withFilters = (model: RunsModel, change: Partial<RunFilters>): Next<RunsModel, RunsEffect> => {
+  const next = { ...model, ...change }
+  return [next, [{ type: 'filters', filters: { filter: next.filter, query: next.query, hour: next.hour } }]]
+}
 
 /** Whether "Load more" can ask for more runs. */
 export function canLoadMore(model: RunsModel): boolean {
@@ -64,9 +96,9 @@ export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, Runs
     // details keep working after the server restarts.
     .with({ type: 'run_resolved' }, ({ id }) => [model, [{ type: 'navigate', run: id, replace: true }]])
     .with({ type: 'load_more' }, () => only({ ...model, limit: Math.min(model.limit + RUNS_PAGE_SIZE, RUNS_MAX) }))
-    .with({ type: 'filter_changed' }, ({ filter }) => only({ ...model, filter }))
-    .with({ type: 'query_changed' }, ({ value }) => only({ ...model, query: value }))
-    .with({ type: 'hour_toggled' }, ({ at }) => only({ ...model, hour: model.hour === at ? null : at }))
+    .with({ type: 'filter_changed' }, ({ filter }) => withFilters(model, { filter }))
+    .with({ type: 'query_changed' }, ({ value }) => withFilters(model, { query: value }))
+    .with({ type: 'hour_toggled' }, ({ at }) => withFilters(model, { hour: model.hour === at ? null : at }))
     .with({ type: 'retry_list' }, () => [model, [{ type: 'refetch_list' }]])
     .with({ type: 'retry_detail' }, () => [model, [{ type: 'refetch_detail' }]])
     .exhaustive()

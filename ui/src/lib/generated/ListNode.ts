@@ -15,4 +15,12 @@ schedule?: string,
 /**
  * A scheduled node's next fire time, in local time.
  */
-next_fire?: string, inputs: Array<string>, env: Array<string>, };
+next_fire?: string, inputs: Array<string>, env: Array<string>,
+/**
+ * Source file of the definition, as in the id.
+ */
+file: string,
+/**
+ * 1-based line of the definition's first decorator.
+ */
+line: number, };

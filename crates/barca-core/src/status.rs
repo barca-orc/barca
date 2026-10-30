@@ -366,12 +366,24 @@ pub struct CacheStatus {
     /// The artifact a `get` would serve from cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
-    /// A `stale` node: what changed in its run hash since its last successful materialization
+    /// A `stale` or failed node: what changed in its run hash since its last successful materialization
     /// (`code`, `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`,
     /// `sensor ID`, `env NAME`, `kind`). Absent when that materialization recorded no components
     /// (before 0.29.0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed: Option<Vec<String>>,
+    /// What moved the run hash, by cause: any of `code_changed`, `inputs_changed`, `env_changed`
+    /// (from `changed`) and `upstream_stale` (an input is not cached yet). Set on `stale` nodes
+    /// and on a failed node that once succeeded; absent when the cause is not recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "ts",
+        ts(
+            optional,
+            type = "Array<\"code_changed\" | \"inputs_changed\" | \"env_changed\" | \"upstream_stale\">"
+        )
+    )]
+    pub change_causes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -993,6 +1005,7 @@ fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
         run_hash: None,
         artifact: None,
         changed: None,
+        change_causes: None,
     }
 }
 
@@ -1086,7 +1099,12 @@ fn not_cached(
         .filter(|m| m.status == "failed" && (r.run_hash.is_none() || m.run_hash == r.run_hash));
     if let Some(m) = failed_here {
         let msg = m.error_message.as_deref().unwrap_or("no message");
-        return cache(state, "failed", format!("last attempt failed: {msg}"));
+        let mut c = cache(state, "failed", format!("last attempt failed: {msg}"));
+        if history.ever_succeeded {
+            c.changed = r.changed.clone();
+            c.change_causes = causes(r.changed.as_deref(), false);
+        }
+        return c;
     }
     if !history.ever_succeeded {
         return cache(state, "no_record", "no successful materialization recorded");
@@ -1101,6 +1119,7 @@ fn not_cached(
             ),
         );
         c.changed = r.changed.clone();
+        c.change_causes = causes(r.changed.as_deref(), true);
         return c;
     }
     let mut c = match &r.changed {
@@ -1116,7 +1135,16 @@ fn not_cached(
         ),
     };
     c.changed = r.changed.clone();
+    c.change_causes = causes(r.changed.as_deref(), false);
     c
+}
+
+fn causes(changed: Option<&[String]>, upstream_stale: bool) -> Option<Vec<String>> {
+    let mut out = changed.map(crate::changes::causes).unwrap_or_default();
+    if upstream_stale {
+        out.push("upstream_stale".to_string());
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// `pipeline.py:p[k=a]` -> `k=a`.
@@ -1150,13 +1178,14 @@ pub async fn read_schemas(
     python: &Path,
     cfg: &crate::config::ResolvedConfig,
     nodes: &mut [NodeStatus],
+    sample: usize,
 ) {
     let verified_local = if cfg.remote_artifacts() && Path::new(&cfg.db_path).exists() {
         check_store_copies(python, cfg, nodes).await
     } else {
         HashSet::new()
     };
-    read_shapes_inner(python, cfg, nodes, 0, true, &verified_local).await;
+    read_shapes_inner(python, cfg, nodes, sample, true, &verified_local).await;
 }
 
 async fn read_shapes_inner(
@@ -1308,6 +1337,7 @@ mod tests {
                 run_hash: run_hash.map(String::from),
                 artifact: None,
                 changed: None,
+                change_causes: None,
             },
             partitions: None,
             last_materialization: None,
@@ -1394,6 +1424,31 @@ mod tests {
             &h,
         );
         assert_eq!((c.state.as_str(), c.reason.as_str()), ("stale", "changed"));
+
+        // The split by cause, for a stale node and for a failed one (#742).
+        let mut changed = report("run", Some("not_materialized"));
+        changed.changed = Some(vec!["input p.py:b".into()]);
+        changed.run_hash = None;
+        let c = cache_status(Some(&changed), &[], &none, &h);
+        assert_eq!(c.change_causes.unwrap(), ["inputs_changed"]);
+        let c = cache_status(
+            Some(&changed),
+            &["p.py:b".to_string()],
+            &HashMap::from([("p.py:b".to_string(), "stale".to_string())]),
+            &h,
+        );
+        assert_eq!(c.reason, "upstream_stale");
+        assert_eq!(
+            c.change_causes.unwrap(),
+            ["inputs_changed", "upstream_stale"]
+        );
+        let mut failed = history(Some("failed"), true);
+        failed.latest.as_mut().unwrap().error_message = Some("boom".into());
+        let c = cache_status(Some(&changed), &[], &none, &failed);
+        assert_eq!(c.reason, "failed");
+        assert_eq!(c.change_causes.unwrap(), ["inputs_changed"]);
+        // A node that never succeeded has nothing to compare with.
+        assert!(c.detail.contains("boom"));
 
         // Its result is recorded and its run hash is unchanged, but the artifact is gone and a
         // run needs it: that is not "changed" (#252).

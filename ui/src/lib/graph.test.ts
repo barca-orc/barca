@@ -4,9 +4,9 @@ import { layout } from './graphLayout'
 import type { ListNode, StatusKind } from './types'
 
 const ASSETS: ListNode[] = [
-  { id: 'p.py:a', kind: 'asset', freshness: 'always', env: [], inputs: [] },
-  { id: 'p.py:b', kind: 'asset', freshness: 'always', env: [], inputs: ['p.py:a'] },
-  { id: 'p.py:c', kind: 'task', freshness: 'manual', env: [], inputs: ['p.py:b'] },
+  { id: 'p.py:a', kind: 'asset', freshness: 'always', env: [], file: 'p.py', line: 1, inputs: [] },
+  { id: 'p.py:b', kind: 'asset', freshness: 'always', env: [], file: 'p.py', line: 1, inputs: ['p.py:a'] },
+  { id: 'p.py:c', kind: 'task', freshness: 'manual', env: [], file: 'p.py', line: 1, inputs: ['p.py:b'] },
 ]
 
 describe('shortName', () => {
@@ -32,7 +32,7 @@ describe('buildGraph', () => {
 
   it('drops edges whose input is not in the asset set', () => {
     const orphan: ListNode[] = [
-      { id: 'p.py:x', kind: 'asset', freshness: 'always', env: [], inputs: ['p.py:missing'] },
+      { id: 'p.py:x', kind: 'asset', freshness: 'always', env: [], file: 'p.py', line: 1, inputs: ['p.py:missing'] },
     ]
     expect(buildGraph(orphan, 'LR').edges).toEqual([])
   })

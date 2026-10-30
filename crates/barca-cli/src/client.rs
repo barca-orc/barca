@@ -1532,6 +1532,8 @@ pub(crate) async fn list(
             freshness,
             inputs: node.inputs,
             env: node.env,
+            file: node.file,
+            line: node.line,
         });
     }
     let total = assets.len();

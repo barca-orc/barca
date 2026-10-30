@@ -458,6 +458,9 @@ pub struct ExtractedNode {
     pub source_file: String,
     /// Byte offset of the function definition in source.
     pub byte_offset: usize,
+    /// 1-based line of that offset: the first decorator of the definition.
+    #[serde(default)]
+    pub line: usize,
     /// The text the definition hash covers: the decorator parts that count, in canonical form,
     /// then the function from `def` on as written (`crate::definition`).
     pub source_text: String,

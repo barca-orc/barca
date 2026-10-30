@@ -11,7 +11,7 @@ Options:
       --groups           Show the organizational hierarchy (groups are never executable nodes)
   -l, --limit <LIMIT>    Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
       --all              Show every node (no limit)
-      --fields <FIELDS>  Select JSON fields as a comma-separated list; implies --json [possible values: id, kind, freshness, schedule, inputs, env, next_fire]
+      --fields <FIELDS>  Select JSON fields as a comma-separated list; implies --json [possible values: id, kind, freshness, schedule, inputs, env, next_fire, file, line]
       --server [<URL>]   Use a server (URL or configured); get/run execute its deployed code
       --local            Use independent local state; ignore the configured server
   -h, --help             Show concise command help

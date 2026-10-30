@@ -45,6 +45,8 @@ pub const LIST_FIELDS: &[&str] = &[
     "inputs",
     "env",
     "next_fire",
+    "file",
+    "line",
 ];
 
 /// Item fields of `barca history --json` (`runs[]`).
@@ -182,6 +184,8 @@ mod tests {
             freshness: barca_core::Freshness::Schedule(barca_core::CronExpr("0 6 * * *".into())),
             inputs: vec![],
             env: vec![],
+            file: "p.py".into(),
+            line: 3,
         };
         let next = "2026-01-01 06:00".to_string();
         let v = barca_core::report::list_node_json(&node, Some(&next));
@@ -277,6 +281,7 @@ mod tests {
                 run_hash: None,
                 artifact: None,
                 changed: None,
+                change_causes: None,
             },
             partitions: Some(PartitionState {
                 total: 0,

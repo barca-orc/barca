@@ -14,8 +14,8 @@ describe('runTarget', () => {
     expect(runTarget({ ...none, node: 'a', group: 'group:g', pipeline: 'billing.py' }, assets)).toEqual({ kind: 'node', name: 'a' })
   })
   it('counts what a get of the scope runs: no tasks', () => {
-    expect(runTarget({ ...none, pipeline: 'billing.py' }, assets)).toEqual({ kind: 'pipeline', file: 'billing.py', nodes: 2 })
-    expect(runTarget(none, assets)).toEqual({ kind: 'all', nodes: 3 })
+    expect(runTarget({ ...none, pipeline: 'billing.py' }, assets)).toEqual({ kind: 'pipeline', file: 'billing.py', assets: 1, sensors: 1 })
+    expect(runTarget(none, assets)).toEqual({ kind: 'all', assets: 2, sensors: 1 })
   })
   it('has nothing to run in an open group, or before assets load', () => {
     expect(runTarget({ ...none, group: 'group:g' }, assets).kind).toBe('none')
@@ -26,12 +26,12 @@ describe('runTarget', () => {
 describe('runButton', () => {
   it('names its target and size', () => {
     expect(runButton({ kind: 'node', name: 'invoices_00' }).label).toBe('Run invoices_00')
-    expect(runButton({ kind: 'pipeline', file: 'x/billing.py', nodes: 506 }).label).toBe('Run billing.py (506 nodes)')
-    expect(runButton({ kind: 'pipeline', file: 'a.py', nodes: 1 }).label).toBe('Run a.py (1 node)')
+    expect(runButton({ kind: 'pipeline', file: 'x/billing.py', assets: 505, sensors: 1 }).label).toBe('Run billing.py (505 assets, 1 sensor)')
+    expect(runButton({ kind: 'pipeline', file: 'a.py', assets: 1, sensors: 0 }).label).toBe('Run a.py (1 asset)')
   })
   it('asks first only for the whole project', () => {
-    expect(runButton({ kind: 'all', nodes: 8070 })).toMatchObject({ label: 'Run all 8,070 nodes', confirm: { action: 'Run all 8,070 nodes' } })
-    expect(runButton({ kind: 'pipeline', file: 'a.py', nodes: 2 }).confirm).toBeNull()
+    expect(runButton({ kind: 'all', assets: 8070, sensors: 0 })).toMatchObject({ label: 'Run all 8,070 assets', confirm: { action: 'Run all 8,070 assets' } })
+    expect(runButton({ kind: 'pipeline', file: 'a.py', assets: 2, sensors: 0 }).confirm).toBeNull()
     expect(runButton({ kind: 'none', hint: 'h' })).toEqual({ label: 'Run', title: 'h', confirm: null })
   })
 })

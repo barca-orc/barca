@@ -106,21 +106,21 @@ describe('organizational groups', () => {
         kind: 'asset',
         inputs: [],
         freshness: 'always',
-        env: [],
+        env: [], file: 'p.py', line: 1,
       },
       {
         id: 'modeling.py:data__train_rows',
         kind: 'asset',
         inputs: ['modeling.py:data__raw_rows'],
         freshness: 'always',
-        env: [],
+        env: [], file: 'p.py', line: 1,
       },
       {
         id: 'modeling.py:cv__fold_01__train_rows',
         kind: 'asset',
         inputs: ['modeling.py:data__raw_rows', 'modeling.py:data__train_rows'],
         freshness: 'always',
-        env: [],
+        env: [], file: 'p.py', line: 1,
       },
     ]
     const original = structuredClone(assets)
@@ -160,7 +160,7 @@ describe('entry order', () => {
 })
 
 describe('soleGroup', () => {
-  const node = (id: string): ListNode => ({ id, kind: 'asset', freshness: 'always', env: [], inputs: [] })
+  const node = (id: string): ListNode => ({ id, kind: 'asset', freshness: 'always', env: [], file: 'p.py', line: 1, inputs: [] })
   const tree = groupTree([{ id: 'group:p.py:g', name: 'G', description: '', members: ['p.py:a', 'p.py:b'], output: 'p.py:b' }])
   it('is the group that holds every node', () => {
     expect(soleGroup([node('p.py:a'), node('p.py:b')], tree)).toBe('group:p.py:g')

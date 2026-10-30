@@ -1089,6 +1089,13 @@ paths:
         in: path
         required: true
         schema: *id003
+      - name: sample
+        in: query
+        required: false
+        description: First rows of each json/csv/parquet artifact to add as shape.sample, at most 20.
+        schema:
+          type: integer
+          minimum: 0
     head:
       summary: Inspect selected node and direct input artifacts (headers only)
       operationId: head_assets_name_schema
@@ -3408,8 +3415,16 @@ components:
       - freshness
       - inputs
       - env
+      - file
+      - line
       properties:
         id: *id005
+        file:
+          type: string
+          description: Source file of the definition, as in the id.
+        line:
+          type: integer
+          description: 1-based line of the definition's first decorator.
         kind:
           type: string
           enum:
@@ -3819,9 +3834,19 @@ components:
         run_hash: *id003
         artifact: *id003
         changed:
-          description: What changed in a stale node's run hash since its last successful materialization (0.29.0).
+          description: What changed in a stale or failed node's run hash since its last successful materialization (0.29.0).
           type: array
           items: *id003
+        change_causes:
+          description: The same evidence by cause; absent when none is recorded.
+          type: array
+          items:
+            type: string
+            enum:
+            - code_changed
+            - inputs_changed
+            - env_changed
+            - upstream_stale
     PartitionState:
       type: object
       additionalProperties: false

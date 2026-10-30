@@ -1,14 +1,15 @@
 import { Fragment, useEffect, useMemo } from 'react'
 import { Link } from 'react-router'
-import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
+import { CircleAlert, Copy, GitBranch, Play, X } from 'lucide-react'
 import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { startedBy } from '@/lib/running'
 import { ArtifactSchema } from './ArtifactSchema'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
+import { useProject } from '@/hooks/useProject'
 import { buildRows, formatSeconds, severityStatus } from '@/lib/assetTable'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
-import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
+import { downstreamOf, durationHistogram, editorLink, formatBytes, historyBars, shortHash, whatChanged } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline } from '@/lib/health'
 import { memberHealth } from '@/lib/groups'
 import { shortName } from '@/lib/graph'
@@ -39,6 +40,10 @@ function Breakable({ name }: { name: string }) {
   return <>{parts.map((part, i) => <Fragment key={i}>{part}{i < parts.length - 1 && <>__<wbr /></>}</Fragment>)}</>
 }
 
+function CopyButton({ label, text }: { label: string; text: string }) {
+  return <IconButton label={label} size="sm" onClick={() => void navigator.clipboard?.writeText(text)}><Copy size={12} /></IconButton>
+}
+
 export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
   const { data: detail, isLoading, isError } = useAssetDetail(node.id)
   const [row] = buildRows([node], nowMs)
@@ -60,6 +65,11 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
+  const change = whatChanged(node.cache, failed)
+  const definition = graph.find((n) => n.id === node.id)
+  const root = useProject().data?.root
+  const editor = definition?.line ? editorLink(root, definition.file, definition.line) : null
+  const artifact = node.cache.artifact ?? last?.artifact ?? null
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -132,6 +142,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             </ul>
           </div>
         )}
+        {change && <p className="barca-note barca-what-changed">{change}</p>}
         {node.cache.changed && node.cache.changed.length > 0 && (
           <KeyValue label="changed">{node.cache.changed.join(', ')}</KeyValue>
         )}
@@ -152,6 +163,12 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               </details>
             )}
           </>
+        )}
+        {definition && definition.line > 0 && (
+          <KeyValue label="source">
+            {editor ? <a className="barca-link" href={editor} title="Open in VS Code">{definition.file}:{definition.line}</a> : <code>{definition.file}:{definition.line}</code>}
+            {' '}<CopyButton label="Copy source path" text={`${definition.file}:${definition.line}`} />
+          </KeyValue>
         )}
         <KeyValue label="downstream">
           {impact === 0 ? 'nothing reads it' : impact === 1 ? '1 node depends on it' : `${impact.toLocaleString()} nodes depend on it`}
@@ -200,6 +217,11 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               <KeyValue label="output">
                 {last.format}
                 {last.size_bytes !== null && ` · ${formatBytes(last.size_bytes)}`}
+              </KeyValue>
+            )}
+            {artifact && (
+              <KeyValue label="path">
+                <code className="barca-wrap">{artifact}</code> <CopyButton label="Copy artifact path" text={artifact} />
               </KeyValue>
             )}
             {last.partition && <KeyValue label="partition">{last.partition}</KeyValue>}

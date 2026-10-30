@@ -87,6 +87,9 @@ export type { TokenMetadata, IssuedToken } from './types'
 /** What a `GET /state` covers: one group (and its nested groups), or one source file. */
 export type StateScope = { group: string } | { file: string }
 
+/** First rows asked for with an output's schema (the panel's Preview). */
+export const PREVIEW_ROWS = 5
+
 export const api = {
   authStatus: (signal?: AbortSignal) => request<{ mode: 'off' | 'token' }>('/auth/status', { signal }, { token: null }),
   bootstrap: (code: string) => request<IssuedToken>('/auth/bootstrap', { method: 'POST', body: JSON.stringify({ code }) }, { token: null, secret: code }),
@@ -98,7 +101,8 @@ export const api = {
   groups: () => request<NodeGroup[]>('/groups'),
   assets: () => request<ListNode[]>('/assets'),
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
-  assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema`),
+  assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema?sample=${PREVIEW_ROWS}`),
+  project: () => request<{ root: string | null }>('/project'),
   plan: () => request<PlanResult>('/plan'),
   /** `GET /state` of a group, a source file, or (`null`) every node. */
   state: (scope: StateScope | null, signal?: AbortSignal) =>

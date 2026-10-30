@@ -459,12 +459,22 @@ pub(crate) fn next_fires(dag: &barca_core::dag::Dag) -> std::collections::HashMa
         .collect()
 }
 
+/// The most rows `GET /assets/{name}/schema?sample=N` returns per artifact.
+const MAX_SCHEMA_SAMPLE: usize = 20;
+
+#[derive(serde::Deserialize)]
+pub struct SchemaQuery {
+    /// First rows of each json/csv/parquet artifact, in `shape.sample`.
+    sample: Option<usize>,
+}
+
 /// `GET /assets/{name}/schema` — inspect the selected node and its direct inputs.
 /// Reads artifact shapes on demand rather than on every `/state` poll. Uses the
 /// same safe inspector as `barca status`: parquet footers, JSON, pickle opcodes.
 pub async fn asset_schema(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    Query(query): Query<SchemaQuery>,
 ) -> Result<Json<Vec<barca_core::status::NodeStatus>>, ApiError> {
     let dag = state.inspect_dag().await?;
     let summaries = queries::list_assets_from_dag(&dag);
@@ -488,7 +498,13 @@ pub async fn asset_schema(
         .nodes
         .clone();
     nodes.retain(|n| n.id == id || inputs.contains(&n.id));
-    barca_core::status::read_schemas(&state.config.python, &cfg, &mut nodes).await;
+    barca_core::status::read_schemas(
+        &state.config.python,
+        &cfg,
+        &mut nodes,
+        query.sample.unwrap_or(0).min(MAX_SCHEMA_SAMPLE),
+    )
+    .await;
     Ok(Json(nodes))
 }
 

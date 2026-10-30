@@ -6,7 +6,7 @@ import { useHealth } from '@/hooks/useHealth'
 import { useProgram } from '@/hooks/useProgram'
 import { useRunDetail, useRuns } from '@/hooks/useRuns'
 import { remote } from '@/lib/remote'
-import { INITIAL_RUNS, updateRuns } from '@/lib/runsPage'
+import { INITIAL_RUNS, parseRunFilters, updateRuns, writeRunFilters, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import { QueuePanel } from './QueuePanel'
 import { RunsView } from './RunsView'
 
@@ -16,7 +16,10 @@ export function RunsPage() {
   const selected = params.get('run')
   const health = useHealth()
   const client = useQueryClient()
-  const [model, dispatch] = useProgram(INITIAL_RUNS, updateRuns, (effect) =>
+  // The URL owns the filters: read at each message, so back, forward and a link all apply.
+  const filters = parseRunFilters(params)
+  const update = (m: RunsModel, msg: RunsMsg) => updateRuns({ ...m, ...filters }, msg)
+  const [program, dispatch] = useProgram(INITIAL_RUNS, update, (effect) =>
     match(effect)
       .with({ type: 'navigate' }, ({ run, replace }) => {
         setParams(previous => {
@@ -28,10 +31,12 @@ export function RunsPage() {
           return next
         }, { replace })
       })
+      .with({ type: 'filters' }, (e) => setParams(previous => writeRunFilters(previous, e.filters), { replace: true }))
       .with({ type: 'refetch_list' }, () => void client.refetchQueries({ queryKey: ['runs', 'list'] }))
       .with({ type: 'refetch_detail' }, () => void client.refetchQueries({ queryKey: ['runs', 'detail', selected] }))
       .exhaustive(),
   )
+  const model = { ...program, ...filters }
   const runs = useRuns(model.limit)
   const detail = useRunDetail(selected)
 

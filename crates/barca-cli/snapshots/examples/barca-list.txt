@@ -25,7 +25,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: id, kind, freshness, schedule, inputs, env, next_fire]
+          [possible values: id, kind, freshness, schedule, inputs, env, next_fire, file, line]
 
       --server [<URL>]
           Use a server (URL or configured); get/run execute its deployed code

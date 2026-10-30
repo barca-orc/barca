@@ -607,6 +607,12 @@ pub struct AssetSummary {
     /// Declared environment variable names (`@asset(env=[...])`), in declaration order.
     #[serde(default)]
     pub env: Vec<String>,
+    /// Source file of the definition, as in the id.
+    #[serde(default)]
+    pub file: String,
+    /// 1-based line of the definition's first decorator.
+    #[serde(default)]
+    pub line: usize,
 }
 
 #[cfg(test)]

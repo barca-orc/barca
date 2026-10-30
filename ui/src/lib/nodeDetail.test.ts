@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AssetRunEntry, NodeState } from './types'
-import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from './nodeDetail'
+import { downstreamOf, durationHistogram, editorLink, formatBytes, historyBars, previewRows, shortHash, whatChanged } from './nodeDetail'
 
 function node(id: string, inputs: string[] = []): NodeState {
   return {
@@ -116,5 +116,38 @@ describe('durationHistogram', () => {
   it('does not mark a last attempt outside the sampled range', () => {
     const bins = durationHistogram([timed(1), timed(2)], 50)
     expect(bins.some((b) => b.isLast)).toBe(false)
+  })
+})
+
+describe('whatChanged', () => {
+  it('says what moved', () => {
+    expect(whatChanged({ change_causes: ['code_changed'] }, true)).toBe('Failed after a code change')
+    expect(whatChanged({ change_causes: ['env_changed'] }, true)).toBe('Failed after an env change')
+    expect(whatChanged({ change_causes: ['inputs_changed'] }, true)).toBe('Failed with the same code on new input')
+    expect(whatChanged({ change_causes: ['inputs_changed'] }, false)).toBe('Same code, new input')
+    expect(whatChanged({ change_causes: ['code_changed', 'inputs_changed', 'upstream_stale'] }, false)).toBe('Code and input changes')
+    expect(whatChanged({ change_causes: ['upstream_stale'] }, false)).toBe('Waiting on a stale upstream')
+    expect(whatChanged({ change_causes: ['inputs_changed', 'upstream_stale'] }, false)).toBe('Waiting on a stale upstream')
+  })
+  it('stays silent with no recorded cause', () => {
+    expect(whatChanged({}, true)).toBeNull()
+  })
+})
+
+describe('editorLink', () => {
+  it('joins the root and line', () => {
+    expect(editorLink('/w/my proj', 'a/b.py', 12)).toBe('vscode://file/w/my%20proj/a/b.py:12')
+    expect(editorLink(null, '/abs/b.py', 1)).toBe('vscode://file/abs/b.py:1')
+    expect(editorLink(null, 'b.py', 1)).toBeNull()
+  })
+})
+
+describe('previewRows', () => {
+  it('tables rows of objects and plain lists', () => {
+    expect(previewRows([{ a: 1 }, { a: 'x', b: null }])).toEqual({ columns: ['a', 'b'], rows: [['1', ''], ['x', 'null']] })
+    expect(previewRows([1, 2])).toEqual({ columns: ['value'], rows: [['1'], ['2']] })
+    expect(previewRows({ a: 1 })).toEqual({ columns: ['a'], rows: [['1']] })
+    expect(previewRows('text')).toBeNull()
+    expect(previewRows([])).toBeNull()
   })
 })

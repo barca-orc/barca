@@ -331,7 +331,7 @@ default, and any aliases.
 | `--groups` | - | default `false` | experimental: Organizational group hierarchy and metadata shape are experimental | Show the organizational hierarchy (groups are never executable nodes) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire`, `file`, `line` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
 | `--examples` | - | - | stable | Show all command examples without running anything |
@@ -1581,11 +1581,13 @@ appears only when `truncated` is true. `--fields` keeps only the named keys on e
 | `nodes[]` | object | always |
 | `nodes[].env` | array | always |
 | `nodes[].env[]` | string | always |
+| `nodes[].file` | string | always |
 | `nodes[].freshness` | string | always |
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].line` | integer | always |
 | `root` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
@@ -1616,10 +1618,12 @@ Truncated (`--limit 1`):
 | `nodes` | array | always |
 | `nodes[]` | object | always |
 | `nodes[].env` | array | always |
+| `nodes[].file` | string | always |
 | `nodes[].freshness` | string | always |
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].kind` | string | always |
+| `nodes[].line` | integer | always |
 | `root` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
@@ -1869,6 +1873,8 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes` | array | always |
 | `nodes[]` | object | always |
 | `nodes[].cache` | object | always |
+| `nodes[].cache.change_causes` | array | sometimes |
+| `nodes[].cache.change_causes[]` | string | always |
 | `nodes[].cache.changed` | array | sometimes |
 | `nodes[].cache.changed[]` | string | always |
 | `nodes[].cache.detail` | string | always |

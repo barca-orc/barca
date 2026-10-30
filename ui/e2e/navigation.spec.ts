@@ -67,3 +67,26 @@ test('the sidebar collapses, and stays collapsed across a reload', async ({ page
   await page.getByRole('button', { name: 'Expand sidebar' }).click()
   await expect(page.locator('.barca-sidebar')).not.toHaveAttribute('data-collapsed', 'true')
 })
+
+test('the command palette jumps to a node', async ({ page }) => {
+  await page.goto('/ui/#/runs')
+  await expect(page.getByRole('button', { name: /^Search/ })).toBeVisible()
+  await page.keyboard.press('ControlOrMeta+k')
+  await page.getByRole('combobox', { name: /^Jump to/ }).fill('numbers')
+  await expect(page.getByRole('option', { name: /numbers/ }).first()).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/#\/assets\?pipeline=pipeline\.py&node=pipeline\.py%3Anumbers/)
+  await expect(page.getByRole('complementary', { name: 'numbers details' })).toBeVisible()
+})
+
+test('the node panel names the definition', async ({ page }) => {
+  await page.goto('/ui/#/assets?pipeline=pipeline.py&node=pipeline.py%3Anumbers')
+  await expect(page.getByRole('complementary', { name: 'numbers details' }).getByText(/pipeline\.py:\d+/)).toBeVisible()
+})
+
+test('run filters survive a reload', async ({ page }) => {
+  await page.goto('/ui/#/runs?status=failed&q=zzz')
+  await page.reload()
+  await expect(page.getByPlaceholder(/filter|search/i).first()).toHaveValue('zzz')
+  await expect(page).toHaveURL(/status=failed&q=zzz/)
+})

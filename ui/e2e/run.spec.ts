@@ -22,7 +22,7 @@ test.describe('topbar Run', () => {
 
   test('names what it runs: the selected node, else the open pipeline', async ({ page }) => {
     await page.goto('/ui/#/graph?pipeline=pipeline.py')
-    await expect(topbarRun(page)).toHaveText(/^Run pipeline\.py \(\d+ nodes?\)$/)
+    await expect(topbarRun(page)).toHaveText(/^Run pipeline\.py \(\d+ assets?(, \d+ sensors?)?\)$/)
     await page.getByText('say_hello').first().click()
     await expect(topbarRun(page)).toHaveText('Run say_hello')
   })
@@ -43,7 +43,7 @@ test.describe('topbar Run', () => {
       return route.fulfill({ status: 202, json: { run_id: 'r1', status: 'running', position: 0 } })
     })
     await page.goto('/ui/#/assets')
-    await expect(topbarRun(page)).toHaveText(/^Run all \d+ nodes?$/)
+    await expect(topbarRun(page)).toHaveText(/^Run all \d+ assets?(, \d+ sensors?)?$/)
     await topbarRun(page).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByRole('button', { name: 'Cancel' }).click()
