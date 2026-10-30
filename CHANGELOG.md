@@ -8,6 +8,23 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- The UI answers "what is broken, and why" on projects of thousands of nodes. Every view shows
+  its scope's health as a bar (`77 failed · 2,111 stale · 7,912 healthy`), group rows show the
+  same breakdown, and a Failures view lists every failure in scope with its error and how many
+  nodes wait on it, most impact first. A node's panel leads with its error, traceback and run,
+  or with the failed upstream nodes a stale node waits on, and counts what depends on it. Search
+  reaches every node in scope, rows are one line, and a graph above 1,500 nodes draws the
+  selected node's lineage instead of never finishing its layout; graphs open at a readable zoom,
+  on the selected node, rather than shrunk to fit. The Runs page shows the last
+  24 hours hour by hour with filters for runs that did not succeed, and each failed run's error.
+
+- Experimental `GET /state` takes group ids in `targets` (`group:FILE:NAME`, every node in the
+  group) and `files=` (every node of a source file). The UI scopes a group or pipeline that way:
+  it listed every node id in the URL, which a server refused (`431`) for a pipeline or group of
+  a few hundred nodes, leaving its states unavailable.
+
 ## 0.36.0 (2026-10-30)
 
 ### Breaking

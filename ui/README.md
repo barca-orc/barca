@@ -53,6 +53,25 @@ serves metadata through `/groups`. Any pipeline with groups uses this view.
 `barca list --groups` exposes the same hierarchy in the terminal. Execution and
 cache behavior stay unchanged.
 
+### At the size of a real platform
+
+[demo/scale.py](./demo/scale.py) generates and seeds a project to use the UI under realistic
+conditions: 10,100 nodes in sixteen domains, each grouped domain → stage → entity (464 groups),
+a 20,000-key partitioned asset, a quarter of the assets with a check task, and about eighty
+deterministic failures of the kinds that break real pipelines (a missing column, a type change,
+an upstream API error, out of memory, failed checks, some keys of the big asset), whose
+downstream stays stale. Seeding takes about three minutes:
+
+```bash
+cargo build -p barca
+python3 ui/demo/scale.py                       # --nodes 30000 --keys 100000 for more
+cd ui/demo/scale && PYTHONPATH=../../../python ../../../target/debug/barca serve --no-schedule
+pnpm --dir ui build && pnpm --dir ui preview   # http://localhost:4173/ui/ — the production build
+```
+
+Measure with the production build (`pnpm preview` proxies the API like `pnpm dev`): React's
+development build is several times slower and says little about what users get.
+
 ## Check
 
 ```bash
@@ -60,7 +79,7 @@ pnpm --dir ui typecheck && pnpm --dir ui lint && pnpm --dir ui test
 pnpm --dir ui gen:types             # after changing a Rust type the UI uses
 cargo build -p barca && pnpm --dir ui test:e2e   # Playwright; starts barca serve + vite on e2e/fixture
                                                   # BARCA_BIN=<path> uses another barca binary
-pnpm --dir ui dev                   # then /ui/#/kit lists every component in each state
+pnpm --dir ui dev                   # then /ui/#/kit: every component and page view in each state, no server needed
 ```
 
 ## Build into barca

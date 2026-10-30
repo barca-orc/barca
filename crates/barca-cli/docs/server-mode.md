@@ -428,8 +428,11 @@ on the blocking pool and migrated privately. A missing database stays missing.
 Read-only servers warm status once at startup even while another process writes the DB,
 then again after settled changes while clients poll.
 `GET /state?targets=first,second` (experimental) computes only those targets and their upstream
-dependencies, including durations; use full node ids when names are ambiguous. An absent or
-empty `targets` computes every node. Unknown targets answer `404`; ambiguous names answer `409`.
+dependencies, including durations; use full node ids when names are ambiguous. A target may be
+a group id (`group:FILE:NAME`), meaning every node in the group, and `files=a.py` adds every
+node of a source file: the UI scopes a group or pipeline that way, one short URL at any size.
+An absent or empty `targets` computes every node. Unknown targets, groups or files answer
+`404`; ambiguous names answer `409`.
 The UI renders the graph, groups and sidebar counts from `/assets` and `/groups` first,
 shows cache states as checking while `/state` runs, then fills them in without moving the
 graph. A selected pipeline or group requests only its upstream cone; All pipelines requests

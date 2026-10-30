@@ -46,3 +46,6 @@ export type { RunningBadgeProps } from './RunningBadge'
 export { RunsInProgress } from './RunsInProgress'
 
 export { TableSpacer } from './TableWindow'
+
+export { HealthBar } from './HealthBar'
+export type { HealthBarProps } from './HealthBar'

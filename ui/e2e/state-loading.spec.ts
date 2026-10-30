@@ -53,8 +53,15 @@ for (const view of ['list', 'graph']) {
       const url = new URL(route.request().url())
       requests.push(url)
       await held
+      // The server expands a group id to its members and a file to its nodes.
       const targets = url.searchParams.get('targets')?.split(',')
-      await route.fulfill({ json: targets ? states.filter(n => targets.includes(n.id)) : states })
+        .flatMap(t => groups.find(g => g.id === t)?.members ?? [t])
+      const files = url.searchParams.get('files')?.split(',')
+      await route.fulfill({
+        json: targets ? states.filter(n => targets.includes(n.id))
+          : files ? states.filter(n => files.some(f => n.id.startsWith(`${f}:`)))
+          : states,
+      })
     })
     try {
       await page.goto(`/ui/#/assets?pipeline=forecast.py${view === 'graph' ? '&view=graph' : ''}`)
@@ -66,9 +73,8 @@ for (const view of ['list', 'graph']) {
       await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toBeVisible()
       await expect(sidebar.getByRole('button', { name: 'other.py 1' })).toBeVisible()
       await expect.poll(() => requests.length).toBeGreaterThan(0)
-      expect(requests.every(url => url.searchParams.has('targets'))).toBe(true)
-      expect(new Set(requests.at(-1)!.searchParams.get('targets')!.split(',')))
-        .toEqual(new Set(assets.slice(0, 3).map(n => n.id)))
+      // A pipeline is asked for by its file: one short URL however many nodes it has.
+      expect(requests.every(url => url.searchParams.get('files') === 'forecast.py')).toBe(true)
       await expect(page.getByText('Checking…', { exact: true }).first()).toBeVisible()
       // Let the initial graph fit settle before comparing geometry across status arrival.
       if (view === 'graph') await page.waitForTimeout(400)
@@ -88,10 +94,11 @@ for (const view of ['list', 'graph']) {
         ? page.locator('.react-flow__node[data-id="group:forecast.py:training"]')
         : page.locator('tr[data-group="group:forecast.py:training"]')
       await group.dblclick()
-      await expect.poll(() => requests.at(-1)?.searchParams.get('targets')?.split(',').sort())
-        .toEqual(['forecast.py:model', 'forecast.py:rows'])
+      // A group by its id, which the server expands.
+      await expect.poll(() => requests.at(-1)?.searchParams.get('targets'))
+        .toBe('group:forecast.py:training')
       await sidebar.getByRole('button', { name: 'All pipelines 4' }).click()
-      await expect.poll(() => requests.at(-1)?.searchParams.has('targets')).toBe(false)
+      await expect.poll(() => requests.at(-1)?.search).toBe('')
     } finally {
       release()
     }

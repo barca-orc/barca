@@ -70,3 +70,11 @@
 .barca-kv > span:last-child { min-width: 0; }
 .barca-note { margin: 6px 0; font-size: var(--text-sm); color: var(--text-default); }
 .barca-wrap { word-break: break-all; }
+
+/* HealthBar (components/HealthBar.tsx): a scope's nodes by state. */
+.barca-health { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-muted); }
+.barca-health-bar { display: flex; flex: none; height: 6px; gap: 1px; border-radius: var(--radius-pill); overflow: hidden; background: var(--bg-inset); }
+.barca-health-bar > span { display: block; height: 100%; }
+.barca-health-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.barca-health[data-urgent="failed"] .barca-health-label { color: var(--status-failed); }
+.barca-health[data-urgent="running"] .barca-health-label { color: var(--status-running); }

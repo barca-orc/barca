@@ -123,6 +123,61 @@ async fn state_targets_select_only_the_requested_upstream_cone() {
 }
 
 #[tokio::test]
+async fn state_targets_take_groups_and_files_in_place_of_their_nodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    let file = config.files[0].clone();
+    std::fs::write(
+        &file,
+        format!(
+            "from barca import group\n{FIXTURE}\n@asset()\ndef unrelated():\n    return 3\n\n\
+             inner = group('Inner', members=[first], output=first)\n\
+             outer = group('Outer', members=[inner, second], output=second)\n"
+        ),
+    )
+    .unwrap();
+    let router = app(config);
+    let names = |rows: &serde_json::Value| -> Vec<String> {
+        let mut v: Vec<String> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["name"].as_str().unwrap().to_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let group = |name: &str| format!("group:{file}:{name}");
+    let (status, inner) = send(
+        &router,
+        "GET",
+        &format!("/state?targets={}", group("inner")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(names(&inner), ["first"]);
+    let (_, outer) = send(
+        &router,
+        "GET",
+        &format!("/state?targets={}", group("outer")),
+    )
+    .await;
+    assert_eq!(names(&outer), ["first", "second"], "nested groups count");
+    let (_, by_file) = send(&router, "GET", &format!("/state?files={file}")).await;
+    assert_eq!(names(&by_file), ["first", "second", "unrelated"]);
+    assert_eq!(
+        send(&router, "GET", &format!("/state?targets={}", group("nope")))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(&router, "GET", "/state?files=elsewhere.py").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn schedule_endpoint_returns_json_array() {
     // `app()` does not spawn the scheduler, so the registry is empty — this
     // asserts the route is wired and returns a well-formed (empty) array.

@@ -1,11 +1,12 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
+import { useMemo } from 'react'
 import { Layers } from 'lucide-react'
 import { ResetDatabaseButton, StatusDot } from '@/components'
 import { useHealth } from '@/hooks/useHealth'
-import { useAssetStates } from '@/hooks/useAssetStates'
+import { useAssetStates, useLastWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { severityStatus } from '@/lib/assetTable'
-import { pipelineSummaries } from '@/lib/pipeline'
+import { mergeStates, pipelineSummaries } from '@/lib/pipeline'
 import { authMode, connect } from '@/lib/credentials'
 import markUrl from '@/assets/brand/mark.svg'
 
@@ -13,11 +14,14 @@ import markUrl from '@/assets/brand/mark.svg'
 const FILTERABLE = ['/assets', '/graph', '/tasks', '/sensors', '/schedules']
 
 export function Sidebar() {
-  const { data: nodes } = useAssetStates()
+  const { data: scoped } = useAssetStates()
+  const { data: whole } = useLastWholeState()
   const assetQuery = useAssets()
   const assets = assetQuery.isPlaceholderData ? undefined : assetQuery.data
   const { data: health } = useHealth()
-  const pipelines = pipelineSummaries(nodes ?? [], assets ?? [])
+  // The open scope is fresh; the pipelines outside it keep what the whole project last said.
+  const nodes = useMemo(() => mergeStates(whole, scoped), [whole, scoped])
+  const pipelines = useMemo(() => pipelineSummaries(nodes, assets ?? []), [nodes, assets])
   const location = useLocation()
   const navigate = useNavigate()
   const [params] = useSearchParams()

@@ -24,6 +24,34 @@ export function groupTree(metadata: NodeGroup[]): GroupTree {
   return { groups, roots: metadata.filter(g => !parents.has(g.id)).map(g => g.id), parents }
 }
 
+/**
+ * The group a grouped view has open, from its URL: `?group=`, else the selected node's
+ * group, so a link to a node opens where it lives. The failures list and the flat view keep
+ * the scope they were opened in (a selection there does not move it).
+ */
+export function viewScope(params: URLSearchParams, tree: GroupTree): string | null {
+  if (params.get('flat') === '1') return null
+  const selected = params.get(params.get('view') === 'graph' ? 'focus' : 'node')
+  const requested = params.get('group') ?? (params.get('show') === 'failures' ? null : tree.parents.get(selected ?? ''))
+  return requested && tree.groups.has(requested) ? requested : null
+}
+
+/** Every group's leaves, computed once per tree. */
+export function leavesByGroup(tree: GroupTree): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  const visit = (id: string): string[] => {
+    const known = out.get(id)
+    if (known) return known
+    const group = tree.groups.get(id)
+    if (!group) return [id]
+    const leaves = group.members.flatMap(visit)
+    out.set(id, leaves)
+    return leaves
+  }
+  for (const id of tree.groups.keys()) visit(id)
+  return out
+}
+
 export function groupLeaves(id: string, tree: GroupTree): string[] {
   const group = tree.groups.get(id)
   return group

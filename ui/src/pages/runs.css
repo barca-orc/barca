@@ -25,3 +25,15 @@
 .barca-queue-table { margin-top: 8px; }
 .barca-queue-table tbody tr { cursor: default; }
 .barca-queue-table td { white-space: nowrap; }
+
+/* The last day of runs, hour by hour (RunsView's ActivityStrip). */
+.barca-activity { display: flex; align-items: flex-end; gap: 16px; padding: 4px 0 12px; }
+.barca-activity-bars { display: flex; align-items: flex-end; gap: 2px; height: 32px; width: 288px; flex: none; border-bottom: 1px solid var(--border-subtle); }
+.barca-activity-bars > span { flex: 1; display: flex; flex-direction: column; min-height: 2px; background: var(--border-subtle); border-radius: 1px 1px 0 0; overflow: hidden; }
+.barca-activity-bars i { display: block; min-height: 2px; }
+.barca-activity-bars i[data-kind="failed"] { background: var(--status-failed); }
+.barca-activity-bars i[data-kind="live"] { background: var(--status-running); }
+.barca-activity-bars i[data-kind="ok"] { background: var(--status-success); opacity: 0.7; }
+.barca-activity-summary { font-size: var(--text-xs); color: var(--text-muted); }
+.barca-activity-summary strong { color: var(--text-strong); font-weight: 500; }
+.barca-run-row-error { color: var(--status-failed); font-family: var(--font-mono); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

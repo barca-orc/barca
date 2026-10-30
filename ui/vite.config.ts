@@ -8,6 +8,9 @@ import tailwindcss from '@tailwindcss/vite'
 // (the API) to barca serve, so the frontend stays same-origin with no CORS.
 const BARCA_SERVE = process.env.BARCA_DEV_SERVER ?? 'http://127.0.0.1:8274'
 
+// Everything outside /ui/ is the API.
+const API_PROXY = { '^/(?!ui(/|$))': { target: BARCA_SERVE, changeOrigin: true } }
+
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   // Relative asset URLs in the build, so the UI works under any reverse-proxy
@@ -21,13 +24,8 @@ export default defineConfig(({ command }) => ({
   },
   // Playwright specs in e2e/ run with `pnpm test:e2e`, not vitest.
   test: { exclude: ['e2e/**', 'e2e-auth/**', 'node_modules/**'] },
-  server: {
-    proxy: {
-      // Everything outside /ui/ is the API.
-      '^/(?!ui(/|$))': {
-        target: BARCA_SERVE,
-        changeOrigin: true,
-      },
-    },
-  },
+  server: { proxy: API_PROXY },
+  // `pnpm build && pnpm preview`: the production build against the same API, for measuring
+  // what users get (React's development build is several times slower).
+  preview: { proxy: API_PROXY },
 }))

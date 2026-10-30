@@ -17,6 +17,7 @@ import {
 } from '@/components'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { useAssetStates } from '@/hooks/useAssetStates'
+import { useAssets } from '@/hooks/useAssets'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
@@ -116,6 +117,8 @@ function SortHeader({
 export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const { data, isError, error, dataUpdatedAt } = useAssetStates()
   const { data: health, isError: healthError } = useHealth()
+  const assetQuery = useAssets()
+  const graph = useMemo(() => (assetQuery.isPlaceholderData ? [] : assetQuery.data ?? []), [assetQuery.data, assetQuery.isPlaceholderData])
   const navigate = useNavigate()
   // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
   // a reload and can be shared.
@@ -377,6 +380,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
           runAction={nodeRun.action}
           node={selectedNode}
           nodes={data ?? []}
+          graph={graph}
           nowMs={dataUpdatedAt}
           onSelect={setSelected}
           onOpenGraph={openGraph}

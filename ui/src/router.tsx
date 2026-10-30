@@ -7,6 +7,7 @@ import { DocsPage } from '@/pages/placeholders'
 import { RunsPage } from '@/pages/RunsPage'
 import { KitPage } from '@/pages/KitPage'
 import { TokensPage } from '@/pages/TokensPage'
+import { AuthGate } from '@/context/AuthGate'
 
 // Hash routing: the page itself is always `<prefix>/ui/`, so relative asset URLs
 // and the API base (see lib/apiBase.ts) work under any reverse-proxy prefix,
@@ -14,7 +15,7 @@ import { TokensPage } from '@/pages/TokensPage'
 export const router = createHashRouter([
   {
     path: '/',
-    element: <AppShell />,
+    element: <AuthGate><AppShell /></AuthGate>,
     children: [
       { index: true, element: <Navigate to="/assets" replace /> },
       { path: 'graph', element: <LegacyGraph /> },
@@ -25,8 +26,9 @@ export const router = createHashRouter([
       { path: 'schedules', element: <SchedulesPage /> },
       { path: 'tokens', element: <TokensPage /> },
       { path: 'docs', element: <DocsPage /> },
-      // Every component in every state: development only, not in the built UI.
-      ...(import.meta.env.DEV ? [{ path: 'kit', element: <KitPage /> }] : []),
     ],
   },
+  // Every component in every state, from fixtures: development only, not in the built UI.
+  // Outside the auth gate and the shell, so it renders with no server at all.
+  ...(import.meta.env.DEV ? [{ path: '/kit', element: <KitPage /> }] : []),
 ])

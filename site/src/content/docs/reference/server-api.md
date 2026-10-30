@@ -375,10 +375,15 @@ A run of every asset refuses an empty loaded asset/sensor set with 400; excluded
 ```
 GET /state             → [NodeState, ...]   (dependency order)
 GET /state?targets=a,b → [NodeState, ...]   (only those targets and their upstream dependencies)
+GET /state?targets=group:a.py:g_raw → [NodeState, ...]   (every node in that group, and upstream)
+GET /state?files=a.py  → [NodeState, ...]   (every node a.py defines, and upstream)
 ```
 
-`targets` is experimental: comma-separated names or full node ids. Absent or empty means
-every node. Unknown targets answer `404`; ambiguous names answer `409`. Status and duration queries are limited
+`targets` and `files` are experimental. `targets` takes comma-separated names, full node ids or
+group ids (`group:FILE:NAME`, as `GET /groups` lists them; a group stands for every node in it
+and its nested groups). `files` takes comma-separated source files, as they appear before the
+last `:` of node ids, and adds every node they define. Absent or empty, both mean
+every node. Unknown groups and files answer `404`. Unknown targets answer `404`; ambiguous names answer `409`. Status and duration queries are limited
 to the selected cone; clients can render `/assets` and `/groups` before requesting it.
 
 Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,

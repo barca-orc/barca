@@ -84,6 +84,9 @@ function startRun(body: RunRequest): Promise<RunHandle> {
 
 export type { TokenMetadata, IssuedToken } from './types'
 
+/** What a `GET /state` covers: one group (and its nested groups), or one source file. */
+export type StateScope = { group: string } | { file: string }
+
 export const api = {
   authStatus: (signal?: AbortSignal) => request<{ mode: 'off' | 'token' }>('/auth/status', { signal }, { token: null }),
   bootstrap: (code: string) => request<IssuedToken>('/auth/bootstrap', { method: 'POST', body: JSON.stringify({ code }) }, { token: null, secret: code }),
@@ -97,9 +100,12 @@ export const api = {
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema`),
   plan: () => request<PlanResult>('/plan'),
-  state: (targets?: string[], signal?: AbortSignal) =>
+  /** `GET /state` of a group, a source file, or (`null`) every node. */
+  state: (scope: StateScope | null, signal?: AbortSignal) =>
     request<NodeState[]>(
-      targets ? `/state?${new URLSearchParams({ targets: targets.join(',') })}` : '/state',
+      scope === null
+        ? '/state'
+        : `/state?${new URLSearchParams('group' in scope ? { targets: scope.group } : { files: scope.file })}`,
       { signal },
     ),
   runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
