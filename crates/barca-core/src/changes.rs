@@ -138,13 +138,44 @@ pub(crate) fn step_components(
     Some(out)
 }
 
-/// [`step_components`] as the JSON text recorded with a materialization.
+/// The key of a recorded row's components that names its definition's (`definition_components`).
+pub(crate) const DEFINITION_KEY: &str = "@definition";
+
+/// [`step_components`] as the JSON text recorded with a materialization: a definition's digests
+/// are the same for each of its keys and can be tens of KB, so the row names them
+/// ([`definition_rows`]) and holds only what is its own.
 pub(crate) fn step_components_json(
     dag: &Dag,
     state: &DecideState,
     display_id: &str,
 ) -> Option<String> {
-    step_components(dag, state, display_id).and_then(|c| serde_json::to_string(&c).ok())
+    let node = dag.get_node(crate::StepId::parse(display_id).base_id())?;
+    let mut own = step_components(dag, state, display_id)?;
+    for (name, _) in &node.components {
+        own.remove(name);
+    }
+    own.insert(DEFINITION_KEY.to_string(), node.definition_hash.clone());
+    serde_json::to_string(&own).ok()
+}
+
+/// What `definition_components` holds for `ids`: (definition hash, its components as JSON).
+pub(crate) fn definition_rows<'a>(
+    dag: &Dag,
+    ids: impl Iterator<Item = &'a str>,
+) -> Vec<(String, String)> {
+    let mut rows = BTreeMap::new();
+    for id in ids {
+        if let Some(node) = dag.get_node(id)
+            && !rows.contains_key(&node.definition_hash)
+        {
+            let parts: BTreeMap<&String, &String> =
+                node.components.iter().map(|(k, v)| (k, v)).collect();
+            if let Ok(json) = serde_json::to_string(&parts) {
+                rows.insert(node.definition_hash.clone(), json);
+            }
+        }
+    }
+    rows.into_iter().collect()
 }
 
 /// The components that differ between `recorded` (the JSON a materialization recorded) and

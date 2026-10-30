@@ -8,6 +8,19 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- The metadata database no longer outgrows the size limit and pushes artifacts out. A production
+  database had reached 41 GB against a 13 GB limit whose artifacts took 7 GB, 36 GB of it the same
+  change digests repeated on every partition key's row. A definition's digests are now stored once
+  (`definition_components`), and each database keeps to its own share of `[cache] max_size`, a
+  tenth up to 1 GiB: past it, barca clears digests of old results and stored outcomes of old runs,
+  then `VACUUM`s, and only if that is not enough deletes old results whose file is gone and all but
+  the last 1000 runs, with their logs. On a copy of that database this took 1m44s and left 848 MB
+  with every result and run kept. Digests recorded before this release are cleared the first time
+  this runs, so those nodes say a plain `changed` until they next run (`barca docs cache`, "The
+  metadata database").
+
 ## 0.37.0 (2026-10-30)
 
 ### Features

@@ -20,6 +20,9 @@
 //! written in the last [`UNREFERENCED_GRACE`] is kept, and so is every one while a run is in
 //! flight on this `.barca/` (its rows are not written yet).
 //!
+//! **The metadata DBs** cannot be evicted, so each is kept within its own share of the limit
+//! first ([`crate::metadata_size`]).
+//!
 //! **Never evicted:** the metadata DBs (and the copies `state reset` and `state restore` move
 //! aside), their logs and locks, the backups, and anything else barca does not own (only files
 //! under `.barca/` that a row or a leftover names are deleted); this
@@ -435,6 +438,10 @@ struct State {
     checked_size: u64,
     #[serde(default)]
     checked_limit: u64,
+    /// By metadata DB: when trimming last found nothing more to remove with the file still over
+    /// its share, and the size it left ([`trim_metadata`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    metadata_short: BTreeMap<String, (u64, u64)>,
     /// When the artifact store was last checked and found there, by environment, store URI and
     /// storage options: seconds since the epoch ([`store_checked_recently`], #593).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1615,6 +1622,66 @@ async fn off_the_event_loop<F: std::future::Future>(fut: F) -> F::Output {
     }
 }
 
+/// Keep each metadata DB within its share of `limit` ([`crate::metadata_size`]). One that cannot
+/// get there with everything removable gone is not looked at again until [`STUCK_FOR`] passes,
+/// or until it has grown a tenth. Never fails a command. True when one ran out of `time` while
+/// it was still removing things. One waiting for a moment with no run alive does not count:
+/// that can last, and artifacts cannot go unbounded meanwhile.
+async fn trim_metadata(
+    project: &Project,
+    envs: &[EnvDb],
+    limit: Option<u64>,
+    time: Option<Duration>,
+) -> bool {
+    let mut under_way = false;
+    let allowance = crate::metadata_size::allowance(limit);
+    for env in envs {
+        let size = std::fs::metadata(&env.db_path).map_or(0, |m| m.len());
+        if size <= allowance {
+            continue;
+        }
+        let short = read_state(project).and_then(|s| s.metadata_short.get(&env.db_path).copied());
+        if time.is_some()
+            && short.is_some_and(|(at, bytes)| {
+                now_secs().saturating_sub(at) < STUCK_FOR.as_secs() && size <= bytes / 10 * 11
+            })
+        {
+            continue;
+        }
+        match crate::metadata_size::trim(&env.db_path, allowance, time).await {
+            Ok(Some(done)) => {
+                under_way |= done.out_of_time && done.removed();
+                if done.after_bytes < done.before_bytes || (done.finished && done.removed()) {
+                    crate::errln!(
+                        "[barca] metadata {} over its {} share of the limit: now {}; cleared \
+                         {} component records and {} run reports, removed {} old results and \
+                         {} old runs",
+                        size::human(done.before_bytes),
+                        size::human(allowance),
+                        size::human(done.after_bytes),
+                        done.components,
+                        done.outcomes,
+                        done.rows,
+                        done.runs
+                    );
+                }
+                let mut state = read_state(project).unwrap_or_default();
+                if done.finished && done.after_bytes > allowance {
+                    state
+                        .metadata_short
+                        .insert(env.db_path.clone(), (now_secs(), done.after_bytes));
+                } else {
+                    state.metadata_short.remove(&env.db_path);
+                }
+                write_state(project, &state);
+            }
+            Ok(None) => {}
+            Err(e) => crate::errln!("[barca] warning: could not trim {}: {e}", env.db_path),
+        }
+    }
+    under_way
+}
+
 /// `serve`'s minute checkpoint: [`after_command`] with nothing of its own to protect.
 pub async fn checkpoint(cfg: &ResolvedConfig) -> Option<CacheReport> {
     after_command(cfg, &Own::default(), None).await
@@ -1666,6 +1733,11 @@ async fn check_in(
         return Ok(None);
     };
     let envs = envs(project);
+    if trim_metadata(project, &envs, Some(limit), Some(AFTER_COMMAND_BUDGET)).await {
+        // The file is about to shrink: evicting against its size now would delete artifacts
+        // that fit.
+        return Ok(None);
+    }
     let state = read_state(project);
     let fresh = state
         .as_ref()
@@ -1915,6 +1987,9 @@ async fn gc_in(
     let mut envs = envs(project);
     if let Some(only) = &opts.env {
         envs.retain(|e| &e.env == only);
+    }
+    if !opts.dry_run {
+        trim_metadata(project, &envs, limit, None).await;
     }
     let survey = if project.barca.is_dir() {
         survey(project, &envs).await?

@@ -182,3 +182,17 @@ def test_a_result_recorded_without_components_says_changed_as_before(project):
     step = dry_run(project)["customer_ltv"]
     assert "changed" not in step
     assert step["detail"] == "no cached result for this code and these inputs"
+
+
+def test_a_definition_is_stored_once_and_rows_name_it(project):
+    ok(barca(project, "get", "ltv_buckets"))
+    with closing(sqlite3.connect(project / ".barca/metadata.db")) as conn:
+        rows = [json.loads(r[0]) for r in conn.execute("SELECT components FROM materializations")]
+        stored = dict(conn.execute("SELECT * FROM definition_components"))
+    assert rows
+    assert all(row["@definition"] in stored for row in rows)
+    assert not any(key == "code" or key.startswith("helper ") for row in rows for key in row)
+    assert any("code" in json.loads(parts) for parts in stored.values())
+    # The named digests still say what changed.
+    edit(project / "pipelines/common.py", "> 100", "> 50")
+    assert status(project)["customer_ltv"]["changed"] == ["helper pipelines/common.py:bucket_ltv"]

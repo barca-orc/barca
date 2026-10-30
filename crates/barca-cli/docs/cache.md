@@ -884,8 +884,8 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
 - `KB`, `MB`, `GB`, `TB` are decimal (`GB` = 10^9 bytes); `KiB`, `MiB`, `GiB`, `TiB` are binary;
   a bare number is bytes. A percentage is of the filesystem's size, read at each check.
 - The budget covers `.barca/` across every environment: artifacts, metadata DBs, staging,
-  `sql-cache/` and `range-cache/`, excluding recognized local metadata backups. The DBs are
-  counted and never deleted. Backup files, owned sidecars, unsent markers and temporary
+  `sql-cache/` and `range-cache/`, excluding recognized local metadata backups. Each DB is
+  counted and keeps to its own share ("The metadata database" below). Backup files, owned sidecars, unsent markers and temporary
   copies in `.barca/backups/` and `.barca/envs/<env>/backups/` are reported separately,
   outside this budget; the five-copy rotation stays. Unrelated files and directories merely
   named `backups` remain budgeted. Physical totals still include backup storage.
@@ -923,9 +923,35 @@ the limit:
   metadata DB): its row may not be written yet;
 - the metadata DBs, their logs, locks and backups, and the databases `barca state reset` and
   `barca state restore` moved aside (`metadata.db.reset-<UTC>`, `metadata.db.pre-restore`):
-  never deleted. Backups are outside the budget; the DBs and moved-aside copies are counted.
+  never deleted (a DB's old rows can be: "The metadata database" below). Backups are outside the budget; the DBs and moved-aside copies are counted.
   Nothing outside `.barca/` is ever deleted, and the artifact store is
   never touched.
+
+**The metadata database.** Each environment's database may use a tenth of the limit, at most
+1 GiB. When its file is past that, barca trims it down to 80% of its share, at the same moments as
+eviction and for at most 5 seconds at a time, and nothing is evicted in a check that ran out of
+that time still trimming. `barca gc` trims until done, and `barca gc --dry-run` trims nothing. With the limit `off` only `barca gc` trims, to 1 GiB. The order:
+
+| Order | What goes | What you notice |
+|---|---|---|
+| 1 | The change digests (`components`) of results that are not a node's latest, and all those recorded before 0.37.1 | A node whose digests went says a plain `changed` until it next runs |
+| 2 | The stored outcome of all but the last 100 runs | `GET /runs/{id}` of an older run answers without `outcome` |
+| 3 | Results older than their node's latest success whose file is already gone | Going back to exactly that code and those inputs computes again, instead of fetching from the store; `barca history` and `barca stats` no longer count them |
+| 4 | All but the last 1000 runs, with their logs (not a run in the queue or still running) | `barca history` and `barca logs` no longer have them |
+
+Results whose file is on disk, a node's latest success and anything newer, and the newest byte
+change of a node are never removed, so a database whose current results alone take more than its
+share stays over it. It says what it did on stderr:
+
+```
+[barca] metadata 39.2 GB over its 1.1 GB share of the limit: now 848 MB; cleared 566986 component records and 16826 run reports, removed 0 old results and 0 old runs
+```
+
+The file shrinks through `VACUUM`, which holds the database's lock while it rewrites the live data
+(runs that start meanwhile wait) and which runs only when no run is alive, as do orders 3 and 4: they delete history, so they run only if a
+`VACUUM` of what orders 1 and 2 cleared was not enough. On a server that is never idle the file
+keeps its size and reuses the freed space until a moment with no run, and eviction still counts
+the whole file.
 
 **After `barca state reset` or `barca state restore`.** The artifacts the old database named stay
 on disk, and the new one names none of them (after a restore, none the restored copy does not
@@ -1028,7 +1054,7 @@ Known limits:
   and a run that writes more than the free space fails with the operating system's error.
 - A run in another process that has just decided a superseded result is cached (an older run
   hash it went back to) can find it gone while it reads it; it is then computed again.
-- `materializations` rows are never deleted: `barca history` and `barca stats` keep every run.
+- Eviction deletes no `materializations` rows. Only trimming the metadata database does ("The metadata database").
 
 ## Environments
 

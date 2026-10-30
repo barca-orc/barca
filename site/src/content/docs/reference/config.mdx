@@ -177,7 +177,7 @@ had none: every new run hash added a file and kept the old one).
 - `KB`, `MB`, `GB`, `TB` are decimal (`20GB` is 20 × 10⁹ bytes); `KiB`, `MiB`, `GiB`, `TiB` are
   binary; a bare number is bytes. A percentage is of the filesystem's size, read at each check.
 - Budgeted size covers `.barca/` across every environment, including the metadata databases
-  (counted, never deleted), except recognized local metadata backup files. Those restore
+  (counted, and each trimmed to a tenth of the limit, at most 1 GiB; `barca docs cache`), except recognized local metadata backup files. Those restore
   copies, their owned sidecars, markers and temporary copies keep the five-copy rotation
   and are reported outside the budget. Physical totals and free-space usage include them.
   Unrelated files in backup directories and other directories named `backups` remain budgeted.
