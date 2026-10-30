@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.37.1 (2026-10-30)
+
 ### Bug Fixes
 
 - The metadata database no longer outgrows the size limit and pushes artifacts out. A production
