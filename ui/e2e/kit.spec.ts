@@ -9,6 +9,7 @@ test('kit page renders every primitive', async ({ page }) => {
     'IconButton',
     'Tag',
     'StatusDot / StatusBadge',
+    'HealthBar',
     'ConnectionBadge',
     'SearchInput / Select / Chip',
     'Skeleton',
@@ -18,7 +19,7 @@ test('kit page renders every primitive', async ({ page }) => {
     'NodeInspector',
     'ResetDatabaseDialog',
     'Runs page',
-    'Run details',
+    'Run details panel',
     'Tokens page',
   ]) {
     await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()

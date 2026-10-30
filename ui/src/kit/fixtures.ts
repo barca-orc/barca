@@ -7,6 +7,7 @@
  */
 
 import type { Connection } from '@/lib/connection'
+import type { HealthCounts } from '@/lib/health'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Severity } from '@/lib/assetTable'
 import type { Remote } from '@/lib/remote'
@@ -334,4 +335,22 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
   revoking: { model: { ...INITIAL_TOKENS, request: { kind: 'revoking', id: 't1' } }, tokens: ready(tokenList) },
   'past expiry': { model: { ...INITIAL_TOKENS, name: 'old', expiry: '2020-01-01T00:00', error: 'Choose a future expiry.' }, tokens: ready(tokenList) },
   'refresh failed': { model: INITIAL_TOKENS, tokens: ready(tokenList, '503 service unavailable') },
+}
+
+// ── Health ────────────────────────────────────────────────────────────────────
+
+const counts = (c: Partial<HealthCounts>): HealthCounts => {
+  const all = { failed: 0, running: 0, stale: 0, idle: 0, healthy: 0, pending: 0, ...c }
+  return { ...all, total: all.failed + all.running + all.stale + all.idle + all.healthy + all.pending }
+}
+
+/** A scope in each state the health bar distinguishes, and the mixes that matter. */
+export const healthStates: Record<string, HealthCounts> = {
+  healthy: counts({ healthy: 504 }),
+  'one failure in thousands': counts({ failed: 1, stale: 12, healthy: 2400 }),
+  'failed and stale': counts({ failed: 3, stale: 121, healthy: 380 }),
+  running: counts({ running: 40, healthy: 460, stale: 4 }),
+  'not run yet': counts({ idle: 120, healthy: 8 }),
+  checking: counts({ pending: 640 }),
+  empty: counts({}),
 }

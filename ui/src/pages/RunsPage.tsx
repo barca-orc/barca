@@ -46,6 +46,7 @@ export function RunsPage() {
       connection={connection(health.data, health.isError)}
       selected={selected ? { id: selected, run: remote(detail) } : null}
       queue={<QueuePanel readOnly={health.data?.read_only} />}
+      now={runs.dataUpdatedAt}
       dispatch={dispatch}
     />
   )

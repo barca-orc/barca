@@ -577,3 +577,22 @@
 }
 .barca-pipe-running + .barca-pipe-count { margin-left: 6px; }
 .barca-count-running { display: inline-flex; align-items: center; gap: 5px; color: var(--status-running); }
+
+/* The node panel's answer to "why": a failure's error, or the failures it waits on. */
+.barca-why {
+  margin: 10px 0; padding: 10px 12px;
+  border: 1px solid var(--status-failed-line); border-radius: var(--radius-md);
+  background: var(--status-failed-bg);
+}
+.barca-why-head { display: flex; align-items: flex-start; gap: 8px; color: var(--status-failed); }
+.barca-why-head svg { flex: none; margin-top: 2px; }
+.barca-why-head strong { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 500; color: var(--text-strong); overflow-wrap: anywhere; }
+.barca-why .barca-note { margin: 6px 0 0 22px; }
+.barca-why details { margin: 6px 0 0 22px; }
+.barca-why summary { cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); }
+.barca-why-list { list-style: none; margin: 6px 0 0 22px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.barca-why-list li { display: flex; flex-direction: column; font-size: var(--text-xs); }
+.barca-why-list li span { color: var(--text-muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.barca-keys summary { cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); margin: 4px 0; }
+.barca-keys code { display: block; max-height: 160px; overflow: auto; white-space: pre; font-size: var(--text-2xs); }
+.barca-sidepanel-title h2 { overflow-wrap: normal; word-break: normal; }

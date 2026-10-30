@@ -152,8 +152,12 @@ test('table groups support search, arrow selection and Enter to open', async ({
   await page
     .getByPlaceholder('Search groups and members')
     .fill('fold_03__trained_model')
-  await expect(rows).toHaveCount(1)
+  // The group that holds the matches, then every matching node in it, with its path.
+  await expect(rows).toHaveCount(3)
   await expect(rows.first()).toContainText('Cross-validation')
+  await expect(rows.nth(1)).toContainText('in Cross-validation › Fold 3')
+  await rows.nth(1).click()
+  await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Fold 3')
 })
 
 test('flat comparison exposes all 152 original nodes and group mode restores five cards', async ({

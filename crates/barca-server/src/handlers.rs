@@ -111,8 +111,11 @@ async fn snapshot_copy(db_path: &str) -> Result<SnapshotDb, BarcaError> {
 /// Experimental target selection for `GET /state`.
 #[derive(Default, serde::Deserialize)]
 pub struct StateQuery {
-    /// Experimental: comma-separated target names or full ids; absent/empty means all nodes.
+    /// Experimental: comma-separated target names, full ids or group ids (`group:FILE:NAME`,
+    /// every node in the group); absent/empty with no `files` means all nodes.
     pub targets: Option<String>,
+    /// Experimental: comma-separated source files, as in node ids; adds every node they define.
+    pub files: Option<String>,
 }
 
 /// `GET /state` — every node's cache state (would `barca get` reuse it?), latest
@@ -126,17 +129,70 @@ pub async fn state(
     Query(query): Query<StateQuery>,
 ) -> Result<Json<Vec<NodeState>>, ApiError> {
     state.reads.polled();
-    let mut targets: Vec<String> = query
-        .targets
-        .iter()
-        .flat_map(|s| s.split(','))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let split = |list: &Option<String>| -> Vec<String> {
+        list.iter()
+            .flat_map(|s| s.split(','))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    let (targets, files) = (split(&query.targets), split(&query.files));
+    // A group or a file stands for its nodes, so a client scopes a view of thousands of
+    // nodes with one short query instead of a URL listing every id.
+    let mut targets = if targets.iter().any(|t| t.starts_with("group:")) || !files.is_empty() {
+        expand_targets(&*state.inspect_dag().await?, targets, &files)?
+    } else {
+        targets
+    };
     targets.sort();
     targets.dedup();
     Ok(Json(state_rows_for_targets(&state, &targets).await?))
+}
+
+/// `targets` with each group id replaced by the nodes in it (nested groups included), and
+/// every node of each of `files` added. An unknown group or file is `404`.
+fn expand_targets(
+    dag: &barca_core::dag::Dag,
+    targets: Vec<String>,
+    files: &[String],
+) -> Result<Vec<String>, ApiError> {
+    let groups: std::collections::HashMap<&str, &barca_core::groups::NodeGroup> =
+        dag.groups.iter().map(|g| (g.id.as_str(), g)).collect();
+    fn leaves(
+        id: &str,
+        groups: &std::collections::HashMap<&str, &barca_core::groups::NodeGroup>,
+        out: &mut Vec<String>,
+    ) {
+        match groups.get(id) {
+            Some(group) => group.members.iter().for_each(|m| leaves(m, groups, out)),
+            None => out.push(id.to_owned()),
+        }
+    }
+    let mut out = Vec::new();
+    for target in targets {
+        if target.starts_with("group:") && !groups.contains_key(target.as_str()) {
+            return Err(ApiError::NotFound(format!(
+                "no group {target}\nGET /groups lists them."
+            )));
+        }
+        leaves(&target, &groups, &mut out);
+    }
+    for file in files {
+        let before = out.len();
+        out.extend(
+            dag.topo_order()
+                .into_iter()
+                .filter(|id| id.rsplit_once(':').is_some_and(|(f, _)| f == file))
+                .map(str::to_owned),
+        );
+        if out.len() == before {
+            return Err(ApiError::NotFound(format!(
+                "no nodes in {file}\nGET /assets lists every node id, whose file is before its last `:`."
+            )));
+        }
+    }
+    Ok(out)
 }
 
 /// The body of `GET /state`, also warmed at startup.

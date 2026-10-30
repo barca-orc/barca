@@ -5,6 +5,7 @@ import {
   Chip,
   ChipGroup,
   ConnectionBadge,
+  HealthBar,
   IconButton,
   KeyValue,
   SearchInput,
@@ -16,8 +17,8 @@ import {
   StatusDot,
   Tag,
 } from '@/components'
-import { STATUS_KINDS, connections, variants } from '../fixtures'
-import { Spec } from '../Kit'
+import { STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
+import { Spec, Variant } from '../Kit'
 
 /** Every primitive in components/, in each state it has. */
 export function Primitives() {
@@ -78,6 +79,13 @@ export function Primitives() {
         <StatusBadge key={s} status={s} />
       ))}
       <StatusBadge status="success" subtle />
+    </Spec>
+
+    <Spec title="HealthBar" note="A scope's nodes by state; a single failure stays visible among thousands.">
+      {Object.entries(healthStates).map(([label, c]) => (
+        <Variant key={label} label={label}><HealthBar counts={c} /></Variant>
+      ))}
+      <Variant label="wide, every bucket named"><HealthBar counts={healthStates['failed and stale']!} labelLimit={6} width={200} /></Variant>
     </Spec>
 
     <Spec title="ConnectionBadge">

@@ -74,3 +74,11 @@ export function pipelineSummaries(
 export function inPipeline(id: string, file: string | null): boolean {
   return file === null || sourceFile(id) === file
 }
+
+/** `fresh` rows, and every row of `older` that `fresh` does not have. */
+export function mergeStates(older: NodeState[] | undefined, fresh: NodeState[] | undefined): NodeState[] {
+  if (!older) return fresh ?? []
+  if (!fresh) return older
+  const ids = new Set(fresh.map((n) => n.id))
+  return [...fresh, ...older.filter((n) => !ids.has(n.id))]
+}

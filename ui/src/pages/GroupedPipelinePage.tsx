@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import {
   ArrowLeft,
@@ -12,6 +12,7 @@ import {
 import {
   Button,
   ConnectionBadge,
+  HealthBar,
   IconButton,
   KeyValue,
   RunningBadge,
@@ -37,35 +38,47 @@ import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { connection } from '@/lib/connection'
 import { ApiError } from '@/lib/api'
-import { inPipeline } from '@/lib/pipeline'
+import { formatAgo } from '@/lib/assetTable'
+import { inPipeline, pipelineName, sourceFile } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
 import { liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
+import { consumersOf, failures, healthCounts, type Failure } from '@/lib/health'
+import { GRAPH_LIMIT, lineage } from '@/lib/lineage'
 import {
   groupTree,
   PREVIEW_FAILURE,
   groupHealth,
-  groupLeaves,
   groupOutput,
   groupPath,
+  leavesByGroup,
   memberHealth,
   projectGroups,
+  viewScope,
 } from '@/lib/groups'
 import type { NodeState } from '@/lib/types'
 import './groups.css'
+
+/** How many nodes a search lists beyond the open level. */
+const SEARCH_LIMIT = 500
+/** `x_2` before `x_10`; one collator, not one per comparison. */
+const NAME_ORDER = new Intl.Collator(undefined, { numeric: true })
+
+/** A database barca cannot use is mended by starting over; any other error is not. */
+const metadataUnusable = (error: unknown) => error instanceof ApiError && error.reason === 'metadata_unusable'
 
 export function GroupedPipelinePage() {
   const [params, setParams] = useSearchParams()
   const pipeline = params.get('pipeline')
   const groupsQuery = useGroups()
   const tree = useMemo(() => groupTree((groupsQuery.data ?? []).filter(g => !pipeline || g.id.startsWith(`group:${pipeline}:`))), [groupsQuery.data, pipeline])
+  const leavesOf = useMemo(() => leavesByGroup(tree), [tree])
+  const leaves = (id: string) => leavesOf.get(id) ?? [id]
   const graph = params.get('view') === 'graph'
   const flat = params.get('flat') === '1'
+  const show = !flat && params.get('show') === 'failures' ? 'failures' : 'items'
   const selected = params.get(graph ? 'focus' : 'node')
-  const requestedScope = tree.groups.has(params.get('group') ?? '')
-    ? params.get('group')
-    : tree.parents.get(selected ?? '')
-  const scope = !flat && requestedScope ? String(requestedScope) : null
+  const scope = viewScope(params, tree)
   const query = params.get('q') ?? ''
   const hasDemoPreview = (groupsQuery.data ?? []).some(g => g.members.includes(PREVIEW_FAILURE)) && (!pipeline || pipeline === 'modeling.py')
   const preview = hasDemoPreview && params.get('preview') === 'failed'
@@ -78,13 +91,11 @@ export function GroupedPipelinePage() {
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
 
-  const assets = useMemo(
-    () =>
-      (assetQuery.isPlaceholderData ? [] : (assetQuery.data ?? [])).filter(
-        (a) => inPipeline(a.id, pipeline),
-      ),
-    [assetQuery.data, assetQuery.isPlaceholderData, pipeline],
-  )
+  const allAssets = useMemo(() => (assetQuery.isPlaceholderData ? [] : (assetQuery.data ?? [])), [assetQuery.data, assetQuery.isPlaceholderData])
+  const assets = useMemo(() => allAssets.filter((a) => inPipeline(a.id, pipeline)), [allAssets, pipeline])
+  const byKind = useMemo(() => new Map(assets.map((a) => [a.id, a.kind])), [assets])
+  // Lineage crosses pipelines: a consumer in another file is still downstream.
+  const consumers = useMemo(() => consumersOf(allAssets), [allAssets])
   const states = useMemo(
     () =>
       (stateQuery.data ?? []).map((node): NodeState => {
@@ -121,28 +132,65 @@ export function GroupedPipelinePage() {
         : projected.entries,
     [assets, flat, projected.entries],
   )
-  const visualStates = useMemo<Record<string, GraphState>>(
-    () =>
-      Object.fromEntries(
-        entries.map((entry) => {
-          const leaves = groupLeaves(entry.id, tree)
-          const liveStatus = nodeRun.statuses[entry.id]
-          const health = entry.kind === 'group'
-            ? groupHealth(leaves, byId, nodeRun.statuses)
-            : liveStatus
-              ? liveGraphState(liveStatus)
-              : memberHealth(byId.get(entry.id))
-          const pending = leaves.some(id => !byId.has(id)) && !stateQuery.isError
-          return [entry.id, pending && !['running', 'queued'].includes(health.status) ? PENDING_GRAPH_STATE : health]
-        }),
-      ),
-    [entries, byId, tree, stateQuery.isError, nodeRun.statuses],
+  // A graph too big to read is drawn as the selected node's lineage instead.
+  const tooBig = graph && entries.length > GRAPH_LIMIT
+  const lineageOf = tooBig && selected && !tree.groups.has(selected) ? selected : null
+  const drawn = useMemo<GraphEntry[]>(
+    () => tooBig
+      ? lineageOf ? lineage(lineageOf, assets, 2, consumers).map((a) => ({ ...a, name: shortName(a.id) })) : []
+      : entries,
+    [tooBig, lineageOf, assets, consumers, entries],
   )
-  const visible = entries.filter((entry) => {
-    const needle = query.trim().toLowerCase()
+  // Typing stays ahead of the list: a one-letter search can match thousands of nodes.
+  const needle = useDeferredValue(query).trim().toLowerCase()
+  // A search reaches every node in scope, not just this level: a match deep in a nested
+  // group is listed with its path, and opening it jumps there.
+  const hits = useMemo<GraphEntry[]>(() => {
+    if (!needle || flat || show === 'failures' || graph) return []
+    const level = new Set(entries.map((e) => e.id))
+    const ids = scope ? leavesOf.get(scope) ?? [] : assets.map((a) => a.id)
+    // What needs attention first, then by name.
+    const rank = (id: string) => ({ failed: 0, warning: 1 } as Record<string, number>)[memberHealth(byId.get(id)).status] ?? 2
+    return ids
+      .filter((id) => !level.has(id) && id.toLowerCase().includes(needle))
+      .map((id) => ({ id, rank: rank(id), name: shortName(id) }))
+      .sort((a, b) => a.rank - b.rank || NAME_ORDER.compare(a.name, b.name))
+      .slice(0, SEARCH_LIMIT)
+      .map(({ id }) => id)
+      .map((id) => ({ id, kind: byKind.get(id) ?? 'asset', inputs: [], name: shortName(id) }))
+    // byKind follows assets.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needle, flat, show, graph, entries, scope, leavesOf, assets, byId])
+  const stateOf = (entry: GraphEntry): GraphState => {
+    const memberIds = leaves(entry.id)
+    const liveStatus = nodeRun.statuses[entry.id]
+    const health = entry.kind === 'group'
+      ? groupHealth(memberIds, byId, nodeRun.statuses)
+      : liveStatus
+        ? liveGraphState(liveStatus)
+        : memberHealth(byId.get(entry.id))
+    const pending = memberIds.some(id => !byId.has(id)) && !stateQuery.isError
+    return pending && !['running', 'queued'].includes(health.status) ? PENDING_GRAPH_STATE : health
+  }
+  const visualStates = useMemo<Record<string, GraphState>>(
+    () => Object.fromEntries((graph ? drawn : [...entries, ...hits]).map((entry) => [entry.id, stateOf(entry)])),
+    // stateOf reads only what is listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [graph, drawn, entries, hits, byId, leavesOf, stateQuery.isError, nodeRun.statuses],
+  )
+  // The nodes of the open scope, and what is wrong with them.
+  const scopeIds = useMemo(() => (scope ? leaves(scope) : assets.map((a) => a.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scope, leavesOf, assets])
+  const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, nodeRun.statuses), [scopeIds, byId, nodeRun.statuses])
+  const failureList = useMemo(() => {
+    const inScope = new Set(scopeIds)
+    return failures(states.filter((s) => inScope.has(s.id)), consumers)
+  }, [scopeIds, states, consumers])
+  const visibleEntries = [...entries.filter((entry) => {
     const matches =
       !needle ||
-      `${entry.name} ${entry.outputName ?? ''} ${groupLeaves(entry.id, tree).join(' ')}`
+      `${entry.name} ${entry.outputName ?? ''} ${leaves(entry.id).join(' ')}`
         .toLowerCase()
         .includes(needle)
     return (
@@ -152,15 +200,19 @@ export function GroupedPipelinePage() {
           (visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE).status,
         ))
     )
-  })
-  const win = useTableWindow(visible.length, scroller)
-  // Searching narrows the table; the graph preserves connections and hierarchy.
-  const graphEntries = entries
+  }), ...hits.filter((hit) => !attention || ['failed', 'warning', 'skipped'].includes((visualStates[hit.id] ?? UNKNOWN_GRAPH_STATE).status))]
+  const isHit = new Set(hits.map((h) => h.id))
+  const visibleFailures = needle
+    ? failureList.filter((f) => `${f.id} ${f.headline}`.toLowerCase().includes(needle))
+    : failureList
+  const rowCount = show === 'failures' ? visibleFailures.length : visibleEntries.length
+  const rowIds = show === 'failures' ? visibleFailures.map((f) => f.id) : visibleEntries.map((e) => e.id)
+  const win = useTableWindow(rowCount, scroller)
   const path = groupPath(scope, tree)
   const selectedGroup = tree.groups.get(selected ?? '')
   const selectedNode = byId.get(selected ?? '')
-  const leaves = selectedGroup ? groupLeaves(selectedGroup.id, tree) : []
-  const failures = leaves
+  const selectedLeaves = selectedGroup ? leaves(selectedGroup.id) : []
+  const selectedFailures = selectedLeaves
     .map((id) => byId.get(id))
     .filter(
       (node): node is NodeState =>
@@ -169,17 +221,13 @@ export function GroupedPipelinePage() {
   const output = selectedGroup
     ? byId.get(groupOutput(selectedGroup.id, tree))
     : undefined
-  const selectedGroupHealth = groupHealth(leaves, byId, nodeRun.statuses)
+  const selectedGroupHealth = groupHealth(selectedLeaves, byId, nodeRun.statuses)
   const groupStatus = selectedGroup
-    ? leaves.some(id => !byId.has(id)) && !stateQuery.isError && selectedGroupHealth.status !== 'running'
+    ? selectedLeaves.some(id => !byId.has(id)) && !stateQuery.isError && selectedGroupHealth.status !== 'running'
       ? PENDING_GRAPH_STATE : selectedGroupHealth
     : undefined
   // How many nodes in view a run is working on now, whoever started it.
-  const runningHere = runningCount(
-    scope ? groupLeaves(scope, tree) : assets.map((a) => a.id),
-    byId,
-    nodeRun.statuses,
-  )
+  const runningHere = runningCount(scopeIds, byId, nodeRun.statuses)
 
   const update = (changes: Record<string, string | null>) => {
     const next = new URLSearchParams(params)
@@ -192,7 +240,7 @@ export function GroupedPipelinePage() {
   const select = (id: string | null) =>
     update({ [graph ? 'focus' : 'node']: id })
   const openGroup = (id: string | null) =>
-    update({ group: id, node: null, focus: null, q: null, attention: null })
+    update({ group: id, node: null, focus: null, q: null, attention: null, show: null })
   const revealNode = (id: string) =>
     update({
       group: tree.parents.get(id) ?? null,
@@ -200,7 +248,16 @@ export function GroupedPipelinePage() {
       focus: graph ? id : null,
       q: null,
       attention: null,
+      show: null,
     })
+  const setMode = (mode: 'groups' | 'flat' | 'failures') =>
+    update(
+      mode === 'flat'
+        ? { flat: '1', group: null, node: null, focus: null, q: null, show: null }
+        : mode === 'failures'
+          ? { flat: null, show: 'failures', view: null, group: scope, node: null, focus: null }
+          : { flat: null, show: null, node: null, focus: null },
+    )
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -226,13 +283,13 @@ export function GroupedPipelinePage() {
       )
         return
       if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-      const index = visible.findIndex((entry) => entry.id === selected)
+      const index = rowIds.indexOf(selected)
       if (index < 0) return
       event.preventDefault()
       const nextIndex = index + (event.key === 'ArrowDown' ? 1 : -1)
-      const next = visible[nextIndex]
+      const next = rowIds[nextIndex]
       if (!next) return
-      select(next.id)
+      select(next)
       focusWindowRow(tableBody.current, nextIndex, win.scrollToIndex)
     }
     window.addEventListener('keydown', onKey)
@@ -244,11 +301,9 @@ export function GroupedPipelinePage() {
   const error = assetQuery.isError || groupsQuery.isError
   // What to do about it, when the server says (e.g. a metadata DB barca cannot use).
   const failure = assetQuery.error ?? groupsQuery.error
-  const title = scope
-    ? tree.groups.get(scope)!.name
-    : pipeline === 'modeling.py'
-      ? 'Modeling'
-      : 'All pipelines'
+  const rootName = pipeline === 'modeling.py' ? 'Modeling' : pipeline ? pipelineName(pipeline) : 'All pipelines'
+  const title = scope ? tree.groups.get(scope)!.name : rootName
+  const pathOf = (id: string) => groupPath(tree.parents.get(id) ?? null, tree).map((g) => g.name).join(' › ')
 
   return (
     <div className="barca-view">
@@ -257,9 +312,8 @@ export function GroupedPipelinePage() {
           <div className="barca-view-title">
             <h1>{title}</h1>
             <span className="barca-count">
-              {entries.length} {flat ? 'nodes' : 'items'} ·{' '}
-              {scope ? groupLeaves(scope, tree).length : assets.length} total
-              nodes
+              {scopeIds.length.toLocaleString()} nodes
+              {!flat && show === 'items' && ` · ${entries.length} ${scope ? 'items' : 'groups'}`}
             </span>
             {runningHere > 0 && (
               <span className="barca-count barca-count-running">
@@ -300,6 +354,7 @@ export function GroupedPipelinePage() {
             {scope && (
               <IconButton
                 label="Up one level"
+                size="sm"
                 onClick={() => openGroup(tree.parents.get(scope) ?? null)}
               >
                 <ArrowLeft size={14} />
@@ -310,7 +365,7 @@ export function GroupedPipelinePage() {
               onClick={() => openGroup(null)}
               aria-current={!scope ? 'page' : undefined}
             >
-              {pipeline === 'modeling.py' ? 'Modeling' : 'All pipelines'}
+              {rootName}
             </button>
             {path.map((group, index) => (
               <span key={group.id}>
@@ -325,6 +380,14 @@ export function GroupedPipelinePage() {
               </span>
             ))}
           </nav>
+          <div className="barca-scope-health" title="Every node in view, by state">
+            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={4} width={140} />}
+          </div>
+          {scope && projected.external.length > 0 && !flat && show === 'items' && (
+            <span className="barca-group-external" title={projected.external.map(shortName).join(', ')}>
+              External inputs · {projected.external.length}
+            </span>
+          )}
           <div className="barca-group-options">
             <div
               className="barca-view-toggle"
@@ -333,25 +396,26 @@ export function GroupedPipelinePage() {
             >
               <button
                 type="button"
-                aria-pressed={!flat}
-                onClick={() => update({ flat: null, node: null, focus: null })}
+                aria-pressed={!flat && show === 'items'}
+                onClick={() => setMode('groups')}
+                title="Double-click a group, or press Enter, to open it"
               >
                 Groups
               </button>
               <button
                 type="button"
                 aria-pressed={flat}
-                onClick={() =>
-                  update({
-                    flat: '1',
-                    group: null,
-                    node: null,
-                    focus: null,
-                    q: null,
-                  })
-                }
+                onClick={() => setMode('flat')}
               >
                 All nodes
+              </button>
+              <button
+                type="button"
+                aria-pressed={show === 'failures'}
+                onClick={() => setMode('failures')}
+                data-failed={failureList.length > 0 || undefined}
+              >
+                Failures{stateQuery.data ? ` · ${failureList.length}` : ''}
               </button>
             </div>
             {hasDemoPreview && <button
@@ -365,37 +429,32 @@ export function GroupedPipelinePage() {
             </button>}
           </div>
         </div>
-        <div className="barca-group-context">
-          {preview ? (
+        {preview && (
+          <div className="barca-group-context">
             <span className="barca-group-preview-note">
               Preview: fold 3’s model validation fails; its model output stays
               cached.
             </span>
-          ) : (
-            <span>Double-click a group to open it. Enter works too.</span>
-          )}
-          {scope && projected.external.length > 0 && (
-            <span title={projected.external.map(shortName).join(', ')}>
-              External inputs · {projected.external.length}
-            </span>
-          )}
-        </div>
-        {!graph && (
+          </div>
+        )}
+        {(!graph || show === 'failures') && (
           <div className="barca-table-tools">
             <SearchInput
-              placeholder="Search groups and members"
+              placeholder={show === 'failures' ? 'Search failures and errors' : 'Search groups and members'}
               value={query}
               onChange={(q) => update({ q: q || null })}
             />
-            <button
-              type="button"
-              className="barca-preview-toggle"
-              aria-pressed={attention}
-              onClick={() => update({ attention: attention ? null : '1' })}
-            >
-              Needs attention
-            </button>
-            <span className="barca-count">{visible.length} shown</span>
+            {show === 'items' && (
+              <button
+                type="button"
+                className="barca-preview-toggle"
+                aria-pressed={attention}
+                onClick={() => update({ attention: attention ? null : '1' })}
+              >
+                Needs attention
+              </button>
+            )}
+            <span className="barca-count">{rowCount.toLocaleString()} shown</span>
           </div>
         )}
       </div>
@@ -408,8 +467,7 @@ export function GroupedPipelinePage() {
             {failure?.message}
           </p>
           {failure instanceof ApiError && failure.remediation && <p>{failure.remediation}</p>}
-          {/* A metadata database that cannot be read or migrated is mended by starting over. */}
-          <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />
+          {metadataUnusable(failure) && <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />}
         </div>
       ) : loading ? (
         <p className="barca-table-empty">Loading pipeline…</p>
@@ -421,21 +479,39 @@ export function GroupedPipelinePage() {
             {stateQuery.error instanceof ApiError && stateQuery.error.remediation && (
               <span> {stateQuery.error.remediation}</span>
             )}
-            <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />
+            {/* Starting over mends a database barca cannot use, and nothing else. */}
+            {metadataUnusable(stateQuery.error) && <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />}
           </div>
         )}
-        <div className={graph ? 'barca-graph-wrap' : 'barca-assets-split'}>
-          {graph ? (
+        <div className={graph && show === 'items' ? 'barca-graph-wrap' : 'barca-assets-split'}>
+          {graph && show === 'items' ? (
             <div className="barca-graph-canvas">
-              <GraphCanvas
-                assets={graphEntries}
-                dir={dir}
-                selected={selected}
-                onSelect={select}
-                onOpenGroup={openGroup}
-                states={visualStates}
-                handleRef={canvas}
-              />
+              {tooBig && !lineageOf ? (
+                <LineagePicker
+                  total={entries.length}
+                  nodes={assets}
+                  failures={failureList}
+                  onPick={select}
+                />
+              ) : (
+                <>
+                  {lineageOf && (
+                    <div className="barca-lineage-note" role="status">
+                      Lineage of <strong>{shortName(lineageOf)}</strong>: two steps up and down, {drawn.length} of {entries.length.toLocaleString()} nodes.
+                      <button type="button" className="barca-clear" onClick={() => select(null)}>Pick another</button>
+                    </div>
+                  )}
+                  <GraphCanvas
+                    assets={drawn}
+                    dir={dir}
+                    selected={selected}
+                    onSelect={(id) => (lineageOf && id === null ? undefined : select(id))}
+                    onOpenGroup={openGroup}
+                    states={visualStates}
+                    handleRef={canvas}
+                  />
+                </>
+              )}
               <div className="barca-legend">
                 <span>
                   <FolderOpen size={12} />
@@ -459,14 +535,82 @@ export function GroupedPipelinePage() {
                 </span>
               </div>
             </div>
+          ) : show === 'failures' ? (
+            <div className="barca-view-body barca-table-scroll" ref={scroller}>
+              <table className="barca-table barca-group-table barca-failure-table">
+                <colgroup>
+                  <col style={{ width: '30%' }} />
+                  <col style={{ width: '44%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '14%' }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Failed node</th>
+                    <th>Error</th>
+                    <th>When</th>
+                    <th className="num" title="Nodes downstream of it, transitively">Waiting on it</th>
+                  </tr>
+                </thead>
+                <tbody ref={tableBody}>
+                  <TableSpacer height={win.before} columns={4} />
+                  {win.items.map(({ index }) => {
+                    const f = visibleFailures[index]
+                    if (!f) return null
+                    return (
+                      <tr
+                        key={f.id}
+                        ref={win.measure}
+                        data-index={index}
+                        tabIndex={0}
+                        aria-selected={selected === f.id}
+                        onClick={(event) => {
+                          event.currentTarget.focus({ preventScroll: true })
+                          select(selected === f.id ? null : f.id)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            select(f.id)
+                          }
+                        }}
+                      >
+                        <td>
+                          <div className="barca-group-row-name">
+                            <StatusDot status="failed" size={6} />
+                            <strong title={f.id}>{f.name}</strong>
+                            {f.kind !== 'asset' && <Tag size="sm">{f.kind === 'task' ? 'check' : f.kind}</Tag>}
+                          </div>
+                          <div className="barca-cell-sub" title={pathOf(f.id)}>{pathOf(f.id) || sourceFile(f.id)}</div>
+                        </td>
+                        <td className="barca-failure-error" title={f.error}>
+                          {f.headline}
+                          {f.missingKeys !== null && f.missingKeys > 0 && (
+                            <div className="barca-cell-sub">{f.missingKeys.toLocaleString()} keys without a result</div>
+                          )}
+                        </td>
+                        <td title={f.at ? `${f.at} UTC` : undefined}>{f.at ? formatAgo(f.at, stateQuery.dataUpdatedAt) : '–'}</td>
+                        <td className="num">{f.impact > 0 ? f.impact.toLocaleString() : '–'}</td>
+                      </tr>
+                    )
+                  })}
+                  <TableSpacer height={win.after} columns={4} />
+                </tbody>
+              </table>
+              {rowCount === 0 && (
+                <p className="barca-table-empty">
+                  {!stateQuery.data ? 'Checking…' : needle ? 'No failures match.' : 'Nothing has failed here.'}
+                </p>
+              )}
+            </div>
           ) : (
             <div className="barca-view-body barca-table-scroll" ref={scroller}>
               <table className="barca-table barca-group-table">
                 <colgroup>
                   <col style={{ width: '34%' }} />
-                  <col style={{ width: '24%' }} />
+                  <col style={{ width: '30%' }} />
                   <col style={{ width: '16%' }} />
-                  <col style={{ width: '22%' }} />
+                  <col style={{ width: '16%' }} />
                   <col style={{ width: '4%' }} />
                 </colgroup>
                 <thead>
@@ -481,7 +625,7 @@ export function GroupedPipelinePage() {
                 <tbody ref={tableBody}>
                   <TableSpacer height={win.before} columns={5} />
                   {win.items.map(({ index }) => {
-                    const entry = visible[index]
+                    const entry = visibleEntries[index]
                     if (!entry) return null
                     const group = tree.groups.get(entry.id)
                     const nestedGroups = group?.members.filter((id) => tree.groups.has(id)).length ?? 0
@@ -500,7 +644,8 @@ export function GroupedPipelinePage() {
                         data-group={group ? entry.id : undefined}
                         onClick={(event) => {
                           event.currentTarget.focus({ preventScroll: true })
-                          select(selected === entry.id ? null : entry.id)
+                          if (isHit.has(entry.id)) revealNode(entry.id)
+                          else select(selected === entry.id ? null : entry.id)
                         }}
                         onDoubleClick={() => group && openGroup(entry.id)}
                         onKeyDown={(event) => {
@@ -515,13 +660,17 @@ export function GroupedPipelinePage() {
                           <div className="barca-group-row-name">
                             {group && <FolderOpen size={15} />}
                             <strong>{entry.name}</strong>
-                            <Tag size="sm">{entry.kind}</Tag>
+                            {group ? (
+                              nestedGroups > 0 && <span className="barca-cell-sub">{nestedGroups} groups</span>
+                            ) : (
+                              <>
+                                <Tag size="sm">{entry.kind}</Tag>
+                                {isHit.has(entry.id)
+                                  ? <span className="barca-cell-sub" title={entry.id}>in {pathOf(entry.id) || sourceFile(entry.id)}</span>
+                                  : entry.name !== shortName(entry.id) && <span className="barca-cell-sub" title={entry.id}>{shortName(entry.id)}</span>}
+                              </>
+                            )}
                           </div>
-                          {(!group || nestedGroups > 0) && (
-                            <div className="barca-cell-sub">
-                              {group ? `${nestedGroups} nested groups` : shortName(entry.id)}
-                            </div>
-                          )}
                         </td>
                         <td title={running ? undefined : state.hint}>
                           {running ? (
@@ -529,6 +678,8 @@ export function GroupedPipelinePage() {
                               running={running}
                               nowMs={stateQuery.dataUpdatedAt}
                             />
+                          ) : group && state !== PENDING_GRAPH_STATE && !stateQuery.isError ? (
+                            <HealthBar counts={healthCounts(leaves(entry.id), byId, nodeRun.statuses)} />
                           ) : (
                             <StatusBadge
                               status={state.status}
@@ -541,13 +692,13 @@ export function GroupedPipelinePage() {
                         <td>
                           {group && (
                             <div className="barca-group-output-cell">
-                              <span>{entry.outputName}</span>
                               {outputNode && (
                                 <StatusDot
                                   status={memberHealth(outputNode).status}
                                   size={6}
                                 />
                               )}
+                              <span>{entry.outputName}</span>
                             </div>
                           )}
                         </td>
@@ -572,7 +723,7 @@ export function GroupedPipelinePage() {
                   <TableSpacer height={win.after} columns={5} />
                 </tbody>
               </table>
-              {visible.length === 0 && (
+              {visibleEntries.length === 0 && (
                 <p className="barca-table-empty">No groups or nodes match.</p>
               )}
             </div>
@@ -582,7 +733,7 @@ export function GroupedPipelinePage() {
               label={`${selectedGroup.name} group details`}
               title={selectedGroup.name}
               badge={<Tag size="sm">group</Tag>}
-              subtitle="modeling.py"
+              subtitle={sourceFile(selectedGroup.id.replace(/^group:/, ''))}
               actions={
                 <IconButton
                   label="Close group details"
@@ -598,6 +749,11 @@ export function GroupedPipelinePage() {
                   status={groupStatus.status}
                   label={groupStatus.label}
                 />
+                {groupStatus !== PENDING_GRAPH_STATE && (
+                  <div className="barca-panel-health">
+                    <HealthBar counts={healthCounts(selectedLeaves, byId, nodeRun.statuses)} labelLimit={6} width={260} />
+                  </div>
+                )}
                 <p className="barca-note">{selectedGroup.description}</p>
                 <Button
                   size="sm"
@@ -607,6 +763,25 @@ export function GroupedPipelinePage() {
                   Open group
                 </Button>
               </div>
+              {selectedFailures.length > 0 && (
+                <Section title="Failed members">
+                  {selectedFailures.map((node) => (
+                    <button
+                      type="button"
+                      className="barca-group-failure"
+                      key={node.id}
+                      onClick={() => revealNode(node.id)}
+                    >
+                      <StatusDot status="failed" size={6} />
+                      <span>
+                        {shortName(node.id)}
+                        <small>{node.last_materialization?.error?.split('\n')[0]}</small>
+                      </span>
+                      <ChevronRight size={13} />
+                    </button>
+                  ))}
+                </Section>
+              )}
               <Section title="Output">
                 <p className="barca-note">
                   The existing node that represents this group’s result.
@@ -631,10 +806,10 @@ export function GroupedPipelinePage() {
               </Section>
               <Section title="Members">
                 <KeyValue label="assets">
-                  {leaves.filter((id) => byId.get(id)?.kind === 'asset').length}
+                  {selectedLeaves.filter((id) => byId.get(id)?.kind === 'asset').length}
                 </KeyValue>
                 <KeyValue label="checks">
-                  {leaves.filter((id) => byId.get(id)?.kind === 'task').length}
+                  {selectedLeaves.filter((id) => byId.get(id)?.kind === 'task').length}
                 </KeyValue>
                 {selectedGroup.members.some((id) => tree.groups.has(id)) && (
                   <KeyValue label="nested groups">
@@ -642,25 +817,6 @@ export function GroupedPipelinePage() {
                   </KeyValue>
                 )}
               </Section>
-              {failures.length > 0 && (
-                <Section title="Failed members">
-                  {failures.map((node) => (
-                    <button
-                      type="button"
-                      className="barca-group-failure"
-                      key={node.id}
-                      onClick={() => revealNode(node.id)}
-                    >
-                      <StatusDot status="failed" size={6} />
-                      <span>
-                        {shortName(node.id)}
-                        <small>{node.last_materialization?.error}</small>
-                      </span>
-                      <ChevronRight size={13} />
-                    </button>
-                  ))}
-                </Section>
-              )}
               <Section title="Organization">
                 <p className="barca-note">
                   Groups organize existing nodes. Their members keep their own
@@ -674,6 +830,7 @@ export function GroupedPipelinePage() {
               runAction={nodeRun.action}
               node={selectedNode}
               nodes={states}
+              graph={allAssets}
               nowMs={stateQuery.dataUpdatedAt}
               onSelect={revealNode}
               onOpenGraph={(id) =>
@@ -682,12 +839,48 @@ export function GroupedPipelinePage() {
                   group: tree.parents.get(id) ?? null,
                   focus: id,
                   node: null,
+                  show: null,
                 })
               }
               onClose={() => select(null)}
             />
           )}
         </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** In place of a graph too big to draw: pick the node whose lineage to draw. */
+function LineagePicker({ total, nodes, failures, onPick }: {
+  total: number
+  nodes: { id: string }[]
+  failures: Failure[]
+  onPick: (id: string) => void
+}) {
+  const [q, setQ] = useState('')
+  const needle = q.trim().toLowerCase()
+  const matches = needle ? nodes.filter((n) => n.id.toLowerCase().includes(needle)).slice(0, 12) : []
+  return (
+    <div className="barca-lineage-picker">
+      <h2>{total.toLocaleString()} nodes are too many to draw as one graph</h2>
+      <p className="barca-note">Open a group to see its part of the pipeline, or pick a node to draw its lineage: two steps upstream and downstream.</p>
+      <SearchInput placeholder="Find a node" value={q} onChange={setQ} autoFocus />
+      <ul>
+        {matches.map((n) => (
+          <li key={n.id}><button type="button" onClick={() => onPick(n.id)}>{shortName(n.id)} <span>{sourceFile(n.id)}</span></button></li>
+        ))}
+        {needle && matches.length === 0 && <li className="barca-note">No node matches.</li>}
+      </ul>
+      {!needle && failures.length > 0 && (
+        <>
+          <h3>Or start from a failure</h3>
+          <ul>
+            {failures.slice(0, 6).map((f) => (
+              <li key={f.id}><button type="button" onClick={() => onPick(f.id)}><StatusDot status="failed" size={6} /> {f.name} <span>{f.headline}</span></button></li>
+            ))}
+          </ul>
         </>
       )}
     </div>

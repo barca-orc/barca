@@ -1,5 +1,6 @@
-import { useEffect } from 'react'
-import { GitBranch, Play, X } from 'lucide-react'
+import { Fragment, useEffect, useMemo } from 'react'
+import { Link } from 'react-router'
+import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
 import { Button, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { startedBy } from '@/lib/running'
 import { ArtifactSchema } from './ArtifactSchema'
@@ -8,13 +9,18 @@ import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { buildRows, formatAgo, formatSeconds, severityStatus } from '@/lib/assetTable'
 import { freshnessLabel } from '@/lib/status'
 import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
-import type { NodeState } from '@/lib/types'
+import { consumersOf, downstreamIds, failedUpstream, headline } from '@/lib/health'
+import { memberHealth } from '@/lib/groups'
+import { shortName } from '@/lib/graph'
+import type { ListNode, NodeState } from '@/lib/types'
 import type { NodeRunAction } from '@/hooks/useNodeRun'
 
 interface NodePanelProps {
   node: NodeState
-  /** Every node, for lineage. */
+  /** The states loaded with it (its upstream cone at least): what blocks it. */
   nodes: NodeState[]
+  /** The whole graph (`GET /assets`): its consumers, wherever they are. */
+  graph: ListNode[]
   nowMs: number
   onSelect: (id: string) => void
   onOpenGraph: (id: string) => void
@@ -27,17 +33,31 @@ interface NodePanelProps {
  * attempt, run history, lineage and declared metadata. All from existing
  * endpoints — `/state` (passed in) and `/assets/{id}` (fetched here).
  */
-export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
+/** `a__b__c` with a line-break opportunity after each `__`, so a long name wraps at its parts. */
+function Breakable({ name }: { name: string }) {
+  const parts = name.split('__')
+  return <>{parts.map((part, i) => <Fragment key={i}>{part}{i < parts.length - 1 && <>__<wbr /></>}</Fragment>)}</>
+}
+
+export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
   const { data: detail, isLoading, isError } = useAssetDetail(node.id)
   const [row] = buildRows([node], nowMs)
   const last = node.last_materialization
   const stats = detail?.stats
   const bars = stats ? historyBars(stats.recent_runs) : []
   const histogram = stats ? durationHistogram(stats.recent_runs, last?.elapsed_seconds ?? null) : []
+  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
   const upstream = node.inputs
-    .map((id) => nodes.find((n) => n.id === id))
+    .map((id) => byId.get(id))
     .filter((n): n is NodeState => n !== undefined)
-  const downstream = downstreamOf(node.id, nodes)
+  const downstream = downstreamOf(node.id, graph)
+  const consumers = useMemo(() => consumersOf(graph), [graph])
+  const impact = useMemo(() => downstreamIds(node.id, consumers).size, [node.id, consumers])
+  const inputs = useMemo(() => new Map(graph.map((n) => [n.id, n.inputs])), [graph])
+  const failed = memberHealth(node).status === 'failed'
+  // Why a node that did not fail is not up to date: something it reads failed.
+  const blockedBy = useMemo(() => (failed ? [] : failedUpstream(node.id, inputs, byId)), [failed, node.id, inputs, byId])
+  const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
 
@@ -50,7 +70,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose, 
   return (
     <SidePanel
       label={`${node.name} details`}
-      title={node.name}
+      title={<Breakable name={node.name} />}
       badge={<Tag size="sm">{node.kind}</Tag>}
       subtitle={row?.file}
       actions={
@@ -81,56 +101,65 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose, 
           </KeyValue>
         )}
         <p className="barca-note">{node.cache.detail}</p>
+        {failed && last && (
+          <div className="barca-why" role="group" aria-label="Why it failed">
+            <div className="barca-why-head">
+              <CircleAlert size={14} />
+              <strong>{headline(last.error)}</strong>
+            </div>
+            <p className="barca-note" title={`${last.created_at} UTC`}>
+              Failed {formatAgo(last.created_at, nowMs)}
+              {failedRun && <> · <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>open the run</Link></>}
+            </p>
+            {last.error && last.error.trim().includes('\n') && (
+              <details>
+                <summary>Traceback</summary>
+                <pre className="barca-error">{last.error}</pre>
+              </details>
+            )}
+          </div>
+        )}
+        {blockedBy.length > 0 && (
+          <div className="barca-why" role="group" aria-label="What it waits on">
+            <div className="barca-why-head">
+              <CircleAlert size={14} />
+              <strong>Waiting on {blockedBy.length} failed upstream node{blockedBy.length === 1 ? '' : 's'}</strong>
+            </div>
+            <ul className="barca-why-list">
+              {blockedBy.slice(0, 8).map((id) => (
+                <li key={id}>
+                  <button type="button" className="barca-link" onClick={() => onSelect(id)}>{shortName(id)}</button>
+                  <span>{headline(byId.get(id)?.last_materialization?.error)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {node.cache.changed && node.cache.changed.length > 0 && (
+          <KeyValue label="changed">{node.cache.changed.join(', ')}</KeyValue>
+        )}
         {node.partitions && (
           <>
             <KeyValue label="partitions">
-              {node.partitions.cached} of {node.partitions.total} cached
+              {node.partitions.cached.toLocaleString()} of {node.partitions.total.toLocaleString()} cached
+              {node.partitions.missing > 0 && ` · ${node.partitions.missing.toLocaleString()} without a result`}
             </KeyValue>
             {node.partitions.missing_keys.length > 0 && (
-              <KeyValue label="missing keys">
-                <code className="barca-wrap">{node.partitions.missing_keys.join(', ')}</code>
-              </KeyValue>
+              <details className="barca-keys">
+                <summary>
+                  {node.partitions.missing > node.partitions.missing_keys.length
+                    ? `First ${node.partitions.missing_keys.length} keys without a result`
+                    : 'Keys without a result'}
+                </summary>
+                <code className="barca-wrap">{node.partitions.missing_keys.join('\n')}</code>
+              </details>
             )}
           </>
         )}
+        <KeyValue label="downstream">
+          {impact === 0 ? 'nothing reads it' : `${impact.toLocaleString()} node${impact === 1 ? '' : 's'} depend on it`}
+        </KeyValue>
       </div>
-
-      <Section title="Inputs & output">
-        <p className="barca-schema-context">Latest materialized data. Input schemas describe their own latest outputs.</p>
-        <Button variant="ghost" size="sm" disabled={schema.isFetching} onClick={() => void schema.refetch()}>
-          {schema.isFetching ? 'Inspecting…' : 'Refresh schema'}
-        </Button>
-        <div className="barca-schema-content">
-          {schema.isLoading ? <Skeleton height={360} /> : schema.isError ? (
-            <div className="barca-schema-empty">
-              <p>Couldn't load schemas: {schema.error.message}</p>
-              <Button size="sm" variant="ghost" onClick={() => void schema.refetch()}>Retry</Button>
-            </div>
-          ) : (
-            <>
-              <h4 className="barca-schema-label">Output <span>{node.name}</span></h4>
-              <div className="barca-schema-output">
-                {output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
-              </div>
-              <h4 className="barca-schema-label">Inputs <span>{node.inputs.length}</span></h4>
-              {node.inputs.length === 0 && <p className="barca-schema-empty">No upstream assets. This is a source node.</p>}
-              {node.inputs.map(id => {
-                const input = schema.data?.find(n => n.id === id)
-                const name = input?.name ?? id.split(':').pop() ?? id
-                return (
-                  <details className="barca-schema-input" key={id}>
-                    <summary>{name}</summary>
-                    <div className="barca-schema-input-body">
-                      <button type="button" className="barca-link" onClick={() => onSelect(id)}>Open {name} →</button>
-                      {input ? <ArtifactSchema node={input} /> : <p className="barca-schema-empty">Input schema unavailable.</p>}
-                    </div>
-                  </details>
-                )
-              })}
-            </>
-          )}
-        </div>
-      </Section>
 
       <Section title="Last attempt">
         {last ? (
@@ -182,7 +211,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose, 
               </KeyValue>
             )}
             {last.partition && <KeyValue label="partition">{last.partition}</KeyValue>}
-            {last.error && <pre className="barca-error">{last.error}</pre>}
+            {last.error && !failed && <pre className="barca-error">{last.error}</pre>}
           </>
         ) : (
           <p className="barca-note">Never ran.</p>
@@ -266,13 +295,50 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose, 
         )}
       </Section>
 
+      <Section title="Inputs & output">
+        <p className="barca-schema-context">Latest materialized data. Input schemas describe their own latest outputs.</p>
+        <Button variant="ghost" size="sm" disabled={schema.isFetching} onClick={() => void schema.refetch()}>
+          {schema.isFetching ? 'Inspecting…' : 'Refresh schema'}
+        </Button>
+        <div className="barca-schema-content">
+          {schema.isLoading ? <Skeleton height={360} /> : schema.isError ? (
+            <div className="barca-schema-empty">
+              <p>Couldn't load schemas: {schema.error.message}</p>
+              <Button size="sm" variant="ghost" onClick={() => void schema.refetch()}>Retry</Button>
+            </div>
+          ) : (
+            <>
+              <h4 className="barca-schema-label">Output <span>{node.name}</span></h4>
+              <div className="barca-schema-output">
+                {output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
+              </div>
+              <h4 className="barca-schema-label">Inputs <span>{node.inputs.length}</span></h4>
+              {node.inputs.length === 0 && <p className="barca-schema-empty">No upstream assets. This is a source node.</p>}
+              {node.inputs.map(id => {
+                const input = schema.data?.find(n => n.id === id)
+                const name = input?.name ?? id.split(':').pop() ?? id
+                return (
+                  <details className="barca-schema-input" key={id}>
+                    <summary>{name}</summary>
+                    <div className="barca-schema-input-body">
+                      <button type="button" className="barca-link" onClick={() => onSelect(id)}>Open {name} →</button>
+                      {input ? <ArtifactSchema node={input} /> : <p className="barca-schema-empty">Input schema unavailable.</p>}
+                    </div>
+                  </details>
+                )
+              })}
+            </>
+          )}
+        </div>
+      </Section>
+
       <Section title="Consumers">
         <KeyValue label="downstream">
           {downstream.length === 0
             ? '–'
             : downstream.map((n) => (
                 <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
-                  {n.name}
+                  {shortName(n.id)}
                 </button>
               ))}
         </KeyValue>

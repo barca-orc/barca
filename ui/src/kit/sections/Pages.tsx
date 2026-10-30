@@ -17,7 +17,8 @@ export function Pages() {
           label="Run list"
           states={{
             ...Object.fromEntries(Object.entries(runLists).map(([name, runs]) => [name, { runs, model: INITIAL_RUNS }])),
-            'at the load-more cap': { runs: runLists.truncated, model: { limit: RUNS_MAX } },
+            'at the load-more cap': { runs: runLists.truncated, model: { ...INITIAL_RUNS, limit: RUNS_MAX } },
+            'failed only': { runs: runLists['every status'], model: { ...INITIAL_RUNS, filter: 'failed' as const } },
           }}
           render={({ runs, model }, dispatch) => (
             <Frame height={420} width="100%">
@@ -26,6 +27,7 @@ export function Pages() {
                 runs={runs}
                 connection={connections.online}
                 selected={null}
+                now={NOW_MS}
                 dispatch={dispatch}
               />
             </Frame>
@@ -33,7 +35,7 @@ export function Pages() {
         />
       </Spec>
 
-      <Spec title="Run details" note="RunPanelView for each state of its request, then each run status.">
+      <Spec title="Run details panel" note="RunPanelView for each state of its request, then each run status.">
         <States
           label="Run"
           states={runDetails}

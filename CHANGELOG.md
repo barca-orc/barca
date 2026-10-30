@@ -16,6 +16,20 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- The UI answers "what is broken, and why" on projects of thousands of nodes. Every view shows
+  its scope's health as a bar (`77 failed · 2,111 stale · 7,912 healthy`), group rows show the
+  same breakdown, and a Failures view lists every failure in scope with its error and how many
+  nodes wait on it, most impact first. A node's panel leads with its error, traceback and run,
+  or with the failed upstream nodes a stale node waits on, and counts what depends on it. Search
+  reaches every node in scope, rows are one line, and a graph above 1,500 nodes draws the
+  selected node's lineage instead of never finishing its layout. The Runs page shows the last
+  24 hours hour by hour with filters for runs that did not succeed, and each failed run's error.
+
+- Experimental `GET /state` takes group ids in `targets` (`group:FILE:NAME`, every node in the
+  group) and `files=` (every node of a source file). The UI scopes a group or pipeline that way:
+  it listed every node id in the URL, which a server refused (`431`) for a pipeline or group of
+  a few hundred nodes, leaving its states unavailable.
+
 - Connect the UI with a bootstrap code or API token, manage named tokens, and show new
   secrets once with explicit expiry choices. Tab-scoped credentials cover ordinary requests
   and fetch-based event streams; disconnect/revocation clears the connection and UI cache.

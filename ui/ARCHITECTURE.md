@@ -65,7 +65,10 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/status.ts` | `statusMeta`, `freshnessLabel`, `nodeKindLabel` — domain → display tokens | — |
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre alone, no React: what `graphLayout.worker.ts` runs off the main thread | — |
-| `lib/pipeline.ts` | derive pipeline/source names from asset ids | — |
+| `lib/pipeline.ts` | derive pipeline/source names from asset ids; `mergeStates` for the sidebar | `pipeline.test.ts` |
+| `lib/health.ts` | `healthCounts`, `failures`, `failedUpstream`, `consumersOf` — what is broken in a scope and why | `health.test.ts` |
+| `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
+| `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.
 `runFeedback` returns `{ kind: 'failed', error, logs }`, not an `<ErrorPanel>`.
@@ -77,6 +80,52 @@ These return **descriptors** (plain data / discriminated unions), never JSX. e.g
 - `hooks/` — thin wrappers that connect I/O to the pure core. `useRunStream` opens the
   `EventSource` and pipes each event through `reduceRunEvent`; all the folding logic lives
   in `lib/runStream.ts`, so the hook itself needs no test.
+
+## Model, update, view: pages with state of their own
+
+A page that remembers more than its URL and its server data is a **program**
+(`lib/program.ts`): a `Model`, a `Msg` union of everything that can happen to it, an `Effect`
+union of everything it asks the outside world to do, and a pure, exhaustively matched
+`update(model, msg) → [model, effects]`. Its view is a component of the model and of its server
+data, which only dispatches messages; `hooks/useProgram.ts` runs the program and hands each
+effect to the page's interpreter, which does the I/O and dispatches the reply as a message.
+
+Server data reaches a view as a `Remote<T>` (`lib/remote.ts`): `loading`, `failed`, or `ready`
+with the error of a failed refresh. TanStack Query still fetches, caches and polls; `remote()`
+folds its flags into the union at the edge.
+
+| Page | Program | View | Container |
+|---|---|---|---|
+| Tokens | `lib/tokensPage.ts` | `pages/TokensView.tsx` | `pages/TokensPage.tsx` |
+| Runs | `lib/runsPage.ts` | `pages/RunsView.tsx` | `pages/RunsPage.tsx` |
+
+Any screen of such a page is a value: construct a model and a `Remote`, render the view. The kit
+page does that for each state, and `replay(update, model, msgs)` tests a sequence of messages
+without a browser. A new page with local state follows the same split; the URL stays the source
+of truth for what is selected (selecting is a `navigate` effect, the page reads the URL back).
+
+## The kit: every state, from fixtures
+
+`/ui/#/kit` (development only, outside the auth gate so it needs no server) renders each
+component and each program's view in each of its states. The states come from `kit/fixtures.ts`,
+whose tables are `satisfies Record<Union, …>`: a variant added to a union, a generated wire type
+included, is a compile error there until it has a fixture, and `kit/fixtures.test.ts` checks
+each fixture is the state its key names. A view too big to show side by side is shown one state
+at a time with chips; the messages a click sends are listed under it.
+
+## Large projects: what is broken, and why
+
+`lib/health.ts` answers the questions a project of thousands of nodes raises, over `/state` rows
+and the `/assets` graph: a scope's counts by state (`healthCounts`, drawn by `HealthBar`), its
+failures with their error headline and how many nodes downstream wait on each (`failures`), and
+the failed nodes upstream of a stale one (`failedUpstream`). The grouped page shows the scope's
+health beside its breadcrumb, a health bar per group row, and a Failures view of every failure
+in scope; the node panel leads with the error, or with what a stale node waits on.
+
+A group or pipeline asks `GET /state` for its scope by group id or file (`?targets=group:…`,
+`?files=…`), which the server expands: never a list of node ids, which a server refuses past a
+few hundred. A graph above `GRAPH_LIMIT` nodes (`lib/lineage.ts`) draws the selected node's
+lineage, two steps up and down, instead of laying out a graph nobody can read.
 
 ## Example: the run stream, end to end
 

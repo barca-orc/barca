@@ -42,13 +42,16 @@ ETags permit HTTP revalidation; a 304 means that representation is unchanged, no
 upstream external data was polled again.
 
 `GET /state?targets=a,b` (experimental) limits status and duration queries to the targets'
-upstream cone. An empty or omitted selection means the whole graph; each selection has its
+upstream cone. A group id target (`group:FILE:NAME`) expands to every node in the group and its
+nested groups, and `files=` adds every node of the named source files; an unknown group or file
+is `404`. An empty or omitted selection means the whole graph; each selection has its
 own cached status. A current WAL DB is read in place even under `--read-only`, without
 migrating or checkpointing it (SQLite may create its WAL/SHM sidecars). Fallback copies and
 migrations and history computations run off the request threads. A read-only server warms
 status once at startup even while an external writer changes the DB, then on settled changes
 while polled. Evidence: `read_cache` unit tests, the router's
-`state_targets_select_only_the_requested_upstream_cone`, and the synthetic GB-class
+`state_targets_select_only_the_requested_upstream_cone` and
+`state_targets_take_groups_and_files_in_place_of_their_nodes`, and the synthetic GB-class
 [`bench_status.py`](../../benchmarks/planning_pipeline/bench_status.py) measurement.
 
 The grouped UI and sidebar render from graph/group metadata before cache status is available.

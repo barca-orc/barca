@@ -10,6 +10,14 @@ const group = {
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/groups', route => route.fulfill({ json: [group] }))
+  // The server does not know the mocked group, so stand in for its expansion of the group id:
+  // the state itself stays real.
+  await page.route(/\/state\?/, route => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('targets') !== group.id) return route.continue()
+    url.searchParams.set('targets', group.members.join(','))
+    return route.continue({ url: url.toString() })
+  })
 })
 
 for (const view of ['list', 'graph']) {
@@ -69,8 +77,9 @@ test('the grouped list topbar shows running before the first stream event arrive
     const row = page.getByRole('row').filter({ hasText: 'history_asset' })
     await expect(row).toContainText('Running')
     await expect(page.getByRole('complementary', { name: 'history_asset details' })).toContainText('Running')
+    // The breadcrumb's root is the open pipeline.
     await page.getByRole('navigation', { name: 'Group breadcrumb' })
-      .getByRole('button', { name: 'All pipelines', exact: true }).click()
+      .getByRole('button', { name: 'pipeline.py', exact: true }).click()
     await expect(page.locator(`tr[data-group="${group.id}"]`)).toContainText('1 running')
   } finally {
     release()

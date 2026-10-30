@@ -1117,9 +1117,18 @@ paths:
       - name: targets
         in: query
         required: false
-        description: 'Experimental: comma-separated target names or full node ids. Return and compute
-          only their upstream cone, including durations. Absent or empty means every node.
-          An unknown target is 404; an ambiguous name is 409.'
+        description: 'Experimental: comma-separated target names, full node ids or group ids
+          (group:FILE:NAME, as GET /groups lists them; a group stands for every node in it and
+          its nested groups). Return and compute only their upstream cone, including durations.
+          Absent or empty (with no files) means every node. An unknown target or group is 404;
+          an ambiguous name is 409.'
+        schema:
+          type: string
+      - name: files
+        in: query
+        required: false
+        description: 'Experimental: comma-separated source files, as they appear before the last
+          colon of node ids. Adds every node they define to targets. An unknown file is 404.'
         schema:
           type: string
       responses:
@@ -1178,6 +1187,11 @@ paths:
       - name: targets
         in: query
         description: Experimental comma-separated targets, as for GET /state.
+        schema:
+          type: string
+      - name: files
+        in: query
+        description: Experimental comma-separated source files, as for GET /state.
         schema:
           type: string
       responses:

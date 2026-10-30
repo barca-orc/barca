@@ -514,8 +514,12 @@ value of its first key only.
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 The experimental HTTP query `GET /state?targets=a,b` computes only the named nodes and their
-upstream dependencies, including durations. Absent or empty means all nodes; unknown targets
-answer `404`, ambiguous names `409`. It preserves the `NodeState` array shape (OpenAPI owns it).
+upstream dependencies, including durations. A target may be a group id (`group:FILE:NAME`, as
+`GET /groups` lists it), which stands for every node in the group and its nested groups, and
+`files=a.py,b.py` adds every node those source files define, so a view of thousands of nodes is
+one short URL. Absent or empty `targets` and `files` mean all nodes; unknown targets, groups or
+files answer `404`, ambiguous names `409`. It preserves the `NodeState` array shape (OpenAPI owns
+it).
 
 `[server] url` in `barca.toml` or `BARCA_SERVER` (experimental) points `get` and `run` at a
 server's ledger (`barca docs server-mode`): they still run here, read cache hits from the server

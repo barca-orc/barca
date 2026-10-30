@@ -5,13 +5,14 @@
  */
 
 import { formatSeconds } from './assetTable'
-import type { AssetRunEntry, NodeState } from './types'
+import type { AssetRunEntry } from './types'
 
 /** Nodes that take `id` as an input, sorted by name. */
-export function downstreamOf(id: string, nodes: NodeState[]): NodeState[] {
+export function downstreamOf<T extends { id: string; inputs: string[] }>(id: string, nodes: readonly T[]): T[] {
+  const name = (n: T) => n.id.slice(n.id.lastIndexOf(':') + 1)
   return nodes
     .filter((n) => n.inputs.includes(id))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => name(a).localeCompare(name(b)))
 }
 
 export interface HistoryBar {

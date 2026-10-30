@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Button, ConnectionBadge, IconButton, KeyValue, LogViewer, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Button, Chip, ChipGroup, ConnectionBadge, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
 import { formatSeconds } from '@/lib/assetTable'
+import { headline } from '@/lib/health'
 import type { Connection } from '@/lib/connection'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, triggeredByLabel } from '@/lib/runs'
-import { canLoadMore, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { canLoadMore, runActivity, runFailed, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunList, RunView } from '@/lib/types'
 import './runs.css'
 
@@ -86,11 +87,47 @@ export interface RunsViewProps {
   selected: { id: string; run: Remote<RunView> } | null
   /** The queue strip (`QueuePanel`, which loads its own data). */
   queue?: ReactNode
+  /** When the list was loaded (ms since epoch): the activity strip's last hour. */
+  now: number
   dispatch: Dispatch<RunsMsg>
 }
 
 /** The Runs page, for any model, run list and selection: renders and dispatches, nothing else. */
-export function RunsView({ model, runs, connection, selected, queue, dispatch }: RunsViewProps) {
+const FILTERS: { value: RunFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'failed', label: 'Not successful' },
+  { value: 'live', label: 'In progress' },
+]
+
+/** The last day hour by hour: a bar per hour, failures in red on top. */
+function ActivityStrip({ activity }: { activity: RunActivity }) {
+  const peak = Math.max(1, ...activity.hours.map((h) => h.ok + h.failed + h.live))
+  return (
+    <div className="barca-activity" aria-label="Runs started in the last 24 hours, hour by hour">
+      <div className="barca-activity-bars">
+        {activity.hours.map((h) => {
+          const n = h.ok + h.failed + h.live
+          const label = `${new Date(h.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: ${n} run${n === 1 ? '' : 's'}${h.failed ? `, ${h.failed} not successful` : ''}${h.live ? `, ${h.live} in progress` : ''}`
+          return (
+            <span key={h.at} title={label} style={{ height: `${Math.max(n ? 8 : 2, (n / peak) * 100)}%` }}>
+              {h.failed > 0 && <i data-kind="failed" style={{ flexGrow: h.failed }} />}
+              {h.live > 0 && <i data-kind="live" style={{ flexGrow: h.live }} />}
+              {h.ok > 0 && <i data-kind="ok" style={{ flexGrow: h.ok }} />}
+            </span>
+          )
+        })}
+      </div>
+      <div className="barca-activity-summary">
+        <strong>{activity.total.toLocaleString()}</strong> runs in the last 24 h
+        {activity.failed > 0 && <> · <span className="barca-cell-failed">{activity.failed} not successful ({Math.round((activity.failed / activity.total) * 100)}%)</span></>}
+        {activity.medianSeconds !== null && <> · median {formatSeconds(activity.medianSeconds)}</>}
+        {activity.partial && <> · of the runs loaded</>}
+      </div>
+    </div>
+  )
+}
+
+export function RunsView({ model, runs, connection, selected, queue, now, dispatch }: RunsViewProps) {
   const list = runs.kind === 'ready' ? runs.data : null
   return (
     <div className="barca-view">
@@ -104,16 +141,36 @@ export function RunsView({ model, runs, connection, selected, queue, dispatch }:
           {match(runs)
             .with({ kind: 'loading' }, () => <div aria-label="Loading runs"><Skeleton height={180} /></div>)
             .with({ kind: 'failed' }, ({ error }) => <RunsError error={error} dispatch={dispatch} />)
-            .with({ kind: 'ready' }, ({ data, refreshError }) => <>
+            .with({ kind: 'ready' }, ({ data, refreshError }) => {
+              const shown = visibleRuns(data.runs, model)
+              const failedCount = data.runs.filter((r) => runFailed(r.status)).length
+              return <>
               {refreshError && <RunsError error={refreshError} dispatch={dispatch} />}
+              {data.runs.length > 0 && <>
+                <ActivityStrip activity={runActivity(data.runs, now, 24, data.truncated)} />
+                <div className="barca-table-tools">
+                  <ChipGroup label="Show">
+                    {FILTERS.map((f) => (
+                      <Chip key={f.value} pressed={model.filter === f.value} onClick={() => dispatch({ type: 'filter_changed', filter: f.value })}>
+                        {f.label}{f.value === 'failed' ? ` · ${failedCount}` : ''}
+                      </Chip>
+                    ))}
+                  </ChipGroup>
+                  <SearchInput placeholder="Filter by target or run id" value={model.query} onChange={(value) => dispatch({ type: 'query_changed', value })} />
+                  <span className="barca-count">{shown.length.toLocaleString()} shown</span>
+                </div>
+              </>}
               {data.runs.length === 0
                 ? <p className="barca-table-empty">No runs recorded. Start a run from the graph to see it here.</p>
-                : <RunTable list={data} selected={selected?.id ?? null} dispatch={dispatch} />}
+                : shown.length === 0
+                  ? <p className="barca-table-empty">No loaded run matches.</p>
+                  : <RunTable runs={shown} selected={selected?.id ?? null} dispatch={dispatch} />}
               {data.truncated && <div className="barca-run-more">
                 <p className="barca-note">Showing the latest {data.runs.length} runs.</p>
                 {canLoadMore(model) && <Button size="sm" onClick={() => dispatch({ type: 'load_more' })}>Load more</Button>}
               </div>}
-            </>)
+            </>
+            })
             .exhaustive()}
         </div>
         {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} dispatch={dispatch} />}
@@ -126,12 +183,15 @@ function RunsError({ error, dispatch }: { error: string; dispatch: Dispatch<Runs
   return <p className="barca-table-empty" role="alert">Can't load runs: {error} <Button size="sm" onClick={() => dispatch({ type: 'retry_list' })}>Retry</Button></p>
 }
 
-function RunTable({ list, selected, dispatch }: { list: RunList; selected: string | null; dispatch: Dispatch<RunsMsg> }) {
+function RunTable({ runs, selected, dispatch }: { runs: RunList['runs']; selected: string | null; dispatch: Dispatch<RunsMsg> }) {
   return <table className="barca-table barca-run-table"><thead><tr>
     <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th>
-  </tr></thead><tbody>{list.runs.map(run => <tr key={run.id} aria-selected={selected === run.id || selected === run.handle}>
+  </tr></thead><tbody>{runs.map(run => <tr key={run.id} aria-selected={selected === run.id || selected === run.handle}>
     <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button><div className="barca-cell-sub">{run.command}</div></td>
-    <td><code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code></td>
+    <td>
+      <code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code>
+      {run.error && <div className="barca-cell-sub barca-run-row-error" title={run.error}>{headline(run.error)}</div>}
+    </td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
     <td><StatusBadge size="sm" status={runStatus(run.status)} label={runLabel(run.status)} /></td>
     <td>{runTime(run.started_at)}</td>
