@@ -236,3 +236,50 @@ test('a failure row retries its node and opens its run', async ({ page }) => {
   await page.getByRole('button', { name: /^Open run of / }).click()
   await expect(page).toHaveURL(/#\/runs\?run=41/)
 })
+
+test('All pipelines is a map of files, and a pipeline of one group opens that group', async ({ page }) => {
+  const file = (name: string, up?: string) => Array.from({ length: 20 }, (_, i) => ({
+    id: `${name}.py:${name}_${i}`, kind: 'asset', freshness: 'always', env: [],
+    inputs: up ? [`${up}.py:${up}_${i}`] : [],
+  }))
+  const nodes = [...file('raw'), ...file('marts', 'raw')]
+  await page.route('**/assets', route => route.fulfill({ json: nodes }))
+  await page.route('**/groups', route => route.fulfill({ json: [{
+    id: 'group:marts.py:marts', name: 'Marts', description: '',
+    members: nodes.filter(n => n.id.startsWith('marts')).map(n => n.id), output: 'marts.py:marts_0',
+  }] }))
+  await page.route(/\/state(?:\?.*)?$/, route => route.fulfill({ json: [] }))
+  await page.goto('/ui/#/assets?view=graph')
+  await expect(page.locator('.react-flow__node')).toHaveCount(2)
+  await expect(page.getByText('40 nodes · 2 pipelines')).toBeVisible()
+  await expect(page.locator('.react-flow__edge-text')).toHaveText('20')
+
+  await page.locator('.react-flow__node[data-id="domain:marts.py"]').dblclick()
+  await expect(page).toHaveURL(/pipeline=marts\.py/)
+  await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText('marts.py')
+  await expect(page.getByText('20 nodes · 20 items')).toBeVisible()
+  // Unconnected members lie in a grid; what feeds them is one faded port per place.
+  await expect(page.locator('.barca-port-node')).toHaveText('raw.py · 20')
+  const rows = await page.locator('.react-flow__node-asset').evaluateAll(all => new Set(all.map(n => n.getBoundingClientRect().top)).size)
+  expect(rows).toBeLessThan(8)
+})
+
+test('the minimap and the legend stay off the graph and the zoom controls', async ({ page }) => {
+  await page.goto('/ui/#/assets?pipeline=modeling.py&view=graph')
+  await expect(page.locator('.react-flow__minimap')).toHaveCount(0)
+  await page.getByRole('button', { name: 'All nodes' }).click()
+  const minimap = page.locator('.react-flow__minimap')
+  await expect(minimap).toBeVisible()
+  await page.waitForTimeout(500)
+  const box = (await minimap.boundingBox())!
+  const legend = (await page.locator('.barca-legend').boundingBox())!
+  const controls = (await page.locator('.react-flow__controls').boundingBox())!
+  expect(legend.x).toBeGreaterThanOrEqual(controls.x + controls.width)
+  const overlapped = await page.locator('.react-flow__node').evaluateAll((all, m) => all.filter((n) => {
+    const r = n.getBoundingClientRect()
+    return r.right > m.x && r.bottom > m.y
+  }).length, box)
+  expect(overlapped).toBe(0)
+  await expect(minimap.locator('.react-flow__minimap-node')).toHaveCount(152)
+  await page.screenshot({ path: '/tmp/minimap.png' })
+})

@@ -220,7 +220,7 @@ export function projectGroups(
   const owner = new Map<string, string>()
   for (const id of members)
     for (const leaf of groupLeaves(id, tree)) owner.set(leaf, id)
-  const external = new Set<string>()
+  const external = new Map<string, string[]>()
   const names = distinctNames(members.filter((id) => !tree.groups.has(id)))
   const entries: GraphEntry[] = members
     .filter((id) => tree.groups.has(id) || byId.has(id))
@@ -232,7 +232,7 @@ export function projectGroups(
         for (const input of byId.get(leaf)?.inputs ?? []) {
           const visibleOwner = owner.get(input)
           if (visibleOwner && visibleOwner !== id) inputs.add(visibleOwner)
-          else if (!visibleOwner) external.add(input)
+          else if (!visibleOwner) external.set(input, [...(external.get(input) ?? []), id])
         }
       const assetCount = leaves.filter(
         (leaf) => byId.get(leaf)?.kind === 'asset',
@@ -251,5 +251,55 @@ export function projectGroups(
         outputName: group ? memberName(groupOutput(id, tree)) : undefined,
       }
     })
-  return { entries, external: [...external] }
+  return { entries, external: [...external.keys()], consumers: external }
+}
+
+/** `1 group`, `3 groups`. */
+export function plural(count: number, noun: string): string {
+  return `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`
+}
+
+/** The group that is all of `assets`, if there is one: nothing above it is worth a level. */
+export function soleGroup(assets: ListNode[], tree: GroupTree): string | null {
+  if (assets.length === 0 || assets.some((a) => !tree.parents.has(a.id))) return null
+  const ids = new Set(assets.map((a) => a.id))
+  const roots = tree.roots.filter((id) => groupLeaves(id, tree).some((leaf) => ids.has(leaf)))
+  return roots.length === 1 ? roots[0]! : null
+}
+
+/** Past this many, a view's outside inputs are shown by where they come from. */
+const PORTS_UP_TO = 10
+
+/**
+ * `entries` and, as ports feeding them, the inputs from outside the view: one each, or one for
+ * each place they come from (`placeOf`) when there are too many to read.
+ */
+export function withPorts(
+  entries: GraphEntry[],
+  external: ReadonlyMap<string, string[]>,
+  placeOf: (id: string) => string,
+): GraphEntry[] {
+  const merged = external.size > PORTS_UP_TO
+  const ports = new Map<string, { ids: string[]; consumers: Set<string> }>()
+  for (const [input, consumers] of external) {
+    const key = merged ? `port:${placeOf(input)}` : input
+    const port = ports.get(key) ?? { ids: [], consumers: new Set() }
+    port.ids.push(input)
+    for (const id of consumers) port.consumers.add(id)
+    ports.set(key, port)
+  }
+  const fed = new Map<string, string[]>()
+  for (const [key, { consumers }] of ports)
+    for (const id of consumers) fed.set(id, [...(fed.get(id) ?? []), key])
+  return [
+    ...[...ports].map(([key, { ids, consumers }]): GraphEntry => ({
+      id: key,
+      kind: 'port',
+      inputs: [],
+      name: merged ? `${key.slice('port:'.length)} · ${ids.length}` : shortName(key),
+      summary: merged ? ids.map(shortName).join(', ') : undefined,
+      loose: consumers.size > 1,
+    })),
+    ...entries.map((e) => (fed.has(e.id) ? { ...e, inputs: [...e.inputs, ...fed.get(e.id)!] } : e)),
+  ]
 }

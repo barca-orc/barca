@@ -85,3 +85,41 @@ describe('edgeClassName', () => {
     expect(edgeClassName({ sourceStatus: 'queued', targetStatus: 'queued', hot: false })).toBe('')
   })
 })
+
+describe('layout', () => {
+  const box = (id: string) => ({ id, width: 100, height: 50 })
+  it('packs unconnected nodes in rows, not one column', () => {
+    const nodes = Array.from({ length: 16 }, (_, i) => box(`n${i}`))
+    const out = layout({ dir: 'LR', ranksep: 96, nodes, edges: [] })
+    expect(new Set(Object.values(out).map((p) => p.y)).size).toBeLessThan(6)
+    expect(new Set(Object.values(out).map((p) => `${p.x},${p.y}`)).size).toBe(16)
+  })
+
+  it('keeps a connected part together, and puts first nodes ahead of it', () => {
+    const out = layout({
+      dir: 'LR',
+      ranksep: 96,
+      nodes: [box('a'), box('b'), { ...box('port'), first: true }],
+      edges: [['a', 'b']],
+    })
+    expect(out.a!.y).toBe(out.b!.y)
+    expect(out.b!.x - out.a!.x).toBe(196)
+    expect(out.port!.y).toBeLessThanOrEqual(out.a!.y)
+  })
+})
+
+describe('loose entries', () => {
+  const entries = [
+    { id: 'x', kind: 'port' as const, inputs: [], loose: true },
+    { id: 'a', kind: 'asset' as const, inputs: ['x'] },
+    { id: 'b', kind: 'asset' as const, inputs: ['x'], inputWeights: { x: 8 } },
+  ]
+  it('keep their edges out of the layout but not out of the graph', () => {
+    expect(layoutInput(entries, 'LR').edges).toEqual([])
+    const { edges } = buildGraph(entries, 'LR')
+    expect(edges.map((e) => e.data)).toEqual([
+      { weight: undefined, port: true, loose: true },
+      { weight: 8, port: true, loose: true },
+    ])
+  })
+})

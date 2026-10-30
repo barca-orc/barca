@@ -6,7 +6,7 @@ import { StatusDot } from './StatusDot'
 export interface DagNodeProps {
   name: string
   kind: string
-  /** The word shown for its kind, when it is not `kind` (a task that is a check). */
+  /** The word for its kind; none for an asset, which its icon says already. */
   kindLabel?: string
   status: StatusKind
   metric?: string | null
@@ -121,22 +121,24 @@ export function DagNode({
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            justifyContent: kindLabel ? 'space-between' : 'flex-start',
             gap: 8,
             marginTop: 6,
           }}
         >
-          <span
-            style={{
-              fontFamily: 'var(--font-sans)',
-              fontSize: 'var(--text-2xs)',
-              letterSpacing: 'var(--tracking-wide)',
-              textTransform: 'uppercase',
-              color: 'var(--text-faint)',
-            }}
-          >
-            {kindLabel ?? kind}
-          </span>
+          {kindLabel && (
+            <span
+              style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-2xs)',
+                letterSpacing: 'var(--tracking-wide)',
+                textTransform: 'uppercase',
+                color: 'var(--text-faint)',
+              }}
+            >
+              {kindLabel}
+            </span>
+          )}
           {(statusLabel ?? metric) && (
             <span
               style={{

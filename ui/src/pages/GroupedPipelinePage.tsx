@@ -49,6 +49,7 @@ import { formatSeconds } from '@/lib/assetTable'
 import { INITIAL_FAILURES, MUTED_KEY, failureTable, parseMuted, updateFailures, type FailuresEffect } from '@/lib/failuresView'
 import { useProgram } from '@/hooks/useProgram'
 import { FailuresView } from './FailuresView'
+import { domainFile, domainMap } from '@/lib/domainMap'
 import { inPipeline, pipelineName, sourceFile } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
@@ -61,6 +62,9 @@ import {
   ENTRY_SORTS,
   groupTree,
   parseEntrySort,
+  plural,
+  soleGroup,
+  withPorts,
   PREVIEW_FAILURE,
   type EntryRank,
   type EntrySort,
@@ -92,7 +96,7 @@ export function GroupedPipelinePage() {
   const flat = params.get('flat') === '1'
   const show = !flat && params.get('show') === 'failures' ? 'failures' : 'items'
   const selected = params.get(graph ? 'focus' : 'node')
-  const scope = viewScope(params, tree)
+  const requestedScope = viewScope(params, tree)
   const query = params.get('q') ?? ''
   const hasDemoPreview = (groupsQuery.data ?? []).some(g => g.members.includes(PREVIEW_FAILURE)) && (!pipeline || pipeline === 'modeling.py')
   const preview = hasDemoPreview && params.get('preview') === 'failed'
@@ -135,6 +139,9 @@ export function GroupedPipelinePage() {
   const byId = useMemo(() => new Map(states.map((s) => [s.id, s])), [states])
   const selectedAsset = assets.find(a => a.id === selected) ?? null
   const nodeRun = useNodeRun(selectedAsset)
+  // A pipeline that is one group is that group: no card to open first.
+  const sole = useMemo(() => soleGroup(assets, tree), [assets, tree])
+  const scope = requestedScope ?? (flat ? null : sole)
   const projected = useMemo(
     () => projectGroups(assets, tree, scope),
     [assets, scope, tree],
@@ -147,13 +154,23 @@ export function GroupedPipelinePage() {
     [assets, flat, projected.entries],
   )
   // A graph too big to read is drawn as the selected node's lineage instead.
-  const tooBig = graph && entries.length > GRAPH_LIMIT
+  const map = useMemo(
+    () => (graph && !pipeline && !scope && !flat ? domainMap(allAssets) : null),
+    [graph, pipeline, scope, flat, allAssets],
+  )
+  const tooBig = graph && !map && entries.length > GRAPH_LIMIT
   const lineageOf = tooBig && selected && !tree.groups.has(selected) ? selected : null
+  const placeOfInput = (id: string) =>
+    groupPath(tree.parents.get(id) ?? null, tree).filter((g) => g.id !== sole).map((g) => g.name).join(' › ') || sourceFile(id)
   const drawn = useMemo<GraphEntry[]>(
-    () => tooBig
-      ? lineageOf ? lineage(lineageOf, assets, 2, consumers).map((a) => ({ ...a, name: shortName(a.id) })) : []
-      : entries,
-    [tooBig, lineageOf, assets, consumers, entries],
+    () => map
+      ? map.entries
+      : tooBig
+        ? lineageOf ? lineage(lineageOf, assets, 2, consumers).map((a) => ({ ...a, name: shortName(a.id) })) : []
+        : scope && !flat ? withPorts(entries, projected.consumers, placeOfInput) : entries,
+    // placeOfInput follows the tree.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [map, tooBig, lineageOf, assets, consumers, entries, scope, flat, projected.consumers, tree],
   )
   // Typing stays ahead of the list: a one-letter search can match thousands of nodes.
   const needle = useDeferredValue(query).trim().toLowerCase()
@@ -176,7 +193,7 @@ export function GroupedPipelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needle, flat, show, graph, entries, scope, leavesOf, assets, byId])
   const stateOf = (entry: GraphEntry): GraphState => {
-    const memberIds = leaves(entry.id)
+    const memberIds = map?.leaves.get(entry.id) ?? leaves(entry.id)
     const liveStatus = nodeRun.statuses[entry.id]
     const health = entry.kind === 'group'
       ? groupHealth(memberIds, byId, nodeRun.statuses)
@@ -190,7 +207,7 @@ export function GroupedPipelinePage() {
     () => Object.fromEntries((graph ? drawn : [...entries, ...hits]).map((entry) => [entry.id, stateOf(entry)])),
     // stateOf reads only what is listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [graph, drawn, entries, hits, byId, leavesOf, stateQuery.isError, nodeRun.statuses],
+    [graph, drawn, map, entries, hits, byId, leavesOf, stateQuery.isError, nodeRun.statuses],
   )
   // The nodes of the open scope, and what is wrong with them.
   const scopeIds = useMemo(() => (scope ? leaves(scope) : assets.map((a) => a.id)),
@@ -267,7 +284,8 @@ export function GroupedPipelinePage() {
     : visibleEntries.filter((e) => e.kind !== 'group').map((e) => e.id)
   const labels = distinctNames(leafIds)
   const win = useTableWindow(rowCount, scroller)
-  const path = groupPath(scope, tree)
+  const crumbScope = scope === sole ? null : scope
+  const path = groupPath(crumbScope, tree).filter((group) => group.id !== sole)
   const selectedGroup = tree.groups.get(selected ?? '')
   const selectedNode = byId.get(selected ?? '')
   const selectedLeaves = selectedGroup ? leaves(selectedGroup.id) : []
@@ -298,8 +316,10 @@ export function GroupedPipelinePage() {
   }
   const select = (id: string | null) =>
     update({ [graph ? 'focus' : 'node']: id })
-  const openGroup = (id: string | null) =>
-    update({ group: id, node: null, focus: null, q: null, show: null })
+  const openGroup = (id: string | null) => {
+    const file = id && domainFile(id)
+    update({ ...(file ? { pipeline: file, group: null } : { group: id === sole ? null : id }), node: null, focus: null, q: null, show: null })
+  }
   const revealNode = (id: string) =>
     update({
       group: tree.parents.get(id) ?? null,
@@ -371,12 +391,12 @@ export function GroupedPipelinePage() {
         <div className="barca-view-bar">
           {/* The breadcrumb is the title: the page says where it is once. */}
           <nav className="barca-group-crumbs" aria-label="Group breadcrumb">
-            {scope && (
-              <IconButton label="Up one level" size="sm" onClick={() => openGroup(tree.parents.get(scope) ?? null)}>
+            {crumbScope && (
+              <IconButton label="Up one level" size="sm" onClick={() => openGroup(tree.parents.get(crumbScope) ?? null)}>
                 <ArrowLeft size={14} />
               </IconButton>
             )}
-            {scope
+            {crumbScope
               ? <button type="button" onClick={() => openGroup(null)}>{rootName}</button>
               : <h1 aria-current="page">{rootName}</h1>}
             {path.map((group, index) => (
@@ -390,7 +410,7 @@ export function GroupedPipelinePage() {
           </nav>
           <span className="barca-count">
             {scopeIds.length.toLocaleString()} nodes
-            {!flat && show === 'items' && ` · ${entries.length} ${scope ? 'items' : 'groups'}`}
+            {!flat && show === 'items' && ` · ${map ? plural(map.entries.length, 'pipeline') : plural(entries.length, scope ? 'item' : 'group')}`}
           </span>
           {runningHere > 0 && (
             <span className="barca-count barca-count-running">
@@ -401,7 +421,7 @@ export function GroupedPipelinePage() {
           <div className="barca-scope-health" title="Every node in view, by state">
             {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={100} />}
           </div>
-          {scope && projected.external.length > 0 && !flat && show === 'items' && (
+          {scope && projected.external.length > 0 && !flat && !graph && show === 'items' && (
             <span className="barca-group-external" title={projected.external.map(shortName).join(', ')}>
               External inputs · {projected.external.length}
             </span>
@@ -548,7 +568,7 @@ export function GroupedPipelinePage() {
               <div className="barca-legend">
                 <span>
                   <FolderOpen size={12} />
-                  Group
+                  {map ? 'Pipeline' : 'Group'}
                 </span>
                 <span>
                   <StatusDot status="failed" size={6} />
@@ -647,10 +667,10 @@ export function GroupedPipelinePage() {
                             {group && <FolderOpen size={15} />}
                             <strong><MiddleName name={labels.get(entry.id) ?? entry.name ?? entry.id} title={entry.id} /></strong>
                             {group ? (
-                              nestedGroups > 0 && <span className="barca-cell-sub">{nestedGroups} groups</span>
+                              nestedGroups > 0 && <span className="barca-cell-sub">{plural(nestedGroups, 'group')}</span>
                             ) : (
                               <>
-                                {entry.kind !== 'asset' && entry.kind !== 'group' && <Tag size="sm">{nodeKindLabel({ id: entry.id, kind: entry.kind })}</Tag>}
+                                {entry.kind !== 'asset' && entry.kind !== 'group' && entry.kind !== 'port' && <Tag size="sm">{nodeKindLabel({ id: entry.id, kind: entry.kind })}</Tag>}
                                 {isHit.has(entry.id) && <span className="barca-cell-sub" title={entry.id}>in {pathOf(entry.id) || sourceFile(entry.id)}</span>}
                               </>
                             )}

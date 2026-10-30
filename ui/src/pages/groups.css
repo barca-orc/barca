@@ -81,6 +81,18 @@
 .barca-group-node[data-selected='true'] {
   outline: 1px solid var(--text-strong);
 }
+.barca-port-node {
+  width: 176px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+.barca-port-node .barca-mid { white-space: pre; }
 .barca-group-node-title {
   display: flex;
   align-items: center;

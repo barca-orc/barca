@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { Database, Radio, Zap } from 'lucide-react'
 import { DagNode } from '@/components'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
+import { domainMap } from '@/lib/domainMap'
 import type { GraphEntry } from '@/lib/graph'
+import { withPorts } from '@/lib/groups'
 import { graphState, liveGraphState, type GraphState } from '@/lib/graphState'
 import { runningGraphState } from '@/lib/running'
 import { NODE_KINDS, STATUS_KINDS, nodeBySeverity, runningByStep, runningPartitioned, variants } from '../fixtures'
@@ -36,8 +38,32 @@ const PIPELINE_STATES: Record<string, GraphState> = {
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
 
+// A group's view: members in a grid where nothing connects them, and an input from outside.
+const MEMBERS: GraphEntry[] = withPorts(
+  Array.from({ length: 8 }, (_, i) => ({ id: `p:invoices_0${i}`, kind: 'asset', inputs: [] })),
+  new Map([['q:accounts', ['p:invoices_00']]]),
+  () => 'q',
+)
+
+// More edges than a map can draw: a grid in dependency order, with the selection's edges.
+const DENSE_MAP = domainMap(
+  Array.from({ length: 12 }, (_, f) =>
+    Array.from({ length: 4 }, (_, n) => ({
+      id: `file_${f}.py:n${n}`,
+      kind: 'asset' as const,
+      freshness: 'always' as const,
+      env: [],
+      inputs: Array.from({ length: f }, (_, up) => `file_${up}.py:n${n}`),
+    })),
+  ).flat(),
+)!
+const MAP_STATES: Record<string, GraphState> = Object.fromEntries(
+  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { status: 'success', label: 'Healthy', hint: '' } : { status: 'failed', label: '2 failed', hint: '' }]),
+)
+
 export function Graph() {
   const [selected, setSelected] = useState<string | null>('p:orders_clean')
+  const [mapSelected, setMapSelected] = useState<string | null>(DENSE_MAP.entries[5]?.id ?? null)
   return (
     <>
       <Spec id="kit-graph" title="DagNode · resting states" note="graphState() of a node in each cache severity, most urgent first.">
@@ -81,6 +107,18 @@ export function Graph() {
       <Spec title="GraphCanvas" note="The real canvas: asset and group nodes, a live edge into the running node, and selection (click a node).">
         <Frame height={340} width="100%">
           <GraphCanvas assets={PIPELINE} dir="LR" selected={selected} onSelect={setSelected} states={PIPELINE_STATES} />
+        </Frame>
+      </Spec>
+
+      <Spec title="GraphCanvas · unconnected members" note="Packed in a grid; an input from outside the view is a faded port.">
+        <Frame height={300} width="100%">
+          <GraphCanvas assets={MEMBERS} dir="LR" selected={null} onSelect={() => undefined} states={{}} />
+        </Frame>
+      </Spec>
+
+      <Spec title="GraphCanvas · pipeline map" note="All pipelines: a card per file; the selected card's edges carry how many inputs cross them.">
+        <Frame height={380} width="100%">
+          <GraphCanvas assets={DENSE_MAP.entries} dir="LR" selected={mapSelected} onSelect={setMapSelected} states={MAP_STATES} />
         </Frame>
       </Spec>
     </>

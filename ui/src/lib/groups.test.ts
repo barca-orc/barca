@@ -1,8 +1,12 @@
 import metadata from '../../e2e/group-metadata.json'
 import { describe, expect, it } from 'vitest'
+import type { GraphEntry } from './graph'
 import {
   compareEntries,
   distinctNames,
+  plural,
+  soleGroup,
+  withPorts,
   parseEntrySort,
   groupTree,
   PREVIEW_FAILURE,
@@ -152,5 +156,41 @@ describe('entry order', () => {
   it('reads the sort from the URL', () => {
     expect(parseEntrySort('name')).toBe('name')
     expect(parseEntrySort('bogus')).toBe('worst')
+  })
+})
+
+describe('soleGroup', () => {
+  const node = (id: string): ListNode => ({ id, kind: 'asset', freshness: 'always', env: [], inputs: [] })
+  const tree = groupTree([{ id: 'group:p.py:g', name: 'G', description: '', members: ['p.py:a', 'p.py:b'], output: 'p.py:b' }])
+  it('is the group that holds every node', () => {
+    expect(soleGroup([node('p.py:a'), node('p.py:b')], tree)).toBe('group:p.py:g')
+  })
+  it('is none when a node sits outside it', () => {
+    expect(soleGroup([node('p.py:a'), node('p.py:c')], tree)).toBeNull()
+    expect(soleGroup([], tree)).toBeNull()
+  })
+})
+
+describe('plural', () => {
+  it('says 1 group, not 1 groups', () => {
+    expect(plural(1, 'group')).toBe('1 group')
+    expect(plural(1200, 'item')).toBe('1,200 items')
+  })
+})
+
+describe('withPorts', () => {
+  const members: GraphEntry[] = [{ id: 'a', kind: 'asset', inputs: [] }, { id: 'b', kind: 'asset', inputs: [] }]
+  it('feeds each consumer from a port of its own input', () => {
+    const out = withPorts(members, new Map([['q:x', ['a']]]), () => 'q')
+    expect(out.map((e) => e.id)).toEqual(['q:x', 'a', 'b'])
+    expect(out[0]).toMatchObject({ kind: 'port', name: 'x', loose: false })
+    expect(out[1]!.inputs).toEqual(['q:x'])
+  })
+  it('merges many inputs by where they come from', () => {
+    const external = new Map(Array.from({ length: 11 }, (_, i) => [`q:x${i}`, ['a', 'b']] as [string, string[]]))
+    const out = withPorts(members, external, () => 'Staging')
+    expect(out).toHaveLength(3)
+    expect(out[0]).toMatchObject({ id: 'port:Staging', name: 'Staging · 11', loose: true })
+    expect(out[2]!.inputs).toEqual(['port:Staging'])
   })
 })

@@ -24,7 +24,7 @@ export function GroupNode({ data, selected }: NodeProps<GraphNode>) {
         <ArrowUpRight size={13} />
       </div>
       <div className="barca-group-node-summary">{data.summary}</div>
-      <div className="barca-group-node-output">↳ {data.outputName}</div>
+      {data.outputName && <div className="barca-group-node-output">↳ {data.outputName}</div>}
       <div className="barca-group-node-health">
         <StatusDot status={data.status} size={6} />
         {data.metric}
