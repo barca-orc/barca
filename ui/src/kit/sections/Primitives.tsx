@@ -6,10 +6,12 @@ import {
   Chip,
   ChipGroup,
   ConnectionBadge,
+  ErrorLine,
   HealthBar,
   IconButton,
   KeyValue,
   LastSuccess,
+  MiddleName,
   SearchInput,
   Section,
   Select,
@@ -21,12 +23,25 @@ import {
 } from '@/components'
 import { NOW_MS, STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
 import { Spec, Variant } from '../Kit'
+import { SidebarView } from '@/layouts/Sidebar'
+import type { PipelineSummary } from '@/lib/pipeline'
+import type { SidebarGroup } from '@/lib/sidebar'
 import { ConfirmDialog } from '@/components'
 import { runButton } from '@/lib/runTarget'
 
 /** Every primitive in components/, in each state it has. */
 export function Primitives() {
-  const [query, setQuery] = useState('')
+  const KIT_PIPELINES: PipelineSummary[] = [
+  { file: 'billing.py', name: 'billing.py', total: 639, worst: 'failed', known: true, running: 0 },
+  { file: 'catalog.py', name: 'catalog.py', total: 561, worst: 'unknown', known: false, running: 0 },
+]
+const KIT_GROUPS: SidebarGroup[] = [
+  { id: 'group:billing.py:raw', name: 'Raw', depth: 0, status: 'failed' },
+  { id: 'group:billing.py:raw:invoices', name: 'Invoices', depth: 1, status: 'success' },
+  { id: 'group:billing.py:marts', name: 'Marts', depth: 0, status: null },
+]
+
+const [query, setQuery] = useState('')
   const [on, setOn] = useState(['tasks'])
   const [when, setWhen] = useState<'any' | 'day'>('any')
   const toggle = (k: string) => setOn((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]))
@@ -112,6 +127,37 @@ export function Primitives() {
     <Spec title="ConnectionBadge">
       {variants(connections).map((kind) => (
         <ConnectionBadge key={kind} connection={connections[kind]} />
+      ))}
+    </Spec>
+
+    <Spec title="ErrorLine" note="The headline, and the traceback on expand when there is one.">
+      <Variant label="one line"><ErrorLine error="row count fell 64% day over day" /></Variant>
+      <Variant label="traceback"><ErrorLine error={'ValueError: bad shape\nTraceback (most recent call last):\n  File "a.py", line 3, in f'} /></Variant>
+      <Variant label="bare traceback"><ErrorLine error={'Traceback (most recent call last):\n  File "a.py", line 3, in f\nKeyError: \'x\''} /></Variant>
+      <Variant label="no error"><ErrorLine error={null} /></Variant>
+      <Variant label="panel size"><div style={{ width: 300 }}><ErrorLine error="row count fell 64% day over day" large /></div></Variant>
+    </Spec>
+    <Spec title="MiddleName" note="Cut in the middle when it does not fit; the full id on hover.">
+      <Variant label="fits"><MiddleName name="invoices_00" /></Variant>
+      <Variant label="cut"><div style={{ display: 'flex', width: 150 }}><MiddleName name="check__risk_review_alerts_01" /></div></Variant>
+    </Spec>
+    <Spec title="Sidebar" note="SidebarView: the groups of an open file, nested under the open group; collapsed to dots.">
+      {([['open', false], ['collapsed', true]] as const).map(([name, collapsed]) => (
+        <Variant key={name} label={name}>
+          <div style={{ display: 'flex', height: 300 }}>
+            <SidebarView
+              model={{ collapsed, expanded: [] }}
+              total={1200}
+              pipelines={KIT_PIPELINES}
+              groupsOf={(file) => (file === 'billing.py' ? KIT_GROUPS : [])}
+              selected="billing.py"
+              scope="group:billing.py:raw"
+              onSelect={() => undefined}
+              onOpenGroup={() => undefined}
+              dispatch={() => undefined}
+            />
+          </div>
+        </Variant>
       ))}
     </Spec>
 

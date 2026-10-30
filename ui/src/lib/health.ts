@@ -151,10 +151,13 @@ export function scopeAge(ids: readonly string[], byId: ReadonlyMap<string, NodeS
   return age
 }
 
-/** The first line of an error, without the traceback barca records after it. */
+/** An error's one line: its first, or a bare traceback's last; no frames. */
 export function headline(error: string | null | undefined): string {
-  const line = (error ?? '').split('\n').find((l) => l.trim() !== '')
-  return line?.trim() ?? 'failed, with no error recorded'
+  const lines = (error ?? '').split('\n').map((l) => l.trim()).filter((l) => l !== '')
+  const first = lines[0]
+  if (first === undefined) return 'failed, with no error recorded'
+  // A bare traceback says what went wrong on its last line, not its first.
+  return /^(Traceback \(most recent call last\)|File ")/.test(first) ? lines.at(-1)! : first
 }
 
 /**

@@ -1,11 +1,10 @@
 import { useNavigate, useSearchParams } from "react-router";
-import { Button, ConnectionBadge, StatusBadge, Tag } from "@/components";
+import { Button, StatusBadge, Tag } from "@/components";
 import { useAssets } from "@/hooks/useAssets";
 import { useAssetStates } from "@/hooks/useAssetStates";
 import { useHealth } from "@/hooks/useHealth";
 import { useSchedule, useToggleSchedulePause } from "@/hooks/useSchedule";
 import { severityStatus } from "@/lib/assetTable";
-import { connection } from "@/lib/connection";
 import { inPipeline, pipelineName } from "@/lib/pipeline";
 import { scheduleRows } from "@/lib/schedules";
 import { nodeKindLabel } from "@/lib/status";
@@ -19,7 +18,7 @@ export function SchedulesPage() {
   // never show invented schedules, so placeholder data is treated as loading.
   const { data: assets, isPlaceholderData, isError } = useAssets();
   const { data: states, dataUpdatedAt } = useAssetStates();
-  const { data: health, isError: healthError } = useHealth();
+  const { data: health } = useHealth();
   // The registry only says which jobs are paused; without it rows show unpaused.
   const { data: jobs } = useSchedule();
   const toggle = useToggleSchedulePause();
@@ -61,12 +60,7 @@ export function SchedulesPage() {
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            <ConnectionBadge
-              connection={connection(health, healthError)}
-              onlineLabel={
-                health?.scheduler ? "scheduler running" : "scheduler not running on this server"
-              }
-            />
+            {health && <span className="barca-count">{health.scheduler ? "scheduler running" : "scheduler not running on this server"}</span>}
           </div>
         </div>
         {health && !health.scheduler && rows.length > 0 && (

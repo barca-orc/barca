@@ -5,7 +5,6 @@ import { match } from 'ts-pattern'
 import { useHealth } from '@/hooks/useHealth'
 import { useProgram } from '@/hooks/useProgram'
 import { useRunDetail, useRuns } from '@/hooks/useRuns'
-import { connection } from '@/lib/connection'
 import { remote } from '@/lib/remote'
 import { INITIAL_RUNS, updateRuns } from '@/lib/runsPage'
 import { QueuePanel } from './QueuePanel'
@@ -45,7 +44,6 @@ export function RunsPage() {
     <RunsView
       model={model}
       runs={remote(runs)}
-      connection={connection(health.data, health.isError)}
       selected={selected ? { id: selected, run: remote(detail), eventGap: params.get('event_gap') === '1' } : null}
       queue={<QueuePanel readOnly={health.data?.read_only} />}
       now={runs.dataUpdatedAt}

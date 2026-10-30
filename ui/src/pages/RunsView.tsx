@@ -1,13 +1,12 @@
 import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Age, Button, Chip, ChipGroup, ConnectionBadge, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
 import { formatSeconds } from '@/lib/assetTable'
-import type { Connection } from '@/lib/connection'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, triggeredByLabel } from '@/lib/runs'
-import { activityBarLabel, activityTicks, canLoadMore, hourLabel, runActivity, runFailed, runProgress, runRowError, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, hourLabel, runActivity, runFailed, runFailureLine, runProgress, runRowError, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunList, RunView } from '@/lib/types'
 import './runs.css'
 
@@ -53,7 +52,7 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
       <KeyValue label="duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</KeyValue>
       <KeyValue label="executed">{data.steps_executed}</KeyValue>
       <KeyValue label="cached">{data.steps_cached}</KeyValue>
-      {(data.error ?? envelope?.error) && <p className="barca-run-error" role="alert">{data.error ?? envelope?.error}</p>}
+      {(data.error ?? envelope?.error) && <p className="barca-run-error" role="alert"><ErrorLine error={data.error ?? envelope?.error} /></p>}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
     <Section title="Steps">
@@ -82,7 +81,6 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
 export interface RunsViewProps {
   model: RunsModel
   runs: Remote<RunList>
-  connection: Connection
   /** `?run=`, with its details; null when no run is selected. */
   selected: { id: string; run: Remote<RunView>; eventGap?: boolean } | null
   /** The queue strip (`QueuePanel`, which loads its own data). */
@@ -138,13 +136,12 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
   )
 }
 
-export function RunsView({ model, runs, connection, selected, queue, now, dispatch }: RunsViewProps) {
+export function RunsView({ model, runs, selected, queue, now, dispatch }: RunsViewProps) {
   const list = runs.kind === 'ready' ? runs.data : null
   return (
     <div className="barca-view">
       <div className="barca-view-head"><div className="barca-view-bar">
         <div className="barca-view-title"><h1>Runs</h1>{list && <span className="barca-count">{list.total} runs</span>}</div>
-        <div className="barca-view-actions"><ConnectionBadge connection={connection} /></div>
       </div></div>
       {queue}
       <div className="barca-assets-split">
@@ -197,24 +194,19 @@ function RunsError({ error, dispatch }: { error: string; dispatch: Dispatch<Runs
 
 function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; selected: string | null; now: number; dispatch: Dispatch<RunsMsg> }) {
   return <table className="barca-table barca-run-table"><thead><tr>
-    <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th>
+    <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th><th>Failure</th>
   </tr></thead><tbody>{runs.map(run => {
     const error = runRowError(run)
     const progress = runProgress(run)
     return <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}>
-    <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button><div className="barca-cell-sub">{run.command}</div></td>
-    <td>
-      <code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code>
-      {error && <div className="barca-cell-sub barca-run-row-error" title={error.title}>{error.text}</div>}
-    </td>
+    <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
+    <td><code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code></td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
     <td><StatusBadge size="sm" status={runStatus(run.status)} label={runLabel(run.status)} /></td>
     <td><Age at={run.started_at} nowMs={now} /></td>
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
-    <td className="num barca-run-steps-cell" title={progress.title}>
-      {progress.steps}
-      {progress.stoppedAt && <div className="barca-cell-sub barca-run-stopped">stopped at {progress.stoppedAt}</div>}
-    </td>
+    <td className="num barca-run-steps-cell" title={progress.title}>{progress.steps}</td>
+    <td className="barca-run-failure">{error && <ErrorLine error={error.title} text={runFailureLine(run) ?? error.text} />}</td>
   </tr>
   })}</tbody></table>
 }

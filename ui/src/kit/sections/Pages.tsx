@@ -1,7 +1,7 @@
 import { INITIAL_RUNS, RUNS_MAX } from '@/lib/runsPage'
 import { RunPanelView, RunsView } from '@/pages/RunsView'
 import { TokensOffView, TokensView } from '@/pages/TokensView'
-import { NOW_MS, failureLists, connections, runDetails, runLists, tokenStates } from '../fixtures'
+import { NOW_MS, failureLists, runDetails, runLists, tokenStates } from '../fixtures'
 import { INITIAL_FAILURES, failureTable, muteKey, type FailuresModel } from '@/lib/failuresView'
 import { distinctNames } from '@/lib/groups'
 import { FailuresView } from '@/pages/FailuresView'
@@ -29,7 +29,6 @@ export function Pages() {
               <RunsView
                 model={model}
                 runs={runs}
-                connection={connections.online}
                 selected={null}
                 now={NOW_MS}
                 dispatch={dispatch}

@@ -125,7 +125,7 @@ test('a failed run names its first failed step, and a bar filters to its hour', 
   } }))
   await page.goto('/ui/#/runs')
   const failed = page.getByRole('row', { name: /r2/ })
-  await expect(failed).toContainText("orders: KeyError: 'currency'")
+  await expect(failed).toContainText("stopped at orders · KeyError: 'currency'")
   await expect(failed).toContainText('21,950 / 28,404')
   await expect(failed).toContainText('stopped at orders')
   await expect(failed).toContainText('5m ago')

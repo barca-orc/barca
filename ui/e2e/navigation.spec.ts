@@ -44,3 +44,26 @@ test('old graph links open Assets in graph view with the selected node', async (
   await page.reload()
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
 })
+
+test('the table starts within 120px of the top', async ({ page }) => {
+  await page.goto('/ui/#/assets')
+  await expect(page.getByRole('table')).toBeVisible()
+  const box = await page.getByRole('table').boundingBox()
+  expect(box!.y).toBeLessThanOrEqual(120)
+})
+
+test('idle furniture stays hidden and the version is on the connection dot', async ({ page }) => {
+  await page.goto('/ui/#/runs')
+  await expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible()
+  await expect(page.locator('.barca-conn')).toHaveAttribute('title', /^barca serve · v/)
+  await expect(page.getByRole('region', { name: 'Queue' })).toHaveCount(0)
+})
+
+test('the sidebar collapses, and stays collapsed across a reload', async ({ page }) => {
+  await page.goto('/ui/#/assets')
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click()
+  await expect(page.locator('.barca-sidebar')).toHaveAttribute('data-collapsed', 'true')
+  await page.reload()
+  await page.getByRole('button', { name: 'Expand sidebar' }).click()
+  await expect(page.locator('.barca-sidebar')).not.toHaveAttribute('data-collapsed', 'true')
+})

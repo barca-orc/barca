@@ -5,8 +5,9 @@ import { ArrowDown, ArrowUp, X } from 'lucide-react'
 import {
   Chip,
   ChipGroup,
-  ConnectionBadge,
+  ErrorLine,
   LastSuccess,
+  MiddleName,
   ResetDatabaseButton,
   RunningBadge,
   SearchInput,
@@ -16,6 +17,7 @@ import {
   StatusDot,
   TableSpacer,
   Tag,
+  ViewToggle,
 } from '@/components'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { useAssetStates } from '@/hooks/useAssetStates'
@@ -26,7 +28,6 @@ import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
 import { liveGraphState } from '@/lib/graphState'
 import { nodeKindLabel, severityWord } from '@/lib/status'
-import { connection } from '@/lib/connection'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
   EMPTY_FILTERS,
@@ -110,7 +111,7 @@ function SortHeader({
 
 export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const { data, isError, error, dataUpdatedAt } = useAssetStates()
-  const { data: health, isError: healthError } = useHealth()
+  const { data: health } = useHealth()
   const assetQuery = useAssets()
   const graph = useMemo(() => (assetQuery.isPlaceholderData ? [] : assetQuery.data ?? []), [assetQuery.data, assetQuery.isPlaceholderData])
   const navigate = useNavigate()
@@ -150,11 +151,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const counts = facetCounts(rows, filters, now)
   const visible = sortRows(applyFilters(rows, filters, now), sort)
   // A name repeated across files reads as its id; two rows never show the same label.
-  const labels = useMemo(() => {
-    const count = new Map<string, number>()
-    for (const r of visible) count.set(r.name, (count.get(r.name) ?? 0) + 1)
-    return new Map(visible.filter((r) => count.get(r.name)! > 1).map((r) => [r.id, r.id]))
-  }, [visible])
+  const nameCount = new Map<string, number>()
+  for (const r of visible) nameCount.set(r.name, (nameCount.get(r.name) ?? 0) + 1)
+  const labels = new Map(visible.filter((r) => nameCount.get(r.name)! > 1).map((r) => [r.id, r.id]))
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const win = useTableWindow(visible.length, scroller)
@@ -217,11 +216,23 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             ) : (
               <Skeleton width={64} height={14} />
             )}
+            <ChipGroup label="State">
+              {SEVERITIES.filter((sev) => counts.states[sev] > 0 || filters.states.includes(sev)).map((sev) => (
+                <Chip
+                  key={sev}
+                  pressed={filters.states.includes(sev)}
+                  onClick={() => setFilters({ ...filters, states: toggle(filters.states, sev) })}
+                >
+                  <StatusDot status={severityStatus(sev)} size={6} />
+                  {counts.states[sev]} {severityWord(sev)}
+                </Chip>
+              ))}
+            </ChipGroup>
           </div>
           <div className="barca-view-actions">
             {nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            <ConnectionBadge connection={connection(health, healthError)} />
+            {kind === 'asset' && <ViewToggle />}
           </div>
         </div>
         <div className="barca-table-tools">
@@ -268,21 +279,6 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
               <X size={12} /> {onDefault ? `Show all ${rows.length.toLocaleString()}` : 'Clear filters'}
             </button>
           )}
-        </div>
-
-        <div className="barca-table-tools">
-          <ChipGroup label="State">
-            {SEVERITIES.filter((sev) => counts.states[sev] > 0 || filters.states.includes(sev)).map((sev) => (
-              <Chip
-                key={sev}
-                pressed={filters.states.includes(sev)}
-                onClick={() => setFilters({ ...filters, states: toggle(filters.states, sev) })}
-              >
-                <StatusDot status={severityStatus(sev)} size={6} />
-                {counts.states[sev]} {severityWord(sev)}
-              </Chip>
-            ))}
-          </ChipGroup>
           <span className="barca-count barca-shown">
             {visible.length === rows.length ? `${rows.length} shown` : `${visible.length} of ${rows.length} shown`}
           </span>
@@ -340,7 +336,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 >
                   <td>
                     <div className="barca-cell-name">
-                      <span className="name">{labels.get(r.id) ?? r.name}</span>
+                      <span className="name"><MiddleName name={labels.get(r.id) ?? r.name} title={r.id} /></span>
                       {r.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(r)}</Tag>}
                     </div>
                     <div className="barca-cell-sub">{r.file}</div>
@@ -358,11 +354,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                     {r.last ? (
                       <>
                         <div>{r.last.status} · {r.last.ago}</div>
-                        {r.last.error && (
-                          <div className="barca-cell-error" title={r.last.error}>
-                            {r.last.error}
-                          </div>
-                        )}
+                        {r.last.error && <div className="barca-cell-error"><ErrorLine error={r.last.error} /></div>}
                       </>
                     ) : (
                       <span className="barca-cell-sub">not run</span>

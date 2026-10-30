@@ -85,3 +85,13 @@ describe('scopeAge', () => {
     expect(scopeAge(['c'], byId)).toEqual({ lastSuccessAt: null, failingSince: null, failures: 0 })
   })
 })
+
+describe('headline', () => {
+  it('skips the frames of a bare traceback', () => {
+    expect(headline('Traceback (most recent call last):\n  File "/a.py", line 1\nKeyError: \'x\'\n')).toBe("KeyError: 'x'")
+    expect(headline('  File "/a.py", line 1\nValueError: no')).toBe('ValueError: no')
+  })
+  it('keeps a first line that says what went wrong', () => {
+    expect(headline('ValueError: no\nTraceback (most recent call last):\n  File "/a.py"')).toBe('ValueError: no')
+  })
+})

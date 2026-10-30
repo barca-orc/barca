@@ -2,7 +2,7 @@ import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { ConnectionBadge, IconButton, StatusDot } from '@/components'
+import { IconButton, StatusDot, ViewToggle } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
@@ -10,7 +10,6 @@ import { useAssetStates } from '@/hooks/useAssetStates'
 import { useQueryClient } from '@tanstack/react-query'
 import { graphState, liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
 import { useHealth } from '@/hooks/useHealth'
-import { connection } from '@/lib/connection'
 import { useRunStream } from '@/hooks/useRunStream'
 import { useTriggerNode } from '@/hooks/useTriggerNode'
 import { useTopbarRun } from '@/hooks/useTopbarRun'
@@ -28,7 +27,7 @@ export function GraphPage() {
   const allAssets = useMemo(() => assetQuery.isPlaceholderData ? [] : assetQuery.data ?? [], [assetQuery.isPlaceholderData, assetQuery.data])
   const stateQuery = useAssetStates()
   const queryClient = useQueryClient()
-  const { data: health, isError: healthError } = useHealth()
+  const { data: health } = useHealth()
   const [dir, setDir] = useState<LayoutDir>('LR')
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
   const [searchParams, setSearchParams] = useSearchParams()
@@ -101,10 +100,7 @@ export function GraphPage() {
           </div>
           <div className="barca-view-actions">
             {run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(run.handle)}`}>View run</Link>}
-            <ConnectionBadge
-              connection={connection(health, healthError)}
-              offlineLabel="offline"
-            />
+            <ViewToggle />
             <IconButton
               label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
               onClick={() => setDir((d) => (d === 'LR' ? 'TB' : 'LR'))}

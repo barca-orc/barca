@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { NavLink, useLocation, useSearchParams } from 'react-router'
-import { Sun, Moon, Play, List, GitBranch } from 'lucide-react'
-import { Button, ConfirmDialog, IconButton, RunsInProgress } from '@/components'
+import { NavLink, useSearchParams } from 'react-router'
+import { Sun, Moon, Play } from 'lucide-react'
+import { Button, ConfirmDialog, ConnectionBadge, IconButton, RunsInProgress } from '@/components'
 import { useTheme } from '@/context/theme'
+import { useHealth } from '@/hooks/useHealth'
+import { connection } from '@/lib/connection'
 
 import type { TopbarRun } from './shellContext'
 import { NAV_ITEMS } from './nav'
@@ -15,22 +17,10 @@ interface TopbarProps {
 export function Topbar({ run }: TopbarProps) {
   const { theme, toggleTheme } = useTheme()
   const [confirming, setConfirming] = useState(false)
-  const location = useLocation()
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
+  const health = useHealth()
   const pipeline = params.get('pipeline')
   const keep = pipeline ? `?pipeline=${encodeURIComponent(pipeline)}` : ''
-  const isAssets = location.pathname === '/assets'
-  const graph = params.get('view') === 'graph'
-  const setView = (view: 'list' | 'graph') => {
-    const next = new URLSearchParams(params)
-    const selected = next.get(graph ? 'focus' : 'node')
-    next.delete('focus')
-    next.delete('node')
-    if (selected) next.set(view === 'graph' ? 'focus' : 'node', selected)
-    if (view === 'graph') next.set('view', 'graph')
-    else next.delete('view')
-    setParams(next, { replace: true })
-  }
   return (
     <header className="barca-topbar">
       <nav className="barca-primary-nav" aria-label="Main navigation">
@@ -42,13 +32,8 @@ export function Topbar({ run }: TopbarProps) {
       </nav>
 
       <div className="barca-top-actions">
+        <ConnectionBadge connection={connection(health.data, health.isError)} />
         <RunsInProgress />
-        {isAssets && (
-          <div className="barca-view-toggle" role="group" aria-label="Asset view">
-            <button type="button" aria-pressed={!graph} onClick={() => setView('list')}><List size={14} />List</button>
-            <button type="button" aria-pressed={graph} onClick={() => setView('graph')}><GitBranch size={14} />Graph</button>
-          </div>
-        )}
         <IconButton
           label={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
           onClick={toggleTheme}

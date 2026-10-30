@@ -3,12 +3,13 @@ import { match } from 'ts-pattern'
 import { Button, StatusDot, Tag } from '@/components'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { ApiError } from '@/lib/api'
-import { capacityLabel, queueControl, queuedLabel, queueRows, queueState, queueStateLabel, sharedCapacityLabel, waitingRows } from '@/lib/queue'
+import { capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queueState, queueStateLabel, sharedCapacityLabel, waitingRows } from '@/lib/queue'
 
 /**
  * The run queue on the Runs page: how many run of the server's limit, how many wait, whether
  * the queue is paused or draining, the operator's pause control, and the waiting runs in order.
- * The strip keeps its height while the queue loads, so the run table below it does not move.
+ * Idle, it is not there at all: it appears when something runs or waits, or the queue holds work
+ * back, so a paused queue can still be resumed.
  */
 export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
   const { data, isError, error } = useQueue()
@@ -20,13 +21,12 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
   const shared = data ? sharedCapacityLabel(data.capacity) : null
   const waiting = data ? waitingRows(data.capacity) : []
   const toggleError = toggle.error instanceof ApiError ? toggle.error : null
+  if (!toggle.isError && (data ? !queueMatters(data) : !isError)) return null
   return (
     <section className="barca-queue" aria-label="Queue">
       <div className="barca-queue-bar">
         <span className="barca-queue-title">Queue</span>
-        {!data && (isError
-          ? <span className="barca-note" role="alert">Queue unavailable: {error.message}</span>
-          : <span className="barca-note">Loading queue…</span>)}
+        {!data && isError && <span className="barca-note" role="alert">Queue unavailable: {error.message}</span>}
         {data && <>
           <span className="barca-queue-count">
             <StatusDot status={data.running.length > 0 ? 'running' : 'pending'} size={6} />

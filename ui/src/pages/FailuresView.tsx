@@ -1,6 +1,6 @@
 import type { RefObject } from 'react'
 import { BellOff, Bell, Copy, ExternalLink, RotateCw } from 'lucide-react'
-import { Age, IconButton, StatusDot, TableSpacer, Tag } from '@/components'
+import { Age, ErrorLine, IconButton, MiddleName, StatusDot, TableSpacer, Tag } from '@/components'
 import { muteKey, type FailureRow, type FailuresModel, type FailuresMsg } from '@/lib/failuresView'
 import { impactLabel, type Failure } from '@/lib/health'
 import type { Dispatch } from '@/lib/program'
@@ -89,13 +89,13 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
               <td>
                 <div className="barca-group-row-name">
                   <StatusDot status="failed" size={6} />
-                  <strong title={f.id}>{labels.get(f.id) ?? f.name}</strong>
+                  <strong><MiddleName name={labels.get(f.id) ?? f.name} title={f.id} /></strong>
                   {f.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(f)}</Tag>}
                 </div>
                 <div className="barca-cell-sub" title={placeOf(f.id)}>{placeOf(f.id)}</div>
               </td>
-              <td className="barca-failure-error" title={f.error}>
-                {f.headline}
+              <td className="barca-failure-error">
+                <ErrorLine error={f.error} text={f.headline} />
                 {f.missingKeys !== null && f.missingKeys > 0 && (
                   <div className="barca-cell-sub">{f.missingKeys.toLocaleString()} keys without a result</div>
                 )}

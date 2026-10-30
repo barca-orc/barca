@@ -10,6 +10,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- The UI spends its space on the table: title, breadcrumb and health share one row so a table
+  starts within 120px of the top; run rows are one line; the queue appears only when something
+  runs, waits or is held back; the server version moves to the tooltip of a connection dot in the
+  top bar; List/Graph sits in the view it applies to. The sidebar collapses and lists each file's
+  groups; long node names are cut in the middle. The node panel leads with the error, with one
+  compact stat row. Tasks, Failures, Runs and the node panel show errors the same way (headline,
+  traceback on expand), and faint text now meets 4.5:1 contrast. The grouped page's "Needs
+  attention" filter is gone: Failures covers it.
 - The UI's Failures view groups failures by cause (first line, numbers normalised) with their
   count and impact, biggest first, and each row can retry, copy the error, open its run, or be
   muted in this browser until the node recovers. `Waiting on it` shows `0` for a leaf and `?`

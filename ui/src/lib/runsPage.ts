@@ -112,6 +112,14 @@ export function runRowError(run: RunSummary): { text: string; title: string } | 
   return parseRunStatus(run.status) === 'failed' ? { text: 'No failed step recorded: open the run', title: 'No failed step recorded: open the run' } : null
 }
 
+/** What the row says went wrong: where it stopped and why, or its own error. */
+export function runFailureLine(run: RunSummary): string | null {
+  const error = runRowError(run)
+  if (!error) return null
+  if (!run.first_failure) return error.text
+  return `stopped at ${stepName(run.first_failure.node_id)} · ${headline(run.error ?? run.first_failure.error)}`
+}
+
 /** How far a run got: `21,950 / 28,404`, and the step it stopped at when it did not finish. */
 export function runProgress(run: RunSummary): { steps: string; stoppedAt: string | null; title: string } {
   const done = run.steps_executed + run.steps_cached

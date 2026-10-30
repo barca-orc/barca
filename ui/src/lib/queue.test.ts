@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { QueueEntry, QueueView } from './types'
 import {
+  queueMatters,
   QUEUE_POLL_BUSY_MS,
   QUEUE_POLL_IDLE_MS,
   capacityLabel,
@@ -142,5 +143,15 @@ describe('healthQueueLabel', () => {
     expect(healthQueueLabel({ paused: false, queued: 3, running: 4, max_runs: 4 })).toBe('3 queued')
     expect(healthQueueLabel({ paused: true, queued: 3, running: 0, max_runs: 4 })).toBe('3 queued · paused')
     expect(healthQueueLabel({ paused: true, queued: 0, running: 0, max_runs: 4 })).toBe('queue paused')
+  })
+})
+
+describe('queueMatters', () => {
+  const idle = { running: [], queued: [], paused: false, draining: false, capacity: null } as unknown as QueueView
+  it('is nothing for an idle queue', () => expect(queueMatters(idle)).toBe(false))
+  it('shows work, and a queue holding work back', () => {
+    expect(queueMatters({ ...idle, running: [{}] } as unknown as QueueView)).toBe(true)
+    expect(queueMatters({ ...idle, paused: true })).toBe(true)
+    expect(queueMatters({ ...idle, draining: true })).toBe(true)
   })
 })
