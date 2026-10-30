@@ -281,7 +281,7 @@
 .barca-graph-canvas { flex: 1; min-width: 0; position: relative; }
 .barca-legend {
   position: absolute;
-  left: 16px;
+  left: 56px; /* beside the zoom controls */
   bottom: 16px;
   display: flex;
   gap: 14px;
@@ -400,6 +400,7 @@
 
 /* ── assets table ─────────────────────────────────────────── */
 .barca-count {
+  white-space: nowrap;
   font-family: var(--font-sans);
   font-size: var(--text-xs);
   color: var(--text-muted);

@@ -20,18 +20,20 @@ function kindIcon(kind: NodeKind) {
  * own edge dots) — see barca-flow.css.
  */
 export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
+  const { kind } = data
+  const leaf = kind !== 'group' && kind !== 'port' ? kind : null
   return (
     <div style={{ width: DAG_NODE_WIDTH }}>
       <Handle type="target" position={data.direction === "TB" ? Position.Top : Position.Left} />
       <DagNode
         name={data.name}
         kind={data.kind}
-        kindLabel={data.kind === 'group' ? undefined : nodeKindLabel({ id, kind: data.kind })}
+        kindLabel={leaf && leaf !== 'asset' ? nodeKindLabel({ id, kind: leaf }) : undefined}
         status={data.status}
         statusLabel={data.metric ?? undefined}
         stateHint={data.stateHint}
         selected={selected}
-        icon={data.kind === 'group' ? undefined : kindIcon(data.kind)}
+        icon={leaf ? kindIcon(leaf) : undefined}
       />
       <Handle type="source" position={data.direction === "TB" ? Position.Bottom : Position.Right} />
     </div>

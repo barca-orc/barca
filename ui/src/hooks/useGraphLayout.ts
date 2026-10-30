@@ -15,7 +15,7 @@ const IN_A_WORKER_FROM = 300
 function structureKey(assets: GraphEntry[], dir: LayoutDir): string {
   return JSON.stringify([
     dir,
-    assets.map((a) => [a.id, a.kind, a.inputs, a.name, a.summary, a.outputName]),
+    assets.map((a) => [a.id, a.kind, a.inputs, a.name, a.summary, a.outputName, a.inputWeights]),
   ])
 }
 

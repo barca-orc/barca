@@ -1,4 +1,5 @@
 import { Position, type Node, type Edge } from '@xyflow/react'
+import { match } from 'ts-pattern'
 import { DAG_NODE_WIDTH, DAG_NODE_HEIGHT } from '@/components'
 import { layout, type LayoutDir, type LayoutInput, type LayoutPositions } from './graphLayout'
 import type { NodeKind, StatusKind } from './types'
@@ -9,7 +10,7 @@ export type { LayoutDir }
 export interface GraphNodeData {
   id: string
   name: string
-  kind: NodeKind | 'group'
+  kind: GraphKind
   summary?: string
   outputName?: string
   status: StatusKind
@@ -20,14 +21,31 @@ export interface GraphNodeData {
 
 export type GraphNode = Node<GraphNodeData>
 
+/** What a box in the graph is: a node, a group of them, or an input from outside the view. */
+export type GraphKind = NodeKind | 'group' | 'port'
+
 /** Organizational entries can be laid out alongside real pipeline nodes. */
 export interface GraphEntry {
   id: string
-  kind: NodeKind | 'group'
+  kind: GraphKind
   inputs: string[]
   name?: string
   summary?: string
   outputName?: string
+  /** How many dependencies an edge from an input stands for, when more than one. */
+  inputWeights?: Record<string, number>
+  /** Placed apart from its edges: they would pull it into a column, or a chain off the screen. */
+  loose?: boolean
+}
+
+/** Data carried on each edge. */
+export interface GraphEdgeData {
+  weight?: number
+  /** An edge from an input outside the view. */
+  port: boolean
+  /** From a loose entry: drawn only for the selection. */
+  loose: boolean
+  [key: string]: unknown
 }
 
 /** Short name: the part after the last colon in a node id. */
@@ -46,22 +64,42 @@ const RESTING_STATUS: StatusKind = 'skipped'
 const GROUP_WIDTH = 248
 const GROUP_HEIGHT = 112
 
+const PORT_WIDTH = 176
+const PORT_HEIGHT = 28
+
 function size(a: GraphEntry) {
-  return a.kind === 'group'
-    ? { width: GROUP_WIDTH, height: GROUP_HEIGHT }
-    : { width: DAG_NODE_WIDTH, height: DAG_NODE_HEIGHT }
+  return match(a.kind)
+    .with('group', () => ({ width: GROUP_WIDTH, height: GROUP_HEIGHT }))
+    .with('port', () => ({ width: PORT_WIDTH, height: PORT_HEIGHT }))
+    .with('asset', 'sensor', 'task', () => ({ width: DAG_NODE_WIDTH, height: DAG_NODE_HEIGHT }))
+    .exhaustive()
+}
+
+function nodeType(kind: GraphKind): string {
+  return match(kind)
+    .with('group', () => 'nodeGroup')
+    .with('port', () => 'port')
+    .with('asset', 'sensor', 'task', () => 'asset')
+    .exhaustive()
+}
+
+/** Edge per dependency: input → asset. */
+function dependencies(assets: GraphEntry[]): [string, string][] {
+  const ids = new Set(assets.map((a) => a.id))
+  return assets.flatMap((a) =>
+    a.inputs.filter((input) => ids.has(input)).map((input): [string, string] => [input, a.id]),
+  )
 }
 
 /** What dagre is given for `assets`: their sizes and the dependencies between them. */
 export function layoutInput(assets: GraphEntry[], dir: LayoutDir): LayoutInput {
-  const ids = new Set(assets.map((a) => a.id))
+  const byId = new Map(assets.map((a) => [a.id, a]))
   return {
     dir,
     ranksep: assets.some((a) => a.kind === 'group') ? 52 : 96,
-    nodes: assets.map((a) => ({ id: a.id, ...size(a) })),
-    // Edge per dependency: input → asset.
-    edges: assets.flatMap((a) =>
-      a.inputs.filter((input) => ids.has(input)).map((input): [string, string] => [input, a.id]),
+    nodes: assets.map((a) => ({ id: a.id, ...size(a), first: a.kind === 'port' })),
+    edges: dependencies(assets).filter(
+      ([source, target]) => !byId.get(source)?.loose && !byId.get(target)?.loose,
     ),
   }
 }
@@ -77,7 +115,11 @@ export function graphAt(assets: GraphEntry[], dir: LayoutDir, positions: LayoutP
     const { width, height } = size(a)
     return {
       id: a.id,
-      type: a.kind === 'group' ? 'nodeGroup' : 'asset',
+      type: nodeType(a.kind),
+      selectable: a.kind !== 'port',
+      // The minimap skips a node with no size of its own, and nothing here writes back React Flow's measurements.
+      initialWidth: width,
+      initialHeight: height,
       data: {
         id: a.id,
         direction: dir,
@@ -93,12 +135,19 @@ export function graphAt(assets: GraphEntry[], dir: LayoutDir, positions: LayoutP
       targetPosition: horizontal ? Position.Left : Position.Top,
     }
   })
-  const edges: Edge[] = layoutInput(assets, dir).edges.map(([source, target]) => ({
-    id: `${source}->${target}`,
-    source,
-    target,
-    type: 'smoothstep',
-  }))
+  const byId = new Map(assets.map((a) => [a.id, a]))
+  const edges: Edge<GraphEdgeData>[] = dependencies(assets).map(([source, target]) => {
+    const weight = byId.get(target)?.inputWeights?.[source]
+    return {
+      id: `${source}->${target}`,
+      source,
+      target,
+      type: 'smoothstep',
+      data: { weight, port: byId.get(source)?.kind === 'port', loose: !!byId.get(source)?.loose },
+      // Wider with weight, but no edge may dwarf a card.
+      style: weight ? { strokeWidth: Math.min(1 + Math.log2(weight) / 2, 3.5) } : undefined,
+    }
+  })
   return { nodes, edges }
 }
 

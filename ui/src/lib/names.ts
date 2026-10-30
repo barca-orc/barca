@@ -6,6 +6,6 @@ const TAIL = 10
  * `check__risk_alerts_01` truncates as `check__ri…alerts_01`, keeping what tells rows apart.
  */
 export function splitMiddle(name: string): { head: string; tail: string } {
-  if (name.length <= TAIL * 2) return { head: name, tail: '' }
+  if (name.length <= TAIL) return { head: name, tail: '' }
   return { head: name.slice(0, -TAIL), tail: name.slice(-TAIL) }
 }

@@ -10,6 +10,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- The UI's graph answers a question: All pipelines is a map of files (one weighted edge per pair
+  of dependent files, drawn for the selected card when there are too many to read), a pipeline
+  of one group opens that group, unconnected members lie in a grid, inputs from outside a group
+  are faded ports, cards drop the `ASSET` label, and the legend clears the zoom controls.
 - The UI spends its space on the table: title, breadcrumb and health share one row so a table
   starts within 120px of the top; run rows are one line; the queue appears only when something
   runs, waits or is held back; the server version moves to the tooltip of a connection dot in the
@@ -41,6 +45,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- The UI's minimap draws its nodes (it was empty), appears only from 60 nodes and fits the graph
+  beside it; names just over 10 characters also cut in the middle in narrow table columns.
 - UI: Reset database shows only for a database barca cannot use, not on every page. Sidebar health
   dots use whole-project state and show no dot until a file's state is all known, instead of
   judging a file by the part in view. All pipelines → Graph fits every domain on screen with nothing selected.

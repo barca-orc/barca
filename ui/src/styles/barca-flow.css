@@ -43,6 +43,25 @@
   }
 }
 
+.react-flow__edge.weighted .react-flow__edge-path {
+  stroke-opacity: 0.45;
+}
+.react-flow__edge.weighted.hot .react-flow__edge-path {
+  stroke-opacity: 1;
+}
+.react-flow__edge.port .react-flow__edge-path {
+  stroke-dasharray: 3 4;
+  stroke-opacity: 0.6;
+}
+.react-flow__edge-text {
+  fill: var(--text-strong);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+}
+.react-flow__edge-textbg {
+  fill: var(--bg-inset);
+}
+
 /* Selection box + node focus ring (DagNode owns its own selected look) */
 .react-flow__node:focus,
 .react-flow__node:focus-visible {
