@@ -100,7 +100,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             <span className="barca-cell-sub">started by {startedBy(node.running.triggered_by)}</span>
           </KeyValue>
         )}
-        <p className="barca-note">{node.cache.detail}</p>
+        {/* A failure's cache detail repeats its error; the block below says it once. */}
+        {!(failed && last) && <p className="barca-note">{node.cache.detail}</p>}
         {failed && last && (
           <div className="barca-why" role="group" aria-label="Why it failed">
             <div className="barca-why-head">
@@ -157,7 +158,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           </>
         )}
         <KeyValue label="downstream">
-          {impact === 0 ? 'nothing reads it' : `${impact.toLocaleString()} node${impact === 1 ? '' : 's'} depend on it`}
+          {impact === 0 ? 'nothing reads it' : impact === 1 ? '1 node depends on it' : `${impact.toLocaleString()} nodes depend on it`}
         </KeyValue>
       </div>
 
