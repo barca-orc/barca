@@ -34,6 +34,8 @@ import {
   applyFilters,
   facetCounts,
   isFiltered,
+  NEEDS_ATTENTION,
+  onDefaultStates,
   parseFilters,
   writeFilters,
   type Filters,
@@ -140,11 +142,19 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   )
   // Filters live in the URL with the sort and pipeline, so a filtered view can
   // be reloaded and shared.
-  const filters = { ...parseFilters(params), kinds: [] }
-  const setFilters = (f: Filters) => setParams(writeFilters(params, f), { replace: true })
+  const defaultStates = kind === 'task' ? NEEDS_ATTENTION : []
+  const filters = { ...parseFilters(params, defaultStates), kinds: [] }
+  const onDefault = onDefaultStates(filters, defaultStates)
+  const setFilters = (f: Filters) => setParams(writeFilters(params, f, defaultStates), { replace: true })
   const now = dataUpdatedAt
   const counts = facetCounts(rows, filters, now)
   const visible = sortRows(applyFilters(rows, filters, now), sort)
+  // A name repeated across files reads as its id; two rows never show the same label.
+  const labels = useMemo(() => {
+    const count = new Map<string, number>()
+    for (const r of visible) count.set(r.name, (count.get(r.name) ?? 0) + 1)
+    return new Map(visible.filter((r) => count.get(r.name)! > 1).map((r) => [r.id, r.id]))
+  }, [visible])
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const win = useTableWindow(visible.length, scroller)
@@ -255,7 +265,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
 
           {isFiltered(filters) && (
             <button type="button" className="barca-clear" onClick={() => setFilters(EMPTY_FILTERS)}>
-              <X size={12} /> Clear filters
+              <X size={12} /> {onDefault ? `Show all ${rows.length.toLocaleString()}` : 'Clear filters'}
             </button>
           )}
         </div>
@@ -296,7 +306,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             ))}
           </div>
         ) : visible.length === 0 ? (
-          <p className="barca-table-empty">Nothing matches.</p>
+          <p className="barca-table-empty">{onDefault ? 'Nothing needs attention.' : 'Nothing matches.'}</p>
         ) : (
           <table className="barca-table">
             <thead>
@@ -330,7 +340,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 >
                   <td>
                     <div className="barca-cell-name">
-                      <span className="name">{r.name}</span>
+                      <span className="name">{labels.get(r.id) ?? r.name}</span>
                       {r.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(r)}</Tag>}
                     </div>
                     <div className="barca-cell-sub">{r.file}</div>

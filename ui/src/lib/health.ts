@@ -122,8 +122,8 @@ export interface Failure {
   failingSince: string | null
   /** Runs in a row that failed it. */
   failures: number
-  /** How many nodes downstream of it, transitively, are waiting on it. */
-  impact: number
+  /** How many nodes downstream of it, transitively, are waiting on it; null until the graph is loaded. */
+  impact: number | null
   /** For a partitioned node: how many keys have no cached result. */
   missingKeys: number | null
 }
@@ -158,11 +158,12 @@ export function headline(error: string | null | undefined): string {
 }
 
 /**
- * The failed nodes among `nodes`: the most downstream impact first, then the most recent. A
+ * The failed nodes among `nodes`: the most downstream impact first (unknown last), then the most
+ * recent. `consumers` is null while the graph is loading: then the impact is unknown, not 0. A
  * check that failed on a cached asset is a failure too; a node merely stale because something
  * upstream failed is not (it is what `impact` counts).
  */
-export function failures(nodes: readonly NodeState[], consumers: ReadonlyMap<string, string[]>): Failure[] {
+export function failures(nodes: readonly NodeState[], consumers: ReadonlyMap<string, string[]> | null): Failure[] {
   return nodes
     .filter((n) => memberHealth(n).status === 'failed')
     .map((n) => {
@@ -176,11 +177,45 @@ export function failures(nodes: readonly NodeState[], consumers: ReadonlyMap<str
         at: n.last_materialization?.created_at ?? null,
         failingSince: n.failing_since,
         failures: n.consecutive_failures,
-        impact: downstreamIds(n.id, consumers).size,
+        impact: consumers ? downstreamIds(n.id, consumers).size : null,
         missingKeys: n.partitions ? n.partitions.missing : null,
       }
     })
-    .sort((a, b) => b.impact - a.impact || (b.at ?? '').localeCompare(a.at ?? '') || a.name.localeCompare(b.name))
+    .sort((a, b) => (b.impact ?? -1) - (a.impact ?? -1) || (b.at ?? '').localeCompare(a.at ?? '') || a.name.localeCompare(b.name))
+}
+
+/** One cause: failures whose error differs at most in its numbers. */
+export interface FailureGroup {
+  /** The headline with its numbers normalised: what the failures share. */
+  cause: string
+  failures: Failure[]
+  /** The members' impacts added up; null when any is unknown. A node downstream of two counts twice. */
+  impact: number | null
+}
+
+/** `row count fell 64% day over day` and `… 12% …` are one cause. */
+export function causeOf(headline: string): string {
+  return headline.replace(/\d[\d,._]*\d|\d/g, '#')
+}
+
+/** `list` grouped by cause, the most impact first (unknown last), then the most failures. */
+export function failureGroups(list: readonly Failure[]): FailureGroup[] {
+  const groups = new Map<string, FailureGroup>()
+  for (const f of list) {
+    const cause = causeOf(f.headline)
+    const group = groups.get(cause) ?? { cause, failures: [], impact: 0 }
+    group.failures.push(f)
+    group.impact = group.impact === null || f.impact === null ? null : group.impact + f.impact
+    groups.set(cause, group)
+  }
+  return [...groups.values()].sort(
+    (a, b) => (b.impact ?? -1) - (a.impact ?? -1) || b.failures.length - a.failures.length || a.cause.localeCompare(b.cause),
+  )
+}
+
+/** A count for a table: `0` for none, `?` while it is not known. */
+export function impactLabel(impact: number | null): string {
+  return impact === null ? '?' : impact.toLocaleString()
 }
 
 /**

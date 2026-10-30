@@ -39,6 +39,14 @@ export const EMPTY_FILTERS: Filters = {
   partitioned: false,
 }
 
+/** What the Tasks page opens on: most tasks always run, and only these need a look. */
+export const NEEDS_ATTENTION: readonly Severity[] = ['failed', 'stale', 'partial', 'unsynced']
+
+/** The default's states are in force: only `state=all` in the URL lifts them. */
+export function onDefaultStates(f: Filters, defaults: readonly Severity[]): boolean {
+  return defaults.length > 0 && f.states.length === defaults.length && defaults.every((s) => f.states.includes(s))
+}
+
 export function isFiltered(f: Filters): boolean {
   return (
     f.query.trim() !== '' ||
@@ -121,11 +129,12 @@ function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] 
   return raw.split(',').filter((v): v is T => (allowed as readonly string[]).includes(v))
 }
 
-export function parseFilters(p: URLSearchParams): Filters {
+/** `defaults`: the states of a URL that names none (`state=all` asks for every state). */
+export function parseFilters(p: URLSearchParams, defaults: readonly Severity[] = []): Filters {
   const ran = p.get('ran')
   return {
     query: p.get('q') ?? '',
-    states: list(p.get('state'), SEVERITIES),
+    states: p.has('state') ? list(p.get('state'), SEVERITIES) : [...defaults],
     kinds: list(p.get('kind'), KINDS),
     lastRun: LAST_RUNS.find((l) => l === ran) ?? 'any',
     scheduled: p.get('scheduled') === '1',
@@ -134,11 +143,14 @@ export function parseFilters(p: URLSearchParams): Filters {
 }
 
 /** `params` with the filter keys replaced by `f` (other keys are kept). */
-export function writeFilters(params: URLSearchParams, f: Filters): URLSearchParams {
+export function writeFilters(params: URLSearchParams, f: Filters, defaults: readonly Severity[] = []): URLSearchParams {
   const p = new URLSearchParams(params)
   for (const k of PARAMS) p.delete(k)
   if (f.query.trim()) p.set('q', f.query)
-  if (f.states.length) p.set('state', f.states.join(','))
+  if (!onDefaultStates(f, defaults)) {
+    if (f.states.length) p.set('state', f.states.join(','))
+    else if (defaults.length) p.set('state', 'all')
+  }
   if (f.kinds.length) p.set('kind', f.kinds.join(','))
   if (f.lastRun !== 'any') p.set('ran', f.lastRun)
   if (f.scheduled) p.set('scheduled', '1')

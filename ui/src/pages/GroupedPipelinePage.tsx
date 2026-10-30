@@ -1,6 +1,8 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
+import { match } from 'ts-pattern'
 import {
   ArrowLeft,
   ArrowDown,
@@ -27,6 +29,7 @@ import {
   Tag,
   TableSpacer,
   ResetDatabaseButton,
+  Select,
 } from '@/components'
 import { isCheck, nodeKindLabel } from '@/lib/status'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
@@ -41,7 +44,11 @@ import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { connection } from '@/lib/connection'
-import { ApiError, metadataUnusable } from '@/lib/api'
+import { api, ApiError, metadataUnusable } from '@/lib/api'
+import { formatSeconds } from '@/lib/assetTable'
+import { INITIAL_FAILURES, MUTED_KEY, failureTable, parseMuted, updateFailures, type FailuresEffect } from '@/lib/failuresView'
+import { useProgram } from '@/hooks/useProgram'
+import { FailuresView } from './FailuresView'
 import { inPipeline, pipelineName, sourceFile } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
@@ -49,8 +56,14 @@ import { liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphSta
 import { consumersOf, failures, healthCounts, scopeAge, type Failure } from '@/lib/health'
 import { GRAPH_LIMIT, lineage } from '@/lib/lineage'
 import {
+  compareEntries,
+  distinctNames,
+  ENTRY_SORTS,
   groupTree,
+  parseEntrySort,
   PREVIEW_FAILURE,
+  type EntryRank,
+  type EntrySort,
   groupHealth,
   groupOutput,
   groupPath,
@@ -66,6 +79,7 @@ import './groups.css'
 const SEARCH_LIMIT = 500
 /** `x_2` before `x_10`; one collator, not one per comparison. */
 const NAME_ORDER = new Intl.Collator(undefined, { numeric: true })
+const SORT_LABEL: Record<EntrySort, string> = { worst: 'worst first', name: 'name', oldest: 'oldest success' }
 
 export function GroupedPipelinePage() {
   const [params, setParams] = useSearchParams()
@@ -83,6 +97,7 @@ export function GroupedPipelinePage() {
   const hasDemoPreview = (groupsQuery.data ?? []).some(g => g.members.includes(PREVIEW_FAILURE)) && (!pipeline || pipeline === 'modeling.py')
   const preview = hasDemoPreview && params.get('preview') === 'failed'
   const attention = params.get('attention') === '1'
+  const sort = parseEntrySort(params.get('sort'))
   const assetQuery = useAssets()
   const stateQuery = useAssetStates()
   const healthQuery = useHealth()
@@ -183,11 +198,23 @@ export function GroupedPipelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [scope, leavesOf, assets])
   const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, nodeRun.statuses), [scopeIds, byId, nodeRun.statuses])
+  const graphKnown = !assetQuery.isPlaceholderData && !!assetQuery.data
   const failureList = useMemo(() => {
     const inScope = new Set(scopeIds)
-    return failures(states.filter((s) => inScope.has(s.id)), consumers)
-  }, [scopeIds, states, consumers])
-  const visibleEntries = [...entries.filter((entry) => {
+    return failures(states.filter((s) => inScope.has(s.id)), graphKnown ? consumers : null)
+  }, [scopeIds, states, consumers, graphKnown])
+  const rankOf = (entry: GraphEntry): EntryRank => {
+    const ids = leaves(entry.id)
+    const counts = healthCounts(ids, byId, nodeRun.statuses)
+    return { name: entry.name ?? entry.id, failed: counts.failed, stale: counts.stale, lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
+  }
+  const sortedEntries = useMemo(() => {
+    const ranked = entries.map((entry) => ({ entry, rank: rankOf(entry) }))
+    return ranked.sort((a, b) => compareEntries(sort, a.rank, b.rank)).map(({ entry }) => entry)
+    // rankOf reads only what is listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, sort, byId, leavesOf, nodeRun.statuses])
+  const visibleEntries = [...sortedEntries.filter((entry) => {
     const matches =
       !needle ||
       `${entry.name} ${entry.outputName ?? ''} ${leaves(entry.id).join(' ')}`
@@ -205,8 +232,50 @@ export function GroupedPipelinePage() {
   const visibleFailures = needle
     ? failureList.filter((f) => `${f.id} ${f.headline}`.toLowerCase().includes(needle))
     : failureList
-  const rowCount = show === 'failures' ? visibleFailures.length : visibleEntries.length
-  const rowIds = show === 'failures' ? visibleFailures.map((f) => f.id) : visibleEntries.map((e) => e.id)
+  const client = useQueryClient()
+  const navigate = useNavigate()
+  const [failuresModel, failuresDispatch] = useProgram(
+    () => ({ ...INITIAL_FAILURES, muted: parseMuted(localStorage.getItem(MUTED_KEY)) }),
+    updateFailures,
+    (effect: FailuresEffect, dispatch) => {
+      const failed = (error: unknown) => dispatch({ type: 'action_failed', text: error instanceof Error ? error.message : String(error) })
+      match(effect)
+        .with({ type: 'retry' }, ({ id, kind, name }) => {
+          // A task always re-executes; anything else is a cache-aware `get`.
+          (kind === 'task' ? api.runTarget(id) : api.getTarget(id)).then(() => {
+            void client.invalidateQueries({ queryKey: ['runs'] })
+            dispatch({ type: 'done', text: `Retrying ${name}` })
+          }, failed)
+        })
+        .with({ type: 'copy' }, ({ text }) => {
+          navigator.clipboard.writeText(text).then(() => dispatch({ type: 'done', text: 'Error copied' }), failed)
+        })
+        .with({ type: 'open_run' }, ({ id, name }) => {
+          api.asset(id).then(({ stats }) => {
+            const run = stats.recent_runs.find((r) => r.status !== 'success')?.run_id
+            if (run) navigate(`/runs?run=${encodeURIComponent(run)}`)
+            else dispatch({ type: 'action_failed', text: `No run is recorded for ${name}` })
+          }, failed)
+        })
+        .with({ type: 'save_muted' }, ({ muted }) => localStorage.setItem(MUTED_KEY, JSON.stringify(muted)))
+        .exhaustive()
+    },
+  )
+  const { rows: failureRows, mutedCount } = failureTable(visibleFailures, failuresModel)
+  const rowCount = show === 'failures' ? failureRows.length : visibleEntries.length
+  // Null for a row that cannot be selected: a cause's heading.
+  const rowIds = show === 'failures'
+    ? failureRows.map((r) => (r.kind === 'failure' ? r.failure.id : null))
+    : visibleEntries.map((e) => e.id)
+  const hasGroups = visibleEntries.some((e) => e.kind === 'group')
+  const hasLeaves = visibleEntries.some((e) => e.kind !== 'group')
+  const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 2 : 0)
+  const failedCount = (id: string) => healthCounts(leaves(id), byId, nodeRun.statuses).failed
+  // What each row is called in this table, so no two read the same.
+  const leafIds = show === 'failures'
+    ? visibleFailures.map((f) => f.id)
+    : visibleEntries.filter((e) => e.kind !== 'group').map((e) => e.id)
+  const labels = distinctNames(leafIds)
   const win = useTableWindow(rowCount, scroller)
   const path = groupPath(scope, tree)
   const selectedGroup = tree.groups.get(selected ?? '')
@@ -286,7 +355,9 @@ export function GroupedPipelinePage() {
       const index = rowIds.indexOf(selected)
       if (index < 0) return
       event.preventDefault()
-      const nextIndex = index + (event.key === 'ArrowDown' ? 1 : -1)
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      let nextIndex = index + step
+      if (rowIds[nextIndex] === null) nextIndex += step
       const next = rowIds[nextIndex]
       if (!next) return
       select(next)
@@ -455,7 +526,25 @@ export function GroupedPipelinePage() {
                 Needs attention
               </button>
             )}
-            <span className="barca-count">{rowCount.toLocaleString()} shown</span>
+            {show === 'items' && (
+              <Select
+                label="Sort"
+                value={sort}
+                options={ENTRY_SORTS.map((value) => ({ value, label: SORT_LABEL[value] }))}
+                onChange={(value) => update({ sort: value === 'worst' ? null : value })}
+              />
+            )}
+            {show === 'failures' && mutedCount + (failuresModel.showMuted ? 1 : 0) > 0 && (
+              <button
+                type="button"
+                className="barca-preview-toggle"
+                aria-pressed={failuresModel.showMuted}
+                onClick={() => failuresDispatch({ type: 'toggle_show_muted' })}
+              >
+                Muted · {mutedCount}
+              </button>
+            )}
+            <span className="barca-count">{(show === 'failures' ? visibleFailures.length - (failuresModel.showMuted ? 0 : mutedCount) : rowCount).toLocaleString()} shown</span>
           </div>
         )}
       </div>
@@ -542,71 +631,19 @@ export function GroupedPipelinePage() {
             </div>
           ) : show === 'failures' ? (
             <div className="barca-view-body barca-table-scroll" ref={scroller}>
-              <table className="barca-table barca-group-table barca-failure-table">
-                <colgroup>
-                  <col style={{ width: '26%' }} />
-                  <col style={{ width: '36%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '12%' }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>Failed node</th>
-                    <th>Error</th>
-                    <th>When</th>
-                    <th title="The first failed attempt after the last clean run, and runs failed in a row">Failing since</th>
-                    <th className="num" title="Nodes downstream of it, transitively">Waiting on it</th>
-                  </tr>
-                </thead>
-                <tbody ref={tableBody}>
-                  <TableSpacer height={win.before} columns={5} />
-                  {win.items.map(({ index }) => {
-                    const f = visibleFailures[index]
-                    if (!f) return null
-                    return (
-                      <tr
-                        key={f.id}
-                        ref={win.measure}
-                        data-index={index}
-                        tabIndex={0}
-                        aria-selected={selected === f.id}
-                        onClick={(event) => {
-                          event.currentTarget.focus({ preventScroll: true })
-                          select(selected === f.id ? null : f.id)
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault()
-                            select(f.id)
-                          }
-                        }}
-                      >
-                        <td>
-                          <div className="barca-group-row-name">
-                            <StatusDot status="failed" size={6} />
-                            <strong title={f.id}>{f.name}</strong>
-                            {f.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(f)}</Tag>}
-                          </div>
-                          <div className="barca-cell-sub" title={pathOf(f.id)}>{pathOf(f.id) || sourceFile(f.id)}</div>
-                        </td>
-                        <td className="barca-failure-error" title={f.error}>
-                          {f.headline}
-                          {f.missingKeys !== null && f.missingKeys > 0 && (
-                            <div className="barca-cell-sub">{f.missingKeys.toLocaleString()} keys without a result</div>
-                          )}
-                        </td>
-                        <td>{f.at ? <Age at={f.at} nowMs={stateQuery.dataUpdatedAt} /> : '–'}</td>
-                        <td>
-                          {f.failingSince ? <><Age at={f.failingSince} nowMs={stateQuery.dataUpdatedAt} /> · {f.failures} {f.failures === 1 ? 'run' : 'runs'}</> : '–'}
-                        </td>
-                        <td className="num">{f.impact > 0 ? f.impact.toLocaleString() : '–'}</td>
-                      </tr>
-                    )
-                  })}
-                  <TableSpacer height={win.after} columns={5} />
-                </tbody>
-              </table>
+              <FailuresView
+                model={failuresModel}
+                rows={failureRows}
+                window={win}
+                labels={labels}
+                placeOf={(id) => pathOf(id) || sourceFile(id)}
+                selected={selected}
+                nowMs={stateQuery.dataUpdatedAt}
+                readOnly={healthQuery.data?.read_only ?? false}
+                bodyRef={tableBody}
+                onSelect={select}
+                dispatch={failuresDispatch}
+              />
               {rowCount === 0 && (
                 <p className="barca-table-empty">
                   {!stateQuery.data ? 'Checking…' : needle ? 'No failures match.' : 'Nothing has failed here.'}
@@ -616,35 +653,27 @@ export function GroupedPipelinePage() {
           ) : (
             <div className="barca-view-body barca-table-scroll" ref={scroller}>
               <table className="barca-table barca-group-table">
-                <colgroup>
-                  <col style={{ width: '30%' }} />
-                  <col style={{ width: '24%' }} />
-                  <col style={{ width: '18%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '4%' }} />
-                </colgroup>
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Health</th>
+                    <th style={{ width: '30%' }}>Name</th>
+                    <th style={{ width: '22%' }}>Health</th>
                     <th title="A group shows its oldest member's">Last success</th>
-                    <th>Contents</th>
-                    <th>Output</th>
-                    <th />
+                    {hasGroups && <th>Contents</th>}
+                    {hasGroups && <th className="num" title="Failed members">Failures</th>}
+                    {hasLeaves && <th title="Since the last attempt">Age</th>}
+                    {hasLeaves && <th className="num" title="The last attempt's">Duration</th>}
+                    {hasGroups && <th style={{ width: 40 }} />}
                   </tr>
                 </thead>
                 <tbody ref={tableBody}>
-                  <TableSpacer height={win.before} columns={6} />
+                  <TableSpacer height={win.before} columns={columnCount} />
                   {win.items.map(({ index }) => {
                     const entry = visibleEntries[index]
                     if (!entry) return null
                     const group = tree.groups.get(entry.id)
                     const nestedGroups = group?.members.filter((id) => tree.groups.has(id)).length ?? 0
                     const state = visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE
-                    const outputNode = group
-                      ? byId.get(groupOutput(entry.id, tree))
-                      : undefined
+                    const last = group ? null : byId.get(entry.id)?.last_materialization
                     const running = group ? null : byId.get(entry.id)?.running
                     const { lastSuccessAt, failingSince, failures: failed } = scopeAge(group ? leaves(entry.id) : [entry.id], byId)
                     const age = { at: lastSuccessAt, failingSince, failures: failed }
@@ -673,15 +702,13 @@ export function GroupedPipelinePage() {
                         <td>
                           <div className="barca-group-row-name">
                             {group && <FolderOpen size={15} />}
-                            <strong>{entry.name}</strong>
+                            <strong title={entry.id}>{labels.get(entry.id) ?? entry.name}</strong>
                             {group ? (
                               nestedGroups > 0 && <span className="barca-cell-sub">{nestedGroups} groups</span>
                             ) : (
                               <>
                                 {entry.kind !== 'asset' && entry.kind !== 'group' && <Tag size="sm">{nodeKindLabel({ id: entry.id, kind: entry.kind })}</Tag>}
-                                {isHit.has(entry.id)
-                                  ? <span className="barca-cell-sub" title={entry.id}>in {pathOf(entry.id) || sourceFile(entry.id)}</span>
-                                  : entry.name !== shortName(entry.id) && <span className="barca-cell-sub" title={entry.id}>{shortName(entry.id)}</span>}
+                                {isHit.has(entry.id) && <span className="barca-cell-sub" title={entry.id}>in {pathOf(entry.id) || sourceFile(entry.id)}</span>}
                               </>
                             )}
                           </div>
@@ -705,39 +732,35 @@ export function GroupedPipelinePage() {
                         <td>
                           {stateQuery.data && <LastSuccess {...age} nowMs={stateQuery.dataUpdatedAt} />}
                         </td>
-                        <td>{group ? entry.summary : '—'}</td>
-                        <td>
-                          {group && (
-                            <div className="barca-group-output-cell">
-                              {outputNode && (
-                                <StatusDot
-                                  status={memberHealth(outputNode).status}
-                                  size={6}
-                                />
-                              )}
-                              <span>{entry.outputName}</span>
-                            </div>
-                          )}
-                        </td>
-                        <td>
-                          {group && (
-                            <button
-                              type="button"
-                              className="barca-clear"
-                              aria-label={`Open ${group.name}`}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                openGroup(entry.id)
-                              }}
-                            >
-                              <ChevronRight size={15} />
-                            </button>
-                          )}
-                        </td>
+                        {hasGroups && <td>{group && entry.summary}</td>}
+                        {hasGroups && (
+                          <td className="num">{group && stateQuery.data && failedCount(entry.id).toLocaleString()}</td>
+                        )}
+                        {hasLeaves && <td>{last && <Age at={last.created_at} nowMs={stateQuery.dataUpdatedAt} />}</td>}
+                        {hasLeaves && (
+                          <td className="num">{typeof last?.elapsed_seconds === 'number' ? formatSeconds(last.elapsed_seconds) : '–'}</td>
+                        )}
+                        {hasGroups && (
+                          <td>
+                            {group && (
+                              <button
+                                type="button"
+                                className="barca-clear"
+                                aria-label={`Open ${group.name}`}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openGroup(entry.id)
+                                }}
+                              >
+                                <ChevronRight size={15} />
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     )
                   })}
-                  <TableSpacer height={win.after} columns={6} />
+                  <TableSpacer height={win.after} columns={columnCount} />
                 </tbody>
               </table>
               {visibleEntries.length === 0 && (

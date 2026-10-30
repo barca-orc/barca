@@ -1,7 +1,10 @@
 import { INITIAL_RUNS, RUNS_MAX } from '@/lib/runsPage'
 import { RunPanelView, RunsView } from '@/pages/RunsView'
 import { TokensOffView, TokensView } from '@/pages/TokensView'
-import { NOW_MS, connections, runDetails, runLists, tokenStates } from '../fixtures'
+import { NOW_MS, failureLists, connections, runDetails, runLists, tokenStates } from '../fixtures'
+import { INITIAL_FAILURES, failureTable, muteKey, type FailuresModel } from '@/lib/failuresView'
+import { distinctNames } from '@/lib/groups'
+import { FailuresView } from '@/pages/FailuresView'
 import { Frame, Spec, States } from '../Kit'
 
 /**
@@ -45,6 +48,37 @@ export function Pages() {
               <RunPanelView id="127" run={run} dispatch={dispatch} />
             </Frame>
           )}
+        />
+      </Spec>
+
+      <Spec title="Failures view" note="Grouped by cause. Actions send messages; no program runs here.">
+        <States
+          label="Failures"
+          states={{
+            ...Object.fromEntries(Object.entries(failureLists).map(([name, list]) => [name, { list, model: INITIAL_FAILURES }])),
+            'muted, shown': { list: failureLists['by cause'], model: { ...INITIAL_FAILURES, showMuted: true, muted: [muteKey(failureLists['by cause'][0]!)] } },
+            'action failed': { list: failureLists['by cause'], model: { ...INITIAL_FAILURES, notice: { text: 'No run is recorded for invoices_00', failed: true } } },
+            'read-only': { list: failureLists['by cause'], model: INITIAL_FAILURES, readOnly: true },
+          } as Record<string, { list: typeof failureLists['by cause']; model: FailuresModel; readOnly?: boolean }>}
+          render={({ list, model, readOnly }, dispatch) => {
+            const { rows } = failureTable(list, model)
+            return (
+              <Frame height={320} width="100%">
+                <FailuresView
+                  model={model}
+                  rows={rows}
+                  window={{ items: rows.map((_, index) => ({ index })), before: 0, after: 0 }}
+                  labels={distinctNames(list.map((f) => f.id))}
+                  placeOf={() => 'Billing › Raw'}
+                  selected={null}
+                  nowMs={NOW_MS}
+                  readOnly={readOnly ?? false}
+                  onSelect={() => undefined}
+                  dispatch={dispatch}
+                />
+              </Frame>
+            )
+          }}
         />
       </Spec>
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, scopeAge } from './health'
+import { causeOf, failureGroups, impactLabel, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, scopeAge } from './health'
 import type { NodeState } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
@@ -48,6 +48,19 @@ describe('health', () => {
     expect(failedUpstream('p.py:report', inputs, byId)).toEqual(['p.py:raw'])
     expect(failedUpstream('p.py:orphan', inputs, byId)).toEqual([])
     expect([...downstreamIds('p.py:raw', consumers)].sort()).toEqual(['p.py:check', 'p.py:clean', 'p.py:report'])
+  })
+
+  it('does not call an unloaded graph zero', () => {
+    expect(failures(nodes, null).every((f) => f.impact === null)).toBe(true)
+    expect(impactLabel(null)).toBe('?')
+    expect(impactLabel(0)).toBe('0')
+  })
+
+  it('groups failures by cause, numbers normalised, most impact first', () => {
+    const f = (headline: string, impact: number | null) => ({ headline, impact }) as Failure
+    const groups = failureGroups([f('fell 64%', 2), f('fell 1,200%', 3), f('other', 9), f('later', null)])
+    expect(groups.map((g) => [g.cause, g.failures.length, g.impact])).toEqual([['other', 1, 9], ['fell #%', 2, 5], ['later', 1, null]])
+    expect(causeOf('v1.2 failed 3 times')).toBe('v# failed # times')
   })
 
   it('says something for an empty error', () => {

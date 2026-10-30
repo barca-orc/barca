@@ -14,7 +14,7 @@ test('arrow keys move the selection and detail panel without wrapping', async ({
     await expect(rows.nth(index)).toHaveAttribute('aria-selected', 'true')
     await expect(rows.nth(index)).toBeFocused()
     const name = await rows.nth(index).locator('.name').innerText()
-    await expect(page.getByRole('complementary', { name: `${name} details` })).toBeVisible()
+    await expect(page.getByRole('complementary', { name: `${name.split(':').pop()} details` })).toBeVisible()
   }
   await page.keyboard.press('ArrowDown')
   await expect(rows.last()).toHaveAttribute('aria-selected', 'true')

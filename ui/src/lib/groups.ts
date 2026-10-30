@@ -79,6 +79,71 @@ export function memberName(id: string): string {
   return `${check ? 'Check · ' : ''}${parts.at(-1)?.replaceAll('_', ' ') ?? name}`
 }
 
+/** The ways to call a node, shortest first: `invoices_00`, `raw__invoices_00`, …, its id. */
+function nameChoices(id: string): string[] {
+  const short = shortName(id)
+  const check = /^(check|validate)__/.exec(short)?.[1]
+  const parts = (check ? short.slice(check.length + 2) : short).split('__')
+  const choices = parts.map((_, i) => [...(check ? [check] : []), ...parts.slice(parts.length - 1 - i)].join('__'))
+  return [...choices, id]
+}
+
+/**
+ * A label per node: the part of its id that tells it from the others in the same table, so no
+ * two rows read the same. `billing__raw__invoices_00` is `invoices_00` until another node ends
+ * the same way.
+ */
+export function distinctNames(ids: readonly string[]): Map<string, string> {
+  const choices = new Map(ids.map((id) => [id, nameChoices(id)]))
+  const level = new Map(ids.map((id) => [id, 0]))
+  const label = (id: string) => {
+    const options = choices.get(id)!
+    return options[Math.min(level.get(id)!, options.length - 1)]!
+  }
+  for (;;) {
+    const holders = new Map<string, string[]>()
+    for (const id of choices.keys()) {
+      const same = holders.get(label(id))
+      if (same) same.push(id)
+      else holders.set(label(id), [id])
+    }
+    const clashes = [...holders.values()].filter((same) => same.length > 1)
+    const movable = clashes.flat().filter((id) => level.get(id)! < choices.get(id)!.length - 1)
+    if (movable.length === 0) break
+    for (const id of movable) level.set(id, level.get(id)! + 1)
+  }
+  return new Map([...choices.keys()].map((id) => [id, label(id)]))
+}
+
+/** How a grouped table can be ordered; `worst` is the default and stays out of the URL. */
+export type EntrySort = 'worst' | 'name' | 'oldest'
+export const ENTRY_SORTS: readonly EntrySort[] = ['worst', 'name', 'oldest']
+
+export function parseEntrySort(raw: string | null): EntrySort {
+  return ENTRY_SORTS.find((s) => s === raw) ?? 'worst'
+}
+
+/** What a row of a grouped table is ordered by. */
+export interface EntryRank {
+  name: string
+  failed: number
+  stale: number
+  lastSuccessAt: string | null
+}
+
+const RANK_NAMES = new Intl.Collator(undefined, { numeric: true })
+
+/** Worst first (failed, then stale, then name), by name, or longest since a success (never first). */
+export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): number {
+  const name = RANK_NAMES.compare(a.name, b.name)
+  if (sort === 'name') return name
+  if (sort === 'oldest') {
+    const at = (a.lastSuccessAt ?? '').localeCompare(b.lastSuccessAt ?? '')
+    return at || name
+  }
+  return b.failed - a.failed || b.stale - a.stale || name
+}
+
 export function memberHealth(node: NodeState | undefined): GraphState {
   if (!node) return UNKNOWN_GRAPH_STATE
   if (node.running) return runningGraphState(node.running)
@@ -156,6 +221,7 @@ export function projectGroups(
   for (const id of members)
     for (const leaf of groupLeaves(id, tree)) owner.set(leaf, id)
   const external = new Set<string>()
+  const names = distinctNames(members.filter((id) => !tree.groups.has(id)))
   const entries: GraphEntry[] = members
     .filter((id) => tree.groups.has(id) || byId.has(id))
     .map((id) => {
@@ -180,7 +246,7 @@ export function projectGroups(
         id,
         kind: group ? 'group' : byId.get(id)!.kind,
         inputs: [...inputs],
-        name: group?.name ?? (scope ? memberName(id) : shortName(id)),
+        name: group?.name ?? names.get(id) ?? shortName(id),
         summary: `${assetCount} assets · ${checkCount} checks${others ? ` · ${others} other` : ''}`,
         outputName: group ? memberName(groupOutput(id, tree)) : undefined,
       }

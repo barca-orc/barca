@@ -10,6 +10,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- The UI's Failures view groups failures by cause (first line, numbers normalised) with their
+  count and impact, biggest first, and each row can retry, copy the error, open its run, or be
+  muted in this browser until the node recovers. `Waiting on it` shows `0` for a leaf and `?`
+  while the graph loads. Grouped tables open worst first with a `?sort=` control, show Failures,
+  Age and Duration instead of Output, and name rows by the distinct part of their id. Tasks open
+  on what needs attention; **Show all** (`?state=all`) lists the rest.
 - The UI uses one name and one meaning per state. Green means healthy only: links, selection and
   the primary button are neutral; red colours only the failed count, a column of states is dot and
   text (pills stay for failed and running). States read Healthy, Stale (`Stale (some keys)`),

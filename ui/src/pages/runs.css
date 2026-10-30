@@ -35,7 +35,7 @@
 .barca-activity-bar:not(:disabled):hover span { filter: brightness(1.3); }
 .barca-activity-bar[aria-pressed="true"] { outline: 1px solid var(--text-strong); outline-offset: 1px; }
 .barca-activity-bar span { width: 100%; display: flex; flex-direction: column; min-height: 2px; background: var(--border-subtle); border-radius: 1px 1px 0 0; overflow: hidden; }
-.barca-activity-axis { position: relative; height: 14px; font-size: var(--text-2xs); color: var(--text-muted); }
+.barca-activity-axis { pointer-events: none; position: relative; height: 14px; font-size: var(--text-2xs); color: var(--text-muted); }
 .barca-activity-axis span { position: absolute; top: 2px; white-space: nowrap; }
 .barca-activity-axis .barca-activity-now { transform: translateX(-100%); color: var(--text-strong); }
 .barca-activity-axis .barca-activity-now::after { content: ""; position: absolute; right: 0; top: -36px; height: 34px; border-right: 1px solid var(--text-muted); }
