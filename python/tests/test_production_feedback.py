@@ -152,7 +152,9 @@ def test_a_failed_step_keeps_its_output_tail_in_a_bounded_page_of_steps(tmp_path
     assert out.returncode == 1, out.stderr
     run_id = json.loads(out.stdout)["run_id"]
     view = ok(barca(tmp_path, "history", run_id, "--limit", "2", "--json"))
-    assert view["steps_page"] == {"total": 6, "truncated": True}, view["steps_page"]
+    page = view["steps_page"]
+    assert (page["total"], page["truncated"]) == (6, True), page
+    assert [(n["keys"], n["failed"]) for n in page["nodes"]] == [(6, 1)], page
     assert len(view["steps"]) == 2
     [failed] = [s for s in view["steps"] if s["status"] == "failed"]
     assert failed["partition_key"] == "k5" or failed["node_id"].endswith("k5]"), failed

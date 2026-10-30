@@ -156,6 +156,13 @@ def many(n: str) -> int:
 """
 
 
+def paged(view: dict) -> dict:
+    """`steps_page` without its per-node summary, which covers every step however few are listed."""
+    page = dict(view["steps_page"])
+    assert sum(n["keys"] for n in page.pop("nodes")) == page["total"]
+    return page
+
+
 def test_history_of_one_run_pages_its_steps_failed_ones_first(tmp_path):
     (tmp_path / "pipeline.py").write_text(FAILING)
     failed = barca(tmp_path, "get", "many", "pipeline.py", "--json", check=False)
@@ -163,13 +170,13 @@ def test_history_of_one_run_pages_its_steps_failed_ones_first(tmp_path):
     run_id = json.loads(failed.stdout)["run_id"]
 
     page = json.loads(barca(tmp_path, "history", run_id, "--limit", "5", "--json").stdout)
-    assert page["steps_page"] == {"total": 30, "truncated": True}
+    assert paged(page) == {"total": 30, "truncated": True}
     keys = [s["partition_key"] for s in page["steps"]]
     assert len(keys) == 5 and "n=17" in keys, keys
     assert [s["status"] for s in page["steps"] if s["partition_key"] == "n=17"] == ["failed"]
 
     every = json.loads(barca(tmp_path, "history", run_id, "--all", "--json").stdout)
-    assert every["steps_page"] == {"total": 30, "truncated": False}
+    assert paged(every) == {"total": 30, "truncated": False}
     assert len(every["steps"]) == 30
     default = json.loads(barca(tmp_path, "history", run_id, "--json").stdout)
     assert len(default["steps"]) == 30 and not default["steps_page"]["truncated"]
@@ -181,7 +188,7 @@ def test_history_of_one_run_pages_its_steps_failed_ones_first(tmp_path):
     with served.Serve(tmp_path, "--no-schedule", env=env()) as serve:
         serve.ready()
         view = serve.get(f"/runs/{run_id}?limit=5")
-        assert view["steps_page"] == {"total": 30, "truncated": True}
+        assert paged(view) == {"total": 30, "truncated": True}
         assert len(view["steps"]) == 5
         assert len(serve.get(f"/runs/{run_id}?all=true")["steps"]) == 30
         remote = barca(
@@ -194,7 +201,7 @@ def test_history_of_one_run_pages_its_steps_failed_ones_first(tmp_path):
             "--server",
             f"http://127.0.0.1:{serve.port}",
         )
-        assert json.loads(remote.stdout)["steps_page"] == {"total": 30, "truncated": True}
+        assert paged(json.loads(remote.stdout)) == {"total": 30, "truncated": True}
 
 
 def _rss_mb(pid: int) -> float:
