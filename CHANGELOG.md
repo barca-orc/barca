@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.36.0 (2026-10-30)
+
 ### Breaking
 
 - Server event IDs use an attempt epoch and one-based sequence. Replay is bounded to
