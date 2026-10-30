@@ -9,7 +9,7 @@ test.describe('graph page', () => {
     await page.getByText('say_hello').first().click()
 
     const started = page.waitForRequest((r) => isStartRun(r, 'run'))
-    await inspector(page).getByRole('button', { name: 'run' }).click()
+    await inspector(page).getByRole('button', { name: 'Run', exact: true }).click()
     await started
 
     await expect(inspector(page)).toContainText('hello from e2e 6', { timeout: 30_000 })
@@ -18,13 +18,40 @@ test.describe('graph page', () => {
 })
 
 test.describe('topbar Run', () => {
-  const topbarRun = (page: Page) => page.getByRole('banner').getByRole('button', { name: 'Run' })
+  const topbarRun = (page: Page) => page.getByRole('banner').getByRole('button', { name: /^Run/ })
 
-  test('is disabled until a node is selected', async ({ page }) => {
-    await page.goto('/ui/#/graph')
-    await expect(topbarRun(page)).toBeDisabled()
+  test('names what it runs: the selected node, else the open pipeline', async ({ page }) => {
+    await page.goto('/ui/#/graph?pipeline=pipeline.py')
+    await expect(topbarRun(page)).toHaveText(/^Run pipeline\.py \(\d+ nodes?\)$/)
     await page.getByText('say_hello').first().click()
-    await expect(topbarRun(page)).toBeEnabled()
+    await expect(topbarRun(page)).toHaveText('Run say_hello')
+  })
+
+  test('a pipeline gets its file at once', async ({ page }) => {
+    await page.goto('/ui/#/assets?pipeline=other.py')
+    await expect(topbarRun(page)).toHaveText(/^Run other\.py/)
+    const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/runs'))
+    await topbarRun(page).click()
+    expect((await started).postDataJSON()).toMatchObject({ command: 'get', targets: [], files: ['other.py'] })
+  })
+
+  test('all pipelines asks first, and Cancel starts nothing', async ({ page }) => {
+    const posts: unknown[] = []
+    await page.route('**/runs', (route) => {
+      if (route.request().method() !== 'POST') return route.continue()
+      posts.push(route.request().postDataJSON())
+      return route.fulfill({ status: 202, json: { run_id: 'r1', status: 'running', position: 0 } })
+    })
+    await page.goto('/ui/#/assets')
+    await expect(topbarRun(page)).toHaveText(/^Run all \d+ nodes?$/)
+    await topbarRun(page).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(dialog).toHaveCount(0)
+    expect(posts).toEqual([])
+    await topbarRun(page).click()
+    await dialog.getByRole('button', { name: /^Run all/ }).click()
+    await expect.poll(() => posts).toEqual([{ command: 'get', targets: [] }])
   })
 
   test('runs the selected task and streams its output', async ({ page }) => {
@@ -49,7 +76,7 @@ test.describe('topbar Run', () => {
   })
 
   test('is absent on pages with nothing to run', async ({ page }) => {
-    await page.goto('/ui/#/assets')
+    await page.goto('/ui/#/tasks')
     await expect(page.getByRole('banner')).toBeVisible()
     await expect(topbarRun(page)).toHaveCount(0)
   })

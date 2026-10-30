@@ -465,8 +465,8 @@ is going, so the poll finds it ready.
 POST /state/reset      → { database, moved_to, moved, undo }
 ```
 
-What the web UI's **Reset database** button calls (on the "Can't load pipeline" panel, and in
-the sidebar), behind a dialog that says what happens and how to undo it. It works as `barca state
+What the web UI's **Reset database** button calls (on the error panel, only when the
+server answers `metadata_unusable`), behind a dialog that says what happens and how to undo it. It works as `barca state
 reset` does: under the database's lock, the metadata database and its `-wal` and `-shm` move to
 `metadata.db.reset-<UTC>` (and `<that>-wal`, `<that>-shm`) in the same directory, and an empty
 database takes its place, so the next request sees an empty history. Nothing is deleted;

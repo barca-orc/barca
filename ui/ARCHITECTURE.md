@@ -67,6 +67,7 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/graphLayout.ts` | `layout(input)` — dagre alone, no React: what `graphLayout.worker.ts` runs off the main thread | — |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `mergeStates` for the sidebar | `pipeline.test.ts` |
 | `lib/health.ts` | `healthCounts`, `failures`, `failedUpstream`, `consumersOf` — what is broken in a scope and why | `health.test.ts` |
+| `lib/runTarget.ts` | `runTarget`, `runButton` — what the topbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
 
@@ -166,6 +167,8 @@ Rules:
 - A second use of a pattern is the cue to make the primitive; the first use stays in its page.
 - A new or changed primitive is added to the kit page (`pages/KitPage.tsx`, at `/ui/#/kit`
   under `pnpm dev`) in every state it has. The kit page is not in the built UI.
+- Colour is status: green healthy, red failed, amber stale, cyan running. `--signal` (primary
+  actions, links, selection) is neutral; `tokens.test.ts` keeps it off the status hues.
 - `styles/tokens.test.ts` fails on a raw color or an off-scale font size outside
   `styles/tokens/`. Add a token instead of an exception.
 
@@ -227,7 +230,7 @@ they arrive. The tests do not exercise that (fonts are local and fast).
   invented colors.
 
 Graph state presentation lives in `src/lib/graphState.ts`. Resting node
-colors come from `/state`: cached green, stale/partial yellow, never-run/unknown/always-run
+colors come from `/state`: healthy green, stale amber, not-run/unknown/always-run
 neutral, and the latest failed attempt red even if an older artifact exists. Active
 run events overlay that state; completion refreshes it. Selection uses a separate outline.
 The graph displays every asset and dependency in the selected pipeline. No nodes

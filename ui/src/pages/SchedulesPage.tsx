@@ -8,6 +8,7 @@ import { severityStatus } from "@/lib/assetTable";
 import { connection } from "@/lib/connection";
 import { inPipeline, pipelineName } from "@/lib/pipeline";
 import { scheduleRows } from "@/lib/schedules";
+import { nodeKindLabel } from "@/lib/status";
 
 /**
  * Every node with a cron schedule: when it runs (in words and as cron), when
@@ -119,7 +120,7 @@ export function SchedulesPage() {
                   <td>
                     <div className="barca-cell-name">
                       <span className="name">{r.name}</span>
-                      {r.kind !== "asset" && <Tag size="sm">{r.kind}</Tag>}
+                      {r.kind !== "asset" && <Tag size="sm">{nodeKindLabel(r)}</Tag>}
                     </div>
                     <div className="barca-cell-sub">{r.file}</div>
                   </td>

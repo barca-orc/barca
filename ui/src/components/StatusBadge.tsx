@@ -7,7 +7,7 @@ export interface StatusBadgeProps {
   status: StatusKind
   label?: string
   size?: 'sm' | 'md'
-  /** Drop the tinted ground + border, keep just the dot + colored label. */
+  /** Dot + plain text, no pill. By default only failed and running, the exceptions, get a pill. */
   subtle?: boolean
   style?: CSSProperties
 }
@@ -19,18 +19,20 @@ const SIZES = {
 
 /**
  * barca · StatusBadge
- * Pill showing a run/asset state: a colored dot + mono label on a faint
- * tinted ground. The status vocabulary of the whole product.
+ * A run/asset state: a colored dot + label. Pills are for exceptions: a failed or running
+ * state sits on a tinted ground, any other is dot + plain text, so a column of healthy rows
+ * stays quiet.
  */
 export function StatusBadge({
   status,
   label,
   size = 'md',
-  subtle = false,
+  subtle,
   style,
 }: StatusBadgeProps) {
   const meta = statusMeta(status)
   const s = SIZES[size]
+  const plain = subtle ?? !(status === 'failed' || status === 'running')
   return (
     <span
       style={{
@@ -40,9 +42,9 @@ export function StatusBadge({
         height: s.height,
         padding: s.padding,
         borderRadius: 'var(--radius-pill)',
-        background: subtle ? 'transparent' : meta.bg,
-        border: `1px solid ${subtle ? 'transparent' : meta.line}`,
-        color: meta.color,
+        background: plain ? 'transparent' : meta.bg,
+        border: `1px solid ${plain ? 'transparent' : meta.line}`,
+        color: plain ? 'var(--text-default)' : meta.color,
         fontFamily: 'var(--font-sans)',
         fontSize: s.fontSize,
         fontWeight: 500,

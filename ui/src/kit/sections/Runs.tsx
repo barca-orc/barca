@@ -64,7 +64,6 @@ export function Runs() {
                 running={s.status === 'running'}
                 error={s.error}
                 readOnly={s.readOnly}
-                verb="get"
                 triggering={false}
                 triggerError={s.triggerError}
                 onFire={() => dispatch({ type: 'fire' })}

@@ -101,7 +101,8 @@ shape readers run at once. Cold reads remain proportional to selected artifact b
 The grouped UI and sidebar render from graph/group metadata before cache status is available.
 Pending state is not presented as never-run or cached. Status arrival preserves row and graph
 geometry; a status error does not hide the graph. Pipeline/group views ask only for their
-upstream cone, while All pipelines asks for everything. Evidence:
+upstream cone, while All pipelines and the sidebar's health dots ask for everything. A sidebar
+dot appears only when all of its file's state is known. Evidence:
 [`state-loading.spec.ts`](../../ui/e2e/state-loading.spec.ts).
 
 The grouped list and graph expose one shared run action for the selected member in the

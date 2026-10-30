@@ -26,6 +26,7 @@ import {
   TableSpacer,
   ResetDatabaseButton,
 } from '@/components'
+import { isCheck, nodeKindLabel } from '@/lib/status'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import {
   GraphCanvas,
@@ -38,7 +39,7 @@ import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { connection } from '@/lib/connection'
-import { ApiError } from '@/lib/api'
+import { ApiError, metadataUnusable } from '@/lib/api'
 import { formatAgo } from '@/lib/assetTable'
 import { inPipeline, pipelineName, sourceFile } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
@@ -64,9 +65,6 @@ import './groups.css'
 const SEARCH_LIMIT = 500
 /** `x_2` before `x_10`; one collator, not one per comparison. */
 const NAME_ORDER = new Intl.Collator(undefined, { numeric: true })
-
-/** A database barca cannot use is mended by starting over; any other error is not. */
-const metadataUnusable = (error: unknown) => error instanceof ApiError && error.reason === 'metadata_unusable'
 
 export function GroupedPipelinePage() {
   const [params, setParams] = useSearchParams()
@@ -521,19 +519,23 @@ export function GroupedPipelinePage() {
                 </span>
                 <span>
                   <StatusDot status="failed" size={6} />
-                  Any member failed
-                </span>
-                <span>
-                  <StatusDot status="success" size={6} />
-                  Healthy
-                </span>
-                <span>
-                  <StatusDot status="warning" size={6} />
-                  Needs refresh
+                  Failed
                 </span>
                 <span>
                   <StatusDot status="running" size={6} />
                   Running
+                </span>
+                <span>
+                  <StatusDot status="warning" size={6} />
+                  Stale
+                </span>
+                <span>
+                  <StatusDot status="skipped" size={6} />
+                  Not run
+                </span>
+                <span>
+                  <StatusDot status="success" size={6} />
+                  Healthy
                 </span>
               </div>
             </div>
@@ -581,7 +583,7 @@ export function GroupedPipelinePage() {
                           <div className="barca-group-row-name">
                             <StatusDot status="failed" size={6} />
                             <strong title={f.id}>{f.name}</strong>
-                            {f.kind !== 'asset' && <Tag size="sm">{f.kind === 'task' ? 'check' : f.kind}</Tag>}
+                            {f.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(f)}</Tag>}
                           </div>
                           <div className="barca-cell-sub" title={pathOf(f.id)}>{pathOf(f.id) || sourceFile(f.id)}</div>
                         </td>
@@ -666,7 +668,7 @@ export function GroupedPipelinePage() {
                               nestedGroups > 0 && <span className="barca-cell-sub">{nestedGroups} groups</span>
                             ) : (
                               <>
-                                <Tag size="sm">{entry.kind}</Tag>
+                                {entry.kind !== 'asset' && entry.kind !== 'group' && <Tag size="sm">{nodeKindLabel({ id: entry.id, kind: entry.kind })}</Tag>}
                                 {isHit.has(entry.id)
                                   ? <span className="barca-cell-sub" title={entry.id}>in {pathOf(entry.id) || sourceFile(entry.id)}</span>
                                   : entry.name !== shortName(entry.id) && <span className="barca-cell-sub" title={entry.id}>{shortName(entry.id)}</span>}
@@ -811,7 +813,7 @@ export function GroupedPipelinePage() {
                   {selectedLeaves.filter((id) => byId.get(id)?.kind === 'asset').length}
                 </KeyValue>
                 <KeyValue label="checks">
-                  {selectedLeaves.filter((id) => byId.get(id)?.kind === 'task').length}
+                  {selectedLeaves.filter((id) => isCheck({ id, kind: byId.get(id)?.kind ?? 'asset' })).length}
                 </KeyValue>
                 {selectedGroup.members.some((id) => tree.groups.has(id)) && (
                   <KeyValue label="nested groups">

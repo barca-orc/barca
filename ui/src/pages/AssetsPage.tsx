@@ -6,6 +6,7 @@ import {
   Chip,
   ChipGroup,
   ConnectionBadge,
+  ResetDatabaseButton,
   RunningBadge,
   SearchInput,
   Select,
@@ -21,7 +22,9 @@ import { useAssets } from '@/hooks/useAssets'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
+import { ApiError, metadataUnusable } from '@/lib/api'
 import { liveGraphState } from '@/lib/graphState'
+import { nodeKindLabel, severityWord } from '@/lib/status'
 import { connection } from '@/lib/connection'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
@@ -44,22 +47,10 @@ import {
   severityStatus,
   sortRows,
   type AssetRow,
-  type Severity,
   type Sort,
   type SortKey,
 } from '@/lib/assetTable'
 import type { NodeKind } from '@/lib/types'
-
-const SEVERITY_LABEL: Record<Severity, string> = {
-  failed: 'failed',
-  stale: 'stale',
-  never_run: 'never run',
-  partial: 'partial',
-  unknown: 'unknown',
-  always_runs: 'always runs',
-  unsynced: 'unsynced',
-  cached: 'cached',
-}
 
 const PAGE_LABEL: Record<NodeKind, string> = { asset: 'Assets', task: 'Tasks', sensor: 'Sensors' }
 
@@ -68,7 +59,7 @@ const LAST_RUN_LABEL: Record<LastRun, string> = {
   hour: 'last hour',
   day: 'last 24h',
   week_plus: '7+ days ago',
-  never: 'never',
+  never: 'not run',
 }
 
 /** Add or remove `v` from a multi-select list. */
@@ -161,7 +152,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   // The node shown in the side panel (?node=<id>).
   const selectedId = params.get('node')
   const selectedNode = data?.find((n) => n.id === selectedId) ?? null
-  const nodeRun = useNodeRun(selectedNode, selectedNode !== null)
+  const nodeRun = useNodeRun(selectedNode, { showTopbar: kind === 'asset' || selectedNode !== null, scopes: kind === 'asset' })
   const setSelected = (id: string | null) => {
     const p = new URLSearchParams(params)
     if (id === null) p.delete('node')
@@ -277,7 +268,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 onClick={() => setFilters({ ...filters, states: toggle(filters.states, sev) })}
               >
                 <StatusDot status={severityStatus(sev)} size={6} />
-                {counts.states[sev]} {SEVERITY_LABEL[sev]}
+                {counts.states[sev]} {severityWord(sev)}
               </Chip>
             ))}
           </ChipGroup>
@@ -287,12 +278,16 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
         </div>
       </div>
 
+      {nodeRun.action.error && !selectedNode && <p role="alert">Could not start run: {nodeRun.action.error.message}</p>}
       <div className="barca-assets-split">
       <div className="barca-view-body barca-table-scroll" ref={scroller}>
         {isError ? (
-          <p className="barca-table-empty">
-            Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}
-          </p>
+          <div className="barca-table-empty">
+            <p>Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}</p>
+            {error instanceof ApiError && error.remediation && <p>{error.remediation}</p>}
+            {/* Starting over mends a database barca cannot use, and nothing else. */}
+            {metadataUnusable(error) && <ResetDatabaseButton readOnly={health?.read_only ?? false} />}
+          </div>
         ) : !data ? (
           <div className="barca-table-skeleton" aria-label="Loading">
             {[0, 1, 2, 3, 4, 5].map((i) => (
@@ -334,7 +329,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   <td>
                     <div className="barca-cell-name">
                       <span className="name">{r.name}</span>
-                      {r.kind !== 'asset' && <Tag size="sm">{r.kind}</Tag>}
+                      {r.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(r)}</Tag>}
                     </div>
                     <div className="barca-cell-sub">{r.file}</div>
                   </td>
@@ -350,9 +345,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   <td>
                     {r.last ? (
                       <>
-                        <div className={r.last.status === 'failed' ? 'barca-cell-failed' : undefined}>
-                          {r.last.status} · {r.last.ago}
-                        </div>
+                        <div>{r.last.status} · {r.last.ago}</div>
                         {r.last.error && (
                           <div className="barca-cell-error" title={r.last.error}>
                             {r.last.error}
@@ -360,7 +353,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                         )}
                       </>
                     ) : (
-                      <span className="barca-cell-sub">never</span>
+                      <span className="barca-cell-sub">not run</span>
                     )}
                   </td>
                   <td className="num" title={r.p95 ? `p95 ${r.p95}` : undefined}>

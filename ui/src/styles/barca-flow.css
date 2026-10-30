@@ -24,7 +24,7 @@
   stroke-width: 1.5;
 }
 .react-flow__edge.hot .react-flow__edge-path {
-  stroke: var(--c-green-line);
+  stroke: var(--c-white-line);
   stroke-width: 1.8;
 }
 .react-flow__edge.live .react-flow__edge-path {

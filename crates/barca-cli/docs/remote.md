@@ -311,7 +311,7 @@ need it (`barca gc` lists them under `held` as `db_copies`).
 - A run in progress on this machine (`running` in `barca history`, its process alive): exit 3,
   naming the run.
 - `barca serve` running on this environment: exit 3. Reset from its UI instead (the **Reset
-  database** button, on the error panel and in the sidebar), or `POST /state/reset`: the server
+  database** button, on the error panel of a database it cannot use), or `POST /state/reset`: the server
   refuses it with 409 while one of its runs is pending or running, and with 403 under
   `--read-only`.
 

@@ -28,11 +28,11 @@ for (const view of ['list', 'graph']) {
       await page.goto(`/ui/#/assets?pipeline=pipeline.py&group=${group.id}&${selection}`)
       await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Grouped work')
       const panel = page.getByRole('complementary', { name: `${target} details` })
-      const topbar = page.getByRole('banner').getByRole('button', { name: 'Run', exact: true })
+      const topbar = page.getByRole('banner').getByRole('button', { name: `Run ${target}`, exact: true })
       await expect(topbar).toBeEnabled()
-      await expect(panel.getByRole('button', { name: verb, exact: true })).toBeEnabled()
+      await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeEnabled()
       const started = page.waitForResponse(response => isStartRun(response.request(), verb, nodeId))
-      await (view === 'graph' ? topbar : panel.getByRole('button', { name: verb, exact: true })).click()
+      await (view === 'graph' ? topbar : panel.getByRole('button', { name: 'Run', exact: true })).click()
       const response = await started
       expect(response.status()).toBe(202)
       const handle = (await response.json()).run_id
@@ -53,12 +53,12 @@ for (const view of ['list', 'graph']) {
     })
     const selection = view === 'graph' ? 'view=graph&focus=pipeline.py:numbers' : 'node=pipeline.py:numbers'
     await page.goto(`/ui/#/assets?pipeline=pipeline.py&group=${group.id}&${selection}`)
-    const topbar = page.getByRole('banner').getByRole('button', { name: 'Run', exact: true })
+    const topbar = page.getByRole('banner').getByRole('button', { name: 'Run numbers', exact: true })
     const panel = page.getByRole('complementary', { name: 'numbers details' })
     await expect(topbar).toBeDisabled()
     await expect(topbar).toHaveAttribute('title', 'This server is read-only')
-    await expect(panel.getByRole('button', { name: 'get', exact: true })).toBeDisabled()
-    await expect(panel.getByRole('button', { name: 'get', exact: true })).toHaveAttribute('title', 'This server is read-only')
+    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeDisabled()
+    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toHaveAttribute('title', 'This server is read-only')
   })
 }
 
@@ -72,7 +72,7 @@ test('the grouped list topbar shows running before the first stream event arrive
   try {
     await page.goto(`/ui/#/assets?pipeline=pipeline.py&group=${group.id}&node=pipeline.py:history_asset`)
     const started = page.waitForResponse(response => isStartRun(response.request(), 'get', 'pipeline.py:history_asset'))
-    await page.getByRole('banner').getByRole('button', { name: 'Run', exact: true }).click()
+    await page.getByRole('banner').getByRole('button', { name: 'Run history_asset', exact: true }).click()
     expect((await started).status()).toBe(202)
     const row = page.getByRole('row').filter({ hasText: 'history_asset' })
     await expect(row).toContainText('Running')
@@ -92,7 +92,7 @@ test('a refused grouped run shows its error in the node panel', async ({ page })
     : route.continue())
   await page.goto(`/ui/#/assets?pipeline=pipeline.py&group=${group.id}&node=pipeline.py:numbers`)
   const panel = page.getByRole('complementary', { name: 'numbers details' })
-  await panel.getByRole('button', { name: 'get', exact: true }).click()
+  await panel.getByRole('button', { name: 'Run', exact: true }).click()
   await expect(panel.getByRole('alert')).toContainText('Run queue is unavailable')
 })
 
@@ -101,7 +101,7 @@ test('the ungrouped list node panel uses the same run action', async ({ page, re
   await page.goto('/ui/#/tasks?node=pipeline.py:say_hello')
   const panel = page.getByRole('complementary', { name: 'say_hello details' })
   const started = page.waitForResponse(response => isStartRun(response.request(), 'run', 'pipeline.py:say_hello'))
-  await panel.getByRole('button', { name: 'run', exact: true }).click()
+  await panel.getByRole('button', { name: 'Run', exact: true }).click()
   const handle = (await (await started).json()).run_id
   await waitForRun(request, handle)
   await page.getByRole('link', { name: 'View run', exact: true }).click()

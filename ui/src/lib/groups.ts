@@ -3,6 +3,7 @@ import type { ListNode, NodeState, StatusKind } from './types'
 import { shortName, type GraphEntry } from './graph'
 import { graphState, liveGraphState, UNKNOWN_GRAPH_STATE, type GraphState } from './graphState'
 import { runningCount, runningGraphState } from './running'
+import { isCheck } from './status'
 
 import type { NodeGroup } from './types'
 export type { NodeGroup } from './types'
@@ -73,8 +74,8 @@ export function groupPath(id: string | null, tree: GroupTree): NodeGroup[] {
 
 export function memberName(id: string): string {
   const name = shortName(id)
-  const check = name.startsWith('validate__')
-  const parts = name.replace(/^validate__/, '').split('__')
+  const check = /^(check|validate)__/.test(name)
+  const parts = name.replace(/^(check|validate)__/, '').split('__')
   return `${check ? 'Check · ' : ''}${parts.at(-1)?.replaceAll('_', ' ') ?? name}`
 }
 
@@ -87,7 +88,7 @@ export function memberHealth(node: NodeState | undefined): GraphState {
   ) {
     return {
       status: 'success',
-      label: 'Passed',
+      label: 'Healthy',
       hint: 'The latest execution succeeded.',
     }
   }
@@ -114,25 +115,25 @@ export function groupHealth(
   if (failed)
     return {
       status: 'failed',
-      label: `${failed} failed member${failed === 1 ? '' : 's'}`,
+      label: `${failed} failed`,
       hint: 'A failure anywhere inside this group makes it unhealthy, including failed checks on cached assets.',
     }
   if (warning)
     return {
       status: 'warning',
-      label: `${warning} stale / partial`,
+      label: `${warning} stale`,
       hint: 'One or more member assets need attention.',
     }
   if (unknown)
     return {
       status: 'skipped',
-      label: `${unknown} unchecked / unknown`,
+      label: `${unknown} not run`,
       hint: 'Some members have not run or their state is unavailable.',
     }
   return {
     status: 'success',
     label: 'Healthy',
-    hint: 'All assets are cached and all checks have passed.',
+    hint: 'Every asset is up to date and every check succeeded.',
   }
 }
 
@@ -170,12 +171,17 @@ export function projectGroups(
       const assetCount = leaves.filter(
         (leaf) => byId.get(leaf)?.kind === 'asset',
       ).length
+      const checkCount = leaves.filter((leaf) => {
+        const node = byId.get(leaf)
+        return node && isCheck(node)
+      }).length
+      const others = leaves.length - assetCount - checkCount
       return {
         id,
         kind: group ? 'group' : byId.get(id)!.kind,
         inputs: [...inputs],
         name: group?.name ?? (scope ? memberName(id) : shortName(id)),
-        summary: `${assetCount} assets · ${leaves.length - assetCount} checks`,
+        summary: `${assetCount} assets · ${checkCount} checks${others ? ` · ${others} other` : ''}`,
         outputName: group ? memberName(groupOutput(id, tree)) : undefined,
       }
     })

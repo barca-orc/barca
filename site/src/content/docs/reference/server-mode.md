@@ -446,10 +446,14 @@ An absent or empty `targets` computes every node. Unknown targets, groups or fil
 The UI renders the graph, groups and sidebar counts from `/assets` and `/groups` first,
 shows cache states as checking while `/state` runs, then fills them in without moving the
 graph. A selected pipeline or group requests only its upstream cone; All pipelines requests
-the whole graph. A status error leaves source metadata visible with the error above it.
+the whole graph, and so does the sidebar, once a minute, for its per-pipeline health dots (a
+dot appears only when all of its file's state is known). A status error leaves source metadata visible with the error above it.
 On a project with groups, select a member node in either List or Graph to run it from the
 topbar Run button or its details panel. Assets and sensors use cache-aware `get`; tasks use
-`run`. Groups organize nodes and are not run targets. Read-only servers disable the actions.
+`run`. Groups organize nodes and are not run targets. With nothing selected the topbar button
+names what is open: `Run billing.py (506 nodes)` gets that file's assets and sensors, and
+`Run all 8,070 nodes` gets every one after a confirmation (the count leaves out tasks, which
+run only by name). Read-only servers disable the actions.
 The selected node shows as running as soon as the server accepts it; View run opens its
 durable status, steps and logs. Ungrouped list panels offer the same action.
 The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is

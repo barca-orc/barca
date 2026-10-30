@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Database, Radio, Zap } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { DagNode, DAG_NODE_WIDTH } from '@/components'
+import { nodeKindLabel } from '@/lib/status'
 import type { NodeKind } from '@/lib/types'
 import type { GraphNode } from '@/lib/graph'
 
@@ -18,13 +19,14 @@ function kindIcon(kind: NodeKind) {
  * handles edges attach to. The handles are visually hidden (DagNode draws its
  * own edge dots) — see barca-flow.css.
  */
-export function AssetNode({ data, selected }: NodeProps<GraphNode>) {
+export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
   return (
     <div style={{ width: DAG_NODE_WIDTH }}>
       <Handle type="target" position={data.direction === "TB" ? Position.Top : Position.Left} />
       <DagNode
         name={data.name}
         kind={data.kind}
+        kindLabel={data.kind === 'group' ? undefined : nodeKindLabel({ id, kind: data.kind })}
         status={data.status}
         statusLabel={data.metric ?? undefined}
         stateHint={data.stateHint}

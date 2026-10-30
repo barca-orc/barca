@@ -1,7 +1,7 @@
-import { createHashRouter, Navigate } from 'react-router'
+import { createHashRouter } from 'react-router'
 import { AppShell } from '@/layouts/AppShell'
 import { AssetsPage } from '@/pages/AssetsPage'
-import { AssetsView, LegacyGraph } from '@/pages/AssetsView'
+import { AssetsView, IndexRedirect, LegacyGraph } from '@/pages/AssetsView'
 import { SchedulesPage } from '@/pages/SchedulesPage'
 import { DocsPage } from '@/pages/placeholders'
 import { RunsPage } from '@/pages/RunsPage'
@@ -17,7 +17,7 @@ export const router = createHashRouter([
     path: '/',
     element: <AuthGate><AppShell /></AuthGate>,
     children: [
-      { index: true, element: <Navigate to="/assets" replace /> },
+      { index: true, element: <IndexRedirect /> },
       { path: 'graph', element: <LegacyGraph /> },
       { path: 'runs', element: <RunsPage /> },
       { path: 'assets', element: <AssetsView /> },

@@ -42,7 +42,7 @@ export interface AssetRow {
   kind: NodeState['kind']
   partitioned: boolean
   severity: Severity
-  /** Short label for the state column, e.g. `stale · code changed`. */
+  /** Short label for the state column, e.g. `Stale · code changed`. */
   stateLabel: string
   /** Why, in words — the server's own explanation (tooltip). */
   stateHint: string
@@ -112,15 +112,17 @@ function staleReason(reason: CacheStatus['reason']): string {
 
 function cacheLabel(node: NodeState): string {
   return match(node.cache.state)
-    .with('cached', () => 'cached')
-    .with('unsynced', () => `unsynced · ${staleReason(node.cache.reason)}`)
-    .with('stale', () => `stale · ${staleReason(node.cache.reason)}`)
-    .with('never_run', () => 'never run')
+    .with('cached', () => 'Healthy')
+    .with('unsynced', () => `Unsynced · ${staleReason(node.cache.reason)}`)
+    .with('stale', () => `Stale · ${staleReason(node.cache.reason)}`)
+    .with('never_run', () => 'Not run')
     .with('partial', () =>
-      node.partitions ? `partial · ${node.partitions.cached}/${node.partitions.total}` : 'partial',
+      node.partitions
+        ? `Stale (${node.partitions.cached.toLocaleString()} of ${node.partitions.total.toLocaleString()} keys)`
+        : 'Stale (some keys)',
     )
-    .with('unknown', () => 'unknown')
-    .with('always_runs', () => 'always runs')
+    .with('unknown', () => 'Unknown')
+    .with('always_runs', () => 'Always runs')
     .exhaustive()
 }
 
@@ -147,14 +149,8 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         kind: n.kind,
         partitioned: n.partitioned,
         severity,
-        // A failed task or sensor is just failed ("always runs" adds nothing);
-        // an asset keeps its cache state, since a good cached result may remain.
-        stateLabel:
-          severity !== 'failed'
-            ? label
-            : n.cache.state === 'always_runs'
-              ? 'failed'
-              : `failed · ${label}`,
+        // One word; the reason, and whether a good result remains, is in the hint and the panel.
+        stateLabel: severity === 'failed' ? 'Failed' : label,
         stateHint:
           severity === 'failed' ? `The latest attempt failed. ${n.cache.detail}` : n.cache.detail,
         last: last

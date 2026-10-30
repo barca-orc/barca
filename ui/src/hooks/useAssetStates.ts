@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type StateScope } from '@/lib/api'
-import { statePollInterval } from '@/lib/running'
+import { POLL_WHOLE_MS, statePollInterval } from '@/lib/running'
 import { useSearchParams } from 'react-router'
 import { useAssets } from './useAssets'
 import { useGroups } from './useGroups'
@@ -55,9 +55,15 @@ export function useAssetStates() {
 }
 
 /**
- * The last whole-project state this tab loaded, without asking for it: what the sidebar
- * shows for the pipelines outside the open scope.
+ * The whole project's state, whatever is open: what the sidebar's dots say for the pipelines
+ * outside the open scope. It is the same query as All pipelines', so that view shares it;
+ * refreshed slowly, and when a run finishes (runs invalidate `state`).
  */
-export function useLastWholeState() {
-  return useQuery({ queryKey: stateKey(null), queryFn: () => api.state(null), enabled: false })
+export function useWholeState() {
+  return useQuery({
+    queryKey: stateKey(null),
+    queryFn: ({ signal }) => api.state(null, signal),
+    refetchInterval: POLL_WHOLE_MS,
+    retry: false,
+  })
 }

@@ -70,12 +70,16 @@ const BUCKET_WORDS: Record<HealthBucket, [string, string]> = {
   pending: ['checking', 'checking'],
 }
 
-/** `3 failed · 121 stale · 380 healthy`: every non-empty bucket, most urgent first. */
-export function healthLabel(counts: HealthCounts, limit = HEALTH_BUCKETS.length): string {
+/** Every non-empty bucket, most urgent first, as the words a label shows for it. */
+export function healthParts(counts: HealthCounts, limit = HEALTH_BUCKETS.length): { bucket: HealthBucket; text: string }[] {
   return HEALTH_BUCKETS.filter((b) => counts[b] > 0)
     .slice(0, limit)
-    .map((b) => `${counts[b].toLocaleString()} ${BUCKET_WORDS[b][counts[b] === 1 ? 0 : 1]}`)
-    .join(' · ')
+    .map((bucket) => ({ bucket, text: `${counts[bucket].toLocaleString()} ${BUCKET_WORDS[bucket][counts[bucket] === 1 ? 0 : 1]}` }))
+}
+
+/** `3 failed · 121 stale · 380 healthy`. */
+export function healthLabel(counts: HealthCounts, limit = HEALTH_BUCKETS.length): string {
+  return healthParts(counts, limit).map((p) => p.text).join(' · ')
 }
 
 /** Each node's direct consumers. */

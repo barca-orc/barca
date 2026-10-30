@@ -73,6 +73,13 @@ describe('pipelineSummaries', () => {
     expect(partial.find(p => p.file === 'pipeline/p02_reconcile.py')?.worst).toBe('failed')
     expect(partial.find(p => p.file === 'pipeline/p01_dims.py')?.worst).toBe('unknown')
   })
+
+  it('knows a file only when every node of it has a state: a part says nothing of the whole', () => {
+    const assets = nodes.map(n => ({ id: n.id }))
+    expect(pipelineSummaries(nodes, assets).every(p => p.known)).toBe(true)
+    const part = nodes.filter(n => n.id !== 'pipeline/p01_dims.py:dim_item')
+    expect(pipelineSummaries(part, assets).find(p => p.file === 'pipeline/p01_dims.py')?.known).toBe(false)
+  })
 })
 
 describe('inPipeline', () => {

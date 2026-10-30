@@ -113,6 +113,8 @@ export const api = {
   startRun,
   /** `barca get` for every asset and sensor. */
   getAll: () => startRun({ command: 'get', targets: [] }),
+  /** `barca get` for every asset and sensor of one deployed file. */
+  getFile: (file: string) => startRun({ command: 'get', targets: [], files: [file] }),
   /** `barca get <target>`: a cache-aware materialization of one asset or sensor. */
   getTarget: (target: string) => startRun({ command: 'get', targets: [target] }),
   /** `barca run <task> --refresh-all`: the task re-executes along with its upstream assets. */
@@ -137,5 +139,8 @@ export const api = {
   /** `barca state reset`: move the metadata database aside and start an empty one. */
   resetState: () => request<ResetResult>('/state/reset', { method: 'POST' }),
 }
+
+/** A database barca cannot use is mended by starting over; any other error is not. */
+export const metadataUnusable = (error: unknown) => error instanceof ApiError && error.reason === 'metadata_unusable'
 
 export { ApiError }

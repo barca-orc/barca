@@ -69,7 +69,7 @@ describe('running state from /state', () => {
     expect(graphState(node('p.py:a', run({ triggered_by: 'manual' }))).hint).toContain('the CLI')
     // A step waiting for its upstream is queued: shown, but still.
     const queued = graphState(node('p.py:a', run({ step: 'queued' })))
-    expect(queued).toMatchObject({ status: 'queued', label: 'Queued' })
+    expect(queued).toMatchObject({ status: 'queued', label: 'Running · queued' })
     expect(statusMeta(queued.status).live).toBe(false)
     // No run: the resting state.
     expect(graphState(node('p.py:a')).status).toBe('success')
