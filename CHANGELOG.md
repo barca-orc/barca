@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.37.0 (2026-10-30)
+
 ### Features
 
 - The UI has a command palette (`⌘K`) for any node, group, file or run, plus Run and Open graph.
