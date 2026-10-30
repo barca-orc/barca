@@ -6,6 +6,7 @@ import {
   Chip,
   ChipGroup,
   ConnectionBadge,
+  LastSuccess,
   ResetDatabaseButton,
   RunningBadge,
   SearchInput,
@@ -303,12 +304,13 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 <SortHeader label="Name" column="name" sort={sort} onSort={onSort} />
                 <SortHeader label="State" column="state" sort={sort} onSort={onSort} />
                 <SortHeader label="Last run" column="last" sort={sort} onSort={onSort} />
+                <SortHeader label="Last success" column="success" sort={sort} onSort={onSort} />
                 <SortHeader label="Typical" column="typical" sort={sort} onSort={onSort} numeric />
                 <SortHeader label="Next run" column="next" sort={sort} onSort={onSort} />
               </tr>
             </thead>
             <tbody ref={tableBody}>
-              <TableSpacer height={win.before} columns={5} />
+              <TableSpacer height={win.before} columns={6} />
               {win.items.map(({ index }) => {
                 const r = visible[index]
                 if (!r) return null
@@ -356,6 +358,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                       <span className="barca-cell-sub">not run</span>
                     )}
                   </td>
+                  <td>
+                    <LastSuccess at={r.lastSuccessAt} failingSince={r.failingSince} failures={r.failures} nowMs={now} />
+                  </td>
                   <td className="num" title={r.p95 ? `p95 ${r.p95}` : undefined}>
                     {r.typical ?? '–'}
                   </td>
@@ -363,7 +368,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 </tr>
                 )
               })}
-              <TableSpacer height={win.after} columns={5} />
+              <TableSpacer height={win.after} columns={6} />
             </tbody>
           </table>
         )}

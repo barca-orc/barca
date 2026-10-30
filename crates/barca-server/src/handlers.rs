@@ -210,6 +210,13 @@ async fn state_rows_for_targets(
     let dag = state.inspect_dag().await?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(state).await?;
+    // Read at most once per database state, whatever the scope (`read_cache`).
+    let ages = state
+        .cached_ages(&db_state, {
+            let snapshot = snapshot.clone();
+            move || async move { db::node_ages(&snapshot.path).await }
+        })
+        .await?;
     let (status, durations) = if targets.is_empty() {
         // Together: after a change, each waits a moment for its new value (`read_cache`).
         let (status, durations) = tokio::join!(
@@ -244,7 +251,7 @@ async fn state_rows_for_targets(
     };
     let runs = crate::running::in_flight(state, Some(&snapshot.path)).await;
     let running = crate::running::by_node(&runs, &status.nodes, &dag);
-    Ok(rows(&status.nodes, &durations, &dag, &zone, running))
+    Ok(rows(&status.nodes, &durations, &ages, &dag, &zone, running))
 }
 
 /// `barca status` of every node without artifact shapes, against `snapshot` of the database in
@@ -287,6 +294,7 @@ async fn status_for_targets(
 fn rows(
     nodes: &[barca_core::status::NodeStatus],
     durations: &std::collections::HashMap<String, Durations>,
+    ages: &std::collections::HashMap<String, db::NodeAge>,
     dag: &barca_core::dag::Dag,
     zone: &crate::scheduler::Zone,
     mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
@@ -298,11 +306,17 @@ fn rows(
             .collect();
     nodes
         .iter()
-        .map(|n| NodeState {
-            durations: durations.get(&n.id).cloned(),
-            next_run: next_run.get(&n.id).copied(),
-            running: running.remove(&n.id),
-            status: n.clone(),
+        .map(|n| {
+            let age = ages.get(&n.id).cloned().unwrap_or_default();
+            NodeState {
+                durations: durations.get(&n.id).cloned(),
+                next_run: next_run.get(&n.id).copied(),
+                running: running.remove(&n.id),
+                status: n.clone(),
+                last_success_at: age.last_success_at,
+                failing_since: age.failing_since,
+                consecutive_failures: age.consecutive_failures,
+            }
         })
         .collect()
 }
@@ -351,10 +365,13 @@ pub(crate) async fn node_states_in(
     };
 
     let status = barca_core::status::status_from_dag(&snap_cfg, &[], dag, python, 0, false).await;
-    let durations = match &snapshot {
+    let (durations, ages) = match &snapshot {
         Some(s) => {
             let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
-            durations_from(db::recent_durations(s.path(), &ids, DURATION_WINDOW).await?)
+            (
+                durations_from(db::recent_durations(s.path(), &ids, DURATION_WINDOW).await?),
+                db::node_ages(s.path()).await?,
+            )
         }
         None => Default::default(),
     };
@@ -366,7 +383,7 @@ pub(crate) async fn node_states_in(
         }
         None => Default::default(),
     };
-    Ok(rows(&nodes, &durations, dag, zone, running))
+    Ok(rows(&nodes, &durations, &ages, dag, zone, running))
 }
 
 /// Successful materializations considered for typical durations.

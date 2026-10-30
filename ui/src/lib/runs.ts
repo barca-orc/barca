@@ -1,4 +1,5 @@
 import { match } from 'ts-pattern'
+import { formatAbsolute } from './time'
 import type { ErrorEnvelope, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
 const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
@@ -104,6 +105,5 @@ export function outcomeResult(outcome: RunOutcome | null): unknown {
 
 export function runTime(value: string | null): string {
   if (!value) return '–'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+  return formatAbsolute(value)
 }

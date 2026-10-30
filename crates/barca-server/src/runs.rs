@@ -1378,10 +1378,21 @@ pub struct RunSummary {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub steps_cached: i64,
     pub error: Option<String>,
+    /// The run's first failed step and its error; `null` when no step failed.
+    pub first_failure: Option<FirstFailure>,
     /// With `?status=running` only: the nodes the run is working on now.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub active_steps: Option<Vec<ActiveStep>>,
+}
+/// A run's first failed step (`RunSummary::first_failure`).
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct FirstFailure {
+    /// The step's node id, with its partition key when it has one.
+    pub node_id: String,
+    /// `ErrorType: message`, the message's first line only.
+    pub error: String,
 }
 /// A node an in-flight run is working on (`GET /runs?status=running`).
 #[derive(Clone, Debug, Serialize)]
@@ -1443,6 +1454,10 @@ fn summary(record: db::RunRecord, live: Option<&RunState>) -> RunSummary {
         steps_executed: record.steps_executed,
         steps_cached: record.steps_cached,
         error: live.and_then(|r| r.error.clone()),
+        first_failure: record.failure.map(|f| FirstFailure {
+            node_id: f.node,
+            error: f.error,
+        }),
         active_steps: None,
     }
 }
@@ -1470,6 +1485,8 @@ fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
                 .count() as i64
         }),
         error: run.error.clone(),
+        // Not in the database yet: nothing has recorded a failed step.
+        first_failure: None,
         active_steps: None,
     }
 }

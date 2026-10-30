@@ -17,13 +17,19 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   everywhere (a task named `check__*` or `validate__*`). `get` is gone from the buttons: **Run**
   names its target and size (`Run invoices_00`, `Run billing.py (506 nodes)`), works with nothing
   selected, and `Run all 8,070 nodes` asks first; the count is the assets and sensors a `get` runs.
+- `GET /runs` rows have `first_failure` (`node_id`, `error`), and `GET /state` rows have
+  `last_success_at`, `failing_since` and `consecutive_failures`. The UI shows them: asset, group and
+  failure tables say how late each row is (Last success, failing since, runs failed in a row); a
+  failed run with no run-level error names its first failed step and that error; Steps reads
+  `21,950 / 28,404 · stopped at <node>`. Every time is relative with absolute UTC on hover, in one
+  format. The Runs activity strip has an hour axis, a now marker, a tooltip per bar naming what
+  failed first, and clicking a bar filters the list to that hour.
 
 ### Bug Fixes
 
 - UI: Reset database shows only for a database barca cannot use, not on every page. Sidebar health
   dots use whole-project state and show no dot until a file's state is all known, instead of
-  judging a file by the part in view. A failed run with no run-level error says to open it for its
-  failed steps. All pipelines → Graph fits every domain on screen with nothing selected.
+  judging a file by the part in view. All pipelines → Graph fits every domain on screen with nothing selected.
   `#/?pipeline=…&show=failures` keeps its filters through the redirect to Assets.
 
 ## 0.36.1 (2026-10-30)

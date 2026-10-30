@@ -720,6 +720,17 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         .unwrap()
         .to_owned();
     assert_eq!(wait(&router, &broken).await["status"], "failed");
+    // The run list names the failed step, and the node's row says how late it is.
+    let runs = checked(&router, "GET", "/runs", "/runs", 200).await;
+    let rows = runs["runs"].as_array().unwrap();
+    let failure = &rows.iter().find(|r| r["id"] == broken.as_str()).unwrap()["first_failure"];
+    assert!(failure["node_id"].as_str().unwrap().ends_with(":broken"));
+    assert_eq!(failure["error"], "ValueError: expected contract failure");
+    let state = checked(&router, "GET", "/state?targets=broken", "/state", 200).await;
+    let node = &state.as_array().unwrap()[0];
+    assert!(node["last_success_at"].is_null());
+    assert!(node["failing_since"].is_string());
+    assert_eq!(node["consecutive_failures"], 1);
     let slow = checked(&router, "POST", "/run/slow", "/run/{target}", 200).await["run_id"]
         .as_str()
         .unwrap()

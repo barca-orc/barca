@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '17'
+  version: '18'
   description: 'Normative current wire contract; specification version 17 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -4008,6 +4008,9 @@ components:
       - shape
       - env
       - durations
+      - last_success_at
+      - failing_since
+      - consecutive_failures
       - next_run
       - running
       properties:
@@ -4031,6 +4034,24 @@ components:
           anyOf:
           - *id054
           - type: 'null'
+        last_success_at:
+          anyOf:
+          - *id003
+          - type: 'null'
+          description: When the node's newest successful result was written (UTC, as
+            last_materialization.created_at; keys of a partitioned node count toward it); null if
+            it never succeeded.
+        failing_since:
+          anyOf:
+          - *id003
+          - type: 'null'
+          description: The first failed attempt after the node's last clean run (a run in which it
+            did not fail); null unless its latest attempts failed.
+        consecutive_failures:
+          type: integer
+          minimum: 0
+          description: How many runs in a row failed the node, up to now; a run counts once however
+            many keys failed. 0 when its latest attempt did not fail.
         running: &id_running
           anyOf:
           - $ref: '#/components/schemas/NodeRunning'
@@ -4337,6 +4358,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Log'
+    FirstFailure:
+      type: object
+      additionalProperties: false
+      description: A run's first failed step.
+      required:
+      - node_id
+      - error
+      properties:
+        node_id:
+          type: string
+          description: The step's node id, with its partition key when it has one.
+        error:
+          type: string
+          description: ErrorType and message, the message's first line only.
     RunSummary:
       type: object
       additionalProperties: false
@@ -4355,6 +4390,7 @@ components:
       - steps_executed
       - steps_cached
       - error
+      - first_failure
       - triggered_by
       - scheduled_at
       - schedule_id
@@ -4397,6 +4433,10 @@ components:
         error:
           anyOf:
           - *id003
+          - type: 'null'
+        first_failure:
+          anyOf:
+          - $ref: '#/components/schemas/FirstFailure'
           - type: 'null'
         triggered_by: &id057
           anyOf:

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts } from './health'
+import { consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, scopeAge } from './health'
 import type { NodeState } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
@@ -7,7 +7,7 @@ function node(id: string, inputs: string[], over: Partial<NodeState> = {}): Node
     id, name: id.split(':')[1]!, kind: 'asset', inputs, partitioned: false,
     cache: { state: 'cached', reason: 'materialized', detail: '' },
     last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null },
-    shape: null, env: [], durations: null, next_run: null, running: null, ...over,
+    shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, ...over,
   }
 }
 const failedAt = (at: string, error: string) => ({
@@ -53,5 +53,22 @@ describe('health', () => {
   it('says something for an empty error', () => {
     expect(headline('\n\n  ValueError: x\n trace')).toBe('ValueError: x')
     expect(headline(null)).toBe('failed, with no error recorded')
+  })
+})
+
+describe('scopeAge', () => {
+  const aged = (id: string, ok: string | null, since: string | null, runs: number) =>
+    ({ id, last_success_at: ok, failing_since: since, consecutive_failures: runs }) as unknown as NodeState
+
+  it('reports the worst of its members', () => {
+    const byId = new Map([
+      ['a', aged('a', '2026-10-28 10:00:00', '2026-10-29 01:00:00', 3)],
+      ['b', aged('b', '2026-10-29 10:00:00', '2026-10-29 05:00:00', 1)],
+      ['c', aged('c', null, null, 0)],
+    ])
+    expect(scopeAge(['a', 'b', 'c', 'unloaded'], byId)).toEqual({
+      lastSuccessAt: '2026-10-28 10:00:00', failingSince: '2026-10-29 01:00:00', failures: 3,
+    })
+    expect(scopeAge(['c'], byId)).toEqual({ lastSuccessAt: null, failingSince: null, failures: 0 })
   })
 })

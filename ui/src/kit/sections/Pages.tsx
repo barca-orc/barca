@@ -19,6 +19,7 @@ export function Pages() {
             ...Object.fromEntries(Object.entries(runLists).map(([name, runs]) => [name, { runs, model: INITIAL_RUNS }])),
             'at the load-more cap': { runs: runLists.truncated, model: { ...INITIAL_RUNS, limit: RUNS_MAX } },
             'failed only': { runs: runLists['every status'], model: { ...INITIAL_RUNS, filter: 'failed' as const } },
+            'one hour': { runs: runLists['every status'], model: { ...INITIAL_RUNS, hour: Math.floor(NOW_MS / 3_600_000) * 3_600_000 } },
           }}
           render={({ runs, model }, dispatch) => (
             <Frame height={420} width="100%">

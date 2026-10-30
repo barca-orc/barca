@@ -111,3 +111,26 @@ test.describe('run history', () => {
     await expect(details).toContainText('history failure logged')
   })
 })
+
+test('a failed run names its first failed step, and a bar filters to its hour', async ({ page }) => {
+  const started = new Date(Date.now() - 5 * 60_000).toISOString()
+  const earlier = new Date(Date.now() - 3 * 3_600_000).toISOString()
+  const row = { handle: null, command: 'get', files: [], target: null, triggered_by: null, scheduled_at: null, schedule_id: null, finished_at: null, elapsed_seconds: 1, steps_cached: 0, error: null }
+  await page.route(/\/runs(\?.*)?$/, (route) => route.fulfill({ json: {
+    runs: [
+      { ...row, id: 'r2', run_id: 'r2', status: 'failed', started_at: started, steps_total: 28404, steps_executed: 21950, first_failure: { node_id: 'p.py:orders', error: "KeyError: 'currency'" } },
+      { ...row, id: 'r1', run_id: 'r1', status: 'success', started_at: earlier, steps_total: 1, steps_executed: 1, first_failure: null },
+    ],
+    total: 2, truncated: false,
+  } }))
+  await page.goto('/ui/#/runs')
+  const failed = page.getByRole('row', { name: /r2/ })
+  await expect(failed).toContainText("orders: KeyError: 'currency'")
+  await expect(failed).toContainText('21,950 / 28,404')
+  await expect(failed).toContainText('stopped at orders')
+  await expect(failed).toContainText('5m ago')
+  await expect(page.locator('.barca-activity-now')).toHaveText('now')
+  await page.getByRole('button', { name: /1 not successful/ }).click()
+  await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
+  await expect(failed).toBeVisible()
+})

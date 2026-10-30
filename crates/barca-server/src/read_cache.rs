@@ -158,6 +158,9 @@ struct SharedSnapshot {
     snapshot: Arc<SnapshotDb>,
 }
 
+/// Every node's age, shared by the polls of one database state.
+type NodeAges = Arc<HashMap<String, barca_core::db::NodeAge>>;
+
 /// What a status result was computed from.
 #[derive(Clone)]
 struct StatusKey {
@@ -232,6 +235,9 @@ pub struct ReadCache {
     /// read again for a newer one ([`AppState::cached_durations`]).
     latest_durations: Mutex<Option<DurationsFor>>,
     durations_catching_up: std::sync::atomic::AtomicBool,
+    /// The last node ages read, and the database state they are of ([`AppState::cached_ages`]).
+    /// An async lock, held while they are read, so that concurrent polls read them once.
+    ages: tokio::sync::Mutex<Option<(Stamp, NodeAges)>>,
     /// Bumped each time a recomputation of the latest results ends.
     caught_up: tokio::sync::watch::Sender<u64>,
     /// Held while a status result is computed, so that concurrent polls compute it once.
@@ -523,6 +529,31 @@ impl AppState {
                 return latest.results[&query].result.clone();
             }
         }
+    }
+
+    /// Every node's age for the database in state `db`: one pass over its rows, kept until it
+    /// changes, so that a view polling one group does not pay for it on every poll.
+    pub(crate) async fn cached_ages<F, Fut>(
+        &self,
+        db: &Stamp,
+        compute: F,
+    ) -> Result<NodeAges, BarcaError>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<
+                Output = Result<HashMap<String, barca_core::db::NodeAge>, BarcaError>,
+            > + Send
+            + 'static,
+    {
+        let mut kept = self.reads.ages.lock().await;
+        if let Some((stamp, ages)) = kept.as_ref()
+            && stamp == db
+        {
+            return Ok(ages.clone());
+        }
+        let ages = Arc::new(off_the_workers(compute).await?);
+        *kept = Some((db.clone(), ages.clone()));
+        Ok(ages)
     }
 
     /// Typical durations for the database in state `db`, kept like a status result (read

@@ -41,6 +41,12 @@ stamps, dynamic-key revalidation and background status refresh determine reuse. 
 ETags permit HTTP revalidation; a 304 means that representation is unchanged, not that
 upstream external data was polled again.
 
+Each `GET /state` row carries `last_success_at`, `failing_since` and `consecutive_failures`, from
+the node's materialization rows with partition keys folded into their base id. An attempt is a
+run: a run with a failed key is one failed attempt, a run that did not fail the node ends the
+streak. They are read once per database state, whatever the selection. Each `GET /runs` row carries
+`first_failure` (`node_id`, `error`), read from the failed-rows index; `null` when no step failed.
+
 `GET /state?targets=a,b` (experimental) limits status and duration queries to the targets'
 upstream cone. A group id target (`group:FILE:NAME`) expands to every node in the group and its
 nested groups, and `files=` adds every node of the named source files; an unknown group or file

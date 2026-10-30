@@ -81,6 +81,9 @@ function node(name: string, overrides: Partial<NodeState>): NodeState {
     durations: { median_seconds: 4.1, p95_seconds: 6.3, samples: 12 },
     next_run: null,
     running: null,
+    last_success_at: ago(3_600),
+    failing_since: null,
+    consecutive_failures: 0,
     ...overrides,
   }
 }
@@ -89,6 +92,9 @@ function node(name: string, overrides: Partial<NodeState>): NodeState {
 export const nodeBySeverity = {
   failed: node('orders_enriched', {
     last_materialization: materialized({ status: 'failed', artifact: null, format: null, error: "KeyError: 'currency'" }),
+    last_success_at: ago(86_400 * 2),
+    failing_since: ago(50_400),
+    consecutive_failures: 3,
   }),
   stale: node('revenue_daily', {
     cache: { state: 'stale', reason: 'changed', detail: 'code changed since the last run', changed: ['code'] },
@@ -97,6 +103,7 @@ export const nodeBySeverity = {
     cache: { state: 'never_run', reason: 'no_record', detail: 'never materialized' },
     last_materialization: null,
     durations: null,
+    last_success_at: null,
   }),
   partial: node('sessionize', {
     partitioned: true,
@@ -284,17 +291,22 @@ function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {})
     status: view.status, triggered_by: view.triggered_by, scheduled_at: null, schedule_id: null,
     started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
     steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
-    error: view.error, ...overrides,
+    error: view.error, first_failure: null, ...overrides,
   }
 }
 
 const runList: RunList = {
   runs: [
     ...Object.values(runByStatus).map((view, i) => summary(view, String(133 - i), { triggered_by: i % 3 === 0 ? 'schedule' : i % 3 === 1 ? 'client' : null })),
-    // Steps failed but the run itself recorded no error: the row says where to look.
-    summary(runByStatus.failed, '125', { triggered_by: 'schedule', error: null }),
+    // Steps failed but the run itself recorded no error: the row names the first of them.
+    summary(runByStatus.failed, '125', {
+      triggered_by: 'schedule', error: null, steps_total: 28_404, steps_executed: 21_950, steps_cached: 0,
+      first_failure: { node_id: 'pipeline.py:sessionize[day=2026-10-27]', error: "KeyError: 'currency'" },
+    }),
+    // The same with no failed step on record (a run that died before recording one).
+    summary(runByStatus.failed, '124', { error: null, started_at: ago(7_500) }),
   ],
-  total: 8,
+  total: 9,
   truncated: false,
 }
 

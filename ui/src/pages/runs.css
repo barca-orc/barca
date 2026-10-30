@@ -28,12 +28,22 @@
 
 /* The last day of runs, hour by hour (RunsView's ActivityStrip). */
 .barca-activity { display: flex; align-items: flex-end; gap: 16px; padding: 4px 0 12px; }
-.barca-activity-bars { display: flex; align-items: flex-end; gap: 2px; height: 32px; width: 288px; flex: none; border-bottom: 1px solid var(--border-subtle); }
-.barca-activity-bars > span { flex: 1; display: flex; flex-direction: column; min-height: 2px; background: var(--border-subtle); border-radius: 1px 1px 0 0; overflow: hidden; }
+.barca-activity-chart { width: 288px; flex: none; }
+.barca-activity-bars { display: flex; align-items: flex-end; gap: 2px; height: 32px; border-bottom: 1px solid var(--border-subtle); }
+.barca-activity-bar { flex: 1; height: 100%; min-width: 0; padding: 0; border: 0; background: none; display: flex; align-items: flex-end; cursor: pointer; }
+.barca-activity-bar:disabled { cursor: default; }
+.barca-activity-bar:not(:disabled):hover span { filter: brightness(1.3); }
+.barca-activity-bar[aria-pressed="true"] { outline: 1px solid var(--text-strong); outline-offset: 1px; }
+.barca-activity-bar span { width: 100%; display: flex; flex-direction: column; min-height: 2px; background: var(--border-subtle); border-radius: 1px 1px 0 0; overflow: hidden; }
+.barca-activity-axis { position: relative; height: 14px; font-size: var(--text-2xs); color: var(--text-muted); }
+.barca-activity-axis span { position: absolute; top: 2px; white-space: nowrap; }
+.barca-activity-axis .barca-activity-now { transform: translateX(-100%); color: var(--text-strong); }
+.barca-activity-axis .barca-activity-now::after { content: ""; position: absolute; right: 0; top: -36px; height: 34px; border-right: 1px solid var(--text-muted); }
 .barca-activity-bars i { display: block; min-height: 2px; }
 .barca-activity-bars i[data-kind="failed"] { background: var(--status-failed); }
 .barca-activity-bars i[data-kind="live"] { background: var(--status-running); }
 .barca-activity-bars i[data-kind="ok"] { background: var(--status-success); opacity: 0.7; }
+.barca-run-stopped { font-family: var(--font-mono); max-width: 240px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-activity-summary { font-size: var(--text-xs); color: var(--text-muted); }
 .barca-activity-summary strong { color: var(--text-strong); font-weight: 500; }
 .barca-run-row-error { color: var(--text-muted); font-family: var(--font-mono); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

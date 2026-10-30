@@ -1,14 +1,13 @@
 import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Button, Chip, ChipGroup, ConnectionBadge, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Age, Button, Chip, ChipGroup, ConnectionBadge, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
 import { formatSeconds } from '@/lib/assetTable'
-import { headline } from '@/lib/health'
 import type { Connection } from '@/lib/connection'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, triggeredByLabel } from '@/lib/runs'
-import { canLoadMore, runActivity, runFailed, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, hourLabel, runActivity, runFailed, runProgress, runRowError, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunList, RunView } from '@/lib/types'
 import './runs.css'
 
@@ -100,23 +99,34 @@ const FILTERS: { value: RunFilter; label: string }[] = [
   { value: 'live', label: 'In progress' },
 ]
 
-/** The last day hour by hour: a bar per hour, failures in red on top. */
-function ActivityStrip({ activity }: { activity: RunActivity }) {
+/** The last day hour by hour: a bar per hour, failures in red on top; a bar filters to its hour. */
+function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivity; hour: number | null; now: number; dispatch: Dispatch<RunsMsg> }) {
   const peak = Math.max(1, ...activity.hours.map((h) => h.ok + h.failed + h.live))
+  const width = 100 / activity.hours.length
+  const nowAt = 100 - width + (width * ((now % 3_600_000) / 3_600_000))
   return (
     <div className="barca-activity" aria-label="Runs started in the last 24 hours, hour by hour">
-      <div className="barca-activity-bars">
-        {activity.hours.map((h) => {
-          const n = h.ok + h.failed + h.live
-          const label = `${new Date(h.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: ${n} run${n === 1 ? '' : 's'}${h.failed ? `, ${h.failed} not successful` : ''}${h.live ? `, ${h.live} in progress` : ''}`
-          return (
-            <span key={h.at} title={label} style={{ height: `${Math.max(n ? 8 : 2, (n / peak) * 100)}%` }}>
-              {h.failed > 0 && <i data-kind="failed" style={{ flexGrow: h.failed }} />}
-              {h.live > 0 && <i data-kind="live" style={{ flexGrow: h.live }} />}
-              {h.ok > 0 && <i data-kind="ok" style={{ flexGrow: h.ok }} />}
-            </span>
-          )
-        })}
+      <div className="barca-activity-chart">
+        <div className="barca-activity-bars">
+          {activity.hours.map((h) => {
+            const n = h.ok + h.failed + h.live
+            const label = activityBarLabel(h)
+            return (
+              <button key={h.at} type="button" className="barca-activity-bar" title={label} aria-label={label} aria-pressed={hour === h.at} disabled={n === 0}
+                onClick={() => dispatch({ type: 'hour_toggled', at: h.at })}>
+                <span style={{ height: `${Math.max(n ? 8 : 2, (n / peak) * 100)}%` }}>
+                  {h.failed > 0 && <i data-kind="failed" style={{ flexGrow: h.failed }} />}
+                  {h.live > 0 && <i data-kind="live" style={{ flexGrow: h.live }} />}
+                  {h.ok > 0 && <i data-kind="ok" style={{ flexGrow: h.ok }} />}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="barca-activity-axis" aria-hidden="true">
+          {activityTicks(activity.hours).map((t) => <span key={t.index} style={{ left: `${t.index * width}%` }}>{t.label}</span>)}
+          <span className="barca-activity-now" style={{ left: `${nowAt}%` }}>now</span>
+        </div>
       </div>
       <div className="barca-activity-summary">
         <strong>{activity.total.toLocaleString()}</strong> runs in the last 24 h
@@ -148,7 +158,7 @@ export function RunsView({ model, runs, connection, selected, queue, now, dispat
               return <>
               {refreshError && <RunsError error={refreshError} dispatch={dispatch} />}
               {data.runs.length > 0 && <>
-                <ActivityStrip activity={runActivity(data.runs, now, 24, data.truncated)} />
+                <ActivityStrip activity={runActivity(data.runs, now, 24, data.truncated)} hour={model.hour} now={now} dispatch={dispatch} />
                 <div className="barca-table-tools">
                   <ChipGroup label="Show">
                     {FILTERS.map((f) => (
@@ -158,6 +168,7 @@ export function RunsView({ model, runs, connection, selected, queue, now, dispat
                     ))}
                   </ChipGroup>
                   <SearchInput placeholder="Filter by target or run id" value={model.query} onChange={(value) => dispatch({ type: 'query_changed', value })} />
+                  {model.hour !== null && <Chip pressed onClick={() => dispatch({ type: 'hour_toggled', at: model.hour! })}>{hourLabel(model.hour)}–{hourLabel(model.hour + 3_600_000)} <X size={12} /></Chip>}
                   <span className="barca-count">{shown.length.toLocaleString()} shown</span>
                 </div>
               </>}
@@ -165,7 +176,7 @@ export function RunsView({ model, runs, connection, selected, queue, now, dispat
                 ? <p className="barca-table-empty">No runs recorded. Start a run from the graph to see it here.</p>
                 : shown.length === 0
                   ? <p className="barca-table-empty">No loaded run matches.</p>
-                  : <RunTable runs={shown} selected={selected?.id ?? null} dispatch={dispatch} />}
+                  : <RunTable runs={shown} selected={selected?.id ?? null} now={now} dispatch={dispatch} />}
               {data.truncated && <div className="barca-run-more">
                 <p className="barca-note">Showing the latest {data.runs.length} runs.</p>
                 {canLoadMore(model) && <Button size="sm" onClick={() => dispatch({ type: 'load_more' })}>Load more</Button>}
@@ -184,21 +195,26 @@ function RunsError({ error, dispatch }: { error: string; dispatch: Dispatch<Runs
   return <p className="barca-table-empty" role="alert">Can't load runs: {error} <Button size="sm" onClick={() => dispatch({ type: 'retry_list' })}>Retry</Button></p>
 }
 
-function RunTable({ runs, selected, dispatch }: { runs: RunList['runs']; selected: string | null; dispatch: Dispatch<RunsMsg> }) {
+function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; selected: string | null; now: number; dispatch: Dispatch<RunsMsg> }) {
   return <table className="barca-table barca-run-table"><thead><tr>
     <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th>
-  </tr></thead><tbody>{runs.map(run => <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}>
+  </tr></thead><tbody>{runs.map(run => {
+    const error = runRowError(run)
+    const progress = runProgress(run)
+    return <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}>
     <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button><div className="barca-cell-sub">{run.command}</div></td>
     <td>
       <code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code>
-      {run.error
-        ? <div className="barca-cell-sub barca-run-row-error" title={run.error}>{headline(run.error)}</div>
-        : runStatus(run.status) === 'failed' && <div className="barca-cell-sub barca-run-row-error">No run-level error: open the run for its failed steps</div>}
+      {error && <div className="barca-cell-sub barca-run-row-error" title={error.title}>{error.text}</div>}
     </td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
     <td><StatusBadge size="sm" status={runStatus(run.status)} label={runLabel(run.status)} /></td>
-    <td>{runTime(run.started_at)}</td>
+    <td><Age at={run.started_at} nowMs={now} /></td>
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
-    <td className="num">{run.steps_executed} ran · {run.steps_cached} cached</td>
-  </tr>)}</tbody></table>
+    <td className="num barca-run-steps-cell" title={progress.title}>
+      {progress.steps}
+      {progress.stoppedAt && <div className="barca-cell-sub barca-run-stopped">stopped at {progress.stoppedAt}</div>}
+    </td>
+  </tr>
+  })}</tbody></table>
 }

@@ -11,9 +11,11 @@ import {
   X,
 } from 'lucide-react'
 import {
+  Age,
   Button,
   ConnectionBadge,
   HealthBar,
+  LastSuccess,
   IconButton,
   KeyValue,
   RunningBadge,
@@ -40,12 +42,11 @@ import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { connection } from '@/lib/connection'
 import { ApiError, metadataUnusable } from '@/lib/api'
-import { formatAgo } from '@/lib/assetTable'
 import { inPipeline, pipelineName, sourceFile } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
 import { liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
-import { consumersOf, failures, healthCounts, type Failure } from '@/lib/health'
+import { consumersOf, failures, healthCounts, scopeAge, type Failure } from '@/lib/health'
 import { GRAPH_LIMIT, lineage } from '@/lib/lineage'
 import {
   groupTree,
@@ -543,21 +544,23 @@ export function GroupedPipelinePage() {
             <div className="barca-view-body barca-table-scroll" ref={scroller}>
               <table className="barca-table barca-group-table barca-failure-table">
                 <colgroup>
-                  <col style={{ width: '30%' }} />
-                  <col style={{ width: '44%' }} />
+                  <col style={{ width: '26%' }} />
+                  <col style={{ width: '36%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '16%' }} />
                   <col style={{ width: '12%' }} />
-                  <col style={{ width: '14%' }} />
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Failed node</th>
                     <th>Error</th>
                     <th>When</th>
+                    <th title="The first failed attempt after the last clean run, and runs failed in a row">Failing since</th>
                     <th className="num" title="Nodes downstream of it, transitively">Waiting on it</th>
                   </tr>
                 </thead>
                 <tbody ref={tableBody}>
-                  <TableSpacer height={win.before} columns={4} />
+                  <TableSpacer height={win.before} columns={5} />
                   {win.items.map(({ index }) => {
                     const f = visibleFailures[index]
                     if (!f) return null
@@ -593,12 +596,15 @@ export function GroupedPipelinePage() {
                             <div className="barca-cell-sub">{f.missingKeys.toLocaleString()} keys without a result</div>
                           )}
                         </td>
-                        <td title={f.at ? `${f.at} UTC` : undefined}>{f.at ? formatAgo(f.at, stateQuery.dataUpdatedAt) : '–'}</td>
+                        <td>{f.at ? <Age at={f.at} nowMs={stateQuery.dataUpdatedAt} /> : '–'}</td>
+                        <td>
+                          {f.failingSince ? <><Age at={f.failingSince} nowMs={stateQuery.dataUpdatedAt} /> · {f.failures} {f.failures === 1 ? 'run' : 'runs'}</> : '–'}
+                        </td>
                         <td className="num">{f.impact > 0 ? f.impact.toLocaleString() : '–'}</td>
                       </tr>
                     )
                   })}
-                  <TableSpacer height={win.after} columns={4} />
+                  <TableSpacer height={win.after} columns={5} />
                 </tbody>
               </table>
               {rowCount === 0 && (
@@ -611,23 +617,25 @@ export function GroupedPipelinePage() {
             <div className="barca-view-body barca-table-scroll" ref={scroller}>
               <table className="barca-table barca-group-table">
                 <colgroup>
-                  <col style={{ width: '34%' }} />
                   <col style={{ width: '30%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '24%' }} />
+                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '12%' }} />
                   <col style={{ width: '4%' }} />
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Name</th>
                     <th>Health</th>
+                    <th title="A group shows its oldest member's">Last success</th>
                     <th>Contents</th>
                     <th>Output</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody ref={tableBody}>
-                  <TableSpacer height={win.before} columns={5} />
+                  <TableSpacer height={win.before} columns={6} />
                   {win.items.map(({ index }) => {
                     const entry = visibleEntries[index]
                     if (!entry) return null
@@ -638,6 +646,8 @@ export function GroupedPipelinePage() {
                       ? byId.get(groupOutput(entry.id, tree))
                       : undefined
                     const running = group ? null : byId.get(entry.id)?.running
+                    const { lastSuccessAt, failingSince, failures: failed } = scopeAge(group ? leaves(entry.id) : [entry.id], byId)
+                    const age = { at: lastSuccessAt, failingSince, failures: failed }
                     return (
                       <tr
                         key={entry.id}
@@ -692,6 +702,9 @@ export function GroupedPipelinePage() {
                             />
                           )}
                         </td>
+                        <td>
+                          {stateQuery.data && <LastSuccess {...age} nowMs={stateQuery.dataUpdatedAt} />}
+                        </td>
                         <td>{group ? entry.summary : '—'}</td>
                         <td>
                           {group && (
@@ -724,7 +737,7 @@ export function GroupedPipelinePage() {
                       </tr>
                     )
                   })}
-                  <TableSpacer height={win.after} columns={5} />
+                  <TableSpacer height={win.after} columns={6} />
                 </tbody>
               </table>
               {visibleEntries.length === 0 && (
