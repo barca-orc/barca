@@ -20,6 +20,18 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   still records the run locally, but no longer promises an immediate remote metadata copy.
   Standalone final backups and the server's graceful-shutdown backup remain enabled.
 
+- Status inspection can reuse cloud availability and remote shape observations for five
+  minutes. Local file changes invalidate evidence immediately; required reads and ledger
+  publication still verify directly. This bounds repeated inspection work without changing
+  asset freshness rules.
+
+### Performance
+
+- Reuse bounded, file-identity-keyed digest and shape evidence across status requests and
+  metadata refreshes; prefer verified local shapes. Keep at most 8 MiB/8192 entries per
+  environment, limit individual values to 64 KiB, and bound cold inspection readers to eight.
+  Refreshes, confirmed upload repairs and credential/import changes invalidate affected evidence.
+
 ### Features
 
 - Resume CLI and browser run streams using attempt-scoped `Last-Event-ID` cursors. Replay

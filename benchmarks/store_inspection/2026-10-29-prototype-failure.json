@@ -1,0 +1,41 @@
+{
+  "verdict": "failed",
+  "phase": "prototype evidence cache derived from transient database-view directory",
+  "scope": "diagnostic hash-count failure; no timing comparison or exact prototype source fingerprint is claimed",
+  "invalidated_hash_calls": 6,
+  "invalidated_python_hash_bytes": 6447745722,
+  "artifact_bytes_per_copy": 1074624287,
+  "error_log_sha256": "3bf9689c084d3b18de146e7f376662719d508ad728fa0e961a255ae6c91591f8",
+  "observed_hashes": [
+    {
+      "copy": "store",
+      "bytes": 1074624287,
+      "seconds": 0.5460954259615391
+    },
+    {
+      "copy": "local",
+      "bytes": 1074624287,
+      "seconds": 0.5271514439955354
+    },
+    {
+      "copy": "store",
+      "bytes": 1074624287,
+      "seconds": 0.5465443129651248
+    },
+    {
+      "copy": "local",
+      "bytes": 1074624287,
+      "seconds": 0.5113207031972706
+    },
+    {
+      "copy": "store",
+      "bytes": 1074624287,
+      "seconds": 0.5370205331128091
+    },
+    {
+      "copy": "local",
+      "bytes": 1074624287,
+      "seconds": 0.5120482319034636
+    }
+  ]
+}

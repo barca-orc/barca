@@ -21,6 +21,13 @@ history) and it is the only process that writes it. The artifact bytes stay in t
 (`barca docs contract`). To set it up in three steps, see
 https://barca.sh/team-server/.
 
+Server mode remains experimental after 0.36.0. A stable designation requires verified
+arbitration of overlapping identical work (#654), bounded cold/full-domain planning and
+inspection (#655, #656), and sustained multi-host proxy/store validation at the supported
+scale. Opt-in tokens, bounded event replay and configurable backups address deployment
+capabilities; they do not establish those remaining properties. Tokens grant full project
+access, without accounts, roles or tenant isolation.
+
 With a server configured, a command does one of three things:
 
 | You type | `get` / `run` | `status` / `history` / `stats` | `sql` |

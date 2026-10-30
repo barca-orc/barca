@@ -2,7 +2,8 @@
 
 Invoked by the Rust coordinator as ``python -m barca._state <verb> ...`` so the fsspec extras
 (and their credential chains) remain the only cloud-auth surface. This module never opens the
-database: it moves and lists opaque files. Every verb prints one JSON object on stdout; a
+ledger database: it moves/lists opaque files and may cache bounded disposable inspection
+evidence. Every verb prints one JSON object on stdout; a
 failure is one ``error: ...`` line on stderr and exit 1.
 
   backup <db> <sidecar> <dir> <keep>
@@ -228,6 +229,47 @@ def stat(paths: "list[str]") -> dict:
     return {"objects": objects}
 
 
+def inspect_copies(paths: list[str], local_paths: list[str], cache_path: str) -> dict:
+    """Advisory status evidence. Ledger publication continues to use strict `stat`."""
+    from barca._inspection_cache import Cache, fingerprint
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    cache = Cache(cache_path)
+
+    def inspect(pair):
+        uri, local = pair
+        remote_local = _storage.local_path_of(uri)
+
+        def observe():
+            return stat([uri])["objects"][0]
+
+        here = None
+        if Path(local).is_file():
+            here = cache.local(
+                "digest",
+                local,
+                None,
+                lambda: {
+                    "size_bytes": Path(local).stat().st_size,
+                    "sha256": _storage.sha256_file(local),
+                },
+            )
+        if remote_local is not None:
+            stored = cache.local("store", remote_local, None, observe)
+        else:
+            # A new/recovered local materialization must not inherit an older cloud size.
+            stored = cache.remote("store", uri, [fingerprint(local), here], observe)
+        return stored, here
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            copies = list(pool.map(inspect, zip(paths, local_paths, strict=True)))
+        return {"objects": [stored for stored, _ in copies], "locals": [here for _, here in copies]}
+    finally:
+        cache.flush()
+
+
 def main(argv: "list[str] | None" = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     verb = argv[0] if argv else ""
@@ -238,7 +280,12 @@ def main(argv: "list[str] | None" = None) -> int:
     elif verb == "fetch" and len(argv) == 3:
         result = fetch(argv[1], argv[2])
     elif verb == "stat" and len(argv) == 1:
-        result = stat(json.load(sys.stdin)["paths"])
+        request = json.load(sys.stdin)
+        result = (
+            inspect_copies(request["paths"], request["locals"], request["inspection_cache"])
+            if "inspection_cache" in request
+            else stat(request["paths"])
+        )
     else:
         print(
             "usage: python -m barca._state backup <db> <sidecar> <dir> <keep>\n"

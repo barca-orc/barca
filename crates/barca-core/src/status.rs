@@ -4,7 +4,7 @@
 //! Nothing here is new logic. Cache state comes from the same decision `--dry-run` makes
 //! ([`crate::execution::explain_dag`]), history from the metadata DB, and artifact shape from
 //! `python -m barca._inspect`, which opens artifact files only: user code is never imported.
-//! Nothing is written, and no `.barca` directory is created.
+//! The ledger is read-only; bounded disposable inspection evidence is cached separately.
 
 use crate::BarcaError;
 use crate::cache::CachePolicy;
@@ -692,14 +692,16 @@ pub(crate) async fn status_from_dag_with_membership(
 
     // With a store, `cached` means this machine's copy, the store's object and the recorded
     // digest all agree (RFC-0009); anything else is `unsynced` with its reason.
-    if cfg.remote_artifacts() && Path::new(&cfg.db_path).exists() {
-        check_store_copies(python, cfg, &mut nodes).await;
-    }
+    let verified_local = if cfg.remote_artifacts() && Path::new(&cfg.db_path).exists() {
+        check_store_copies(python, cfg, &mut nodes).await
+    } else {
+        HashSet::new()
+    };
 
     trace_since("status: store check", t0);
     let t0 = std::time::Instant::now();
     if shape {
-        read_shapes(python, cfg, &mut nodes, sample).await;
+        read_shapes(python, cfg, &mut nodes, sample, &verified_local).await;
     }
     trace_since("status: shapes", t0);
 
@@ -828,10 +830,11 @@ async fn check_store_copies(
     python: &Path,
     cfg: &crate::config::ResolvedConfig,
     nodes: &mut [NodeStatus],
-) {
+) -> HashSet<usize> {
+    let mut verified_local = HashSet::new();
     let layout = crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
     let Ok(cache) = db::CacheReader::for_config(cfg).await else {
-        return;
+        return verified_local;
     };
     // (node index, store path, local path, recorded digest)
     let mut wanted: Vec<(usize, String, std::path::PathBuf, Option<String>)> = Vec::new();
@@ -852,12 +855,20 @@ async fn check_store_copies(
     }
     drop(cache);
     if wanted.is_empty() {
-        return;
+        return verified_local;
     }
     let paths: Vec<&str> = wanted.iter().map(|(_, p, _, _)| p.as_str()).collect();
-    let objects = match stat_objects(python, cfg, &paths).await {
-        Ok(objects) if objects.len() == wanted.len() => objects,
-        Ok(_) => return,
+    let local_paths: Vec<_> = wanted
+        .iter()
+        .map(|(_, _, local, _)| local.to_string_lossy().into_owned())
+        .collect();
+    let evidence = match inspect_copies(python, cfg, &paths, &local_paths).await {
+        Ok(evidence)
+            if evidence.objects.len() == wanted.len() && evidence.locals.len() == wanted.len() =>
+        {
+            evidence
+        }
+        Ok(_) => return verified_local,
         Err(why) => {
             for (i, ..) in &wanted {
                 let c = &mut nodes[*i].cache;
@@ -866,23 +877,27 @@ async fn check_store_copies(
                     c.detail
                 );
             }
-            return;
+            return verified_local;
         }
     };
-    for ((i, store, local, recorded), object) in wanted.into_iter().zip(objects) {
-        let here = std::fs::metadata(&local)
-            .ok()
-            .filter(|m| m.is_file())
-            .and_then(|m| db::file_sha256(&local).ok().map(|sha| (m.len(), sha)));
+    for (((i, store, _, recorded), object), here) in wanted
+        .into_iter()
+        .zip(evidence.objects)
+        .zip(evidence.locals)
+    {
         let copies = classify(
-            here.as_ref().map(|(size, sha)| (*size, sha.as_str())),
+            here.as_ref()
+                .map(|local| (local.size_bytes, local.sha256.as_str())),
             &object,
             recorded.as_deref(),
         );
         let at = crate::transfer::diagnostic_uri(&store);
         let c = &mut nodes[i].cache;
         let (state, reason, detail) = match copies {
-            Copies::InSync => continue,
+            Copies::InSync => {
+                verified_local.insert(i);
+                continue;
+            }
             Copies::LocalOnly => (
                 "unsynced",
                 "local_only",
@@ -910,6 +925,38 @@ async fn check_store_copies(
         if state != "cached" && state != "unsynced" {
             c.artifact = None;
         }
+    }
+    verified_local
+}
+
+/// Disposable status evidence; publication and transfer checks remain strict.
+#[derive(Deserialize)]
+struct CopyEvidence {
+    objects: Vec<StoreObject>,
+    locals: Vec<Option<LocalEvidence>>,
+}
+#[derive(Deserialize)]
+struct LocalEvidence {
+    size_bytes: u64,
+    sha256: String,
+}
+async fn inspect_copies(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    paths: &[&str],
+    locals: &[String],
+) -> Result<CopyEvidence, String> {
+    let mut command = crate::backup::state_helper(python, cfg);
+    command.arg("stat").kill_on_drop(true);
+    let request = serde_json::json!({"paths": paths, "locals": locals, "inspection_cache": cfg.inspection_cache_path()});
+    let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(60));
+    use crate::helper_proc::JsonFailed;
+    match crate::helper_proc::run_json(command, &request, Some(limit)).await {
+        Ok(reply) => Ok(reply),
+        Err(JsonFailed::Spawn(error) | JsonFailed::Io(error)) => Err(error.to_string()),
+        Err(JsonFailed::TimedOut(limit)) => Err(format!("no answer within {}s", limit.as_secs())),
+        Err(JsonFailed::Exited(stderr)) => Err(crate::helper_proc::helper_cause(&stderr)),
+        Err(JsonFailed::Invalid(error)) => Err(error.to_string()),
     }
 }
 
@@ -1092,8 +1139,9 @@ async fn read_shapes(
     cfg: &crate::config::ResolvedConfig,
     nodes: &mut [NodeStatus],
     sample: usize,
+    verified_local: &HashSet<usize>,
 ) {
-    read_shapes_inner(python, cfg, nodes, sample, false).await;
+    read_shapes_inner(python, cfg, nodes, sample, false, verified_local).await;
 }
 
 /// Inspect artifact schemas, including JSON object field and list element types.
@@ -1103,7 +1151,12 @@ pub async fn read_schemas(
     cfg: &crate::config::ResolvedConfig,
     nodes: &mut [NodeStatus],
 ) {
-    read_shapes_inner(python, cfg, nodes, 0, true).await;
+    let verified_local = if cfg.remote_artifacts() && Path::new(&cfg.db_path).exists() {
+        check_store_copies(python, cfg, nodes).await
+    } else {
+        HashSet::new()
+    };
+    read_shapes_inner(python, cfg, nodes, 0, true, &verified_local).await;
 }
 
 async fn read_shapes_inner(
@@ -1112,6 +1165,7 @@ async fn read_shapes_inner(
     nodes: &mut [NodeStatus],
     sample: usize,
     fields: bool,
+    verified_local: &HashSet<usize>,
 ) {
     // A remote-off cache hit can select an older local row than the historical latest
     // materialization. Keep the selected artifact's metadata together rather than read
@@ -1157,6 +1211,19 @@ async fn read_shapes_inner(
             if selected.path == *path {
                 wanted.push((i, selected.path, selected.format));
             }
+        } else if verified_local.contains(&i)
+            && n.cache.state == "cached"
+            && n.cache.artifact.as_deref() == Some(path.as_str())
+        {
+            // Use the selected, verified local copy instead of reopening remote payloads.
+            let layout =
+                crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+            let local = layout.local_for(path).filter(|path| path.is_file());
+            wanted.push((
+                i,
+                local.map_or_else(|| path.clone(), |path| path.to_string_lossy().into_owned()),
+                m.format.clone().unwrap_or_default(),
+            ));
         } else if n.cache.state == "unsynced" && n.cache.reason != "store_only" {
             // Not in the store, or not the same there (#390, RFC-0009): read this machine's
             // copy. A `store_only` result is read from the store like a cached one.
@@ -1178,6 +1245,7 @@ async fn read_shapes_inner(
     let request = serde_json::json!({
         "sample": sample,
         "fields": fields,
+        "inspection_cache": cfg.inspection_cache_path(),
         "artifacts": wanted
             .iter()
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))

@@ -35,7 +35,9 @@ reply carries the request id.
        way. The coordinator recomputes such a cached result only after a "probe" succeeded.
 
 Transfers go through barca._storage, so credentials and BARCA_STORAGE_OPTIONS
-behave exactly as they do for workers and the state helper.
+behave exactly as they do for workers and the state helper. The native coordinator may pass
+`--inspection-cache <path>` to invalidate already-inspected remote objects after confirmed
+puts/fetches. This private configuration does not change request/reply frames.
 """
 
 import os
@@ -123,7 +125,7 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
         return {"sha256": digest, "fetched": fetched, "mismatch": mismatch}
 
 
-def _transfer(msg: dict) -> dict:
+def _transfer(msg: dict, observer=None) -> dict:
     """Perform one request; for a put/get return the reply fields describing the local file."""
     if msg["type"] == "probe":
         _storage.check_store(msg["root"])
@@ -147,6 +149,8 @@ def _transfer(msg: dict) -> dict:
         with _storage.staged_beside(Path(local)) as snapshot:
             _pin_file(local, snapshot)
             _storage.put_file(str(snapshot), msg["remote"])
+            if observer is not None:
+                observer.changed(msg["remote"])
             return {
                 "size_bytes": snapshot.stat().st_size,
                 "sha256": _storage.sha256_file(snapshot),
@@ -159,6 +163,8 @@ def _transfer(msg: dict) -> dict:
             result = {"sha256": expected, "fetched": False, "mismatch": False}
         else:
             result = _staged_get(msg["remote"], local, expected)
+    if observer is not None and result["fetched"]:
+        observer.changed(msg["remote"])
     return {"size_bytes": os.stat(local).st_size, **result}
 
 
@@ -245,7 +251,7 @@ def _send(reply: dict) -> None:
         pass  # coordinator is gone; nothing to report to
 
 
-def _handle(msg: dict, requests: _Requests, retries: int, backoff: float) -> None:
+def _handle(msg: dict, requests: _Requests, retries: int, backoff: float, observer=None) -> None:
     req_id = msg["id"]
     attempt = 0
     while True:
@@ -253,7 +259,13 @@ def _handle(msg: dict, requests: _Requests, retries: int, backoff: float) -> Non
         if not requests.start_attempt(req_id, attempt):
             return  # timed out (or abandoned) meanwhile: never retried
         try:
-            requests.resolve({"type": "done", "id": req_id, **_transfer(msg)})
+            requests.resolve(
+                {
+                    "type": "done",
+                    "id": req_id,
+                    **(_transfer(msg, observer) if observer is not None else _transfer(msg)),
+                }
+            )
             return
         except Exception as exc:
             if _is_permanent(exc) or attempt > retries:
@@ -297,12 +309,16 @@ def serve(
     retries: int = _DEFAULT_RETRIES,
     backoff: float = _DEFAULT_BACKOFF,
     timeout: float | None = _DEFAULT_TIMEOUT,
+    inspection_cache: str | None = None,
 ) -> None:
     """Serve transfer requests on `sock` until shutdown or disconnect.
 
     `timeout` bounds each attempt, measured from when it starts (not from
     when the request was queued behind others).
     """
+    from barca._inspection_cache import TransferObserver
+
+    observer = TransferObserver(inspection_cache) if inspection_cache else None
     _runtime._socket = sock
     requests = _Requests(timeout)
     stop = threading.Event()
@@ -327,7 +343,7 @@ def serve(
                 return
             if kind in ("put", "get", "probe", "stat"):
                 requests.accept(msg["id"])
-                pool.submit(_handle, msg, requests, retries, backoff)
+                pool.submit(_handle, msg, requests, retries, backoff, observer)
     finally:
         stop.set()
         pool.shutdown(wait=False, cancel_futures=True)
@@ -374,6 +390,11 @@ def main() -> int:
     if not os.environ.get("BARCA_SOCKET"):
         print("BARCA_SOCKET not set", file=sys.stderr)
         return 1
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--inspection-cache")
+    args = parser.parse_args()
     # What Ctrl-C means for the run is the coordinator's decision alone: it cancels the run
     # and stops this helper (SIGTERM). Acting on an interrupt here as well would end the
     # helper under a coordinator that is still waiting on it, and print a KeyboardInterrupt
@@ -406,6 +427,7 @@ def main() -> int:
         concurrency=_env_int("BARCA_TRANSFER_CONCURRENCY", _DEFAULT_CONCURRENCY),
         retries=_env_int("BARCA_TRANSFER_RETRIES", _DEFAULT_RETRIES),
         timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
+        inspection_cache=args.inspection_cache,
     )
     _runtime.disconnect()
     # Whatever was still in flight is abandoned (the coordinator disconnected, or an attempt
