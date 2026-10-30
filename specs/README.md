@@ -44,7 +44,7 @@ from approved decisions.
 | [Performance](behavior/performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |
 | [Python runtime](behavior/python-runtime.md) | Cached modules, process-local DuckDB state and temporary input views | Implemented; real worker connection controls |
 | [Server event replay](behavior/server-event-replay.md) | Attempt-scoped cursors and bounded serialized retention | Server implemented for pending 0.36.0; CLI/UI integration and cost probes incomplete |
-| [Server authentication](behavior/server-authentication.md) | Project token storage, local bootstrap and request protection | Implemented for pending 0.36.0; browser access implemented; cursor resume remains intent |
+| [Server authentication](behavior/server-authentication.md) | Project token storage, local bootstrap and request protection | Implemented for pending 0.36.0; browser access implemented; replay has a separate owner |
 | [Cache decisions](behavior/cache-decisions.md) | Reuse, provenance, early cutoff and durable run records | Implemented; selection deviation remains explicit |
 
 Each owner links its exact conformance sources and records known limitations. Existing wire
@@ -89,11 +89,13 @@ These owners have not been relocated or copied into new schemas.
 the bootstrap, token lifecycle, browser credential and event-resume boundaries for #706 and
 #187. The accepted design preserves the user-chosen opt-in Barca issuance/validation boundary
 without accounts. Server issuance/validation now follows [project token authentication](behavior/server-authentication.md);
-Browser token management is implemented; cursor replay remains unimplemented. Client transport now implements
+Browser token management and [attempt-scoped replay](behavior/server-event-replay.md) are
+implemented for pending 0.36.0. Client transport now implements
 `BARCA_SERVER_TOKEN` and URL Basic credentials, scoped redirects and error redaction, as
 documented in the [server-mode manual](../crates/barca-cli/docs/server-mode.md) and checked by
 [authenticated proxy tests](../python/tests/test_server_credentials.py).
-Current HTTP/CLI contracts remain authoritative until implementation and conformance land.
+Current HTTP/CLI contracts and the implemented behavioral owners are authoritative; release
+conformance and publication are still required.
 
 [Architecture map and cleanup sequence](../docs/engineering/architecture-cleanup.md) connects the inspected
 implementation to approved responsibilities and orders structural refactors before changes

@@ -22,6 +22,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Resume CLI and browser run streams using attempt-scoped `Last-Event-ID` cursors. Replay
+  retains at most 65,536 events/16 MiB per run and 64 MiB across runs. When replay has expired,
+  execution clients show a gap notice and follow the accepted run's outcome without
+  resubmitting work; `logs -f` reports incomplete output as an infrastructure error.
+
 - Connect the UI with a bootstrap code or API token, manage named tokens, and show new
   secrets once with explicit expiry choices. Tab-scoped credentials cover ordinary requests
   and fetch-based event streams; disconnect/revocation clears the connection and UI cache.
@@ -29,7 +34,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Opt into server-issued project bearer tokens with `[server] auth = "token"`,
   `BARCA_SERVER_AUTH`, or `serve --auth`. Local `tokens bootstrap` creates a one-use recovery
   grant; HTTP token creation/list/revocation works in read-only mode, stores digests outside
-  metadata backups, and closes revoked or expired event streams. Cursor resume remains pending.
+  metadata backups, and closes revoked or expired event streams.
 
 - Send server bearer credentials from `BARCA_SERVER_TOKEN`, or Basic credentials from URL
   userinfo, consistently across execution, ledger, streaming and cancellation requests in the
