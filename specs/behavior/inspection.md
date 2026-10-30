@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 3. Status: implemented behavior and explicit limits.
+Specification version: 4. Status: implemented behavior and explicit limits.
 Scope: what inspection says about computation validity, execution and stored bytes.
 Terms: [glossary](../../GLOSSARY.md). Exact JSON keys, status enums and response bodies remain
 owned by [OpenAPI](../interfaces/server-api.openapi.yaml) and the [CLI
@@ -62,6 +62,13 @@ that changes during reading must not publish reusable evidence. A missing file i
 again rather than trusted as a cached local observation. Verified selected local copies are
 preferred for shape only after successful copy verification, preserving historical/selected-artifact
 distinctions. A store-check failure must not promote an unverified local copy for shape.
+
+Local digest/shape evidence requires a change timestamp at least one second behind the
+observation clock. Recent/future timestamps bypass both lookup and retention, including
+when all stat fields collide after delete/recreate. A later settled observation may be
+retained. This assumes filesystem change timestamps distinguish writes at least one second
+apart; filesystem metadata deliberately forged across that boundary is outside the cache
+contract. Older disposable-cache formats are discarded.
 
 Cloud availability and remote shape observations have a fixed five-minute lifetime. Hits
 do not extend it; a backwards clock invalidates time evidence. Cloud copy observations also

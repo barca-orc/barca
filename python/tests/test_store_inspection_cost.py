@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 
 import pytest
 from barca.api import _find_binary
@@ -63,6 +64,7 @@ def inspected_project(tmp_path, monkeypatch):
     assert control.returncode == 0, control.stderr
     assert reads.read_text().splitlines(), "the payload-read audit hook must be active"
     reads.write_text("")
+    time.sleep(1.05)  # Measure settled evidence; fresh files intentionally bypass reuse.
     monkeypatch.setenv("PYTHONPATH", env["PYTHONPATH"])
     return project, artifact, reads, command
 

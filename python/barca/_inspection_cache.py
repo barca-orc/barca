@@ -23,6 +23,7 @@ MAX_BYTES = 8 * 1024 * 1024
 MAX_ENTRIES = 8192
 MAX_VALUE_BYTES = 64 * 1024
 REMOTE_SECONDS = 300
+LOCAL_SETTLE_SECONDS = 1
 
 
 def fingerprint(path: str | Path) -> list[int] | None:
@@ -93,7 +94,7 @@ class Cache:
             entries = value.get("entries")
             invalidations = value.get("invalidations", {})
             if (
-                value.get("version") != 1
+                value.get("version") != 2
                 or not isinstance(entries, dict)
                 or not isinstance(invalidations, dict)
                 or len(entries) + len(invalidations) > MAX_ENTRIES
@@ -155,12 +156,18 @@ class Cache:
         path = str(Path(path).absolute())
         before = fingerprint(path)
         key = self._key(kind, path, options)
+        # Inodes can be reused within one coarse filesystem timestamp tick. Do not
+        # retain an observation made while ctime is recent (or ahead of our clock):
+        # otherwise a delete/recreate collision can remain stale after the tick ends.
+        settled = (
+            before is not None and self.clock() - before[4] / 1_000_000_000 >= LOCAL_SETTLE_SECONDS
+        )
         with self.mutex:
             row = self.entries.get(key, {})
-        if before is not None and row.get("stamp") == before and _valid(row):
+        if settled and row.get("stamp") == before and _valid(row):
             return row["value"]
         value = compute()
-        if before is not None and fingerprint(path) == before:
+        if settled and fingerprint(path) == before:
             self._remember(key, before, value)
         return value
 
@@ -224,7 +231,7 @@ class Cache:
         ordered = ordered[-keep:] if keep else []
         while True:
             raw = json.dumps(
-                {"version": 1, "entries": dict(ordered), "invalidations": self.invalidations},
+                {"version": 2, "entries": dict(ordered), "invalidations": self.invalidations},
                 separators=(",", ":"),
             ).encode()
             if len(raw) <= MAX_BYTES:

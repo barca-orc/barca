@@ -25,6 +25,10 @@ verified local copy for shape. This is availability
 and shape evidence, not a new freshness proof. Required reads, transfers and server ledger
 publication keep their direct verification paths.
 
+Local inspection evidence is reusable only after the file's change timestamp is at least
+one second old. Recently changed files are read directly without retaining evidence, so
+inode reuse within a filesystem timestamp tick cannot preserve an old observation.
+
 The disposable inspection cache is limited to 8 MiB and 8192 entries per environment, with
 at most 64 KiB per value. Corruption, eviction or an unwritable cache causes another check;
 a busy cache-write lock is skipped. Cold inspection still hashes selected local copies and
