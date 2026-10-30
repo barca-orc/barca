@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test'
 
+test('the index keeps a deep link\'s filters', async ({ page }) => {
+  await page.goto('/ui/#/?pipeline=pipeline.py&show=failures')
+  await expect(page).toHaveURL(/#\/assets\?pipeline=pipeline\.py&show=failures$/)
+})
+
 test('primary sections are separate from the Assets view toggle', async ({ page }) => {
   await page.goto('/ui/#/assets')
   const navigation = page.getByRole('navigation', { name: 'Main navigation' })

@@ -76,5 +76,6 @@
 .barca-health-bar { display: flex; flex: none; height: 6px; gap: 1px; border-radius: var(--radius-pill); overflow: hidden; background: var(--bg-inset); }
 .barca-health-bar > span { display: block; height: 100%; }
 .barca-health-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.barca-health[data-urgent="failed"] .barca-health-label { color: var(--status-failed); }
-.barca-health[data-urgent="running"] .barca-health-label { color: var(--status-running); }
+.barca-health-label [data-bucket="failed"] { color: var(--status-failed); }
+.barca-health-label [data-bucket="running"] { color: var(--status-running); }
+.barca-health-label [data-bucket="stale"] { color: var(--status-warning); }

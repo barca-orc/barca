@@ -133,7 +133,7 @@ describe('buildRows', () => {
     )
     expect(row.name).toBe('ibp_model')
     expect(row.file).toBe('utz/assets.py')
-    expect(row.stateLabel).toBe('stale · upstream')
+    expect(row.stateLabel).toBe('Stale · upstream')
     // The explanation comes from the server, not the UI.
     expect(row.stateHint).toBe("upstream 'dim_ppg' will re-run")
     expect(row.last).toEqual({ status: 'success', ago: '5m ago', error: null })
@@ -145,10 +145,10 @@ describe('buildRows', () => {
   it('labels each reason a stale node can have', () => {
     const label = (reason: CacheStatus['reason']) =>
       only(buildRows([node({ id: 'p.py:a', cache: cache('stale', reason) })], NOW)).stateLabel
-    expect(label('changed')).toBe('stale · code changed')
-    expect(label('upstream_stale')).toBe('stale · upstream')
-    expect(label('sensor_output_unknown')).toBe('stale · sensor')
-    expect(label('cutoff_pending')).toBe('stale · cutoff')
+    expect(label('changed')).toBe('Stale · code changed')
+    expect(label('upstream_stale')).toBe('Stale · upstream')
+    expect(label('sensor_output_unknown')).toBe('Stale · sensor')
+    expect(label('cutoff_pending')).toBe('Stale · cutoff')
   })
 
   it('reports partition progress and never-run nodes', () => {
@@ -166,8 +166,8 @@ describe('buildRows', () => {
     )
     const fetch = rows.find((r) => r.name === 'fetch')!
     const fresh = rows.find((r) => r.name === 'new')!
-    expect(fetch.stateLabel).toBe('partial · 3/5')
-    expect(fresh.stateLabel).toBe('never run')
+    expect(fetch.stateLabel).toBe('Stale (3 of 5 keys)')
+    expect(fresh.stateLabel).toBe('Not run')
     expect(fresh.last).toBeNull()
     expect(fresh.typical).toBeNull()
   })
@@ -188,7 +188,7 @@ describe('buildRows', () => {
     )
     expect(row.severity).toBe('failed')
     // "always runs" says nothing for a task: it's just failed.
-    expect(row.stateLabel).toBe('failed')
+    expect(row.stateLabel).toBe('Failed')
     expect(row.last?.error).toBe('AssertionError: 3 rows with negative units')
     expect(row.last?.ago).toBe('35m ago')
   })
@@ -304,8 +304,8 @@ describe('sorting', () => {
 })
 
 describe('failed labels', () => {
-  it('an asset keeps its cache state: a good cached result may still be served', () => {
+  it('one word, with a remaining good result in the hint', () => {
     const row = only(buildRows([node({ id: 'p.py:a', last_materialization: failedAttempt })], NOW))
-    expect(row.stateLabel).toBe('failed · cached')
+    expect(row.stateLabel).toBe('Failed')
   })
 })

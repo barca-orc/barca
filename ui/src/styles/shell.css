@@ -10,6 +10,7 @@
   color: var(--text-default);
   font-family: var(--font-sans);
 }
+.barca-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .barca-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .barca-content { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .barca-content > * { flex: 1; min-height: 0; }
@@ -38,8 +39,8 @@
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--signal);
-  background: var(--c-green-wash);
-  border: 1px solid var(--c-green-line);
+  background: var(--c-white-wash);
+  border: 1px solid var(--c-white-line);
   padding: 2px 6px;
   border-radius: var(--radius-pill);
 }
@@ -100,8 +101,8 @@
   width: 26px;
   height: 26px;
   border-radius: var(--radius-sm);
-  background: var(--c-green-wash);
-  border: 1px solid var(--c-green-line);
+  background: var(--c-white-wash);
+  border: 1px solid var(--c-white-line);
   color: var(--signal);
   display: flex;
   align-items: center;
@@ -162,7 +163,8 @@
   padding: 1px 5px;
 }
 @container (max-width: 110px) { .barca-search kbd { display: none; } }
-.barca-top-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; }
+.barca-top-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; min-width: 0; }
+.barca-top-run { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .barca-primary-nav { display: flex; align-self: stretch; gap: 20px; min-width: 0; overflow-x: auto; }
 .barca-primary-link {
   display: flex; align-items: center; flex: none;
@@ -269,7 +271,6 @@
   box-shadow: var(--shadow-sm);
   z-index: 5;
 }
-.barca-legend span { display: inline-flex; align-items: center; gap: 5px; text-transform: capitalize; }
 
 .barca-insp-body { margin-top: 14px; display: flex; flex-direction: column; gap: 14px; }
 .barca-tagrow { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -403,7 +404,7 @@
 .barca-cell-failed { color: var(--status-failed); }
 .barca-cell-error {
   max-width: 420px; margin-top: 2px;
-  font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--status-failed);
+  font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* The message carries its own top spacing: the scroll area has none (see
@@ -422,6 +423,7 @@
 .barca-table th.num .barca-sort { flex-direction: row-reverse; }
 
 /* pipeline list: node count per file */
+.barca-pipe-nodot { width: 6px; height: 6px; flex: none; }
 .barca-pipe-count {
   margin-left: auto;
   font-family: var(--font-sans);

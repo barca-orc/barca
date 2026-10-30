@@ -36,13 +36,13 @@
   --bg-inset:    #ECF1EC;
   --bg-hover:    rgba(8, 24, 16, 0.04);
   --bg-active:   rgba(8, 24, 16, 0.07);
-  --bg-selected: var(--c-green-wash);
+  --bg-selected: var(--c-white-wash);
 
   /* ---- Borders ---- */
   --border-subtle:  #EAEFEA;
   --border-default: #DCE3DD;
   --border-strong:  #C5CEC7;
-  --border-accent:  var(--c-green-line);
+  --border-accent:  var(--c-white-line);
 
   /* ---- Text ---- */
   --text-strong:    #0B1410;
@@ -50,18 +50,20 @@
   --text-muted:     #586860;
   --text-faint:     #8A968E;
   --text-disabled:  #AEB8B1;
-  --text-on-signal: #FFFFFF;        /* white text on the deep emerald */
-  --text-link:      var(--c-cyan-l-500);
+  --text-on-signal: #FFFFFF;
+  --text-link:      #0B1410;
 
-  /* ---- Brand signal ---- */
-  --signal:        var(--c-green-l-500);
-  --signal-hover:  var(--c-green-l-600);
-  --signal-press:  var(--c-green-l-700);
-  --signal-dim:    var(--c-green-l-300);
+  /* ---- Signal: neutral, as on dark ---- */
+  --c-white-wash:  rgba(11, 20, 16, 0.06);
+  --c-white-line:  rgba(11, 20, 16, 0.30);
+  --signal:        #0B1410;
+  --signal-hover:  #243029;
+  --signal-press:  #000000;
+  --signal-dim:    #586860;
 
   /* ---- Focus ---- */
-  --focus-ring:    var(--c-green-l-500);
-  --focus-glow:    0 0 0 1px #FFFFFF, 0 0 0 3px var(--c-green-line);
+  --focus-ring:    #0B1410;
+  --focus-glow:    0 0 0 1px #FFFFFF, 0 0 0 3px var(--c-white-line);
 
   /* ---- Elevation: lift comes from soft gray shadow, not a white edge ---- */
   --edge-top:   inset 0 1px 0 rgba(255, 255, 255, 0.6);  /* @kind shadow */

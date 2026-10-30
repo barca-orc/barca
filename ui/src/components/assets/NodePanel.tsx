@@ -7,7 +7,7 @@ import { ArtifactSchema } from './ArtifactSchema'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { buildRows, formatAgo, formatSeconds, severityStatus } from '@/lib/assetTable'
-import { freshnessLabel } from '@/lib/status'
+import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline } from '@/lib/health'
 import { memberHealth } from '@/lib/groups'
@@ -71,14 +71,14 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
     <SidePanel
       label={`${node.name} details`}
       title={<Breakable name={node.name} />}
-      badge={<Tag size="sm">{node.kind}</Tag>}
+      badge={<Tag size="sm">{nodeKindLabel(node)}</Tag>}
       subtitle={row?.file}
       actions={
         <>
           <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
             disabled={runAction.readOnly} loading={runAction.triggering}
             title={runAction.title} onClick={runAction.fire}>
-            {runAction.verb}
+            Run
           </Button>
           <IconButton label="Open in graph" size="sm" onClick={() => onOpenGraph(node.id)}>
             <GitBranch size={14} />
@@ -215,7 +215,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             {last.error && !failed && <pre className="barca-error">{last.error}</pre>}
           </>
         ) : (
-          <p className="barca-note">Never ran.</p>
+          <p className="barca-note">Not run yet.</p>
         )}
       </Section>
 
@@ -258,7 +258,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               {node.kind !== 'task' && (
                 <div>
                   <b>{Math.round(stats.cache_hit_rate * 100)}%</b>
-                  <span>re-executed, same inputs</span>
+                  <span>re-ran with unchanged inputs</span>
                 </div>
               )}
             </div>

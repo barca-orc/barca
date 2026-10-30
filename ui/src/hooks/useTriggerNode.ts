@@ -4,7 +4,7 @@ import { useTriggerRun } from '@/hooks/useTriggerRun'
 import type { ListNode } from '@/lib/types'
 
 /**
- * The canonical barca verb for a node: `run` a task (always re-executes), `get`
+ * The barca command behind a node's Run button: `run` a task (always re-executes), `get`
  * an asset or sensor (cache-aware). No "materialize".
  */
 export function useTriggerNode(
@@ -23,7 +23,6 @@ export function useTriggerNode(
   }, [asset, mutate, onTrigger])
 
   return {
-    verb: isTask ? ('run' as const) : ('get' as const),
     fire,
     isPending: trigger.isPending,
     /** The trigger request itself failing (network/404), not a run that failed. */

@@ -65,9 +65,12 @@ test('double-click navigates nested groups and List keeps the current scope afte
   await expect(page.locator('.react-flow__node')).toHaveCount(6)
   await page.locator('.react-flow__node[data-id="group:modeling.py:fold_03"]').dblclick()
   await expect(page.locator('.react-flow__node')).toHaveCount(3)
-  await page
-    .locator('.react-flow__node[data-id="group:modeling.py:fold_03__fitting"]')
-    .focus()
+  // React Flow keeps a node hidden, so not focusable, until it is measured.
+  const fitting = page.locator('.react-flow__node[data-id="group:modeling.py:fold_03__fitting"]')
+  await expect(async () => {
+    await fitting.focus()
+    await expect(fitting).toBeFocused({ timeout: 200 })
+  }).toPass()
   await page.keyboard.press('Enter')
   await expect(page.locator('.react-flow__node')).toHaveCount(6)
   await expect(
@@ -105,8 +108,8 @@ test('failed validation makes ancestors red while their output remains cached; n
   const panel = page.getByRole('complementary', {
     name: 'Cross-validation group details',
   })
-  await expect(panel).toContainText('1 failed member')
-  await expect(panel.getByText('Cached', { exact: true })).toBeVisible()
+  await expect(panel).toContainText('1 failed')
+  await expect(panel.getByText('Healthy', { exact: true })).toBeVisible()
   await expect(panel).toContainText('validate__cv__fold_03__trained_model')
   await panel
     .getByRole('button', { name: /validate__cv__fold_03__trained_model/ })

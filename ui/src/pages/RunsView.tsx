@@ -187,11 +187,13 @@ function RunsError({ error, dispatch }: { error: string; dispatch: Dispatch<Runs
 function RunTable({ runs, selected, dispatch }: { runs: RunList['runs']; selected: string | null; dispatch: Dispatch<RunsMsg> }) {
   return <table className="barca-table barca-run-table"><thead><tr>
     <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th>
-  </tr></thead><tbody>{runs.map(run => <tr key={run.id} aria-selected={selected === run.id || selected === run.handle}>
+  </tr></thead><tbody>{runs.map(run => <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}>
     <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button><div className="barca-cell-sub">{run.command}</div></td>
     <td>
       <code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code>
-      {run.error && <div className="barca-cell-sub barca-run-row-error" title={run.error}>{headline(run.error)}</div>}
+      {run.error
+        ? <div className="barca-cell-sub barca-run-row-error" title={run.error}>{headline(run.error)}</div>
+        : runStatus(run.status) === 'failed' && <div className="barca-cell-sub barca-run-row-error">No run-level error: open the run for its failed steps</div>}
     </td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
     <td><StatusBadge size="sm" status={runStatus(run.status)} label={runLabel(run.status)} /></td>

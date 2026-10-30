@@ -43,8 +43,8 @@ const CSS = `
 
 /**
  * barca · Button
- * The primary action control. The "signal" variant uses the cool emerald
- * brand green and is reserved for the single most important action in a
+ * The primary action control. The "signal" variant is filled and neutral
+ * (green means healthy, never "press me") and is reserved for the single most important action in a
  * view. Everything else is quiet.
  */
 export function Button({

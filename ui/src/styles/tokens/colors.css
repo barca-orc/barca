@@ -1,7 +1,8 @@
 /* ============================================================
    barca · colors
    Dark-first, terminal/console. Green-tinted near-black with a
-   cool emerald "signal" green and a calm cyan secondary accent.
+   neutral "signal" for actions, links and selection. Colour is
+   status only: green healthy, red failed, amber stale, cyan running.
    Base values first, semantic aliases at the bottom.
    ============================================================ */
 
@@ -57,6 +58,8 @@
   --c-violet-900: #1E1633;
 
   /* ---- Translucent signal washes (for glows / tints over dark) ---- */
+  --c-white-wash:  rgba(233, 241, 236, 0.08);
+  --c-white-line:  rgba(233, 241, 236, 0.34);
   --c-green-wash:  rgba(63, 209, 129, 0.12);
   --c-green-line:  rgba(63, 209, 129, 0.34);
   --c-green-glow:  rgba(63, 209, 129, 0.48);
@@ -79,13 +82,13 @@
   --bg-inset:     var(--c-ink-850);
   --bg-hover:     rgba(255, 255, 255, 0.035);
   --bg-active:    rgba(255, 255, 255, 0.06);
-  --bg-selected:  var(--c-green-wash);
+  --bg-selected:  var(--c-white-wash);
 
   /* Borders / hairlines */
   --border-subtle:  #161B18;
   --border-default: #232B26;
   --border-strong:  #313B34;
-  --border-accent:  var(--c-green-line);
+  --border-accent:  var(--c-white-line);
 
   /* Text */
   --text-strong:   var(--c-white);
@@ -93,18 +96,18 @@
   --text-muted:    var(--c-ink-100);
   --text-faint:    var(--c-ink-200);
   --text-disabled: var(--c-ink-300);
-  --text-on-signal: var(--c-black);   /* black text on green */
-  --text-link:     var(--c-cyan-400);
+  --text-on-signal: var(--c-black);
+  --text-link:     var(--c-white);
 
-  /* Brand signal */
-  --signal:        var(--c-green-500);
-  --signal-hover:  var(--c-green-400);
-  --signal-press:  var(--c-green-600);
-  --signal-dim:    var(--c-green-700);
+  /* Signal: primary actions, links, selection. Neutral: green means healthy, nothing else. */
+  --signal:        var(--c-white);
+  --signal-hover:  var(--c-pure-white);
+  --signal-press:  var(--c-ink-050);
+  --signal-dim:    var(--c-ink-100);
 
   /* Focus */
-  --focus-ring:    var(--c-green-500);
-  --focus-glow:    0 0 0 1px var(--c-ink-900), 0 0 0 3px var(--c-green-line);
+  --focus-ring:    var(--c-white);
+  --focus-glow:    0 0 0 1px var(--c-ink-900), 0 0 0 3px var(--c-white-line);
 
   /* Status (run states) */
   --status-success:      var(--c-green-500);
@@ -131,7 +134,7 @@
   --status-skipped-bg:   rgba(71, 81, 73, 0.18);
 
   /* Graph canvas */
-  --graph-grid:  rgba(63, 209, 129, 0.10);   /* the dot grid behind the DAG */
+  --graph-grid:  rgba(233, 241, 236, 0.08);   /* the dot grid behind the DAG */
   --graph-mask:  rgba(8, 11, 10, 0.72);      /* what the minimap dims outside the viewport */
   --glow-running: 0 0 14px -5px rgba(54, 203, 211, 0.6);  /* a running node's halo */
 }

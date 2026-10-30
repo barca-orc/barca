@@ -19,6 +19,8 @@ import {
 } from '@/components'
 import { STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
 import { Spec, Variant } from '../Kit'
+import { ConfirmDialog } from '@/components'
+import { runButton } from '@/lib/runTarget'
 
 /** Every primitive in components/, in each state it has. */
 export function Primitives() {
@@ -78,7 +80,18 @@ export function Primitives() {
       {STATUS_KINDS.map((s) => (
         <StatusBadge key={s} status={s} />
       ))}
-      <StatusBadge status="success" subtle />
+      <StatusBadge status="failed" subtle />
+      <StatusBadge status="success" subtle={false} />
+    </Spec>
+
+    <Spec title="ConfirmDialog" note="Run all asks first; the labels are runButton()'s. A pipeline or a node runs at once.">
+      <Variant label="run all"><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><ConfirmDialog {...runButton({ kind: 'all', nodes: 8070 }).confirm!} onConfirm={() => {}} onCancel={() => {}} /></div></Variant>
+    </Spec>
+
+    <Spec title="Topbar Run labels" note="runButton() for each target: what it runs and how much.">
+      {[runButton({ kind: 'node', name: 'invoices_00' }), runButton({ kind: 'pipeline', file: 'billing.py', nodes: 506 }), runButton({ kind: 'all', nodes: 8070 }), runButton({ kind: 'none', hint: 'Select a node to run' })].map((b) => (
+        <Variant key={b.label} label={b.title}><Button variant="signal" size="sm">{b.label}</Button></Variant>
+      ))}
     </Spec>
 
     <Spec title="HealthBar" note="A scope's nodes by state; a single failure stays visible among thousands.">

@@ -6,6 +6,8 @@ import { StatusDot } from './StatusDot'
 export interface DagNodeProps {
   name: string
   kind: string
+  /** The word shown for its kind, when it is not `kind` (a task that is a check). */
+  kindLabel?: string
   status: StatusKind
   metric?: string | null
   statusLabel?: string
@@ -22,11 +24,12 @@ export const DAG_NODE_HEIGHT = 64
 /**
  * barca · DagNode
  * The signature object: one node in a pipeline graph. Status drives the accent.
- * `selected` rings it in signal green; `running` gets a live cyan border + spine.
+ * `selected` rings it in the neutral signal; `running` gets a live cyan border + spine.
  */
 export function DagNode({
   name,
   kind,
+  kindLabel,
   status,
   metric,
   statusLabel,
@@ -132,7 +135,7 @@ export function DagNode({
               color: 'var(--text-faint)',
             }}
           >
-            {kind}
+            {kindLabel ?? kind}
           </span>
           {(statusLabel ?? metric) && (
             <span

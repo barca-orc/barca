@@ -16,7 +16,7 @@ const states = assets.map(asset => ({
   cache: { state: 'cached', reason: 'materialized', detail: 'Cached result' },
 }))
 
-test('an empty pipeline selection renders an empty result without querying the whole project', async ({ page }) => {
+test('an empty pipeline selection renders an empty result; only the sidebar asks for the whole project', async ({ page }) => {
   const requests: string[] = []
   await page.route('**/assets', route => route.fulfill({ json: assets }))
   await page.route('**/groups', route => route.fulfill({ json: groups }))
@@ -26,7 +26,7 @@ test('an empty pipeline selection renders an empty result without querying the w
   })
   await page.goto('/ui/#/assets?pipeline=missing.py')
   await expect(page.getByText('Nothing matches.', { exact: true })).toBeVisible()
-  expect(requests).toEqual([])
+  expect(requests.every(url => !url.includes('?'))).toBe(true)
 })
 
 test('a status failure leaves grouped metadata and sidebar counts visible', async ({ page }) => {
@@ -40,6 +40,35 @@ test('a status failure leaves grouped metadata and sidebar counts visible', asyn
   await expect(page.getByRole('status')).toContainText('History is unavailable')
   await expect(page.getByRole('status')).toContainText('Check the metadata volume')
   await expect(page.locator('.barca-sidebar').getByRole('button', { name: 'other.py 1' })).toBeVisible()
+})
+
+test('a sidebar dot waits for its whole file: no dot says "fine" from part of it', async ({ page }) => {
+  await page.route('**/assets', route => route.fulfill({ json: assets }))
+  await page.route('**/groups', route => route.fulfill({ json: groups }))
+  await page.route(/\/state(?:\?.*)?$/, route => {
+    // The whole-project request fails: only the open pipeline is known.
+    if (!route.request().url().includes('?')) return route.fulfill({ status: 500, json: { error: 'busy' } })
+    return route.fulfill({ json: states.filter(n => n.id.startsWith('forecast.py:')) })
+  })
+  await page.goto('/ui/#/assets?pipeline=forecast.py')
+  const sidebar = page.locator('.barca-sidebar')
+  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toHaveAttribute('title', 'forecast.py · healthy')
+  await expect(sidebar.getByRole('button', { name: 'other.py 1' }).locator('.barca-pipe-nodot')).toHaveCount(1)
+})
+
+test('Reset database appears only for a database barca cannot use', async ({ page }) => {
+  await page.route('**/assets', route => route.fulfill({ json: assets }))
+  await page.route('**/groups', route => route.fulfill({ json: [] }))
+  let unusable = false
+  await page.route(/\/state(?:\?.*)?$/, route => unusable
+    ? route.fulfill({ status: 503, json: { error: 'unreadable', reason: 'metadata_unusable', remediation: 'Restore a backup' } })
+    : route.fulfill({ json: states }))
+  await page.goto('/ui/#/assets')
+  await expect(page.locator('.barca-table tbody tr')).toHaveCount(4)
+  await expect(page.getByRole('button', { name: 'Reset database' })).toHaveCount(0)
+  unusable = true
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Reset database' })).toBeVisible()
 })
 
 for (const view of ['list', 'graph']) {
@@ -74,7 +103,8 @@ for (const view of ['list', 'graph']) {
       await expect(sidebar.getByRole('button', { name: 'other.py 1' })).toBeVisible()
       await expect.poll(() => requests.length).toBeGreaterThan(0)
       // A pipeline is asked for by its file: one short URL however many nodes it has.
-      expect(requests.every(url => url.searchParams.get('files') === 'forecast.py')).toBe(true)
+      // The other request is the sidebar's whole-project health.
+      expect(requests.every(url => url.search === '' || url.searchParams.get('files') === 'forecast.py')).toBe(true)
       await expect(page.getByText('Checking…', { exact: true }).first()).toBeVisible()
       // Let the initial graph fit settle before comparing geometry across status arrival.
       if (view === 'graph') await page.waitForTimeout(400)

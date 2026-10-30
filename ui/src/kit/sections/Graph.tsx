@@ -31,7 +31,7 @@ const PIPELINE_STATES: Record<string, GraphState> = {
   'p:product_catalog': graphState(nodeBySeverity.cached),
   'p:orders_clean': graphState(nodeBySeverity.cached),
   'p:orders_enriched': runningGraphState(runningPartitioned),
-  'group:p:modeling': { status: 'failed', label: '1 failed · 23 cached', hint: 'fold 3 validation failed' },
+  'group:p:modeling': { status: 'failed', label: '1 failed', hint: 'fold 3 validation failed' },
   'p:revenue_daily': graphState(nodeBySeverity.stale),
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
@@ -71,7 +71,7 @@ export function Graph() {
           </Variant>
         ))}
         <Variant label="selected">
-          <DagNode name="orders_clean" kind="asset" status="success" statusLabel="Cached" selected icon={KIND_ICON.asset} />
+          <DagNode name="orders_clean" kind="asset" status="success" statusLabel="Healthy" selected icon={KIND_ICON.asset} />
         </Variant>
         <Variant label="long name">
           <DagNode name="cv__fold_03__preprocessing__standard_scaler_fit" kind="asset" status="warning" statusLabel="Stale" icon={KIND_ICON.asset} />

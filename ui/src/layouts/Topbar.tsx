@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { NavLink, useLocation, useSearchParams } from 'react-router'
 import { Sun, Moon, Play, List, GitBranch } from 'lucide-react'
-import { Button, IconButton, RunsInProgress } from '@/components'
+import { Button, ConfirmDialog, IconButton, RunsInProgress } from '@/components'
 import { useTheme } from '@/context/theme'
 
 import type { TopbarRun } from './shellContext'
@@ -13,6 +14,7 @@ interface TopbarProps {
 
 export function Topbar({ run }: TopbarProps) {
   const { theme, toggleTheme } = useTheme()
+  const [confirming, setConfirming] = useState(false)
   const location = useLocation()
   const [params, setParams] = useSearchParams()
   const pipeline = params.get('pipeline')
@@ -61,10 +63,20 @@ export function Topbar({ run }: TopbarProps) {
             loading={run.loading}
             disabled={run.disabled}
             title={run.title}
-            onClick={run.onRun}
+            onClick={() => (run.confirm ? setConfirming(true) : run.onRun())}
           >
-            Run
+            <span className="barca-top-run">{run.label}</span>
           </Button>
+        )}
+        {run?.confirm && confirming && (
+          <ConfirmDialog
+            {...run.confirm}
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false)
+              run.onRun()
+            }}
+          />
         )}
       </div>
     </header>

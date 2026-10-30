@@ -1,7 +1,7 @@
-import { X, Download, Play, Terminal, CircleAlert } from 'lucide-react'
+import { X, Play, Terminal, CircleAlert } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Button, IconButton, KeyValue, SidePanel, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
-import { freshnessLabel } from '@/lib/status'
+import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
 import { runFeedback } from '@/lib/runFeedback'
 import type { ListNode, StatusKind, LogLine } from '@/lib/types'
@@ -21,8 +21,7 @@ interface NodeInspectorProps {
   error: string | null
   /** The server refuses runs (`barca serve --read-only`). */
   readOnly: boolean
-  /** The node's trigger verb and state (owned by the page, shared with the topbar). */
-  verb: 'run' | 'get'
+  /** The node's trigger state (owned by the page, shared with the topbar). */
   triggering: boolean
   triggerError: Error | null
   onFire: () => void
@@ -65,14 +64,12 @@ export function NodeInspector({
   running,
   error,
   readOnly,
-  verb,
   triggering,
   triggerError,
   onFire,
   onClose,
 }: NodeInspectorProps) {
   const name = shortName(asset.id)
-  const isTask = asset.kind === 'task'
 
   // Presentation logic (pure, tested) decides the feedback descriptor; this
   // component only maps each descriptor variant to elements. Exhaustive on both
@@ -104,15 +101,13 @@ export function NodeInspector({
     >
       <div className="barca-insp-body">
         <div className="barca-tagrow">
-          <Tag tone="signal" dot>
-            {asset.kind}
-          </Tag>
+          <Tag>{nodeKindLabel(asset)}</Tag>
           <StatusBadge status={status} label={statusLabel} size="sm" />
         </div>
 
         <div>
           <KeyValue label="id">{asset.id}</KeyValue>
-          <KeyValue label="kind">{asset.kind}</KeyValue>
+          <KeyValue label="kind">{nodeKindLabel(asset)}</KeyValue>
           <KeyValue label="freshness">{freshnessLabel(asset)}</KeyValue>
           <KeyValue label="inputs">{asset.inputs.length}</KeyValue>
         </div>
@@ -131,13 +126,13 @@ export function NodeInspector({
           <Button
             variant="signal"
             size="sm"
-            iconLeft={isTask ? <Play size={12} /> : <Download size={12} />}
+            iconLeft={<Play size={12} />}
             loading={triggering || running}
             disabled={readOnly}
             title={readOnly ? 'This server is read-only' : undefined}
             onClick={onFire}
           >
-            {verb}
+            Run
           </Button>
           <Button variant="ghost" size="sm" iconLeft={<Terminal size={13} />}>
             logs
@@ -149,7 +144,7 @@ export function NodeInspector({
         {/* Failure of the trigger request itself (network/404), distinct from a
             run that started and then failed. */}
         {triggerError && (
-          <ErrorPanel title={`could not start ${verb}`} message={triggerError.message} />
+          <ErrorPanel title="could not start the run" message={triggerError.message} />
         )}
       </div>
     </SidePanel>

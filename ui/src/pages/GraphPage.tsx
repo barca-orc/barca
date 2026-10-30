@@ -1,6 +1,6 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useOutletContext, useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
 import { ConnectionBadge, IconButton, StatusDot } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
@@ -13,15 +13,14 @@ import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
 import { useRunStream } from '@/hooks/useRunStream'
 import { useTriggerNode } from '@/hooks/useTriggerNode'
-import type { AppShellContext } from '@/layouts/shellContext'
-import { shortName } from '@/lib/graph'
+import { useTopbarRun } from '@/hooks/useTopbarRun'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
 import type { StatusKind } from '@/lib/types'
 
 const LEGEND: { status: StatusKind; label: string }[] = [
-  {status:'success', label:'Cached'}, {status:'warning', label:'Stale / partial'},
-  {status:'skipped', label:'Neutral / no cached state'}, {status:'failed', label:'Last attempt failed'}, {status:'running', label:'Running'},
+  {status:'failed', label:'Failed'}, {status:'running', label:'Running'}, {status:'warning', label:'Stale'},
+  {status:'skipped', label:'Not run'}, {status:'success', label:'Healthy'},
 ]
 
 export function GraphPage() {
@@ -46,11 +45,10 @@ export function GraphPage() {
     () => allAssets.filter((a) => inPipeline(a.id, pipeline)),
     [allAssets, pipeline],
   )
-  const [run, setRun] = useState<{ handle: string; nodeId: string } | null>(null)
+  const [run, setRun] = useState<{ handle: string; nodeId: string | null } | null>(null)
   const canvasRef = useRef<GraphCanvasHandle>(null)
 
   const stream = useRunStream(run?.handle ?? null)
-  const { setTopbarRun } = useOutletContext<AppShellContext>()
 
   const title = pipeline ? `Assets · ${pipelineName(pipeline)}` : 'Assets'
 
@@ -66,23 +64,13 @@ export function GraphPage() {
   const trigger = useTriggerNode(selectedAsset, onTrigger)
   const readOnly = health?.read_only ?? false
 
-  // The topbar's Run button acts on the selected node, same as the inspector's.
-  const { fire, verb } = trigger
-  const triggering = trigger.isPending || stream.running
-  const selectedName = selectedAsset ? shortName(selectedAsset.id) : null
-  useEffect(() => {
-    setTopbarRun({
-      onRun: fire,
-      disabled: !selectedName || readOnly,
-      loading: triggering,
-      title: readOnly
-        ? 'This server is read-only'
-        : selectedName
-          ? `${verb} ${selectedName}`
-          : 'Select a node to run',
-    })
-    return () => setTopbarRun(null)
-  }, [setTopbarRun, fire, verb, selectedName, readOnly, triggering])
+  // The topbar's Run button acts on the selected node, same as the inspector's, else on what
+  // is open.
+  const onStarted = useCallback((handle: string) => setRun({ handle, nodeId: null }), [])
+  const topbar = useTopbarRun({
+    node: selectedAsset, show: true, scopes: true, fireNode: trigger.fire,
+    busy: trigger.isPending || stream.running, onStarted,
+  })
 
   // Live status overlay: stream-derived, plus an optimistic "running" on the
   // triggered node so the click feels instant before the first event lands.
@@ -130,6 +118,7 @@ export function GraphPage() {
         </div>
       </div>
 
+      {topbar.error && <p role="alert">Could not start run: {topbar.error.message}</p>}
       {stateQuery.isError && <div className="barca-graph-tools" role="status">Asset state unavailable; colors are neutral.</div>}
       <div className="barca-graph-wrap">
         <div className="barca-graph-canvas">
@@ -160,7 +149,6 @@ export function GraphPage() {
             running={stream.running}
             error={selectedError}
             readOnly={readOnly}
-            verb={trigger.verb}
             triggering={trigger.isPending}
             triggerError={trigger.error}
             onFire={trigger.fire}

@@ -42,6 +42,8 @@ export interface PipelineSummary extends Pipeline {
   total: number
   /** The most urgent state among them (what its status dot shows). */
   worst: Severity
+  /** Every one of them has a loaded state: `worst` is the file's, not just a part's. */
+  known: boolean
   /** How many of them a run is working on now. */
   running: number
 }
@@ -60,10 +62,11 @@ export function pipelineSummaries(
     const p = byFile.get(file)
     const running = n?.running ? 1 : 0
     if (!p) {
-      byFile.set(file, { file, name: pipelineName(file), total: 1, worst: severity, running })
+      byFile.set(file, { file, name: pipelineName(file), total: 1, worst: severity, known: n !== undefined, running })
     } else {
       p.total += 1
       p.running += running
+      p.known &&= n !== undefined
       if (SEVERITIES.indexOf(severity) < SEVERITIES.indexOf(p.worst)) p.worst = severity
     }
   }

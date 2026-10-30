@@ -1,5 +1,6 @@
 import { match } from 'ts-pattern'
 import type { StatusKind, ListNode, NodeKind } from './types'
+import type { Severity } from './assetTable'
 
 export interface StatusMeta {
   /** CSS var for the status color */
@@ -21,7 +22,7 @@ export function statusMeta(status: StatusKind): StatusMeta {
       color: 'var(--status-success)',
       bg: 'var(--status-success-bg)',
       line: 'var(--status-success-line)',
-      label: 'Succeeded',
+      label: 'Healthy',
       live: false,
     }))
     .with('running', () => ({
@@ -42,21 +43,21 @@ export function statusMeta(status: StatusKind): StatusMeta {
       color: 'var(--status-warning)',
       bg: 'var(--status-warning-bg)',
       line: 'var(--status-warning-line)',
-      label: 'Warning',
+      label: 'Stale',
       live: false,
     }))
     .with('queued', 'pending', () => ({
       color: 'var(--status-queued)',
       bg: 'var(--status-queued-bg)',
       line: 'var(--status-queued-line)',
-      label: 'Queued',
+      label: 'Running · queued',
       live: false,
     }))
     .with('skipped', () => ({
       color: 'var(--status-skipped)',
       bg: 'var(--status-skipped-bg)',
       line: 'transparent',
-      label: 'Skipped',
+      label: 'Not run',
       live: false,
     }))
     .exhaustive()
@@ -71,11 +72,33 @@ export function freshnessLabel(node: Pick<ListNode, 'freshness' | 'schedule'>): 
     .exhaustive()
 }
 
-/** Short label for a node kind. */
-export function nodeKindLabel(kind: NodeKind): string {
-  return match(kind)
+/**
+ * A task that checks data. The graph has no such kind: the name says so, by the `check__` and
+ * `validate__` conventions.
+ */
+export function isCheck(node: { id: string; kind: NodeKind | 'group' }): boolean {
+  return node.kind === 'task' && /(^|:)(check|validate)__/.test(node.id)
+}
+
+/** Short label for a node kind: `check` for a check, wherever a node is shown. */
+export function nodeKindLabel(node: { id: string; kind: NodeKind }): string {
+  return match(node.kind)
     .with('asset', () => 'asset')
     .with('sensor', () => 'sensor')
-    .with('task', () => 'task')
+    .with('task', () => (isCheck(node) ? 'check' : 'task'))
+    .exhaustive()
+}
+
+/** One name per state, in lower case for counts and filters (`3 failed`, `12 not run`). */
+export function severityWord(severity: Severity): string {
+  return match(severity)
+    .with('failed', () => 'failed')
+    .with('stale', () => 'stale')
+    .with('never_run', () => 'not run')
+    .with('partial', () => 'stale (some keys)')
+    .with('unknown', () => 'unknown')
+    .with('always_runs', () => 'always runs')
+    .with('unsynced', () => 'unsynced')
+    .with('cached', () => 'healthy')
     .exhaustive()
 }

@@ -289,8 +289,12 @@ function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {})
 }
 
 const runList: RunList = {
-  runs: Object.values(runByStatus).map((view, i) => summary(view, String(133 - i), { triggered_by: i % 3 === 0 ? 'schedule' : i % 3 === 1 ? 'client' : null })),
-  total: 7,
+  runs: [
+    ...Object.values(runByStatus).map((view, i) => summary(view, String(133 - i), { triggered_by: i % 3 === 0 ? 'schedule' : i % 3 === 1 ? 'client' : null })),
+    // Steps failed but the run itself recorded no error: the row says where to look.
+    summary(runByStatus.failed, '125', { triggered_by: 'schedule', error: null }),
+  ],
+  total: 8,
   truncated: false,
 }
 

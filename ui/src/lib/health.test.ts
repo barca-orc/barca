@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel } from './health'
+import { consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts } from './health'
 import type { NodeState } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
@@ -31,6 +31,7 @@ describe('health', () => {
     expect(healthCounts(ids, byId)).toEqual({ failed: 2, running: 0, stale: 1, idle: 0, healthy: 2, pending: 0, total: 5 })
     expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, healthy: 1, pending: 1 })
     expect(healthLabel(healthCounts(ids, byId))).toBe('2 failed · 1 stale · 2 healthy')
+    expect(healthParts(healthCounts(ids, byId), 2)).toEqual([{ bucket: 'failed', text: '2 failed' }, { bucket: 'stale', text: '1 stale' }])
     expect(healthLabel(healthCounts(ids, byId), 1)).toBe('2 failed')
   })
 

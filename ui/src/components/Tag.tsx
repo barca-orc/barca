@@ -25,7 +25,7 @@ export function Tag({ tone = 'default', size = 'sm', dot = false, style, childre
   const s = SIZES[size]
   const toneStyle: CSSProperties =
     tone === 'signal'
-      ? { background: 'var(--c-green-wash)', border: '1px solid var(--c-green-line)', color: 'var(--signal)' }
+      ? { background: 'var(--c-white-wash)', border: '1px solid var(--c-white-line)', color: 'var(--signal)' }
       : tone === 'bare'
         ? { background: 'transparent', border: '1px solid var(--border-default)', color: 'var(--text-muted)' }
         : { background: 'var(--bg-inset)', border: '1px solid var(--border-default)', color: 'var(--text-default)' }

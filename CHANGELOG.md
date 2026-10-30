@@ -8,6 +8,24 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- The UI uses one name and one meaning per state. Green means healthy only: links, selection and
+  the primary button are neutral; red colours only the failed count, a column of states is dot and
+  text (pills stay for failed and running). States read Healthy, Stale (`Stale (some keys)`),
+  Failed, Running, Not run in every badge, legend, card and tooltip, and a check is `check`
+  everywhere (a task named `check__*` or `validate__*`). `get` is gone from the buttons: **Run**
+  names its target and size (`Run invoices_00`, `Run billing.py (506 nodes)`), works with nothing
+  selected, and `Run all 8,070 nodes` asks first; the count is the assets and sensors a `get` runs.
+
+### Bug Fixes
+
+- UI: Reset database shows only for a database barca cannot use, not on every page. Sidebar health
+  dots use whole-project state and show no dot until a file's state is all known, instead of
+  judging a file by the part in view. A failed run with no run-level error says to open it for its
+  failed steps. All pipelines → Graph fits every domain on screen with nothing selected.
+  `#/?pipeline=…&show=failures` keeps its filters through the redirect to Assets.
+
 ## 0.36.1 (2026-10-30)
 
 ### Features

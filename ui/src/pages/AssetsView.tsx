@@ -1,4 +1,4 @@
-import { Navigate, useSearchParams } from 'react-router'
+import { Navigate, useLocation, useSearchParams } from 'react-router'
 import { AssetsPage } from './AssetsPage'
 import { GraphPage } from './GraphPage'
 import { GroupedPipelinePage } from './GroupedPipelinePage'
@@ -10,6 +10,12 @@ export function AssetsView() {
   const pipeline = params.get('pipeline')
   if (groups.data?.some(g => !pipeline || g.id.startsWith(`group:${pipeline}:`))) return <GroupedPipelinePage />
   return params.get('view') === 'graph' ? <GraphPage /> : <AssetsPage />
+}
+
+/** `#/` opens Assets, and a deep link to it keeps its filters. */
+export function IndexRedirect() {
+  const { search } = useLocation()
+  return <Navigate to={{ pathname: '/assets', search }} replace />
 }
 
 /** Keep old graph bookmarks working while Assets owns both views. */

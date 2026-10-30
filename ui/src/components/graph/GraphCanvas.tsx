@@ -22,12 +22,8 @@ import { statusMeta } from '@/lib/status'
 const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode }
 
 const FIT_OPTIONS = { padding: 0.18, maxZoom: 1.4, duration: 200 }
-/**
- * The first view of a graph: fitted, but never so small that names cannot be read. A graph
- * that does not fit at this zoom opens on its selected node (else its middle) and is panned;
- * the Fit button shows all of it.
- */
-const FIRST_VIEW = { ...FIT_OPTIONS, minZoom: 0.7 }
+/** The view of a selected node: on it, never so small that names cannot be read. */
+const FOCUS_VIEW = { ...FIT_OPTIONS, minZoom: 0.7, maxZoom: 1 }
 
 /**
  * The minimap draws every node again on each pan and zoom: above this many it costs more than
@@ -72,7 +68,7 @@ function FitController({ layoutKey, focus, handleRef }: { layoutKey: string; foc
     // timing quirk). `fitView` is safe to call repeatedly.
     const t = setTimeout(() => {
       const id = focused.current
-      void fitView(id ? { ...FIRST_VIEW, nodes: [{ id }], maxZoom: 1 } : FIRST_VIEW)
+      void fitView(id ? { ...FOCUS_VIEW, nodes: [{ id }] } : FIT_OPTIONS)
     }, 150)
     return () => clearTimeout(t)
   }, [layoutKey, fitView])
@@ -148,7 +144,7 @@ export function GraphCanvas({
         }}
         zoomOnDoubleClick={!onOpenGroup}
         onPaneClick={() => onSelect(null)}
-        minZoom={0.3}
+        minZoom={0.05}
         maxZoom={1.6}
         nodesDraggable={false}
         nodesConnectable={false}

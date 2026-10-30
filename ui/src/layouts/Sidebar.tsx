@@ -1,11 +1,11 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useMemo } from 'react'
 import { Layers } from 'lucide-react'
-import { ResetDatabaseButton, StatusDot } from '@/components'
-import { useHealth } from '@/hooks/useHealth'
-import { useAssetStates, useLastWholeState } from '@/hooks/useAssetStates'
+import { StatusDot } from '@/components'
+import { useAssetStates, useWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { severityStatus } from '@/lib/assetTable'
+import { severityWord } from '@/lib/status'
 import { mergeStates, pipelineSummaries } from '@/lib/pipeline'
 import { authMode, connect } from '@/lib/credentials'
 import markUrl from '@/assets/brand/mark.svg'
@@ -15,10 +15,9 @@ const FILTERABLE = ['/assets', '/graph', '/tasks', '/sensors', '/schedules']
 
 export function Sidebar() {
   const { data: scoped } = useAssetStates()
-  const { data: whole } = useLastWholeState()
+  const { data: whole } = useWholeState()
   const assetQuery = useAssets()
   const assets = assetQuery.isPlaceholderData ? undefined : assetQuery.data
-  const { data: health } = useHealth()
   // The open scope is fresh; the pipelines outside it keep what the whole project last said.
   const nodes = useMemo(() => mergeStates(whole, scoped), [whole, scoped])
   const pipelines = useMemo(() => pipelineSummaries(nodes, assets ?? []), [nodes, assets])
@@ -73,12 +72,15 @@ export function Sidebar() {
           <button
             key={p.file}
             className="barca-pipe"
-            title={p.file}
+            title={p.known ? `${p.file} · ${severityWord(p.worst)}` : p.file}
             data-active={selected === p.file ? '' : undefined}
             aria-pressed={selected === p.file}
             onClick={() => select(selected === p.file ? null : p.file)}
           >
-            <StatusDot status={p.running ? 'running' : severityStatus(p.worst)} size={6} />
+            {/* A dot says the whole file's state: none until all of it is known. */}
+            {p.running || p.known
+              ? <StatusDot status={p.running ? 'running' : severityStatus(p.worst)} size={6} />
+              : <span className="barca-pipe-nodot" />}
             <span className="barca-pipe-name">{p.name}</span>
             {p.running > 0 && (
               <span className="barca-pipe-running" title={`${p.running} running now`}>
@@ -92,7 +94,6 @@ export function Sidebar() {
       <div className="barca-side-foot">
         <Link className="barca-nav" to="/docs">Docs</Link>
         {authMode() === 'token' && <><Link className="barca-nav" to="/tokens">API tokens</Link><button className="barca-nav" onClick={() => connect(null)}>Disconnect</button></>}
-        <ResetDatabaseButton readOnly={health?.read_only ?? false} />
       </div>
     </aside>
   )

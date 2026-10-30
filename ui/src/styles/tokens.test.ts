@@ -32,6 +32,17 @@ describe('design tokens', () => {
     expect(hits.map((p) => relative(SRC, p))).toEqual([])
   })
 
+  it('keeps actions, links and selection off the status colours', () => {
+    for (const theme of ['colors.css', 'theme-light.css']) {
+      const tokens = readFileSync(join(SRC, 'styles', 'tokens', theme), 'utf8')
+      for (const name of ['signal', 'text-link', 'focus-ring', 'bg-selected', 'border-accent']) {
+        const value = tokens.match(new RegExp(`--${name}:\\s*([^;]+);`))?.[1]
+        expect(value, `${theme} --${name}`).toBeDefined()
+        expect(value, `${theme} --${name}`).not.toMatch(/green|status-|cyan/)
+      }
+    }
+  })
+
   it('sets font sizes from the type scale', () => {
     const hits: string[] = []
     for (const path of css) {

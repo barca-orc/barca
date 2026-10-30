@@ -10,6 +10,8 @@ import type { NodeRunning, NodeState, StatusKind, TriggeredBy } from './types'
 /** `/state` poll interval while some node is running, and otherwise. */
 export const POLL_RUNNING_MS = 2_000
 export const POLL_IDLE_MS = 10_000
+/** The sidebar's whole-project state: seconds of server work on a big project, so rarely. */
+export const POLL_WHOLE_MS = 60_000
 
 /** How often to poll `/state`: faster while anything runs. */
 export function statePollInterval(nodes: NodeState[] | undefined): number {
@@ -52,7 +54,7 @@ export function elapsedLabel(startedAt: string, nowMs: number): string {
 /** The graph/table state of a running node: it pulses (running) or waits (queued). */
 export function runningGraphState(running: NodeRunning): GraphState {
   const keys = keysLabel(running)
-  const word = running.step === 'running' ? 'Running' : 'Queued'
+  const word = running.step === 'running' ? 'Running' : 'Running · queued'
   return {
     status: runningStatus(running),
     label: keys ? `${word} · ${keys}` : word,
