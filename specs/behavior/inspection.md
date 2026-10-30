@@ -54,15 +54,22 @@ while polled. Evidence: `read_cache` unit tests, the router's
 ### Artifact inspection evidence
 
 Status copy checks and shape inspection share a disposable per-environment evidence cache,
-limited to 8 MiB, 8192 entries and 64 KiB per value. Local evidence is keyed by absolute
+limited to 8 MiB of serialized cache JSON, 8192 evidence/barrier entries and 64 KiB per value,
+plus one fixed 16-byte contention epoch. Local evidence is keyed by absolute
 request path, device, inode, size, mtime, ctime, format/sample/field options where relevant,
-and storage-option scope. Check file identity before and after computing evidence; a file
+and storage-option, credential and Python import-environment scope. Check file identity before and after computing evidence; a file
 that changes during reading must not publish reusable evidence. A missing file is checked
 again rather than trusted as a cached local observation. Verified selected local copies are
-preferred for shape, preserving historical/selected-artifact distinctions.
+preferred for shape only after successful copy verification, preserving historical/selected-artifact
+distinctions. A store-check failure must not promote an unverified local copy for shape.
 
 Cloud availability and remote shape observations have a fixed five-minute lifetime. Hits
-do not extend it; a backwards clock invalidates time evidence. This is advisory availability,
+do not extend it; a backwards clock invalidates time evidence. Cloud copy observations also
+include local materialization identity/digest, so a refresh or recovery cannot inherit an
+older cloud size. Confirmed uploads/fetches invalidate inspected remote subjects before
+acknowledgement. Bounded invalidation barriers prevent an older in-flight observation from
+restoring stale evidence. A busy invalidation lock conservatively changes a remote epoch;
+local evidence and ordinary unrelated remote subjects remain reusable. This is advisory availability,
 not a freshness proof or a promise of current remote bytes. Required reads, transfers and
 ledger acceptance bypass this cache. Strict `stat_objects` remains the ledger path.
 
@@ -70,7 +77,10 @@ The native status helper opts into evidence using `inspection_cache` and aligned
 `locals` arrays in its internal `_state stat` request. It returns `objects` (the existing
 store objects) and `locals` (null or `{size_bytes, sha256}`). Requests without that option
 retain strict stat semantics. `_inspect` accepts the same optional cache location while
-preserving its shape-array output. Worker and transfer protocols are unchanged.
+preserving its shape-array output. The transfer helper receives the private optional
+`--inspection-cache` argument from resolved native configuration; its request/reply frames
+and the worker wire protocol remain unchanged. Uninspected bulk uploads only check the
+cache-file stamp, without parsing or rewriting evidence for every new artifact.
 
 Cache files use atomic replacement and owner-readable/writable files. Concurrent writers
 merge completed evidence under a nonblocking cross-process write lock; a busy lock or an

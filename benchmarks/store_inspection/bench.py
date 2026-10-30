@@ -10,6 +10,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 import urllib.request
 
@@ -46,6 +47,7 @@ def main():
         for key, value in os.environ.items()
         if not key.startswith(("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_"))
     }
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     env |= {
         "PYTHONPATH": str(audit) + os.pathsep + str(Path(__file__).resolve().parents[2] / "python"),
         "BARCA_POOL_SIZE": "2",
@@ -53,14 +55,19 @@ def main():
     source_root = Path(__file__).resolve().parents[2]
     source_files = [
         "crates/barca-core/src/status.rs",
+        "crates/barca-core/src/config.rs",
+        "crates/barca-core/src/transfer.rs",
+        "python/barca/_transfer.py",
         "python/barca/_inspection_cache.py",
         "python/barca/_state.py",
         "python/barca/_inspect.py",
+        "benchmarks/store_inspection/bench.py",
     ]
     result = {
         "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "helper_python": sys.executable,
         "pyarrow": pa.__version__,
         "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
         "cpu_model": next(
@@ -88,6 +95,13 @@ def main():
         binary = supplied.resolve()
         root = base / label
         root.mkdir()
+        # Isolate native executables from sibling Python installations; both use PATH's
+        # exact benchmark interpreter and the same Python helper source/dependencies.
+        executable_dir = root / ".bench-bin"
+        executable_dir.mkdir()
+        executable = executable_dir / "barca"
+        shutil.copyfile(binary, executable)
+        executable.chmod(0o755)
         store = root / "store"
         (root / "barca.toml").write_text(
             f'[remote]\nuri = {json.dumps(str(store))}\nbackup_interval = "off"\n'
@@ -99,7 +113,7 @@ def main():
         def cli():
             started = time.perf_counter()
             proc = subprocess.run(
-                [str(binary), "status", "pipeline.py", "--json"],
+                [str(executable), "status", "pipeline.py", "--json"],
                 cwd=root,
                 env=env,
                 text=True,
@@ -112,7 +126,7 @@ def main():
             return time.perf_counter() - started
 
         subprocess.run(
-            [str(binary), "get", "value", "pipeline.py", "--json"],
+            [str(executable), "get", "value", "pipeline.py", "--json"],
             cwd=root,
             env=env,
             capture_output=True,

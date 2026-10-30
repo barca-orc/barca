@@ -769,7 +769,9 @@ Status inspection reuses bounded evidence instead of re-reading unchanged artifa
 Local file identities include device, inode, size, mtime and ctime; changed or missing local
 copies and directory-store objects are checked again immediately. Cloud availability and
 remote shape observations can be up to five minutes old; cache hits do not extend that
-window. Inspection prefers an already verified local copy for shape. This is availability
+window. Local materialization changes, confirmed transfers, credential changes and Python
+import-environment changes invalidate the affected evidence. Inspection prefers an already
+verified local copy for shape. This is availability
 and shape evidence, not a new freshness proof. Required reads, transfers and server ledger
 publication keep their direct verification paths.
 

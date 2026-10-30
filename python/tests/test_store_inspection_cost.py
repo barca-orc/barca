@@ -112,3 +112,81 @@ def test_server_db_refresh_reuses_artifact_evidence_from_the_stable_environment(
         )
     finally:
         server.stop()
+
+
+def test_confirmed_cloud_upload_repair_invalidates_evidence_when_local_identity_is_unchanged(
+    tmp_path,
+):
+    from barca import _inspection_cache
+    from .planning_pipeline_store import Bucket, S3_ENDPOINT, S3_KEY, S3_SECRET
+    from .store_window import age_store_checks
+
+    bucket = Bucket()
+    project = tmp_path / "project"
+    project.mkdir()
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    # Exercise the supported copy fallback: hard-link side effects must not be the
+    # mechanism by which an upload repair invalidates availability evidence.
+    (hooks / "sitecustomize.py").write_text(
+        "import os\n"
+        "def no_link(*args, **kwargs): raise OSError('copy fallback')\n"
+        "os.link = no_link\n"
+    )
+    (project / "pipeline.py").write_text(
+        "from barca import asset\n@asset()\ndef value(): return 42\n"
+    )
+    (project / "barca.toml").write_text(
+        f'[remote]\nuri = "{bucket.uri("inspection-repair")}"\n'
+        f'[remote.storage_options.s3]\nkey = "{S3_KEY}"\nsecret = "{S3_SECRET}"\nendpoint_url = "{S3_ENDPOINT}"\n'
+    )
+    env = _env() | {"PYTHONPATH": str(hooks) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+
+    def command(*args):
+        result = subprocess.run(
+            [_find_binary(), *args, "--json"],
+            cwd=project,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    try:
+        command("get", "value", "pipeline.py")
+        node = command("status", "pipeline.py")["nodes"][0]
+        uri = node["cache"]["artifact"]
+        local = next((project / ".barca/artifacts").rglob("*.json"))
+        before = _inspection_cache.fingerprint(local)
+        bucket.fs.pipe(uri, b"424242")
+        cache = project / ".barca/inspection-cache/default.json"
+        _inspection_cache.Cache(str(cache)).invalidate_remote(uri)
+        bad = command("status", "pipeline.py")["nodes"][0]
+        assert bad["cache"]["reason"] == "mismatch", bad
+        age_store_checks(project)
+        repaired = command("get", "value", "pipeline.py", "-o", "value")
+        assert repaired["steps_executed"] == 0, repaired
+        assert repaired["final_output"] == 42
+        assert _inspection_cache.fingerprint(local) == before
+        after = command("status", "pipeline.py")["nodes"][0]
+        assert after["cache"]["state"] == "cached", after
+        assert bucket.cat(uri) == b"42"
+    finally:
+        bucket.remove()
+
+
+def test_failed_store_verification_does_not_choose_an_unverified_local_shape(inspected_project):
+    project, artifact, _, command = inspected_project
+    command("status", "pipeline.py")
+    local = next((project / ".barca/artifacts").rglob("*.json"))
+    local.write_text("invalid local JSON")
+    mode = artifact.stat().st_mode
+    artifact.chmod(0)
+    try:
+        node = command("status", "pipeline.py")["nodes"][0]
+        assert "Permission denied" in node["shape"]["note"], node["shape"]
+        assert "Expecting value" not in node["shape"]["note"], node["shape"]
+    finally:
+        artifact.chmod(mode)

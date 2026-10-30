@@ -177,3 +177,141 @@ def test_cloud_inspection_window_never_caches_strict_ledger_checks(tmp_path, mon
     now[0] = 310.0
     assert not _state.inspect_copies([uri], missing, cache)["objects"][0]["exists"]
     assert len(calls) == before + 2
+
+
+def test_cloud_evidence_rechecks_when_the_local_materialization_changes(tmp_path):
+    import fsspec
+    from barca import _state
+
+    fs = fsspec.filesystem("memory")
+    uri = "memory://inspection-revision/value"
+    local = tmp_path / "value.json"
+    cache = str(tmp_path / "cache.json")
+    local.write_text("42")
+    fs.pipe(uri, b"42")
+    assert _state.inspect_copies([uri], [str(local)], cache)["objects"][0]["size_bytes"] == 2
+    local.write_text("4242")
+    fs.pipe(uri, b"4242")
+    assert _state.inspect_copies([uri], [str(local)], cache)["objects"][0]["size_bytes"] == 4
+
+
+def test_copy_based_upload_repair_invalidates_cloud_evidence_without_changing_local_file(
+    tmp_path, monkeypatch
+):
+    import shutil
+    import fsspec
+    from barca import _state, _transfer
+
+    fs = fsspec.filesystem("memory")
+    uri = "memory://inspection-repair/value"
+    local = tmp_path / "value.json"
+    local.write_text("42")
+    cache = str(tmp_path / "cache.json")
+    fs.pipe(uri, b"4242")
+    assert _state.inspect_copies([uri], [str(local)], cache)["objects"][0]["size_bytes"] == 4
+    monkeypatch.setattr(
+        _transfer, "_pin_file", lambda source, target: shutil.copyfile(source, target)
+    )
+    _transfer._transfer(
+        {"type": "put", "local": str(local), "remote": uri}, memo.TransferObserver(cache)
+    )
+    assert _state.inspect_copies([uri], [str(local)], cache)["objects"][0]["size_bytes"] == 2
+
+
+def test_transfer_invalidation_preserves_unrelated_observations_and_blocks_late_writers(tmp_path):
+    path = str(tmp_path / "cache.json")
+    cache = memo.Cache(path)
+    cache.remote("store", "one", None, lambda: {"size": 1})
+    cache.remote("store", "two", None, lambda: {"size": 2})
+    cache.flush()
+    late = memo.Cache(path)
+
+    def old_observation():
+        memo.TransferObserver(path).changed("one")
+        return {"type": "old"}
+
+    late.remote("shape", "one", None, old_observation)
+    late.flush()
+    fresh = memo.Cache(path)
+    assert fresh.remote("store", "one", None, lambda: {"size": 3}) == {"size": 3}
+    assert fresh.remote("shape", "one", None, lambda: {"type": "new"}) == {"type": "new"}
+
+    def unexpected():
+        raise AssertionError("an unrelated remote object was unnecessarily rechecked")
+
+    assert fresh.remote("store", "two", None, unexpected) == {"size": 2}
+
+
+def test_busy_invalidation_uses_a_nonblocking_remote_epoch_without_losing_local_evidence(tmp_path):
+    import fcntl
+
+    path = str(tmp_path / "cache.json")
+    local = tmp_path / "value"
+    local.write_text("42")
+    cache = memo.Cache(path)
+    cache.remote("store", "one", None, lambda: {"size": 1})
+    cache.local("shape", local, None, lambda: {"type": "int"})
+    cache.flush()
+    with (tmp_path / "cache.json.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        attempt = threading.Thread(
+            target=lambda: memo.TransferObserver(path).changed("one"), daemon=True
+        )
+        attempt.start()
+        attempt.join(timeout=1)
+        blocked = attempt.is_alive()
+    attempt.join(timeout=2)
+    assert not attempt.is_alive()
+    assert not blocked
+    fresh = memo.Cache(path)
+    assert fresh.remote("store", "one", None, lambda: {"size": 2}) == {"size": 2}
+
+    def unexpected():
+        raise AssertionError("remote invalidation re-read unchanged local evidence")
+
+    assert fresh.local("shape", local, None, unexpected) == {"type": "int"}
+
+
+def test_uncached_uploads_do_not_create_or_rewrite_an_inspection_cache(tmp_path):
+    path = tmp_path / "cache.json"
+    observer = memo.TransferObserver(str(path))
+    for number in range(100):
+        observer.changed(f"memory://unused/{number}")
+    assert not list(tmp_path.iterdir())
+
+
+def test_pruning_invalidation_barriers_cannot_revive_a_late_observation(tmp_path, monkeypatch):
+    monkeypatch.setattr(memo, "MAX_ENTRIES", 4)
+    monkeypatch.setattr(memo, "MAX_BYTES", 2048)
+    path = str(tmp_path / "cache.json")
+    late = memo.Cache(path)
+
+    def old_observation():
+        writer = memo.Cache(path)
+        for number in range(6):
+            writer.invalidate_remote(f"other-{number}")
+        return {"size": 1}
+
+    late.remote("store", "one", None, old_observation)
+    late.flush()
+    current = memo.Cache(path)
+    assert current.remote("store", "one", None, lambda: {"size": 2}) == {"size": 2}
+    data = json.loads((tmp_path / "cache.json").read_text())
+    assert len(data["entries"]) + len(data["invalidations"]) <= 4
+    assert (tmp_path / "cache.json").stat().st_size <= 2048
+
+
+def test_equal_clock_ticks_do_not_allow_a_pre_repair_observation_to_return(tmp_path):
+    path = str(tmp_path / "cache.json")
+    clock = [10.0]
+    late = memo.Cache(path, clock=lambda: clock[0])
+
+    def old_observation():
+        memo.Cache(path, clock=lambda: clock[0]).invalidate_remote("one")
+        return {"size": 1}
+
+    late.remote("store", "one", None, old_observation)
+    late.flush()
+    clock[0] = 11.0
+    current = memo.Cache(path, clock=lambda: clock[0])
+    assert current.remote("store", "one", None, lambda: {"size": 2}) == {"size": 2}

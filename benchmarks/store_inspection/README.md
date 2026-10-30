@@ -19,19 +19,21 @@ stopped in `finally` and the synthetic files remain under the worktree for teard
 The same current Python helpers serve both native binaries: the old native request selects
 the unchanged strict helper path, and the new request opts into inspection evidence. The
 source/binary fingerprints, dependencies, CPU affinity, load, worker count and sample counts
-are in [the raw result](2026-10-29-fast-local.json). This is a warm local-directory-store fast
+are in [the final raw result](2026-10-30-confirmed-transfers-fast-local.json).
+The benchmark copies each native binary without modifying its bytes and selects the same
+benchmark Python interpreter through PATH for both helpers. This is a warm local-directory-store fast
 profile comparison, not a cloud-network, TLS, release-wheel, cold-filesystem or 8.6 GB
 whole-deployment measurement. It does not resolve the broader #655/#656 scaling gaps.
 
-## 2026-10-29 measurement
+## 2026-10-30 measurement
 
 Each artifact copy is 1,074,624,287 bytes. Shapes describe 134,217,728 rows of one int64 column.
 
 | Operation | Before | After |
 |---|---:|---:|
-| Cold CLI status | 3.06 s | 1.66 s |
-| Warm CLI status, three samples | 2.70–2.93 s | 94–97 ms |
-| Metadata-invalidated `/state`, three samples | 2.70–5.22 s | 45–49 ms |
+| Cold CLI status | 3.83 s | 2.00 s |
+| Warm CLI status, three samples | 3.61–4.20 s | 80–82 ms |
+| Metadata-invalidated `/state`, three samples | 2.59–6.82 s | 43–82 ms |
 | Python artifact-hash bytes over warm CLI samples | 3,223,872,861 | 0 |
 | Python artifact-hash bytes over invalidated state samples | 4,298,497,148 | 0 |
 
@@ -48,3 +50,7 @@ read view. The fix keys the cache to the stable project/environment instead. The
 [Cache controls](../../python/tests/test_inspection_cache.py) cover file replacement,
 mtime-preserving edits, fixed remote expiry, backwards clocks, storage scope, strict-ledger
 bypass, corruption, bounded retention, concurrent writers/readers and nonblocking write locks.
+
+The [earlier measurement](2026-10-29-fast-local.json) predates the final transfer-invalidation
+and verified-local-shape corrections. The final run includes those corrections; load varied
+from 11.4 to 20.3 during this run, so ranges are observations rather than latency guarantees.

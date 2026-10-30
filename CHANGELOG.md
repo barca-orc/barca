@@ -24,6 +24,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Reuse bounded, file-identity-keyed digest and shape evidence across status requests and
   metadata refreshes; prefer verified local shapes. Keep at most 8 MiB/8192 entries per
   environment, limit individual values to 64 KiB, and bound cold inspection readers to eight.
+  Refreshes, confirmed upload repairs and credential/import changes invalidate affected evidence.
 
 ### Features
 

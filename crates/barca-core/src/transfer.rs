@@ -462,6 +462,8 @@ impl TransferClient {
             "barca._transfer",
             cfg.storage_options_json.as_deref(),
         );
+        cmd.arg("--inspection-cache")
+            .arg(cfg.inspection_cache_path());
         cmd.env(
             "BARCA_UPLOAD_SNAPSHOT_PREFIX",
             upload_snapshot_prefix(run_id)?,
