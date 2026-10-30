@@ -546,6 +546,11 @@ file. `barca status` (`barca docs status`) names the state each node is in:
 | `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree; with a configured server, its ledger has not received the result yet | repairs that (an upload, a download) without running a step (`barca docs remote`, `barca docs server-mode`) |
 | `never_run`, `partial`, `unknown`, `always_runs` | no result yet; some partition keys cached; not knowable without running; a task or sensor | `barca docs status` |
 
+Store availability reported by inspection can reuse a cloud observation for five minutes.
+Local file and plain-directory-store identity changes invalidate digest evidence immediately.
+Inspection shape/digest evidence is bounded separately from the ledger; required reads and
+ledger publication still verify directly (`barca docs remote`, "Inspection cost and observation window").
+
 A missing or evicted artifact that nothing needs to read leaves the node `cached`.
 
 ## Forcing a recompute

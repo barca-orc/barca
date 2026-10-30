@@ -1082,7 +1082,7 @@ pub(crate) async fn view_page(
         } else {
             view.steps.iter().map(|s| s.node_id.clone()).collect()
         };
-        // The live backlog has every line; recorded logs only become canonical at wrap-up.
+        // Replay contains only its retained tail. Recorded logs remain canonical at wrap-up.
         let live_logs = view.logs.is_empty();
         for event in channel.snapshot() {
             match event {
@@ -1216,24 +1216,29 @@ A run recorded on another machine is \
     ))
 }
 
-/// `GET /runs/{run_id}/events` (and the alias `GET /events/{run_id}`) — the run's events as
-/// server-sent events, from its first: `run_started`, `line`, `log`, `step_finished`, then
-/// `run_finished` with the outcome, after which the stream ends. Each has an `id:`, its
-/// number in the run. A subscriber that reads slowly receives every event, once.
-///
-/// Sends `X-Accel-Buffering: no` so nginx (and proxies that honor it) pass events through as
-/// they happen; idle streams carry a keep-alive comment every 15s, inside nginx's default 60s
-/// read timeout.
+/// Attempt-scoped SSE from the beginning or strictly after Last-Event-ID. Retention is
+/// bounded; expired replay is 410 and lagging readers close without skipping a gap.
+/// Terminal cursors return 204. Authentication wraps this handler before cursor inspection.
 pub async fn events(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<
-    (
-        [(axum::http::HeaderName, &'static str); 1],
-        Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>>,
-    ),
-    ApiError,
-> {
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    let mut cursor_headers = headers.get_all("last-event-id").iter();
+    let cursor = cursor_headers
+        .next()
+        .map(|header| {
+            header
+                .to_str()
+                .map_err(|_| ApiError::EventCursor(crate::replay::CursorError::Invalid))
+        })
+        .transpose()?;
+    if cursor_headers.next().is_some() {
+        return Err(ApiError::EventCursor(crate::replay::CursorError::Invalid));
+    }
+    if let Some(cursor) = cursor {
+        crate::replay::parse(cursor).map_err(ApiError::EventCursor)?;
+    }
     let channel: RunChannel = state
         .events
         .get(&run_id)
@@ -1243,11 +1248,15 @@ pub async fn events(
                 "run '{run_id}' is not live on this server\nGET /runs/{run_id} shows a finished run."
             ))
         })?;
-    let stream = channel.subscribe(0).map(|(n, event)| {
-        Ok(Event::default()
-            .id(n.to_string())
-            .json_data(&event)
-            .unwrap_or_else(|_| Event::default()))
+    let Some(stream) = channel.resume(cursor).map_err(ApiError::EventCursor)? else {
+        return Ok((
+            StatusCode::NO_CONTENT,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+        )
+            .into_response());
+    };
+    let stream = stream.map(|frame| {
+        Ok::<_, std::convert::Infallible>(Event::default().id(frame.id()).data(frame.data.as_ref()))
     });
     Ok((
         [(
@@ -1255,7 +1264,8 @@ pub async fn events(
             "no",
         )],
         Sse::new(stream).keep_alive(KeepAlive::default()),
-    ))
+    )
+        .into_response())
 }
 
 /// `GET /runs/{run_id}/output` — the bytes of a successful single-target run's final

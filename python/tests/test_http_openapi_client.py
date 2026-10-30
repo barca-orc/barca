@@ -233,7 +233,7 @@ def _events(server, run_id):
             event_id = next(line[4:] for line in lines if line.startswith("id: "))
             event = json.loads(data[0])
             validate({"$ref": "#/components/schemas/RunEvent"}, event)
-            events.append((int(event_id), event))
+            events.append((event_id, event))
     return events
 
 
@@ -260,7 +260,10 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         )
         run_id = accepted["run_id"]
         events = _events(server, run_id)
-        assert [n for n, _ in events] == list(range(len(events)))
+        cursors = [re.fullmatch(r"([0-9a-f]{32}):([1-9][0-9]*)", cursor) for cursor, _ in events]
+        assert all(cursors), events
+        assert len({cursor.group(1) for cursor in cursors}) == 1
+        assert [int(cursor.group(2)) for cursor in cursors] == list(range(1, len(events) + 1))
         assert events[0][1] == {"type": "run_started", "run_id": run_id}
         assert any(e["type"] == "line" and e["when"] == "agent" for _, e in events)
         finished = events[-1][1]

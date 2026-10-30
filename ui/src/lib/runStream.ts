@@ -19,6 +19,8 @@ export interface ProgressLine {
 }
 
 export interface RunStreamState {
+  /** Replay is incomplete or this run moved to a new attempt. */
+  notice?: string
   /** True between run_started and run_finished. */
   running: boolean
   /** Captured log lines (what the steps printed), in order. */

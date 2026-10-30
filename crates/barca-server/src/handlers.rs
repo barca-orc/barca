@@ -26,6 +26,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         "queue": crate::queue::health(&state),
         "version": env!("CARGO_PKG_VERSION"),
         "api_version": barca_core::outcome::API_VERSION,
+        "capabilities": { "event_resume": 1 },
         "env": cfg.env,
         // The artifact store this server writes to, so a client can refuse a mismatched
         // `[remote]`; null when artifacts stay on this machine.

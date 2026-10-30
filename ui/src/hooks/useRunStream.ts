@@ -12,9 +12,9 @@ const STARTING: RunStreamState = { ...EMPTY_RUN_STATE, running: true }
  * `reduceRunEvent` reducer. All the folding logic lives in `lib/runStream.ts`
  * so it can be tested without a browser.
  *
- * Pass `null` to disconnect. The server replays the run from its first event
- * on connect, so a slightly-late subscribe still sees everything; frames
- * already applied (by `id:`) are skipped after a reconnect. The server closes
+ * Pass `null` to disconnect. The server replays its retained events on connect. Reconnects acknowledge
+ * successfully applied frames; an expired replay switches to the canonical
+ * outcome and visibly marks the incomplete live transcript. The server closes
  * the stream after `run_finished`, so the client closes on that event and never
  * reconnects. State is tagged with the handle it belongs to, so switching runs
  * starts fresh without resetting state inside the effect.
@@ -37,13 +37,16 @@ export function useRunStream(handle: string | null): RunStreamState {
 
     void followEvents(`/runs/${encodeURIComponent(handle)}/events`, (frame) => {
       if (!isNewFrame(lastId, frame.id)) return true
-      let event: RunEvent
-      try { event = JSON.parse(frame.data) as RunEvent } catch { return true }
+      const event = JSON.parse(frame.data) as RunEvent
       const id = Number(frame.id)
       if (frame.id !== '' && Number.isInteger(id)) lastId = id
       update(state => reduceRunEvent(state, event))
       return event.type !== 'run_finished'
-    }, () => update(endRunStream), controller.signal)
+    }, reason => update(state => ({ ...endRunStream(state), ...(reason ? { notice: reason } : {}) })), controller.signal, {
+      onGap: () => update(state => ({ ...state, notice: 'Event replay is incomplete. Following this run’s outcome; recorded logs remain available.' })),
+      onRestart: () => { lastId = null; update(() => ({ ...STARTING, notice: 'This run has a new attempt. Following its new stream.' })) },
+      onOutcome: body => update(state => reduceRunEvent(state, { type: 'run_finished', run_id: handle, ok: body.status === 'success', outcome: body.outcome })),
+    })
 
     return () => controller.abort()
   }, [handle])

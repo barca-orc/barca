@@ -60,3 +60,25 @@ test('bootstrap, authenticated execution, one-time token display, reload, discon
   await expect(page.getByRole('heading', { name: 'Connect to barca' })).toBeVisible()
   expect(await page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith('barca:connection:')))).toBe(false)
 })
+
+test('expired replay shows an incomplete transcript and follows the existing run outcome', async ({ page }) => {
+  const code = execFileSync(binary, ['tokens', 'bootstrap'], { cwd: fixture, encoding: 'utf8' }).trim()
+  let submissions = 0
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/runs')) submissions++
+  })
+  await page.route('**/runs/*/events', route => route.fulfill({ status: 410, contentType: 'application/json', body: '{"reason":"event_cursor_expired"}' }))
+  await page.goto('/ui/#/graph')
+  await page.getByLabel('API token or bootstrap code').fill(code)
+  await page.getByRole('button', { name: 'Connect', exact: true }).click()
+  await page.getByText('gap_job', { exact: true }).first().click()
+  await page.getByRole('banner').getByRole('button', { name: 'Run', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Event replay is incomplete' })).toBeVisible()
+  const outcome = await page.waitForResponse(async response => /\/runs\/[^/]+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET' && (await response.json()).status === 'success')
+  expect((await outcome.json()).outcome).toBeTruthy()
+  await expect(page.getByRole('status').filter({ hasText: 'Event replay is incomplete' })).toBeVisible()
+  expect(submissions).toBe(1)
+  await page.getByRole('link', { name: 'View recorded logs' }).click()
+  expect(new URL(page.url()).hash).toContain('event_gap=1')
+  await expect(page.getByText('finished despite expired replay', { exact: true })).toBeVisible()
+})

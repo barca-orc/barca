@@ -4,7 +4,7 @@
 
 Specification version: 3. Status: implemented for pending 0.36.0.
 Scope: token storage, bootstrap, request authentication, administration and browser access.
-Stream cursor resume remains accepted intent in [RFC-0016](../../site/src/content/docs/rfcs/0016-server-tokens-and-stream-resume.md).
+Stream cursor resume follows the implemented [event replay owner](server-event-replay.md).
 Exact HTTP shapes belong to [OpenAPI](../interfaces/server-api.openapi.yaml); client
 credential rules belong to the [manual](../../crates/barca-cli/docs/server-mode.md).
 

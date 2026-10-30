@@ -360,6 +360,13 @@ pub struct ResolvedConfig {
 }
 
 impl ResolvedConfig {
+    /// Disposable evidence must outlive a server reader's temporary metadata view.
+    pub(crate) fn inspection_cache_path(&self) -> PathBuf {
+        self.project_root
+            .join(".barca/inspection-cache")
+            .join(format!("{}.json", self.env))
+    }
+
     /// This environment's local backup directory: `backups/` beside the metadata DB
     /// (`.barca/backups`, or `.barca/envs/<env>/backups` for a named environment).
     pub fn local_backup_dir(&self) -> PathBuf {

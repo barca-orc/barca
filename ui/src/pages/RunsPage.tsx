@@ -22,6 +22,8 @@ export function RunsPage() {
       .with({ type: 'navigate' }, ({ run, replace }) => {
         setParams(previous => {
           const next = new URLSearchParams(previous)
+          // Only a replacement keeps it: the same run, under its durable id.
+          if (!replace) next.delete('event_gap')
           if (run) next.set('run', run)
           else next.delete('run')
           return next
@@ -44,7 +46,7 @@ export function RunsPage() {
       model={model}
       runs={remote(runs)}
       connection={connection(health.data, health.isError)}
-      selected={selected ? { id: selected, run: remote(detail) } : null}
+      selected={selected ? { id: selected, run: remote(detail), eventGap: params.get('event_gap') === '1' } : null}
       queue={<QueuePanel readOnly={health.data?.read_only} />}
       now={runs.dataUpdatedAt}
       dispatch={dispatch}

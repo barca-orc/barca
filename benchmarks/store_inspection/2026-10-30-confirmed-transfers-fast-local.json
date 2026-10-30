@@ -1,0 +1,106 @@
+{
+  "started_at_utc": "2026-10-30T01:01:54Z",
+  "platform": "Linux-7.2.8-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "python": "3.14.8",
+  "helper_python": "/home/mukulram/Personal/barca/.worktrees/store-inspection-cost-706/.venv/bin/python",
+  "pyarrow": "26.0.0",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cpu_model": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "load_before": [
+    11.4140625,
+    14.73046875,
+    11.92822265625
+  ],
+  "worker_pool": 2,
+  "profile": "fast",
+  "warm_samples": 3,
+  "invalidated_samples": 3,
+  "page_cache": "recently written synthetic parquet; no cold-filesystem claim",
+  "source_sha256": {
+    "crates/barca-core/src/status.rs": "2c4eb8c38fa86de0305dfce6f7713fbe28cafe4ac12148214c4c03da921c5863",
+    "crates/barca-core/src/config.rs": "702f0e0784e4c8016a2dc508ce37623661ab5d5871f39dff1d659cfba5244521",
+    "crates/barca-core/src/transfer.rs": "4bde87b5e2b09ed80c16a12499ecb698f41a6b6e16f0dee77f3def82bd119c9e",
+    "python/barca/_transfer.py": "c129d46251e15521f6029eb0d0f29ba7e9f7a9231cd96b09f07a9442a855020f",
+    "python/barca/_inspection_cache.py": "e59091d4249775e9a072b39e56a4af401c511ba229f87f30e8ba5853feac5b22",
+    "python/barca/_state.py": "a3c1ecdc0cc6e7eecd60a07415e13310b0668e8bc83ad27ba5148f2f6bc2f13e",
+    "python/barca/_inspect.py": "37b0236d2a670f1d543078b26a4e62bf7d58f2f90d718c76d16f54ebc5f77b68",
+    "benchmarks/store_inspection/bench.py": "048c87f8e085ff40df212532715e698f7fe17dd2e8622cb5d1f691a465004147"
+  },
+  "modes": {
+    "before": {
+      "binary_sha256": "b77ac4b09ee7e556dc58f21c203d4a56f66a518b3a49278125fc5c77ed2eebbb",
+      "artifact_bytes_per_copy": 1074624287,
+      "cold_cli_seconds": 3.8302920600399375,
+      "cold_python_hash_bytes": 1074624287,
+      "warm_cli_seconds": [
+        4.202934723114595,
+        3.7516670229379088,
+        3.6061688119079918
+      ],
+      "warm_python_hash_bytes": 3223872861,
+      "invalidated_state_seconds": [
+        6.8159441880416125,
+        2.603035527979955,
+        2.5905275030527264
+      ],
+      "invalidated_python_hash_bytes": 4298497148
+    },
+    "after": {
+      "binary_sha256": "852ad900730978f37498f23ea4e847481a1298d6d5834057283fa8eebaebe89f",
+      "artifact_bytes_per_copy": 1074624287,
+      "cold_cli_seconds": 2.002098246011883,
+      "cold_python_hash_bytes": 2149248574,
+      "warm_cli_seconds": [
+        0.08023144188337028,
+        0.08035898907110095,
+        0.08154183509759605
+      ],
+      "warm_python_hash_bytes": 0,
+      "invalidated_state_seconds": [
+        0.08117094612680376,
+        0.04310253681614995,
+        0.04595272592268884
+      ],
+      "invalidated_python_hash_bytes": 0
+    }
+  },
+  "load_after": [
+    20.28076171875,
+    16.86572265625,
+    12.77734375
+  ]
+}

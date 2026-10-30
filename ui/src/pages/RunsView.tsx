@@ -13,7 +13,7 @@ import type { RunList, RunView } from '@/lib/types'
 import './runs.css'
 
 /** One run's details, for any state of its request. */
-export function RunPanelView({ id, run, dispatch }: { id: string; run: Remote<RunView>; dispatch: Dispatch<RunsMsg> }) {
+export function RunPanelView({ id, run, eventGap = false, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; dispatch: Dispatch<RunsMsg> }) {
   const retry = <Button size="sm" onClick={() => dispatch({ type: 'retry_detail' })}>Retry</Button>
   return (
     <SidePanel label="Run details" title="Run details" subtitle={run.kind === 'ready' ? run.data.run_id : id}
@@ -31,14 +31,14 @@ export function RunPanelView({ id, run, dispatch }: { id: string; run: Remote<Ru
             <p role="alert">Showing the last loaded run information: {refreshError}</p>
             {retry}
           </Section>}
-          <RunDetails data={data} />
+          <RunDetails data={data} eventGap={eventGap} />
         </>)
         .exhaustive()}
     </SidePanel>
   )
 }
 
-function RunDetails({ data }: { data: RunView }) {
+function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
   const outcome = parseOutcome(data.outcome)
   const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
   const result = outcomeResult(outcome)
@@ -71,6 +71,7 @@ function RunDetails({ data }: { data: RunView }) {
       {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length} of {data.steps_page.total} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
     </Section>
     <Section title="Logs">
+      {eventGap && runIsLive(data.status) && <p role="status" className="barca-note">Live event replay was incomplete. These logs may show only a retained tail until the run finishes.</p>}
       <LogViewer lines={data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts }))} live={runIsLive(data.status)} height={280} />
     </Section>
     {result !== null && result !== undefined && (
@@ -84,7 +85,7 @@ export interface RunsViewProps {
   runs: Remote<RunList>
   connection: Connection
   /** `?run=`, with its details; null when no run is selected. */
-  selected: { id: string; run: Remote<RunView> } | null
+  selected: { id: string; run: Remote<RunView>; eventGap?: boolean } | null
   /** The queue strip (`QueuePanel`, which loads its own data). */
   queue?: ReactNode
   /** When the list was loaded (ms since epoch): the activity strip's last hour. */
@@ -173,7 +174,7 @@ export function RunsView({ model, runs, connection, selected, queue, now, dispat
             })
             .exhaustive()}
         </div>
-        {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} dispatch={dispatch} />}
+        {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} eventGap={selected.eventGap} dispatch={dispatch} />}
       </div>
     </div>
   )

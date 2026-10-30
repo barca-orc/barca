@@ -3,7 +3,7 @@ title: 'RFC-0016: Server Tokens and Resumable Run Events'
 description: 'Opt-in Barca-issued API tokens, browser token management without accounts, consistent client credentials, and attempt-scoped Last-Event-ID replay.'
 ---
 
-- **Status:** Accepted for 0.36.0; not implemented
+- **Status:** Accepted; implemented for pending 0.36.0
 - **Date:** 2026-10-29
 - **Touches:** barca-core | barca-cli | python/barca | HTTP server | UI
 - **Related:** [#706](https://github.com/barca-orc/barca/issues/706),
@@ -22,22 +22,23 @@ the default.
 
 This RFC settles the remaining details: one-time local bootstrap, project-wide token
 records, browser bearer credentials, revocation of live streams, and bounded event replay.
-These are accepted design intent, not shipped behavior. Current contracts remain the
-runtime owners until implementation and executable conformance land.
+Implementation and conformance landed in #728–#732. The authentication and event-replay
+behavioral owners and HTTP/CLI contracts describe the runtime. Release validation and
+publication remain required before this is declared shipped.
 
 `BARCA_SERVER_TOKEN` supplies bearer credentials to every server request. URL userinfo stays
 supported for Basic-auth proxies. Run streams resume after the last completely processed
 event, using an attempt-scoped `Last-Event-ID`, rather than replaying and skipping a count.
 
-## 2. Motivation and current implementation
+## 2. Motivation and pre-0.36.0 implementation
 
 The proxy deployment in #706 needs consistent credentials on health, inspection, execution,
 ledger requests, cancellation and SSE. Credential masking shipped in 0.35.2; sending and
 validating bearer tokens has not shipped.
 
-Today `RunChannel` retains events and assigns numeric IDs, but the events handler always
-subscribes from zero. The CLI already reconnects for up to 60 seconds, checks the server's
-`started_at`, and skips a count of replayed events. Its parser discards IDs. The UI uses
+Before this change, `RunChannel` retained events and assigned numeric IDs, but the events
+handler always subscribed from zero. The CLI reconnected for up to 60 seconds, checked the
+server's `started_at`, and skipped a count of replayed events. Its parser discarded IDs. The UI used
 native `EventSource`, which cannot supply the proposed Authorization header. Reconnect
 must distinguish an interrupted connection from a new attempt of the same accepted run.
 

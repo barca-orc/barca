@@ -31,6 +31,13 @@ history) and it is the only process that writes it. The artifact bytes stay in t
 ([`barca docs contract`](/reference/cli-contract/)). To set it up in three steps, see
 https://barca.sh/team-server/.
 
+Server mode remains experimental after 0.36.0. A stable designation requires verified
+arbitration of overlapping identical work (#654), bounded cold/full-domain planning and
+inspection (#655, #656), and sustained multi-host proxy/store validation at the supported
+scale. Opt-in tokens, bounded event replay and configurable backups address deployment
+capabilities; they do not establish those remaining properties. Tokens grant full project
+access, without accounts, roles or tenant isolation.
+
 With a server configured, a command does one of three things:
 
 | You type | `get` / `run` | `status` / `history` / `stats` | `sql` |
@@ -287,8 +294,19 @@ the server, as JSON (a table as a list of row objects).
 A draining server (one that is restarting) accepts a new `--server` run into its run queue;
 the client keeps following it: when the stream breaks it waits up to 60 seconds
 (`BARCA_SERVER_RECONNECT`) for the server to come back and follows the same run id there, and
-only then exits 3 ([`barca docs scheduling`](/scheduling/), "Restarting without losing work"). `barca logs -f
---server` does the same. Nothing runs here either way.
+only then exits 3 ([`barca docs scheduling`](/scheduling/), "Restarting without losing work"). On servers
+advertising event resume in `/health`, reconnects send the last successfully processed
+`Last-Event-ID`; older servers retain replay-count fallback. An attempt change resets live
+presentation while following the same run ID, without submitting another run.
+
+Replay is bounded to 65,536 events or 16 MiB per attempt and 64 MiB across the server. If
+required events have expired, execution commands warn that their live transcript is incomplete
+and poll the recorded outcome every two seconds. A healthy pending/running response can be
+followed longer than `BARCA_SERVER_RECONNECT`; that setting limits transport outages, not run
+duration. Ctrl-C still cancels the existing server run during polling. `barca logs -f --server`
+requires a complete transcript and instead exits 3 on an unfillable replay gap, naming the
+recorded-log command. The browser also marks incomplete replay and follows the outcome.
+Nothing runs here either way.
 
 Ctrl-C (or SIGTERM) asks the server to cancel the run (`DELETE /runs/<run_id>`) and keeps
 printing until the run has stopped; it then exits 130. A second Ctrl-C exits 130 at once, and
@@ -303,7 +321,8 @@ the server still stops the run.
 | a server is configured and the project has no `[remote]` (a local run) | 2 | the missing `[remote]` section |
 | the post after a local run is refused or does not arrive | 0 (the run's own code) | the run id and why, on stderr |
 | an error the server answers with (an unknown target, a task given to `get`) | as locally | as the local command prints it |
-| the connection drops while a `--server` run streams | 3 | the run id |
+| a stream transport outage exceeds `BARCA_SERVER_RECONNECT` | 3 | the run id |
+| `logs -f --server` cannot recover a complete replay | 3 | the run id and recorded-log command |
 
 There is no silent fallback to this machine's ledger: two people who stop agreeing without
 noticing is what the server exists to prevent. To run without the server, pass `--local`. A

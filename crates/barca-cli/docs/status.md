@@ -15,6 +15,26 @@ including an incomplete backup survey, are `null` and displayed as unmeasured. U
 doctor` or `barca gc --dry-run` for a full measurement. Server status reports server storage.
 The UI's `/state` node array does no additional disk-accounting work.
 
+Status inspection reuses bounded evidence instead of re-reading unchanged artifact bytes.
+Local file identities include device, inode, size, mtime and ctime; changed or missing local
+copies and directory-store objects are checked again immediately. Cloud availability and
+remote shape observations can be up to five minutes old; cache hits do not extend that
+window. Local materialization changes, confirmed transfers, credential changes and Python
+import-environment changes invalidate the affected evidence. Inspection prefers an already
+verified local copy for shape. This is availability
+and shape evidence, not a new freshness proof. Required reads, transfers and server ledger
+publication keep their direct verification paths.
+
+Local inspection evidence is reusable only after the file's change timestamp is at least
+one second old. Recently changed files are read directly without retaining evidence, so
+inode reuse within a filesystem timestamp tick cannot preserve an old observation.
+
+The disposable inspection cache is limited to 8 MiB and 8192 entries per environment, with
+at most 64 KiB per value. Corruption, eviction or an unwritable cache causes another check;
+a busy cache-write lock is skipped. Cold inspection still hashes selected local copies and
+plain-directory store objects once, so its cost grows with their bytes. These limits do not
+resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
+
 ```python
 import pandas as pd
 from barca import asset, task

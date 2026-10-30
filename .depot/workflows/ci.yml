@@ -30,12 +30,12 @@ concurrency:
 #   gate every merge to main passes.
 # - full (a release): everything, with the object-store emulators, the duckdb 1.x rerun and
 #   the real minute checkpoint test on. A release PR (head branch `release/v*`) runs it as
-#   its PR run, and its merge group (head commit `chore(release): ...`) runs it again. A PR
+#   its PR run, and its merge group (checked-out commit `chore(release): ...`) runs it again. A PR
 #   labelled `ci-full` runs it too.
 #
-# The tier conditions, repeated on the jobs because a job-level `if` cannot read `env`:
+# The changes job selects one tier with scripts/ci-tier.py; jobs consume its output:
 #   full  = (pull_request && (head_ref starts with release/v || label ci-full))
-#           || (merge_group && head commit message contains "chore(release)")
+#           || (merge_group && checked-out commit message contains "chore(release)")
 #   merge = merge_group || full
 #
 # Sandbox sizes: Depot bills per vCPU-second, so a larger sandbox costs the same CPU time and
@@ -238,8 +238,8 @@ jobs:
   integration:
     # The shell integration tests and benchmark examples, against the wheel `build` makes.
     # Tier full only.
-    needs: build
-    if: ${{ (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)')) }}
+    needs: [build, changes]
+    if: ${{ needs.changes.outputs.tier == 'full' }}
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     steps:
@@ -290,7 +290,7 @@ jobs:
   test:
     # The required `CI / test` check. It always runs, so a failed, cancelled or (in a full run)
     # skipped job fails it instead of leaving the check missing.
-    needs: [checks, clippy, rust-tests, build, integration]
+    needs: [changes, checks, clippy, rust-tests, build, integration]
     if: always()
     runs-on: depot-ubuntu-latest
     timeout-minutes: 5
@@ -298,7 +298,7 @@ jobs:
       - name: Every test job succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
-          TIER: ${{ ((github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)'))) && 'full' || (github.event_name == 'merge_group' && 'merge' || 'fast') }}
+          TIER: ${{ needs.changes.outputs.tier }}
         run: python3 -c "$CHECK_NEEDS"
 
   # ---- CI / backends ---------------------------------------------------------------------
@@ -317,6 +317,7 @@ jobs:
     runs-on: depot-ubuntu-latest
     timeout-minutes: 10
     outputs:
+      tier: ${{ steps.decide.outputs.tier }}
       emulators: ${{ steps.decide.outputs.emulators }}
       duckdb1: ${{ steps.decide.outputs.duckdb1 }}
       checkpoint: ${{ steps.decide.outputs.checkpoint }}
@@ -327,9 +328,12 @@ jobs:
       - name: Decide which optional parts run
         id: decide
         env:
-          TIER: ${{ ((github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)'))) && 'full' || (github.event_name == 'merge_group' && 'merge' || 'fast') }}
+          CI_HEAD_REF: ${{ github.head_ref }}
+          CI_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         # The tier and the reasons go to the check's summary as well as the log.
         run: |
+          TIER=$(python3 scripts/ci-tier.py)
+          python3 scripts/test-ci-tier.py
           echo "tier=$TIER" >> "$GITHUB_OUTPUT"
           if [ "$TIER" = full ]; then
             python3 scripts/ci-changes.py --all >> "$GITHUB_OUTPUT" 2> why.txt
@@ -366,9 +370,10 @@ jobs:
           cat "$GITHUB_OUTPUT"
 
   ui:
+    needs: changes
     # The web UI's own checks. The build job builds `ui/dist` (or restores it) on its own.
     # Tier full only.
-    if: ${{ (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)')) }}
+    if: ${{ needs.changes.outputs.tier == 'full' }}
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 15
     steps:
@@ -498,8 +503,8 @@ jobs:
   proxy:
     # The shell tests that need the UI-embedded binary, beside the Python shards.
     # Tier full only.
-    needs: build
-    if: ${{ (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)')) }}
+    needs: [build, changes]
+    if: ${{ needs.changes.outputs.tier == 'full' }}
     runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -700,5 +705,5 @@ jobs:
       - name: Every backends job succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
-          TIER: ${{ ((github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) || (github.event_name == 'merge_group' && contains(github.event.merge_group.head_commit.message, 'chore(release)'))) && 'full' || (github.event_name == 'merge_group' && 'merge' || 'fast') }}
+          TIER: ${{ needs.changes.outputs.tier }}
         run: python3 -c "$CHECK_NEEDS"

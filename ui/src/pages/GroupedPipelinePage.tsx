@@ -1,3 +1,4 @@
+import { StreamNotice } from '@/components/StreamNotice'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import {
@@ -307,6 +308,7 @@ export function GroupedPipelinePage() {
 
   return (
     <div className="barca-view">
+      <StreamNotice notice={nodeRun.stream.notice} runId={nodeRun.run?.handle} />
       <div className="barca-view-head">
         <div className="barca-view-bar">
           <div className="barca-view-title">
