@@ -2,15 +2,18 @@
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 
+import pytest
 from barca.api import _find_binary
 
-from .test_serve_robustness import _env
+from .test_serve_robustness import Server, _env, wait_for
 
 
-def test_warm_status_does_not_rehash_an_unchanged_store_copy(tmp_path):
+@pytest.fixture
+def inspected_project(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     store = tmp_path / "store"
@@ -60,6 +63,12 @@ def test_warm_status_does_not_rehash_an_unchanged_store_copy(tmp_path):
     assert control.returncode == 0, control.stderr
     assert reads.read_text().splitlines(), "the payload-read audit hook must be active"
     reads.write_text("")
+    monkeypatch.setenv("PYTHONPATH", env["PYTHONPATH"])
+    return project, artifact, reads, command
+
+
+def test_warm_status_does_not_rehash_an_unchanged_store_copy(inspected_project):
+    _, artifact, reads, command = inspected_project
     first = command("status", "pipeline.py")
     first_reads = reads.read_text().splitlines()
     assert first["nodes"][0]["cache"]["state"] == "cached", first
@@ -67,3 +76,39 @@ def test_warm_status_does_not_rehash_an_unchanged_store_copy(tmp_path):
     assert second["nodes"][0]["cache"]["state"] == "cached", second
     repeated_reads = reads.read_text().splitlines()[len(first_reads) :]
     assert not repeated_reads, f"unchanged warm status reopened store payloads: {repeated_reads}"
+
+    # Same-sized store edits must invalidate digest evidence immediately, including when
+    # the old modification time is restored; ctime/inode are part of the fingerprint.
+    before = artifact.stat()
+    artifact.write_text("43")
+    os.utime(artifact, ns=(before.st_atime_ns, before.st_mtime_ns))
+    changed = command("status", "pipeline.py")
+    assert changed["nodes"][0]["cache"]["state"] == "unsynced", changed
+    assert changed["nodes"][0]["cache"]["reason"] == "mismatch", changed
+    artifact.unlink()
+    missing = command("status", "pipeline.py")
+    assert missing["nodes"][0]["cache"]["reason"] == "local_only", missing
+
+
+def test_server_db_refresh_reuses_artifact_evidence_from_the_stable_environment(inspected_project):
+    project, _, reads, command = inspected_project
+    command("status", "pipeline.py")
+    reads.write_text("")
+    server = Server(project, "--read-only", "--no-schedule")
+    try:
+        assert server.request("GET", "/state")[1][0]["cache"]["state"] == "cached"
+        for elapsed in (17.25, 23.5):
+            with sqlite3.connect(project / ".barca/metadata.db") as database:
+                database.execute("UPDATE materializations SET elapsed_seconds = ?", (elapsed,))
+
+            def updated():
+                status, rows = server.request("GET", "/state")
+                assert status == 200
+                return rows[0]["last_materialization"]["elapsed_seconds"] == elapsed
+
+            wait_for(updated, "new metadata reflected in state")
+        assert not reads.read_text().splitlines(), (
+            "DB invalidation reread unchanged artifact payloads"
+        )
+    finally:
+        server.stop()

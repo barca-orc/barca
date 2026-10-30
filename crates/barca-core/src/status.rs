@@ -855,8 +855,16 @@ async fn check_store_copies(
         return;
     }
     let paths: Vec<&str> = wanted.iter().map(|(_, p, _, _)| p.as_str()).collect();
-    let objects = match stat_objects(python, cfg, &paths).await {
-        Ok(objects) if objects.len() == wanted.len() => objects,
+    let local_paths: Vec<_> = wanted
+        .iter()
+        .map(|(_, _, local, _)| local.to_string_lossy().into_owned())
+        .collect();
+    let evidence = match inspect_copies(python, cfg, &paths, &local_paths).await {
+        Ok(evidence)
+            if evidence.objects.len() == wanted.len() && evidence.locals.len() == wanted.len() =>
+        {
+            evidence
+        }
         Ok(_) => return,
         Err(why) => {
             for (i, ..) in &wanted {
@@ -869,13 +877,14 @@ async fn check_store_copies(
             return;
         }
     };
-    for ((i, store, local, recorded), object) in wanted.into_iter().zip(objects) {
-        let here = std::fs::metadata(&local)
-            .ok()
-            .filter(|m| m.is_file())
-            .and_then(|m| db::file_sha256(&local).ok().map(|sha| (m.len(), sha)));
+    for (((i, store, _, recorded), object), here) in wanted
+        .into_iter()
+        .zip(evidence.objects)
+        .zip(evidence.locals)
+    {
         let copies = classify(
-            here.as_ref().map(|(size, sha)| (*size, sha.as_str())),
+            here.as_ref()
+                .map(|local| (local.size_bytes, local.sha256.as_str())),
             &object,
             recorded.as_deref(),
         );
@@ -910,6 +919,45 @@ async fn check_store_copies(
         if state != "cached" && state != "unsynced" {
             c.artifact = None;
         }
+    }
+}
+
+/// Disposable status evidence; publication and transfer checks remain strict.
+#[derive(Deserialize)]
+struct CopyEvidence {
+    objects: Vec<StoreObject>,
+    locals: Vec<Option<LocalEvidence>>,
+}
+#[derive(Deserialize)]
+struct LocalEvidence {
+    size_bytes: u64,
+    sha256: String,
+}
+fn inspection_cache_path(cfg: &crate::config::ResolvedConfig) -> std::path::PathBuf {
+    // Server readers substitute a temporary DB view. Evidence belongs to the stable
+    // project/environment, not that view's temporary lifetime.
+    cfg.project_root
+        .join(".barca/inspection-cache")
+        .join(format!("{}.json", cfg.env))
+}
+
+async fn inspect_copies(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    paths: &[&str],
+    locals: &[String],
+) -> Result<CopyEvidence, String> {
+    let mut command = crate::backup::state_helper(python, cfg);
+    command.arg("stat").kill_on_drop(true);
+    let request = serde_json::json!({"paths": paths, "locals": locals, "inspection_cache": inspection_cache_path(cfg)});
+    let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(60));
+    use crate::helper_proc::JsonFailed;
+    match crate::helper_proc::run_json(command, &request, Some(limit)).await {
+        Ok(reply) => Ok(reply),
+        Err(JsonFailed::Spawn(error) | JsonFailed::Io(error)) => Err(error.to_string()),
+        Err(JsonFailed::TimedOut(limit)) => Err(format!("no answer within {}s", limit.as_secs())),
+        Err(JsonFailed::Exited(stderr)) => Err(crate::helper_proc::helper_cause(&stderr)),
+        Err(JsonFailed::Invalid(error)) => Err(error.to_string()),
     }
 }
 
@@ -1157,6 +1205,19 @@ async fn read_shapes_inner(
             if selected.path == *path {
                 wanted.push((i, selected.path, selected.format));
             }
+        } else if cfg.remote_artifacts()
+            && n.cache.state == "cached"
+            && n.cache.artifact.as_deref() == Some(path.as_str())
+        {
+            // Use the selected, verified local copy instead of reopening remote payloads.
+            let layout =
+                crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+            let local = layout.local_for(path).filter(|path| path.is_file());
+            wanted.push((
+                i,
+                local.map_or_else(|| path.clone(), |path| path.to_string_lossy().into_owned()),
+                m.format.clone().unwrap_or_default(),
+            ));
         } else if n.cache.state == "unsynced" && n.cache.reason != "store_only" {
             // Not in the store, or not the same there (#390, RFC-0009): read this machine's
             // copy. A `store_only` result is read from the store like a cached one.
@@ -1178,6 +1239,7 @@ async fn read_shapes_inner(
     let request = serde_json::json!({
         "sample": sample,
         "fields": fields,
+        "inspection_cache": inspection_cache_path(cfg),
         "artifacts": wanted
             .iter()
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))

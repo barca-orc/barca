@@ -421,22 +421,33 @@ def _reduce_label(fn: Any, args: Any) -> str:
     return name
 
 
-def shapes(artifacts: list[dict], sample: int = 0, fields: bool = False) -> list[dict]:
+def shapes(artifacts: list[dict], sample: int = 0, fields: bool = False, cache=None) -> list[dict]:
     """Shape of each artifact, in order. Remote ones are read concurrently, so a status over
     many nodes is not one network round trip after another."""
+
+    def read(artifact):
+        path, fmt = artifact["path"], artifact.get("format", "")
+        if cache is None:
+            return shape(path, fmt, sample, fields)
+
+        def observe():
+            return shape(path, fmt, sample, fields)
+
+        if _storage.is_remote(path):
+            return cache.remote("shape", path, [fmt, sample, fields], observe)
+        return cache.local("shape", path, [fmt, sample, fields], observe)
+
     out: list[dict | None] = [None] * len(artifacts)
     remote: list[int] = []
     for i, a in enumerate(artifacts):
         if _storage.is_remote(a["path"]):
             remote.append(i)
         else:
-            out[i] = shape(a["path"], a.get("format", ""), sample, fields)
+            out[i] = read(a)
     if remote:
         with ThreadPoolExecutor(max_workers=min(MAX_REMOTE_READERS, len(remote))) as pool:
             done = pool.map(
-                lambda i: shape(
-                    artifacts[i]["path"], artifacts[i].get("format", ""), sample, fields
-                ),
+                lambda i: read(artifacts[i]),
                 remote,
             )
             for i, s in zip(remote, done):
@@ -447,11 +458,18 @@ def shapes(artifacts: list[dict], sample: int = 0, fields: bool = False) -> list
 def main() -> None:
     req = json.load(sys.stdin)
     sample = int(req.get("sample") or 0)
-    sys.stdout.write(
-        json.dumps(
-            shapes(req.get("artifacts", []), sample, bool(req.get("fields", False))), default=str
-        )
-    )
+    fields = bool(req.get("fields", False))
+    if "inspection_cache" in req:
+        from barca._inspection_cache import Cache
+
+        cache = Cache(req["inspection_cache"])
+        try:
+            result = shapes(req.get("artifacts", []), sample, fields, cache)
+        finally:
+            cache.flush()
+    else:
+        result = shapes(req.get("artifacts", []), sample, fields)
+    sys.stdout.write(json.dumps(result, default=str))
 
 
 if __name__ == "__main__":
