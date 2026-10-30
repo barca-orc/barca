@@ -1,6 +1,6 @@
 # Direction
 
-Last updated: 2026-10-29, after v0.35.3. The pinned
+Last updated: 2026-10-30, preparing v0.36.0 after v0.35.3. The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -43,11 +43,13 @@ The decisions in [#707](https://github.com/barca-orc/barca/issues/707) set this 
    upgrading rewrites existing partition artifacts and reruns their consumers once.
 3. **0.36.0: server mode behind a proxy (#706).** RFC-0015's configurable backup cadence
    and separate local-backup accounting are implemented, awaiting this release. Complete
-   the client-credential RFC and implementation, plus `Last-Event-ID` stream resume. Include the cost of
+   release validation of the implemented client credentials, UI token management and
+   `Last-Event-ID` stream resume. Include the cost of
    hashing and remotely checking every artifact during status. Userinfo remains supported;
    bearer credentials reach every client request. The user chose barca-issued and
-   barca-validated UI tokens in an opt-in mode with no user-account system (#187). The auth
-   RFC must specify bootstrap access, browser security and revocation explicitly.
+   barca-validated UI tokens in an opt-in mode with no user-account system (#187). RFC-0016
+   specifies bootstrap access, browser security and revocation; implementation and conformance
+   are merged. Publication remains required.
 4. **Then the cleanup week.** Triage #666 into 0.36.1 or 0.37.0: a failed key must not stop
    independent keys' downstream work. Batch the small feedback in #668, #671, #672 and #673.
    Keep #674 (incremental fan-ins) parked pending discussion, alongside #667, #669, #670,
@@ -88,7 +90,7 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.35.1 | 2026-10-28 | Cache-size accounting off request threads; transfer-helper handshake before planning | #702, [release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.1) |
 | 0.35.2 | 2026-10-29 | Read-only status, metadata-first UI, run actions, credential masking and first-use/help docs | #708, #710, #709, #706 part 3, #650, #651 |
 | 0.35.3 | 2026-10-29 | Streamed batched partitions sort by all columns, so a refresh with the same rows in another order keeps cutoff consumers cached | [#721](https://github.com/barca-orc/barca/pull/721), [release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.3) |
-| 0.36.0 | planned | Configurable backups, proxy credentials and UI token design, resumable streams and store inspection costs | #706, #187 |
+| 0.36.0 | planned | Configurable backups, proxy credentials and UI token management, resumable streams and store inspection costs | #706, #187 |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
@@ -116,7 +118,8 @@ Settled by what shipped, and documented in the manual: drain defaults (#190: `--
 ## Decided, October 2026
 
 **After 0.35.1 (2026-10-29, #707).** The RFCs record the accepted 0.36.0 designs;
-implementation and publication are still required:
+implementation is merged except the final store-inspection gate; release validation and
+publication are still required:
 
 - Backups: `[remote] backup_interval` / `BARCA_BACKUP_INTERVAL`, default `"1m"`, with `"off"`
   for external volume backups; retain the shutdown backup. Explain whole-DB copy/upload cost.
@@ -127,8 +130,7 @@ implementation and publication are still required:
   including health, streams, cancellation and ledger traffic. Tokens can be generated in the
   UI and validated by barca in an opt-in mode with no user-account system. #187 is reopened
   for this scope. RFC-0016 specifies local bootstrap, tab-scoped browser bearer access,
-  token persistence and revocation, without account or cookie-session systems. This remains
-  unreleased design intent until implementation and conformance land.
+  token persistence and revocation, without account or cookie-session systems. Implementation and conformance are merged; publication remains required.
 - Streams: `Last-Event-ID` resume replaces treating every dropped connection as an infra error.
   RFC-0016 binds cursors to an attempt and bounds replay. After expiration, execution clients
   follow the existing run's canonical outcome with a gap notice; they do not resubmit work.
