@@ -5037,7 +5037,7 @@ components:
         refresh:
           type: array
           items: *id005
-          description: --refresh
+          description: "--refresh; asset names or keyed selectors such as source[account=A]. Array entries select a set without narrowing the target domain."
         refresh_all:
           type: boolean
           description: --refresh-all

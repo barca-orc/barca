@@ -240,6 +240,19 @@ exit code is still 2 and nothing runs.
 
 `--no-cache` was removed in 0.24.0; use `--refresh-all`.
 
+To refresh a key or set while retaining the complete output domain:
+
+```bash
+barca get final pipeline.py --refresh 'source[account=A],source[account=C]'
+```
+
+Each selector names one dimension and value; comma-separated selectors select a set.
+Only those source keys and their affected downstream keys refresh. Fresh siblings remain
+cached and invalidated `collect()` publishers read the complete domain. Cutoff bytes and
+`--no-cascade` retain their usual behavior. `--partition` still narrows the DAG. Python uses
+`barca.get("final", "pipeline.py", refresh=["source[account=A]", "source[account=C]"])`;
+`barca.run` and the server's `refresh` request array accept the same selectors.
+
 A dry run of the same target:
 
 ```

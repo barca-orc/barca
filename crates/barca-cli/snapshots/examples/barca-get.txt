@@ -33,7 +33,7 @@ Options:
           Override declared batching: none, all, N or NODE=N (experimental)
 
       --refresh <REFRESH>
-          Recompute named assets and their downstream dependents: --refresh a,b
+          Recompute assets or selected keys and their dependents: --refresh a,b
 
       --no-cascade
           Refresh only named assets; cached downstream results may be outdated
@@ -80,6 +80,7 @@ Examples:
   barca get orders pipeline.py --refresh orders --json  # check recomputed artifact bytes
   barca get total pipeline.py --refresh-all        # recompute everything in that cone
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
+  barca get total pipeline.py --refresh 'clean[account=A],clean[account=C]' # refresh a set; retain full DAG
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
   barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
   barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store

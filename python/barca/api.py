@@ -277,6 +277,11 @@ def get(
     those assets (the target may be one of them) and everything downstream of
     them; ``cascade=False`` (``--no-cascade``) re-materializes only the named
     ones. ``refresh_all=True`` re-materializes every asset in the cone.
+    Select a key or set with ``refresh=["source[account=A]", "source[account=C]"]``.
+    Keyed refresh retains the complete target domain and fan-ins, reuses fresh siblings,
+    and cascades only through affected keys (stopping at unchanged cutoff bytes).
+    Each selector names one dimension and value; unlike ``partition``, it does not narrow
+    the output domain.
 
     A partitioned target returns a dict of partition key (``"region=emea"``) to
     value, for every key or for the keys ``partition`` selects: ``"region=emea,amer"``
@@ -328,6 +333,9 @@ def run(
     """Run a task (and its cone). The task always re-runs.
 
     Upstream assets are served from cache when fresh (same as ``get``). Pass
+    ``refresh=["source[account=A]", "source[account=C]"]`` refreshes a set of keys
+    while keeping the full target domain, cached siblings and complete fan-ins.
+    Each keyed selector names one dimension and value. Use
     ``refresh=["asset_name", ...]`` to force re-materialize those assets and every
     asset downstream of them in the task's cone; add ``cascade=False``
     (``--no-cascade``) to re-materialize only the named assets. Pass

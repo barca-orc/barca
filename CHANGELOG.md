@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- Refresh a key or set with `--refresh 'source[account=A],source[account=C]'` while retaining the complete target DAG, cached siblings, batching and full fan-in publication (#784).
+
 ### Bug Fixes
 
 - A metadata database past its share of `[cache] max_size` no longer evicts artifacts that fit. Upgrading a 40 GB database could delete every current result during the trim, costing a recompute of each.

@@ -877,3 +877,19 @@ Task return values appear in `barca run` results as asset values do. Captured st
 available through `barca logs RUN_ID --pretty` or `--json`, separately from progress.
 JSON run/get output suppresses step prints. In other modes stderr prefixes each line
 with its node id; framework agent lines retain `[barca]` prefixes.
+
+### Refreshing a partition set from Python
+
+```python
+import barca
+
+result = barca.get(
+    "final", "pipeline.py",
+    refresh=["source[account=A]", "source[account=C]"],
+)
+```
+
+`barca.run` accepts the same `refresh` list. A keyed selector names one dimension and value;
+list entries select a set. These refreshes retain the target's full partition domain, reuse
+fresh siblings and let complete `collect()` publishers read refreshed and cached results.
+Cascades respect cutoff bytes and `cascade=False`. `partition=` still narrows the domain.

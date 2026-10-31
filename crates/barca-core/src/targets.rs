@@ -347,8 +347,9 @@ pub(crate) fn target_outcomes(
         .collect()
 }
 
-/// Does a `--refresh` name (a function name, or a full `file.py:name` id) identify `node_id`?
+/// Does the asset part of a `--refresh` selector (short name or full id) identify `node_id`?
 pub(crate) fn refresh_name_matches(node_id: &str, name: &str) -> bool {
+    let name = name.split('[').next().unwrap_or(name);
     node_id == name || node_id.ends_with(&format!(":{name}"))
 }
 
@@ -394,6 +395,20 @@ pub(crate) fn validate_refresh_names(
         })
         .collect();
     for name in names {
+        if name.contains('[') {
+            let (_, key) = crate::model::PartitionKey::parse_from_id(name);
+            if !name.ends_with(']')
+                || key.0.len() != 1
+                || key
+                    .0
+                    .iter()
+                    .any(|(d, v)| d.is_empty() || v.is_empty() || v.contains(['[', ']']))
+            {
+                return Err(BarcaError::Usage(format!(
+                    "--refresh: invalid keyed selector '{name}'; use 'asset[dimension=value]'. Select a set with --refresh 'asset[dimension=A],asset[dimension=B]'."
+                )));
+            }
+        }
         if !assets.iter().any(|id| refresh_name_matches(id, name)) {
             let valid: Vec<&str> = assets.iter().map(|id| short_name(id)).collect();
             let meant = target_suggestion(name, &assets)

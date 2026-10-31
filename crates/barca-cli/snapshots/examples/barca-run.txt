@@ -8,7 +8,7 @@ Arguments:
 
 Options:
       --refresh <REFRESH>
-          Recompute named assets and their downstream dependents: --refresh a,b
+          Recompute assets or selected keys and their dependents: --refresh a,b
 
       --no-cascade
           Refresh only named assets; cached downstream results may be outdated
@@ -68,6 +68,7 @@ Examples:
   barca run deploy pipelines/                          # only read files under pipelines/
   barca run deploy pipeline.py                         # task runs; upstream assets come from cache
   barca run deploy pipeline.py --refresh fetch,clean   # re-materialize these and everything downstream of them
+  barca run deploy pipeline.py --refresh 'fetch[account=A],fetch[account=C]' # refresh a set; retain full DAG
   barca run deploy pipeline.py --refresh fetch --no-cascade   # re-materialize only fetch; downstream stays cached
   barca run deploy pipeline.py --refresh-all           # re-materialize every upstream asset
   barca run deploy pipeline.py --dry-run --refresh fetch   # preview: which steps run, which are cached
