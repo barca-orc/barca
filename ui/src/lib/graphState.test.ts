@@ -5,4 +5,5 @@ const state = (cache: NodeState['cache']['state'], failed=false): NodeState => (
 describe('graph colors', () => {
   it.each([['cached','success'],['stale','warning'],['partial','warning'],['never_run','skipped'],['unknown','skipped'],['always_runs','skipped'],['unsynced','warning']] as const)('%s maps to %s',(cache,status)=>expect(graphState(state(cache)).status).toBe(status))
   it('latest failure overrides a cached artifact',()=>expect(graphState(state('cached',true)).status).toBe('failed'))
+  it('a blocked node is stale-colored and says so',()=>expect(graphState(state('blocked'))).toMatchObject({status:'warning',label:'Blocked',hint:'reason'}))
 })

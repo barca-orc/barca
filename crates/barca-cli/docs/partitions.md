@@ -438,7 +438,8 @@ def scored(retailer: list[str], cleaned: dict[str, pd.DataFrame]) -> dict:
   call (batch=all)" in its WHY column. `calls` is `null` for `batches(...)`/`batches_by(...)` over
   more keys than the dry run lists (20).
 - **Failed keys:** `barca status --json` and `GET /state` give a node's `partitions.failed` and
-  the first 20 `failed_keys`, the keys whose latest attempt failed. `GET /assets/{name}/partitions`
+  the first 20 `failed_keys`, the keys whose latest attempt failed; a node below it that reads
+  those keys key for key is `blocked` ("Failed keys block their own keys" below). `GET /assets/{name}/partitions`
   pages through the keys that have an attempt (`?status=failed`, `?q=`) and groups the failures'
   errors. `barca history RUN_ID --json` adds `steps_page.nodes`: each node's keys, failed keys,
   summed time and calls over the whole run, however few keys `steps` lists.
@@ -476,6 +477,39 @@ barca get margin pipeline.py --partition '{"region":"apac"}'           # a JSON 
 - When some keys fail, the run fails (exit 1, `failed_node` names the key). The keys that
   succeeded are returned; a failed key has no artifact and runs again on the next `get`.
 - Past 1000 keys, without `--partition`, only the keys the run computed are listed (below).
+
+### Failed keys block their own keys
+
+A failed key blocks only what reads it. A node that reads the failed node key for key
+(`partitions_from(node)`, or a node with exactly the same dimension names reading it as a plain
+input) still has everything it needs for every other key, so the run goes on: those keys run (or
+are served from cache), and only the keys of the failed ones are skipped, down the chain. A node
+that reads every key of the failed node cannot run at all: a `collect()` fan-in, an unpartitioned
+node, a node on other dimensions, and everything below one of them, is skipped as a whole, as
+before. The run still fails (exit 1) with the first failed key as `failed_node`.
+
+```bash
+barca get publish_plan planning.py          # 39 of 3077 forecasts fail: 3038 promo plans are computed
+barca get promo_plan planning.py --json     # the 39 blocked keys are steps with reason upstream_key_failed
+barca status planning.py                    # promo_plan: blocked, 39 of 39 missing keys wait on 'demand_forecast'
+```
+
+- **In JSON**, each blocked key is a step with `status` `skipped`, `reason` `upstream_key_failed`
+  and a `detail` naming the step it reads: `depends on 'demand_forecast[account=ra-00693]', which
+  failed`, or `..., which was skipped` further down the chain. The node's own step line counts
+  the keys the planner handed it: the blocked keys are left out when the failure came from an
+  earlier phase, counted when it happened in the same one. A node skipped as a whole keeps
+  `reason` `upstream_failed` and `depends on 'demand_forecast', which failed`. The stderr summary
+  counts both: `80 downstream steps skipped`.
+- **`barca status` and `GET /state`** report such a node `blocked` (reason `upstream_failed`,
+  `detail` `39 of 39 missing keys wait on 'demand_forecast': the same keys of it failed`) rather
+  than stale because of its upstream; `--state blocked` selects them and `summary.blocked` counts
+  them. A node with failed keys of its own is reported by those first.
+- **The fix** is upstream: once the failed keys succeed, the next `get` computes exactly the
+  blocked keys below them, from cache for the rest.
+- **Within one phase** (a chain the planner fused into one stream, such as nodes with static
+  keys), the coordinator already ran the other keys; what is new is that their node is no longer
+  reported `skipped` as a whole: its skipped keys are steps of their own, as above.
 
 ### Many keys
 

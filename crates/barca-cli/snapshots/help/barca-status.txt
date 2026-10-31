@@ -12,8 +12,8 @@ Options:
       --all              Show every node (no limit)
       --fields <FIELDS>  Select JSON fields as a comma-separated list; implies --json [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
       --sample <N>       Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
-      --state <STATE>    Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, unknown, always_runs. The summary still counts every node
-      --problems         Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, unknown), a task or sensor whose last run failed, or a paused or failing schedule
+      --state <STATE>    Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node
+      --problems         Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
       --env <ENV>        Use a separate cache and history for this environment
       --server [<URL>]   Use a server (URL or configured); get/run execute its deployed code
       --local            Use independent local state; ignore the configured server

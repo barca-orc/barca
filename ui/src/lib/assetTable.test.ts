@@ -72,6 +72,7 @@ describe('severityOf', () => {
     )
     expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task') }))).toBe('always_runs')
     expect(severityOf(node({ id: 'a', cache: cache('unsynced', 'local_only') }))).toBe('unsynced')
+    expect(severityOf(node({ id: 'a', cache: cache('blocked', 'upstream_failed') }))).toBe('stale')
   })
 
   it('a failed latest attempt wins over any cache state', () => {
@@ -149,6 +150,22 @@ describe('buildRows', () => {
       only(buildRows([node({ id: 'p.py:a', cache: cache('stale', reason) })], NOW)).stateLabel
     expect(label('changed')).toBe('Stale · code changed')
     expect(label('upstream_stale')).toBe('Stale · upstream')
+    // Keys waiting on failed upstream keys (#764): the count is in the label, the node in the hint.
+    const blocked = only(
+      buildRows(
+        [
+          node({
+            id: 'p.py:promo_plan',
+            partitioned: true,
+            cache: cache('blocked', 'upstream_failed'),
+            partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [] },
+          }),
+        ],
+        NOW,
+      ),
+    )
+    expect(blocked.stateLabel).toBe('Blocked · 39 keys wait on upstream')
+    expect(blocked.severity).toBe('stale')
     expect(label('sensor_output_unknown')).toBe('Stale · sensor')
     expect(label('cutoff_pending')).toBe('Stale · cutoff')
   })

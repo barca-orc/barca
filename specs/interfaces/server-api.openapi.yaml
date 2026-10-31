@@ -515,7 +515,7 @@ paths:
         schema:
           type: string
         description: 'Comma-separated cache states (--state): cached, unsynced, stale, never_run, partial,
-          unknown, always_runs.'
+          blocked, unknown, always_runs.'
       - name: problems
         in: query
         required: false
@@ -3915,6 +3915,7 @@ components:
           - stale
           - never_run
           - partial
+          - blocked
           - unknown
           - always_runs
         reason:
@@ -3927,6 +3928,7 @@ components:
           - not_in_ledger
           - changed
           - upstream_stale
+          - upstream_failed
           - failed
           - artifact_missing
           - evicted

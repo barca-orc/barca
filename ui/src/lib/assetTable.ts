@@ -78,6 +78,8 @@ export function severityOf(node: NodeState): Severity {
     .with('stale', (): Severity => 'stale')
     .with('never_run', (): Severity => 'never_run')
     .with('partial', (): Severity => 'partial')
+    // Keys waiting on failed upstream keys: as urgent as a stale node, and said in the label.
+    .with('blocked', (): Severity => 'stale')
     .with('unknown', (): Severity => 'unknown')
     .with('always_runs', (): Severity => 'always_runs')
     .exhaustive()
@@ -111,6 +113,7 @@ function staleReason(reason: CacheStatus['reason']): string {
   return match(reason)
     .with('changed', () => 'code changed')
     .with('upstream_stale', () => 'upstream')
+    .with('upstream_failed', () => 'upstream failed')
     .with('sensor_output_unknown', () => 'sensor')
     .with('cutoff_pending', () => 'cutoff')
     .with('failed', () => 'last run failed')
@@ -142,6 +145,11 @@ function cacheLabel(node: NodeState): string {
       node.partitions
         ? `${node.partitions.missing.toLocaleString()} of ${node.partitions.total.toLocaleString()} keys stale`
         : 'Stale (some keys)',
+    )
+    .with('blocked', () =>
+      node.partitions
+        ? `Blocked · ${node.partitions.missing.toLocaleString()} keys wait on upstream`
+        : 'Blocked · upstream failed',
     )
     .with('unknown', () => 'Unknown')
     .with('always_runs', () => 'Always runs')

@@ -545,6 +545,7 @@ file. `barca status` (`barca docs status`) names the state each node is in:
 | `stale`, reason `evicted` | the same, because the cache size limit deleted the file | computes it again ("Disk use"); a copy the artifact store holds is downloaded instead, and is not stale |
 | `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree; with a configured server, its ledger has not received the result yet | repairs that (an upload, a download) without running a step (`barca docs remote`, `barca docs server-mode`) |
 | `never_run`, `partial`, `unknown`, `always_runs` | no result yet; some partition keys cached; not knowable without running; a task or sensor | `barca docs status` |
+| `blocked`, reason `upstream_failed` | a partitioned node whose missing keys wait on the same keys of an input, which failed | computes its other keys and skips these (`barca docs partitions`, "Failed keys block their own keys") |
 
 Store availability reported by inspection can reuse a cloud observation for five minutes.
 Local file and plain-directory-store identity changes invalidate digest evidence immediately.

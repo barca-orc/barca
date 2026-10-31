@@ -36,6 +36,7 @@ nodes[].shape.type : string
 root : string
 summary : object
 summary.always_runs : integer
+summary.blocked : integer
 summary.cached : integer
 summary.never_run : integer
 summary.partial : integer

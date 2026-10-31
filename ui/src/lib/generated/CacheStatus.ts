@@ -2,16 +2,18 @@
 
 export type CacheStatus = {
 /**
- * `cached`, `unsynced`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
+ * `cached`, `unsynced`, `stale`, `never_run`, `partial`, `blocked`, `unknown` or
+ * `always_runs`.
  */
-state: "cached" | "unsynced" | "stale" | "never_run" | "partial" | "unknown" | "always_runs",
+state: "cached" | "unsynced" | "stale" | "never_run" | "partial" | "blocked" | "unknown" | "always_runs",
 /**
  * Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`,
  * `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
- * `upstream_stale`, `failed`, `artifact_missing`, `evicted`, `no_record`, `partitions_missing`,
- * `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`, `task` or `sensor`.
+ * `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`, `evicted`, `no_record`,
+ * `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`,
+ * `task` or `sensor`.
  */
-reason: "materialized" | "local_only" | "store_only" | "mismatch" | "not_in_ledger" | "changed" | "upstream_stale" | "failed" | "artifact_missing" | "evicted" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "cutoff_pending" | "task" | "sensor",
+reason: "materialized" | "local_only" | "store_only" | "mismatch" | "not_in_ledger" | "changed" | "upstream_stale" | "upstream_failed" | "failed" | "artifact_missing" | "evicted" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "cutoff_pending" | "task" | "sensor",
 /**
  * The reason in words.
  */
