@@ -1,13 +1,14 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { KEYS_PER_NODE, type KeyHits } from '@/lib/palette'
+import { recovering } from './polling'
 
 /** A page of a partitioned node's keys (`GET /assets/{id}/partitions`), while a panel shows it. */
 export function usePartitionKeys(id: string, filter: { status?: 'failed'; q?: string; limit: number }) {
   return useQuery({
     queryKey: ['partition-keys', id, filter],
     queryFn: () => api.partitionKeys(id, filter),
-    refetchInterval: 10_000,
+    refetchInterval: recovering(10_000),
     placeholderData: (previous) => previous,
     retry: false,
   })
@@ -26,6 +27,7 @@ export function usePartitionKeySearch(ids: readonly string[], q: string) {
       queryFn: () => api.partitionKeys(id, { q, limit: KEYS_PER_NODE }),
       enabled: q !== '',
       staleTime: 10_000,
+      refetchInterval: recovering(),
       retry: false,
     })),
     combine: (results) => ({

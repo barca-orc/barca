@@ -643,3 +643,23 @@
 .barca-keys-list li { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--border-default); }
 .barca-keys-list code { font-size: var(--text-xs); overflow-wrap: anywhere; }
 .barca-keys-list li.is-failed code { color: var(--status-failed); }
+
+/* Node panel, a partitioned node (issue 763): errors in the failure colour and copyable, key rows
+   that can be run and show their artifact, a cut preview cell that opens on click. */
+.barca-node-keys .barca-error-line { max-width: none; color: var(--status-failed); white-space: normal; overflow-wrap: anywhere; }
+.barca-node-keys .barca-error-line > summary { white-space: normal; }
+.barca-keys-errors li > .barca-iconbtn, .barca-key-artifact > .barca-iconbtn { flex: none; align-self: center; }
+.barca-key-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.barca-key-head > code { min-width: 0; }
+.barca-key-head > .barca-btn { flex: none; }
+.barca-key-artifact { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.barca-key-artifact > code { font-size: var(--text-2xs); color: var(--text-muted); }
+.barca-keys-bar > span { flex: none; }
+.barca-keys > summary .barca-cell-failed { color: var(--status-failed); }
+.barca-source-path { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.barca-schema-cell-more {
+  display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; color: inherit; text-align: left; overflow-wrap: anywhere;
+}
+.barca-schema-cell-more:hover, .barca-schema-cell-more:focus-visible { color: var(--text-strong); outline: none; text-decoration: underline dotted; }
+.barca-schema-cell-more[aria-expanded="true"] { white-space: pre-wrap; }

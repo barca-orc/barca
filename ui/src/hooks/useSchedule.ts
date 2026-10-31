@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { recovering } from './polling'
 
 /** The scheduler's job registry (`GET /schedule`): which jobs are paused. */
 export function useSchedule() {
   return useQuery({
     queryKey: ['schedule'],
     queryFn: api.schedule,
-    refetchInterval: 10_000,
+    refetchInterval: recovering(10_000),
     retry: false,
   })
 }

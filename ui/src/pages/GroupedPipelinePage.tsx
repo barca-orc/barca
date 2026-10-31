@@ -521,7 +521,8 @@ export function GroupedPipelinePage() {
         <div className="barca-table-empty">
           <p>
             Can't load pipeline:{' '}
-            {failure?.message}
+            {failure?.message}{' '}
+            <Button size="sm" onClick={() => { void assetQuery.refetch(); void groupsQuery.refetch() }}>Retry</Button>
           </p>
           {failure instanceof ApiError && failure.remediation && <p>{failure.remediation}</p>}
           {metadataUnusable(failure) && <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />}
@@ -532,7 +533,8 @@ export function GroupedPipelinePage() {
         <>
         {stateQuery.isError && (
           <div className="barca-graph-tools" role="status">
-            Asset state unavailable: {stateQuery.error.message}
+            Asset state unavailable: {stateQuery.error.message}{' '}
+            <Button size="sm" onClick={() => void stateQuery.refetch()}>Retry</Button>
             {stateQuery.error instanceof ApiError && stateQuery.error.remediation && (
               <span> {stateQuery.error.remediation}</span>
             )}

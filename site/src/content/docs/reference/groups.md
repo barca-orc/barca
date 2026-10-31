@@ -39,11 +39,13 @@ training = group(
 experiment = group("Experiment", members=[training], output=training)
 ```
 
-Declare groups as top-level assignments after their referenced functions/groups,
-using a literal name, list or tuple of members, output reference, and optional
-literal description. Groups can nest to any depth. Each node or group has at
-most one parent. Duplicate membership, unknown references, cycles and outputs
-outside the group's descendants are errors. Nodes may remain ungrouped.
+Declare groups at the top level of the file, after their referenced
+functions/groups, using a literal name, list or tuple of members, output
+reference, and optional literal description. Assign a group to a variable to
+nest it in another group; a bare `group(...)` statement is registered too, under
+its name, and can only be a root. Groups can nest to any depth. Each node or
+group has at most one parent. Duplicate membership, unknown references, cycles
+and outputs outside the group's descendants are errors. Nodes may remain ungrouped.
 Members may reference imported nodes from discovered pipeline files; nested groups
 are currently referenced by their variable in the same file. Computed membership,
 loops, conditional declarations, strings as references and starred arguments are
@@ -55,7 +57,9 @@ barca list pipeline.py --groups --json   # {groups: [{id, name, description, mem
 barca list pipeline.py                   # unchanged flat executable-node listing
 ```
 
-Group IDs are `group:<file>:<variable>`, separate from `<file>:<function>` node IDs.
+Group IDs are `group:<file>:<variable>` (`group:<file>:<name>` for a group that is not
+assigned to a variable), separate from `<file>:<function>` node IDs. Two groups in a
+file cannot share an ID.
 The server exposes the same metadata at `GET /groups`. The UI collapses roots and
 opens their contents on double click or Enter, retaining nesting across List/Graph.
 Health aggregates all descendant nodes: any failed member makes its ancestors red,
