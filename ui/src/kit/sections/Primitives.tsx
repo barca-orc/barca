@@ -125,7 +125,7 @@ const [query, setQuery] = useState('')
       <Variant label="wide, every bucket named"><HealthBar counts={healthStates['failed and stale']!} labelLimit={6} width={200} /></Variant>
     </Spec>
 
-    <Spec title="Age / LastSuccess" note="Relative, absolute UTC on hover; a failing row adds since when and how many runs.">
+    <Spec title="Age / LastSuccess" note="Relative, absolute in the chosen zone on hover; a failing row adds since when and how many runs.">
       <Variant label="minutes"><Age at={new Date(NOW_MS - 300_000).toISOString()} nowMs={NOW_MS} /></Variant>
       <Variant label="healthy"><LastSuccess at={new Date(NOW_MS - 3_600_000).toISOString()} failingSince={null} failures={0} nowMs={NOW_MS} /></Variant>
       <Variant label="failing"><LastSuccess at={new Date(NOW_MS - 172_800_000).toISOString()} failingSince={new Date(NOW_MS - 50_400_000).toISOString()} failures={3} nowMs={NOW_MS} /></Variant>

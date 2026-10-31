@@ -1,5 +1,5 @@
 import { match } from 'ts-pattern'
-import { formatAbsolute } from './time'
+import { formatAbsolute, type TimeZone } from './time'
 import type { ErrorEnvelope, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
 const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
@@ -103,7 +103,8 @@ export function outcomeResult(outcome: RunOutcome | null): unknown {
     .exhaustive()
 }
 
-export function runTime(value: string | null): string {
+/** A run's start or finish in the reader's zone; `null` (not finished, or not recorded) is a dash. */
+export function runTime(value: string | null, zone: TimeZone): string {
   if (!value) return '–'
-  return formatAbsolute(value)
+  return formatAbsolute(value, zone)
 }

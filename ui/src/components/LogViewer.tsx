@@ -1,4 +1,6 @@
 import { useEffect, useRef, type CSSProperties } from 'react'
+import { useTimeZone } from '@/context/timeZone'
+import { formatAbsolute, formatClock } from '@/lib/time'
 import type { LogLine } from '@/lib/types'
 import { injectStyles } from '@/lib/injectStyles'
 
@@ -44,19 +46,11 @@ const CSS = `
   }
 `
 
-/** `HH:MM:SS.mmm` of an RFC 3339 time in local time, as the rest of the UI shows times; the
- * line's title is the recorded UTC time. */
-function clock(ts: string): string {
-  const d = new Date(ts)
-  if (Number.isNaN(d.getTime())) return ts
-  const pad = (n: number, width = 2) => String(n).padStart(width, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
-}
-
 /**
  * barca · LogViewer
  * Monospace log stream — the core barca surface. Renders captured lines with
- * line numbers, each line's time (local; UTC on hover) and a blinking signal-green cursor while
+ * line numbers, each line's time (`HH:MM:SS.mmm` in the reader's zone, zone named; the full
+ * date on hover) and a blinking signal-green cursor while
  * live; stderr lines are muted, with a rule at their left. Auto-scrolls to the
  * bottom while the user is pinned there.
  */
@@ -68,6 +62,7 @@ export function LogViewer({
   style,
 }: LogViewerProps) {
   injectStyles(STYLE_ID, CSS)
+  const { zone } = useTimeZone()
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
 
@@ -107,8 +102,8 @@ export function LogViewer({
               <div key={i} className="barca-log-line" data-stream={ln.stream ?? 'stdout'}>
                 {showLineNumbers && <span className="barca-log-gutter">{i + 1}</span>}
                 {ln.ts && (
-                  <span className="barca-log-ts" title={ln.ts}>
-                    {clock(ln.ts)}
+                  <span className="barca-log-ts" title={formatAbsolute(ln.ts, zone)}>
+                    {formatClock(ln.ts, zone)}
                   </span>
                 )}
                 <span className="barca-log-text">

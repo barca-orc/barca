@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useMemo } from 'react'
 import { Link } from 'react-router'
 import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
-import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
+import { formatAbsolute } from '@/lib/time'
 import { ArtifactSchema } from './ArtifactSchema'
 import { CopyButton, NodeKeys, PartitionBar } from './NodeKeys'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
@@ -43,6 +45,7 @@ function Breakable({ name }: { name: string }) {
 }
 
 export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
+  const { zone } = useTimeZone()
   const { data: detail, isLoading, isError } = useAssetDetail(node.id)
   const [row] = buildRows([node], nowMs)
   const last = node.last_materialization
@@ -290,7 +293,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                   key={i}
                   className={b.failed ? 'is-failed' : undefined}
                   style={{ height: `${b.heightPct}%` }}
-                  title={`${b.createdAt} UTC · ${b.label}`}
+                  title={`${formatAbsolute(b.createdAt, zone)} · ${b.label}`}
                 />
               ))}
             </div>
@@ -391,7 +394,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           {detail ? freshnessLabel(detail.asset) : <Skeleton width={72} height={12} />}
         </KeyValue>
         {row?.nextRunMs != null && (
-          <KeyValue label="next run">{new Date(row.nextRunMs).toLocaleString()}</KeyValue>
+          <KeyValue label="next run"><Absolute at={row.nextRunMs} /></KeyValue>
         )}
         <KeyValue label="partitioned">{node.partitioned ? 'yes' : 'no'}</KeyValue>
         <KeyValue label="env vars">{node.env.length ? <code>{node.env.join(', ')}</code> : '–'}</KeyValue>

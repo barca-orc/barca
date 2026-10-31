@@ -10,7 +10,7 @@ import { shortName } from './graph'
 import { headline } from './health'
 import { only, type Next } from './program'
 import { parseRunStatus, runIsLive } from './runs'
-import { parseTime } from './time'
+import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
 import type { FirstFailure, RunNodeSummary, RunStep, RunSummary, RunView, StatusKind } from './types'
 
 export const RUNS_PAGE_SIZE = 100
@@ -327,24 +327,24 @@ export function runActivity(runs: readonly RunSummary[], nowMs: number, hours = 
   }
 }
 
-/** `14:00`, in the reader's own time zone. */
-export function hourLabel(at: number): string {
-  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+/** `14:00`, in the reader's chosen time zone. */
+export function hourLabel(at: number, zone: TimeZone = 'local'): string {
+  return formatHour(at, zone)
 }
 
-/** A bar's tooltip: the hour, its runs, and what failed first. */
-export function activityBarLabel(h: ActivityHour): string {
+/** A bar's tooltip: the hour (zone named), its runs, and what failed first. */
+export function activityBarLabel(h: ActivityHour, zone: TimeZone = 'local'): string {
   const n = h.ok + h.failed + h.live
-  const parts = [`${hourLabel(h.at)}: ${n} run${n === 1 ? '' : 's'}`]
+  const parts = [`${hourLabel(h.at, zone)} ${zoneName(zone, h.at)}: ${n} run${n === 1 ? '' : 's'}`]
   if (h.failed) parts.push(`${h.failed} not successful`)
   if (h.live) parts.push(`${h.live} in progress`)
   const failure = h.firstFailure ? `\n${failureLine(h.firstFailure)}` : ''
   return parts.join(', ') + failure
 }
 
-/** A tick every `every` hours of local time: an hour's bar index with its label. */
-export function activityTicks(hours: readonly ActivityHour[], every = 6): { index: number; label: string }[] {
+/** A tick every `every` hours of the reader's chosen zone: an hour's bar index with its label. */
+export function activityTicks(hours: readonly ActivityHour[], every = 6, zone: TimeZone = 'local'): { index: number; label: string }[] {
   return hours.flatMap((h, index) =>
-    new Date(h.at).getHours() % every === 0 && index < hours.length - 2 ? [{ index, label: hourLabel(h.at) }] : [],
+    hourOf(h.at, zone) % every === 0 && index < hours.length - 2 ? [{ index, label: hourLabel(h.at, zone) }] : [],
   )
 }

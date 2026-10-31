@@ -1,5 +1,5 @@
 import { match } from 'ts-pattern'
-import { Button, Section } from '@/components'
+import { Absolute, Button, Section } from '@/components'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import type { TokensModel, TokensMsg } from '@/lib/tokensPage'
@@ -12,8 +12,6 @@ export interface TokensViewProps {
   /** For the create message's expiry check; the kit and tests pass a fixed clock. */
   now?: () => number
 }
-
-const when = (iso: string) => new Date(iso).toLocaleString()
 
 /** The page while token authentication is off on the server. */
 export function TokensOffView() {
@@ -34,7 +32,7 @@ export function TokensView({ model, tokens, dispatch, now = Date.now }: TokensVi
     {issued && <Section title="Copy your token">
       <p>This secret is shown once. Keep it somewhere safe before dismissing it.</p>
       <code className="barca-token-secret">{issued.token.token}</code>
-      <p>{issued.token.expires_at ? `Expires ${when(issued.token.expires_at)}` : 'This token has no expiry.'}</p>
+      <p>{issued.token.expires_at ? <>Expires <Absolute at={issued.token.expires_at} /></> : 'This token has no expiry.'}</p>
       <Button onClick={() => dispatch({ type: 'copy_clicked' })}>{issued.copied ? 'Copied' : 'Copy token'}</Button>
       {' '}<Button onClick={() => dispatch({ type: 'dismissed' })}>Done</Button>
     </Section>}
@@ -56,7 +54,7 @@ export function TokensView({ model, tokens, dispatch, now = Date.now }: TokensVi
           {refreshError && <p role="alert">{refreshError} <Button onClick={() => dispatch({ type: 'retry_list' })}>Retry</Button></p>}
           {data.length === 0 && <p className="barca-note">No active tokens.</p>}
           {data.map(token => <div key={token.id} className="barca-token-row">
-            <div><strong>{token.name}</strong><p className="barca-note">Created {when(token.created_at)} · {token.expires_at ? `expires ${when(token.expires_at)}` : 'no expiry'}</p></div>
+            <div><strong>{token.name}</strong><p className="barca-note">Created <Absolute at={token.created_at} /> · {token.expires_at ? <>expires <Absolute at={token.expires_at} /></> : 'no expiry'}</p></div>
             <Button variant="danger" disabled={busy} loading={request.kind === 'revoking' && request.id === token.id} onClick={() => dispatch({ type: 'revoke_clicked', id: token.id })} aria-label={`Revoke ${token.name}`}>Revoke</Button>
           </div>)}
         </>)

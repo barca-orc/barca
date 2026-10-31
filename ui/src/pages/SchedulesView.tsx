@@ -1,10 +1,12 @@
 import { match } from "ts-pattern";
-import { Button, StatusBadge, Tag } from "@/components";
+import { Absolute, Button, StatusBadge, Tag } from "@/components";
+import { useTimeZone } from "@/context/timeZone";
 import { severityStatus } from "@/lib/assetTable";
 import { inPipeline } from "@/lib/pipeline";
 import type { Remote } from "@/lib/remote";
 import { scheduleRows, type ScheduleRow } from "@/lib/schedules";
 import { nodeKindLabel } from "@/lib/status";
+import { formatInstant } from "@/lib/time";
 import type { Health, ListNode, NodeState, ScheduleJob } from "@/lib/types";
 
 export interface SchedulesViewProps {
@@ -107,6 +109,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
 }
 
 function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<SchedulesViewProps, "toggle" | "onOpen" | "onToggle"> & { rows: ScheduleRow[]; canPause: boolean }) {
+  const { zone } = useTimeZone();
   return (
     <table className="barca-table">
       <thead>
@@ -143,7 +146,7 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
                 <>
                   <div>{r.nextIn}</div>
                   <div className="barca-cell-sub">
-                    {new Date(r.nextRunMs).toLocaleString()}
+                    <Absolute at={r.nextRunMs} />
                   </div>
                 </>
               ) : (
@@ -170,7 +173,7 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
                 <span
                   title={
                     r.paused.until !== null
-                      ? `paused until ${new Date(r.paused.until).toLocaleString()}`
+                      ? `paused until ${formatInstant(r.paused.until, zone)}`
                       : "paused until resumed"
                   }
                 >
