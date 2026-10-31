@@ -37,6 +37,7 @@ use crate::persist::{
 };
 use crate::store_sync::{StoreSync, transfer_remedy};
 
+mod blocked;
 mod bookkeeping;
 mod republish;
 use bookkeeping::{LedgerContext, RunEvidence, RunResults};
@@ -362,6 +363,12 @@ struct RunState {
     step_failure_phase: Option<crate::dispatch::ErrorPhase>,
     failed_bases: std::collections::HashSet<String>,
     skipped_bases: std::collections::HashSet<String>,
+    /// The keys whose step failed, by base (`PartitionKey::suffix`), and whether a step failed
+    /// whole (a run with one target stops at that; a failed key stops only what reads it, #764).
+    failed_keys: blocked::Keys,
+    whole_failure: bool,
+    /// The keys not computed because the same key of an input failed or was blocked, by base.
+    blocked_keys: blocked::Keys,
     logs_buffer: crate::run_logs::Recorder,
     steps_executed: usize,
     total_steps: usize,
@@ -1481,11 +1488,18 @@ async fn expand_and_decide<'p>(
     // Multi-target run after a failure: drop the steps that depend on a failed
     // step before they are decided; the rest of the phase still runs.
     let unblocked_phase;
-    let phase = if session.prepared.keep_going && !session.state.failed_bases.is_empty() {
+    let phase = if !session.state.failed_bases.is_empty() {
         let mut p = phase.clone();
+        let narrowed = narrow_blocked_keys(session, &mut p);
         recover::drop_blocked(
             &mut p,
-            |base| blocking_failure(&session.prepared.dag, base, &session.state.failed_bases),
+            |base| {
+                (!narrowed.contains(base))
+                    .then(|| {
+                        blocking_failure(&session.prepared.dag, base, &session.state.failed_bases)
+                    })
+                    .flatten()
+            },
             |st, up| {
                 let base = st.step_id.base_id();
                 session.state.results.reports.push(StepReport {
@@ -1599,6 +1613,7 @@ async fn expand_and_decide<'p>(
             if let Some(selection) = &session.request.partition {
                 selection.prefilter(dims);
             }
+            blocked::filter_dims(&session.state.blocked_keys, base, dims);
         },
     );
     // A `partitions_from` source that cannot be read for keys fails the steps reading it.
@@ -1726,6 +1741,7 @@ fn fail_step(session: &mut RunSession<'_, '_>, base: String, message: String, er
         crate::run_line!(Agent, "{}", failed_step_line(&base, &message));
     }
     session.state.failed_bases.insert(base.clone());
+    session.state.whole_failure = true;
     if session.state.step_failure.is_none() {
         session.state.step_failure = Some((base.clone(), message.clone()));
     }
@@ -1734,6 +1750,73 @@ fn fail_step(session: &mut RunSession<'_, '_>, base: String, message: String, er
         .results
         .record_failure(base, error_type, message, 1, None, None);
 }
+/// What this run knows about its failures so far, for `blocked`.
+fn failures<'s>(session: &'s RunSession<'_, '_>) -> blocked::Failures<'s> {
+    blocked::Failures {
+        dag: &session.prepared.dag,
+        failed_bases: &session.state.failed_bases,
+        failed_keys: &session.state.failed_keys,
+        blocked_keys: &session.state.blocked_keys,
+        skipped: &session.state.skipped_bases,
+    }
+}
+
+/// Drop from `phase` the keys that a failed key blocks (#764): each is reported `skipped` with
+/// reason `upstream_key_failed`, and the rest of its node runs. Returns the bases narrowed this
+/// way; the other bases below a failure are blocked whole (`recover::drop_blocked`).
+fn narrow_blocked_keys(
+    session: &mut RunSession<'_, '_>,
+    phase: &mut Phase,
+) -> std::collections::HashSet<String> {
+    let prepared = session.prepared;
+    let in_phase: std::collections::HashSet<&str> = phase
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .map(|st| st.step_id.base_id())
+        .collect();
+    // In dependency order: a key blocked in one step blocks the same key of the step below it.
+    let order: Vec<String> = prepared
+        .dag
+        .topo_order()
+        .into_iter()
+        .filter(|id| in_phase.contains(id))
+        .map(str::to_string)
+        .collect();
+    let mut narrowed = std::collections::HashSet::new();
+    let mut dropped = std::collections::HashSet::new();
+    for base in order {
+        if blocking_failure(&prepared.dag, &base, &session.state.failed_bases).is_none() {
+            continue;
+        }
+        match blocked::how(&failures(session), &base, &dropped) {
+            blocked::Blocked::Whole => {
+                dropped.insert(base);
+            }
+            blocked::Blocked::Keys(keys) => {
+                let set: std::collections::HashSet<String> =
+                    keys.iter().map(|k| k.key.clone()).collect();
+                blocked::drop_keys(phase, &base, &set);
+                // A phase is prepared more than once (expanded, then made ready): each key is
+                // reported the first time.
+                let recorded = session.state.blocked_keys.entry(base.clone()).or_default();
+                for k in keys.iter().filter(|k| !recorded.contains(&k.key)) {
+                    let report = blocked::report(&prepared.dag, &base, k);
+                    session.state.results.reports.push(report);
+                }
+                session
+                    .state
+                    .blocked_keys
+                    .entry(base.clone())
+                    .or_default()
+                    .extend(set);
+                narrowed.insert(base);
+            }
+        }
+    }
+    narrowed
+}
+
 async fn recover_phase_inputs<'p>(
     session: &mut RunSession<'_, '_>,
     mut filtered_phase: Phase,
@@ -1743,10 +1826,17 @@ async fn recover_phase_inputs<'p>(
 ) -> Result<Option<(Phase, HashMap<String, dispatch::ProvidedInput>)>, BarcaError> {
     // A phase that waited for a recompute may since have lost an upstream to a failure
     // (several targets keep going around one): its blocked steps do not run.
-    if session.prepared.keep_going && !session.state.failed_bases.is_empty() {
+    if !session.state.failed_bases.is_empty() {
+        let narrowed = narrow_blocked_keys(session, &mut filtered_phase);
         recover::drop_blocked(
             &mut filtered_phase,
-            |base| blocking_failure(&session.prepared.dag, base, &session.state.failed_bases),
+            |base| {
+                (!narrowed.contains(base))
+                    .then(|| {
+                        blocking_failure(&session.prepared.dag, base, &session.state.failed_bases)
+                    })
+                    .flatten()
+            },
             |st, _| {
                 session
                     .state
@@ -2003,6 +2093,7 @@ async fn collect_failures(
                 .state
                 .failed_bases
                 .insert(item.step_id.base_id().to_string());
+            session.state.whole_failure = true;
             continue;
         }
         if session.request.agent_mode {
@@ -2026,6 +2117,16 @@ async fn collect_failures(
             .state
             .failed_bases
             .insert(item.step_id.base_id().to_string());
+        if item.step_id.partition.is_empty() {
+            session.state.whole_failure = true;
+        } else {
+            session
+                .state
+                .failed_keys
+                .entry(item.step_id.base_id().to_string())
+                .or_default()
+                .insert(item.step_id.partition.suffix());
+        }
         session.state.results.record_failure(
             node_id,
             "WorkerError",
@@ -2037,15 +2138,40 @@ async fn collect_failures(
     }
 
     // Steps the coordinator skipped because an in-phase dependency failed.
-    // They never executed, so they do not count in `steps_executed`.
+    // They never executed, so they do not count in `steps_executed`. A skipped key is
+    // reported on its own (#764); its node is skipped only when none of its keys ran.
+    let ran: std::collections::HashSet<&str> = coord
+        .outputs()
+        .keys()
+        .map(|id| coord.item(*id).step_id.base_id())
+        .collect();
+    let mut keyed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for item_id in coord.skipped_items() {
         let item = coord.item(item_id);
-        if item.group.is_none() {
-            session
-                .state
-                .skipped_bases
-                .insert(item.step_id.base_id().to_string());
-            session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        if item.group.is_some() {
+            continue;
+        }
+        session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        let base = item.step_id.base_id().to_string();
+        if item.step_id.partition.is_empty() {
+            session.state.skipped_bases.insert(base);
+            continue;
+        }
+        let key = item.step_id.partition.suffix();
+        let cause = blocked::cause(&failures(session), &base, &key);
+        let report = blocked::report(&session.prepared.dag, &base, &cause);
+        session.state.results.reports.push(report);
+        session
+            .state
+            .blocked_keys
+            .entry(base.clone())
+            .or_default()
+            .insert(key);
+        keyed.insert(base);
+    }
+    for base in keyed {
+        if !ran.contains(base.as_str()) && !session.state.failed_bases.contains(&base) {
+            session.state.skipped_bases.insert(base);
         }
     }
 
@@ -2272,9 +2398,11 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
                 &session.state.results.observations,
             );
         }
+        // A failed key blocks only the keys that read it: the run goes on and the next phases
+        // drop those keys (`blocked`). A step that failed whole stops a single-target run.
         if session.state.phase_error.is_some()
             || session.state.transfer_error.is_some()
-            || (session.state.step_failure.is_some() && !prepared.keep_going)
+            || (session.state.whole_failure && !prepared.keep_going)
         {
             break;
         }

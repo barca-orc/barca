@@ -37,7 +37,7 @@ behavior follows the coordinator dependency rules, not ordinary data-failure pro
 | Server accepts a request | Persist its queue entry before acknowledging its run identity |
 | Admission/capacity permits execution | Begin work under that run's cancellation and progress ownership |
 | Work succeeds | Commit completed results and progress; a final successful outcome does not invent computations for cache hits |
-| A key fails | Preserve completed peers; skip data dependents that cannot proceed; finish the run with its real failures |
+| A key fails | Preserve completed peers; skip data dependents that cannot proceed: only the same key of a dependent that reads it key for key (reported `upstream_key_failed`), the whole of one that reads every key (`upstream_failed`); the run goes on to later phases; finish the run with its real failures |
 | Caller cancels | Stop owned work, persist truthful progress/outcome and reap owned helpers |
 | Server drains/restarts | Apply queue requeue/interruption rules and reuse already committed successes |
 
@@ -115,7 +115,11 @@ The removed `BARCA_STATE=off` spelling and shared-history pull are not current a
 
 ## Failures and recovery
 
-A failed key preserves successful peers and blocks applicable data dependents. Cancellation
+A failed key preserves successful peers and blocks applicable data dependents: the same key of a
+dependent on exactly the same dimensions that reads it as a plain input, down the chain, and the
+whole of a dependent that reads every key (a `collect()` fan-in, an unpartitioned node, other
+dimensions). `barca status` reports a node with keys blocked this way `blocked`. A step that
+fails whole stops a single-target run at its phase, as before. Cancellation
 stops run-owned work and persists completed progress. Restart follows durable queue and
 owner-diagnosis rules; it does not establish exactly-once external side effects. The completion
 and lifecycle rules below define the precise existing behavior.

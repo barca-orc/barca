@@ -203,6 +203,8 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
         .iter()
         .map(|n| {
             let why = match &n.partitions {
+                // `39 of 39 missing keys wait on 'demand_forecast': ...` (#764).
+                Some(_) if n.cache.state == "blocked" => n.cache.detail.clone(),
                 Some(p) if n.cache.state != "cached" => {
                     format!(
                         "{} of {} keys cached; {}",
@@ -333,8 +335,14 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
     }
     let s = &result.summary;
     if let Some(filter) = filter {
-        let all =
-            s.cached + s.unsynced + s.stale + s.never_run + s.partial + s.unknown + s.always_runs;
+        let all = s.cached
+            + s.unsynced
+            + s.stale
+            + s.never_run
+            + s.partial
+            + s.blocked
+            + s.unknown
+            + s.always_runs;
         writeln!(
             &mut rendered,
             "\n{} of {} match {}; the counts below are for every node",
@@ -346,7 +354,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
     }
     writeln!(
         &mut rendered,
-        "\n{} cached, {}{} stale, {} never run, {} partial, {} unknown, {} always run",
+        "\n{} cached, {}{} stale, {} never run, {} partial, {}{} unknown, {} always run",
         s.cached,
         match s.unsynced {
             0 => String::new(),
@@ -355,6 +363,10 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
         s.stale,
         s.never_run,
         s.partial,
+        match s.blocked {
+            0 => String::new(),
+            n => format!("{n} blocked, "),
+        },
         s.unknown,
         s.always_runs
     )

@@ -349,8 +349,8 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
-| `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, unknown, always_runs. The summary still counts every node |
-| `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
+| `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node |
+| `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -784,7 +784,12 @@ may grow.
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
   words. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
   or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
-  `partition_selection`, and the result has `partition_selection` (see "Partitioned targets"). A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
+  `partition_selection`, and the result has `partition_selection` (see "Partitioned targets").
+  After a partition key fails, a key of a node that reads it key for key is a step with `status`
+  `skipped`, `reason` `upstream_key_failed` and a `detail` naming the failed key
+  (`barca docs partitions`, "Failed keys block their own keys"); a node that reads every key
+  (a `collect()` fan-in, an unpartitioned node) is `skipped` with reason `upstream_failed`,
+  as before. `barca status` reports such a node `blocked`. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
   stale; `barca docs cache`) carries a `detail` starting `Manual`. Breaking in this release: a
   stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
   `artifact_missing` is a step that has a cached result whose artifact file is gone
@@ -1365,6 +1370,7 @@ fetched) is still exit 3.
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
+| `summary.blocked` | integer | always |
 | `summary.cached` | integer | always |
 | `summary.never_run` | integer | always |
 | `summary.partial` | integer | always |
@@ -1751,6 +1757,7 @@ counts every node even when `nodes` is truncated.
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
+| `summary.blocked` | integer | always |
 | `summary.cached` | integer | always |
 | `summary.never_run` | integer | always |
 | `summary.partial` | integer | always |
@@ -1848,6 +1855,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
+| `summary.blocked` | integer | always |
 | `summary.cached` | integer | always |
 | `summary.never_run` | integer | always |
 | `summary.partial` | integer | always |
@@ -1907,6 +1915,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
+| `summary.blocked` | integer | always |
 | `summary.cached` | integer | always |
 | `summary.never_run` | integer | always |
 | `summary.partial` | integer | always |
@@ -2727,6 +2736,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
+| `summary.blocked` | integer | always |
 | `summary.cached` | integer | always |
 | `summary.never_run` | integer | always |
 | `summary.partial` | integer | always |

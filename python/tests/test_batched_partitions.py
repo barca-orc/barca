@@ -399,6 +399,152 @@ def test_a_call_that_raises_fails_every_key_and_a_retry_reruns_only_failed_keys(
     assert failed[0]["output_tail"] == ["about to fail"]
 
 
+# ─── Failed keys block their own keys (#764) ─────────────────────────────────
+
+CHAIN = (
+    FAILING_KEYS
+    + """
+@asset()
+def prices() -> int:
+    return 2
+
+# A second input ends the planner's chain: `promo` and `orders` are a phase after `scored`.
+@asset(partitions={"retailer": partitions_from(scored)}, batch="all", inputs={"prices": prices})
+def promo(retailer: list[str], scored: dict, prices: int) -> dict:
+    _called("promo", retailer)
+    return {r: {"promo": scored[r]["r"] * prices} for r in retailer}
+
+@asset(partitions={"retailer": partitions_from(promo)})
+def orders(retailer: str, promo: dict) -> dict:
+    return {"orders": promo["promo"]}
+
+@asset(inputs={"orders": collect(orders)})
+def summary(orders: list) -> dict:
+    return {"n": len(orders)}
+"""
+)
+
+
+def skipped_keys(result: dict) -> list[tuple[str, str]]:
+    return sorted(
+        (s["id"], s["detail"]) for s in result["steps"] if s.get("reason") == "upstream_key_failed"
+    )
+
+
+def test_a_failed_key_blocks_only_its_own_key_down_the_chain_and_a_fan_in_whole(keys5):
+    from . import served
+    from .test_http_openapi_client import validate
+
+    write(keys5, CHAIN)
+    (keys5 / "bad.txt").touch()
+    proc = run(keys5, "get", "summary", "pipeline.py", "--json")
+    assert proc.returncode == 1, proc.stderr
+    res = json.loads(proc.stdout)
+    # Two calls of two keys fail; which one is reported first depends on the workers.
+    assert res["failed_node"] in {
+        "pipeline.py:scored[retailer=r2]",
+        "pipeline.py:scored[retailer=r4]",
+    }
+    assert step(res, "scored")["status"] == "failed"
+    # The other three keys of the consumers ran, in one call; the two blocked keys are steps of
+    # their own, naming what they read.
+    assert step(res, "promo")["status"] == "ran"
+    assert step(res, "promo")["partitions"]["will_run"] == 3
+    assert step(res, "orders")["status"] == "ran"
+    assert calls(keys5) == [["promo", ["r1", "r3", "r5"]]]
+    assert skipped_keys(res) == [
+        ("pipeline.py:orders[retailer=r2]", "depends on 'promo[retailer=r2]', which was skipped"),
+        ("pipeline.py:orders[retailer=r4]", "depends on 'promo[retailer=r4]', which was skipped"),
+        ("pipeline.py:promo[retailer=r2]", "depends on 'scored[retailer=r2]', which failed"),
+        ("pipeline.py:promo[retailer=r4]", "depends on 'scored[retailer=r4]', which failed"),
+    ]
+    # The fan-in reads every key: skipped whole, as before.
+    summary = step(res, "summary")
+    assert (summary["status"], summary["reason"]) == ("skipped", "upstream_failed")
+    assert summary["detail"] == "depends on 'scored', which failed"
+    assert "5 downstream steps skipped (exit 1)" in proc.stderr
+
+    # The consumer alone: its computed keys are cached, the blocked ones skipped again.
+    proc = run(keys5, "get", "promo", "pipeline.py", "--json")
+    assert proc.returncode == 1, proc.stderr
+    res = json.loads(proc.stdout)
+    assert step(res, "promo")["status"] == "cached"
+    assert sorted(res["final_output"]) == ["retailer=r1", "retailer=r3", "retailer=r5"]
+    assert [k for k, _ in skipped_keys(res)] == [
+        "pipeline.py:promo[retailer=r2]",
+        "pipeline.py:promo[retailer=r4]",
+    ]
+    assert calls(keys5) == []
+
+    # Status: the consumers are blocked, not stale because of their upstream.
+    status = json.loads(run(keys5, "status", "pipeline.py", "--json").stdout)
+    nodes = {n["name"]: n for n in status["nodes"]}
+    assert (nodes["promo"]["cache"]["state"], nodes["promo"]["cache"]["reason"]) == (
+        "blocked",
+        "upstream_failed",
+    )
+    assert (
+        nodes["promo"]["cache"]["detail"]
+        == "2 of 2 missing keys wait on 'scored': the same keys of it failed"
+    )
+    assert nodes["orders"]["cache"]["state"] == "blocked"
+    assert "scored" in nodes["orders"]["cache"]["detail"]
+    assert nodes["scored"]["partitions"]["failed"] == 2
+    assert nodes["summary"]["cache"]["state"] == "never_run"
+    assert status["summary"]["blocked"] == 2
+    only = json.loads(run(keys5, "status", "pipeline.py", "--state", "blocked", "--json").stdout)
+    assert {n["name"] for n in only["nodes"]} == {"promo", "orders"}
+    table = run(keys5, "status", "pipeline.py", "--pretty").stdout
+    assert "2 of 2 missing keys wait on 'scored'" in table and "2 blocked," in table
+    with served.Serve(keys5, "--no-schedule", env=env()) as serve:
+        serve.ready()
+        state = serve.get("/state")
+        validate({"type": "array", "items": {"$ref": "#/components/schemas/NodeState"}}, state)
+        by_name = {n["name"]: n for n in state}
+        assert by_name["promo"]["cache"]["state"] == "blocked"
+        assert by_name["promo"]["partitions"]["missing"] == 2
+
+    # The fix is upstream: only the blocked keys run below it.
+    (keys5 / "bad.txt").unlink()
+    res = get(keys5, "summary")
+    assert step(res, "scored")["partitions"]["will_run"] == 2
+    assert step(res, "promo")["partitions"]["will_run"] == 2
+    assert calls(keys5) == [["promo", ["r2", "r4"]]]
+    assert step(res, "summary")["status"] == "ran"
+    assert skipped_keys(res) == []
+    status = json.loads(run(keys5, "status", "pipeline.py", "--json").stdout)
+    assert status["summary"]["blocked"] == 0
+
+
+def test_within_one_phase_a_skipped_key_is_its_own_step(tmp_path):
+    # Static keys: the planner fuses the chain into one phase, and the coordinator skips the key
+    # that reads the failed one while the others run.
+    write(
+        tmp_path,
+        """
+        @asset(partitions={"k": partitions(["a", "b", "c"])})
+        def first(k: str) -> dict:
+            if k == "b":
+                raise ValueError("no b")
+            return {"k": k}
+
+        @asset(partitions={"k": partitions(["a", "b", "c"])}, inputs={"first": first})
+        def second(k: str, first: dict) -> dict:
+            return {"k": first["k"]}
+        """,
+    )
+    proc = run(tmp_path, "get", "second", "pipeline.py", "--json")
+    assert proc.returncode == 1, proc.stderr
+    res = json.loads(proc.stdout)
+    assert step(res, "first")["status"] == "failed"
+    assert step(res, "second")["status"] == "ran"
+    assert sorted(res["final_output"]) == ["k=a", "k=c"]
+    assert skipped_keys(res) == [
+        ("pipeline.py:second[k=b]", "depends on 'first[k=b]', which failed")
+    ]
+    assert "1 downstream steps skipped (exit 1)" in proc.stderr
+
+
 # ─── Priority 2 and 3: tables ────────────────────────────────────────────────
 
 TABLES = """

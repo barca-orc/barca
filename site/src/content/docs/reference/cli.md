@@ -725,6 +725,7 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization recorded | `no_record`, `failed` |
 | `partial` | partitioned, some keys cached | `partitions_missing` |
+| `blocked` | partitioned; its missing keys wait on the same keys of an input, which failed | `upstream_failed` |
 | `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
 | `always_runs` | tasks and sensors | `task`, `sensor` |
 

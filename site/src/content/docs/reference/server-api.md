@@ -398,7 +398,7 @@ result was written (UTC `YYYY-MM-DD HH:MM:SS`, like `last_materialization.create
 `failing_since` is the first failed attempt after its last clean run, and `consecutive_failures` how
 many runs in a row failed it; they are `null` and `0` unless its latest attempts failed. An attempt
 is a run: one with a failed key is one failed attempt, even if other keys succeeded. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
-`unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
+`blocked`, `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
 [`barca status`](/reference/cli/#status)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
 check uses read-only connections to a compatible WAL metadata DB, or a private copy

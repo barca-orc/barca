@@ -210,6 +210,7 @@ pub const STATES: &[&str] = &[
     "stale",
     "never_run",
     "partial",
+    "blocked",
     "unknown",
     "always_runs",
 ];
@@ -339,22 +340,24 @@ pub fn short_error(error: &str, max: usize) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CacheStatus {
-    /// `cached`, `unsynced`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
+    /// `cached`, `unsynced`, `stale`, `never_run`, `partial`, `blocked`, `unknown` or
+    /// `always_runs`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"cached\" | \"unsynced\" | \"stale\" | \"never_run\" | \"partial\" | \"unknown\" | \"always_runs\""
+            type = "\"cached\" | \"unsynced\" | \"stale\" | \"never_run\" | \"partial\" | \"blocked\" | \"unknown\" | \"always_runs\""
         )
     )]
     pub state: String,
     /// Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`,
     /// `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
-    /// `upstream_stale`, `failed`, `artifact_missing`, `evicted`, `no_record`, `partitions_missing`,
-    /// `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`, `task` or `sensor`.
+    /// `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`, `evicted`, `no_record`,
+    /// `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`,
+    /// `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"cutoff_pending\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"upstream_failed\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"cutoff_pending\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -445,6 +448,10 @@ pub struct StatusSummary {
     pub stale: usize,
     pub never_run: usize,
     pub partial: usize,
+    /// Partitioned nodes some of whose keys wait on the same keys of an input, which failed
+    /// (#764).
+    #[serde(default)]
+    pub blocked: usize,
     pub unknown: usize,
     pub always_runs: usize,
     /// Cached, but not (yet) where it should be: this machine's copy and the artifact store's
@@ -465,6 +472,7 @@ impl StatusSummary {
                 "stale" => summary.stale += 1,
                 "never_run" => summary.never_run += 1,
                 "partial" => summary.partial += 1,
+                "blocked" => summary.blocked += 1,
                 "always_runs" => summary.always_runs += 1,
                 _ => summary.unknown += 1,
             }
@@ -647,6 +655,8 @@ pub(crate) async fn status_from_dag_with_membership(
 
     let mut nodes: Vec<NodeStatus> = Vec::new();
     let mut states: HashMap<String, String> = HashMap::new();
+    // Each blocked node: how many of its keys wait, and on which failed node.
+    let mut blocked: HashMap<String, (usize, String)> = HashMap::new();
     for id in ids {
         let Some(node) = dag.get_node(id) else {
             continue;
@@ -684,6 +694,22 @@ pub(crate) async fn status_from_dag_with_membership(
             !node.extracted.partitions.is_empty(),
             &pending,
         );
+        // Keys that wait on the same keys of an input, which failed, are blocked (#764): a run
+        // computes the node's other keys and skips these. Its own failed keys come first.
+        if let Some(p) = partitions.as_ref().filter(|p| p.failed == 0)
+            && !node.extracted.partitions.is_empty()
+            && matches!(cache.state.as_str(), "stale" | "never_run" | "partial")
+            && let Some((count, origin)) = blocked_by(dag, node, &failed_keys, &blocked, p.missing)
+        {
+            cache.state = "blocked".to_string();
+            cache.reason = "upstream_failed".to_string();
+            cache.detail = format!(
+                "{count} of {} missing keys wait on '{}': the same keys of it failed",
+                p.missing,
+                short_name(&origin)
+            );
+            blocked.insert(id.to_string(), (count, origin));
+        }
         states.insert(id.to_string(), cache.state.clone());
 
         let last_materialization = history.latest.map(|m| LastMaterialization {
@@ -765,6 +791,37 @@ pub(crate) fn trace_since(what: &str, t0: std::time::Instant) {
             t0.elapsed().as_secs_f64() * 1000.0
         );
     }
+}
+
+/// How many of `node`'s `missing` keys wait on a failed key of the same name: the node reads an
+/// input key for key (both have exactly the same dimension names and the input is not
+/// collected) whose keys failed, or are blocked in turn. Names the node whose keys failed.
+fn blocked_by(
+    dag: &crate::dag::Dag,
+    node: &crate::model::DagNode,
+    failed_keys: &HashMap<String, db::FailedKeys>,
+    blocked: &HashMap<String, (usize, String)>,
+    missing: usize,
+) -> Option<(usize, String)> {
+    let mine: std::collections::BTreeSet<&String> = node.extracted.partitions.keys().collect();
+    let mut reads: Vec<&String> = node.resolved_inputs.values().collect();
+    reads.sort();
+    reads.dedup();
+    reads
+        .into_iter()
+        .filter(|up| {
+            dag.get_node(up).is_some_and(|u| {
+                let theirs: std::collections::BTreeSet<&String> =
+                    u.extracted.partitions.keys().collect();
+                theirs == mine
+            })
+        })
+        .find_map(|up| match failed_keys.get(up) {
+            Some(f) if f.count > 0 => Some((f.count, up.clone())),
+            _ => blocked.get(up).cloned(),
+        })
+        .map(|(count, origin)| (count.min(missing), origin))
+        .filter(|(count, _)| *count > 0)
 }
 
 /// A cached node whose result was computed here and whose upload is still pending is
@@ -1113,9 +1170,12 @@ fn not_cached(
     };
     let upstream_stale = inputs.iter().find(|up| {
         let base = up.split('[').next().unwrap_or(up);
-        states
-            .get(base)
-            .is_some_and(|s| matches!(s.as_str(), "stale" | "never_run" | "partial" | "unknown"))
+        states.get(base).is_some_and(|s| {
+            matches!(
+                s.as_str(),
+                "stale" | "never_run" | "partial" | "blocked" | "unknown"
+            )
+        })
     });
     // The last attempt at exactly this code and these inputs failed.
     let failed_here = history

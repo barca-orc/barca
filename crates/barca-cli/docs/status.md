@@ -116,6 +116,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
+| `blocked` | a partitioned asset whose missing keys wait on the same keys of an input, which failed: a run computes its other keys and skips these (`barca docs partitions`, "Failed keys block their own keys") | `upstream_failed` (`detail`: `39 of 39 missing keys wait on 'demand_forecast': the same keys of it failed`) |
 | `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, an asset reading a sensor with no recorded output, or an asset reading an `@asset(cutoff=True)` that would run first (and what depends on any of them) | `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending` |
 | `always_runs` | tasks and sensors are never cached | `task`, `sensor` |
 
@@ -202,8 +203,8 @@ reason `failed`), and the error says to use `--problems`.
 
 `--problems` keeps every node that needs attention:
 
-- every state but `cached` and `always_runs`: `unsynced`, `stale`, `never_run`, `partial` and
-  `unknown`. A node that never ran counts: nothing it would serve exists yet;
+- every state but `cached` and `always_runs`: `unsynced`, `stale`, `never_run`, `partial`,
+  `blocked` and `unknown`. A node that never ran counts: nothing it would serve exists yet;
 - a task or sensor (`always_runs`) whose last run failed;
 - a node whose schedule is paused or failing (below).
 
@@ -361,7 +362,7 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
   ],
-  "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "unknown": 0, "always_runs": 0}
+  "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "blocked": 0, "unknown": 0, "always_runs": 0}
 }
 ```
 

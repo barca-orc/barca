@@ -974,11 +974,11 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "N")]
         sample: Option<usize>,
         /// Show only nodes in these cache states (comma-separated): cached, unsynced, stale,
-        /// never_run, partial, unknown, always_runs. The summary still counts every node
+        /// never_run, partial, blocked, unknown, always_runs. The summary still counts every node
         #[arg(long, value_name = "STATE", value_delimiter = ',')]
         state: Vec<String>,
         /// Show only nodes that need attention: not cached (unsynced, stale, never_run, partial,
-        /// unknown), a task or sensor whose last run failed, or a paused or failing schedule
+        /// blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
         #[arg(long)]
         problems: bool,
         /// Environment name (separates cache/state per environment)
