@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.38.0 (2026-10-31)
+
 ### Features
 
 - A batched run says how many function calls it made. Each batched node gets one line before the
