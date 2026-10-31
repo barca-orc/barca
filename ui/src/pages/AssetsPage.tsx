@@ -24,6 +24,8 @@ import { useAssetStates } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
+import { useTimeZone } from '@/context/timeZone'
+import { formatShort, type TimeZone } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
 import { liveGraphState } from '@/lib/graphState'
@@ -71,14 +73,8 @@ function toggle<T>(list: T[], v: T): T[] {
   return list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
 }
 
-function formatNextRun(ms: number | null): string {
-  if (ms === null) return 'manual'
-  return new Date(ms).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+function formatNextRun(ms: number | null, zone: TimeZone): string {
+  return ms === null ? 'manual' : formatShort(ms, zone)
 }
 
 /** A column header that sorts the table; the active one shows its direction. */
@@ -112,6 +108,7 @@ function SortHeader({
 export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const { data, isError, error, dataUpdatedAt } = useAssetStates()
   const { data: health } = useHealth()
+  const { zone } = useTimeZone()
   const assetQuery = useAssets()
   const graph = useMemo(() => (assetQuery.isPlaceholderData ? [] : assetQuery.data ?? []), [assetQuery.data, assetQuery.isPlaceholderData])
   const navigate = useNavigate()
@@ -366,7 +363,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   <td className="num" title={r.p95 ? `p95 ${r.p95}` : undefined}>
                     {r.typical ?? '–'}
                   </td>
-                  <td>{formatNextRun(r.nextRunMs)}</td>
+                  <td>{formatNextRun(r.nextRunMs, zone)}</td>
                 </tr>
                 )
               })}

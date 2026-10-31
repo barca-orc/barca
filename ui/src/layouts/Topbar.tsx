@@ -3,6 +3,8 @@ import { NavLink, useSearchParams } from 'react-router'
 import { Sun, Moon, Play, Search } from 'lucide-react'
 import { Button, ConfirmDialog, ConnectionBadge, IconButton, RunsInProgress } from '@/components'
 import { useTheme } from '@/context/theme'
+import { useTimeZone } from '@/context/timeZone'
+import { zoneName } from '@/lib/time'
 import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
 
@@ -17,6 +19,7 @@ interface TopbarProps {
 
 export function Topbar({ run }: TopbarProps) {
   const { theme, toggleTheme } = useTheme()
+  const { zone, toggleZone } = useTimeZone()
   const [confirming, setConfirming] = useState(false)
   const [palette, setPalette] = useState(false)
   useEffect(() => {
@@ -50,6 +53,16 @@ export function Topbar({ run }: TopbarProps) {
         </IconButton>
         <ConnectionBadge connection={connection(health.data, health.isError)} />
         <RunsInProgress />
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-pressed={zone === 'utc'}
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', letterSpacing: '0.02em', color: zone === 'utc' ? 'var(--text-strong)' : 'var(--text-muted)' }}
+          title={zone === 'utc' ? `Times are UTC; show them in local time (${zoneName('local')})` : `Times are local (${zoneName('local')}); show them in UTC`}
+          onClick={toggleZone}
+        >
+          {zoneName(zone)}
+        </Button>
         <IconButton
           label={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
           onClick={toggleTheme}

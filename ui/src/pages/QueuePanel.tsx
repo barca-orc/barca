@@ -2,7 +2,9 @@ import { Link } from 'react-router'
 import { match } from 'ts-pattern'
 import { Button, StatusDot, Tag } from '@/components'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
+import { useTimeZone } from '@/context/timeZone'
 import { ApiError } from '@/lib/api'
+import { runTime } from '@/lib/runs'
 import { capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queueState, queueStateLabel, sharedCapacityLabel, waitingRows } from '@/lib/queue'
 
 /**
@@ -14,10 +16,12 @@ import { capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queu
 export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
   const { data, isError, error } = useQueue()
   const toggle = useToggleQueuePause()
+  const { zone } = useTimeZone()
   const state = data ? queueState(data) : null
-  const stateLabel = state ? queueStateLabel(state) : null
+  const formatTime = (value: string | null) => runTime(value, zone)
+  const stateLabel = state ? queueStateLabel(state, formatTime) : null
   const control = data ? queueControl(data, readOnly) : { kind: 'hidden' as const }
-  const rows = data ? queueRows(data.queued) : []
+  const rows = data ? queueRows(data.queued, formatTime) : []
   const shared = data ? sharedCapacityLabel(data.capacity) : null
   const waiting = data ? waitingRows(data.capacity) : []
   const toggleError = toggle.error instanceof ApiError ? toggle.error : null

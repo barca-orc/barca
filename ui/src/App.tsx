@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from 'react-router'
 import { ThemeProvider } from '@/context/ThemeContext'
+import { TimeZoneProvider } from '@/context/TimeZoneContext'
 import { router } from '@/router'
 import { subscribeConnection } from '@/lib/credentials'
 
@@ -18,7 +19,9 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <RouterProvider router={router} />
+        <TimeZoneProvider>
+          <RouterProvider router={router} />
+        </TimeZoneProvider>
       </ThemeProvider>
     </QueryClientProvider>
   )

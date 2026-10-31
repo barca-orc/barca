@@ -6,7 +6,7 @@
 
 import { match } from 'ts-pattern'
 import { runHref } from './running'
-import { runTime, triggeredByLabel } from './runs'
+import { triggeredByLabel } from './runs'
 import type { CapacitySnapshot, HealthQueue, QueueEntry, QueueView } from './types'
 
 /** `/queue` poll interval while anything runs or waits, and otherwise. */
@@ -35,7 +35,7 @@ export function queueState(view: QueueView): QueueState {
 }
 
 /** The state in words; null while the queue is open. */
-export function queueStateLabel(state: QueueState, formatTime: (value: string | null) => string = runTime): string | null {
+export function queueStateLabel(state: QueueState, formatTime: (value: string | null) => string): string | null {
   return match(state)
     .with({ kind: 'open' }, () => null)
     .with({ kind: 'paused' }, (s) => (s.since ? `paused since ${formatTime(s.since)}` : 'paused'))
@@ -113,7 +113,7 @@ export interface QueueRow {
   href: string
 }
 
-export function queueRows(entries: QueueEntry[], formatTime: (value: string | null) => string = runTime): QueueRow[] {
+export function queueRows(entries: QueueEntry[], formatTime: (value: string | null) => string): QueueRow[] {
   return [...entries]
     .sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity))
     .map((entry) => ({

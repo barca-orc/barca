@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Absolute, Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { useTimeZone } from '@/context/timeZone'
 import { formatSeconds } from '@/lib/assetTable'
+import { zoneName } from '@/lib/time'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
-import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, triggeredByLabel } from '@/lib/runs'
+import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, triggeredByLabel } from '@/lib/runs'
 import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runNodeLine, runFailed, runFailureLine, runProgress, runRowError, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunNodeGroup } from '@/lib/runsPage'
 import type { RunList, RunStep, RunView } from '@/lib/types'
@@ -75,8 +77,8 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
       <KeyValue label="command">{data.command}</KeyValue>
       <KeyValue label="target"><code className="barca-wrap">{data.target ?? 'all assets'}</code></KeyValue>
       <KeyValue label="triggered by">{triggeredByLabel(data.triggered_by)}</KeyValue>
-      <KeyValue label="started">{runTime(data.started_at)}</KeyValue>
-      <KeyValue label="finished">{runTime(data.finished_at)}</KeyValue>
+      <KeyValue label="started"><Absolute at={data.started_at} /></KeyValue>
+      <KeyValue label="finished"><Absolute at={data.finished_at} /></KeyValue>
       <KeyValue label="duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</KeyValue>
       <KeyValue label="executed">{data.steps_executed}</KeyValue>
       <KeyValue label="cached">{data.steps_cached}</KeyValue>
@@ -122,6 +124,7 @@ const FILTERS: { value: RunFilter; label: string }[] = [
 
 /** The last day hour by hour: a bar per hour, failures in red on top; a bar filters to its hour. */
 function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivity; hour: number | null; now: number; dispatch: Dispatch<RunsMsg> }) {
+  const { zone } = useTimeZone()
   const peak = Math.max(1, ...activity.hours.map((h) => h.ok + h.failed + h.live))
   const width = 100 / activity.hours.length
   const nowAt = 100 - width + (width * ((now % 3_600_000) / 3_600_000))
@@ -131,7 +134,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
         <div className="barca-activity-bars">
           {activity.hours.map((h) => {
             const n = h.ok + h.failed + h.live
-            const label = activityBarLabel(h)
+            const label = activityBarLabel(h, zone)
             return (
               <button key={h.at} type="button" className="barca-activity-bar" title={label} aria-label={label} aria-pressed={hour === h.at} disabled={n === 0}
                 onClick={() => dispatch({ type: 'hour_toggled', at: h.at })}>
@@ -145,7 +148,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
           })}
         </div>
         <div className="barca-activity-axis" aria-hidden="true">
-          {activityTicks(activity.hours).map((t) => <span key={t.index} style={{ left: `${t.index * width}%` }}>{t.label}</span>)}
+          {activityTicks(activity.hours, 6, zone).map((t, i) => <span key={t.index} style={{ left: `${t.index * width}%` }}>{t.label}{i === 0 && ` ${zoneName(zone, now)}`}</span>)}
           <span className="barca-activity-now" style={{ left: `${nowAt}%` }}>now</span>
         </div>
       </div>
@@ -160,6 +163,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
 }
 
 export function RunsView({ model, runs, selected, queue, now, dispatch }: RunsViewProps) {
+  const { zone } = useTimeZone()
   const list = runs.kind === 'ready' ? runs.data : null
   return (
     <div className="barca-view">
@@ -188,7 +192,7 @@ export function RunsView({ model, runs, selected, queue, now, dispatch }: RunsVi
                     ))}
                   </ChipGroup>
                   <SearchInput placeholder="Filter by target or run id" value={model.query} onChange={(value) => dispatch({ type: 'query_changed', value })} />
-                  {model.hour !== null && <Chip pressed onClick={() => dispatch({ type: 'hour_toggled', at: model.hour! })}>{hourLabel(model.hour)}–{hourLabel(model.hour + 3_600_000)} <X size={12} /></Chip>}
+                  {model.hour !== null && <Chip pressed onClick={() => dispatch({ type: 'hour_toggled', at: model.hour! })}>{hourLabel(model.hour, zone)}–{hourLabel(model.hour + 3_600_000, zone)} {zoneName(zone, model.hour)} <X size={12} /></Chip>}
                   <span className="barca-count">{shown.length.toLocaleString()} shown</span>
                 </div>
               </>}

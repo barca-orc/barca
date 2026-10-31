@@ -1,5 +1,6 @@
 import { useNavigate, useSearchParams } from "react-router";
-import { Button, StatusBadge, Tag } from "@/components";
+import { Absolute, Button, StatusBadge, Tag } from "@/components";
+import { useTimeZone } from "@/context/timeZone";
 import { useAssets } from "@/hooks/useAssets";
 import { useAssetStates } from "@/hooks/useAssetStates";
 import { useHealth } from "@/hooks/useHealth";
@@ -7,6 +8,7 @@ import { useSchedule, useToggleSchedulePause } from "@/hooks/useSchedule";
 import { severityStatus } from "@/lib/assetTable";
 import { inPipeline, pipelineName } from "@/lib/pipeline";
 import { scheduleRows } from "@/lib/schedules";
+import { formatInstant } from "@/lib/time";
 import { nodeKindLabel } from "@/lib/status";
 
 /**
@@ -24,6 +26,7 @@ export function SchedulesPage() {
   const toggle = useToggleSchedulePause();
   const canPause = health ? health.scheduler && !health.read_only : false;
   const navigate = useNavigate();
+  const { zone } = useTimeZone();
   const [params] = useSearchParams();
   const pipeline = params.get("pipeline");
 
@@ -127,7 +130,7 @@ export function SchedulesPage() {
                       <>
                         <div>{r.nextIn}</div>
                         <div className="barca-cell-sub">
-                          {new Date(r.nextRunMs).toLocaleString()}
+                          <Absolute at={r.nextRunMs} />
                         </div>
                       </>
                     ) : (
@@ -154,7 +157,7 @@ export function SchedulesPage() {
                       <span
                         title={
                           r.paused.until !== null
-                            ? `paused until ${new Date(r.paused.until).toLocaleString()}`
+                            ? `paused until ${formatInstant(r.paused.until, zone)}`
                             : "paused until resumed"
                         }
                       >

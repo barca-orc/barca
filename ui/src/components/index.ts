@@ -1,5 +1,5 @@
-export { Age, LastSuccess } from './Age'
-export type { AgeProps, LastSuccessProps } from './Age'
+export { Absolute, Age, LastSuccess } from './Age'
+export type { AbsoluteProps, AgeProps, LastSuccessProps } from './Age'
 
 export { Button } from './Button'
 export type { ButtonProps, ButtonVariant, ButtonSize } from './Button'

@@ -1,3 +1,4 @@
+import { Absolute } from '@/components/Age'
 import { artifactSchema } from '@/lib/artifactSchema'
 import { previewRows } from '@/lib/nodeDetail'
 import type { NodeStatus } from '@/lib/types'
@@ -17,7 +18,7 @@ export function ArtifactSchema({ node }: { node: NodeStatus }) {
       {schema.columns.length > 0 && <span>{schema.columns.length} {schema.fields ? 'fields' : 'columns'}</span>}
       {last.format && <span>{last.format}</span>}
     </div>
-    <p className="barca-schema-provenance">Materialized {last.created_at} UTC{last.partition ? ` · key ${last.partition}` : ''}</p>
+    <p className="barca-schema-provenance">Materialized <Absolute at={last.created_at} />{last.partition ? ` · key ${last.partition}` : ''}</p>
     {node.partitioned && <p className="barca-schema-empty">Schema of this key only; other keys may differ.</p>}
     {last.format === 'pickle' && <p className="barca-schema-empty">Top-level type or constructor only. Pickle fields are unavailable without loading the object.</p>}
     {schema.note && <p className="barca-schema-empty">{schema.note}</p>}
