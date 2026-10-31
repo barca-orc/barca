@@ -7,6 +7,8 @@ import { useAssets } from './useAssets'
 import { useGroups } from './useGroups'
 import { inPipeline } from '@/lib/pipeline'
 import { groupTree, viewScope } from '@/lib/groups'
+import { recovering } from './polling'
+import type { NodeState } from '@/lib/types'
 
 /** The query key of `scope`'s state; `null` is the whole project. */
 export function stateKey(scope: StateScope | null) {
@@ -49,7 +51,7 @@ export function useAssetStates() {
     queryKey: stateKey(scope),
     queryFn: ({ signal }) => (empty ? Promise.resolve([]) : api.state(scope, signal)),
     enabled: !waiting && (file === null || listed !== undefined),
-    refetchInterval: (query) => statePollInterval(query.state.data),
+    refetchInterval: recovering<NodeState[]>((query) => statePollInterval(query.state.data)),
     retry: false,
   })
 }
@@ -63,7 +65,7 @@ export function useWholeState() {
   return useQuery({
     queryKey: stateKey(null),
     queryFn: ({ signal }) => api.state(null, signal),
-    refetchInterval: POLL_WHOLE_MS,
+    refetchInterval: recovering(POLL_WHOLE_MS),
     retry: false,
   })
 }

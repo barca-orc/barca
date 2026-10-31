@@ -1,18 +1,19 @@
 import { Fragment, useEffect, useMemo } from 'react'
 import { Link } from 'react-router'
-import { CircleAlert, Copy, GitBranch, Play, X } from 'lucide-react'
+import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
 import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
 import { formatAbsolute } from '@/lib/time'
 import { ArtifactSchema } from './ArtifactSchema'
-import { NodeKeys } from './NodeKeys'
+import { CopyButton, NodeKeys, PartitionBar } from './NodeKeys'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
+import { useRunDetail } from '@/hooks/useRuns'
 import { buildRows, formatSeconds, severityStatus } from '@/lib/assetTable'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
-import { downstreamOf, durationHistogram, editorLink, formatBytes, historyBars, shortHash, whatChanged } from '@/lib/nodeDetail'
+import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, runPace, shortHash, sourcePath, whatChanged } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline } from '@/lib/health'
 import { memberHealth } from '@/lib/groups'
 import { shortName } from '@/lib/graph'
@@ -41,10 +42,6 @@ interface NodePanelProps {
 function Breakable({ name }: { name: string }) {
   const parts = name.split('__')
   return <>{parts.map((part, i) => <Fragment key={i}>{part}{i < parts.length - 1 && <>__<wbr /></>}</Fragment>)}</>
-}
-
-function CopyButton({ label, text }: { label: string; text: string }) {
-  return <IconButton label={label} size="sm" onClick={() => void navigator.clipboard?.writeText(text)}><Copy size={12} /></IconButton>
 }
 
 export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
@@ -76,8 +73,15 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const change = whatChanged(node.cache, failed)
   const definition = graph.find((n) => n.id === node.id)
   const root = useProject().data?.root
-  const editor = definition?.line ? editorLink(root, definition.file, definition.line) : null
+  const source = definition ? `${sourcePath(root, definition.file)}:${definition.line}` : null
+  // The server's path opens in an editor only on a machine that has it: one of the configured roots.
+  const roots = editorRoots(typeof localStorage === 'undefined' ? null : localStorage.getItem(EDITOR_ROOTS_KEY))
+  const editor = definition?.line && editorOpens(root, roots) ? editorLink(root, definition.file, definition.line) : null
   const artifact = node.cache.artifact ?? last?.artifact ?? null
+  // How fast the last run that recorded time went, per batched call (`steps_page.nodes` of the run).
+  const pacedRun = node.partitioned ? stats?.recent_runs.find((r) => r.elapsed_seconds !== null)?.run_id ?? null : null
+  const paced = useRunDetail(pacedRun)
+  const pace = runPace(paced.data?.steps_page.nodes?.find((n) => n.node_id === node.id))
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -131,6 +135,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             <div className="barca-why-head">
               <CircleAlert size={14} />
               <ErrorLine error={last.error} large />
+              {last.error && <CopyButton label="Copy error" text={last.error} />}
             </div>
             <p className="barca-note">
               Failed <Age at={last.created_at} nowMs={nowMs} />
@@ -160,11 +165,14 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {node.cache.changed && node.cache.changed.length > 0 && (
           <KeyValue label="changed">{node.cache.changed.join(', ')}</KeyValue>
         )}
-        {node.partitions && <NodeKeys key={node.id} id={node.id} partitions={node.partitions} nowMs={nowMs} />}
-        {definition && definition.line > 0 && (
+        {node.partitions && <PartitionBar partitions={node.partitions} />}
+        {definition && definition.line > 0 && source && (
           <KeyValue label="source">
-            {editor ? <a className="barca-link" href={editor} title="Open in VS Code">{definition.file}:{definition.line}</a> : <code>{definition.file}:{definition.line}</code>}
-            {' '}<CopyButton label="Copy source path" text={`${definition.file}:${definition.line}`} />
+            <span className="barca-source-path">
+              <code title={editor ? undefined : `Relative to the project root ${root ?? ''}. To open it in VS Code, set localStorage ${EDITOR_ROOTS_KEY} to a path prefix this machine has.`}>{source}</code>
+              <CopyButton label="Copy path" text={source} />
+              {editor && <a className="barca-link" href={editor}>Open in VS Code</a>}
+            </span>
           </KeyValue>
         )}
         <KeyValue label="downstream">
@@ -248,10 +256,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                 <b>{stats.total_runs}</b>
                 <span>runs</span>
               </div>
+              {pace && (
+                <div>
+                  <b>{pace.split(' / ')[0]}</b>
+                  <span>/ {pace.split(' / ')[1]}</span>
+                </div>
+              )}
               {stats.median_elapsed_seconds !== null && (
                 <div>
                   <b>{formatSeconds(stats.median_elapsed_seconds)}</b>
-                  <span>median</span>
+                  <span>{node.partitioned ? 'median / run' : 'median'}</span>
                 </div>
               )}
               {stats.p95_elapsed_seconds !== null && (
@@ -307,6 +321,13 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           </>
         )}
       </Section>
+
+      {node.partitions && (
+        <Section title="Keys">
+          <NodeKeys key={node.id} id={node.id} partitions={node.partitions} nowMs={nowMs}
+            onRunKey={runAction.fireKey} runDisabled={runAction.readOnly || runAction.triggering} startingKey={runAction.startingKey} />
+        </Section>
+      )}
 
       <Section title="Inputs & output">
         <p className="barca-schema-context">Latest materialized data. Input schemas describe their own latest outputs.</p>

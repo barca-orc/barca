@@ -1,7 +1,22 @@
+import { useState } from 'react'
 import { Absolute } from '@/components/Age'
 import { artifactSchema } from '@/lib/artifactSchema'
-import { previewRows } from '@/lib/nodeDetail'
+import { previewRows, truncateCell } from '@/lib/nodeDetail'
 import type { NodeStatus } from '@/lib/types'
+
+/** A preview cell: a long value (a 52-week list) is cut, and opens whole on click. */
+function PreviewCell({ value }: { value: string }) {
+  const [open, setOpen] = useState(false)
+  const { short, truncated } = truncateCell(value)
+  if (!truncated) return <td>{value}</td>
+  return (
+    <td>
+      <button type="button" className="barca-schema-cell-more" aria-expanded={open} title={open ? 'Collapse' : value} onClick={() => setOpen(!open)}>
+        {open ? value : short}
+      </button>
+    </td>
+  )
+}
 
 export function ArtifactSchema({ node }: { node: NodeStatus }) {
   const schema = artifactSchema(node.shape)
@@ -32,7 +47,7 @@ export function ArtifactSchema({ node }: { node: NodeStatus }) {
       <h4 className="barca-schema-label">First rows</h4>
       <table className="barca-schema-table" aria-label={`${node.name} first rows`}>
         <thead><tr>{preview.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-        <tbody>{preview.rows.map((row, i) => <tr key={i}>{row.map((v, j) => <td key={j}>{v}</td>)}</tr>)}</tbody>
+        <tbody>{preview.rows.map((row, i) => <tr key={i}>{row.map((v, j) => <PreviewCell key={j} value={v} />)}</tr>)}</tbody>
       </table>
     </div>}
   </>

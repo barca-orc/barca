@@ -7,7 +7,8 @@
 import { match } from 'ts-pattern'
 import { memberHealth } from './groups'
 import type { GraphState } from './graphState'
-import type { NodeState, StatusKind } from './types'
+import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
+import type { NodeState, PartitionKeys, StatusKind } from './types'
 
 /** A node's place in the graph: what `GET /assets` says, all a lineage needs. */
 export interface GraphLink {
@@ -126,6 +127,41 @@ export interface Failure {
   impact: number | null
   /** For a partitioned node: how many keys have no cached result. */
   missingKeys: number | null
+  /** For a partitioned node whose keys failed: how many, and their errors once loaded. */
+  keys?: FailedKeys | null
+}
+
+/** The failed keys of a partitioned node, as the failures list shows them. */
+export interface FailedKeys {
+  failed: number
+  total: number
+  /**
+   * Most common first, the key's own values replaced by `<key>`; null until
+   * `GET /assets/{name}/partitions?status=failed` has answered.
+   */
+  errors: PartitionErrorGroup[] | null
+  /** The run that recorded a failed key, once loaded: what "Open run" opens. */
+  runId: string | null
+}
+
+/** A node's failed keys, from its state and (once loaded) its keys page; null when none failed. */
+function failedKeys(node: NodeState, page: PartitionKeys | undefined): FailedKeys | null {
+  const partitions = node.partitions
+  const failed = partitions?.failed ?? page?.failed ?? 0
+  if (!partitions || failed === 0) return null
+  return { failed, total: partitions.total, errors: page ? page.errors : null, runId: page?.keys[0]?.run_id ?? null }
+}
+
+/** The failed nodes among `nodes` whose keys failed: those whose key errors are worth loading. */
+export function failedKeyNodes(nodes: readonly NodeState[]): string[] {
+  return nodes.filter((n) => memberHealth(n).status === 'failed' && failedKeys(n, undefined)).map((n) => n.id)
+}
+
+/** `7 of 3,077 keys · +2 more errors`: the line under a partitioned failure's headline. */
+export function keysLine(keys: FailedKeys): string {
+  const more = (keys.errors?.length ?? 0) - 1
+  const count = `${keys.failed.toLocaleString()} of ${keys.total.toLocaleString()} keys`
+  return more > 0 ? `${count} · +${more} more ${more === 1 ? 'error' : 'errors'}` : count
 }
 
 /** How late a group is: its members' worst, so one old failure is not averaged away. */
@@ -164,24 +200,36 @@ export function headline(error: string | null | undefined): string {
  * The failed nodes among `nodes`: the most downstream impact first (unknown last), then the most
  * recent. `consumers` is null while the graph is loading: then the impact is unknown, not 0. A
  * check that failed on a cached asset is a failure too; a node merely stale because something
- * upstream failed is not (it is what `impact` counts).
+ * upstream failed is not (it is what `impact` counts). A node whose keys failed is headed by
+ * their most common error once `keyErrors` (by node id) has its keys page; before that by its
+ * own error, which is one key's, or by how many keys failed.
  */
-export function failures(nodes: readonly NodeState[], consumers: ReadonlyMap<string, string[]> | null): Failure[] {
+export function failures(
+  nodes: readonly NodeState[],
+  consumers: ReadonlyMap<string, string[]> | null,
+  keyErrors?: ReadonlyMap<string, PartitionKeys>,
+): Failure[] {
   return nodes
     .filter((n) => memberHealth(n).status === 'failed')
     .map((n) => {
-      const error = n.last_materialization?.error ?? ''
+      const nodeError = n.last_materialization?.error ?? ''
+      const page = keyErrors?.get(n.id)
+      const keys = failedKeys(n, page)
+      const top = keys?.errors?.[0]
+      const sample = page?.keys[0]?.error ?? ''
+      const fallback = keys && !nodeError ? `${keysLine({ ...keys, errors: null })} failed` : headline(nodeError)
       return {
         id: n.id,
         name: n.name,
         kind: n.kind,
-        headline: headline(error),
-        error,
+        headline: top?.error ?? fallback,
+        error: top ? sample || nodeError || top.error : nodeError,
         at: n.last_materialization?.created_at ?? null,
         failingSince: n.failing_since,
         failures: n.consecutive_failures,
         impact: consumers ? downstreamIds(n.id, consumers).size : null,
         missingKeys: n.partitions ? n.partitions.missing : null,
+        keys,
       }
     })
     .sort((a, b) => (b.impact ?? -1) - (a.impact ?? -1) || (b.at ?? '').localeCompare(a.at ?? '') || a.name.localeCompare(b.name))
@@ -191,6 +239,8 @@ export function failures(nodes: readonly NodeState[], consumers: ReadonlyMap<str
 export interface FailureGroup {
   /** The headline with its numbers normalised: what the failures share. */
   cause: string
+  /** The first failure's headline as recorded: what the heading shows. */
+  headline: string
   failures: Failure[]
   /** The members' impacts added up; null when any is unknown. A node downstream of two counts twice. */
   impact: number | null
@@ -206,7 +256,7 @@ export function failureGroups(list: readonly Failure[]): FailureGroup[] {
   const groups = new Map<string, FailureGroup>()
   for (const f of list) {
     const cause = causeOf(f.headline)
-    const group = groups.get(cause) ?? { cause, failures: [], impact: 0 }
+    const group = groups.get(cause) ?? { cause, headline: f.headline, failures: [], impact: 0 }
     group.failures.push(f)
     group.impact = group.impact === null || f.impact === null ? null : group.impact + f.impact
     groups.set(cause, group)

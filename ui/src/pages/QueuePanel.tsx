@@ -14,7 +14,7 @@ import { capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queu
  * back, so a paused queue can still be resumed.
  */
 export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
-  const { data, isError, error } = useQueue()
+  const { data, isError, error, refetch } = useQueue()
   const toggle = useToggleQueuePause()
   const { zone } = useTimeZone()
   const state = data ? queueState(data) : null
@@ -30,7 +30,7 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
     <section className="barca-queue" aria-label="Queue">
       <div className="barca-queue-bar">
         <span className="barca-queue-title">Queue</span>
-        {!data && isError && <span className="barca-note" role="alert">Queue unavailable: {error.message}</span>}
+        {!data && isError && <span className="barca-note" role="alert">Queue unavailable: {error.message} <Button size="sm" onClick={() => void refetch()}>Retry</Button></span>}
         {data && <>
           <span className="barca-queue-count">
             <StatusDot status={data.running.length > 0 ? 'running' : 'pending'} size={6} />

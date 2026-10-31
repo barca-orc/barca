@@ -23,7 +23,7 @@ export const INITIAL_FAILURES: FailuresModel = { muted: [], showMuted: false, no
 export type FailuresMsg =
   | { type: 'retry'; id: string; kind: NodeKind; name: string }
   | { type: 'copy'; error: string }
-  | { type: 'open_run'; id: string; name: string }
+  | { type: 'open_run'; id: string; name: string; runId: string | null }
   | { type: 'toggle_mute'; key: string }
   | { type: 'toggle_show_muted' }
   | { type: 'done'; text: string }
@@ -32,7 +32,7 @@ export type FailuresMsg =
 export type FailuresEffect =
   | { type: 'retry'; id: string; kind: NodeKind; name: string }
   | { type: 'copy'; text: string }
-  | { type: 'open_run'; id: string; name: string }
+  | { type: 'open_run'; id: string; name: string; runId: string | null }
   | { type: 'save_muted'; muted: readonly string[] }
 
 export function updateFailures(model: FailuresModel, msg: FailuresMsg): Next<FailuresModel, FailuresEffect> {
@@ -40,7 +40,7 @@ export function updateFailures(model: FailuresModel, msg: FailuresMsg): Next<Fai
     .returnType<Next<FailuresModel, FailuresEffect>>()
     .with({ type: 'retry' }, ({ id, kind, name }) => [{ ...model, notice: null }, [{ type: 'retry', id, kind, name }]])
     .with({ type: 'copy' }, ({ error }) => [{ ...model, notice: null }, [{ type: 'copy', text: error }]])
-    .with({ type: 'open_run' }, ({ id, name }) => [{ ...model, notice: null }, [{ type: 'open_run', id, name }]])
+    .with({ type: 'open_run' }, ({ id, name, runId }) => [{ ...model, notice: null }, [{ type: 'open_run', id, name, runId }]])
     .with({ type: 'toggle_mute' }, ({ key }) => {
       const muted = model.muted.includes(key) ? model.muted.filter((k) => k !== key) : [...model.muted, key]
       return [{ ...model, muted }, [{ type: 'save_muted', muted }]]

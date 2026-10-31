@@ -20,7 +20,10 @@ pub struct NodeGroup {
 
 pub(crate) struct Declaration {
     pub(crate) file: String,
-    binding: String,
+    /// The variable the call is assigned to. `None` for a bare `group(...)` statement, which
+    /// is registered under its name instead (`group:<file>:<name>`) and cannot be nested in
+    /// another group, since nothing in the file refers to it.
+    binding: Option<String>,
     name: String,
     description: String,
     members: Vec<NodeRef>,
@@ -53,10 +56,12 @@ pub(crate) fn extract_body_with_names(
     let mut result = Vec::new();
     for stmt in body {
         let (target, value) = match stmt {
-            Stmt::Assign(a) if a.targets.len() == 1 => (&a.targets[0], a.value.as_ref()),
+            Stmt::Assign(a) if a.targets.len() == 1 => (Some(&a.targets[0]), a.value.as_ref()),
             Stmt::AnnAssign(a) if a.value.is_some() => {
-                (a.target.as_ref(), a.value.as_ref().unwrap().as_ref())
+                (Some(a.target.as_ref()), a.value.as_ref().unwrap().as_ref())
             }
+            // A `group(...)` call on its own line (#762): registered under its name.
+            Stmt::Expr(e) => (None, e.value.as_ref()),
             _ => continue,
         };
         let Expr::Call(call) = value else { continue };
@@ -72,8 +77,10 @@ pub(crate) fn extract_body_with_names(
         {
             return Err(invalid(file, "starred arguments are not supported"));
         }
-        let Expr::Name(binding) = target else {
-            return Err(invalid(file, "assign group(...) to a single name"));
+        let binding = match target {
+            None => None,
+            Some(Expr::Name(binding)) => Some(binding.id.to_string()),
+            Some(_) => return Err(invalid(file, "assign group(...) to a single name")),
         };
         if let Some(problem) = crate::decorator_args::check_call(
             call,
@@ -129,7 +136,7 @@ pub(crate) fn extract_body_with_names(
         };
         result.push(Declaration {
             file: file.into(),
-            binding: binding.id.to_string(),
+            binding,
             name: name.value.to_str().into(),
             description,
             members,
@@ -143,25 +150,30 @@ pub(crate) fn resolve(
     declarations: Vec<Declaration>,
     nodes: &[ExtractedNode],
 ) -> Result<Vec<NodeGroup>, BarcaError> {
+    // Assigned groups are referenced by their variable; a bare call is addressed by its name.
+    let key = |d: &Declaration| d.binding.clone().unwrap_or_else(|| d.name.clone());
     let mut bindings = HashMap::new();
+    let mut ids = HashSet::new();
     for d in &declarations {
-        if nodes
-            .iter()
-            .any(|n| n.source_file == d.file && n.function_name == d.binding)
-        {
-            return Err(invalid(
-                &d.file,
-                "a group cannot replace a node's function binding",
-            ));
+        if let Some(binding) = &d.binding {
+            if nodes
+                .iter()
+                .any(|n| n.source_file == d.file && n.function_name == *binding)
+            {
+                return Err(invalid(
+                    &d.file,
+                    "a group cannot replace a node's function binding",
+                ));
+            }
+            bindings.insert(
+                (d.file.clone(), binding.clone()),
+                format!("group:{}:{binding}", d.file),
+            );
         }
-        let id = format!("group:{}:{}", d.file, d.binding);
-        if bindings
-            .insert((d.file.clone(), d.binding.clone()), id)
-            .is_some()
-        {
+        if !ids.insert(format!("group:{}:{}", d.file, key(d))) {
             return Err(invalid(
                 &d.file,
-                format!("duplicate group binding {}", d.binding),
+                format!("duplicate group binding {}", key(d)),
             ));
         }
     }
@@ -179,7 +191,7 @@ pub(crate) fn resolve(
                 .ok_or_else(|| invalid(&d.file, format!("unknown or ambiguous member {r:?}")))
         };
         groups.push(NodeGroup {
-            id: bindings[&(d.file.clone(), d.binding.clone())].clone(),
+            id: format!("group:{}:{}", d.file, key(&d)),
             name: d.name.clone(),
             description: d.description.clone(),
             members: d.members.iter().map(reference).collect::<Result<_, _>>()?,
@@ -251,6 +263,47 @@ mod tests {
         assert_eq!(g[1].output, "p.py:model");
     }
     #[test]
+    fn unassigned_calls_register_under_their_name() {
+        // #762: a `group(...)` statement without `name = ` must not vanish.
+        let source = format!(
+            "{BASE}\nprep = group('Preparation', members=[rows], output=rows)\ngroup('Training', members=[prep, model], output=model, description='fit')\ngroup(\"Checks\", members=[check], output=check)\n"
+        );
+        let g = parse(&source).unwrap();
+        assert_eq!(
+            g.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(),
+            [
+                "group:p.py:prep",
+                "group:p.py:Training",
+                "group:p.py:Checks"
+            ]
+        );
+        assert_eq!(g[1].members, ["group:p.py:prep", "p.py:model"]);
+        assert_eq!(g[1].description, "fit");
+        // A bare group named like a node is a group, and its members still name the node.
+        let g = parse(&format!(
+            "{BASE}\ngroup('rows', members=[rows], output=rows)\n"
+        ))
+        .unwrap();
+        assert_eq!(g[0].id, "group:p.py:rows");
+        assert_eq!(g[0].members, ["p.py:rows"]);
+    }
+    #[test]
+    fn unassigned_calls_are_validated_and_unique() {
+        for declaration in [
+            "group('a', members=[missing], output=missing)",
+            "group('a', members=[rows])",
+            "group('a', members=[rows], output=rows)\ngroup('a', members=[model], output=model)",
+            "a = group('a', members=[rows], output=rows)\ngroup('a', members=[model], output=model)",
+            // Nothing in the file refers to a bare group, so it cannot be nested.
+            "group('a', members=[rows], output=rows)\nb = group('b', members=[a], output=a)",
+        ] {
+            assert!(
+                parse(&format!("{BASE}\n{declaration}\n")).is_err(),
+                "{declaration}"
+            );
+        }
+    }
+    #[test]
     fn rejects_invalid_hierarchies_and_dynamic_metadata() {
         for declaration in [
             "g = group('g', members=[missing], output=missing)",
@@ -314,13 +367,19 @@ mod tests {
 
     #[test]
     fn grouping_preserves_dependency_graph_and_hashes() {
-        let grouped =
-            format!("{BASE}\ng = group('Training', members=[rows, model, check], output=model)\n");
+        for declaration in [
+            "g = group('Training', members=[rows, model, check], output=model)",
+            "group('Training', members=[rows, model, check], output=model)",
+        ] {
+            grouping_preserves(&format!("{BASE}\n{declaration}\n"));
+        }
+    }
+    fn grouping_preserves(grouped: &str) {
         let ungrouped = BASE.replace(", group", "");
         let before = crate::parse::extract_nodes(&ungrouped, "p.py").unwrap();
-        let after = crate::parse::extract_nodes(&grouped, "p.py").unwrap();
+        let after = crate::parse::extract_nodes(grouped, "p.py").unwrap();
         let baseline = crate::cone::Module::new("p", ungrouped.as_str(), false);
-        let organizational = crate::cone::Module::new("p", grouped.as_str(), false);
+        let organizational = crate::cone::Module::new("p", grouped, false);
         let modules: HashMap<String, std::rc::Rc<crate::cone::Module>> = HashMap::new();
         for a in &before {
             assert_eq!(
