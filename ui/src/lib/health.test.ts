@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { causeOf, failureGroups, impactLabel, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, scopeAge } from './health'
-import type { NodeState } from './types'
+import { causeOf, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, scopeAge } from './health'
+import type { NodeState, PartitionKeys } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
   return {
@@ -60,6 +60,8 @@ describe('health', () => {
     const f = (headline: string, impact: number | null) => ({ headline, impact }) as Failure
     const groups = failureGroups([f('fell 64%', 2), f('fell 1,200%', 3), f('other', 9), f('later', null)])
     expect(groups.map((g) => [g.cause, g.failures.length, g.impact])).toEqual([['other', 1, 9], ['fell #%', 2, 5], ['later', 1, null]])
+    // The heading shows what its first member says, not the masked cause.
+    expect(groups.map((g) => g.headline)).toEqual(['other', 'fell 64%', 'later'])
     expect(causeOf('v1.2 failed 3 times')).toBe('v# failed # times')
   })
 
@@ -93,5 +95,46 @@ describe('headline', () => {
   })
   it('keeps a first line that says what went wrong', () => {
     expect(headline('ValueError: no\nTraceback (most recent call last):\n  File "/a.py"')).toBe('ValueError: no')
+  })
+})
+
+describe('partitioned failures', () => {
+  const KEY_ERROR = 'BatchKeyFailed: forecast model diverged for <key>: NaN in week 14'
+  const SAMPLE = 'BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14\n  File "p.py", line 9'
+  const page: PartitionKeys = {
+    total: 7, recorded: 3077, failed: 7,
+    keys: [{ key: 'account=ra-02541', status: 'failed', created_at: '2026-10-31 15:30:12', elapsed_seconds: null, error: SAMPLE, run_id: 'd9becbdf4a92', artifact_path: null, size_bytes: null }],
+    errors: [{ error: KEY_ERROR, keys: 5 }, { error: 'KeyError: <key>', keys: 2 }],
+  }
+  const forecast = (over: Partial<NodeState> = {}) =>
+    node('p.py:forecast', [], {
+      partitioned: true,
+      cache: { state: 'stale', reason: 'failed', detail: '' },
+      partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7, failed_keys: [] },
+      ...over,
+    })
+  const loaded = new Map([['p.py:forecast', page]])
+
+  it('counts the failed keys until their errors are loaded, then heads with the most common', () => {
+    const [before] = failures([forecast()], consumers)
+    expect(before).toMatchObject({ headline: '7 of 3,077 keys failed', error: '', keys: { failed: 7, total: 3077, errors: null, runId: null } })
+    expect(keysLine(before!.keys!)).toBe('7 of 3,077 keys')
+    const [after] = failures([forecast()], consumers, loaded)
+    expect(after).toMatchObject({ headline: KEY_ERROR, error: SAMPLE, keys: { failed: 7, total: 3077, errors: page.errors, runId: 'd9becbdf4a92' } })
+    expect(keysLine(after!.keys!)).toBe('7 of 3,077 keys · +1 more error')
+  })
+
+  it('a key error outranks the node-level one, which is one key\'s', () => {
+    const withError = forecast(failedAt('2026-10-31 15:30:12', 'BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14'))
+    expect(failures([withError], consumers)[0]!.headline).toBe('BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14')
+    expect(failures([withError], consumers, loaded)[0]!.headline).toBe(KEY_ERROR)
+    expect(failureGroups(failures([withError], consumers, loaded))[0]!.headline).toBe(KEY_ERROR)
+  })
+
+  it('leaves a node whose keys did not fail alone', () => {
+    // Failed as a whole, with 7 keys stale rather than failed: its own error, and no key errors to load.
+    const whole = forecast({ ...failedAt('2026-10-31 15:30:12', 'ImportError: no module named prophet'), partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [] } })
+    expect(failures([whole], consumers)[0]).toMatchObject({ headline: 'ImportError: no module named prophet', keys: null, missingKeys: 7 })
+    expect(failedKeyNodes([forecast(), whole, ...nodes])).toEqual(['p.py:forecast'])
   })
 })
