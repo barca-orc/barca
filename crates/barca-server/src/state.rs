@@ -250,6 +250,40 @@ pub struct NodeState {
     pub failing_since: Option<String>,
     /// How many runs in a row failed it, up to now (`0` when its latest attempt did not fail).
     pub consecutive_failures: u32,
+    /// Its newest run as a whole, the run `last_materialization` is from; absent until a run
+    /// recorded a row for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub last_run: Option<LastRun>,
+}
+
+/// What a node's newest run cost on it as a whole: `last_materialization.elapsed_seconds` is
+/// one key's share, this is every key of the run added up, over the batched calls they ran in.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct LastRun {
+    pub run_id: String,
+    /// Wall time summed over the rows that recorded one; `null` when none did (every key failed
+    /// before finishing).
+    pub elapsed_seconds: Option<f64>,
+    /// Rows the run recorded for the node: its keys, or 1.
+    pub keys: u32,
+    /// Batched calls (RFC-0013) those keys ran in; `0` when each ran on its own.
+    pub calls: u32,
+    /// Keys that failed.
+    pub failed: u32,
+}
+
+impl From<barca_core::db::RunTotals> for LastRun {
+    fn from(t: barca_core::db::RunTotals) -> Self {
+        LastRun {
+            run_id: t.run_id,
+            elapsed_seconds: t.elapsed_seconds,
+            keys: t.keys,
+            calls: t.calls,
+            failed: t.failed,
+        }
+    }
 }
 
 /// Median and p95 wall time over a node's most recent successful materializations.

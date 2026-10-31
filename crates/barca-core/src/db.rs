@@ -270,6 +270,10 @@ pub struct RunRecord {
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
     pub steps_cached: i64,
+    /// Recorded steps that failed (a partitioned node's keys each count); `null` when not read.
+    /// `GET /runs` shows it (#758); `barca history --json` does not yet, so it is not written.
+    #[serde(default, skip_serializing)]
+    pub steps_failed: Option<i64>,
     /// Total recorded materialization attempts; cached steps contribute zero.
     #[serde(default)]
     pub attempts: Option<i64>,
@@ -3357,6 +3361,8 @@ pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, B
 
 /// A run's first failed step and its error, read from `idx_mat_failed` ([`read_runs`]).
 const FAILURE_INDEXED: &str = "(SELECT node_id || char(31) || COALESCE(error_type, '') || char(31) || COALESCE(error_message, '') FROM materializations INDEXED BY idx_mat_failed WHERE run_id = runs.run_id AND status = 'failed' ORDER BY id LIMIT 1)";
+/// How many of a run's recorded steps failed, read from `idx_mat_failed` ([`read_runs`]).
+const FAILED_COUNT_INDEXED: &str = "(SELECT COUNT(*) FROM materializations INDEXED BY idx_mat_failed WHERE run_id = runs.run_id AND status = 'failed')";
 
 async fn read_runs(
     db_path: &str,
@@ -3416,18 +3422,21 @@ async fn read_runs(
     };
     // The first failed step and its error, joined by the unit separator (a byte no node id,
     // error type or message line holds).
-    let failure = if !(names.contains("run_id") && names.contains("error_type")) {
-        "NULL"
+    let (failure, failed) = if !(names.contains("run_id") && names.contains("error_type")) {
+        ("NULL", "NULL")
     } else if has_index(&conn, "idx_mat_failed").await? {
         // Named: without statistics SQLite's planner picks `idx_mat_run` and reads every row
         // of the run to check its status.
-        FAILURE_INDEXED
+        (FAILURE_INDEXED, FAILED_COUNT_INDEXED)
     } else {
-        "(SELECT node_id || char(31) || COALESCE(error_type, '') || char(31) || COALESCE(error_message, '') FROM materializations WHERE run_id = runs.run_id AND status = 'failed' ORDER BY id LIMIT 1)"
+        (
+            "(SELECT node_id || char(31) || COALESCE(error_type, '') || char(31) || COALESCE(error_message, '') FROM materializations WHERE run_id = runs.run_id AND status = 'failed' ORDER BY id LIMIT 1)",
+            "(SELECT COUNT(*) FROM materializations WHERE run_id = runs.run_id AND status = 'failed')",
+        )
     };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -3456,6 +3465,7 @@ async fn read_runs(
             steps_total: row.get::<i64>(5).ok(),
             steps_executed: row.get::<i64>(6).unwrap_or(0),
             steps_cached: row.get::<i64>(7).unwrap_or(0),
+            steps_failed: row.get::<i64>(18).ok(),
             attempts: row.get::<i64>(11).ok(),
             started_at: row.get::<String>(8).unwrap_or_default(),
             finished_at: {
@@ -3610,6 +3620,92 @@ pub struct RunNodeSummary {
     /// Batched calls that computed them; 0 when each key ran on its own.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub calls: usize,
+    /// What became of the node in this run, when the server could rebuild the run's plan
+    /// ([`planned_run_nodes`]): `ran` (it recorded steps), `cached` (nothing to do) or
+    /// `skipped` (never run: a step it depends on failed, or the run stopped before it).
+    /// Absent otherwise. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub status: Option<String>,
+    /// For a `skipped` node: the failed node upstream of it that kept it from running. Absent
+    /// when the run stopped before reaching it. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub blocked_by: Option<String>,
+}
+
+/// Every node a finished run planned, in plan order, each with its [`RunNodeSummary::status`]:
+/// `recorded` (the nodes with steps, from [`run_node_summaries`]) completed with the planned
+/// nodes that recorded none. Such a node is `skipped` when a node upstream of it failed
+/// (`blocked_by`) or when the run broke off before its phase (a single-target run stops at the
+/// phase of its first failure; a run of several targets goes on), else `cached`. None when the
+/// plan rebuilt from today's sources does not have `steps_total` steps: the sources changed
+/// since the run, so nothing can be said about what it skipped.
+pub fn planned_run_nodes(
+    dag: &crate::dag::Dag,
+    command: &str,
+    target_ids: &[&str],
+    status: &str,
+    steps_total: Option<i64>,
+    recorded: Vec<RunNodeSummary>,
+) -> Option<Vec<RunNodeSummary>> {
+    use std::collections::{HashMap, HashSet};
+    let config = crate::planner::ResourceConfig {
+        pool_size: std::thread::available_parallelism().map_or(4, |n| n.get()),
+        concurrency_groups: HashMap::new(),
+    };
+    let plan = crate::targets::plan_for_targets(dag, target_ids, &config, command, None);
+    if plan.phases.is_empty() || steps_total != Some(plan.total_steps as i64) {
+        return None;
+    }
+    let mut phase_of: HashMap<&str, usize> = HashMap::new();
+    let mut planned: Vec<&str> = Vec::new();
+    for (i, phase) in plan.phases.iter().enumerate() {
+        for step in phase.streams.iter().flat_map(|s| &s.steps) {
+            if !phase_of.contains_key(step.step_id.base_id()) {
+                phase_of.insert(step.step_id.base_id(), i);
+                planned.push(step.step_id.base_id());
+            }
+        }
+    }
+    let mut by_id: HashMap<String, RunNodeSummary> = recorded
+        .into_iter()
+        .map(|n| (n.node_id.clone(), n))
+        .collect();
+    let failed: HashSet<String> = by_id
+        .values()
+        .filter(|n| n.failed > 0)
+        .map(|n| n.node_id.clone())
+        .collect();
+    // A single-target run breaks off after the phase of its first failure; later phases were
+    // never decided. A successful run, or one of several targets, reached every phase.
+    let reached = if status == "success" || target_ids.len() > 1 {
+        usize::MAX
+    } else {
+        by_id
+            .keys()
+            .filter_map(|id| phase_of.get(id.as_str()).copied())
+            .max()
+            .unwrap_or(0)
+    };
+    let mut nodes = Vec::with_capacity(planned.len());
+    for id in planned {
+        if let Some(mut node) = by_id.remove(id) {
+            node.status = Some("ran".into());
+            nodes.push(node);
+            continue;
+        }
+        let blocked_by = crate::targets::blocking_failure(dag, id, &failed);
+        let skipped = blocked_by.is_some() || phase_of.get(id).copied().unwrap_or(0) > reached;
+        nodes.push(RunNodeSummary {
+            node_id: id.to_string(),
+            status: Some(if skipped { "skipped" } else { "cached" }.into()),
+            blocked_by: blocked_by.map(str::to_string),
+            ..Default::default()
+        });
+    }
+    nodes.extend(by_id.into_values());
+    Some(nodes)
 }
 
 /// How many recorded steps `barca history RUN_ID` and `GET /runs/{run_id}` list by default.
@@ -3736,6 +3832,25 @@ pub async fn get_run_steps_page(
         }
     }
     let total = total.unwrap_or(steps.len());
+    let mut nodes = node_summaries(&conn, run_id, batch).await?;
+    if nodes.iter().all(|n| n.keys <= 1) {
+        nodes.clear();
+    }
+    let page = StepsPage {
+        total,
+        truncated: steps.len() < total,
+        nodes,
+    };
+    Ok((steps, page))
+}
+
+/// Every node `run_id` recorded steps for, with their counts: failed nodes first, then in the
+/// order they were first recorded. `batch` is the batch id column, or `NULL` without one.
+async fn node_summaries(
+    conn: &libsql::Connection,
+    run_id: &str,
+    batch: &str,
+) -> Result<Vec<RunNodeSummary>, BarcaError> {
     let mut summary = conn
         .query(
             &format!(
@@ -3758,17 +3873,26 @@ pub async fn get_run_steps_page(
             failed: row.get::<i64>(2).unwrap_or(0) as usize,
             elapsed_seconds: row.get::<f64>(3).unwrap_or(0.0),
             calls: row.get::<i64>(4).unwrap_or(0) as usize,
+            ..Default::default()
         });
     }
-    if nodes.iter().all(|n| n.keys <= 1) {
-        nodes.clear();
-    }
-    let page = StepsPage {
-        total,
-        truncated: steps.len() < total,
-        nodes,
+    Ok(nodes)
+}
+
+/// [`StepsPage::nodes`] of `run_id` whatever its nodes' key counts: the input of
+/// [`planned_run_nodes`].
+pub async fn run_node_summaries(
+    db_path: &str,
+    run_id: &str,
+) -> Result<Vec<RunNodeSummary>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let batch = if has_column(&conn, "materializations", "batch_id").await? {
+        "batch_id"
+    } else {
+        "NULL"
     };
-    Ok((steps, page))
+    node_summaries(&conn, run_id, batch).await
 }
 
 /// The recorded lines of `run_id` written by `nodes`, (node id, line), in the order they were
@@ -4420,7 +4544,7 @@ pub(crate) async fn changed_bytes_in_run(
 
 /// How late a node is, from its materialization rows (keys of a partitioned node count toward
 /// their base id). Timestamps are as recorded: UTC `YYYY-MM-DD HH:MM:SS`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct NodeAge {
     /// When its newest successful row was written.
     pub last_success_at: Option<String>,
@@ -4428,6 +4552,23 @@ pub struct NodeAge {
     pub failing_since: Option<String>,
     /// How many runs in a row failed it, up to now. A run counts once however many keys failed.
     pub consecutive_failures: u32,
+    /// Its newest run as a whole; `None` until a run recorded a row for it.
+    pub last_run: Option<RunTotals>,
+}
+
+/// One run's rows for one node, keys folded into their base id: what the run cost on the node
+/// as a whole, where `elapsed_seconds` of a key's row is that key's share alone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RunTotals {
+    pub run_id: String,
+    /// Wall time summed over the rows that recorded one; `None` when none did (every key
+    /// failed before finishing).
+    pub elapsed_seconds: Option<f64>,
+    /// Rows the run recorded for the node: its keys, or 1.
+    pub keys: u32,
+    /// Batched calls (RFC-0013) those keys ran in; 0 when each ran on its own.
+    pub calls: u32,
+    pub failed: u32,
 }
 
 /// The base id of a materialization row's node id (`<base>[k=v]` for a key).
@@ -4446,6 +4587,14 @@ pub async fn node_ages(db_path: &str) -> Result<HashMap<String, NodeAge>, BarcaE
     let attempt = |run: Option<String>, id: i64| run.unwrap_or_else(|| format!("#{id}"));
     // base id -> run -> (its newest failed row, its earliest failure's time).
     let mut failed: HashMap<String, HashMap<String, (i64, String)>> = HashMap::new();
+    // base id -> (its newest row, that row's run).
+    let mut newest: HashMap<String, (i64, Option<String>)> = HashMap::new();
+    let mut note_newest = |base: &str, id: i64, run: Option<String>| {
+        let entry = newest.entry(base.to_string()).or_insert((id, run.clone()));
+        if id >= entry.0 {
+            *entry = (id, run);
+        }
+    };
     let mut rows = conn
         .query(
             "SELECT id, node_id, run_id, created_at FROM materializations \
@@ -4457,7 +4606,9 @@ pub async fn node_ages(db_path: &str) -> Result<HashMap<String, NodeAge>, BarcaE
     while let Some(row) = rows.next().await.map_err(failure)? {
         let id = row.get::<i64>(0).unwrap_or_default();
         let node = row.get::<String>(1).unwrap_or_default();
-        let run = attempt(row.get::<String>(2).ok().filter(|r| !r.is_empty()), id);
+        let recorded = row.get::<String>(2).ok().filter(|r| !r.is_empty());
+        note_newest(base_of(&node), id, recorded.clone());
+        let run = attempt(recorded, id);
         let at = row.get::<String>(3).unwrap_or_default();
         failed
             .entry(base_of(&node).to_string())
@@ -4481,10 +4632,11 @@ pub async fn node_ages(db_path: &str) -> Result<HashMap<String, NodeAge>, BarcaE
         let id = row.get::<i64>(0).unwrap_or_default();
         let node = row.get::<String>(1).unwrap_or_default();
         let base = base_of(&node);
-        let clean = failed.get(base).is_none_or(|runs| {
-            let run = row.get::<String>(2).ok().filter(|r| !r.is_empty());
-            run.is_none_or(|r| !runs.contains_key(&r))
-        });
+        let run = row.get::<String>(2).ok().filter(|r| !r.is_empty());
+        note_newest(base, id, run.clone());
+        let clean = failed
+            .get(base)
+            .is_none_or(|runs| run.is_none_or(|r| !runs.contains_key(&r)));
         let entry = match success.get_mut(base) {
             Some(entry) => entry,
             None => success.entry(base.to_string()).or_default(),
@@ -4507,11 +4659,36 @@ pub async fn node_ages(db_path: &str) -> Result<HashMap<String, NodeAge>, BarcaE
                 last_success_at: None,
                 failing_since: trailing.clone().map(|(_, at)| at.clone()).min(),
                 consecutive_failures: trailing.count() as u32,
+                last_run: None,
             },
         );
     }
     for (base, (_, at, _)) in success {
         out.entry(base).or_default().last_success_at = Some(at);
+    }
+    // The newest run's rows, one index seek per node (`idx_mat_run`: a run has at most one row
+    // per key). Rows without a run id (an older barca's) leave it unknown.
+    for (base, (_, run)) in newest {
+        let Some(run) = run else { continue };
+        let (lo, hi) = key_range(&base);
+        let mut rows = conn
+            .query(
+                "SELECT sum(elapsed_seconds), count(*), count(DISTINCT batch_id), \
+                 sum(status = 'failed') FROM materializations INDEXED BY idx_mat_run \
+                 WHERE run_id = ?1 AND (node_id = ?2 OR (node_id >= ?3 AND node_id < ?4))",
+                libsql::params![run.clone(), base.clone(), lo, hi],
+            )
+            .await
+            .map_err(failure)?;
+        if let Some(row) = rows.next().await.map_err(failure)? {
+            out.entry(base).or_default().last_run = Some(RunTotals {
+                run_id: run,
+                elapsed_seconds: row.get::<f64>(0).ok(),
+                keys: row.get::<i64>(1).unwrap_or_default() as u32,
+                calls: row.get::<i64>(2).unwrap_or_default() as u32,
+                failed: row.get::<i64>(3).unwrap_or_default() as u32,
+            });
+        }
     }
     Ok(out)
 }
@@ -4933,6 +5110,108 @@ async fn partitioned_avg_elapsed_on(
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod planned_nodes_tests {
+    use super::{RunNodeSummary, planned_run_nodes};
+
+    const SRC: &str = "from barca import asset\n\
+@asset()\ndef accounts(): return 1\n\
+@asset()\ndef prices(): return 1\n\
+@asset(inputs={'accounts': accounts})\ndef forecast(accounts): return 1\n\
+@asset(inputs={'forecast': forecast, 'prices': prices})\ndef plan(forecast, prices): return 1\n\
+@asset(inputs={'plan': plan})\ndef publish(plan): return 1\n\
+@asset()\ndef unrelated(): return 1\n";
+
+    fn dag() -> crate::dag::Dag {
+        crate::dag::Dag::build(&crate::parse::extract_nodes(SRC, "p.py").unwrap()).unwrap()
+    }
+
+    fn ran(node_id: &str, keys: usize, failed: usize) -> RunNodeSummary {
+        RunNodeSummary {
+            node_id: node_id.into(),
+            keys,
+            failed,
+            ..Default::default()
+        }
+    }
+
+    fn outcomes(nodes: &[RunNodeSummary]) -> Vec<(&str, &str, Option<&str>)> {
+        nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.node_id.as_str(),
+                    n.status.as_deref().unwrap(),
+                    n.blocked_by.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failure_skips_what_depends_on_it_and_the_rest_was_cached() {
+        let nodes = planned_run_nodes(
+            &dag(),
+            "get",
+            &["p.py:publish"],
+            "failed",
+            Some(5),
+            vec![ran("p.py:forecast", 3, 1)],
+        )
+        .unwrap();
+        let mut sorted = outcomes(&nodes);
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            [
+                ("p.py:accounts", "cached", None),
+                ("p.py:forecast", "ran", None),
+                ("p.py:plan", "skipped", Some("p.py:forecast")),
+                ("p.py:prices", "cached", None),
+                ("p.py:publish", "skipped", Some("p.py:forecast")),
+            ]
+        );
+        // In plan order: a node after what it depends on.
+        let at = |id: &str| nodes.iter().position(|n| n.node_id == id).unwrap();
+        assert!(at("p.py:accounts") < at("p.py:forecast"));
+        assert!(at("p.py:forecast") < at("p.py:plan") && at("p.py:plan") < at("p.py:publish"));
+    }
+
+    #[test]
+    fn a_successful_run_cached_every_node_without_steps() {
+        let nodes = planned_run_nodes(
+            &dag(),
+            "get",
+            &["p.py:publish"],
+            "success",
+            Some(5),
+            vec![ran("p.py:publish", 1, 0)],
+        )
+        .unwrap();
+        let statuses: Vec<&str> = nodes.iter().map(|n| n.status.as_deref().unwrap()).collect();
+        assert_eq!(statuses, ["cached", "cached", "cached", "cached", "ran"]);
+    }
+
+    #[test]
+    fn a_run_whose_plan_changed_says_nothing() {
+        // Today's sources plan 5 nodes for `publish`; the run recorded 4.
+        let dag = dag();
+        assert!(
+            planned_run_nodes(&dag, "get", &["p.py:publish"], "failed", Some(4), vec![]).is_none()
+        );
+        assert!(
+            planned_run_nodes(&dag, "get", &["p.py:publish"], "failed", None, vec![]).is_none()
+        );
+    }
+
+    #[test]
+    fn everything_plans_the_gettable_graph() {
+        let nodes = planned_run_nodes(&dag(), "get", &[], "success", Some(6), vec![]).unwrap();
+        assert_eq!(nodes.len(), 6);
+        assert!(nodes.iter().all(|n| n.status.as_deref() == Some("cached")));
+    }
 }
 
 #[cfg(test)]
@@ -6844,11 +7123,15 @@ mod failure_index_tests {
         let ages = node_ages(&path).await.unwrap();
         let age = |id: &str, ok: Option<&str>, since: Option<&str>, n: u32| {
             assert_eq!(
-                ages[id],
+                NodeAge {
+                    last_run: None,
+                    ..ages[id].clone()
+                },
                 NodeAge {
                     last_success_at: ok.map(str::to_string),
                     failing_since: since.map(str::to_string),
                     consecutive_failures: n,
+                    last_run: None,
                 },
                 "{id}"
             );
@@ -6867,6 +7150,70 @@ mod failure_index_tests {
             1,
         );
         age("p.py:never", None, Some("2026-01-01 00:00:00"), 1);
+        // The newest run as a whole: its keys, how many failed, and (none recorded a time) no
+        // duration rather than zero.
+        assert_eq!(
+            ages["p.py:keys"].last_run,
+            Some(RunTotals {
+                run_id: "r2".into(),
+                elapsed_seconds: None,
+                keys: 3,
+                calls: 0,
+                failed: 2,
+            })
+        );
+        assert_eq!(
+            ages["p.py:recovered"].last_run.as_ref().unwrap().run_id,
+            "r2"
+        );
+    }
+
+    /// A batched node's last run costs what its keys' rows add up to, over the calls they ran in.
+    #[tokio::test]
+    async fn a_nodes_last_run_sums_its_keys_over_their_batched_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            for (run, node, elapsed, batch) in [
+                ("r1", "p.py:keys[d=1]", 9.0, "old"),
+                ("r2", "p.py:keys[d=1]", 0.5, "b1"),
+                ("r2", "p.py:keys[d=2]", 0.25, "b1"),
+                ("r2", "p.py:keys[d=3]", 1.0, "b2"),
+                ("r2", "p.py:plain", 2.0, ""),
+            ] {
+                conn.execute(
+                    "INSERT INTO materializations (run_id, node_id, status, elapsed_seconds, \
+                     batch_id) VALUES (?1, ?2, 'success', ?3, NULLIF(?4, ''))",
+                    libsql::params![run, node, elapsed, batch],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let ages = node_ages(&path).await.unwrap();
+        assert_eq!(
+            ages["p.py:keys"].last_run,
+            Some(RunTotals {
+                run_id: "r2".into(),
+                elapsed_seconds: Some(1.75),
+                keys: 3,
+                calls: 2,
+                failed: 0,
+            })
+        );
+        assert_eq!(
+            ages["p.py:plain"].last_run,
+            Some(RunTotals {
+                run_id: "r2".into(),
+                elapsed_seconds: Some(2.0),
+                keys: 1,
+                calls: 0,
+                failed: 0,
+            })
+        );
     }
 
     /// The runs list reads each run's first failure from `idx_mat_failed`: the plan names it,

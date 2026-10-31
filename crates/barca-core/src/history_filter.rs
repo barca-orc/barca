@@ -219,6 +219,7 @@ mod tests {
             steps_total: None,
             steps_executed: 0,
             steps_cached: 0,
+            steps_failed: None,
             attempts: None,
             started_at: started.into(),
             finished_at: None,

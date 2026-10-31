@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
 import {
+  Button,
   Chip,
   ChipGroup,
   ErrorLine,
@@ -23,6 +24,7 @@ import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { NodePanel } from '@/components/assets/NodePanel'
+import { RunNotice } from '@/components/RunNotice'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
@@ -36,6 +38,7 @@ import {
   facetCounts,
   isFiltered,
   NEEDS_ATTENTION,
+  RECENT_MS,
   onDefaultStates,
   parseFilters,
   writeFilters,
@@ -110,7 +113,7 @@ function SortHeader({
 }
 
 export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
-  const { data, isError, error, dataUpdatedAt } = useAssetStates()
+  const { data, isError, error, dataUpdatedAt, refetch } = useAssetStates()
   const { data: health } = useHealth()
   const assetQuery = useAssets()
   const graph = useMemo(() => (assetQuery.isPlaceholderData ? [] : assetQuery.data ?? []), [assetQuery.data, assetQuery.isPlaceholderData])
@@ -148,8 +151,10 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const onDefault = onDefaultStates(filters, defaultStates)
   const setFilters = (f: Filters) => setParams(writeFilters(params, f, defaultStates), { replace: true })
   const now = dataUpdatedAt
-  const counts = facetCounts(rows, filters, now)
-  const visible = sortRows(applyFilters(rows, filters, now), sort)
+  // The default also shows what ran recently: a task that just ran is what the page is for.
+  const opts = onDefault ? { recentMs: RECENT_MS } : {}
+  const counts = facetCounts(rows, filters, now, opts)
+  const visible = sortRows(applyFilters(rows, filters, now, opts), sort)
   // A name repeated across files reads as its id; two rows never show the same label.
   const nameCount = new Map<string, number>()
   for (const r of visible) nameCount.set(r.name, (nameCount.get(r.name) ?? 0) + 1)
@@ -217,7 +222,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
               <Skeleton width={64} height={14} />
             )}
             <ChipGroup label="State">
-              {SEVERITIES.filter((sev) => counts.states[sev] > 0 || filters.states.includes(sev)).map((sev) => (
+              {SEVERITIES.filter((sev) => counts.states[sev] > 0 || (filters.states.includes(sev) && !onDefault)).map((sev) => (
                 <Chip
                   key={sev}
                   pressed={filters.states.includes(sev)}
@@ -285,12 +290,14 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
         </div>
       </div>
 
-      {nodeRun.action.error && !selectedNode && <p role="alert">Could not start run: {nodeRun.action.error.message}</p>}
+      <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       <div className="barca-assets-split">
       <div className="barca-view-body barca-table-scroll" ref={scroller}>
         {isError ? (
           <div className="barca-table-empty">
-            <p>Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}</p>
+            <p>Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}{' '}
+              <Button size="sm" onClick={() => void refetch()}>Retry</Button>
+            </p>
             {error instanceof ApiError && error.remediation && <p>{error.remediation}</p>}
             {/* Starting over mends a database barca cannot use, and nothing else. */}
             {metadataUnusable(error) && <ResetDatabaseButton readOnly={health?.read_only ?? false} />}
@@ -302,7 +309,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             ))}
           </div>
         ) : visible.length === 0 ? (
-          <p className="barca-table-empty">{onDefault ? 'Nothing needs attention.' : 'Nothing matches.'}</p>
+          <p className="barca-table-empty">{onDefault ? 'Nothing needs attention, and nothing ran in the last 24h.' : 'Nothing matches.'}</p>
         ) : (
           <table className="barca-table">
             <thead>

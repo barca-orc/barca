@@ -7,34 +7,58 @@ import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
 import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, runTime, triggeredByLabel } from '@/lib/runs'
-import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runNodeLine, runFailed, runFailureLine, runProgress, runRowError, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runFailed, runFailureLine, runNodeIdle, runNodeOutcome, runNodeTime, runProgress, runRowError, runTargetLines, splitRunSteps, stepsLabel, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunNodeGroup } from '@/lib/runsPage'
 import type { RunList, RunStep, RunView } from '@/lib/types'
 import './runs.css'
 
-/** One run's details, for any state of its request. */
+/** How many steps a list shows before it asks to be expanded. */
+const STEP_ROWS = 50
+
+/** A run's steps, at most `STEP_ROWS` until expanded. */
 function StepList({ steps }: { steps: readonly RunStep[] }) {
-  return <ul className="barca-run-steps">
-    {steps.map((step, index) => <li key={`${step.node_id}:${index}`}>
-      <code>{step.node_id}</code>
-      <div><StatusBadge size="sm" status={step.status === 'cached' ? 'skipped' : runStatus(step.status)} label={step.status} />
-        {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}</div>
-      {step.error && <p className="barca-run-error">{step.error}</p>}
-    </li>)}
-  </ul>
+  const [all, setAll] = useState(false)
+  const shown = all ? steps : steps.slice(0, STEP_ROWS)
+  return <>
+    <ul className="barca-run-steps">
+      {shown.map((step, index) => <li key={`${step.node_id}:${index}`}>
+        <code>{step.node_id}</code>
+        <div><StatusBadge size="sm" status={step.status === 'cached' ? 'skipped' : runStatus(step.status)} label={step.status} />
+          {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}</div>
+        {step.error && <p className="barca-run-error">{step.error}</p>}
+      </li>)}
+    </ul>
+    {shown.length < steps.length && <Button size="sm" onClick={() => setAll(true)}>Show all {steps.length.toLocaleString()}</Button>}
+  </>
 }
 
-/** One node of a run with partitioned steps; its keys render only once it is opened. */
+/**
+ * One planned node of a run: what became of it, and, for one that ran, its keys once opened:
+ * failed keys listed at once, successful ones behind their count.
+ */
 function RunNodeRow({ group: { summary, steps } }: { group: RunNodeGroup }) {
   const [open, setOpen] = useState(summary.failed > 0)
+  const outcome = runNodeOutcome(summary)
+  const time = runNodeTime(summary, formatSeconds)
+  if (runNodeIdle(summary)) {
+    return <div className="barca-run-node barca-run-node-idle" data-status={summary.status}>
+      <code>{shortName(summary.node_id)}</code>
+      <StatusBadge size="sm" status={outcome.kind} label={outcome.label} />
+      {outcome.detail && <span className="barca-run-node-detail">{outcome.detail}</span>}
+    </div>
+  }
+  const { failed, ok } = splitRunSteps(steps)
   const hidden = summary.keys - steps.length
   return <details className="barca-run-node" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>
       <code>{shortName(summary.node_id)}</code>
-      <StatusBadge size="sm" status={summary.failed ? 'failed' : 'success'} label={runNodeLine(summary)} />
-      <span>{formatSeconds(summary.elapsed_seconds)}</span>
+      <StatusBadge size="sm" status={outcome.kind} label={outcome.label} />
+      {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
     </summary>
-    {open && <StepList steps={steps} />}
+    {open && failed.length > 0 && <StepList steps={failed} />}
+    {open && ok.length > 0 && (failed.length > 0 || summary.keys > 1
+      ? <details className="barca-run-node-ok"><summary>{ok.length.toLocaleString()} successful key{ok.length === 1 ? '' : 's'}</summary><StepList steps={ok} /></details>
+      : <StepList steps={ok} />)}
     {open && hidden > 0 && <p className="barca-note">{hidden.toLocaleString()} more keys not listed here.</p>}
   </details>
 }
@@ -68,9 +92,12 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
   const outcome = parseOutcome(data.outcome)
   const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
   const result = outcomeResult(outcome)
+  const nodes = data.steps_page?.nodes ?? []
+  const targets = runTargetLines(data, nodes)
   return <>
     <Section title="Run">
       <StatusBadge status={runStatus(data.status)} label={runLabel(data.status)} />
+      {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
       <KeyValue label="id"><code className="barca-wrap">{data.run_id}</code></KeyValue>
       <KeyValue label="command">{data.command}</KeyValue>
       <KeyValue label="target"><code className="barca-wrap">{data.target ?? 'all assets'}</code></KeyValue>
@@ -78,17 +105,16 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
       <KeyValue label="started">{runTime(data.started_at)}</KeyValue>
       <KeyValue label="finished">{runTime(data.finished_at)}</KeyValue>
       <KeyValue label="duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</KeyValue>
-      <KeyValue label="executed">{data.steps_executed}</KeyValue>
-      <KeyValue label="cached">{data.steps_cached}</KeyValue>
+      <KeyValue label="steps">{stepsLabel(data.steps_executed, data.steps_cached)}{data.steps_total !== null && <span className="barca-cell-sub"> · {data.steps_total.toLocaleString()} node{data.steps_total === 1 ? '' : 's'} planned</span>}</KeyValue>
       {(data.error ?? envelope?.error) && <p className="barca-run-error" role="alert"><ErrorLine error={data.error ?? envelope?.error} /></p>}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
     <Section title="Steps">
-      {data.steps.length === 0 ? <p className="barca-note">{runIsLive(data.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p> : (
-        data.steps_page?.nodes?.length
-          ? <div className="barca-run-nodes">{groupRunSteps(data.steps, data.steps_page.nodes).map((group) => <RunNodeRow key={group.summary.node_id} group={group} />)}</div>
-          : <StepList steps={data.steps} />
-      )}
+      {nodes.length > 0
+        ? <div className="barca-run-nodes">{groupRunSteps(data.steps, nodes).map((group) => <RunNodeRow key={group.summary.node_id} group={group} />)}</div>
+        : data.steps.length === 0
+          ? <p className="barca-note">{runIsLive(data.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p>
+          : <StepList steps={data.steps} />}
       {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length} of {data.steps_page.total} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
     </Section>
     <Section title="Logs">

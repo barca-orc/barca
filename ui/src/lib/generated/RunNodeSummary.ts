@@ -11,4 +11,16 @@ elapsed_seconds: number,
 /**
  * Batched calls that computed them; 0 when each key ran on its own.
  */
-calls: number, };
+calls: number,
+/**
+ * What became of the node in this run, when the server could rebuild the run's plan
+ * ([`planned_run_nodes`]): `ran` (it recorded steps), `cached` (nothing to do) or
+ * `skipped` (never run: a step it depends on failed, or the run stopped before it).
+ * Absent otherwise. Experimental.
+ */
+status?: string,
+/**
+ * For a `skipped` node: the failed node upstream of it that kept it from running. Absent
+ * when the run stopped before reaching it. Experimental.
+ */
+blocked_by?: string, };

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
 import type { RunSummary } from './types'
-import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, stepsLabel, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
@@ -84,10 +84,13 @@ describe('run list telemetry', () => {
     expect(runRowError(run('c', 'cancelled', 1))).toBeNull()
   })
 
-  it('shows progress and where the run stopped', () => {
-    const stopped = { ...run('f', 'failed', 1), steps_total: 28404, steps_executed: 21950, first_failure: failure }
-    expect(runProgress(stopped)).toMatchObject({ steps: `${(21950).toLocaleString()} / ${(28404).toLocaleString()}`, stoppedAt: 'orders[day=1]' })
-    expect(runProgress({ ...run('s', 'success', 1), steps_executed: 2, steps_cached: 1 })).toMatchObject({ steps: '3', stoppedAt: null })
+  it('counts steps in one unit, keys, and names the planned nodes apart', () => {
+    const stopped = { ...run('f', 'failed', 1), steps_total: 8, steps_executed: 3077, steps_cached: 3, first_failure: failure }
+    expect(runProgress(stopped)).toMatchObject({ steps: `${(3077).toLocaleString()} ran · 3 cached`, stoppedAt: 'orders[day=1]' })
+    expect(runProgress(stopped).title).toContain('8 nodes planned')
+    expect(runProgress({ ...run('s', 'success', 1), steps_total: 8, steps_executed: 0, steps_cached: 9236 }))
+      .toMatchObject({ steps: `0 ran · ${(9236).toLocaleString()} cached`, stoppedAt: null })
+    expect(stepsLabel(2, 1)).toBe('2 ran · 1 cached')
   })
 
   it('labels a bar with what failed first, and ticks the axis', () => {
@@ -102,6 +105,12 @@ describe('run list telemetry', () => {
 describe('runFailureLine', () => {
   const run = { status: 'failed', error: null, first_failure: { node_id: 'p.py:orders', error: 'KeyError: x\ntrace' } } as unknown as RunSummary
   it('says where a run stopped and why', () => expect(runFailureLine(run)).toBe('stopped at orders · KeyError: x'))
+  it('counts a partitioned node\'s failed keys instead of naming one', () => {
+    const batched = { ...run, steps_failed: 7, first_failure: { node_id: 'p.py:demand_forecast[account=ra-02772]', error: 'BatchKeyFailed: NaN in week 14' } }
+    expect(runFailureLine(batched)).toBe('demand_forecast: 7 keys failed · BatchKeyFailed: NaN in week 14')
+    expect(runFailureLine({ ...batched, steps_failed: 1 })).toBe('demand_forecast: 1 key failed · BatchKeyFailed: NaN in week 14')
+    expect(runFailureLine({ ...batched, steps_failed: undefined })).toBe('demand_forecast: 1 key failed · BatchKeyFailed: NaN in week 14')
+  })
   it('is nothing for a run with nothing to say', () => {
     expect(runFailureLine({ ...run, status: 'success', first_failure: null })).toBeNull()
   })

@@ -397,7 +397,13 @@ fire time in unix seconds for scheduled nodes. `last_success_at` is when its new
 result was written (UTC `YYYY-MM-DD HH:MM:SS`, like `last_materialization.created_at`), or `null`.
 `failing_since` is the first failed attempt after its last clean run, and `consecutive_failures` how
 many runs in a row failed it; they are `null` and `0` unless its latest attempts failed. An attempt
-is a run: one with a failed key is one failed attempt, even if other keys succeeded. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
+is a run: one with a failed key is one failed attempt, even if other keys succeeded. `last_run` is
+the node's newest run as a whole, the run `last_materialization` is from: `{ run_id, elapsed_seconds,
+keys, calls, failed }`, where `elapsed_seconds` is summed over the rows that recorded one (a key's
+`last_materialization.elapsed_seconds` is that key's share alone; `null` when every key failed before
+finishing), `keys` how many rows the run recorded for the node, `calls` how many batched calls they
+ran in (`0` when each ran on its own) and `failed` how many failed; absent until a run recorded a row
+for it. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
 `blocked`, `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
 [`barca status`](/reference/cli/#status)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache

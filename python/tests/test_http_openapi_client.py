@@ -244,6 +244,9 @@ def value() -> dict:
 @asset()
 def broken() -> dict:
     raise ValueError("expected contract failure")
+@asset(inputs={"broken": broken, "value": value})
+def after_broken(broken: dict, value: dict) -> dict:
+    return {**broken, **value}
 @task(inputs={"value": value})
 def publish(value: dict) -> None:
     print("published", value["n"])
@@ -294,11 +297,31 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         _checked(server, "GET", f"/runs/{task['run_id']}/logs?stream=stderr", 200)
         _checked(server, "GET", f"/runs/{task['run_id']}/logs?step=nowhere", 400)
         failed, _ = _checked(
-            server, "POST", "/runs", 202, {"command": "get", "targets": ["broken"]}
+            server, "POST", "/runs", 202, {"command": "get", "targets": ["after_broken"]}
         )
         outcome = _events(server, failed["run_id"])[-1][1]["outcome"]
         assert outcome["status"] == "failed" and outcome["envelope"]["code"] == 1
         _checked(server, "GET", f"/runs/{failed['run_id']}/output", 404)
+        # Every planned node with what became of it (#758): the one that failed, the cached
+        # input, and the target it blocked.
+        view, _ = _checked(server, "GET", f"/runs/{failed['run_id']}", 200)
+        nodes = {n["node_id"]: n for n in view["steps_page"]["nodes"]}
+        assert nodes["pipeline.py:broken"]["status"] == "ran"
+        assert nodes["pipeline.py:broken"]["failed"] == 1
+        assert nodes["pipeline.py:value"] == {
+            "node_id": "pipeline.py:value",
+            "keys": 0,
+            "failed": 0,
+            "elapsed_seconds": 0.0,
+            "calls": 0,
+            "status": "cached",
+        }
+        assert nodes["pipeline.py:after_broken"]["status"] == "skipped"
+        assert nodes["pipeline.py:after_broken"]["blocked_by"] == "pipeline.py:broken"
+        assert [n["node_id"] for n in view["steps_page"]["nodes"]][-1] == "pipeline.py:after_broken"
+        listed, _ = _checked(server, "GET", "/runs", 200)
+        [row] = [r for r in listed["runs"] if r["id"] == failed["run_id"]]
+        assert row["steps_failed"] == 1
         _checked(server, "DELETE", f"/runs/{failed['run_id']}", 409)
         _checked(server, "POST", "/runs", 404, {"command": "get", "targets": ["missing"]})
         plan, _ = _checked(

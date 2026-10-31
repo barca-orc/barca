@@ -1,7 +1,7 @@
 .barca-group-crumbs {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   white-space: nowrap;
 }
@@ -12,10 +12,20 @@
 .barca-group-crumbs > span {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
   color: var(--text-faint);
 }
+/* Short of room, the ancestors (navigation, whole in their tooltip) give way before the
+   heading, which names where you are. */
+.barca-group-crumbs > span:has(> h1) { flex-shrink: 0; }
+.barca-group-crumbs > span > h1 { min-width: 0; }
+.barca-group-crumbs > span > svg { flex: none; }
 .barca-group-crumbs button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: 0;
   background: transparent;
   color: var(--text-muted);
@@ -92,7 +102,8 @@
   color: var(--text-faint);
   font-size: var(--text-xs);
 }
-.barca-port-node .barca-mid { white-space: pre; }
+/* Port names are identifiers. */
+.barca-port-node { font-family: var(--font-mono); }
 .barca-group-node-title {
   display: flex;
   align-items: center;
@@ -146,12 +157,18 @@
 .barca-group-row-name strong {
   min-width: 0;
 }
+/* In a table cell the name is one part of the row's line, beside its place or file. */
+.barca-table td > .barca-group-row-name {
+  display: inline-flex;
+  vertical-align: middle;
+}
 .barca-group-row-name .barca-cell-sub {
   margin-top: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .barca-group-row-name strong {
+  font-family: var(--font-mono);
   font-weight: 500;
 }
 .barca-group-row-name > svg {
@@ -162,14 +179,18 @@
   table-layout: fixed;
   min-width: 760px;
 }
-/* One line per row: a level of a big project fits on a screen. */
-.barca-group-table td {
-  padding-top: 7px;
-  padding-bottom: 7px;
-  vertical-align: middle;
-}
 .barca-group-table td:first-child {
   min-width: 200px;
+}
+/* Last success: the age and, beside it, how long it has been failing, on one line. A part
+   that still does not fit a fixed-layout cell is cut, not spilled into the next column. */
+.barca-group-table th:nth-child(3) {
+  width: 250px;
+}
+.barca-group-table td > .barca-cell-sub {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .barca-group-table td:nth-child(3) {
   white-space: nowrap;
@@ -226,22 +247,19 @@
   line-height: 1.6;
 }
 
-/* The open scope's health beside its breadcrumb. */
-.barca-scope-health { display: flex; align-items: center; min-height: 20px; }
-.barca-group-external { color: var(--text-faint); font-size: var(--text-xs); }
+/* The open scope's health beside its breadcrumb. When the bar is short of room the health
+   label gives way first (it has an ellipsis), the heading last; nothing wraps or overlaps. */
+.barca-scope-health { display: flex; align-items: center; min-height: 20px; min-width: 0; flex-shrink: 4; }
+.barca-group-external { color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; }
 .barca-view-toggle button[data-failed]:not([aria-pressed='true']) { color: var(--status-failed); }
 .barca-panel-health { margin: 10px 0 4px; }
 
-/* The failures list: what is broken in scope, the most downstream impact first. */
-.barca-failure-table td { vertical-align: top; }
-.barca-failure-table .barca-group-row-name { margin-bottom: 2px; }
+/* The failures list: what is broken in scope, the most downstream impact first. The error
+   fills its (fixed-width) cell and cuts with an ellipsis; a note goes under it. */
 .barca-failure-error {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--text-default);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* A graph too big to draw: its lineage, or the picker for one. */

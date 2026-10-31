@@ -58,7 +58,7 @@ export interface AssetRow {
   failingSince: string | null
   /** Runs in a row that failed it. */
   failures: number
-  /** Median of recent successful runs, formatted; null if it never succeeded. */
+  /** Median of recent successful runs, formatted (`~2.3s / run` over a partitioned node's keys); null if it never succeeded. */
   typical: string | null
   typicalSeconds: number | null
   p95: string | null
@@ -156,6 +156,24 @@ function cacheLabel(node: NodeState): string {
     .exhaustive()
 }
 
+/**
+ * A node's typical time, in seconds. Durations are recorded per key, whichever call computed
+ * it, so a batched node's per-key median is a few milliseconds and says nothing; a partitioned
+ * node's figure is the time of a run over all its keys, estimated from that median.
+ */
+export function typicalSeconds(n: Pick<NodeState, 'durations' | 'partitioned' | 'partitions'>): number | null {
+  if (!n.durations) return null
+  if (n.partitioned && n.partitions) return n.durations.median_seconds * n.partitions.total
+  return n.durations.median_seconds
+}
+
+/** `3.0s`, or `~2.3s / run` for a partitioned node (its keys' medians summed, see `typicalSeconds`). */
+export function typicalLabel(n: Pick<NodeState, 'durations' | 'partitioned' | 'partitions'>): string | null {
+  const s = typicalSeconds(n)
+  if (s === null) return null
+  return n.partitioned && n.partitions ? `~${formatSeconds(s)} / run` : formatSeconds(s)
+}
+
 function fileOf(id: string): string {
   const i = id.lastIndexOf(':')
   return i < 0 ? '' : id.slice(0, i)
@@ -190,9 +208,8 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         lastSuccessAt: n.last_success_at,
         failingSince: n.failing_since,
         failures: n.consecutive_failures,
-        // Recorded per key, whichever call computed it.
-        typical: n.durations ? `${formatSeconds(n.durations.median_seconds)}${n.partitioned ? ' / key' : ''}` : null,
-        typicalSeconds: n.durations?.median_seconds ?? null,
+        typical: typicalLabel(n),
+        typicalSeconds: typicalSeconds(n),
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
         nextRunMs: n.next_run === null ? null : n.next_run * 1000,
         running: n.running ?? null,

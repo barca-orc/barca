@@ -1,7 +1,6 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
-import { useQueryClient } from '@tanstack/react-query'
 import { match } from 'ts-pattern'
 import {
   ArrowLeft,
@@ -39,22 +38,23 @@ import {
   type GraphCanvasHandle,
 } from '@/components/graph/GraphCanvas'
 import { NodePanel } from '@/components/assets/NodePanel'
+import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { api, ApiError, metadataUnusable } from '@/lib/api'
-import { formatSeconds } from '@/lib/assetTable'
 import { INITIAL_FAILURES, MUTED_KEY, failureTable, parseMuted, updateFailures, type FailuresEffect } from '@/lib/failuresView'
 import { useProgram } from '@/hooks/useProgram'
+import { usePartitionErrors } from '@/hooks/usePartitionErrors'
 import { FailuresView } from './FailuresView'
 import { domainFile, domainMap } from '@/lib/domainMap'
 import { inPipeline, pipelineName, sourceFile } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
 import { liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
-import { consumersOf, failures, healthCounts, scopeAge, type Failure } from '@/lib/health'
+import { consumersOf, failedKeyNodes, failures, healthCounts, scopeAge, type Failure } from '@/lib/health'
 import { GRAPH_LIMIT, lineage } from '@/lib/lineage'
 import {
   compareEntries,
@@ -71,6 +71,7 @@ import {
   groupHealth,
   groupOutput,
   groupPath,
+  lastRunDuration,
   leavesByGroup,
   memberHealth,
   projectGroups,
@@ -215,10 +216,15 @@ export function GroupedPipelinePage() {
     [scope, leavesOf, assets])
   const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, nodeRun.statuses), [scopeIds, byId, nodeRun.statuses])
   const graphKnown = !assetQuery.isPlaceholderData && !!assetQuery.data
-  const failureList = useMemo(() => {
+  const scopedStates = useMemo(() => {
     const inScope = new Set(scopeIds)
-    return failures(states.filter((s) => inScope.has(s.id)), graphKnown ? consumers : null)
-  }, [scopeIds, states, consumers, graphKnown])
+    return states.filter((s) => inScope.has(s.id))
+  }, [scopeIds, states])
+  const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scopedStates), [scopedStates]))
+  const failureList = useMemo(
+    () => failures(scopedStates, graphKnown ? consumers : null, keyErrors),
+    [scopedStates, consumers, graphKnown, keyErrors],
+  )
   const rankOf = (entry: GraphEntry): EntryRank => {
     const ids = leaves(entry.id)
     const counts = healthCounts(ids, byId, nodeRun.statuses)
@@ -239,7 +245,6 @@ export function GroupedPipelinePage() {
   const visibleFailures = needle
     ? failureList.filter((f) => `${f.id} ${f.headline}`.toLowerCase().includes(needle))
     : failureList
-  const client = useQueryClient()
   const navigate = useNavigate()
   const [failuresModel, failuresDispatch] = useProgram(
     () => ({ ...INITIAL_FAILURES, muted: parseMuted(localStorage.getItem(MUTED_KEY)) }),
@@ -247,17 +252,16 @@ export function GroupedPipelinePage() {
     (effect: FailuresEffect, dispatch) => {
       const failed = (error: unknown) => dispatch({ type: 'action_failed', text: error instanceof Error ? error.message : String(error) })
       match(effect)
-        .with({ type: 'retry' }, ({ id, kind, name }) => {
-          // A task always re-executes; anything else is a cache-aware `get`.
-          (kind === 'task' ? api.runTarget(id) : api.getTarget(id)).then(() => {
-            void client.invalidateQueries({ queryKey: ['runs'] })
-            dispatch({ type: 'done', text: `Retrying ${name}` })
-          }, failed)
-        })
+        // The shared run line follows it: the run id, its progress and its outcome.
+        .with({ type: 'retry' }, ({ id, kind }) => nodeRun.retry({ id, kind }))
         .with({ type: 'copy' }, ({ text }) => {
           navigator.clipboard.writeText(text).then(() => dispatch({ type: 'done', text: 'Error copied' }), failed)
         })
-        .with({ type: 'open_run' }, ({ id, name }) => {
+        .with({ type: 'open_run' }, ({ id, name, runId }) => {
+          if (runId) {
+            navigate(`/runs?run=${encodeURIComponent(runId)}`)
+            return
+          }
           api.asset(id).then(({ stats }) => {
             const run = stats.recent_runs.find((r) => r.status !== 'success')?.run_id
             if (run) navigate(`/runs?run=${encodeURIComponent(run)}`)
@@ -397,14 +401,14 @@ export function GroupedPipelinePage() {
               </IconButton>
             )}
             {crumbScope
-              ? <button type="button" onClick={() => openGroup(null)}>{rootName}</button>
+              ? <button type="button" title={rootName} onClick={() => openGroup(null)}>{rootName}</button>
               : <h1 aria-current="page">{rootName}</h1>}
             {path.map((group, index) => (
               <span key={group.id}>
                 <ChevronRight size={12} />
                 {index === path.length - 1
                   ? <h1 aria-current="page">{group.name}</h1>
-                  : <button type="button" onClick={() => openGroup(group.id)}>{group.name}</button>}
+                  : <button type="button" title={group.name} onClick={() => openGroup(group.id)}>{group.name}</button>}
               </span>
             ))}
           </nav>
@@ -419,7 +423,7 @@ export function GroupedPipelinePage() {
             </span>
           )}
           <div className="barca-scope-health" title="Every node in view, by state">
-            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={100} />}
+            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={80} />}
           </div>
           {scope && projected.external.length > 0 && !flat && !graph && show === 'items' && (
             <span className="barca-group-external" title={projected.external.map(shortName).join(', ')}>
@@ -512,12 +516,13 @@ export function GroupedPipelinePage() {
         )}
       </div>
 
-      {nodeRun.action.error && !selectedNode && <p role="alert">Could not start run: {nodeRun.action.error.message}</p>}
+      <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       {error ? (
         <div className="barca-table-empty">
           <p>
             Can't load pipeline:{' '}
-            {failure?.message}
+            {failure?.message}{' '}
+            <Button size="sm" onClick={() => { void assetQuery.refetch(); void groupsQuery.refetch() }}>Retry</Button>
           </p>
           {failure instanceof ApiError && failure.remediation && <p>{failure.remediation}</p>}
           {metadataUnusable(failure) && <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />}
@@ -528,7 +533,8 @@ export function GroupedPipelinePage() {
         <>
         {stateQuery.isError && (
           <div className="barca-graph-tools" role="status">
-            Asset state unavailable: {stateQuery.error.message}
+            Asset state unavailable: {stateQuery.error.message}{' '}
+            <Button size="sm" onClick={() => void stateQuery.refetch()}>Retry</Button>
             {stateQuery.error instanceof ApiError && stateQuery.error.remediation && (
               <span> {stateQuery.error.remediation}</span>
             )}
@@ -638,6 +644,7 @@ export function GroupedPipelinePage() {
                     const state = visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE
                     const last = group ? null : byId.get(entry.id)?.last_materialization
                     const running = group ? null : byId.get(entry.id)?.running
+                    const duration = group ? null : lastRunDuration(byId.get(entry.id))
                     const { lastSuccessAt, failingSince, failures: failed } = scopeAge(group ? leaves(entry.id) : [entry.id], byId)
                     const age = { at: lastSuccessAt, failingSince, failures: failed }
                     return (
@@ -701,7 +708,7 @@ export function GroupedPipelinePage() {
                         )}
                         {hasLeaves && <td>{last && <Age at={last.created_at} nowMs={stateQuery.dataUpdatedAt} />}</td>}
                         {hasLeaves && (
-                          <td className="num">{typeof last?.elapsed_seconds === 'number' ? formatSeconds(last.elapsed_seconds) : '–'}</td>
+                          <td className="num" title={duration?.title}>{duration?.text}</td>
                         )}
                         {hasGroups && (
                           <td>

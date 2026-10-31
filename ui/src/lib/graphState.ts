@@ -17,7 +17,11 @@ export function graphState(node: NodeState): GraphState {
     .with('failed', () => ({ status: 'failed' as const, label: failedKeysLabel(node) ?? 'Failed' }))
     .with('cached', () => ({ status: 'success' as const, label: 'Healthy' }))
     .with('unsynced', () => ({ status: 'warning' as const, label: 'Unsynced' }))
-    .with('stale', () => ({ status: 'warning' as const, label: 'Stale' }))
+    // Keys waiting on failed upstream keys (issue 764) share the stale severity, not its word.
+    .with('stale', () => ({
+      status: 'warning' as const,
+      label: node.cache.state === 'blocked' ? 'Blocked' : 'Stale',
+    }))
     .with('partial', () => ({
       status: 'warning' as const,
       label: node.partitions ? `${node.partitions.missing.toLocaleString()} of ${node.partitions.total.toLocaleString()} keys stale` : 'Stale (some keys)',

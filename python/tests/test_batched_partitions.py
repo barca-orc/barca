@@ -226,10 +226,14 @@ def test_a_partitioned_node_reports_its_failed_keys_and_its_runs(keys5):
 
         view = serve.get(f"/runs/{latest['run_id']}")
         validate({"$ref": "#/components/schemas/RunView"}, view)
-        # Failed nodes first, the rest of the run after it.
-        summary, *others = view["steps_page"]["nodes"]
-        assert {n["node_id"] for n in others} == {"pipeline.py:versions", "pipeline.py:cleaned"}
-        assert summary["node_id"] == "pipeline.py:scored"
+        # Every planned node (in plan order when the server can rebuild the plan, #776; failed
+        # nodes first otherwise), the failed one with its counts.
+        nodes = view["steps_page"]["nodes"]
+        summary = next(n for n in nodes if n["node_id"] == "pipeline.py:scored")
+        assert {n["node_id"] for n in nodes if n is not summary} == {
+            "pipeline.py:versions",
+            "pipeline.py:cleaned",
+        }
         assert (summary["keys"], summary["failed"], summary["calls"]) == (5, 2, 3)
 
     # The fix: only the failed keys run, and nothing is reported failed any more.

@@ -6,6 +6,7 @@
 
 import { formatSeconds } from './assetTable'
 import type { AssetRunEntry, CacheStatus } from './types'
+import type { RunNodeSummary } from './generated/RunNodeSummary'
 
 /** Nodes that take `id` as an input, sorted by name. */
 export function downstreamOf<T extends { id: string; inputs: string[] }>(id: string, nodes: readonly T[]): T[] {
@@ -132,11 +133,95 @@ export function whatChanged({ change_causes: causes = [] }: Pick<CacheStatus, 'c
   return `Failed after ${moved[0] === 'env_changed' ? 'an' : 'a'} ${noun}`
 }
 
+/** localStorage key: the path prefixes an editor on this machine can open, one per line or comma. */
+export const EDITOR_ROOTS_KEY = 'barca.editor-roots'
+
+/** The configured editor roots: absolute path prefixes, blank lines dropped. */
+export function editorRoots(stored: string | null | undefined): string[] {
+  return (stored ?? '').split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+}
+
+/**
+ * Whether an editor link makes sense: the server's project root is under a configured prefix,
+ * so the path is one this browser's machine has. The server's own path is useless elsewhere.
+ */
+export function editorOpens(root: string | null | undefined, roots: readonly string[]): boolean {
+  if (!root) return false
+  return roots.some((prefix) => root === prefix.replace(/\/+$/, '') || root.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`))
+}
+
+/** A definition's file relative to the project root (`planning.py`, not `/srv/app/planning.py`). */
+export function sourcePath(root: string | null | undefined, file: string): string {
+  if (root && file.startsWith(`${root.replace(/\/+$/, '')}/`)) return file.slice(root.replace(/\/+$/, '').length + 1)
+  return file
+}
+
 /** `vscode://file/…:12` for a node's definition; null when the server names no project root. */
 export function editorLink(root: string | null | undefined, file: string, line: number): string | null {
   if (!root && !file.startsWith('/')) return null
   const path = file.startsWith('/') ? file : `${root}/${file}`
   return `vscode://file/${path.split('/').filter(Boolean).map(encodeURIComponent).join('/')}:${line}`
+}
+
+/**
+ * `--partition` for one key as `GET /assets/{id}/partitions` lists it: `region=emea` as is, a
+ * compound key (`region=emea,tier=key`) as the JSON object the flag takes.
+ */
+export function partitionSelection(key: string): string {
+  const pairs = key.split(',')
+  if (pairs.length === 1) return key
+  const entries = pairs.map((pair) => {
+    const i = pair.indexOf('=')
+    return i < 0 ? null : [pair.slice(0, i), pair.slice(i + 1)]
+  })
+  if (entries.some((e) => e === null)) return key
+  return JSON.stringify(Object.fromEntries(entries as [string, string][]))
+}
+
+/**
+ * How fast a partitioned node's last run went, per unit of work: `0.4s / call · 5 calls` for
+ * batched calls, `2.2s / run · 3,077 keys` when each key ran on its own. Null when it recorded
+ * no time (every key failed).
+ */
+export function runPace(run: Pick<RunNodeSummary, 'calls' | 'keys' | 'elapsed_seconds'> | null | undefined): string | null {
+  if (!run || run.keys === 0 || (run.elapsed_seconds === 0 && run.calls === 0)) return null
+  if (run.calls > 0) return `${formatSeconds(run.elapsed_seconds / run.calls)} / call · ${run.calls.toLocaleString()} ${run.calls === 1 ? 'call' : 'calls'}`
+  return `${formatSeconds(run.elapsed_seconds)} / run · ${run.keys.toLocaleString()} keys`
+}
+
+export interface BarSegments {
+  cached: number
+  failed: number
+  stale: number
+}
+
+/**
+ * The widths (percent) of a key bar's parts. A part that exists is at least `minPct` wide, taken
+ * from the widest part: 7 failed keys of 3,077 are 0.2%, which a 300px bar never shows.
+ */
+export function barSegments({ cached, failed, stale, total }: { cached: number; failed: number; stale: number; total: number }, minPct = 2): BarSegments {
+  if (total <= 0) return { cached: 0, failed: 0, stale: 0 }
+  const out: BarSegments = { cached: (cached / total) * 100, failed: (failed / total) * 100, stale: (stale / total) * 100 }
+  const keys = ['cached', 'failed', 'stale'] as const
+  for (const k of keys) {
+    if (out[k] > 0 && out[k] < minPct) {
+      const widest = keys.reduce((a, b) => (out[a] >= out[b] ? a : b))
+      if (widest !== k) out[widest] -= minPct - out[k]
+      out[k] = minPct
+    }
+  }
+  return out
+}
+
+/** The `key` param of a hash route (`#/assets?node=…&key=ra-00001`, a palette key result), or nothing. */
+export function keyParam(hash: string): string {
+  return new URLSearchParams(hash.split('?')[1]).get('key') ?? ''
+}
+
+/** A preview cell past `max` characters, cut for the table; the whole value opens on click. */
+export function truncateCell(value: string, max = 80): { short: string; truncated: boolean } {
+  if (value.length <= max) return { short: value, truncated: false }
+  return { short: `${value.slice(0, max - 1)}…`, truncated: true }
 }
 
 /** A shape's `sample` as a table: rows of objects, one object (a dict's first keys), or plain values. */

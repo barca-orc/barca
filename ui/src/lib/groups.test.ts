@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import type { GraphEntry } from './graph'
 import {
   compareEntries,
+  contentsSummary,
+  lastRunDuration,
   distinctNames,
   plural,
   soleGroup,
@@ -192,5 +194,43 @@ describe('withPorts', () => {
     expect(out).toHaveLength(3)
     expect(out[0]).toMatchObject({ id: 'port:Staging', name: 'Staging · 11', loose: true })
     expect(out[2]!.inputs).toEqual(['port:Staging'])
+  })
+})
+
+describe('contentsSummary', () => {
+  const node = (id: string, kind: ListNode['kind']): Pick<ListNode, 'id' | 'kind'> => ({ id, kind })
+
+  it('names what a group holds and leaves out what it has none of', () => {
+    expect(contentsSummary([
+      node('p.py:a', 'asset'), node('p.py:b', 'asset'), node('p.py:c', 'asset'), node('p.py:validate_publication', 'task'),
+    ])).toBe('3 assets · 1 task')
+    expect(contentsSummary([node('p.py:a', 'asset'), node('p.py:check__a', 'task'), node('p.py:s', 'sensor')])).toBe('1 asset · 1 check · 1 sensor')
+    expect(contentsSummary([])).toBe('0 assets')
+  })
+})
+
+describe('lastRunDuration', () => {
+  const base = state('modeling.py:data__raw_rows')
+  const run = { run_id: 'd969', elapsed_seconds: 2.25, keys: 3077, calls: 5, failed: 0 }
+
+  it('adds a batched node up over its keys and calls, and says so', () => {
+    expect(lastRunDuration({ ...base, last_run: run })).toEqual({
+      text: '2.3s', title: 'Summed over 3,077 keys in 5 batched calls (run d969)',
+    })
+    expect(lastRunDuration({ ...base, last_run: { ...run, keys: 1, calls: 0, elapsed_seconds: 0.0019 } })).toEqual({
+      text: '2ms', title: 'Run d969',
+    })
+  })
+
+  it('says when a failed run recorded no time, instead of a dash', () => {
+    expect(lastRunDuration({ ...base, last_run: { ...run, elapsed_seconds: null, keys: 7, failed: 7, calls: 5 } })).toEqual({
+      text: 'not recorded', title: '7 of 7 keys failed before finishing; nothing recorded a time (run d969)',
+    })
+  })
+
+  it('falls back to the row for an older record, and is empty for a node that never ran', () => {
+    expect(lastRunDuration({ ...base, last_materialization: { ...base.last_materialization!, elapsed_seconds: 61 } })).toEqual({ text: '1.0m' })
+    expect(lastRunDuration({ ...base, last_materialization: null })).toBeNull()
+    expect(lastRunDuration(undefined)).toBeNull()
   })
 })
