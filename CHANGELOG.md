@@ -8,6 +8,76 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- A failed partition key blocks only the keys that read it. A `partitions_from` consumer (or a
+  node on the same dimensions) runs its other keys and skips its own key of the failure as a
+  step with reason `upstream_key_failed` naming the failed key; a `collect()` fan-in, an
+  unpartitioned node or a node on other dimensions is still skipped whole (`upstream_failed`).
+  `barca status` and `GET /state` report such a consumer `blocked` (detail `39 of 39 missing
+  keys wait on 'demand_forecast'`), `--state blocked` selects them, `summary.blocked` counts
+  them, and the UI labels them `Blocked · N keys wait on upstream`. (#764)
+- The run page lists every planned node with what became of it: ran (keys, failed keys,
+  batched calls, compute time labelled as summed over the calls), cached, or skipped with the
+  failed node that blocked it, and states the target's outcome at the top (`publish_plan did
+  not run: upstream demand_forecast failed 7 keys`). Successful keys sit behind their count,
+  failed keys open at once. The runs table's Steps column counts keys in one unit (`3,077 ran ·
+  3 cached`) and a batched node's failure reads `demand_forecast: 7 keys failed · …`.
+  `GET /runs/{id}` gains `steps_page.nodes[].status` and `blocked_by`, and `GET /runs`
+  `steps_failed` (experimental). (#758)
+- The node panel of a partitioned node is actionable: the key bar always shows its failed
+  segment and the legend says `7 failed` in red; typical time is per run in the table
+  (`~2.2s / run`) and per batched call in the panel (`0.4s / call · 5 calls`), never
+  `0.0s / key`; last attempt and history come before the key list, which starts closed past 10
+  failed keys; error lines are in the failure colour, wrap, and have a copy button; a key
+  search that matches no failed key widens to every key and says so; each key row offers **Run
+  this key** and shows its artifact path; the source path is project-relative with **Copy
+  path**, and the editor link appears only for a root listed in localStorage
+  `barca.editor-roots`. (#763)
+- The command palette (⌘K) finds a partition key: a query that looks like one (`ra-02541`,
+  `account=ra-02541`) asks every partitioned node and lists `demand_forecast ·
+  account=ra-02541 · failed 2m ago` rows that open the node panel with that key searched; with
+  an empty query, nodes and groups come before runs. (#759)
+- The UI shows every absolute time in one zone, local or UTC, chosen with a toggle next to the
+  theme switch and remembered like the theme. Every absolute time names its zone, relative
+  times keep the absolute time in their hover title, and the runs histogram, log timestamps,
+  next-run cells and schedule times all follow the setting. (#761)
+- The graph is readable at fit-to-screen: a fit never scales cards below 1:1 (13px names, 12px
+  state labels); a bigger graph is centred on the selected node, else on its failed nodes. A
+  consumer that did not run says on its card which failure upstream blocked it. Arrow keys move
+  the selection, Enter opens the panel, Escape closes it. (#767)
+- Starting a run from any page (a node's Run button, the Failures view's Retry, the topbar)
+  shows one line with the run id link, its progress, and its outcome (`succeeded in 2.3s`,
+  `7 keys failed`), refreshing the rows it touched. A group's Contents reads `3 assets · 1
+  task`; a node's Duration is its last run's time summed over its keys and batched calls, with
+  the breakdown on hover. `GET /state` rows gain an optional `last_run`. (#766)
+- The UI's tables are compact: 44px rows whose headers never wrap, and beside the node panel a
+  table scrolls sideways instead of growing. A failed row's error is 13px in the failed colour,
+  sub-labels are 12px, identifiers (node, file, key, run id, target, error) are in the mono
+  font everywhere, and a name that does not fit is cut at its start but stays one piece of
+  text, so selecting a row copies `demand_forecast`, not `deman\nd_forecast`. The grouped
+  view's header fits a 1280×720 window on one line, and the connection dot is 12px with its
+  text on hover or focus. (#765)
+
+### Bug Fixes
+
+- The Failures view heads a partitioned node whose keys failed with their most common key error
+  (`BatchKeyFailed: … for <key>: …`, `7 of 3,077 keys` under it, `+N more errors` when they
+  differ) instead of "failed, with no error recorded"; its cause headings show a real message
+  instead of `#`-masked text; "Copy error" copies the key's error and "Open run" opens the run
+  that recorded it. (#757)
+- A page no longer stays on "barca serve is not reachable" after the server restarts: every
+  query asks again every 5 s while its last fetch failed and refetches as soon as a health poll
+  succeeds. While the server does not answer, a banner on every page says so, the connection
+  badge is an amber pill, and every page in error has a Retry. Schedules no longer shows
+  counts next to a "can't load" error and keeps the last loaded rows under a notice when a
+  refresh fails. (#760)
+- A `group(...)` call that is not assigned to a variable is registered (as
+  `group:<file>:<name>`) instead of being silently dropped from `barca list --groups`,
+  `GET /groups` and the Assets page. (#762)
+- The Tasks page's default view also shows tasks that ran in the last 24 hours, its "Last run"
+  counts include them, and zero-count state chips are hidden. (#766)
+
 ## 0.38.0 (2026-10-31)
 
 ### Features
