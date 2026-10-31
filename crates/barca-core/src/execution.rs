@@ -3451,6 +3451,12 @@ async fn predict_steps(
         let forced = matches!(
             &decision,
             Decision::Run(reason) if *reason != RunReason::NotMaterialized
+        ) || matches!(
+            &decision,
+            Decision::Partitioned {
+                refresh: Some(_),
+                ..
+            }
         );
         if missing_sensor.is_some() || hash_unknown_dep.is_some() {
             ctx.hash_unknown.insert(base.to_string());
@@ -3597,7 +3603,9 @@ async fn predict_steps(
                     ctx.cached_steps.remember(step);
                 }
             }
-            Decision::Partitioned { cached, missing } => {
+            Decision::Partitioned {
+                cached, missing, ..
+            } => {
                 ctx.summary.cached += cached.len();
                 ctx.summary.will_run += missing.len();
                 let any_cached = !cached.is_empty();
@@ -3803,7 +3811,9 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
                     cached_steps.remember(step);
                 }
             }
-            Decision::Partitioned { cached, missing } => {
+            Decision::Partitioned {
+                cached, missing, ..
+            } => {
                 let any_cached = !cached.is_empty();
                 for (pdisplay, oref) in cached {
                     all_outputs.insert(pdisplay.clone(), oref);

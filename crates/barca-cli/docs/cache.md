@@ -596,6 +596,38 @@ A missing or evicted artifact that nothing needs to read leaves the node `cached
   `collect()` fan-in over them is skipped, and naming it in `--refresh` is a usage error
   (`barca docs partitions`, "Selecting keys").
 
+### Refresh selected keys in a complete DAG
+
+Use keyed selectors to refresh one key or a set independently of the output domain:
+
+```bash
+barca get final pipeline.py --refresh 'source[account=A]'
+barca get final pipeline.py --refresh 'source[account=A],source[account=C]'
+barca run publish pipeline.py --refresh 'source[account=A],source[account=C]'
+```
+
+Each selector names one dimension and value; it selects every source key with that coordinate.
+Combine selectors with commas to select a set. Bare asset names still refresh all planned keys.
+A malformed selector or a selector matching no planned key is a usage error. Quote brackets
+so the shell does not expand them. With `--partition`, selectors must match the narrowed domain.
+
+The full target DAG and partition domain remain planned. Only selected keys and their aligned
+cascade recompute; fresh siblings keep their hashes and artifacts. An invalidated `collect()`
+reads all current keys, combining refreshed keys and cached siblings. Missing or stale siblings
+follow normal cache validation and artifact recovery; a failure blocks publication rather than
+omitting an input. `batch="all"` receives the keys that need work. `--no-cascade` and cutoff
+semantics apply as above. A cutoff whose bytes stay unchanged leaves its consumers cached;
+a dry run reports consumers of a running cutoff as `unknown` / `cutoff_pending`.
+
+`--dry-run --json` reports selected work and sibling cache counts in `partitions`, including
+`will_run_keys`; `reason` distinguishes `refresh` and `refresh_cascade`. The publisher's step
+reports whether the complete fan-in runs or stays cached. A real report has the corresponding
+`status` and counts. A cached consumer after the refreshed cutoff reports that propagation
+stopped at unchanged cutoff bytes.
+
+Python uses `refresh=["source[account=A]", "source[account=C]"]`; POST `/runs` uses the same
+strings in its `refresh` array. Both use the CLI's cache engine.
+
 For external data that changes in place (a blob overwritten at the same path), the canonical
 answer is a sensor ("External data that changes in place" above). Without one, `--refresh`
 the asset that reads it, and everything built from it re-runs.

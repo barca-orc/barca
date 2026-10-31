@@ -31,6 +31,7 @@ with `inputs={"parameter": upstream_function}`.
 |---|---|
 | Get an asset and reuse unchanged results | `barca get summary` |
 | Run a task and reuse its cached inputs | `barca run publish` |
+| Refresh a partition set and publish the complete result | `barca get final --refresh 'source[account=A],source[account=C]'` |
 | Get one partition | `barca get report --partition customer=acme` |
 | Manage runs on one server | `barca serve`, then `barca get summary --server http://host:8274` |
 
@@ -127,6 +128,10 @@ sensor discovery. No batching setting is required.
 Only `summary` runs again; `raw_data` comes from the cache. To recompute by hand, name the
 assets: `barca get summary --refresh raw_data` (and everything downstream of it), or
 `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
+
+Refresh a partition set while keeping complete publication with
+`barca get final pipeline.py --refresh 'source[account=A],source[account=C]'`.
+Fresh siblings stay cached. See `barca docs cache`.
 
 An asset that reads a file, a bucket or a table in its own body has the same code and inputs
 on every run, so it is served from cache even after the data changes. Data from outside comes

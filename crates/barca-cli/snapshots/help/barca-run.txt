@@ -7,7 +7,7 @@ Arguments:
 
 Options:
       --refresh <REFRESH>
-          Recompute named assets and their downstream dependents: --refresh a,b
+          Recompute assets or selected keys and their dependents: --refresh a,b
       --no-cascade
           Refresh only named assets; cached downstream results may be outdated
       --refresh-all

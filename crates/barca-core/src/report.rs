@@ -855,7 +855,15 @@ pub(crate) fn report_for(
             }
             word_cached
         }
-        Decision::Partitioned { cached, missing } => {
+        Decision::Partitioned {
+            cached,
+            missing,
+            refresh,
+            cutoff_stopped,
+        } => {
+            if *cutoff_stopped {
+                r.detail = Some("unchanged cutoff bytes: refresh propagation stopped".to_string());
+            }
             let total = cached.len() + missing.len();
             r.partitions = Some(PartitionSummary {
                 total,
@@ -865,8 +873,9 @@ pub(crate) fn report_for(
                 changed: None,
             });
             if !missing.is_empty() {
-                r.reason = Some(RunReason::NotMaterialized.code().to_string());
-                r.detail = Some(RunReason::NotMaterialized.detail());
+                let reason = refresh.as_ref().unwrap_or(&RunReason::NotMaterialized);
+                r.reason = Some(reason.code().to_string());
+                r.detail = Some(reason.detail());
             }
             match (cached.is_empty(), missing.is_empty()) {
                 (_, true) => word_cached,

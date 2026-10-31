@@ -187,7 +187,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
 | `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use | Override declared batching: none, all, N or NODE=N (experimental) |
-| `--refresh` | comma-separated names | - | stable | Recompute named assets and their downstream dependents: --refresh a,b |
+| `--refresh` | comma-separated names | - | stable | Recompute assets or selected keys and their dependents: --refresh a,b |
 | `--no-cascade` | - | default `false` | stable | Refresh only named assets; cached downstream results may be outdated |
 | `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
 | `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
@@ -203,7 +203,7 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<ARGS>...` | - | required | stable | Target(s), then optional files/directories; omit files to discover the project |
-| `--refresh` | comma-separated names | - | stable | Recompute named assets and their downstream dependents: --refresh a,b |
+| `--refresh` | comma-separated names | - | stable | Recompute assets or selected keys and their dependents: --refresh a,b |
 | `--no-cascade` | - | default `false` | stable | Refresh only named assets; cached downstream results may be outdated |
 | `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
@@ -2888,5 +2888,10 @@ error envelope or an `--agent` line updates, in the same PR:
 3. pre-1.0, for a breaking change: plan a minor bump and add a "Breaking" line to the release
    notes. From 1.0: keep the old spelling working for at least one minor release, with a stderr
    warning.
+
+Keyed refresh selectors (`--refresh 'source[account=A],source[account=C]'`) select a set
+of refresh coordinates independently of the target domain. Each selector has one dimension.
+The existing refresh list in CLI, Python and server requests shares these semantics;
+`--partition` continues to narrow execution and skip affected fan-ins.
 
 See also: `barca docs agents` (how to drive barca from scripts and agents), [`barca docs skill`](/reference/agent-skill/).

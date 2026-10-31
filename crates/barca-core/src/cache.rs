@@ -188,9 +188,13 @@ impl RunReason {
 pub(crate) enum Held {
     /// A `Manual` node read as it is (RFC-0008): its latest result, `stale` when its inputs'
     /// latest results or its code differ from the ones it was computed with.
-    Manual { stale: bool },
+    Manual {
+        stale: bool,
+    },
     /// Under a tick, a task whose last successful run used the current versions of its inputs.
     UpToDate,
+    /// A matching cache hit after a refreshed cutoff wrote unchanged bytes.
+    CutoffUnchanged,
 }
 
 impl Held {
@@ -201,6 +205,7 @@ impl Held {
                 "Manual and stale: its last result is read as it is; name it in --refresh to \
                  recompute it"
             }
+            Held::CutoffUnchanged => "unchanged cutoff bytes: refresh propagation stopped",
             Held::UpToDate => "up to date: its last successful run used these inputs",
         }
     }
@@ -218,6 +223,8 @@ pub(crate) enum Decision {
     Partitioned {
         cached: Vec<(String, OutputRef)>,
         missing: Vec<crate::model::PartitionKey>,
+        refresh: Option<RunReason>,
+        cutoff_stopped: bool,
     },
 }
 
@@ -229,8 +236,10 @@ pub(crate) struct DecideState {
     run_hashes: HashMap<String, String>,
     expected_steps: BTreeMap<String, BTreeSet<String>>,
     complete_upstreams: HashSet<String>,
+    validated_refresh: HashSet<String>,
+    /// Refreshed display ids: one entry per actual key, or the base for a global asset.
     pub(crate) refreshed_ids: std::collections::HashSet<String>,
-    /// Refreshed asset -> the `--refresh` name it was refreshed for (itself, or the named
+    /// Refreshed display id -> the `--refresh` name it was refreshed for (itself, or the named
     /// upstream it cascaded from).
     pub(crate) cascade_roots: HashMap<String, String>,
     pub(crate) stale_cached: HashMap<String, String>,
@@ -742,6 +751,8 @@ pub(crate) async fn decide_step(
             Decision::Partitioned {
                 cached: Vec::new(),
                 missing: Vec::new(),
+                refresh: None,
+                cutoff_stopped: false,
             },
         ));
     }
@@ -760,6 +771,27 @@ pub(crate) async fn decide_step(
     let display_id = step.step_id.display();
     let base_node = dag.get_node(base_id);
 
+    if let CachePolicy::RefreshSelective { names, .. } = policy
+        && state.validated_refresh.insert(base_id.to_string())
+    {
+        for name in names
+            .iter()
+            .filter(|n| n.contains('[') && refresh_name_matches(base_id, n))
+        {
+            let (_, selected) = crate::model::PartitionKey::parse_from_id(name);
+            if !state.expected_steps.get(base_id).is_some_and(|ids| {
+                ids.iter().any(|id| {
+                    let (_, key) = crate::model::PartitionKey::parse_from_id(id);
+                    selected.0.iter().all(|(d, v)| key.0.get(d) == Some(v))
+                })
+            }) {
+                return Err(crate::BarcaError::Usage(format!(
+                    "--refresh: selector '{name}' matches no planned partition keys of '{}'.",
+                    short_name(base_id)
+                )));
+            }
+        }
+    }
     let kind = base_node.map(|n| n.kind());
     // Sensors and tasks always re-run — never cached. Under a tick, a task other than the
     // scheduled one runs only when it is out of date.
@@ -786,38 +818,13 @@ pub(crate) async fn decide_step(
     // cascading, every asset downstream of one (plan order puts upstream steps first, so a
     // refreshed upstream is already in `cascade_roots` when its consumers are decided).
     let is_asset = kind == Some(crate::NodeKind::Asset);
-    let refresh = match policy {
-        CachePolicy::CacheAware => None,
-        CachePolicy::RefreshAll => is_asset.then_some(RunReason::RefreshAll),
-        CachePolicy::RefreshSelective { names, cascade } => {
-            if !is_asset {
-                None
-            } else if names.iter().any(|name| refresh_name_matches(base_id, name)) {
-                Some(RunReason::Refresh)
-            } else if *cascade {
-                // Not through a cutoff asset: what reads it is decided by the bytes it wrote.
-                step.inputs.values().find_map(|up| {
-                    let up_base = up.split('[').next().unwrap_or(up);
-                    if is_cutoff(dag, up_base) {
-                        return None;
-                    }
-                    state
-                        .cascade_roots
-                        .get(up_base)
-                        .map(|root| RunReason::RefreshCascade { root: root.clone() })
-                })
-            } else {
-                None
-            }
-        }
+    let refresh = if step.partition_keys.is_empty() {
+        refresh_reason(dag, policy, state, &step, &display_id, is_asset)
+    } else {
+        None
     };
     if let Some(reason) = refresh {
-        let root = match &reason {
-            RunReason::RefreshCascade { root } => root.clone(),
-            _ => short_name(base_id).to_string(),
-        };
-        state.refreshed_ids.insert(base_id.to_string());
-        state.cascade_roots.insert(base_id.to_string(), root);
+        remember_refresh(state, &display_id, base_id, &reason);
         return Ok((step, Decision::Run(reason)));
     }
 
@@ -836,6 +843,7 @@ pub(crate) async fn decide_step(
     if !step.partition_keys.is_empty() {
         let mut cached = Vec::new();
         let mut missing = Vec::new();
+        let mut refresh = None;
         // Many keys: their rows in one pass, when that is cheaper than a lookup per key.
         let rows = match cache {
             Some(cache) if step.partition_keys.len() >= KEYS_READ_TOGETHER => {
@@ -895,6 +903,13 @@ pub(crate) async fn decide_step(
                     None => lookup_in(cache, &pdisplay, &run_h).await,
                 },
             };
+            let forced = refresh_reason(dag, policy, state, &step, &pdisplay, is_asset);
+            if let Some(reason) = forced {
+                remember_refresh(state, &pdisplay, base_id, &reason);
+                refresh.get_or_insert(reason);
+                missing.push(pk.clone());
+                continue;
+            }
             match hit {
                 Some(oref) => {
                     record_output(dag, state, &pdisplay, oref.content_hash.as_ref());
@@ -903,7 +918,16 @@ pub(crate) async fn decide_step(
                 None => missing.push(pk.clone()),
             }
         }
-        return Ok((step, Decision::Partitioned { cached, missing }));
+        let cutoff_stopped = missing.is_empty() && reads_refreshed_cutoff(dag, state, &step);
+        return Ok((
+            step,
+            Decision::Partitioned {
+                cached,
+                missing,
+                refresh,
+                cutoff_stopped,
+            },
+        ));
     }
 
     let run_h = step
@@ -921,7 +945,12 @@ pub(crate) async fn decide_step(
                 let up_base = up.split('[').next().unwrap_or(up);
                 if is_cutoff(dag, up_base) {
                     None
-                } else if state.refreshed_ids.contains(up_base) {
+                } else if state.refreshed_ids.contains(up_base)
+                    || state.refreshed_ids.iter().any(|id| {
+                        id.strip_prefix(up_base)
+                            .is_some_and(|suffix| suffix.starts_with('['))
+                    })
+                {
                     Some(short_name(up_base).to_string())
                 } else {
                     state.stale_cached.get(up_base).cloned()
@@ -930,7 +959,7 @@ pub(crate) async fn decide_step(
             if let Some(root) = &stale_root {
                 state.stale_cached.insert(base_id.to_string(), root.clone());
             }
-            let held = None;
+            let held = reads_refreshed_cutoff(dag, state, &step).then_some(Held::CutoffUnchanged);
             (
                 step,
                 Decision::Cached {
@@ -941,6 +970,94 @@ pub(crate) async fn decide_step(
             )
         }
     })
+}
+
+fn reads_refreshed_cutoff(
+    dag: &Dag,
+    state: &DecideState,
+    step: &crate::planner::StreamStep,
+) -> bool {
+    step.inputs.values().any(|up| {
+        if !is_cutoff(dag, up) {
+            return false;
+        }
+        state.refreshed_ids.contains(up)
+            || state.refreshed_ids.iter().any(|id| {
+                id.strip_prefix(up)
+                    .is_some_and(|suffix| suffix.starts_with('['))
+            })
+    })
+}
+
+/// Refresh a key using the same upstream alignment as its run hash. A fan-in reads all
+/// upstream keys; an aligned consumer reads just its own key. Cutoffs stop forced cascades.
+fn refresh_reason(
+    dag: &Dag,
+    policy: &CachePolicy,
+    state: &DecideState,
+    step: &crate::planner::StreamStep,
+    display: &str,
+    is_asset: bool,
+) -> Option<RunReason> {
+    if !is_asset {
+        return None;
+    }
+    let base = step.step_id.base_id();
+    match policy {
+        CachePolicy::CacheAware => None,
+        CachePolicy::RefreshAll => Some(RunReason::RefreshAll),
+        CachePolicy::RefreshSelective { names, cascade } => {
+            let (_, key) = crate::model::PartitionKey::parse_from_id(display);
+            let selected = names.iter().any(|name| {
+                if !refresh_name_matches(base, name) {
+                    return false;
+                }
+                if !name.contains('[') {
+                    return true;
+                }
+                let (_, selection) = crate::model::PartitionKey::parse_from_id(name);
+                !selection.is_empty() && selection.0.iter().all(|(d, v)| key.0.get(d) == Some(v))
+            });
+            if selected {
+                return Some(RunReason::Refresh);
+            }
+            if !cascade {
+                return None;
+            }
+            step.inputs.values().find_map(|up| {
+                let up_base = up.split('[').next().unwrap_or(up);
+                if is_cutoff(dag, up_base) {
+                    return None;
+                }
+                if let Some(root) = state.cascade_roots.get(up) {
+                    return Some(RunReason::RefreshCascade { root: root.clone() });
+                }
+                let aligned = key.display_id(up);
+                if state.run_hashes.contains_key(&aligned) {
+                    return state
+                        .cascade_roots
+                        .get(&aligned)
+                        .map(|root| RunReason::RefreshCascade { root: root.clone() });
+                }
+                let prefix = format!("{up}[");
+                state
+                    .cascade_roots
+                    .iter()
+                    .filter(|(id, _)| id.starts_with(&prefix))
+                    .min_by_key(|(id, _)| *id)
+                    .map(|(_, root)| RunReason::RefreshCascade { root: root.clone() })
+            })
+        }
+    }
+}
+
+fn remember_refresh(state: &mut DecideState, display: &str, base: &str, reason: &RunReason) {
+    let root = match reason {
+        RunReason::RefreshCascade { root } => root.clone(),
+        _ => short_name(base).to_string(),
+    };
+    state.refreshed_ids.insert(display.to_string());
+    state.cascade_roots.insert(display.to_string(), root);
 }
 
 /// Under a tick (RFC-0008 rule 3), the result of a task that need not fire: not the scheduled
@@ -1117,7 +1234,12 @@ pub(crate) fn localize_decision(
             stale_root,
             held,
         },
-        Decision::Partitioned { cached, missing } => Decision::Partitioned {
+        Decision::Partitioned {
+            cached,
+            missing,
+            refresh,
+            cutoff_stopped,
+        } => Decision::Partitioned {
             cached: cached
                 .into_iter()
                 .map(|(pdisplay, oref)| {
@@ -1126,6 +1248,8 @@ pub(crate) fn localize_decision(
                 })
                 .collect(),
             missing,
+            refresh,
+            cutoff_stopped,
         },
         run => run,
     }
@@ -1138,8 +1262,8 @@ pub enum CachePolicy {
     CacheAware,
     /// Force-rerun every asset in the target's cone (`barca get|run ... --refresh-all`).
     RefreshAll,
-    /// Force-rerun the named assets (`barca get|run ... --refresh a,b`). A name matches when it
-    /// equals the node's base id exactly, or matches the trailing `:name` segment. With
+    /// Force-rerun named assets or coordinates (`--refresh a[k=v],a[k=w]` selects a set).
+    /// A bare asset name matches the node's base id or its trailing `:name` segment. With
     /// `cascade` (the default) every asset downstream of a named one in the target's cone
     /// re-runs too; without it (`--no-cascade`) all other assets stay cache-aware.
     RefreshSelective { names: Vec<String>, cascade: bool },
@@ -2436,7 +2560,7 @@ def below_plain(p: int) -> int:
         // Decided by the bytes `dims` wrote: no cache here, so it runs as not materialized,
         // not as part of the cascade.
         assert!(
-            matches!(&d, Decision::Partitioned { cached, missing } if cached.is_empty() && missing.len() == 2)
+            matches!(&d, Decision::Partitioned { cached, missing, .. } if cached.is_empty() && missing.len() == 2)
         );
         assert!(!state.refreshed_ids.contains("t.py:per_key"));
     }

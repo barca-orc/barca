@@ -203,6 +203,7 @@ Examples:
   barca get orders pipeline.py --refresh orders --json  # check recomputed artifact bytes
   barca get total pipeline.py --refresh-all        # recompute everything in that cone
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
+  barca get total pipeline.py --refresh 'clean[account=A],clean[account=C]' # refresh a set; retain full DAG
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
   barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
   barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store
@@ -246,6 +247,7 @@ Examples:
   barca run deploy pipelines/                          # only read files under pipelines/
   barca run deploy pipeline.py                         # task runs; upstream assets come from cache
   barca run deploy pipeline.py --refresh fetch,clean   # re-materialize these and everything downstream of them
+  barca run deploy pipeline.py --refresh 'fetch[account=A],fetch[account=C]' # refresh a set; retain full DAG
   barca run deploy pipeline.py --refresh fetch --no-cascade   # re-materialize only fetch; downstream stays cached
   barca run deploy pipeline.py --refresh-all           # re-materialize every upstream asset
   barca run deploy pipeline.py --dry-run --refresh fetch   # preview: which steps run, which are cached
@@ -569,7 +571,7 @@ pub(crate) enum Cli {
         /// `--refresh a b`); the target itself may be named. Every asset downstream of them in
         /// the target's cone re-materializes too (see --no-cascade)
         #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
-        #[arg(help = "Recompute named assets and their downstream dependents: --refresh a,b", long_help = None)]
+        #[arg(help = "Recompute assets or selected keys and their dependents: --refresh a,b", long_help = None)]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns
@@ -618,7 +620,7 @@ pub(crate) enum Cli {
         /// (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the
         /// task's cone re-materializes too (see --no-cascade)
         #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
-        #[arg(help = "Recompute named assets and their downstream dependents: --refresh a,b", long_help = None)]
+        #[arg(help = "Recompute assets or selected keys and their dependents: --refresh a,b", long_help = None)]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns

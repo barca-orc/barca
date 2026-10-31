@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 3. Status: implemented; historical-selection deviation tracked in [freshness](freshness.md).
+Specification version: 4. Status: implemented; historical-selection deviation tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -127,6 +127,19 @@ run hash (`cutoff` does not count in its definition):
   a cone hashes less than the conservative rule above: the asset's code reaches its consumers
   only through its bytes. Calling a cutoff asset as a plain function from another step is outside
   the tracking boundary.
+
+### Keyed refresh scope
+
+A refresh selector `asset[dimension=value]` forces matching keys while preserving the planned
+target domain. A comma-separated CLI list (or request array) unions selectors into a set.
+Each selector contains one coordinate. Bare names select all keys. Invalid syntax and
+selectors matching no planned key fail with a usage error. Per-key cascade follows the same
+aligned-or-fan-in upstream lookup as run hashing and stops at cutoff outputs. Unchanged
+cutoff bytes preserve downstream cache hits. Complete fan-ins read every domain key; normal
+validation/recovery computes missing or stale siblings or blocks publication on failure.
+Batching operates on the due keys. `--partition` retains its existing narrowing semantics.
+Conformance: `python/tests/test_keyed_refresh.py` (CLI and server, warm sets, cutoffs, batching,
+complete publication, invalid keys and missing siblings).
 
 ### Recording progress
 
