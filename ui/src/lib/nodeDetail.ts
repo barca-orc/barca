@@ -213,6 +213,11 @@ export function barSegments({ cached, failed, stale, total }: { cached: number; 
   return out
 }
 
+/** The `key` param of a hash route (`#/assets?node=…&key=ra-00001`, a palette key result), or nothing. */
+export function keyParam(hash: string): string {
+  return new URLSearchParams(hash.split('?')[1]).get('key') ?? ''
+}
+
 /** A preview cell past `max` characters, cut for the table; the whole value opens on click. */
 export function truncateCell(value: string, max = 80): { short: string; truncated: boolean } {
   if (value.length <= max) return { short: value, truncated: false }

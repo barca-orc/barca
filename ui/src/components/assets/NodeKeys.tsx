@@ -5,7 +5,7 @@ import { Copy, Play } from 'lucide-react'
 import { Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, SearchInput, Skeleton } from '@/components'
 import { usePartitionKeys } from '@/hooks/usePartitionKeys'
 import { formatSeconds, keyBreakdown } from '@/lib/assetTable'
-import { barSegments, formatBytes } from '@/lib/nodeDetail'
+import { barSegments, formatBytes, keyParam } from '@/lib/nodeDetail'
 import type { PartitionKeys, PartitionState } from '@/lib/types'
 
 const PAGE = 100
@@ -55,9 +55,9 @@ export interface NodeKeysProps {
  */
 export function NodeKeys({ id, partitions, nowMs, onRunKey, runDisabled = false, startingKey = null }: NodeKeysProps) {
   const { failed, stale, total } = keyBreakdown(partitions)
-  // The key search: what is typed, and whether it covers only failed keys. (A `?key=` URL
-  // param pre-fills `query`.)
-  const [query, setQuery] = useState('')
+  // The key search: what is typed, and whether it covers only failed keys. `?key=` in the
+  // location hash (the palette's key results) pre-fills it.
+  const [query, setQuery] = useState(typeof window === 'undefined' ? '' : keyParam(window.location.hash))
   const [onlyFailed, setOnlyFailed] = useState(failed > 0)
   const [limit, setLimit] = useState(PAGE)
   const q = query.trim() || undefined
