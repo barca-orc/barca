@@ -401,14 +401,14 @@ export function GroupedPipelinePage() {
               </IconButton>
             )}
             {crumbScope
-              ? <button type="button" onClick={() => openGroup(null)}>{rootName}</button>
+              ? <button type="button" title={rootName} onClick={() => openGroup(null)}>{rootName}</button>
               : <h1 aria-current="page">{rootName}</h1>}
             {path.map((group, index) => (
               <span key={group.id}>
                 <ChevronRight size={12} />
                 {index === path.length - 1
                   ? <h1 aria-current="page">{group.name}</h1>
-                  : <button type="button" onClick={() => openGroup(group.id)}>{group.name}</button>}
+                  : <button type="button" title={group.name} onClick={() => openGroup(group.id)}>{group.name}</button>}
               </span>
             ))}
           </nav>
@@ -423,7 +423,7 @@ export function GroupedPipelinePage() {
             </span>
           )}
           <div className="barca-scope-health" title="Every node in view, by state">
-            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={100} />}
+            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={80} />}
           </div>
           {scope && projected.external.length > 0 && !flat && !graph && show === 'items' && (
             <span className="barca-group-external" title={projected.external.map(shortName).join(', ')}>
