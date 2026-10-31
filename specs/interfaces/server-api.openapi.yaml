@@ -4253,6 +4253,40 @@ components:
           description: The run working on this node now, whoever started it (the scheduler, an
             HTTP request, a `barca get --server`, or a CLI run on the same `.barca/` whose owner is
             alive); null when none is.
+        last_run:
+          $ref: '#/components/schemas/LastRun'
+          description: The node's newest run as a whole (the run last_materialization is from);
+            absent until a run recorded a row for it.
+    LastRun:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - elapsed_seconds
+      - keys
+      - calls
+      - failed
+      properties:
+        run_id: *id003
+        elapsed_seconds:
+          anyOf:
+          - *id045
+          - type: 'null'
+          description: Wall time summed over the rows of the run that recorded one (a key's
+            last_materialization.elapsed_seconds is that key's share alone); null when none did,
+            every key having failed before finishing.
+        keys:
+          type: integer
+          minimum: 0
+          description: Rows the run recorded for the node; its keys, or 1.
+        calls:
+          type: integer
+          minimum: 0
+          description: Batched calls those keys ran in; 0 when each ran on its own.
+        failed:
+          type: integer
+          minimum: 0
+          description: Keys that failed.
     NodeRunning:
       type: object
       additionalProperties: false
@@ -4632,6 +4666,12 @@ components:
           - type: 'null'
         steps_executed: *id054
         steps_cached: *id054
+        steps_failed:
+          anyOf:
+          - *id054
+          - type: 'null'
+          description: Recorded steps that failed, a partitioned node's keys each counted; absent
+            for a run not yet recorded. Experimental.
         error:
           anyOf:
           - *id003
@@ -5227,8 +5267,11 @@ components:
             truncated: *id059
             nodes:
               type: array
-              description: Per node over every recorded step, listed or not, failed nodes first;
-                absent when no node has more than one step. Experimental.
+              description: Per node over every recorded step, listed or not. For a finished run
+                whose plan the server can rebuild from today's sources, every planned node in plan
+                order, each with a status, the cached and skipped ones with no steps included;
+                otherwise the nodes with recorded steps, failed nodes first, and absent when no
+                node has more than one step. Experimental.
               items:
                 type: object
                 additionalProperties: false
@@ -5240,6 +5283,16 @@ components:
                   elapsed_seconds:
                     type: number
                   calls: *id056
+                  status:
+                    type: string
+                    enum: [ran, cached, skipped]
+                    description: What became of the node in this run; present when the server
+                      rebuilt the run's plan. A skipped node never ran because a node upstream of
+                      it failed (blocked_by) or because the run stopped before its phase.
+                  blocked_by:
+                    type: string
+                    description: For a skipped node, the failed node upstream of it; absent when
+                      the run stopped before reaching it.
         logs:
           type: array
           items:

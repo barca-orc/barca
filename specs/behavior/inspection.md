@@ -44,7 +44,10 @@ upstream external data was polled again.
 Each `GET /state` row carries `last_success_at`, `failing_since` and `consecutive_failures`, from
 the node's materialization rows with partition keys folded into their base id. An attempt is a
 run: a run with a failed key is one failed attempt, a run that did not fail the node ends the
-streak. They are read once per database state, whatever the selection. Each `GET /runs` row carries
+streak. Each row also carries `last_run`, the node's newest run as a whole (`run_id`,
+`elapsed_seconds` summed over the rows that recorded one, `keys`, batched `calls`, `failed`), absent
+until a run recorded a row for it. They are read once per database state, whatever the
+selection. Each `GET /runs` row carries
 `first_failure` (`node_id`, `error`), read from the failed-rows index; `null` when no step failed.
 
 `GET /state?targets=a,b` (experimental) limits status and duration queries to the targets'

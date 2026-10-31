@@ -42,6 +42,12 @@ export const EMPTY_FILTERS: Filters = {
 /** What the Tasks page opens on: most tasks always run, and only these need a look. */
 export const NEEDS_ATTENTION: readonly Severity[] = ['failed', 'stale', 'partial', 'unsynced']
 
+/**
+ * With the default in force, a row that ran this recently is shown whatever its state: a task
+ * that just ran is what its page is opened for, and tasks record no cache state to pick it by.
+ */
+export const RECENT_MS = 24 * 3_600_000
+
 /** The default's states are in force: only `state=all` in the URL lifts them. */
 export function onDefaultStates(f: Filters, defaults: readonly Severity[]): boolean {
   return defaults.length > 0 && f.states.length === defaults.length && defaults.every((s) => f.states.includes(s))
@@ -74,11 +80,18 @@ function matchesLastRun(row: AssetRow, lastRun: LastRun, nowMs: number): boolean
 
 type Group = 'states' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
 
+export interface FilterOptions {
+  /** Rows that ran within this many ms pass the state filter whatever their state. */
+  recentMs?: number
+}
+
 /** Rows passing every filter except those of `skip` (for faceted counts). */
-function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group): AssetRow[] {
+function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group, opts: FilterOptions = {}): AssetRow[] {
+  const recent = (r: AssetRow) =>
+    opts.recentMs !== undefined && r.lastAtMs !== null && nowMs - r.lastAtMs <= opts.recentMs
   return filterRows(rows, f.query).filter(
     (r) =>
-      (skip === 'states' || f.states.length === 0 || f.states.includes(r.severity)) &&
+      (skip === 'states' || f.states.length === 0 || f.states.includes(r.severity) || recent(r)) &&
       (skip === 'kinds' || f.kinds.length === 0 || f.kinds.includes(r.kind)) &&
       (skip === 'lastRun' || matchesLastRun(r, f.lastRun, nowMs)) &&
       (skip === 'scheduled' || !f.scheduled || r.nextRunMs !== null) &&
@@ -86,8 +99,8 @@ function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group)
   )
 }
 
-export function applyFilters(rows: AssetRow[], f: Filters, nowMs: number): AssetRow[] {
-  return filterExcept(rows, f, nowMs)
+export function applyFilters(rows: AssetRow[], f: Filters, nowMs: number, opts: FilterOptions = {}): AssetRow[] {
+  return filterExcept(rows, f, nowMs, undefined, opts)
 }
 
 export interface FacetCounts {
@@ -98,14 +111,14 @@ export interface FacetCounts {
   partitioned: number
 }
 
-export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number): FacetCounts {
+export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: FilterOptions = {}): FacetCounts {
   const states = Object.fromEntries(SEVERITIES.map((s) => [s, 0])) as Record<Severity, number>
-  for (const r of filterExcept(rows, f, nowMs, 'states')) states[r.severity] += 1
+  for (const r of filterExcept(rows, f, nowMs, 'states', opts)) states[r.severity] += 1
 
   const kinds = { asset: 0, task: 0, sensor: 0 } as Record<Kind, number>
-  for (const r of filterExcept(rows, f, nowMs, 'kinds')) kinds[r.kind] += 1
+  for (const r of filterExcept(rows, f, nowMs, 'kinds', opts)) kinds[r.kind] += 1
 
-  const forLastRun = filterExcept(rows, f, nowMs, 'lastRun')
+  const forLastRun = filterExcept(rows, f, nowMs, 'lastRun', opts)
   const lastRun = Object.fromEntries(
     LAST_RUNS.map((l) => [l, forLastRun.filter((r) => matchesLastRun(r, l, nowMs)).length]),
   ) as Record<LastRun, number>
@@ -114,9 +127,9 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number): FacetC
     states,
     kinds,
     lastRun,
-    scheduled: filterExcept(rows, f, nowMs, 'scheduled').filter((r) => r.nextRunMs !== null)
+    scheduled: filterExcept(rows, f, nowMs, 'scheduled', opts).filter((r) => r.nextRunMs !== null)
       .length,
-    partitioned: filterExcept(rows, f, nowMs, 'partitioned').filter((r) => r.partitioned).length,
+    partitioned: filterExcept(rows, f, nowMs, 'partitioned', opts).filter((r) => r.partitioned).length,
   }
 }
 

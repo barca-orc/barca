@@ -29,19 +29,23 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   const trigger = useTriggerNode(node, onTrigger)
   const stream = useRunStream(run?.handle ?? null)
   const client = useQueryClient()
+  const { fire, fireFor, follow, dismiss, notice } = trigger
   const keyRun = useMutation({
     mutationFn: ({ id, key }: { id: string; key: string }) =>
       api.startRun({ command: 'get', targets: [id], partition: partitionSelection(key) }),
     onSuccess: (data, { id }) => {
       setRun({ handle: data.run_id, nodeId: id })
+      follow(data.run_id, id)
       void client.invalidateQueries({ queryKey: ['runs'] })
     },
   })
-  const { fire } = trigger
   const { mutate: mutateKey } = keyRun
   const fireKey = useCallback((key: string) => { if (node) mutateKey({ id: node.id, key }) }, [node, mutateKey])
   const triggering = trigger.isPending || keyRun.isPending || stream.running
-  const onStarted = useCallback((handle: string) => setRun({ handle, nodeId: null }), [])
+  const onStarted = useCallback((handle: string) => {
+    setRun({ handle, nodeId: null })
+    follow(handle)
+  }, [follow])
   const topbar = useTopbarRun({ node, show: showTopbar, scopes, fireNode: fire, busy: triggering, onStarted })
   const { readOnly } = topbar
   const title = readOnly ? topbar.title : node ? `Run ${shortName(node.id)}` : topbar.title
@@ -64,5 +68,11 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
     triggering, readOnly, title, error: trigger.error ?? (keyRun.error as Error | null) ?? topbar.error,
     liveState: liveStatus ? liveGraphState(liveStatus) : undefined,
   }
-  return { action, run, statuses, stream }
+  return {
+    action, run, statuses, stream,
+    /** The run this page started, followed to its outcome (`RunNotice` shows it). */
+    notice, dismiss,
+    /** Start any node, not only the selected one (a failures list's Retry). */
+    retry: fireFor,
+  }
 }
