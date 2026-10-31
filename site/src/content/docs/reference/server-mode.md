@@ -204,7 +204,10 @@ the server (`GET /history?status=...&target=...&triggered_by=...&since=...`; a r
 `--since` counts back from the server's clock), and `barca history RUN_ID` reads
 `GET /runs/{run_id}`: the run, its steps with their attempts, run hashes, artifacts, errors and
 tracebacks (at most 1000 steps unless `--limit N` or `--all` asks for more; `steps_page` says how
-many there are). A run only this machine has (a failed run against the ledger is never posted) fails
+many there are). For a finished run whose plan the server can still rebuild from the sources,
+`steps_page.nodes` lists every planned node in plan order with a `status`: `ran`, `cached`, or
+`skipped` with `blocked_by` naming the failed node upstream of it (experimental; the local
+`barca history RUN_ID` lists only the nodes with recorded steps). A run only this machine has (a failed run against the ledger is never posted) fails
 (exit 2) with the remediation `this run is on this machine: barca history RUN_ID --local`.
 
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`
