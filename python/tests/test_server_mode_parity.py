@@ -140,6 +140,10 @@ def _value(v, roots: list[str], key: str = ""):
         if measured:
             assert v["size_bytes"] == v["budget_bytes"] + v["backup_bytes"]
         return {k: "<host-bytes>" for k in v}
+    if key == "steps_page" and isinstance(v, dict):
+        # The server completes a finished run's nodes with the planned ones it skipped or found
+        # cached; the local `history RUN_ID` lists only the nodes with steps (server-mode.md).
+        v = {k: x for k, x in v.items() if k != "nodes"}
     if isinstance(v, dict) and v.get("partitioned") is True:
         v = {**v, "last_materialization": "<key>", "shape": "<key>"}
     if isinstance(v, dict):
