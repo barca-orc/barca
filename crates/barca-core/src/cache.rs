@@ -1007,11 +1007,19 @@ pub(crate) async fn lookup_cached(
          FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
          AND status = 'success' ORDER BY id DESC";
     let statement = cache.lookup_statement(&[WITH_OUTPUT_HASH, WITHOUT]).await;
-    let mut rows = statement
+    let mut rows = match statement
         .query([node_id.to_string(), run_hash.to_string()])
         .await
-        .unwrap();
-    while let Some(row) = rows.next().await.unwrap() {
+    {
+        Ok(rows) => rows,
+        Err(e) => return lookup_failed(node_id, e),
+    };
+    loop {
+        let row = match rows.next().await {
+            Ok(Some(row)) => row,
+            Ok(None) => return None,
+            Err(e) => return lookup_failed(node_id, e),
+        };
         let Some(path) = row.get::<String>(0).ok() else {
             continue;
         };
@@ -1026,6 +1034,13 @@ pub(crate) async fn lookup_cached(
             content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
         });
     }
+}
+
+/// A lookup the database could not answer is a miss: the step runs again, which costs time and
+/// never gives a wrong result. A `--read-only` server can see this while the writer runs
+/// `VACUUM`.
+fn lookup_failed(node_id: &str, e: libsql::Error) -> Option<dispatch::OutputRef> {
+    crate::errln!("[barca] warning: cache lookup of {node_id} failed: {e}");
     None
 }
 

@@ -1,0 +1,43 @@
+# Long use of a real server under faults (tests/simulation/sim.py), too slow for any CI tier.
+# A failure uploads the kept run; its seed replays the same sequence of operations.
+name: Simulation
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Seeds to run, 10 minutes each
+        default: "5"
+
+permissions:
+  contents: read
+
+jobs:
+  sustained:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --profile fast --out dist
+          manylinux: "off"
+      - run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python dist/*.whl
+      - run: >-
+          .venv/bin/python tests/simulation/sim.py
+          --seeds "${{ inputs.seeds || '5' }}" --seconds 600 --settle-seconds 300
+          --seed-db-mb 2000 --keep sim-runs --drop-passed --strict-reads
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: simulation-failure
+          path: |
+            sim-runs/*/trace.jsonl
+            sim-runs/*/*.log
+            sim-runs/*/pipeline.py

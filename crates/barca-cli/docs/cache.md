@@ -931,7 +931,9 @@ the limit:
 **The metadata database.** Each environment's database may use a tenth of the limit, at most
 1 GiB. When its file is past that, barca trims it down to 80% of its share, at the same moments as
 eviction and for at most 5 seconds at a time, and nothing is evicted in a check that ran out of
-that time still trimming. `barca gc` trims until done, and `barca gc --dry-run` trims nothing. With the limit `off` only `barca gc` trims, to 1 GiB. The order:
+that time still trimming. Eviction counts a database as at most its share, so one past it never
+deletes artifacts that fit: `.barca/` can exceed the limit by what the database holds past its
+share until a trim gets it back. `barca gc` trims until done, and `barca gc --dry-run` trims nothing. With the limit `off` only `barca gc` trims, to 1 GiB. The order:
 
 | Order | What goes | What you notice |
 |---|---|---|
