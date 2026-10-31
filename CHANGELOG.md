@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.39.0 (2026-10-31)
+
 ### Features
 
 - A failed partition key blocks only the keys that read it. A `partitions_from` consumer (or a
