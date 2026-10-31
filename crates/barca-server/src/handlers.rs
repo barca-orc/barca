@@ -316,6 +316,7 @@ fn rows(
                 last_success_at: age.last_success_at,
                 failing_since: age.failing_since,
                 consecutive_failures: age.consecutive_failures,
+                last_run: age.last_run.map(Into::into),
             }
         })
         .collect()

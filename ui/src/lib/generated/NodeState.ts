@@ -3,6 +3,7 @@ import type { BytesChange } from "./BytesChange";
 import type { CacheStatus } from "./CacheStatus";
 import type { Durations } from "./Durations";
 import type { LastMaterialization } from "./LastMaterialization";
+import type { LastRun } from "./LastRun";
 import type { NodeRunning } from "./NodeRunning";
 import type { PartitionState } from "./PartitionState";
 
@@ -37,6 +38,11 @@ failing_since: string | null,
  * How many runs in a row failed it, up to now (`0` when its latest attempt did not fail).
  */
 consecutive_failures: number,
+/**
+ * Its newest run as a whole, the run `last_materialization` is from; absent until a run
+ * recorded a row for it.
+ */
+last_run?: LastRun,
 /**
  * Node id, e.g. `pipeline.py:clean`.
  */

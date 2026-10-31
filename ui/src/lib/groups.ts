@@ -4,6 +4,7 @@ import { shortName, type GraphEntry } from './graph'
 import { graphState, liveGraphState, UNKNOWN_GRAPH_STATE, type GraphState } from './graphState'
 import { runningCount, runningGraphState } from './running'
 import { isCheck } from './status'
+import { formatSeconds } from './assetTable'
 
 import type { NodeGroup } from './types'
 export type { NodeGroup } from './types'
@@ -234,24 +235,30 @@ export function projectGroups(
           if (visibleOwner && visibleOwner !== id) inputs.add(visibleOwner)
           else if (!visibleOwner) external.set(input, [...(external.get(input) ?? []), id])
         }
-      const assetCount = leaves.filter(
-        (leaf) => byId.get(leaf)?.kind === 'asset',
-      ).length
-      const checkCount = leaves.filter((leaf) => {
-        const node = byId.get(leaf)
-        return node && isCheck(node)
-      }).length
-      const others = leaves.length - assetCount - checkCount
+      const kinds = leaves.map((leaf) => byId.get(leaf)).filter((node) => node !== undefined)
       return {
         id,
         kind: group ? 'group' : byId.get(id)!.kind,
         inputs: [...inputs],
         name: group?.name ?? names.get(id) ?? shortName(id),
-        summary: `${assetCount} assets · ${checkCount} checks${others ? ` · ${others} other` : ''}`,
+        summary: contentsSummary(kinds),
         outputName: group ? memberName(groupOutput(id, tree)) : undefined,
       }
     })
   return { entries, external: [...external.keys()], consumers: external }
+}
+
+/**
+ * What a group holds, by kind: `3 assets · 1 task`. A count of zero is left out, except that a
+ * group of nothing reads `0 assets`; checks are tasks named `check__`/`validate__`.
+ */
+export function contentsSummary(nodes: readonly Pick<ListNode, 'id' | 'kind'>[]): string {
+  const counts = { asset: 0, check: 0, task: 0, sensor: 0 }
+  for (const node of nodes) counts[node.kind === 'task' ? (isCheck(node) ? 'check' : 'task') : node.kind] += 1
+  const parts = (['asset', 'check', 'task', 'sensor'] as const)
+    .filter((kind) => counts[kind] > 0)
+    .map((kind) => plural(counts[kind], kind))
+  return parts.length ? parts.join(' · ') : '0 assets'
 }
 
 /** `1 group`, `3 groups`. */
@@ -302,4 +309,37 @@ export function withPorts(
     })),
     ...entries.map((e) => (fed.has(e.id) ? { ...e, inputs: [...e.inputs, ...fed.get(e.id)!] } : e)),
   ]
+}
+
+/** `850ms`, `2.3s`, `4.1m`: a run's time on a node, readable below a second too. */
+export function formatRunSeconds(s: number): string {
+  return s < 1 ? `${Math.round(s * 1000)}ms` : formatSeconds(s)
+}
+
+/**
+ * A leaf's Duration cell: what its newest run spent on it, added up over the keys the run
+ * recorded (one key's row alone would be the batch's share for that key); `null` for a node
+ * that never ran. A run whose keys all failed before finishing recorded no time, which is said
+ * rather than shown as a dash.
+ */
+export function lastRunDuration(node: NodeState | undefined): { text: string; title?: string } | null {
+  if (!node) return null
+  const run = node.last_run
+  if (!run) {
+    const seconds = node.last_materialization?.elapsed_seconds
+    return typeof seconds === 'number' ? { text: formatRunSeconds(seconds) } : node.last_materialization ? { text: '–' } : null
+  }
+  const keys = run.keys > 1
+    ? `${run.keys.toLocaleString()} keys${run.calls ? ` in ${run.calls.toLocaleString()} batched ${run.calls === 1 ? 'call' : 'calls'}` : ''}`
+    : null
+  if (run.elapsed_seconds === null) {
+    return {
+      text: 'not recorded',
+      title: `${run.failed.toLocaleString()} of ${run.keys.toLocaleString()} ${run.keys === 1 ? 'key' : 'keys'} failed before finishing; nothing recorded a time (run ${run.run_id})`,
+    }
+  }
+  return {
+    text: formatRunSeconds(run.elapsed_seconds),
+    title: keys ? `Summed over ${keys}${run.failed ? `, ${run.failed.toLocaleString()} failed` : ''} (run ${run.run_id})` : `Run ${run.run_id}`,
+  }
 }
