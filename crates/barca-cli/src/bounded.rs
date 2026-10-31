@@ -209,6 +209,7 @@ mod tests {
             steps_total: None,
             steps_executed: 0,
             steps_cached: 0,
+            steps_failed: None,
             attempts: Some(0),
             started_at: String::new(),
             finished_at: None,

@@ -1128,6 +1128,35 @@ pub(crate) async fn view_page(
         }
     }
     steps_page.truncated = view.steps.len() < steps_page.total;
+    // A finished run's planned nodes, the skipped and cached ones included, when today's
+    // sources still plan what it ran (#758). Live runs stream their steps instead.
+    if let Some(record) = &record
+        && live.as_ref().is_none_or(|run| run.outcome.is_some())
+        && !matches!(view.status.as_str(), "pending" | "running")
+        && let Some(job) = &record.job
+        && let Ok(dag) = state.inspect_dag().await
+    {
+        let targets: Vec<&str> = if job == "all" {
+            Vec::new()
+        } else {
+            job.split(',').collect()
+        };
+        let recorded = if steps_page.nodes.is_empty() {
+            db::run_node_summaries(&snapshot.path, id).await?
+        } else {
+            steps_page.nodes.clone()
+        };
+        if let Some(nodes) = db::planned_run_nodes(
+            &dag,
+            &record.command,
+            &targets,
+            &view.status,
+            record.steps_total,
+            recorded,
+        ) {
+            steps_page.nodes = nodes;
+        }
+    }
     view.steps_page = steps_page;
     if view.error.is_none() {
         view.error = view.steps.iter().find_map(|step| step.error.clone());
@@ -1377,6 +1406,11 @@ pub struct RunSummary {
     pub steps_executed: i64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub steps_cached: i64,
+    /// Recorded steps that failed, a partitioned node's keys each counted (#758); absent for
+    /// a run not yet recorded. Experimental.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null", optional))]
+    pub steps_failed: Option<i64>,
     pub error: Option<String>,
     /// The run's first failed step and its error; `null` when no step failed.
     pub first_failure: Option<FirstFailure>,
@@ -1453,6 +1487,7 @@ fn summary(record: db::RunRecord, live: Option<&RunState>) -> RunSummary {
         steps_total: record.steps_total,
         steps_executed: record.steps_executed,
         steps_cached: record.steps_cached,
+        steps_failed: record.steps_failed,
         error: live.and_then(|r| r.error.clone()),
         first_failure: record.failure.map(|f| FirstFailure {
             node_id: f.node,
@@ -1484,6 +1519,7 @@ fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
                 .filter(|s| s.status.as_deref() == Some("cached"))
                 .count() as i64
         }),
+        steps_failed: None,
         error: run.error.clone(),
         // Not in the database yet: nothing has recorded a failed step.
         first_failure: None,
