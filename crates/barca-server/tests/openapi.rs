@@ -732,6 +732,11 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     assert!(node["last_success_at"].is_null());
     assert!(node["failing_since"].is_string());
     assert_eq!(node["consecutive_failures"], 1);
+    // Its newest run as a whole: one row, failed, with no time recorded.
+    assert_eq!(node["last_run"]["run_id"], broken.as_str());
+    assert_eq!(node["last_run"]["keys"], 1);
+    assert_eq!(node["last_run"]["failed"], 1);
+    assert!(node["last_run"]["elapsed_seconds"].is_null());
     let slow = checked(&router, "POST", "/run/slow", "/run/{target}", 200).await["run_id"]
         .as_str()
         .unwrap()

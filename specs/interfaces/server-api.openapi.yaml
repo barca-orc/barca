@@ -4253,6 +4253,40 @@ components:
           description: The run working on this node now, whoever started it (the scheduler, an
             HTTP request, a `barca get --server`, or a CLI run on the same `.barca/` whose owner is
             alive); null when none is.
+        last_run:
+          $ref: '#/components/schemas/LastRun'
+          description: The node's newest run as a whole (the run last_materialization is from);
+            absent until a run recorded a row for it.
+    LastRun:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - elapsed_seconds
+      - keys
+      - calls
+      - failed
+      properties:
+        run_id: *id003
+        elapsed_seconds:
+          anyOf:
+          - *id045
+          - type: 'null'
+          description: Wall time summed over the rows of the run that recorded one (a key's
+            last_materialization.elapsed_seconds is that key's share alone); null when none did,
+            every key having failed before finishing.
+        keys:
+          type: integer
+          minimum: 0
+          description: Rows the run recorded for the node; its keys, or 1.
+        calls:
+          type: integer
+          minimum: 0
+          description: Batched calls those keys ran in; 0 when each ran on its own.
+        failed:
+          type: integer
+          minimum: 0
+          description: Keys that failed.
     NodeRunning:
       type: object
       additionalProperties: false
