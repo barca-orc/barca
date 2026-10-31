@@ -2,7 +2,7 @@ import type { RefObject } from 'react'
 import { BellOff, Bell, Copy, ExternalLink, RotateCw } from 'lucide-react'
 import { Age, ErrorLine, IconButton, MiddleName, StatusDot, TableSpacer, Tag } from '@/components'
 import { muteKey, type FailureRow, type FailuresModel, type FailuresMsg } from '@/lib/failuresView'
-import { impactLabel, type Failure } from '@/lib/health'
+import { impactLabel, keysLine, type Failure } from '@/lib/health'
 import type { Dispatch } from '@/lib/program'
 import { nodeKindLabel } from '@/lib/status'
 
@@ -56,11 +56,11 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
           const row = rows[index]
           if (!row) return null
           if (row.kind === 'cause') {
-            const { cause, failures, impact } = row.group
+            const { cause, headline, failures, impact } = row.group
             return (
               <tr key={`cause:${cause}`} ref={win.measure} data-index={index} className="barca-failure-cause">
                 <td colSpan={COLUMNS}>
-                  <strong title={cause}>{cause}</strong>
+                  <strong title={headline}>{headline}</strong>
                   <span>{failures.length.toLocaleString()} failed · {impactLabel(impact)} waiting</span>
                 </td>
               </tr>
@@ -96,7 +96,9 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
               </td>
               <td className="barca-failure-error">
                 <ErrorLine error={f.error} text={f.headline} />
-                {f.missingKeys !== null && f.missingKeys > 0 && (
+                {f.keys ? (
+                  <div className="barca-cell-sub">{keysLine(f.keys)}</div>
+                ) : f.missingKeys !== null && f.missingKeys > 0 && (
                   <div className="barca-cell-sub">{f.missingKeys.toLocaleString()} keys without a result</div>
                 )}
               </td>
@@ -130,7 +132,7 @@ function FailureActions({ failure: f, muted, readOnly, name, dispatch }: {
       <IconButton size="sm" label={`Copy error of ${name}`} title="Copy error" onClick={() => dispatch({ type: 'copy', error: f.error || f.headline })}>
         <Copy size={13} />
       </IconButton>
-      <IconButton size="sm" label={`Open run of ${name}`} title="Open run" onClick={() => dispatch({ type: 'open_run', id: f.id, name })}>
+      <IconButton size="sm" label={`Open run of ${name}`} title="Open run" onClick={() => dispatch({ type: 'open_run', id: f.id, name, runId: f.keys?.runId ?? null })}>
         <ExternalLink size={13} />
       </IconButton>
       <IconButton size="sm" label={`${muted ? 'Unmute' : 'Mute'} ${name}`} title={muted ? 'Unmute' : 'Mute until it recovers (this browser only)'} onClick={() => dispatch({ type: 'toggle_mute', key: muteKey(f) })}>

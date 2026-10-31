@@ -48,13 +48,14 @@ import { api, ApiError, metadataUnusable } from '@/lib/api'
 import { formatSeconds } from '@/lib/assetTable'
 import { INITIAL_FAILURES, MUTED_KEY, failureTable, parseMuted, updateFailures, type FailuresEffect } from '@/lib/failuresView'
 import { useProgram } from '@/hooks/useProgram'
+import { usePartitionErrors } from '@/hooks/usePartitionErrors'
 import { FailuresView } from './FailuresView'
 import { domainFile, domainMap } from '@/lib/domainMap'
 import { inPipeline, pipelineName, sourceFile } from '@/lib/pipeline'
 import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
 import { liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
-import { consumersOf, failures, healthCounts, scopeAge, type Failure } from '@/lib/health'
+import { consumersOf, failedKeyNodes, failures, healthCounts, scopeAge, type Failure } from '@/lib/health'
 import { GRAPH_LIMIT, lineage } from '@/lib/lineage'
 import {
   compareEntries,
@@ -215,10 +216,15 @@ export function GroupedPipelinePage() {
     [scope, leavesOf, assets])
   const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, nodeRun.statuses), [scopeIds, byId, nodeRun.statuses])
   const graphKnown = !assetQuery.isPlaceholderData && !!assetQuery.data
-  const failureList = useMemo(() => {
+  const scopedStates = useMemo(() => {
     const inScope = new Set(scopeIds)
-    return failures(states.filter((s) => inScope.has(s.id)), graphKnown ? consumers : null)
-  }, [scopeIds, states, consumers, graphKnown])
+    return states.filter((s) => inScope.has(s.id))
+  }, [scopeIds, states])
+  const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scopedStates), [scopedStates]))
+  const failureList = useMemo(
+    () => failures(scopedStates, graphKnown ? consumers : null, keyErrors),
+    [scopedStates, consumers, graphKnown, keyErrors],
+  )
   const rankOf = (entry: GraphEntry): EntryRank => {
     const ids = leaves(entry.id)
     const counts = healthCounts(ids, byId, nodeRun.statuses)
@@ -257,7 +263,11 @@ export function GroupedPipelinePage() {
         .with({ type: 'copy' }, ({ text }) => {
           navigator.clipboard.writeText(text).then(() => dispatch({ type: 'done', text: 'Error copied' }), failed)
         })
-        .with({ type: 'open_run' }, ({ id, name }) => {
+        .with({ type: 'open_run' }, ({ id, name, runId }) => {
+          if (runId) {
+            navigate(`/runs?run=${encodeURIComponent(runId)}`)
+            return
+          }
           api.asset(id).then(({ stats }) => {
             const run = stats.recent_runs.find((r) => r.status !== 'success')?.run_id
             if (run) navigate(`/runs?run=${encodeURIComponent(run)}`)
