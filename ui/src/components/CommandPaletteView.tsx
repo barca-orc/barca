@@ -19,14 +19,16 @@ export interface CommandPaletteViewProps {
   query: string
   items: readonly PaletteItem[]
   active: number
+  /** Partitioned nodes are still answering the key query. */
+  searching?: boolean
   onQuery: (value: string) => void
   onMove: (by: number) => void
   onPick: (item: PaletteItem) => void
   onClose: () => void
 }
 
-/** barca · CommandPalette: one field that reaches any node, group, file or run. */
-export function CommandPaletteView({ query, items, active, onQuery, onMove, onPick, onClose }: CommandPaletteViewProps) {
+/** barca · CommandPalette: one field that reaches any node, group, file, run or partition key. */
+export function CommandPaletteView({ query, items, active, searching = false, onQuery, onMove, onPick, onClose }: CommandPaletteViewProps) {
   injectStyles(STYLE_ID, CSS)
   const list = useRef<HTMLUListElement>(null)
   useEffect(() => {
@@ -40,8 +42,8 @@ export function CommandPaletteView({ query, items, active, onQuery, onMove, onPi
           role="combobox"
           aria-expanded="true"
           aria-controls="barca-palette-list"
-          aria-label="Jump to a node, group, file or run"
-          placeholder="Jump to a node, group, file or run"
+          aria-label="Jump to a node, group, file, run or partition key"
+          placeholder="Jump to a node, group, file, run or partition key"
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -57,7 +59,7 @@ export function CommandPaletteView({ query, items, active, onQuery, onMove, onPi
             }
           }}
         />
-        {items.length === 0 ? <p className="barca-palette-empty">Nothing matches.</p> : (
+        {items.length === 0 ? <p className="barca-palette-empty">{searching ? 'Searching keys…' : 'Nothing matches.'}</p> : (
           <ul id="barca-palette-list" role="listbox" ref={list} aria-label="Results">
             {items.map((item, i) => (
               <li key={item.key} role="option" aria-selected={i === active} onClick={() => onPick(item)}>

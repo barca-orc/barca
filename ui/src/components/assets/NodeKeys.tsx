@@ -16,7 +16,7 @@ const PAGE = 100
 export function NodeKeys({ id, partitions, nowMs }: { id: string; partitions: PartitionState; nowMs: number }) {
   const { cached, failed, stale, total } = keyBreakdown(partitions)
   const [onlyFailed, setOnlyFailed] = useState(failed > 0)
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(new URLSearchParams(window.location.hash.split('?')[1]).get('key') ?? '') // ?key= from the palette's key results
   const [limit, setLimit] = useState(PAGE)
   const { data, isLoading, isError } = usePartitionKeys(id, { status: onlyFailed ? 'failed' : undefined, q: query.trim() || undefined, limit })
   const percent = (n: number) => `${total ? (n / total) * 100 : 0}%`
