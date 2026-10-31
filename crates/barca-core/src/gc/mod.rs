@@ -1682,6 +1682,22 @@ async fn trim_metadata(
     under_way
 }
 
+/// What the metadata DBs hold past their share of `limit`. Eviction leaves this out of what it
+/// must free: the DB is [`trim_metadata`]'s to shrink, and deleting artifacts cannot do it, so
+/// counting it would delete artifacts that fit (a 41 GB file against a 13 GB limit evicts them
+/// all). Artifacts stay within the limit less the DB's share either way.
+fn metadata_excess(envs: &[EnvDb], limit: Option<u64>) -> u64 {
+    // Under this a database is little more than its schema, which no trim can remove.
+    const SMALL: u64 = 1 << 20;
+    let allowance = crate::metadata_size::allowance(limit).max(SMALL);
+    envs.iter()
+        .map(|env| {
+            let bytes = |path: &str| std::fs::metadata(path).map_or(0, |m| m.len());
+            (bytes(&env.db_path) + bytes(&format!("{}-wal", env.db_path))).saturating_sub(allowance)
+        })
+        .sum()
+}
+
 /// `serve`'s minute checkpoint: [`after_command`] with nothing of its own to protect.
 pub async fn checkpoint(cfg: &ResolvedConfig) -> Option<CacheReport> {
     after_command(cfg, &Own::default(), None).await
@@ -1758,7 +1774,9 @@ async fn check_in(
             return Ok(None);
         }
         let measured = estimate(project, &envs, state).await?;
-        let size = measured.budget_bytes();
+        let size = measured
+            .budget_bytes()
+            .saturating_sub(metadata_excess(&envs, Some(limit)));
         remember(measured.size_bytes, limit);
         if size <= limit {
             checked(project, size, limit);
@@ -1789,7 +1807,10 @@ async fn check_in(
     };
     let survey = survey(project, &envs).await?;
     let backup_bytes = survey.held.get(&Held::Backups).copied().unwrap_or(0);
-    let budget_bytes = survey.total.saturating_sub(backup_bytes);
+    let budget_bytes = survey
+        .total
+        .saturating_sub(backup_bytes)
+        .saturating_sub(metadata_excess(&envs, Some(limit)));
     remember(survey.total, limit);
     if budget_bytes <= limit {
         checked(project, budget_bytes, limit);
@@ -2016,7 +2037,7 @@ async fn gc_in(
         }
     };
     let plan = plan::plan(
-        budget_before_bytes,
+        budget_before_bytes.saturating_sub(metadata_excess(&envs, limit)),
         &survey.rows,
         &survey.leftovers,
         &protect,

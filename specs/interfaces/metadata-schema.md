@@ -265,7 +265,8 @@ naming a file on disk, a node's latest success and later rows, and a node's newe
 row stay. A `materializations.run_id` can therefore name a run that is gone, and a run's rows can be
 gone while its `runs` row stays. Nothing a cache decision needs is lost: a deleted row costs a
 recompute. `VACUUM`, the only way the file shrinks, comes before any row is deleted and needs no
-run alive. Connections set `journal_size_limit` to 64 MiB, so a checkpoint hands back a large log.
+run alive. Eviction counts the database and its log as at most this share, so a large file never evicts
+artifacts that fit. Connections set `journal_size_limit` to 64 MiB, so a checkpoint hands back a large log.
 Conformance: the tests in `metadata_size.rs`.
 
 A version-1 database written by an earlier release that lacks an additive column or index of

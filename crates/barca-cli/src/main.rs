@@ -193,11 +193,18 @@ fn main() {
         finish(json);
     }
 
-    let rt = runtime(json, matches!(cli, Cli::Serve { .. }));
+    let serving = matches!(cli, Cli::Serve { .. });
+    let rt = runtime(json, serving);
     if let Err(e) = rt.block_on(run_cli(cli, &ctx, ledger)) {
         e.emit(json);
     }
-    drop(rt);
+    if serving {
+        // It has drained and is about to exit. Tearing the runtime down would only race its
+        // background loops: a timer polled during that panics.
+        std::mem::forget(rt);
+    } else {
+        drop(rt);
+    }
     finish(json);
 }
 

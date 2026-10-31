@@ -2411,6 +2411,36 @@ fn cache_state(nodes: &serde_json::Value, name: &str) -> String {
         .unwrap_or_else(|| panic!("no {name} in {nodes}"))
 }
 
+/// The tag of a state that has stopped changing: a read with it is a `304` with no body. The
+/// fixture's every-second `ticking` asset may move `next_run` between two reads, which rightly
+/// changes the tag, so that alone is read again; any other difference fails.
+#[cfg(unix)]
+async fn settled_state_tag(
+    app: &axum::Router,
+    mut tag: String,
+    mut nodes: serde_json::Value,
+) -> String {
+    let without_next_run = |nodes: &serde_json::Value| {
+        let mut nodes = nodes.clone();
+        for node in nodes.as_array_mut().unwrap() {
+            node.as_object_mut().unwrap().remove("next_run");
+        }
+        nodes
+    };
+    for _ in 0..3 {
+        let (status, next_tag, body) = state_again(app, Some(&tag)).await;
+        if status == StatusCode::NOT_MODIFIED {
+            assert!(body.is_null(), "a 304 has no body");
+            return tag;
+        }
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(without_next_run(&nodes), without_next_run(&body));
+        tag = next_tag.expect("an ETag");
+        nodes = body;
+    }
+    panic!("the state never settled: {nodes}");
+}
+
 /// The read routes keep what they computed until the sources or the database change
 /// (`read_cache`): a kept answer must never hide a run that finished or an edit, and an
 /// unchanged poll is a `304` with no body.
@@ -2427,10 +2457,7 @@ async fn a_kept_state_shows_a_new_run_and_an_edit_at_once() {
     let (status, tag, nodes) = state_again(&app, None).await;
     assert_eq!(status, StatusCode::OK, "{nodes}");
     assert_eq!(cache_state(&nodes, "second"), "never_run");
-    let tag = tag.expect("an ETag");
-    let (status, _, body) = state_again(&app, Some(&tag)).await;
-    assert_eq!(status, StatusCode::NOT_MODIFIED, "nothing changed: {body}");
-    assert!(body.is_null(), "a 304 has no body");
+    let tag = settled_state_tag(&app, tag.expect("an ETag"), nodes).await;
 
     // A run: the next answer has it, with no wait.
     let id = start_run(
@@ -2450,12 +2477,7 @@ async fn a_kept_state_shows_a_new_run_and_an_edit_at_once() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let (_, after_run, nodes) = state_again(&app, None).await;
     assert_eq!(cache_state(&nodes, "second"), "cached");
-    let (status, next_tag, next_body) = state_again(&app, after_run.as_deref()).await;
-    assert_eq!(
-        status,
-        StatusCode::NOT_MODIFIED,
-        "ETag changed from {after_run:?} to {next_tag:?}: before={nodes}; after={next_body}"
-    );
+    let after_run = Some(settled_state_tag(&app, after_run.expect("an ETag"), nodes).await);
 
     // An edit to `second`: stale at once.
     let text = std::fs::read_to_string(&source).unwrap();

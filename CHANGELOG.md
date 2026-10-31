@@ -8,6 +8,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- A metadata database past its share of `[cache] max_size` no longer evicts artifacts that fit. Upgrading a 40 GB database could delete every current result during the trim, costing a recompute of each.
+- `barca serve` no longer panics now and then as it exits after a drain. The exit code was already 0.
+- A cache lookup the database cannot answer is a miss with a warning instead of a panic. A `--read-only` server beside a writer running `VACUUM` was seen to read `database disk image is malformed`; the database itself was intact.
+
+### Documentation
+
+- `contributing/testing.md` describes `tests/simulation/sim.py`, a seeded simulation of long server use with faults.
+
 ## 0.39.0 (2026-10-31)
 
 ### Features

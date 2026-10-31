@@ -115,6 +115,38 @@ bash tests/integration/test_cli.sh
 `python/tests/test_ci_coverage.py` fails if a script in `tests/integration/` is not run by the
 CI workflow.
 
+## Simulation
+
+`tests/simulation/sim.py` compresses long use of a real deployment: a writer `barca serve` with a
+scheduled task beside a `--read-only` server on the same `.barca`. A seeded generator edits the
+source, returns to old versions, deletes artifacts, runs `barca gc` and a local `barca get`
+alongside the server, and sends SIGKILL or SIGTERM to the server, SIGKILL to a worker. After each
+operation it checks that results match the source, both servers are healthy with no panic, and,
+periodically, that the database is intact and the newest runs and each node's latest success still
+exist. Once traffic ends it checks that the database, its WAL and `.barca` settle within their
+limits while the scheduler keeps running.
+
+```bash
+tests/simulation/sim.py --seed 7 --seconds 120
+tests/simulation/sim.py --seeds 20 --seconds 60
+tests/simulation/sim.py --seed 7 --seconds 300 --limit-mb 13000 --seed-db-mb 40000 --keep /data/sim
+```
+
+`--seed-db-mb` starts from a database in the old format, for an upgrade under traffic, and
+`--from-db` from a copy of a real one. Keep a large one off `/tmp`. `--without gc,kill_server`
+leaves operations out (without `gc`, only automatic trimming shrinks the database), and
+`--tick-sleep 3` keeps a run alive nearly all the time. A failure keeps its directory (`trace.jsonl`, the logs) and prints the seed. **The
+seed fixes the sequence of operations, not the timing**, so a kill can land elsewhere on replay,
+and a failure that depends on timing may need several tries. It is not deterministic simulation:
+it explores real timing and does not control the scheduler, the clock or the disk.
+
+`--sabotage` breaks what an invariant watches. `python/tests/test_simulation.py` uses it to prove
+each one can fail, and runs a short seed, in CI's full tier. `.github/workflows/simulation.yml`
+runs the long version weekly, with `--strict-reads`: a read the `--read-only` server lost to the
+writer fails it, because the cause of those is not known yet. `BARCA_TEST_CACHE_CHECKPOINT_SECS` shortens the server's one-minute
+size check for it; long waits (`STUCK_FOR`, `SURVEY_EVERY`) are skipped by rewriting
+`gc-state.json`.
+
 ## Web UI
 
 ```bash

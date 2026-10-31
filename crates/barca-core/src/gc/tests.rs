@@ -249,6 +249,26 @@ async fn a_result_whose_upload_is_pending_is_never_evicted() {
 }
 
 #[tokio::test]
+async fn a_database_past_its_share_does_not_evict_artifacts_that_fit() {
+    let (f, _files) = project().await;
+    {
+        let _g = crate::db::db_guard().await;
+        let (_h, conn) = crate::db::open_conn(&f.db).await.unwrap();
+        conn.execute(
+            "INSERT INTO runs (run_id, command, files, outcome_json) \
+             VALUES ('big', 'get', 'p.py', zeroblob(50000000))",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    // The dry run trims nothing, so the database is still past its 2 MB share.
+    let result = f.gc(MaxSize::Bytes(20_000_000), true).await;
+    assert!(result.size_bytes > 50_000_000);
+    assert!(result.evicted.is_empty(), "{:?}", result.evicted);
+}
+
+#[tokio::test]
 async fn metadata_backups_are_counted_and_never_evicted() {
     // `barca state restore` (#471) needs its copies: `.barca/backups/` and a named
     // environment's `backups/` count toward the physical total, outside the cache budget.
