@@ -76,3 +76,47 @@ def test_modeling_demo_metadata_matches_browser_fixture():
     assert json.loads(proc.stdout)["groups"] == json.loads(
         (root / "ui" / "e2e" / "group-metadata.json").read_text()
     )
+
+
+def test_unassigned_group_calls_are_registered(tmp_path):
+    """#762: `group(...)` on its own line is a group too, addressed by its name."""
+    binary = _find_binary()
+    pipeline = tmp_path / "pipeline.py"
+
+    def run(*args):
+        proc = subprocess.run(
+            [binary, *args], cwd=tmp_path, text=True, capture_output=True, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout)
+
+    pipeline.write_text(BASE + GROUPS)
+    assert run("get", "model", "pipeline.py", "--json")["steps_executed"] == 2
+    # Nothing refers to a bare group, so Training no longer nests Preparation; the
+    # bare Done takes check.
+    bare = (
+        GROUPS.replace("preparation = group(", "group(")
+        .replace("members=[preparation, model, check]", "members=[model]")
+        .replace("experiment = group(", "group(")
+    )
+    pipeline.write_text(BASE + bare + 'group("Done", members=[check], output=check)\n')
+    groups = run("list", "pipeline.py", "--groups", "--json")["groups"]
+    assert [g["id"] for g in groups] == [
+        "group:pipeline.py:Preparation",
+        "group:pipeline.py:training",
+        "group:pipeline.py:Experiment",
+        "group:pipeline.py:Done",
+    ]
+    assert groups[0]["members"] == ["pipeline.py:rows"]
+    assert groups[2]["members"] == ["group:pipeline.py:training"]
+    assert groups[3]["members"] == ["pipeline.py:check"]
+    assert run("get", "model", "pipeline.py", "--json")["steps_executed"] == 0
+    proc = subprocess.run(
+        [binary, "list", "pipeline.py", "--groups"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Done" in proc.stdout and "Experiment" in proc.stdout
