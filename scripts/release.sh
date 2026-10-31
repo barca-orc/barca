@@ -14,7 +14,7 @@
 # Then, in .worktrees/release-vX.Y.Z on branch release/vX.Y.Z off origin/main, it applies the
 # bump (scripts/bump-version.py), runs scripts/check-version-sync.sh, scripts/check-changelog.py,
 # scripts/changelog-section.py and the lock-file checks, commits `chore(release): vX.Y.Z`,
-# pushes, opens the PR into main and enables `gh pr merge --squash --auto --delete-branch`.
+# pushes, opens the PR into main and enables `gh pr merge --squash --auto`.
 #
 # When the PR merges, .github/workflows/release-tag.yml tags the merge commit vX.Y.Z and starts
 # the release workflow (wheels, GitHub Release, PyPI, barca.sh). Remove the worktree with
@@ -130,7 +130,7 @@ if [ "$dry" -eq 1 ]; then
     step "dry run: stopping before push"
     echo "would run: git push -u origin $branch" >&2
     echo "would run: gh pr create --base main --head $branch --title 'chore(release): $tag'" >&2
-    echo "would run: gh pr merge $branch --squash --auto --delete-branch" >&2
+    echo "would run: gh pr merge $branch --squash --auto" >&2
     echo "--- PR body ---" >&2
     echo "$body" >&2
     if [ "$keep" -eq 1 ]; then
@@ -147,7 +147,7 @@ step "opening the PR"
 url="$(cd "$tree" && gh pr create --base main --head "$branch" --title "chore(release): $tag" --body "$body")"
 echo "$url"
 step "enabling squash auto-merge"
-(cd "$tree" && gh pr merge "$url" --squash --auto --delete-branch) ||
+(cd "$tree" && gh pr merge "$url" --squash --auto) ||
     echo "warning: could not enable auto-merge; merge $url by hand once CI passes" >&2
 cat >&2 <<EOF
 Next: CI runs on $url and it squash-merges when green (rebase it if main moves: gh pr update-branch $url).
