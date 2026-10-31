@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { NodeState } from '@/lib/types'
+import { recovering } from './polling'
 
 /** Inspect on selection and when the node or an input has a new artifact. */
 export function useAssetSchema(node: NodeState, inputs: NodeState[]) {
@@ -9,6 +10,7 @@ export function useAssetSchema(node: NodeState, inputs: NodeState[]) {
     queryKey: ['asset-schema', node.id, revisions],
     queryFn: () => api.assetSchema(node.id),
     staleTime: Infinity,
+    refetchInterval: recovering(),
     retry: false,
   })
 }

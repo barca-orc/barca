@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { queuePollInterval } from '@/lib/queue'
+import { recovering } from './polling'
+import type { QueueView } from '@/lib/types'
 
 /** The run queue (`GET /queue`): polled faster while anything runs or waits. */
 export function useQueue() {
   return useQuery({
     queryKey: ['queue'],
     queryFn: api.queue,
-    refetchInterval: (q) => queuePollInterval(q.state.data),
+    refetchInterval: recovering<QueueView>((q) => queuePollInterval(q.state.data)),
     retry: false,
   })
 }

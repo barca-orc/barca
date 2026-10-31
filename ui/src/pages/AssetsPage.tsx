@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
 import {
+  Button,
   Chip,
   ChipGroup,
   ErrorLine,
@@ -110,7 +111,7 @@ function SortHeader({
 }
 
 export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
-  const { data, isError, error, dataUpdatedAt } = useAssetStates()
+  const { data, isError, error, dataUpdatedAt, refetch } = useAssetStates()
   const { data: health } = useHealth()
   const assetQuery = useAssets()
   const graph = useMemo(() => (assetQuery.isPlaceholderData ? [] : assetQuery.data ?? []), [assetQuery.data, assetQuery.isPlaceholderData])
@@ -290,7 +291,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
       <div className="barca-view-body barca-table-scroll" ref={scroller}>
         {isError ? (
           <div className="barca-table-empty">
-            <p>Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}</p>
+            <p>Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}{' '}
+              <Button size="sm" onClick={() => void refetch()}>Retry</Button>
+            </p>
             {error instanceof ApiError && error.remediation && <p>{error.remediation}</p>}
             {/* Starting over mends a database barca cannot use, and nothing else. */}
             {metadataUnusable(error) && <ResetDatabaseButton readOnly={health?.read_only ?? false} />}
