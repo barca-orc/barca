@@ -141,3 +141,24 @@ describe('a page that defaults to what needs attention', () => {
     expect(parseFilters(all, NEEDS_ATTENTION).states).toEqual([])
   })
 })
+
+describe('a page that also shows what ran recently', () => {
+  const attention = { ...EMPTY_FILTERS, states: [...NEEDS_ATTENTION] }
+  const recent = { recentMs: 24 * 3_600_000 }
+
+  it('passes a row that ran within the window whatever its state, and only then', () => {
+    // `check` always runs (no attention state) but ran 10 minutes ago; `watch` never ran.
+    expect(applyFilters(rows, attention, NOW).map((r) => r.name).sort()).toEqual(['check', 'parts', 'today'])
+    expect(applyFilters(rows, attention, NOW, recent).map((r) => r.name).sort()).toEqual(['check', 'parts', 'recent', 'today'])
+    expect(applyFilters(rows, { ...attention, kinds: ['task'] }, NOW, recent).map((r) => r.name)).toEqual(['check'])
+  })
+
+  it('counts the last-run buckets over the rows the default shows', () => {
+    // `recent` is healthy: it is in the hour's count only because it ran within the window.
+    expect(facetCounts(rows, attention, NOW, recent).lastRun.hour).toBe(2)
+    expect(facetCounts(rows, attention, NOW).lastRun.hour).toBe(1)
+    expect(facetCounts(rows, attention, NOW, recent).lastRun.never).toBe(0)
+    // The state chips still count every row, as before.
+    expect(facetCounts(rows, attention, NOW, recent).states.cached).toBe(2)
+  })
+})

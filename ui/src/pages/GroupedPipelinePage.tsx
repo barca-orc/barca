@@ -1,7 +1,6 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
-import { useQueryClient } from '@tanstack/react-query'
 import { match } from 'ts-pattern'
 import {
   ArrowLeft,
@@ -39,13 +38,13 @@ import {
   type GraphCanvasHandle,
 } from '@/components/graph/GraphCanvas'
 import { NodePanel } from '@/components/assets/NodePanel'
+import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { api, ApiError, metadataUnusable } from '@/lib/api'
-import { formatSeconds } from '@/lib/assetTable'
 import { INITIAL_FAILURES, MUTED_KEY, failureTable, parseMuted, updateFailures, type FailuresEffect } from '@/lib/failuresView'
 import { useProgram } from '@/hooks/useProgram'
 import { usePartitionErrors } from '@/hooks/usePartitionErrors'
@@ -72,6 +71,7 @@ import {
   groupHealth,
   groupOutput,
   groupPath,
+  lastRunDuration,
   leavesByGroup,
   memberHealth,
   projectGroups,
@@ -245,7 +245,6 @@ export function GroupedPipelinePage() {
   const visibleFailures = needle
     ? failureList.filter((f) => `${f.id} ${f.headline}`.toLowerCase().includes(needle))
     : failureList
-  const client = useQueryClient()
   const navigate = useNavigate()
   const [failuresModel, failuresDispatch] = useProgram(
     () => ({ ...INITIAL_FAILURES, muted: parseMuted(localStorage.getItem(MUTED_KEY)) }),
@@ -253,13 +252,8 @@ export function GroupedPipelinePage() {
     (effect: FailuresEffect, dispatch) => {
       const failed = (error: unknown) => dispatch({ type: 'action_failed', text: error instanceof Error ? error.message : String(error) })
       match(effect)
-        .with({ type: 'retry' }, ({ id, kind, name }) => {
-          // A task always re-executes; anything else is a cache-aware `get`.
-          (kind === 'task' ? api.runTarget(id) : api.getTarget(id)).then(() => {
-            void client.invalidateQueries({ queryKey: ['runs'] })
-            dispatch({ type: 'done', text: `Retrying ${name}` })
-          }, failed)
-        })
+        // The shared run line follows it: the run id, its progress and its outcome.
+        .with({ type: 'retry' }, ({ id, kind }) => nodeRun.retry({ id, kind }))
         .with({ type: 'copy' }, ({ text }) => {
           navigator.clipboard.writeText(text).then(() => dispatch({ type: 'done', text: 'Error copied' }), failed)
         })
@@ -522,7 +516,7 @@ export function GroupedPipelinePage() {
         )}
       </div>
 
-      {nodeRun.action.error && !selectedNode && <p role="alert">Could not start run: {nodeRun.action.error.message}</p>}
+      <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       {error ? (
         <div className="barca-table-empty">
           <p>
@@ -648,6 +642,7 @@ export function GroupedPipelinePage() {
                     const state = visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE
                     const last = group ? null : byId.get(entry.id)?.last_materialization
                     const running = group ? null : byId.get(entry.id)?.running
+                    const duration = group ? null : lastRunDuration(byId.get(entry.id))
                     const { lastSuccessAt, failingSince, failures: failed } = scopeAge(group ? leaves(entry.id) : [entry.id], byId)
                     const age = { at: lastSuccessAt, failingSince, failures: failed }
                     return (
@@ -711,7 +706,7 @@ export function GroupedPipelinePage() {
                         )}
                         {hasLeaves && <td>{last && <Age at={last.created_at} nowMs={stateQuery.dataUpdatedAt} />}</td>}
                         {hasLeaves && (
-                          <td className="num">{typeof last?.elapsed_seconds === 'number' ? formatSeconds(last.elapsed_seconds) : '–'}</td>
+                          <td className="num" title={duration?.title}>{duration?.text}</td>
                         )}
                         {hasGroups && (
                           <td>

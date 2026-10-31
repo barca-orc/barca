@@ -23,9 +23,12 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   const trigger = useTriggerNode(node, onTrigger)
   const stream = useRunStream(run?.handle ?? null)
   const client = useQueryClient()
-  const { fire } = trigger
+  const { fire, fireFor, follow, dismiss, notice } = trigger
   const triggering = trigger.isPending || stream.running
-  const onStarted = useCallback((handle: string) => setRun({ handle, nodeId: null }), [])
+  const onStarted = useCallback((handle: string) => {
+    setRun({ handle, nodeId: null })
+    follow(handle)
+  }, [follow])
   const topbar = useTopbarRun({ node, show: showTopbar, scopes, fireNode: fire, busy: triggering, onStarted })
   const { readOnly } = topbar
   const title = readOnly ? topbar.title : node ? `Run ${shortName(node.id)}` : topbar.title
@@ -46,5 +49,11 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
     fire, triggering, readOnly, title, error: trigger.error ?? topbar.error,
     liveState: liveStatus ? liveGraphState(liveStatus) : undefined,
   }
-  return { action, run, statuses, stream }
+  return {
+    action, run, statuses, stream,
+    /** The run this page started, followed to its outcome (`RunNotice` shows it). */
+    notice, dismiss,
+    /** Start any node, not only the selected one (a failures list's Retry). */
+    retry: fireFor,
+  }
 }
