@@ -2,12 +2,14 @@ import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { runIsLive } from '@/lib/runs'
+import { recovering } from './polling'
+import type { RunView } from '@/lib/types'
 
 export function useRuns(limit: number) {
   return useQuery({
     queryKey: ['runs', 'list', limit],
     queryFn: () => api.runs(limit),
-    refetchInterval: 2_000,
+    refetchInterval: recovering(2_000),
     retry: false,
   })
 }
@@ -19,7 +21,7 @@ export function useRunDetail(id: string | null) {
     queryFn: () => api.runDetail(id!),
     enabled: id !== null,
     // Continue polling while queued/running, also when a transient fetch fails.
-    refetchInterval: (q) => !q.state.data || runIsLive(q.state.data.status) ? 1_000 : false,
+    refetchInterval: recovering<RunView>((q) => !q.state.data || runIsLive(q.state.data.status) ? 1_000 : false),
     retry: false,
   })
   const status = query.data?.status

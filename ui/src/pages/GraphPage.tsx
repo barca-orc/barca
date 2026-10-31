@@ -2,7 +2,7 @@ import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { IconButton, StatusDot, ViewToggle } from '@/components'
+import { Button, IconButton, StatusDot, ViewToggle } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
@@ -115,7 +115,7 @@ export function GraphPage() {
       </div>
 
       {topbar.error && <p role="alert">Could not start run: {topbar.error.message}</p>}
-      {stateQuery.isError && <div className="barca-graph-tools" role="status">Asset state unavailable; colors are neutral.</div>}
+      {stateQuery.isError && <div className="barca-graph-tools" role="status">Asset state unavailable; colors are neutral. <Button size="sm" onClick={() => void stateQuery.refetch()}>Retry</Button></div>}
       <div className="barca-graph-wrap">
         <div className="barca-graph-canvas">
           <GraphCanvas
