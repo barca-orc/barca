@@ -197,7 +197,7 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   the version bump (crates/*/Cargo.toml, the barca entries in Cargo.lock and uv.lock,
   pyproject.toml, `barca.__version__`) and `## Pending` renamed to `## X.Y.Z (YYYY-MM-DD)`
   under a new empty `## Pending`; commits `chore(release): vX.Y.Z`, pushes, opens the PR and
-  enables squash auto-merge with `--delete-branch`. Tidy the Pending notes on main before
+  enables squash auto-merge. Tidy the Pending notes on main before
   running it. When the PR merges, `.github/workflows/release-tag.yml` tags the merge commit
   `vX.Y.Z` (checking it matches pyproject.toml) and dispatches the release workflow on the
   tag (wheels, GitHub Release, PyPI); a tag pushed with the workflow token does not trigger
