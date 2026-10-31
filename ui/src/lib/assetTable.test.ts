@@ -11,6 +11,8 @@ import {
   severityOf,
   sortRows,
   summarize,
+  typicalLabel,
+  typicalSeconds,
   type Sort,
 } from './assetTable'
 
@@ -191,6 +193,29 @@ describe('buildRows', () => {
     expect(row.stateLabel).toBe('Failed')
     expect(row.last?.error).toBe('AssertionError: 3 rows with negative units')
     expect(row.last?.ago).toBe('35m ago')
+  })
+})
+
+describe('typical time', () => {
+  it('is the median of a plain node', () => {
+    const n = node({ id: 'p.py:a', durations: { median_seconds: 3.04, p95_seconds: 9.5, samples: 12 } })
+    expect(typicalSeconds(n)).toBe(3.04)
+    expect(typicalLabel(n)).toBe('3.0s')
+  })
+  it('is a run over every key of a partitioned node, never a per-key figure', () => {
+    // Batched calls record a few milliseconds per key: 0.0007s × 3,077 keys is the 2.2s run.
+    const n = node({
+      id: 'p.py:forecast',
+      partitioned: true,
+      durations: { median_seconds: 0.0007, p95_seconds: 0.0009, samples: 20 },
+      partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7 },
+    })
+    expect(typicalSeconds(n)).toBeCloseTo(2.154, 3)
+    expect(typicalLabel(n)).toBe('~2.2s / run')
+    expect(only(buildRows([n], NOW)).typical).toBe('~2.2s / run')
+  })
+  it('is null until the node has succeeded', () => {
+    expect(typicalLabel(node({ id: 'p.py:a' }))).toBeNull()
   })
 })
 

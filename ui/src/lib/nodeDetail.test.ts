@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AssetRunEntry, NodeState } from './types'
-import { downstreamOf, durationHistogram, editorLink, formatBytes, historyBars, previewRows, shortHash, whatChanged } from './nodeDetail'
+import { barSegments, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, partitionSelection, previewRows, runPace, shortHash, sourcePath, truncateCell, whatChanged } from './nodeDetail'
 
 function node(id: string, inputs: string[] = []): NodeState {
   return {
@@ -149,5 +149,78 @@ describe('previewRows', () => {
     expect(previewRows({ a: 1 })).toEqual({ columns: ['a'], rows: [['1']] })
     expect(previewRows('text')).toBeNull()
     expect(previewRows([])).toBeNull()
+  })
+})
+
+describe('source path and editor roots', () => {
+  it('shows a definition relative to the project root', () => {
+    expect(sourcePath('/srv/app', '/srv/app/flows/planning.py')).toBe('flows/planning.py')
+    expect(sourcePath('/srv/app/', 'planning.py')).toBe('planning.py')
+    expect(sourcePath(null, '/srv/app/planning.py')).toBe('/srv/app/planning.py')
+  })
+  it('reads the configured roots, one per line or comma', () => {
+    expect(editorRoots('/home/me/work\n, /srv/app ,\n')).toEqual(['/home/me/work', '/srv/app'])
+    expect(editorRoots(null)).toEqual([])
+  })
+  it('offers the editor link only for a project under a configured root', () => {
+    expect(editorOpens('/home/me/work/barca', ['/home/me/work'])).toBe(true)
+    expect(editorOpens('/home/me/work', ['/home/me/work/'])).toBe(true)
+    // The server's path on another machine opens nothing here.
+    expect(editorOpens('/tmp/uxrev', ['/home/me/work'])).toBe(false)
+    expect(editorOpens('/home/me/workspace', ['/home/me/work'])).toBe(false)
+    expect(editorOpens('/tmp/uxrev', [])).toBe(false)
+    expect(editorOpens(null, ['/'])).toBe(false)
+  })
+})
+
+describe('partitionSelection', () => {
+  it('passes a one-dimension key as the flag takes it', () => {
+    expect(partitionSelection('account=ra-02541')).toBe('account=ra-02541')
+  })
+  it('turns a compound key into the JSON object the flag takes', () => {
+    expect(partitionSelection('region=emea,tier=key')).toBe('{"region":"emea","tier":"key"}')
+    expect(partitionSelection('a=x=y,b=2')).toBe('{"a":"x=y","b":"2"}')
+  })
+  it('leaves a key it cannot parse alone', () => {
+    expect(partitionSelection('odd,shape')).toBe('odd,shape')
+  })
+})
+
+describe('runPace', () => {
+  it('is per batched call, with the count', () => {
+    expect(runPace({ calls: 5, keys: 3077, elapsed_seconds: 2.213 })).toBe('0.4s / call · 5 calls')
+    expect(runPace({ calls: 1, keys: 3077, elapsed_seconds: 2.213 })).toBe('2.2s / call · 1 call')
+  })
+  it('is per run when each key ran on its own', () => {
+    expect(runPace({ calls: 0, keys: 3077, elapsed_seconds: 2.213 })).toBe('2.2s / run · 3,077 keys')
+  })
+  it('says nothing without a run, or a run that recorded no time', () => {
+    expect(runPace(undefined)).toBeNull()
+    expect(runPace({ calls: 0, keys: 0, elapsed_seconds: 0 })).toBeNull()
+    expect(runPace({ calls: 0, keys: 7, elapsed_seconds: 0 })).toBeNull()
+  })
+})
+
+describe('barSegments', () => {
+  it('keeps a thin part visible, taking the width from the widest', () => {
+    const w = barSegments({ cached: 3070, failed: 7, stale: 0, total: 3077 })
+    expect(w.failed).toBe(2)
+    expect(w.stale).toBe(0)
+    expect(w.cached + w.failed).toBeCloseTo(100, 6)
+  })
+  it('leaves parts that are wide enough alone', () => {
+    expect(barSegments({ cached: 50, failed: 25, stale: 25, total: 100 })).toEqual({ cached: 50, failed: 25, stale: 25 })
+    expect(barSegments({ cached: 0, failed: 0, stale: 0, total: 0 })).toEqual({ cached: 0, failed: 0, stale: 0 })
+  })
+})
+
+describe('truncateCell', () => {
+  it('cuts a long value and leaves a short one', () => {
+    expect(truncateCell('short')).toEqual({ short: 'short', truncated: false })
+    const long = JSON.stringify(Array.from({ length: 52 }, (_, i) => 100 + i))
+    const cut = truncateCell(long)
+    expect(cut.truncated).toBe(true)
+    expect(cut.short).toHaveLength(80)
+    expect(cut.short.endsWith('…')).toBe(true)
   })
 })

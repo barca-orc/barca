@@ -8,6 +8,12 @@
   background: var(--bg-canvas);
 }
 
+/* A card's state label is 12px at 1:1, the smallest a fit shows (graphView.ts READABLE_ZOOM):
+   DagNode sets its label size from this token. */
+.react-flow__node {
+  --text-2xs: var(--text-xs);
+}
+
 /* DagNode draws its own edge dots, so hide React Flow's handles. */
 .react-flow__handle {
   opacity: 0;
@@ -63,6 +69,7 @@
 }
 
 /* Selection box + node focus ring (DagNode owns its own selected look) */
+.react-flow:focus,
 .react-flow__node:focus,
 .react-flow__node:focus-visible {
   outline: none;
