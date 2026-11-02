@@ -186,11 +186,11 @@ no longer in the bucket) exits 3 and carries the store's error. A server that ca
 To recompute a result before querying it, use `--refresh` (`barca get revenue --refresh revenue`);
 never delete files under `.barca/` (other than `.barca/sql-cache/`).
 
-See also: `barca docs status`, `barca docs types`, `barca docs cache`, [`barca docs server-mode`](/reference/server-mode/).
-
 Python callers can use `barca.sql("select * from orders", "pipeline.py")`.
 It returns a dictionary with `columns`, `rows` (row dictionaries), `total`,
 `truncated`, and an optional `hint`. Pass `limit=20` or `all=True` to control
 the row count, `env="dev"` to select an environment, and `server=True` or
 `server="https://..."` to query a server. It queries cached results without
 executing assets and raises `barca.BarcaError` on failure.
+
+See also: `barca docs status`, `barca docs types`, `barca docs cache`, [`barca docs server-mode`](/reference/server-mode/).
