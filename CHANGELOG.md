@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.39.3 (2026-11-02)
+
 ### Bug Fixes
 
 - Automatically split failed partition batches into smaller calls, including after worker crashes, down to single partitions.
