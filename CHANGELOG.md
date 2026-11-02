@@ -8,13 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
-### Features
-
-- Add `barca.sql()` to the Python API for querying cached results with SQL.
-
 ### Bug Fixes
 
 - Automatically split failed partition batches into smaller calls, including after worker crashes, down to single partitions.
+
+## 0.39.2 (2026-11-02)
+
+### Features
+
+- Add `barca.sql()` to the Python API for querying cached results with SQL.
 
 ### Performance
 
