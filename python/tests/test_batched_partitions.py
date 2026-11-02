@@ -1040,7 +1040,8 @@ def scored(region: list[str], month: list[str], cleaned: {annotation}):
         assert row["amount"] == 5
 
 
-def test_worker_death_retries_every_unfinished_key_of_the_call(keys5):
+@pytest.mark.parametrize("retries", [0, 2])
+def test_worker_death_retries_every_unfinished_key_of_the_call(keys5, retries):
     write(
         keys5,
         """
@@ -1054,10 +1055,15 @@ def test_worker_death_retries_every_unfinished_key_of_the_call(keys5):
                 marker.touch()
                 os._exit(7)
             return {r: cleaned[r] for r in retailer}
-    """,
+    """.replace("retries=2", f"retries={retries}"),
     )
     result = get(keys5, "scored")
-    assert calls(keys5) == [["scored", ["r1", "r2", "r3", "r4", "r5"]]] * 2
+    recorded = calls(keys5)
+    assert recorded[0] == ["scored", ["r1", "r2", "r3", "r4", "r5"]]
+    assert sorted(recorded[1:]) == [
+        ["scored", ["r1", "r2", "r3"]],
+        ["scored", ["r4", "r5"]],
+    ]
     assert step(result, "scored")["attempts"] == 2
     assert len(result["final_output"]) == 5
 
