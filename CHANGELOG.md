@@ -2,7 +2,11 @@
 
 Release notes for barca, newest first: each `## <version> (<date>)` section is published as that
 version's [GitHub release](https://github.com/barca-orc/barca/releases) body, and changes not
-released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their notes only on
+released yet collect under `## Pending
+
+### Bug Fixes
+
+- Automatically split failed partition batches into smaller calls, including after worker crashes, down to single partitions.`. Releases 0.1.2 to 0.23.x have their notes only on
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 

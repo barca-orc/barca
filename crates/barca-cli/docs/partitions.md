@@ -602,3 +602,5 @@ list the first twenty keys in lexical order, independently of worker chunking.
 
 See also: `barca docs sinks` (one file per partition, or one Hive-partitioned dataset with a
 directory per key), `barca docs examples/partitions`.
+
+Failed batched calls automatically retry failed partitions in groups at most half the previous size, down to one partition, even without configured retries. Successful partitions are retained. Single-partition failures use the configured retry budget, counting earlier attempts. This also applies when a worker exits unexpectedly.
