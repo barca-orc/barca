@@ -39,6 +39,7 @@ __all__ = [
     "plan",
     "history",
     "stats",
+    "sql",
     "signed_url",
     "BarcaError",
     "Client",
@@ -455,12 +456,13 @@ _LAZY = {
     "run": "barca.api",
     "signed_url": "barca.api",
     "stats": "barca.api",
+    "sql": "barca.api",
     "Client": "barca.client",
     "Run": "barca.client",
 }
 
 if TYPE_CHECKING:
-    from barca.api import BarcaError, get, history, plan, run, signed_url, stats  # noqa: E402
+    from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats  # noqa: E402
     from barca.client import Client, Run  # noqa: E402
 
 

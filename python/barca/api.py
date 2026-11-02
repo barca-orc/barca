@@ -436,3 +436,26 @@ def signed_url(uri: str, expires: "int | float | datetime.timedelta" = 3600) -> 
         error.code = 2 if exc.kind == "usage" else 3
         raise error from None
     return url
+
+
+def sql(
+    query: str,
+    *files: str,
+    limit: int = 100,
+    all: bool = False,
+    env: str | None = None,
+    server: bool | str = False,
+) -> dict:
+    """Query cached results with DuckDB SQL without executing assets.
+
+    Returns the CLI envelope: columns, rows (row dictionaries), total and truncated,
+    plus hint when truncated. Files default to project discovery. Requires duckdb.
+    ``all=True`` returns every row; otherwise ``limit`` defaults to 100.
+    ``env`` selects an environment; ``server`` queries a configured or explicit server.
+    Raises BarcaError when the query or command fails.
+    """
+    args = ["sql", query, *files, "--json"]
+    args += ["--all"] if all else ["--limit", str(limit)]
+    if env is not None:
+        args += ["--env", env]
+    return _exec(args + _server_args(server))
