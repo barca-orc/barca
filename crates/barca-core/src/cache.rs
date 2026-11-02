@@ -188,9 +188,7 @@ impl RunReason {
 pub(crate) enum Held {
     /// A `Manual` node read as it is (RFC-0008): its latest result, `stale` when its inputs'
     /// latest results or its code differ from the ones it was computed with.
-    Manual {
-        stale: bool,
-    },
+    Manual { stale: bool },
     /// Under a tick, a task whose last successful run used the current versions of its inputs.
     UpToDate,
     /// A matching cache hit after a refreshed cutoff wrote unchanged bytes.

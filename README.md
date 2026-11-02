@@ -32,6 +32,7 @@ with `inputs={"parameter": upstream_function}`.
 | Get an asset and reuse unchanged results | `barca get summary` |
 | Run a task and reuse its cached inputs | `barca run publish` |
 | Refresh a partition set and publish the complete result | `barca get final --refresh 'source[account=A],source[account=C]'` |
+| Query cached results from Python | `barca.sql("select * from summary")` |
 | Get one partition | `barca get report --partition customer=acme` |
 | Manage runs on one server | `barca serve`, then `barca get summary --server http://host:8274` |
 

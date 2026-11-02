@@ -1799,10 +1799,9 @@ impl DbSnapshot {
 
 /// The elapsed seconds of each node's last `window` successful materializations, its partition
 /// keys' rows folded into the node (newest first). What `GET /state` reports as typical
-/// durations, without reading every row of the table: a node's own rows come from the node id
-/// index; its keys' rows from the rows just below the latest key row, a window that grows until
-/// it holds `window` successes or reaches the first row. The keys of one run are written
-/// together, so for a node with many keys the first window is enough.
+/// durations. Both the node's own rows and its keys' rows are read through the node id
+/// index, so sparse or failed-only partition histories never scan unrelated nodes. Each
+/// query returns at most `window` successes; merging them preserves global recency.
 pub async fn recent_durations(
     db_path: &str,
     base_ids: &[String],
@@ -1837,48 +1836,25 @@ pub async fn recent_durations(
         }
         drop(rows);
         let (lo, hi) = key_range(base);
-        let latest_key = query_i64(
-            &conn,
-            "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run \
-             WHERE node_id >= ?1 AND node_id < ?2",
-            vec![
-                libsql::Value::Text(lo.clone()),
-                libsql::Value::Text(hi.clone()),
-            ],
-        )
-        .await?;
-        if let Some(top) = latest_key {
-            let mut keys: Vec<(i64, f64)> = Vec::new();
-            let mut span: i64 = 1024;
-            let mut below = top + 1;
-            while keys.len() < window && below > 0 {
-                let from = (top + 1 - span).max(0);
-                let mut rows = conn
-                    .query(
-                        "SELECT id, node_id, elapsed_seconds FROM materializations \
-                         WHERE id >= ?1 AND id < ?2 AND status = 'success' \
-                         AND elapsed_seconds IS NOT NULL ORDER BY id DESC",
-                        [from, below],
-                    )
-                    .await
-                    .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
-                while let Some(row) = rows
-                    .next()
-                    .await
-                    .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
-                {
-                    let node = row.get::<String>(1).unwrap_or_default();
-                    if node.as_str() >= lo.as_str()
-                        && node.as_str() < hi.as_str()
-                        && let (Ok(id), Ok(e)) = (row.get::<i64>(0), row.get::<f64>(2))
-                    {
-                        keys.push((id, e));
-                    }
-                }
-                below = from;
-                span *= 4;
+        // Restrict the scan to this node's keys. Walking global row-id windows can
+        // read the entire database once per sparse or failed-only partitioned node.
+        let mut rows = conn
+            .query(
+                "SELECT id, elapsed_seconds FROM materializations INDEXED BY idx_mat_node_run \
+                 WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                 AND elapsed_seconds IS NOT NULL ORDER BY id DESC LIMIT ?3",
+                libsql::params![lo, hi, window as i64],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
+        {
+            if let (Ok(id), Ok(elapsed)) = (row.get::<i64>(0), row.get::<f64>(1)) {
+                found.push((id, elapsed));
             }
-            found.extend(keys);
         }
         if found.is_empty() {
             continue;
@@ -6880,6 +6856,45 @@ mod fold_log_tests {
 
 #[cfg(test)]
 mod duration_tests {
+    /// A sparse partitioned node must not walk other nodes' entire histories.
+    #[tokio::test]
+    async fn recent_durations_skip_unrelated_history_for_sparse_nodes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        let ids: Vec<String> = (0..24).map(|i| format!("p.py:sparse_{i}")).collect();
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            conn.execute(
+                "WITH RECURSIVE history(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM history WHERE n < 200000) \
+                 INSERT INTO materializations(node_id, status, elapsed_seconds) \
+                 SELECT 'p.py:other', 'success', 0.5 FROM history",
+                (),
+            ).await.unwrap();
+            for (i, id) in ids.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO materializations(node_id, status, elapsed_seconds) VALUES (?1, ?2, ?3)",
+                    libsql::params![format!("{id}[key=a]"), if i % 2 == 0 { "success" } else { "failed" }, 7.0],
+                ).await.unwrap();
+            }
+        }
+        let started = std::time::Instant::now();
+        let durations = super::recent_durations(&path, &ids, 20).await.unwrap();
+        let elapsed = started.elapsed();
+        for (i, id) in ids.iter().enumerate() {
+            if i % 2 == 0 {
+                assert_eq!(durations[id], vec![7.0]);
+            } else {
+                assert!(!durations.contains_key(id));
+            }
+        }
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "duration lookup walked unrelated history: {elapsed:?}"
+        );
+    }
+
     /// `GET /state`'s typical durations: the last successes of a node, its keys folded in,
     /// found below the latest key row however many other rows were written since.
     #[tokio::test]
@@ -6919,13 +6934,20 @@ mod duration_tests {
                 insert("p.py:other", "success", 0.5).await;
             }
             insert("p.py:g[k=new]", "failed", 99.0).await;
+            insert("p.py:failed_only[k=1]", "failed", 99.0).await;
             // `p.py:a_b` is not a key of `p.py:a`.
             insert("p.py:a_b[k=1]", "success", 5.0).await;
         }
-        let ids: Vec<String> = ["p.py:a", "p.py:f", "p.py:g", "p.py:missing"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let ids: Vec<String> = [
+            "p.py:a",
+            "p.py:f",
+            "p.py:g",
+            "p.py:missing",
+            "p.py:failed_only",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let d = super::recent_durations(&path, &ids, 20).await.unwrap();
         assert_eq!(
             d["p.py:a"],
@@ -6936,6 +6958,7 @@ mod duration_tests {
         assert_eq!(d["p.py:f"], f, "the latest 20 key rows, newest first");
         assert_eq!(d["p.py:g"], vec![7.0], "found below 3000 other rows");
         assert!(!d.contains_key("p.py:missing"));
+        assert!(!d.contains_key("p.py:failed_only"));
     }
 }
 
