@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Performance
+
+- Scope UI duration estimates to each node’s partition history, avoiding scans of unrelated materializations.
+
 ## 0.39.1 (2026-10-31)
 
 ### Features
