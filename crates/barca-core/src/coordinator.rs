@@ -542,8 +542,25 @@ impl Coordinator {
             return;
         }
         let retry = std::mem::take(&mut self.calls[c].retry);
-        for m in retry {
-            self.ready.push_back(m);
+        let size = self.calls[c].members.iter().flatten().count();
+        if size > 1 {
+            let limit = size.div_ceil(2);
+            for (part, members) in retry.chunks(limit).enumerate() {
+                let index = self.calls.len();
+                self.calls.push(Call {
+                    id: format!("{}-retry-{part}", self.calls[c].id),
+                    members: members.iter().copied().map(Some).collect(),
+                    ..Default::default()
+                });
+                for &m in members {
+                    self.call_of.insert(m, index);
+                    self.ready.push_back(m);
+                }
+            }
+        } else {
+            for m in retry {
+                self.ready.push_back(m);
+            }
         }
     }
 
@@ -680,9 +697,13 @@ impl Coordinator {
             .entry(item_id)
             .or_insert(attempt_start);
 
+        let can_split = self
+            .call_of
+            .get(&item_id)
+            .is_some_and(|&c| self.calls[c].members.iter().flatten().count() > 1);
         let item = self.items.get_mut(&item_id).unwrap();
 
-        if item.attempts < item.spec.retries {
+        if can_split || item.attempts < item.spec.retries {
             let backoff = item.spec.retry_backoff_seconds * item.attempts as f64;
             if let Some(&c) = self.call_of.get(&item_id) {
                 // A key of a call: tried again with the call's other failed keys, once every
@@ -1965,6 +1986,39 @@ mod tests {
             }
             assert_eq!(drain(&mut c), [members[0].clone(), members[2].clone()]);
         }
+    }
+
+    #[test]
+    fn failed_calls_split_without_configured_retries_and_stop_at_single_keys() {
+        let (mut c, _) = call_phase(4, 0, 0.0);
+        for d in drain(&mut c) {
+            let id = id_of(&c, &d);
+            c.on_item_completed(id);
+        }
+        for expected_size in [2, 1] {
+            let ids: Vec<_> = drain(&mut c).iter().map(|d| id_of(&c, d)).collect();
+            assert_eq!(ids.len(), 4);
+            for id in &ids {
+                assert_eq!(
+                    c.on_item_failed(*id, "OOM".into(), std::time::Duration::ZERO),
+                    FailureAction::RetryNow
+                );
+            }
+            for id in &ids {
+                assert_eq!(
+                    ids.iter().filter(|other| c.same_call(*id, **other)).count(),
+                    expected_size
+                );
+            }
+        }
+        for d in drain(&mut c) {
+            let id = id_of(&c, &d);
+            assert_eq!(
+                c.on_item_failed(id, "OOM".into(), std::time::Duration::ZERO),
+                FailureAction::Failed
+            );
+        }
+        assert_eq!(c.ready_count(), 0);
     }
 
     /// #345: each key of a step used to wait on every key of the step before it in its stream

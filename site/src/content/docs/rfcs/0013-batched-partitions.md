@@ -284,3 +284,5 @@ Decided:
 
 - **Adaptive batch size** from recorded per-call memory and time.
 - **Streaming outputs:** yielding `(key, value)` pairs, so a long call commits keys as it goes.
+
+Failed batched calls automatically retry failed partitions in groups at most half the previous size, down to one partition, even without configured retries. Successful partitions are retained. Single-partition failures use the configured retry budget, counting earlier attempts. This also applies when a worker exits unexpectedly.
