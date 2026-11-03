@@ -140,8 +140,8 @@ class Server:
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
-    def submit(self, target: str) -> dict:
-        status, body = self.request("POST", "/runs", {"command": "run", "targets": [target]})
+    def submit(self, target: str, command: str = "run") -> dict:
+        status, body = self.request("POST", "/runs", {"command": command, "targets": [target]})
         assert status == 202, body
         return body
 
@@ -481,3 +481,60 @@ def test_a_client_gives_up_when_the_server_does_not_come_back(project, serve):
     )
     assert bad.returncode == 2, bad.stderr
     assert "BARCA_SERVER_RECONNECT=soon is not a number of seconds" in bad.stderr
+
+
+# ─── a resumed run re-plans on the code it resumes on ───────────────────────
+
+CHANGING = """
+import time
+from pathlib import Path
+
+from barca import asset
+
+
+@asset()
+def a() -> int:
+    return VERSION
+
+
+@asset(inputs={"a": a})
+def b(a: int) -> int:
+    with open("b.starts", "a") as f:
+        f.write("start\\n")
+    deadline = time.time() + 120
+    while not Path("release-b").exists() and time.time() < deadline:
+        time.sleep(0.05)
+    return a * 10
+"""
+
+
+def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(project, serve):
+    """#794: a run a deploy requeues resumes under the same run id on the new code. A step its
+    stopped attempt finished re-executes under the new definition and is recorded under its new
+    run hash, so the run publishes the new results and the next run finds them cached."""
+    (project / "pipeline.py").write_text(CHANGING.replace("VERSION", "1"))
+    server = serve("--no-schedule", "--drain-timeout", "1")
+    run_id = server.submit("b", "get")["run_id"]
+    wait_for(lambda: started(project, "b") > 0, "b to start")
+    assert server.stop() == 0, server.output()
+    assert f"[barca] run {run_id} stopped and put back in the queue" in server.output()
+
+    # The deploy: `a` and `b` change while the run waits in the queue.
+    (project / "pipeline.py").write_text(
+        CHANGING.replace("VERSION", "2").replace("a * 10", "a * 100")
+    )
+    (project / "release-b").write_text("")
+    restarted = serve("--no-schedule")
+    assert "[barca] resuming 1 queued run" in restarted.output(), restarted.output()
+    run = restarted.finished(run_id)
+    assert run["status"] == "success", run
+
+    # Both steps are recorded under the new run hashes: cached for the current code, and the
+    # run's output is the new code's.
+    status = barca(project, "status", "pipeline.py", "--json")
+    assert status.returncode == 0, status.stderr
+    nodes = {n["id"]: n["cache"] for n in json.loads(status.stdout)["nodes"]}
+    assert nodes["pipeline.py:a"]["state"] == "cached", nodes
+    assert nodes["pipeline.py:b"]["state"] == "cached", nodes
+    assert json.loads((project / nodes["pipeline.py:b"]["artifact"]).read_text()) == 200
+    assert started(project, "b") == 2, "the stopped attempt and the resumed one"

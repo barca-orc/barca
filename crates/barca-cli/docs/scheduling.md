@@ -496,8 +496,10 @@ open after that get 2 more (shorter with a drain timeout under 10 seconds: below
 
 ### At least once
 
-A run the drain timeout requeued runs again from its start. Assets that finished are cache hits
-then, but a step that was interrupted runs again, and a task runs again from its beginning
+A run the drain timeout requeued runs again from its start, planned on the code the restarted
+server has. Assets that finished are cache hits then while their code and inputs are unchanged; one
+a deploy changed runs again under its new run hash, as in a new run. A step that was interrupted
+runs again, and a task runs again from its beginning
 (including what it did before it was stopped, such as an email or an insert). So a run the server
 accepted is executed at least once, not exactly once. A task with side effects should be safe to
 repeat (an upsert, a key that makes a second send a no-op), or give the drain long enough for it

@@ -117,7 +117,8 @@ barca queue resume --server      # if you paused it
    its end.
 
 A requeued run starts again from its beginning, so a run is executed at least once: assets that
-finished are cache hits, but an interrupted step or task runs again. Make tasks with side
+finished are cache hits unless the deploy changed their code or inputs, and an interrupted step
+or task runs again. Make tasks with side
 effects safe to repeat, or give them a longer drain timeout.
 
 The supervisor's grace period must cover the drain timeout plus what the server takes after it:

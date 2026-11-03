@@ -8,20 +8,22 @@ use crate::ledger::{LedgerPost, PostAccepted};
 use crate::{BarcaError, db, dispatch::OutputRef};
 use std::collections::{HashMap, HashSet};
 
-/// Appends successful steps' rows, unless the run already has a row for the node. Prepared once
-/// per transaction and rebound for each row (#460).
+/// Appends successful steps' rows, unless the run already has a row for the node under the same
+/// run hash. A run requeued and resumed on new code keeps its run id, so a step it re-executes
+/// under a new run hash gets a new row rather than leaving the earlier attempt's (#794).
+/// Prepared once per transaction and rebound for each row (#460).
 pub(super) struct StepInsert(db::Prepared);
 
 impl StepInsert {
     // Turso otherwise intersects the node and run indexes, scanning this run
     // for each partition. Bound deduplication to the node's own history.
-    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, '') WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)";
+    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, '') WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12)";
 
     pub(super) async fn prepare(conn: &libsql::Connection) -> Result<Self, libsql::Error> {
         db::prepare(conn, Self::SQL).await.map(Self)
     }
 
-    /// Rows written: 1, or 0 when the run already recorded the node.
+    /// Rows written: 1, or 0 when the run already recorded the node under this run hash.
     pub(super) async fn run(&mut self, row: &StepRow, run_id: &str) -> Result<u64, libsql::Error> {
         let opt = |v: Option<String>| v.unwrap_or_default();
         self.0
@@ -46,22 +48,26 @@ impl StepInsert {
     }
 }
 
-/// The steps of `run_id` already recorded, by node id.
+/// The steps of `run_id` already recorded, by node id and run hash: an earlier attempt of a
+/// requeued run may have recorded a node under a run hash this attempt no longer computes.
 async fn steps_of_run(
     conn: &libsql::Connection,
     run_id: &str,
-) -> Result<HashSet<String>, BarcaError> {
+) -> Result<HashSet<(String, String)>, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read recorded steps: {e}"));
     let mut out = HashSet::new();
     let mut rows = conn
         .query(
-            "SELECT node_id FROM materializations WHERE run_id = ?1",
+            "SELECT node_id, COALESCE(run_hash, '') FROM materializations WHERE run_id = ?1",
             [run_id.to_string()],
         )
         .await
         .map_err(failed)?;
     while let Some(row) = rows.next().await.map_err(failed)? {
-        out.insert(row.get::<String>(0).map_err(failed)?);
+        out.insert((
+            row.get::<String>(0).map_err(failed)?,
+            row.get::<String>(1).map_err(failed)?,
+        ));
     }
     Ok(out)
 }
@@ -90,12 +96,15 @@ pub(super) async fn write_terminal_ledger(
 
     let mut insert = None;
     for (node_id, oref) in l.all_outputs {
-        if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
+        if l.cached_node_ids.contains(node_id) {
             continue;
         }
         let Some(run_h) = l.run_hashes.get(node_id) else {
             continue;
         };
+        if already.contains(&(node_id.clone(), run_h.clone())) {
+            continue;
+        }
         let base = crate::StepId::parse(node_id).base_id().to_string();
         let (cpu, rss) = l.all_timings.get(node_id).copied().unwrap_or((None, None));
         let mut row = StepRow::from_artifact(node_id, run_h, &serde_json::Value::Null, 1);
@@ -130,10 +139,10 @@ pub(super) async fn write_terminal_ledger(
     let mut insert_failed = None;
     for failure in l.all_failures {
         let node_id = &failure.node_id;
-        if already.contains(node_id) {
+        let run_h = l.run_hashes.get(node_id).cloned().unwrap_or_default();
+        if already.contains(&(node_id.clone(), run_h.clone())) {
             continue;
         }
-        let run_h = l.run_hashes.get(node_id).cloned().unwrap_or_default();
         let failed = |e| BarcaError::Db(format!("failed to record failed step: {e}"));
         let insert = match &mut insert_failed {
             Some(insert) => insert,
