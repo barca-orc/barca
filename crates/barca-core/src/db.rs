@@ -4642,14 +4642,15 @@ pub async fn node_ages(db_path: &str) -> Result<HashMap<String, NodeAge>, BarcaE
     for (base, (_, at, _)) in success {
         out.entry(base).or_default().last_success_at = Some(at);
     }
-    // The newest run's rows, one index seek per node (`idx_mat_run`: a run has at most one row
-    // per key). Rows without a run id (an older barca's) leave it unknown.
+    // The newest run's rows, one index seek per node (`idx_mat_run`). A run requeued onto new
+    // code can hold two rows for a key, one per run hash (#794), so keys are counted distinct.
+    // Rows without a run id (an older barca's) leave it unknown.
     for (base, (_, run)) in newest {
         let Some(run) = run else { continue };
         let (lo, hi) = key_range(&base);
         let mut rows = conn
             .query(
-                "SELECT sum(elapsed_seconds), count(*), count(DISTINCT batch_id), \
+                "SELECT sum(elapsed_seconds), count(DISTINCT node_id), count(DISTINCT batch_id), \
                  sum(status = 'failed') FROM materializations INDEXED BY idx_mat_run \
                  WHERE run_id = ?1 AND (node_id = ?2 OR (node_id >= ?3 AND node_id < ?4))",
                 libsql::params![run.clone(), base.clone(), lo, hi],

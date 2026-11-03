@@ -926,6 +926,88 @@ mod persist_tests {
         );
     }
 
+    /// A run requeued and resumed on new code keeps its run id (#794): a step the earlier
+    /// attempt finished under its old run hash is recorded again under the new one, at the
+    /// recorder and at the end of the run, and the run's artifact is the new attempt's.
+    #[tokio::test]
+    async fn a_resumed_attempt_records_steps_under_their_new_run_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let old = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(5))
+            .await
+            .unwrap();
+        // The attempt the restart stopped.
+        assert_eq!(
+            record_steps(
+                &db_path,
+                "r1",
+                &[old.row("f.py:a"), old.row("f.py:part[k=1]")]
+            )
+            .await
+            .unwrap(),
+            2
+        );
+        // The resumed attempt, planned under new definitions.
+        let mut new = Fixture::new();
+        for (node, hash) in new.run_hashes.iter_mut() {
+            *hash = format!("new-{node}");
+        }
+        for (node, out) in new.outputs.iter_mut() {
+            out.path = format!(".barca/artifacts/{node}/new.json");
+        }
+        assert_eq!(
+            record_steps(&db_path, "r1", &[new.row("f.py:a")])
+                .await
+                .unwrap(),
+            1,
+            "a step re-executed under a new run hash is recorded"
+        );
+        assert_eq!(
+            record_steps(&db_path, "r1", &[new.row("f.py:a")])
+                .await
+                .unwrap(),
+            0,
+            "the same run hash is still recorded once"
+        );
+        persist_run(&db_path, &new.ledger("r1")).await.unwrap();
+
+        let mut got = Vec::new();
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            let mut found = conn
+                .query(
+                    "SELECT node_id, run_hash FROM materializations WHERE run_id = 'r1' \
+                     AND status = 'success' ORDER BY node_id, id",
+                    (),
+                )
+                .await
+                .unwrap();
+            while let Some(row) = found.next().await.unwrap() {
+                got.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+            }
+        }
+        let pair = |n: &str, h: &str| (n.to_string(), h.to_string());
+        assert_eq!(
+            got,
+            [
+                pair("f.py:a", "hash-f.py:a"),
+                pair("f.py:a", "new-f.py:a"),
+                pair("f.py:part[k=1]", "hash-f.py:part[k=1]"),
+                pair("f.py:part[k=1]", "new-f.py:part[k=1]"),
+                pair("f.py:part[k=2]", "new-f.py:part[k=2]"),
+            ]
+        );
+        assert_eq!(
+            db::run_artifact(&db_path, "r1", "f.py:part[k=1]")
+                .await
+                .unwrap()
+                .map(|(path, _)| path),
+            Some(".barca/artifacts/f.py:part[k=1]/new.json".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn a_failed_success_row_cannot_finalize_a_partial_ledger() {
         let dir = tempfile::tempdir().unwrap();
