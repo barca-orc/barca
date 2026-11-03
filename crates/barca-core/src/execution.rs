@@ -994,6 +994,7 @@ async fn start_workers(
         pool_size,
         capacity: prepared.capacity,
         shared: request.options.shared_capacity.clone(),
+        shared_steps: request.options.shared_steps.clone(),
         run_id: run_id.clone(),
         datadog: telemetry
             .iter()
@@ -2001,6 +2002,34 @@ async fn dispatch_ready(
 
     coord
 }
+/// Steps another run of the server finished while this run waited for them (#654): cache
+/// hits here. The owner recorded them; this run records no row and uploads nothing.
+fn computed_by_other_runs(
+    session: &mut RunSession<'_, '_>,
+    phase_outputs: &HashMap<String, OutputRef>,
+) {
+    let Some(pool) = session.pool.as_mut() else {
+        return;
+    };
+    for node_id in pool.take_from_other_runs() {
+        session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        // Not executed here: no attempts of this run's.
+        session.state.results.attempts.remove(&node_id);
+        crate::report::computed_by_another_run(
+            &mut session.state.results.reports,
+            &node_id,
+            phase_outputs.get(&node_id).map(|o| o.path.as_str()),
+        );
+        if session.request.agent_mode {
+            crate::run_line!(
+                Agent,
+                "{}",
+                cached_step_line(&session.prepared.dag, &node_id)
+            );
+        }
+        session.state.cached_node_ids.insert(node_id);
+    }
+}
 fn collect_outputs(
     session: &mut RunSession<'_, '_>,
     coord: &crate::coordinator::Coordinator,
@@ -2383,6 +2412,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         );
         let coord = dispatch_ready(session, &phase, &provided, phase_idx, calls).await;
         let phase_outputs = collect_outputs(session, &coord);
+        computed_by_other_runs(session, &phase_outputs);
         collect_failures(session, &coord).await;
         session
             .state

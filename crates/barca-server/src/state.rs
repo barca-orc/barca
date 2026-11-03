@@ -347,6 +347,9 @@ pub struct AppState {
     /// The capacity every run shares (`--capacity`, `[server] capacity`, #628): a step of any
     /// run is admitted against it as well as against its run's own. `None`: not set.
     pub capacity: Option<Arc<barca_core::capacity::SharedCapacity>>,
+    /// The asset steps the runs are executing (#654): a run waits for a step another run is
+    /// computing instead of computing it again.
+    pub shared_steps: Arc<barca_core::claims::SharedSteps>,
     /// The runs accepted and not started, in order, and whether the queue is paused.
     pub queue: Arc<crate::queue::Queue>,
     /// Cancelled when a drain ends without the runs finishing (its deadline, or a second
@@ -398,6 +401,7 @@ impl AppState {
         Self {
             auth: Arc::new(crate::auth_http::Access::new(&config.resolved)),
             capacity,
+            shared_steps: Arc::new(barca_core::claims::SharedSteps::new()),
             replay: Default::default(),
             loaded: Arc::new(tokio::sync::Mutex::new(None)),
             load_errors: Arc::new(RwLock::new(Vec::new())),

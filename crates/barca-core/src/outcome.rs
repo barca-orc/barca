@@ -101,6 +101,9 @@ pub struct RunOptions {
     /// The capacity every run of a `barca serve` shares (`[server] capacity`): the run's steps
     /// are admitted against it as well as against the run's own (#628).
     pub shared_capacity: Option<std::sync::Arc<crate::capacity::SharedCapacity>>,
+    /// The asset steps the runs of a `barca serve` are executing (#654): the run waits for a
+    /// step another run is computing instead of computing it again ([`crate::claims`]).
+    pub shared_steps: Option<std::sync::Arc<crate::claims::SharedSteps>>,
     /// `--batch` (RFC-0013): the run's override of the `batch=` of the nodes that declare one.
     pub batch: crate::batch::BatchOverride,
 }
