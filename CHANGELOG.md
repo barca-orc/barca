@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.39.4 (2026-11-03)
+
 ### Features
 
 - Compute an asset step once when two runs of a `barca serve` need it at the same time: the second run waits for the first and reports the step `cached`. Tasks, sensors and differing run hashes stay separate (#654).
