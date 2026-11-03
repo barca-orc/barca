@@ -154,10 +154,23 @@ Configuration details: [remote manual](../../crates/barca-cli/docs/remote.md).
 
 ## Open questions and gaps
 
-Matching overlapping asset requests can currently compute the same result twice:
-[#654](https://github.com/barca-orc/barca/issues/654). No global in-flight sharing is promised
-by this implemented contract. [The approved design](current-state-and-execution.md)
-defines the sharing, cancellation and version-order requirements for the replacement.
+Runs of one `barca serve` share the asset steps they have in flight
+([#654](https://github.com/barca-orc/barca/issues/654), [`claims.rs`](../../crates/barca-core/src/claims.rs)):
+a step is claimed under its display id (partition key included) and run hash when one of the
+run's workers leases it, and another run that reaches the same step while the claim is held
+waits instead of executing it, then reports it `cached` and records no row of its own. Tasks,
+sensors and `parallel()` branches are never shared; different run hashes and keys the runs do
+not have in common are independent. A claim ends without a result when its step fails an
+attempt, loses its worker, or its run ends or is cancelled; one waiting run then claims and
+executes the step. Conformance: [shared steps](../../python/tests/test_serve_shared_steps.py),
+[claims](../../crates/barca-core/src/claims.rs).
+
+Known gaps against [the approved design](current-state-and-execution.md): cancelling the run that
+owns a shared step stops it, and the waiting run executes it again from the start
+(INV-CANCEL-01 asks that the computation survive); the owner's result is handed to waiting runs
+when its worker reports it, before the owner's row is durable; and a run that decided a step
+before another run finished it, and leases it after that run's claim ended, executes it again.
+Independent CLI processes, and local runs against a server's ledger, share nothing.
 
 Full bootstrap and validation still retain work proportional to partition count:
 [#655](https://github.com/barca-orc/barca/issues/655). Bounded scheduling is an accepted target,

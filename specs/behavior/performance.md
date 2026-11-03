@@ -78,7 +78,7 @@ measurements establish only their stated workloads.
 | --- | --- | --- |
 | [#655](https://github.com/barca-orc/barca/issues/655): full bootstrap/validation retains whole-domain state | Bounded admission, completion buffers and persistence; release completed per-key state | Cold and refresh scaling, peak/retained native memory, queue/window sizes, same per-key results and failure recovery |
 | [#656](https://github.com/barca-orc/barca/issues/656): expensive cold/post-run inspection | Maintained summaries and explicit checking state | Cold, invalidated and cached requests; unchanged-run invalidation; concurrent responsiveness; long-run retained memory |
-| [#654](https://github.com/barca-orc/barca/issues/654): duplicate matching work | Shared in-flight asset ownership | Real overlapping requests, identical/different hashes, partial key overlap, cancellation, failure and restart |
+| [#654](https://github.com/barca-orc/barca/issues/654): duplicate matching work (server runs share in-flight asset steps; cancellation survival and durable handoff remain) | Shared in-flight asset ownership | Real overlapping requests, identical/different hashes, partial key overlap, cancellation, failure and restart |
 
 The published 0.33.0 [audit on PR #658](https://github.com/barca-orc/barca/pull/658)
 reports full 200k bootstrap at 68 s / 2.75 GiB native and post-run inspection around 2.7 s /

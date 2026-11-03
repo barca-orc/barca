@@ -798,6 +798,57 @@ pub(crate) fn kind_str(kind: Option<crate::NodeKind>) -> String {
 
 /// Build the report line for one decided step. `dry` selects the vocabulary: a dry run says what
 /// will happen (`action`), a real run says what happened (`status`).
+/// What another run of the same server computed while this run waited for it (#654), as this
+/// run reports it: a cache hit. `display_id` is the step (with its partition key), `artifact`
+/// where its result is. Adjusts the report of its node made when the step was decided.
+pub(crate) fn computed_by_another_run(
+    reports: &mut [StepReport],
+    display_id: &str,
+    artifact: Option<&str>,
+) {
+    let id = crate::StepId::parse(display_id);
+    let base = id.base_id();
+    let key = (!id.partition.is_empty()).then(|| id.partition.suffix());
+    for r in reports.iter_mut().rev().filter(|r| r.id == base) {
+        match (&key, r.partitions.as_mut()) {
+            (Some(key), Some(p)) if p.will_run > 0 => {
+                p.will_run -= 1;
+                p.cached += 1;
+                p.will_run_keys.retain(|k| k != key);
+                if let Some(changed) = p.changed.as_mut() {
+                    changed.remove(key);
+                }
+                if p.will_run == 0 {
+                    r.reason = None;
+                    r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
+                    r.status = Some(
+                        if p.cached == p.total {
+                            "cached"
+                        } else {
+                            "partial"
+                        }
+                        .into(),
+                    );
+                }
+                return;
+            }
+            (None, None) if r.status.as_deref() == Some("ran") => {
+                r.status = Some("cached".to_string());
+                r.reason = None;
+                r.changed = None;
+                r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
+                r.artifact = artifact.map(str::to_string);
+                return;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The detail of a step another run of the server computed for this one.
+pub(crate) const COMPUTED_BY_ANOTHER_RUN: &str =
+    "computed by another run of the server at the same time";
+
 pub(crate) fn report_for(
     dag: &Dag,
     step: &crate::planner::StreamStep,

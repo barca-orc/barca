@@ -55,6 +55,9 @@ pub struct IoConfig {
     /// The capacity every run of a `barca serve` shares (`[server] capacity`, #628): a step is
     /// leased only once this admits it too ([`crate::capacity`]).
     pub shared: Option<std::sync::Arc<crate::capacity::SharedCapacity>>,
+    /// The asset steps the server's runs are executing (#654): a step another run is
+    /// executing is waited for instead of executed again ([`crate::claims`]).
+    pub shared_steps: Option<std::sync::Arc<crate::claims::SharedSteps>>,
     pub run_id: String,
     /// Present only when the Datadog integration successfully configured.
     pub datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
@@ -137,6 +140,12 @@ enum IoEvent {
     RetryReady {
         item_id: ItemId,
     },
+    /// Another run's claim on a step this run waited for ended ([`crate::claims`]): with the
+    /// owner's artifact when it finished the step, `None` when this run must execute it.
+    Settled {
+        item_id: ItemId,
+        artifact: Option<serde_json::Value>,
+    },
     /// A process connected to the coordination socket and negotiated (or failed to).
     /// `worker_id` is from its hello, `pid` from the socket (`SO_PEERCRED`).
     Connected {
@@ -177,6 +186,37 @@ impl Drop for Share {
     fn drop(&mut self) {
         self.capacity.leave(&self.run_id);
     }
+}
+
+/// This run's claims on the asset steps the server's runs share ([`crate::claims`]).
+struct Steps {
+    shared: std::sync::Arc<crate::claims::SharedSteps>,
+    run_id: String,
+    /// The claims this run holds: the steps its workers have leased.
+    held: std::collections::HashSet<crate::claims::StepKey>,
+    /// Steps of this run waiting on another run's claim, and the task that waits.
+    awaiting: HashMap<ItemId, JoinHandle<()>>,
+    /// Steps another run finished for this one, by display id: cache hits, not executed here.
+    from_others: Vec<String>,
+}
+
+impl Drop for Steps {
+    fn drop(&mut self) {
+        for (_, task) in self.awaiting.drain() {
+            task.abort();
+        }
+        self.shared.leave(&self.run_id);
+    }
+}
+
+/// What identifies `item` as work runs may share: an asset step with a run hash, not a
+/// `parallel()` branch. `None` for a task, a sensor or a branch.
+fn share_key(item: &crate::coordinator::Item) -> Option<crate::claims::StepKey> {
+    if item.spec.kind != "asset" || item.group.is_some() {
+        return None;
+    }
+    let hash = item.spec.run_hash.clone()?;
+    Some((item.step_id.display(), hash))
 }
 
 /// Wait until the shared capacity changes, when the run waits in its line; never otherwise.
@@ -381,6 +421,8 @@ pub struct WorkerPool {
     steps_dispatched: usize,
     /// Under a capacity the server's runs share: this run's part of it.
     share: Option<Share>,
+    /// Under `barca serve`: this run's claims on the asset steps its runs share.
+    steps: Option<Steps>,
 }
 
 /// The directory that holds branch results, under the project's `.barca`.
@@ -461,6 +503,13 @@ impl WorkerPool {
             grant: None,
             waiting: false,
         });
+        let steps = config.shared_steps.clone().map(|shared| Steps {
+            shared,
+            run_id: config.run_id.clone(),
+            held: Default::default(),
+            awaiting: HashMap::new(),
+            from_others: Vec::new(),
+        });
         Ok(Self {
             config,
             socket_path,
@@ -488,7 +537,17 @@ impl WorkerPool {
             failures_survived: 0,
             steps_dispatched: 0,
             share,
+            steps,
         })
+    }
+
+    /// The steps another run of the server finished while this run waited for them
+    /// ([`crate::claims`]), by display id, since the last call: cache hits for this run.
+    pub fn take_from_other_runs(&mut self) -> Vec<String> {
+        self.steps
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.from_others))
+            .unwrap_or_default()
     }
 
     /// Library warnings the workers printed once and then suppressed, with how many times
@@ -585,8 +644,10 @@ impl WorkerPool {
             if cancel.is_cancelled() {
                 return Err("run cancelled".to_string());
             }
-            // Give the shared capacity back what the last event ended.
+            // Give the shared capacity back what the last event ended, and the claims on steps
+            // that are no longer leased.
             self.sync_share(coord);
+            self.sync_claims(coord);
             let waiting_for_share = self.share.as_ref().is_some_and(|s| s.waiting);
             if self.workers.is_empty()
                 && self.pending.is_empty()
@@ -673,6 +734,7 @@ impl WorkerPool {
 
                         // Record output and fire progress callback
                         let artifact_val = serde_json::to_value(artifact).unwrap_or_default();
+                        self.finish_claim(coord, item_id, &artifact_val);
                         coord.record_output(item_id, artifact_val.clone());
                         if let Some(ref mut cb) = on_step {
                             cb(node_id, &artifact_val, coord.item(item_id).attempts);
@@ -1024,6 +1086,38 @@ impl WorkerPool {
                     coord.requeue(item_id);
                     self.assign_ready(coord, cost, cancel).await;
                 }
+                IoEvent::Settled { item_id, artifact } => {
+                    let Some(steps) = self.steps.as_mut() else {
+                        continue;
+                    };
+                    if steps.awaiting.remove(&item_id).is_none() {
+                        continue;
+                    }
+                    match artifact {
+                        // The owner finished it: a cache hit here, as if it had been found
+                        // cached when this run planned it.
+                        Some(artifact) => {
+                            let node_id = coord.item(item_id).step_id.display();
+                            steps.from_others.push(node_id.clone());
+                            coord.record_output(item_id, artifact);
+                            if let Some(ref mut ev) = on_event {
+                                ev(RunEvent::StepFinished {
+                                    node_id,
+                                    ok: true,
+                                    cached: true,
+                                    elapsed_seconds: None,
+                                    error: None,
+                                    import_seconds: None,
+                                });
+                            }
+                            coord.on_item_completed(item_id);
+                        }
+                        // The owner stopped without a result: this run executes it (the
+                        // wait cost it no attempt).
+                        None => coord.return_leased(item_id),
+                    }
+                    self.assign_ready(coord, cost, cancel).await;
+                }
                 IoEvent::Connected {
                     worker_id,
                     pid,
@@ -1067,6 +1161,8 @@ impl WorkerPool {
             );
         }
         drop(self.acceptor);
+        // The runs waiting on this run's steps execute them themselves.
+        drop(self.steps);
         let workers = self.workers;
         let frozen = self.frozen;
         let pending = self.pending;
@@ -1232,6 +1328,16 @@ impl WorkerPool {
             let batch: Vec<ItemId> = (0..len)
                 .map(|_| coord.next_ready().expect("batch_len counts ready items"))
                 .collect();
+            // Steps another run of the server is executing wait for it instead (#654).
+            let batch = self.claim_batch(coord, batch);
+            if batch.is_empty() {
+                // Nothing is leased: what the shared capacity admitted for the head goes back.
+                if let Some(share) = self.share.as_mut() {
+                    share.grant = None;
+                }
+                self.sync_share(coord);
+                continue;
+            }
 
             let call = coord.call_id(batch[0]).map(str::to_string);
             let msg = if let Some(call) = &call {
@@ -1293,6 +1399,94 @@ impl WorkerPool {
                 share.grant = None;
             }
         }
+    }
+
+    /// Claim the asset steps of `batch` for this run ([`crate::claims`]) and return the ones
+    /// to lease. A step another run is executing is kept out: it waits for that run's claim
+    /// to end ([`IoEvent::Settled`]), leased to no worker.
+    fn claim_batch(&mut self, coord: &Coordinator, batch: Vec<ItemId>) -> Vec<ItemId> {
+        let Some(steps) = self.steps.as_mut() else {
+            return batch;
+        };
+        let mut lease = Vec::with_capacity(batch.len());
+        for item_id in batch {
+            let Some(key) = share_key(coord.item(item_id)) else {
+                lease.push(item_id);
+                continue;
+            };
+            match steps.shared.claim(&steps.run_id, &key) {
+                crate::claims::Claim::Mine => {
+                    steps.held.insert(key);
+                    lease.push(item_id);
+                }
+                crate::claims::Claim::Theirs { owner, result } => {
+                    if self.trace_on {
+                        crate::errln!(
+                            "[trace]  {:>8.1}ms  {} waits for run {owner}, which is computing it",
+                            self.trace_start.elapsed().as_secs_f64() * 1000.0,
+                            key.0
+                        );
+                    }
+                    let tx = self.event_tx.clone();
+                    let task = tokio::spawn(async move {
+                        let artifact = crate::claims::settled(result).await;
+                        let _ = tx.send(IoEvent::Settled { item_id, artifact }).await;
+                    });
+                    steps.awaiting.insert(item_id, task);
+                }
+            }
+        }
+        lease
+    }
+
+    /// `item_id` finished on one of this run's workers: the runs waiting on its claim get
+    /// `artifact`.
+    fn finish_claim(&mut self, coord: &Coordinator, item_id: ItemId, artifact: &serde_json::Value) {
+        let Some(steps) = self.steps.as_mut() else {
+            return;
+        };
+        let Some(key) = share_key(coord.item(item_id)) else {
+            return;
+        };
+        if steps.held.remove(&key) {
+            let mut artifact = artifact.clone();
+            // This run's own upload copy, removed once uploaded: not the waiters' to read.
+            if let Some(map) = artifact.as_object_mut() {
+                map.remove("upload_snapshot");
+            }
+            steps.shared.finish(&steps.run_id, &key, artifact);
+        }
+    }
+
+    /// Release the claims on steps no worker of this run has leased any more (they failed,
+    /// their worker died, or they went back to the queue): a run waiting on one executes it.
+    fn sync_claims(&mut self, coord: &Coordinator) {
+        let Some(steps) = self.steps.as_mut() else {
+            return;
+        };
+        if steps.held.is_empty() {
+            return;
+        }
+        let leased: std::collections::HashSet<crate::claims::StepKey> = self
+            .workers
+            .values()
+            .flat_map(|w| w.leases.iter().copied())
+            .chain(
+                self.frozen
+                    .iter()
+                    .flat_map(|f| std::iter::once(f.parent_item).chain(f.rest.iter().copied())),
+            )
+            .filter_map(|id| share_key(coord.item(id)))
+            .collect();
+        let shared = &steps.shared;
+        let run_id = &steps.run_id;
+        steps.held.retain(|key| {
+            let keep = leased.contains(key);
+            if !keep {
+                shared.release(run_id, key);
+            }
+            keep
+        });
     }
 
     /// The weight the head of the ready queue counts for against the shared capacity.
@@ -2652,6 +2846,7 @@ mod tests {
             pool_size,
             capacity: pool_size,
             shared: None,
+            shared_steps: None,
             run_id: format!("{run_id}-{}", std::process::id()),
             datadog: None,
             artifact_root: ".".to_string(),
@@ -2950,6 +3145,7 @@ mod tests {
                     pool_size: n,
                     capacity: n,
                     shared: None,
+                    shared_steps: None,
                     run_id: "test-shutdown".to_string(),
                     datadog: None,
                     artifact_root: ".".to_string(),
@@ -2976,6 +3172,7 @@ mod tests {
                 failures_survived: 0,
                 steps_dispatched: 0,
                 share: None,
+                steps: None,
             };
 
             let start = std::time::Instant::now();

@@ -280,6 +280,16 @@ systemd (`[barca] stop grace: ...`: the drain timeout plus 12 seconds, more with
 [Restarting without losing work](/deploying/#restarting-without-losing-work); for a container,
 see [Deploying](/deploying/#in-a-container).
 
+## Overlapping runs share their steps
+
+When two runs of one `barca serve` need the same asset step at the same time (same node,
+partition key and run hash), it is computed once. A scheduled tick and an API request for the
+same report, or two targets that share an upstream, wait for each other's steps instead of
+computing them twice; the run that waited reports the step `cached`. Keys the runs do not have in
+common still run concurrently. Tasks, sensors and `parallel()` branches are never shared. If the
+run computing a step fails it or is cancelled, a waiting run computes it itself (from the start).
+Details: `barca docs scheduling`, "Runs share the steps they have in common".
+
 ## Heavy rebuilds beside a frequent job
 
 Each run under `barca serve` admits its steps against its own capacity (`[execution] capacity`,

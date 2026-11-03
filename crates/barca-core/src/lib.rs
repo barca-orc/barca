@@ -7,6 +7,7 @@ pub mod batch;
 pub mod cache;
 pub mod capacity;
 pub mod changes;
+pub mod claims;
 pub mod commands;
 pub mod cone;
 pub mod config;

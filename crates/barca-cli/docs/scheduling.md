@@ -444,6 +444,27 @@ if the drain timeout had passed. This happens once per run: a run that is in fli
 killed drains in a row is recorded as interrupted, so a run that keeps its server from stopping
 cannot loop.
 
+
+### Runs share the steps they have in common
+
+Two runs of the server that need the same asset step at the same time compute it once: the same
+node, the same partition key and the same run hash (code, inputs and everything else that goes
+into it). The run that reaches the step second waits for the first and reports it `cached`, with
+the detail `computed by another run of the server at the same time`; only the run that computed
+it records a row, and its `steps_executed` counts it. Steps the runs do not have in common run
+concurrently: `barca get part --partition k=1` and `barca get part` share key 1 only.
+
+```bash
+barca get report --server   # in one terminal
+barca get report --server   # in another, meanwhile: waits for the first run's steps, all cached
+```
+
+Not shared: tasks (each `barca run` is its own invocation), sensors, `parallel()` branches, steps
+under different run hashes, and runs outside this server (a CLI run in the same project, or a
+local run against the server's ledger). When the run computing a step fails it, or is cancelled,
+or its worker dies, one waiting run computes the step itself; a cancelled run's work so far is
+lost and done again.
+
 ## Stopping the server
 
 SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way: the

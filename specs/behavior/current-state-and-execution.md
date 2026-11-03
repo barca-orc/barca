@@ -2,7 +2,11 @@
 
 ## Scope and status
 
-Specification version: 2. Status: approved product behavior, not implemented.
+Specification version: 2. Status: approved product behavior, partly implemented. Sharing
+asset computations is implemented for runs of one `barca serve` (identical requests execute
+once, differing hashes and partial key overlap stay independent, a failed owner releases one
+waiter): see [execution](execution.md#open-questions-and-gaps), which also lists what of it is
+not met (INV-CANCEL-01, durable handoff, the decide-to-lease race). The rest is not implemented.
 Scope: current selection, validation status, pending reconciliation and shared asset work.
 This records the user decisions made during the 0.33.0 audit. It does not prescribe a new
 public field, database table, persistent worker pool or transport protocol. Terms:

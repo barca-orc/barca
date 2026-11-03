@@ -525,6 +525,7 @@ async fn execute(
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
                     shared_capacity: state.capacity.clone(),
+                    shared_steps: Some(state.shared_steps.clone()),
                     batch: barca_core::batch::BatchOverride::parse(&spec.batch).unwrap_or_default(),
                 },
                 partition: spec.partition.clone(),
