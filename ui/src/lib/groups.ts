@@ -148,16 +148,6 @@ export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): num
 export function memberHealth(node: NodeState | undefined): GraphState {
   if (!node) return UNKNOWN_GRAPH_STATE
   if (node.running) return runningGraphState(node.running)
-  if (
-    node.kind !== 'asset' &&
-    node.last_materialization?.status === 'success'
-  ) {
-    return {
-      status: 'success',
-      label: 'Healthy',
-      hint: 'The latest execution succeeded.',
-    }
-  }
   return graphState(node)
 }
 

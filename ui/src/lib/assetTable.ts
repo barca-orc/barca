@@ -81,7 +81,10 @@ export function severityOf(node: NodeState): Severity {
     // Keys waiting on failed upstream keys: as urgent as a stale node, and said in the label.
     .with('blocked', (): Severity => 'stale')
     .with('unknown', (): Severity => 'unknown')
-    .with('always_runs', (): Severity => 'always_runs')
+    // Tasks and sensors keep no cache: their last execution is their state, as everywhere else
+    // (group and chain health count a task that succeeded as healthy).
+    .with('always_runs', (): Severity =>
+      node.last_materialization?.status === 'success' ? 'cached' : node.last_materialization ? 'always_runs' : 'never_run')
     .exhaustive()
 }
 
@@ -102,8 +105,8 @@ export function severityStatus(severity: Severity): StatusKind {
   return match(severity)
     .with('failed', (): StatusKind => 'failed')
     .with('stale', 'partial', 'unsynced', (): StatusKind => 'warning')
-    .with('never_run', (): StatusKind => 'queued')
-    .with('unknown', 'always_runs', (): StatusKind => 'skipped')
+    // Grey for every state with nothing wrong and nothing to show: the queued color is a run's.
+    .with('never_run', 'unknown', 'always_runs', (): StatusKind => 'skipped')
     .with('cached', (): StatusKind => 'success')
     .exhaustive()
 }
@@ -135,7 +138,8 @@ function staleReason(reason: CacheStatus['reason']): string {
     .exhaustive()
 }
 
-function cacheLabel(node: NodeState): string {
+function cacheLabel(node: NodeState, severity: Severity): string {
+  if (node.cache.state === 'always_runs') return severity === 'cached' ? 'Healthy' : severity === 'never_run' ? 'Not run' : 'Always runs'
   return match(node.cache.state)
     .with('cached', () => 'Healthy')
     .with('unsynced', () => `Unsynced · ${staleReason(node.cache.reason)}`)
@@ -152,7 +156,6 @@ function cacheLabel(node: NodeState): string {
         : 'Blocked · upstream failed',
     )
     .with('unknown', () => 'Unknown')
-    .with('always_runs', () => 'Always runs')
     .exhaustive()
 }
 
@@ -188,7 +191,7 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
   return nodes
     .map((n): AssetRow => {
       const severity = severityOf(n)
-      const label = cacheLabel(n)
+      const label = cacheLabel(n, severity)
       const last = n.last_materialization
       return {
         id: n.id,

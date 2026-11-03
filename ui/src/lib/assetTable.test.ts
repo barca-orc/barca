@@ -70,7 +70,10 @@ describe('severityOf', () => {
     expect(severityOf(node({ id: 'a', cache: cache('unknown', 'partitions_unknown') }))).toBe(
       'unknown',
     )
-    expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task') }))).toBe('always_runs')
+    // A task or sensor is what its last execution was.
+    expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task') }))).toBe('never_run')
+    expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task'), last_materialization: { ...failedAttempt, status: 'success', error: null } }))).toBe('cached')
+    expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task'), last_materialization: { ...failedAttempt, status: 'cancelled', error: null } }))).toBe('always_runs')
     expect(severityOf(node({ id: 'a', cache: cache('unsynced', 'local_only') }))).toBe('unsynced')
     expect(severityOf(node({ id: 'a', cache: cache('blocked', 'upstream_failed') }))).toBe('stale')
   })

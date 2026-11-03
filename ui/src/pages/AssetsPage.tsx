@@ -308,7 +308,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
         ) : visible.length === 0 ? (
           <p className="barca-table-empty">{onDefault ? 'Nothing needs attention, and nothing ran in the last 24h.' : 'Nothing matches.'}</p>
         ) : (
-          <table className="barca-table">
+          <table className="barca-table barca-asset-table">
             <thead>
               <tr>
                 <SortHeader label="Name" column="name" sort={sort} onSort={onSort} />

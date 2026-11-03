@@ -28,7 +28,7 @@ export function graphState(node: NodeState): GraphState {
     }))
     .with('never_run', () => ({ status: 'skipped' as const, label: 'Not run' }))
     .with('always_runs', () => ({ status: 'skipped' as const, label: 'Always runs' }))
-    .with('unknown', () => ({ status: 'skipped' as const, label: 'State unknown' }))
+    .with('unknown', () => ({ status: 'skipped' as const, label: 'Unknown' }))
     .exhaustive()
   return { ...state, hint: state.status === 'failed' ? node.last_materialization?.error ?? state.label : node.cache.detail }
 }

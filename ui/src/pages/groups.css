@@ -103,7 +103,7 @@
   font-size: var(--text-xs);
 }
 /* Port names are identifiers. */
-.barca-port-node { font-family: var(--font-mono); }
+.barca-port-node { font-family: var(--font-name); }
 .barca-group-node-title {
   display: flex;
   align-items: center;
@@ -168,7 +168,7 @@
   text-overflow: ellipsis;
 }
 .barca-group-row-name strong {
-  font-family: var(--font-mono);
+  font-family: var(--font-name);
   font-weight: 500;
 }
 .barca-group-row-name > svg {

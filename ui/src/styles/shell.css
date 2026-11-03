@@ -433,13 +433,12 @@
   white-space: nowrap;
 }
 /* Compact density: 44px rows, so a 1440×900 screen shows 16 of them. What a cell shows is
-   a row of parts (the name then its file, the status then its error), each on one line; a
-   part goes under the one before it only when the column is short of room, and two lines
-   still fit the 44px. Headers never wrap: a table beside a wide panel scrolls sideways. */
+   its parts stacked (the name over its file, the status over its error), the same in every
+   row whatever the column's width; two lines fit the 44px. Headers never wrap. */
 .barca-table td { height: 44px; padding: 0 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
-.barca-table td > div { display: inline-block; vertical-align: middle; white-space: nowrap; }
-.barca-table td > :not(:last-child) { margin-right: 8px; }
-.barca-table .barca-cell-name { display: inline-flex; }
+.barca-table td > div { display: block; white-space: nowrap; }
+.barca-table .barca-cell-name { display: flex; }
+.barca-table td > .barca-cell-name + .barca-cell-sub { margin-top: 1px; }
 .barca-table tbody tr { cursor: pointer; }
 .barca-table tbody tr:hover, .barca-table tbody tr:focus-visible { background: var(--bg-hover); outline: none; }
 /* The space of the rows a long table leaves out (components/TableWindow.tsx). */
@@ -449,10 +448,11 @@
 .barca-cell-name { display: flex; align-items: center; gap: 8px; max-width: 340px; }
 /* Identifiers (a node, a file, a key, a run id, a target, an error) are mono wherever they
    are, on the same scale as the text around them; prose stays sans. */
-.barca-cell-name .name { min-width: 0; font-family: var(--font-mono); color: var(--text-strong); }
-.barca-table code, .barca-sidepanel-title h2, .barca-pipe-name { font-family: var(--font-mono); }
+.barca-cell-name .name { min-width: 0; font-family: var(--font-name); color: var(--text-strong); }
+.barca-table code { font-family: var(--font-mono); }
+.barca-sidepanel-title h2, .barca-pipe-name { font-family: var(--font-name); }
 .barca-table code { font-size: inherit; }
-.barca-cell-name + .barca-cell-sub, .barca-group-row-name + .barca-cell-sub { font-family: var(--font-mono); }
+.barca-cell-name + .barca-cell-sub, .barca-group-row-name + .barca-cell-sub { font-family: var(--font-name); }
 /* A name that does not fit loses its head, not its tail, which is what tells rows apart. It
    stays one text node (copy and a screen reader get it whole): the box is laid out
    right-to-left so the ellipsis lands at the start, and a left-to-right mark on each side keeps
@@ -460,7 +460,7 @@
 .barca-mid { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .barca-mid::before, .barca-mid::after { content: '\200E' / ''; }
 .barca-cell-sub { font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
-.barca-table td > .barca-cell-sub { margin-top: 0; }
+.barca-table td > .barca-cell-sub { margin-top: 0; overflow: hidden; text-overflow: ellipsis; }
 .barca-cell-failed { color: var(--status-failed); }
 .barca-cell-error { max-width: 420px; }
 /* ErrorLine: one line of headline, the most important text on a failed row, so never the
@@ -510,7 +510,13 @@
 
 /* assets: table + node panel */
 .barca-assets-split { display: flex; flex: 1; min-height: 0; }
-.barca-assets-split > .barca-view-body { flex: 1; min-width: 0; }
+.barca-assets-split > .barca-view-body { flex: 1; min-width: 0; container-type: inline-size; }
+/* Beside the node panel the table keeps name, state and last run at full width and leaves
+   out the rest (the panel says them), instead of squeezing every column. */
+@container (max-width: 860px) {
+  .barca-asset-table th:nth-child(n+4), .barca-asset-table td:nth-child(n+4) { display: none; }
+  .barca-asset-table .barca-cell-error { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+}
 .barca-table tbody tr[aria-selected="true"] { background: var(--bg-hover); box-shadow: inset 2px 0 0 var(--signal); }
 .barca-error {
   margin: 6px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto;
@@ -653,11 +659,11 @@
 .barca-why-head { display: flex; align-items: flex-start; gap: 8px; color: var(--status-failed); }
 .barca-why-head svg { flex: none; margin-top: 2px; }
 .barca-why-head > .barca-error-line { flex: 1; }
-.barca-why-head strong { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 500; color: var(--text-strong); overflow-wrap: anywhere; }
+.barca-why-head strong { font-family: var(--font-name); font-size: var(--text-sm); font-weight: 500; color: var(--text-strong); overflow-wrap: anywhere; }
 .barca-why .barca-note { margin: 6px 0 0 22px; }
 .barca-why-list { list-style: none; margin: 6px 0 0 22px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .barca-why-list li { display: flex; flex-direction: column; font-size: var(--text-xs); }
-.barca-why-list li span { color: var(--text-muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.barca-why-list li span { color: var(--text-muted); font-family: var(--font-name); overflow-wrap: anywhere; }
 .barca-keys summary { cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); margin: 4px 0; }
 .barca-keys code { display: block; max-height: 160px; overflow: auto; white-space: pre; font-size: var(--text-2xs); }
 .barca-sidepanel-title h2 { overflow-wrap: normal; word-break: normal; }
