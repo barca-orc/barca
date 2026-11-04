@@ -81,14 +81,14 @@
   --bg-raised:    var(--c-ink-700);
   --bg-overlay:   var(--c-ink-600);
   --bg-inset:     var(--c-ink-850);
-  --bg-hover:     rgba(255, 255, 255, 0.035);
-  --bg-active:    rgba(255, 255, 255, 0.06);
+  --bg-hover:     rgba(255, 255, 255, 0.06);
+  --bg-active:    rgba(255, 255, 255, 0.10);
   --bg-selected:  var(--c-white-wash);
 
   /* Borders / hairlines */
   --border-subtle:  #161B18;
-  --border-default: #232B26;
-  --border-strong:  #313B34;
+  --border-default: #2C3530;
+  --border-strong:  #4A5650;
   --border-accent:  var(--c-white-line);
 
   /* Text */
@@ -138,4 +138,5 @@
   --graph-grid:  rgba(233, 241, 236, 0.08);   /* the dot grid behind the DAG */
   --graph-mask:  rgba(8, 11, 10, 0.72);      /* what the minimap dims outside the viewport */
   --glow-running: 0 0 14px -5px rgba(54, 203, 211, 0.6);  /* a running node's halo */
+
 }

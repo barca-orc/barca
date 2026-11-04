@@ -47,6 +47,8 @@
   --font-eyebrow:  var(--font-sans);
   --font-metric:   var(--font-sans);
   --font-code:     var(--font-mono);
+  /* Node, file and chain names: identifiers people scan, so the sans. Code and logs keep the mono. */
+  --font-name:     var(--font-sans);
   --font-heading:  var(--font-display);
   --font-body:     var(--font-sans);
 }

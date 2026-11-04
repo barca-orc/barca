@@ -116,6 +116,8 @@ export const nodeBySeverity = {
   always_runs: node('daily_report', {
     kind: 'task',
     cache: { state: 'always_runs', reason: 'task', detail: 'a task runs every time' },
+    // A task's state is its last execution: only one that neither succeeded nor failed stays "always runs".
+    last_materialization: materialized({ status: 'cancelled', artifact: null, format: null }),
   }),
   unsynced: node('product_catalog', {
     cache: { state: 'unsynced', reason: 'local_only', detail: 'cached here, not uploaded to the store yet' },

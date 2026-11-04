@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- UI: one state vocabulary everywhere. A task or sensor shows its last execution (Healthy, Failed, Not run) in tables, as group health already did; Not run, Unknown and Always runs are grey wherever they appear, leaving the queued colour to queued run work; "State unknown" is "Unknown". Node, file and group names use the sans-serif instead of monospace, dark-theme borders and hover/selection backgrounds have more contrast, and table rows stack a name over its file at any width, with the table beside the node panel leaving out last success, typical and next run instead of squeezing every column.
+
 ## 0.39.4 (2026-11-03)
 
 ### Features
