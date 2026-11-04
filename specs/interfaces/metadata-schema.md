@@ -79,6 +79,14 @@ migrated instead of the original. Read-only connections can create `-wal` and `-
 beside the database; an empty
 log holds nothing and is not a change.
 
+Readers in place depend on SQLite's own locks, which are POSIX record locks: each connection
+holds a shared lock on the database file while it is open, and a connection that closes and
+finds no other lock checkpoints without regard to readers and deletes the log and its index.
+A process loses every such lock on a file when it closes any descriptor of that file, so no
+barca process opens and closes the database file outside SQLite. Its own reads of the file (the
+header check before every open, the metadata backup's digest and copy, a private copy) go
+through one descriptor per file that stays open for the life of the process.
+
 ## Backups, restore and older binaries
 
 The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).

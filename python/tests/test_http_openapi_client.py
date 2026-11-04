@@ -15,14 +15,15 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-import jsonschema
 import pytest
-import yaml
 from barca.api import BarcaError, _find_binary
 from barca.client import Client
 
 from .test_serve_load_isolation import BROKEN, PIPELINE
 from .test_serve_robustness import Server
+
+jsonschema = pytest.importorskip("jsonschema")
+yaml = pytest.importorskip("yaml")
 
 SPEC = yaml.safe_load(
     (Path(__file__).parents[2] / "specs/interfaces/server-api.openapi.yaml").read_text()

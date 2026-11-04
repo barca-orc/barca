@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Regenerate the TypeScript bindings in ui/src/lib/generated/ from the Rust
 # API-boundary types (the single source of truth). Run after changing any type
-# exposed by barca-server. CI should run this and `git diff --exit-code` to
-# catch drift.
+# exposed by barca-server. CI's merge tier runs this and `git diff --exit-code` to
+# catch drift (.depot/workflows/ci.yml, rust-tests).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -14,7 +14,8 @@ export TS_RS_EXPORT_DIR="$OUT"
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-core --features ts export_bindings
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-server --features ts export_bindings
 
-# Note: ts-rs leaves some trailing whitespace; the repo's pre-commit hook strips
-# it on commit, so committed bindings stay clean. CI drift checks should run the
-# same whitespace hook before `git diff --exit-code`.
+# ts-rs leaves trailing whitespace, which the repo's trailing-whitespace hook strips
+# from committed files: strip it here, so the output is what is committed and CI's
+# `git diff --exit-code` compares like with like.
+sed -i.bak 's/[[:space:]]*$//' "$OUT"/*.ts && rm -f "$OUT"/*.ts.bak
 echo "regenerated TS bindings → $OUT"

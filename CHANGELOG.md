@@ -8,6 +8,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- UI: one state vocabulary everywhere. A task or sensor shows its last execution (Healthy, Failed, Not run) in tables, as group health already did; Not run, Unknown and Always runs are grey wherever they appear, leaving the queued colour to queued run work; "State unknown" is "Unknown". Node, file and group names use the sans-serif instead of monospace, dark-theme borders and hover/selection backgrounds have more contrast, and table rows stack a name over its file at any width, with the table beside the node panel leaving out last success, typical and next run instead of squeezing every column.
+- A `--read-only` server reading beside a writer no longer loses reads to `database disk image is malformed` (a cache lookup counted as a miss, a failed request). Its check of the database file's header closed a descriptor of the file, which drops every SQLite lock the process holds on it, so a writer in another process closing its last connection took the database as its alone: it checkpointed past the reader's snapshot and deleted the write-ahead log under the reader's queries. barca now reads the database file only through a descriptor it keeps open, as SQLite does. The same applied to a `barca serve` process's own reads during its metadata backups.
+
 ### Performance
 
 - A run that executes a step writes its cost estimates in the ledger's transaction instead of a second one: one commit (a sync of the metadata log) fewer, about 0.7 ms of the one-asset pipeline's 38 ms on the benchmark machine (`benchmarks/RESULTS.md`, 2026-11-04).
@@ -16,13 +21,6 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Measured 0.39.4 on the trivial pipeline: 31.7 ms from process start to exit (`benchmarks/trivial/bench.sh`: 42-43 ms, with its shell wrapper), against 26.3 ms for 0.1.5 and 60.3 ms for 0.28.0 on the same machine. The README and the framework comparison now give this number instead of 0.28's; `benchmarks/RESULTS.md` attributes the time per phase, and the manual gives the measured cost of sorting a streamed partition (about twice the unsorted write).
 - CI's merge tier runs the performance budgets (`scripts/perf-gate.py`: the trivial pipeline's wall time, coordinator CPU and memory, and the `incremental_dag` coordinator budgets), so a regression fails the merge queue (`specs/behavior/performance.md`, "Gates").
-
-### Bug Fixes
-
-- UI: one state vocabulary everywhere. A task or sensor shows its last execution (Healthy, Failed, Not run) in tables, as group health already did; Not run, Unknown and Always runs are grey wherever they appear, leaving the queued colour to queued run work; "State unknown" is "Unknown". Node, file and group names use the sans-serif instead of monospace, dark-theme borders and hover/selection backgrounds have more contrast, and table rows stack a name over its file at any width, with the table beside the node panel leaving out last success, typical and next run instead of squeezing every column.
-
-### Documentation
-
 - The deprecated HTTP aliases (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `GET /events/{run_id}`) and `barca.Client` have one stated lifetime everywhere, the manual, the CLI contract, the OpenAPI spec and `Client`'s `DeprecationWarning`: no scheduled removal; a removal migrates `Client` first and lands as a breaking change in a minor release.
 - CLI contract: `partitions.failed` and `batch_execution` are marked new in 0.38.0 instead of "the next release"; a stale note promising a change to the `run failed:` line (shipped in 0.24.0) is gone; `steps_page.nodes[].status` and `blocked_by` (from `history RUN_ID` with a server) are listed as experimental, and `failing_since`, `consecutive_failures`, `steps_failed` and `first_failure` as HTTP-only.
 - `BARCA_TRANSFER_RETRIES` is documented, and the configuration page now lists `BARCA_LOG`, `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL`, `BARCA_TRACE_LIBRARIES` and `BARCA_SERVER_TOKEN`. A test keeps every `BARCA_*` variable in the source documented in the CLI contract or named as internal.

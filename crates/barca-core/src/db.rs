@@ -563,8 +563,17 @@ pub(crate) async fn copy_for_backup(
     until.check()?;
     let tracing = std::env::var_os("BARCA_TRACE_TIMING").is_some();
     let hashing = Instant::now();
-    let digest = file_sha256(Path::new(db_path))
-        .map_err(|e| BarcaError::Db(format!("failed to read {db_path} for a backup: {e}")))?;
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        // Through the held file: closing a descriptor of the database drops this process's
+        // locks on it ([`HELD_FILES`]).
+        read_held(Path::new(db_path), |chunk| {
+            hasher.update(chunk);
+            Ok(())
+        })?;
+        format!("{:x}", hasher.finalize())
+    };
     let bytes = tracing.then(|| fs::metadata(db_path).map(|m| m.len()).unwrap_or(0));
     if let Some(bytes) = bytes {
         crate::errln!(
@@ -590,6 +599,87 @@ pub(crate) async fn copy_for_backup(
     copied.map(|()| Some(digest))
 }
 
+/// Database files this process opened itself, outside SQLite, by device and inode. None is
+/// ever closed while a path still names it.
+///
+/// SQLite's locks on a database are POSIX record locks, and a process loses every lock it
+/// holds on a file, from every connection, as soon as it closes any descriptor of that file.
+/// In WAL mode each connection keeps a shared lock on the database file for as long as it is
+/// open, and a connection that closes and finds no other lock takes the database for its own:
+/// it checkpoints without asking the readers, then deletes the log and its index under them.
+/// So a header check that opened and closed the file let a writer in another process do that
+/// under a `--read-only` server's queries, which then read `database disk image is malformed`.
+/// SQLite keeps its own descriptors open for the same reason; barca reads a database file only
+/// through these.
+static HELD_FILES: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<FileId, std::sync::Arc<fs::File>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// A file's device and inode.
+type FileId = (u64, u64);
+
+/// The database file at `path`, opened once and kept open ([`HELD_FILES`]). Read it with
+/// positional reads (`FileExt::read_at`): the descriptor is shared.
+pub(crate) fn held_file(path: &Path) -> std::io::Result<std::sync::Arc<fs::File>> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(path)?;
+    let mut held = HELD_FILES.lock().unwrap();
+    if let Some(file) = held.get(&(meta.dev(), meta.ino())) {
+        return Ok(file.clone());
+    }
+    // A file no path names any more (a snapshot's copy, a database replaced by a restore)
+    // can be let go: no connection opened from now on can reach it.
+    held.retain(|_, file| file.metadata().is_ok_and(|m| m.nlink() > 0));
+    let file = fs::File::open(path)?;
+    let opened = file.metadata()?;
+    let key = (opened.dev(), opened.ino());
+    if let Some(existing) = held.get(&key) {
+        // Replaced and put back between the two looks: keep the first, and never close this.
+        std::mem::forget(file);
+        return Ok(existing.clone());
+    }
+    let file = std::sync::Arc::new(file);
+    held.insert(key, file.clone());
+    Ok(file)
+}
+
+/// Each chunk of the database file at `path`, in order, read through [`held_file`].
+fn read_held(
+    path: &Path,
+    mut each: impl FnMut(&[u8]) -> Result<(), BarcaError>,
+) -> Result<(), BarcaError> {
+    use std::os::unix::fs::FileExt;
+    let failed =
+        |e: std::io::Error| BarcaError::Db(format!("failed to read {}: {e}", path.display()));
+    let file = held_file(path).map_err(failed)?;
+    let mut buf = vec![0u8; 1 << 16];
+    let mut offset = 0u64;
+    loop {
+        let n = file.read_at(&mut buf, offset).map_err(failed)?;
+        if n == 0 {
+            return Ok(());
+        }
+        each(&buf[..n])?;
+        offset += n as u64;
+    }
+}
+
+/// Copy the database file at `path` to a new file `target`, through [`held_file`].
+fn copy_held(path: &Path, target: &Path) -> Result<(), BarcaError> {
+    use std::io::Write;
+    let failed = |e: std::io::Error| {
+        BarcaError::Db(format!(
+            "failed to copy {} to {}: {e}",
+            path.display(),
+            target.display()
+        ))
+    };
+    let mut out = fs::File::create(target).map_err(failed)?;
+    out.set_permissions(fs::metadata(path).map_err(failed)?.permissions())
+        .map_err(failed)?;
+    read_held(path, |chunk| out.write_all(chunk).map_err(failed))
+}
+
 /// The SHA-256 of the file at `path`, as lowercase hex.
 pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
@@ -612,25 +702,30 @@ async fn copy_snapshot_bytes(
     target_path: &Path,
     until: crate::helper_proc::Until<'_>,
 ) -> Result<(), BarcaError> {
-    use std::io::{Read, Write};
+    use std::io::Write;
+    use std::os::unix::fs::FileExt;
     let failed = |e| {
         BarcaError::Db(format!(
             "failed to copy {db_path} to {} for a backup: {e}",
             target_path.display(),
         ))
     };
-    let mut source = fs::File::open(db_path).map_err(failed)?;
+    // Through the held file: closing a descriptor of the database drops this process's locks
+    // on it ([`HELD_FILES`]).
+    let source = held_file(Path::new(db_path)).map_err(failed)?;
     let mut target = fs::File::create(target_path).map_err(failed)?;
     target
         .set_permissions(source.metadata().map_err(failed)?.permissions())
         .map_err(failed)?;
     let mut bytes = [0u8; 64 * 1024];
+    let mut offset = 0u64;
     loop {
         until.check()?;
-        let count = source.read(&mut bytes).map_err(failed)?;
+        let count = source.read_at(&mut bytes, offset).map_err(failed)?;
         if count == 0 {
             break;
         }
+        offset += count as u64;
         target.write_all(&bytes[..count]).map_err(failed)?;
         // No background filesystem worker may outlive the lock or partial-copy cleanup.
         tokio::task::yield_now().await;
@@ -672,17 +767,19 @@ pub(crate) async fn fold_log(db_path: &str) -> Result<(), BarcaError> {
 /// for a file that looks like a database, and for an empty one (a database not yet
 /// checkpointed has an empty main file). A file that cannot be read is not judged here.
 pub(crate) fn not_a_database(path: &str) -> Option<String> {
-    use std::io::Read;
+    use std::os::unix::fs::FileExt;
     let len = fs::metadata(path).ok()?.len();
     if len == 0 {
         return None;
     }
     let mut header = [0u8; 100];
-    let mut file = fs::File::open(path).ok()?;
+    // Through the held file: opening and closing the database here would drop every lock this
+    // process's connections hold on it ([`HELD_FILES`]).
+    let file = held_file(Path::new(path)).ok()?;
     if len < header.len() as u64 {
         return Some(format!("{len} bytes: too short to be a database"));
     }
-    file.read_exact(&mut header).ok()?;
+    file.read_exact_at(&mut header, 0).ok()?;
     if &header[..16] != b"SQLite format 3\0" {
         return Some("it does not start with a SQLite header".to_string());
     }
@@ -1776,7 +1873,9 @@ impl DbSnapshot {
             let dir = tempfile::tempdir()
                 .map_err(|e| BarcaError::Db(format!("failed to create snapshot dir: {e}")))?;
             let copy = dir.path().join("metadata.db");
-            fs::copy(&db_path, &copy)
+            // Not `fs::copy`: closing a descriptor of the database drops this process's locks
+            // on it ([`HELD_FILES`]).
+            copy_held(Path::new(&db_path), &copy)
                 .map_err(|e| BarcaError::Db(format!("failed to snapshot DB: {e}")))?;
             let wal = format!("{db_path}-wal");
             if Path::new(&wal).exists() {
@@ -7366,6 +7465,67 @@ mod read_view_tests {
         }
         reads.await.unwrap();
         assert_eq!(get_recent_runs(view.path(), 1000).await.unwrap().len(), 100);
+    }
+
+    /// Every connection holds a shared lock on the database file, and a writer that finds none
+    /// but its own when it closes takes the database as its alone: it checkpoints without
+    /// asking the readers, deletes the log and its index, and a reader still in the middle of a
+    /// query reads pages overwritten under it (`database disk image is malformed`, seen on a
+    /// `--read-only` server beside a writer's `VACUUM`). The locks are POSIX locks, which a
+    /// process loses, all of them, when it closes any descriptor of the file: so barca's own
+    /// look at the file (the header check every open makes) must not close one.
+    #[tokio::test]
+    async fn looking_at_the_database_file_keeps_this_process_s_locks() {
+        const WRITER: &str = crate::test_hooks::LAST_CONNECTION_WRITER;
+        if let Some(path) = crate::test_hooks::last_connection_writer() {
+            // The other process: one write, then its connection closes.
+            let path = path.to_string_lossy().into_owned();
+            create_run(&path, "theirs", "get", "[]", None, Some(1))
+                .await
+                .unwrap();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_in(&dir);
+        init_db(&path).await.unwrap();
+        create_run(&path, "ours", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        let view = ReadView::open(&path).await.unwrap().unwrap();
+        let (_db, reader) = open_conn(view.path()).await.unwrap();
+        let mut rows = reader.query("SELECT count(*) FROM runs", ()).await.unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            1
+        );
+        drop(rows);
+        // What every request of a read-only server does while others read: open a view, and
+        // with it look at the file.
+        let _second = ReadView::open(&path).await.unwrap().unwrap();
+        assert!(unusable_file(&path).is_none());
+        let mut writer = std::process::Command::new(std::env::current_exe().unwrap());
+        writer
+            .args([
+                "--exact",
+                "db::read_view_tests::looking_at_the_database_file_keeps_this_process_s_locks",
+                "--nocapture",
+            ])
+            .env(WRITER, &path);
+        let output = crate::helper_proc::output_std(&mut writer).unwrap();
+        assert!(
+            output.status.success(),
+            "the writer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            Path::new(&format!("{path}-wal")).exists(),
+            "the writer took itself for the last connection and deleted the log under a reader"
+        );
+        let mut rows = reader.query("SELECT count(*) FROM runs", ()).await.unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            2
+        );
     }
 
     #[tokio::test]

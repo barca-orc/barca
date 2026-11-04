@@ -7,9 +7,10 @@ via the Python API to ensure barca.get/plan return correct values.
 import textwrap
 
 import barca
-import pandas as pd
 import pytest
 from barca.api import BarcaError
+
+pd = pytest.importorskip("pandas")
 
 
 @pytest.fixture(autouse=True)

@@ -8,10 +8,11 @@ import json
 import pickle
 from decimal import Decimal
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from barca import _inspect, _storage
+
+pa = pytest.importorskip("pyarrow")
+pq = pytest.importorskip("pyarrow.parquet")
 
 
 @pytest.mark.parametrize(

@@ -70,7 +70,11 @@ def _reachable(endpoint: str) -> bool:
 
 
 BARCA = _barca_bin()
-pytestmark = pytest.mark.skipif(BARCA is None, reason="barca binary not installed")
+# A fetch through connection resets took 43 s on Azurite; on a busy CI shard, longer.
+pytestmark = [
+    pytest.mark.timeout(300),
+    pytest.mark.skipif(BARCA is None, reason="barca binary not installed"),
+]
 
 
 # ─── Fault-injecting TCP proxy ───────────────────────────────────────────────

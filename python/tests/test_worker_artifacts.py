@@ -8,12 +8,12 @@ and resolve upstream artifact references as inputs.
 import textwrap
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from barca import _storage
 from barca._artifacts import deserialize
 
+pd = pytest.importorskip("pandas")
 from .daemon_steps import run_steps
 
 

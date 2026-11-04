@@ -48,8 +48,8 @@ The domain lives in Rust; the frontend's business logic is deliberately thin.
 `#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]`, then run
 `pnpm gen:types` (which runs `cargo test --features ts export_bindings` with the
 output dir set to `lib/generated/`). The `ts` feature is off by default, so
-`ts-rs` stays out of the production binary. CI should run `pnpm gen:types` then
-`git diff --exit-code lib/generated` to make drift a failing build.
+`ts-rs` stays out of the production binary. CI's merge tier runs it and then
+`git diff --exit-code` on `lib/generated`, so drift fails the build.
 
 ### 2. Presentation logic — pure & tested
 

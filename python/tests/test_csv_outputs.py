@@ -6,16 +6,16 @@ import os
 import subprocess
 from pathlib import Path
 
-import duckdb
-import pandas as pd
-import polars as pl
-import pyarrow as pa
 import pytest
 from barca import _inspect, _sinks, _storage
 from barca._artifacts import deserialize, serialize_hashed
 from barca._worker import _write_sinks
 from barca.api import _find_binary
 
+duckdb = pytest.importorskip("duckdb")
+pd = pytest.importorskip("pandas")
+pl = pytest.importorskip("polars")
+pa = pytest.importorskip("pyarrow")
 from .daemon_steps import run_steps
 
 

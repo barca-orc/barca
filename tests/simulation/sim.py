@@ -664,7 +664,9 @@ class Sim:
             raise Violation(f"the reader lost {lost} cache lookups; see {self.reader.log}")
 
     def failed_lookups(self) -> int:
-        """Reads a `--read-only` server lost to the writer's `VACUUM`: known, and not yet explained."""
+        """Reads a `--read-only` server lost to the writer: a cache lookup the database could not
+        answer. `database disk image is malformed` here was barca dropping its own SQLite locks
+        (`HELD_FILES` in crates/barca-core/src/db.rs)."""
         return self.reader.log.read_text(errors="replace").count("cache lookup of")
 
     def close(self) -> None:

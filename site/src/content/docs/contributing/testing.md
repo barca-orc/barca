@@ -44,6 +44,14 @@ pytest python/tests/test_sql.py -q        # one file
 Most tests in `python/tests/` create a temporary project with decorated functions, run the
 real `barca` binary on it, and check the output, exit code and files.
 
+Each test has a timeout (pytest-timeout, from the `test` extra): 120 s by default (`timeout` in
+`[tool.pytest.ini_options]` in `pyproject.toml`), 300 s in the files whose tests are known to
+take longer (`test_minute_checkpoints.py`, `test_remote_faults.py`, `test_simulation.py`, with a
+module-level `pytest.mark.timeout(300)`). A test past its timeout fails with the stacks of its
+threads, so a hang costs minutes instead of the CI job's own limit. A test that needs optional packages (pandas, pyarrow, duckdb,
+jsonschema) skips without them through `pytest.importorskip`, so the suite collects without
+the `test` extra.
+
 barca prints through `barca_core::outln!` and `errln!`, which do not panic when the reader of
 stdout or stderr has gone; clippy denies `println!` and `eprintln!` in the three crates.
 Workers do not hold barca's stderr when it is a pipe: they write to a pipe barca reads and
@@ -143,8 +151,11 @@ it explores real timing and does not control the scheduler, the clock or the dis
 `--sabotage` breaks what an invariant watches. `python/tests/test_simulation.py` uses it to prove
 each one can fail, and runs a short seed, in CI's full tier. `.github/workflows/simulation.yml`
 runs the long version weekly, with `--strict-reads`: a read the `--read-only` server lost to the
-writer fails it, because the cause of those is not known yet. `BARCA_TEST_CACHE_CHECKPOINT_SECS` shortens the server's one-minute
-size check for it; long waits (`STUCK_FOR`, `SURVEY_EVERY`) are skipped by rewriting
+writer fails it. Those reads (`database disk image is malformed`) came from the server's own check
+of the database file's header, which closed a descriptor of the file and so dropped the process's
+SQLite locks on it; `looking_at_the_database_file_keeps_this_process_s_locks` in
+`crates/barca-core/src/db.rs` covers it. `BARCA_TEST_CACHE_CHECKPOINT_SECS` shortens the server's
+one-minute size check for it; long waits (`STUCK_FOR`, `SURVEY_EVERY`) are skipped by rewriting
 `gc-state.json`.
 
 ## Web UI
@@ -155,7 +166,19 @@ pnpm --dir ui typecheck
 pnpm --dir ui lint
 pnpm --dir ui test       # vitest
 pnpm --dir ui build
+pnpm --dir ui gen:types  # regenerate ui/src/lib/generated from Rust; CI fails on a difference
+pnpm --dir ui test:e2e   # Playwright: ui/e2e, then ui/e2e-auth
 ```
+
+The Playwright suites start `barca serve` on their fixture project and the Vite dev server in
+front of it. They run `target-local/debug/barca` or `target/debug/barca`, or the binary in
+`BARCA_BIN` (CI sets it to the wheel's). Install the browser once with
+`pnpm --dir ui exec playwright install chromium`.
+
+In CI the Playwright step does not gate the full tier yet (`continue-on-error`). Seven specs in
+`ui/e2e` fail on `main`, listed in [#807](https://github.com/barca-orc/barca/issues/807), and
+`ui/e2e-auth` runs only after `ui/e2e` passes. The step's result and the uploaded traces
+(`playwright-results`) still show every failure. It gates again when #807 closes.
 
 ## Manual, help and contract tests
 
@@ -202,11 +225,12 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes | yes |
 | **changes**: the tier and its optional parts; every test file is in exactly one shard (`scripts/ci-shards.py --check`) and every file in `scripts/fast-tests.txt` exists | backends | yes | yes | yes |
 | **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes | yes |
+| **rust-tests**, generated types: `ui/scripts/regen-types.sh` (what `pnpm gen:types` runs), then `git diff --exit-code` on `ui/src/lib/generated`, so the UI's wire types cannot drift from Rust | test | | yes | yes |
 | **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes | yes |
 | **python (fast)**: the quick subset in `scripts/fast-tests.txt`, about 20 s of tests | backends | | yes | |
 | **perf**: the performance budgets, `scripts/perf-gate.py` against that wheel (see below) | test | | yes | yes |
 | **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | | yes |
-| **ui**: the web UI's typecheck, lint and unit tests | backends | | | yes |
+| **ui**: the web UI's typecheck, lint and unit tests, then the Playwright suites in `ui/e2e` and `ui/e2e-auth` against that wheel (not gating yet, see below) | backends | | | yes |
 | **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | | yes |
 | **python (1/3 .. 3/3, duckdb 1.x)**: the whole Python suite in shards, with the emulators, the duckdb 1.x rerun and the minute checkpoint test | backends | | | yes |
 

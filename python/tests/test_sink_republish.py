@@ -15,9 +15,10 @@ import subprocess
 from contextlib import closing
 from pathlib import Path
 
-import duckdb
 import pytest
 from barca.api import _find_binary
+
+duckdb = pytest.importorskip("duckdb")
 
 
 def get(cwd: Path, target: str, check: bool = True):

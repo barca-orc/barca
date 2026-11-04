@@ -12,6 +12,9 @@ from barca.api import _find_binary
 
 SIM = Path(__file__).resolve().parents[2] / "tests/simulation/sim.py"
 
+# Each run may take up to its 180 s subprocess timeout, past the default per-test timeout.
+pytestmark = pytest.mark.timeout(300)
+
 
 def sim(tmp_path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

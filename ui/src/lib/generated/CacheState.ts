@@ -2,5 +2,10 @@
 
 /**
  * A node's cache state (`barca docs status`, the state table).
+ *
+ * Producers set a variant; [`FromStr`](std::str::FromStr) (`--state`, `?state=`) is strict.
+ * Decoding JSON is lenient: a state this build does not know (a newer server's, the contract
+ * adds enum values) decodes as [`CacheState::Unknown`], "cannot say what `get` would do",
+ * and its `reason` and `detail` still say why.
  */
 export type CacheState = "cached" | "unsynced" | "stale" | "never_run" | "partial" | "blocked" | "unknown" | "always_runs";
