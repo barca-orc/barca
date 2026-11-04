@@ -102,7 +102,9 @@ the first run.
 
 ## How it works
 
-The binary parses your Python source and does not import it, so decorators and `inputs=` have
-to be written literally. An asset is cached by run hash, which covers its code and its inputs,
+The binary reads your Python source statically, so decorators and `inputs=` have to be written
+literally; only a nonliteral `partitions(...)` or `batches(...)` expression and a `batches_by`
+function are evaluated in a resolver subprocess that imports the module. An asset is cached by
+run hash, which covers its code and its inputs,
 not the bytes of its result. [Architecture](/architecture/#a-run) describes a run step by step,
 and [Philosophy](/philosophy/) says what each design choice costs.

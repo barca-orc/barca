@@ -55,8 +55,9 @@ Run 151401da97ef | all assets in 0.133s (2 steps, 1 phase)
   }
 ```
 
-Barca read `pipeline.py` without importing it, saw that `summary` depends on `raw_data`,
-and ran both in a Python worker process, which imports the file to call the functions. It
+Barca read `pipeline.py` statically (only a nonliteral `partitions(...)` or `batches(...)`
+expression and a `batches_by` function are evaluated, in a resolver subprocess that imports the
+module), saw that `summary` depends on `raw_data`, and ran both in a Python worker process, which imports the file to call the functions. It
 then printed where the last asset's result is, with a preview of the
 value under it when the value is small json. The `[barca]` lines are progress, on stderr. The
 rest is the result, on stdout. File names are shortened here; barca prints the whole run hash.

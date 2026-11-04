@@ -16,11 +16,12 @@ file can be imported, called and tested without barca.
 Cost: barca knows only what the decorators declare. A dependency that is not in `inputs=` is
 not in the graph.
 
-## Planning reads source and does not import it
+## Planning reads source statically
 
 The binary parses your files with ruff's Python parser, so planning has no import side effects
-and does not wait for your packages to load. (The exception: a non-literal
-`partitions(<expression>)` is evaluated by Python at plan time.)
+and does not wait for your packages to load. (The exception: a nonliteral `partitions(...)` or
+`batches(...)` expression and a `batches_by` function are evaluated in a resolver subprocess that
+imports the module.)
 
 Cost: decorators, `inputs=` and `freshness=` must be written literally. `inputs` built in a
 loop is not seen. Some code changes are not seen by the cache either, a module loaded with
