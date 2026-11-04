@@ -156,30 +156,30 @@ class TestLoadCollectedArtifacts:
         assert message.count("not found") == 1
 
     def test_cache_misses_load_concurrently(self, tmp_path, monkeypatch):
-        # Each artifact's deserialize takes ~50ms. Sequential loading of 8
-        # would take ~400ms; a thread pool should collapse this toward the
-        # single-artifact cost. Generous upper bound to avoid CI flakiness
-        # while still clearly failing if concurrency regresses to sequential.
+        # The loads must overlap. Every deserialize waits at a barrier for the others, so a
+        # concurrent loader passes it as soon as all are started, whatever the machine's load,
+        # and a sequential one never fills it: the first load times out and breaks it.
+        import threading
+
         import barca._worker as worker_mod
 
         real_deserialize = worker_mod.deserialize
+        n = 8
+        barrier = threading.Barrier(min(n, worker_mod._COLLECT_IO_MAX_WORKERS), timeout=30)
 
-        def _slow_deserialize(path, fmt, **kwargs):
-            time.sleep(0.05)
+        def _rendezvous_deserialize(path, fmt, **kwargs):
+            barrier.wait()
             return real_deserialize(path, fmt, **kwargs)
 
-        monkeypatch.setattr(worker_mod, "deserialize", _slow_deserialize)
+        monkeypatch.setattr(worker_mod, "deserialize", _rendezvous_deserialize)
 
-        artifacts = self._write_artifacts(tmp_path, [{"n": i} for i in range(8)])
-        t0 = time.perf_counter()
-        result = _load_collected_artifacts(artifacts)
-        elapsed = time.perf_counter() - t0
+        artifacts = self._write_artifacts(tmp_path, [{"n": i} for i in range(n)])
+        try:
+            result = _load_collected_artifacts(artifacts)
+        except threading.BrokenBarrierError:
+            pytest.fail("the artifact loads did not overlap, concurrency may have regressed")
 
-        assert result == [{"n": i} for i in range(8)]
-        assert elapsed < 0.05 * 8 * 0.5, (
-            f"took {elapsed:.3f}s — expected well under the sequential bound "
-            "(8 * 50ms), concurrency may have regressed"
-        )
+        assert result == [{"n": i} for i in range(n)]
 
     def test_duckdb_relations_are_made_one_at_a_time(self, tmp_path, monkeypatch):
         # #663: a `list[duckdb.DuckDBPyRelation]` fan-in makes each relation on the worker's
@@ -342,19 +342,24 @@ class TestManyTinyPartitions:
         assert distinct == 12, "every partition must materialize"
         assert total == 12, "no partition may run twice"
 
-        # The estimator must reflect the cost split: heavy partitions carry
-        # larger estimates than tiny ones.
-        est = dict(
-            _query(
-                "SELECT node_id, estimate_seconds FROM cost_estimates WHERE node_id LIKE '%:work[%'"
+        # The estimator must reflect the cost split: each partition carries its own
+        # measurement (one sample, the elapsed time recorded for that key), and a heavy
+        # partition's is at least its 60ms sleep. Durations only grow under load, so this
+        # is a floor, never a comparison of a tiny key's time with a heavy key's.
+        est = {
+            node_id: (estimate, samples, elapsed)
+            for node_id, estimate, samples, elapsed in _query(
+                "SELECT c.node_id, c.estimate_seconds, c.samples, m.elapsed_seconds "
+                "FROM cost_estimates c JOIN materializations m ON m.node_id = c.node_id "
+                "WHERE c.node_id LIKE '%:work[%' AND m.status = 'success'"
             )
-        )
+        }
         assert len(est) == 12
-        heavy = [v for k, v in est.items() if int(k.split("p")[-1].rstrip("]")) % 2 == 1]
-        tiny = [v for k, v in est.items() if int(k.split("p")[-1].rstrip("]")) % 2 == 0]
-        assert min(heavy) > max(tiny), (
-            f"heavy estimates {sorted(heavy)} must exceed tiny {sorted(tiny)}"
-        )
+        for node_id, (estimate, samples, elapsed) in est.items():
+            assert samples == 1, node_id
+            assert estimate == pytest.approx(elapsed), node_id
+            if int(node_id.split("p")[-1].rstrip("]")) % 2 == 1:
+                assert estimate >= 0.06, f"heavy {node_id} estimated {estimate}s"
 
     def test_second_run_seeds_estimates_for_partitions(self, tmp_path):
         f = write_module(
