@@ -194,24 +194,12 @@ pub(crate) async fn write_in(
         .await
         .map_err(failed("creating the table"))?;
     let host = db::local_host();
-    let mut upsert = db::prepare(
-        conn,
-        "INSERT INTO sink_publications (node_id, sink, run_hash, host, run_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(node_id, sink) DO UPDATE SET run_hash = ?3, host = ?4, run_id = ?5, \
-         published_at = datetime('now')",
-    )
-    .await
-    .map_err(failed("recording"))?;
+    let mut upsert = db::sink_publications::UpsertPublication::prepare(conn)
+        .await
+        .map_err(failed("recording"))?;
     for p in publications {
         upsert
-            .execute([
-                Value::Text(p.node_id.clone()),
-                Value::Text(p.sink.clone()),
-                Value::Text(p.run_hash.clone()),
-                Value::Text(host.clone()),
-                Value::Text(run_id.to_string()),
-            ])
+            .run(&p.node_id, &p.sink, &p.run_hash, &host, run_id)
             .await
             .map_err(failed("recording"))?;
     }

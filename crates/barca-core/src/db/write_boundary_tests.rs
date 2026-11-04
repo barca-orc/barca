@@ -19,7 +19,6 @@ const OWNERS: &[&str] = &[
 const ALLOWED: &[(&str, &str)] = &[
     ("gc/mod.rs", "moving to an owner"),
     ("persist.rs", "moving to an owner"),
-    ("sink_publications.rs", "moving to an owner"),
     ("telemetry/history.rs", "moving to an owner"),
 ];
 

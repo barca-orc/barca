@@ -36,6 +36,7 @@ pub(crate) mod ledger_posts;
 pub(crate) mod materializations;
 pub(crate) mod run_queue;
 pub(crate) mod runs;
+pub(crate) mod sink_publications;
 pub(crate) mod uploads;
 #[cfg(test)]
 mod write_boundary_tests;
