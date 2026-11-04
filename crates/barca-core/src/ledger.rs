@@ -847,21 +847,14 @@ pub mod posts {
         conn.execute(CREATE, ())
             .await
             .map_err(failed("creating the table"))?;
-        conn.execute(
-            "INSERT INTO ledger_posts (client_run_id, server, body, state, server_run_id, error, attempts) \
-             VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), NULLIF(?6, ''), 1) \
-             ON CONFLICT(client_run_id) DO UPDATE SET server = excluded.server, \
-             body = excluded.body, state = excluded.state, \
-             server_run_id = excluded.server_run_id, error = excluded.error, \
-             attempts = ledger_posts.attempts + 1, updated_at = datetime('now')",
-            [
-                post.run.run_id.clone(),
-                server.to_string(),
-                body,
-                state.to_string(),
-                server_run_id,
-                error,
-            ],
+        db::ledger_posts::upsert(
+            &conn,
+            &post.run.run_id,
+            server,
+            &body,
+            state,
+            &server_run_id,
+            &error,
         )
         .await
         .map_err(failed("recording a post"))?;
@@ -997,18 +990,14 @@ pub mod posts {
             }
             let run = post.run.run_id.clone();
             if post.steps.is_empty() {
-                conn.execute("DELETE FROM ledger_posts WHERE client_run_id = ?1", [run])
+                db::ledger_posts::delete(&conn, &run)
                     .await
                     .map_err(failed("removing a post"))?;
             } else {
                 let body = encode(&post)?;
-                conn.execute(
-                    "UPDATE ledger_posts SET body = ?2, updated_at = datetime('now') \
-                     WHERE client_run_id = ?1",
-                    [run, body],
-                )
-                .await
-                .map_err(failed("updating a post"))?;
+                db::ledger_posts::set_body(&conn, &run, &body)
+                    .await
+                    .map_err(failed("updating a post"))?;
             }
         }
         Ok(())

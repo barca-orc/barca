@@ -178,16 +178,12 @@ impl JobHistory {
         };
         let _g = crate::db::db_guard().await;
         let (_db, conn) = crate::db::open_conn(db_path).await.map_err(failed)?;
-        conn.execute(
-            "INSERT INTO notifications (job, integration, posted_at, state, message_ref) \
-             VALUES (?1, ?2, ?3, ?4, '') ON CONFLICT(job, integration) DO UPDATE SET \
-             posted_at = ?3, state = ?4, message_ref = ''",
-            [
-                job.to_string(),
-                integration.to_string(),
-                posted_at.format(STAMP).to_string(),
-                state.as_str().to_string(),
-            ],
+        crate::db::notifications::record_post(
+            &conn,
+            job,
+            integration,
+            &posted_at.format(STAMP).to_string(),
+            state.as_str(),
         )
         .await
         .map_err(failed)?;

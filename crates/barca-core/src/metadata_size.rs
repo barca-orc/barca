@@ -135,10 +135,6 @@ async fn ids_in(conn: &Connection, filter: &str, from: i64) -> Result<Vec<i64>, 
     Ok(ids)
 }
 
-fn id_list(ids: &[i64]) -> String {
-    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
-}
-
 /// One batch of step 1 or 3, over the ids after `from`. The number of rows changed.
 async fn row_batch(conn: &Connection, step: u8, from: i64) -> Result<u64, BarcaError> {
     if step == 0 {
@@ -150,14 +146,7 @@ async fn row_batch(conn: &Connection, step: u8, from: i64) -> Result<u64, BarcaE
         if ids.is_empty() {
             return Ok(0);
         }
-        return conn
-            .execute(
-                &format!(
-                    "UPDATE materializations SET components = NULL WHERE id IN ({})",
-                    id_list(&ids)
-                ),
-                (),
-            )
+        return db::materializations::clear_components(conn, &ids)
             .await
             .map_err(failed("clear components"));
     }
@@ -172,15 +161,9 @@ async fn row_batch(conn: &Connection, step: u8, from: i64) -> Result<u64, BarcaE
     if ids.is_empty() {
         return Ok(0);
     }
-    conn.execute(
-        &format!(
-            "DELETE FROM materializations WHERE id IN ({})",
-            id_list(&ids)
-        ),
-        (),
-    )
-    .await
-    .map_err(failed("delete rows"))
+    db::materializations::delete_rows(conn, &ids)
+        .await
+        .map_err(failed("delete rows"))
 }
 
 /// One batch of step 4: the oldest runs that may go, logs first.
@@ -198,10 +181,10 @@ async fn run_batch(conn: &Connection) -> Result<u64, BarcaError> {
     }
     drop(rows);
     for run in &runs {
-        conn.execute("DELETE FROM logs WHERE run_id = ?1", [run.as_str()])
+        db::runs::delete_logs(conn, run)
             .await
             .map_err(failed("delete logs"))?;
-        conn.execute("DELETE FROM runs WHERE run_id = ?1", [run.as_str()])
+        db::runs::delete_run(conn, run)
             .await
             .map_err(failed("delete runs"))?;
     }
@@ -211,15 +194,9 @@ async fn run_batch(conn: &Connection) -> Result<u64, BarcaError> {
 /// Definitions no remaining row names. Only with no run alive: a starting run writes its
 /// definitions before its rows.
 async fn drop_unnamed_definitions(conn: &Connection) -> Result<(), BarcaError> {
-    conn.execute(
-        "DELETE FROM definition_components WHERE definition_hash NOT IN (SELECT \
-         json_extract(components, '$.\"@definition\"') FROM materializations \
-         WHERE components IS NOT NULL AND json_valid(components) \
-         AND json_extract(components, '$.\"@definition\"') IS NOT NULL)",
-        (),
-    )
-    .await
-    .map_err(failed("delete definitions"))?;
+    db::materializations::delete_unnamed_definitions(conn)
+        .await
+        .map_err(failed("delete definitions"))?;
     Ok(())
 }
 
@@ -277,16 +254,7 @@ pub(crate) async fn trim(
                 from = from.saturating_add(ID_SPAN);
             }
             1 => {
-                let changed = conn
-                    .execute(
-                        &format!(
-                            "UPDATE runs SET outcome_json = NULL WHERE id IN (SELECT id FROM runs \
-                             WHERE outcome_json IS NOT NULL AND id < (SELECT id FROM runs ORDER BY \
-                             id DESC LIMIT 1 OFFSET {}) ORDER BY id LIMIT {RUN_BATCH})",
-                            KEPT_OUTCOMES - 1
-                        ),
-                        (),
-                    )
+                let changed = db::runs::clear_old_outcomes(&conn, KEPT_OUTCOMES, RUN_BATCH)
                     .await
                     .map_err(failed("clear outcomes"))?;
                 done.outcomes += changed;

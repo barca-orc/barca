@@ -1496,13 +1496,9 @@ async fn mark_evicted(db_path: &str, paths: &[&str]) {
     };
     let _ = crate::db::with_tx(&conn, "BEGIN IMMEDIATE", "eviction marks", async {
         for path in paths {
-            conn.execute(
-                "UPDATE materializations SET evicted_at = datetime('now') \
-                 WHERE artifact_path = ?1 AND status = 'success'",
-                [*path],
-            )
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to mark an eviction: {e}")))?;
+            crate::db::materializations::mark_evicted(&conn, path)
+                .await
+                .map_err(|e| BarcaError::Db(format!("failed to mark an eviction: {e}")))?;
         }
         Ok(())
     })

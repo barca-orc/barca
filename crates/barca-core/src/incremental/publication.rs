@@ -29,17 +29,17 @@ pub(super) async fn publish_proofs(
             return Ok(false);
         }
         drop(rows);
-        conn.execute("DELETE FROM freshness_proofs WHERE generation != ?1", [generation]).await.map_err(db_error)?;
+        db::freshness_proofs::delete_other_generations(conn, generation).await.map_err(db_error)?;
         // Cache-only reversion can keep the same metadata generation. Explicitly
         // remove discarded proofs so an oversized selection cannot revive one.
-        let mut remove = db::prepare(conn, "DELETE FROM freshness_proofs WHERE id = ?1").await.map_err(db_error)?;
+        let mut remove = db::freshness_proofs::DeleteProof::prepare(conn).await.map_err(db_error)?;
         for id in discarded {
-            remove.execute([format!("{key}:{id}")]).await.map_err(db_error)?;
+            remove.run(format!("{key}:{id}")).await.map_err(db_error)?;
         }
-        let mut insert = db::prepare(conn, "INSERT OR REPLACE INTO freshness_proofs (id, generation, snapshot) VALUES (?1, ?2, ?3)").await.map_err(db_error)?;
+        let mut insert = db::freshness_proofs::ReplaceProof::prepare(conn).await.map_err(db_error)?;
         for (id, proof) in proofs {
             let snapshot = serde_json::to_string(proof).map_err(|e| BarcaError::Other(e.to_string()))?;
-            insert.execute((format!("{key}:{id}"), generation, snapshot)).await.map_err(db_error)?;
+            insert.run(format!("{key}:{id}"), generation, snapshot).await.map_err(db_error)?;
         }
         Ok(true)
     }).await
