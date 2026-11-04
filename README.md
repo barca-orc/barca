@@ -51,10 +51,11 @@ and a web UI. [Getting Started](https://barca.sh/getting-started/) covers each p
   the state is one directory, `.barca/`.
 - **Recomputes only what changed.** An asset runs again when its code, the project code it
   calls, or its inputs change; everything else comes from the cache.
-- **Milliseconds of overhead.** A one-asset pipeline runs in 64 ms from process start to exit,
-  against 1.07 s for Dagster and about 5 s for Prefect and Airflow on the same machine
-  ([comparison](https://barca.sh/comparisons/framework-comparison/#run-times-nothing-cached));
-  0.28.3 then cut barca's time for it from 86 to 47 ms.
+- **Milliseconds of overhead.** A one-asset pipeline runs in 32 ms from process start to exit
+  (barca 0.39.4, measured 2026-11-04, median of 20 runs). Through `benchmarks/trivial/bench.sh`,
+  whose shell wrapper adds about 10 ms, it took 42 to 43 ms against 0.85 to 1.06 s for Dagster
+  and 5.0 to 5.2 s for Prefect in the same runs
+  ([comparison](https://barca.sh/comparisons/framework-comparison/#run-times-nothing-cached)).
 
 ## Install
 

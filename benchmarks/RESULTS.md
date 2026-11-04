@@ -1,10 +1,153 @@
 # Benchmark Results
 
-Latest passes: 2026-10-25, framework cold/warm updates and bounded coordinator overhead; 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
+Latest passes: 2026-11-04, 0.39.4 fixed cost per run, incremental budgets and partition sort; 2026-10-25, framework cold/warm updates and bounded coordinator overhead; 2026-10-24, incremental DAG planning and batched partitions; 2026-10-23,
 early cutoff and bounded server run records; 2026-10-22, keyed sources and server read routes.
 The latest framework comparison is 2026-10-21 (barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0
-and Airflow 3.3.2, #65). Older passes on other hardware are kept below. Absolute times from
+and Airflow 3.3.2, #65); barca's side of it was measured again with 0.39.4 on 2026-11-04. Older passes on other hardware are kept below. Absolute times from
 different machines are not comparable; within one pass, the ratios between frameworks are.
+
+## 0.39.4 pass: fixed cost per run, incremental budgets, partition sort (2026-11-04)
+
+The first `trivial` record since 0.28.0 (#800). Machine: AMD Ryzen AI MAX+ 395 (16 cores, 32
+threads), 62 GiB RAM, Fedora 44, kernel 7.2.8, btrfs on NVMe, the same host as the passes
+below. Other agents were building Rust on it all day; every measurement started after the
+1-minute load average fell below 4, and the load is given beside each one. barca is the PyPI
+wheel 0.39.4 in a fresh uv venv (Python 3.14.8, nothing else installed) unless a row says
+otherwise. Older versions are their PyPI wheels in venvs of their own.
+
+### Trivial pipeline
+
+`benchmarks/trivial/bench.sh 10` (hyperfine 1.19, `--warmup 3 --runs 10`, `taskset -c 0-3`,
+pool 4), with `BARCA` set to the wheel's binary. Dagster 1.13.7 and Prefect 3.9.1 are what
+`benchmarks/trivial/*/uv.lock` resolve to. Mean ± σ (min–max):
+
+| Pass | Load before → after | barca 0.39.4 | Dagster 1.13.7 | Prefect 3.9.1 |
+|---|---|---:|---:|---:|
+| 1 | 3.6 → 3.6 | 43.0 ± 1.7 ms (40.2–45.5) | 1.00 s (0.95–1.12) | 5.22 s (5.07–5.37) |
+| 2 | 3.6 → 7.8 | 43.4 ± 2.2 ms (41.5–49.0) | 1.06 s (0.99–1.11) | 5.22 s (5.09–5.33) |
+| 3 | 3.1 → 3.9 | 42.3 ± 1.8 ms (39.7–46.1) | 0.85 s (0.83–0.86) | 4.99 s (4.80–5.26) |
+
+bench.sh times `bash run.sh` under the shell hyperfine starts, about 10 ms over the barca
+process itself. The process alone, `barca get assets.py --refresh-all` executed directly under
+`taskset -c 0-3`, 20 interleaved runs per version after 3 warm-ups (0.1.5 has no
+`--refresh-all` and runs `--no-cache`), load 3.5 → 3.7:
+
+| Version | Median | Min–max | σ |
+|---|---:|---:|---:|
+| 0.1.5 | 26.3 ms | 25.2–30.4 | 1.3 |
+| 0.28.0 | 60.3 ms | 56.3–63.6 | 1.9 |
+| 0.39.4 (wheel) | 31.7 ms | 30.2–34.3 | 1.1 |
+| 0.39.4 (`main` at `79269bf0`, release build, in the dev venv with the `test` extras) | 37.1 ms | 35.0–41.2 | 1.7 |
+
+The dev venv's 5 ms are the interpreter's: the worker starts with `site` and the `.pth` files
+of every package installed beside barca. Measure the README number in a clean venv.
+
+So the regression the 2026-10-21 pass found (42 ms at 0.1.5, 64–99 ms at 0.28.0) is gone:
+0.39.4 is 5.4 ms over 0.1.5 and half of 0.28.0. With the comparison's settings (pool 16,
+`taskset -c 16-31`, `benchmarks/lib/interleave.py`, three passes of 10 runs, load 3.0–3.9), the
+0.39.4 wheel ran trivial in 45 ms (40–51; pass medians 48, 47, 41), chain_100 in 118 ms
+(106–147), deep_diamond in 97 ms (87–111) and fan_out_500_50ms in 1.73 s (1.72–1.75, 15 runs);
+the partitioned 10k workload (`run_all.py barca`, `--internal`) in 1.16 s (1.12–1.28, 15 runs).
+0.28.0 took 64 ms, 112 ms, 310 ms, 2.24 s and 2.27 s there. Deep diamond and fan-out gained
+the most: workers now start together (deep diamond's five connect 23–28 ms after they were
+started), where 0.28.0 started each after the previous one had connected.
+
+### Where the trivial run's time goes
+
+`BARCA_TRACE_TIMING=1` plus temporary marks (`main`, the metadata DB calls, `persist_run`,
+`gc::after_command`, exit; not committed), on a `fast`-profile build of `79269bf0` (the release
+optimization level without LTO) in the clean venv, `taskset -c 0-3`, 30 runs after 3 warm-ups,
+two passes interleaved with the change below, load 2.9–3.1. Medians of the pass medians:
+
+| Phase | 0.39.4 | With the fold below | Notes |
+|---|---:|---:|---|
+| Process exec and exit (wall minus `main`..exit) | 2.8 ms | 3.0 ms | dynamic loading, runtime start, process teardown |
+| Arguments, project root, `barca.toml` | 0.5 | 0.5 | telemetry env reads are in here: under 0.1 ms |
+| Parse, DAG, plan | 0.4 | 0.4 | |
+| DB: lock, read-only format check, open, schema check | 0.7 | 0.7 | first of three open cycles |
+| DB: run row insert, commit | 2.0 | 2.1 | a WAL commit syncs the log (about 0.8–2 ms on this disk) |
+| DB: estimates read, close | 0.8 | 0.8 | the last connection's close checkpoints the WAL |
+| Pool start, phase 0 cache check | 0.6 | 0.6 | second open cycle |
+| **Worker: spawn, Python start, imports, connect** | **21.7** | **21.0–22.9** | `python -c pass` 8.5 ms in this venv; `import barca` adds 6, `barca._worker` 11 more |
+| Dispatch, step, result | 1.5 | 1.5 | |
+| Phase end, pool shutdown, recorder stop | 1.3 | 1.3 | |
+| Persist: open | 0.5 | 0.4 | third open cycle |
+| Persist: ledger transaction, commit | 2.1 | 2.2 | |
+| Persist: cost estimates transaction, close | 1.5 | 0.8–0.9 | the fold removes this commit |
+| Logs, incremental save | 0.5 | 0.5 | |
+| `gc::after_command` (cache size check, metadata trim) | 1.1 | 1.1 | one more open cycle and an estimate from the ledger; a run that wrote nothing returns in 0.1 ms; the metadata trim is a `stat` here |
+| Render, emit, exit | 0.1 | 0.1 | |
+| **Total wall** | **38.6 ms** | **37.8–40.5 ms** | coordinator CPU 9.0–9.6 ms |
+
+No artifact store is configured, so the backup gate does nothing (it starts only with a
+store). Against 0.1.5's 26 ms, the 0.39.4 run spends its extra time in the metadata database:
+three or four open cycles (each a read-only format check, an open and a schema check, then a
+WAL checkpoint on close) and two or three synced commits, about 9 ms in all, plus the larger
+worker module (11 ms of imports, `_storage`, `_sinks` and `_artifacts` with `shutil`,
+`tempfile`, `urllib.parse`, `datetime`, `pickle` and `hashlib`). The post-command size check is
+1 ms after a run that wrote and 0.1 ms after one that did not; it was not the cause.
+
+Fixed here: the cost-estimate upsert ran in a transaction of its own after the ledger's, one
+more synced commit for every run that executed a step. It now runs in the ledger's transaction
+(`persist.rs`), still best effort. About 0.7 ms on this machine, more on a disk with slower
+syncs.
+
+Not fixed (each is more than a small change):
+
+- **Start the worker while the database is opened.** The worker is spawned after
+  `db_run_started` and the phase 0 cache check (about 4 ms on the critical path). Starting it
+  as the plan is known would overlap them, but a run whose steps are all cached would then
+  start an interpreter it does not use, so it needs the spawn to be cancellable or decided
+  from the plan alone.
+- **One metadata connection per process.** Three or four open cycles cost about 1 ms each plus
+  a checkpoint on each close (0.8–1.5 ms). Keeping one connection open across `start_run`, the
+  cache check, `persist_run` and `gc` would save 3–5 ms, but the code opens per operation on
+  purpose (the cross-process lock, the backup's checkpoint that needs no other handle).
+- **`PRAGMA synchronous = NORMAL` in WAL mode** would skip the sync on each commit (2–3 commits,
+  about 3–4 ms here). It trades durability of the last transactions on power loss, not on a
+  crash; that is a decision for the persistence spec, not a benchmark fix.
+- **Worker imports.** `_storage` is on the worker's hot path (`exists`, `suffix`,
+  `local_path_of`), so lazy imports save little; most of the 11 ms is the standard library.
+
+### incremental_dag with its budgets
+
+`benchmarks/incremental_dag/bench.py` with `KEYS=1,50000,200000 REPEATS=3
+COORDINATOR_MAX_KIB=19531 COORDINATOR_MAX_CPU_MS=20`, three passes on retained projects, all
+budgets and work-count assertions passing. Pass 1 seeded; passes 2 and 3 started at load
+3.3 and 3.4. Warm runs only (seed and proof rows are warm-ups), median (min–max):
+
+| Keys | Case | Runs | Wall | Coordinator CPU | Coordinator peak | Steps / calls / identities |
+|---:|---|---:|---:|---:|---:|---|
+| 1 | one key | 9 | 0.056 s (0.054–0.060) | 12.7 ms (12.0–15.4) | 14.67 MiB | 3 / 3 / 3 |
+| 1 | unchanged | 3 | 0.043 s (0.043–0.046) | 10.8 ms (10.5–11.7) | 14.33 MiB | 1 / 1 / 2 |
+| 50,000 | one key | 9 | 0.119 s (0.113–0.136) | 15.2 ms (13.6–18.1) | 14.72 MiB | 3 / 3 / 3 |
+| 50,000 | unchanged | 3 | 0.096 s (0.094–0.106) | 12.9 ms (11.5–13.4) | 14.36 MiB | 1 / 1 / 1 |
+| 200,000 | one key | 9 | 0.311 s (0.293–0.375) | 15.5 ms (13.9–19.6) | 14.79 MiB | 3 / 3 / 3 |
+| 200,000 | unchanged | 3 | 0.261 s (0.260–0.264) | 10.6 ms (10.4–12.0) | 14.41 MiB | 1 / 1 / 1 |
+
+The 20 ms CPU budget held with 0.4 ms to spare at 200k (19.6 ms). The cold seeds, outside the
+budget (#655), took 35.9 s / 850 MiB native at 50k and 189.7 s / 3.27 GiB native at 200k.
+An earlier attempt with the projects under `/tmp` (tmpfs) failed its 200k seed: the 400k
+artifact files exhausted the tmpfs inodes and a worker died mid-write; it is a property of
+that fixture on tmpfs, not a budget failure. Raw rows:
+[incremental_dag/v0.39.4-measurements.jsonl](incremental_dag/v0.39.4-measurements.jsonl).
+
+### Sorting a streamed partition (0.35.3, #721)
+
+`_split_duckdb` in `python/barca/_batch.py` on one key of 1,000,000 rows (a key column, an
+integer, a double and a string, in random order), called directly with a DuckDB relation;
+3 calls per variant per pass, three passes, staging on the NVMe disk. "No sort" is the 0.35.2
+function (no `ORDER_BY`, no rewrite), "rewrite" forces the read-back sorted rewrite DuckDB 1.x,
+multi-file keys and BIT/BIGNUM tables take. DuckDB 2.0.0. Pass medians (min–max of all calls):
+
+| DuckDB threads | Load | No sort | Native `ORDER_BY` (the DuckDB 2 path) | Rewrite pass |
+|---:|---|---:|---:|---:|
+| 32 (default) | 3.3–3.6 | 53, 53, 53 ms (46–62) | 102, 112, 109 ms (92–121) | 101, 101, 103 ms (93–110) |
+| 4 | 3.7–3.8 | 74, 73, 73 ms (69–90) | 166, 162, 154 ms (154–184) | 148, 149, 136 ms (134–154) |
+
+The sort about doubles the write of a large key, 50–60 ms per million rows with every thread
+and 80–90 ms with four. The native writer is not faster than the read-back rewrite here. The
+sorted file is 5% smaller (18.4 MB against 19.3 MB).
 
 ## Read routes during a run over many partitioned nodes (2026-10-28)
 

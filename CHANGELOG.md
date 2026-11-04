@@ -8,6 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Performance
+
+- A run that executes a step writes its cost estimates in the ledger's transaction instead of a second one: one commit (a sync of the metadata log) fewer, about 0.7 ms of the one-asset pipeline's 38 ms on the benchmark machine (`benchmarks/RESULTS.md`, 2026-11-04).
+
+### Documentation
+
+- Measured 0.39.4 on the trivial pipeline: 31.7 ms from process start to exit (`benchmarks/trivial/bench.sh`: 42-43 ms, with its shell wrapper), against 26.3 ms for 0.1.5 and 60.3 ms for 0.28.0 on the same machine. The README and the framework comparison now give this number instead of 0.28's; `benchmarks/RESULTS.md` attributes the time per phase, and the manual gives the measured cost of sorting a streamed partition (about twice the unsorted write).
+- CI's merge tier runs the performance budgets (`scripts/perf-gate.py`: the trivial pipeline's wall time, coordinator CPU and memory, and the `incremental_dag` coordinator budgets), so a regression fails the merge queue (`specs/behavior/performance.md`, "Gates").
+
 ### Bug Fixes
 
 - UI: one state vocabulary everywhere. A task or sensor shows its last execution (Healthy, Failed, Not run) in tables, as group health already did; Not run, Unknown and Always runs are grey wherever they appear, leaving the queued colour to queued run work; "State unknown" is "Unknown". Node, file and group names use the sans-serif instead of monospace, dark-theme borders and hover/selection backgrounds have more contrast, and table rows stack a name over its file at any width, with the table beside the node panel leaving out last success, typical and next run instead of squeezing every column.

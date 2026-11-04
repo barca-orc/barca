@@ -1,11 +1,11 @@
 ---
 title: "Framework Comparison: Code, Features and Overhead"
-description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured on 2026-10-21 with barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2.
+description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured with barca 0.39.4 on 2026-11-04 and Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on 2026-10-21.
 ---
 
-Run times last measured: 2026-10-21, with barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0 and
-Airflow 3.3.2 under Python 3.13, on one Linux machine (AMD Ryzen AI MAX+ 395). The setup,
-commands, spread and load are in
+Run times last measured: barca 0.39.4 (the PyPI wheel, Python 3.14) on 2026-11-04; Dagster
+1.13.26, Prefect 3.9.0 and Airflow 3.3.2 (Python 3.13) on 2026-10-21, on the same Linux machine
+(AMD Ryzen AI MAX+ 395) with the same pinning and worker counts. The setup, commands, spread and load are in
 [`benchmarks/RESULTS.md`](https://github.com/barca-orc/barca/blob/main/benchmarks/RESULTS.md).
 
 The code samples for the other tools are the benchmark sources. The feature descriptions of
@@ -252,15 +252,17 @@ control and no integrations library. If you need those, the other three tools ha
 
 ## Run times, nothing cached
 
-Measured 2026-10-21. Medians of 10 runs (fan-out 5; Airflow 5 on chain 100 and 3 on fan-out),
-the frameworks taking turns run by run. The range is the fastest and slowest run.
+barca measured 2026-11-04: medians of 30 runs in three passes (fan-out 15), load average
+3.0-4.8. The other three measured 2026-10-21: medians of 10 runs (fan-out 5; Airflow 5 on
+chain 100 and 3 on fan-out), taking turns run by run with barca 0.28.0, load 5-13. The range is
+the fastest and slowest run.
 
-| Benchmark | Barca 0.28.0 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 |
+| Benchmark | Barca 0.39.4 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 |
 |-----------|-------|---------|---------|---------|
-| Trivial (1 asset) | 64 ms (61–74) | 1.07 s (0.90–1.26) | 5.09 s (4.81–5.34) | 5.05 s (4.80–5.84) |
-| Chain 100 | 112 ms (103–124) | 1.88 s (1.57–2.09) | 5.16 s (4.80–7.78) | 10.3 s (9.7–12.9) |
-| Deep diamond (18) | 310 ms (265–342) | 1.19 s (1.05–1.31) | 5.13 s (4.68–5.70) | 6.45 s (5.97–7.35) |
-| Fan-out 500×50ms | 2.24 s (2.22–2.44) | 30.2 s (29.7–30.8) | 6.53 s (6.19–10.03) | 54.6 s (53.5–56.1) |
+| Trivial (1 asset) | 45 ms (40–51) | 1.07 s (0.90–1.26) | 5.09 s (4.81–5.34) | 5.05 s (4.80–5.84) |
+| Chain 100 | 118 ms (106–147) | 1.88 s (1.57–2.09) | 5.16 s (4.80–7.78) | 10.3 s (9.7–12.9) |
+| Deep diamond (18) | 97 ms (87–111) | 1.19 s (1.05–1.31) | 5.13 s (4.68–5.70) | 6.45 s (5.97–7.35) |
+| Fan-out 500×50ms | 1.73 s (1.72–1.75) | 30.2 s (29.7–30.8) | 6.53 s (6.19–10.03) | 54.6 s (53.5–56.1) |
 
 How to read these:
 
@@ -273,17 +275,17 @@ How to read these:
 - barca and Prefect ran up to 16 steps at once (16 worker processes, a 16-thread task runner).
   Dagster's `materialize()` and Airflow's `dags test` run one step at a time, which is why
   their fan-out times are close to 500 × 50 ms plus overhead.
-- barca starts its worker processes one at a time, each after the previous one has connected
-  (30 to 40 ms each on this machine). That is most of barca's time on deep diamond and about a
-  quarter of it on fan-out.
-- The machine was shared with other work during the run; the trivial barca time was 64 ms in
-  this pass and 79 to 99 ms in later passes on the same build.
+- The trivial time is the wall time of `benchmarks/trivial/barca/run.sh`, a bash script that
+  runs barca; the barca process alone takes 32 ms (median of 20, same day). Most of it is the
+  Python worker starting: about 21 ms of interpreter start and imports before it connects.
+- barca starts the workers a run needs together (deep diamond: five, connected 23 to 28 ms
+  after they were started); earlier versions started them one after another.
 
 ### Partitioned workload: 10 steps × 1000 partitions = 10,000 steps
 
-| | Barca 0.28.0 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 |
+| | Barca 0.39.4 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 |
 |-----------|-------|---------|---------|---------|
-| Time | 2.27 s (2.14–2.40), 5 runs | 141 s (137–144), 3 runs | stopped at 10 min, 1 run | stopped at 10 min, 1 run |
+| Time | 1.16 s (1.12–1.28), 15 runs | 141 s (137–144), 3 runs | stopped at 10 min, 1 run | stopped at 10 min, 1 run |
 | Done when stopped | | | 3,050 of 10,000 task runs | 1,000 of 10,000 task instances |
 | Pattern used | `partitions()` | `StaticPartitionsDefinition`, one `materialize()` per key | `task.map()` | `expand()`, `dags test`, PostgreSQL |
 
