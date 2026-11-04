@@ -625,9 +625,12 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
     let (_db, conn) = db::open_conn(db_path).await?;
 
     let result = db::with_tx(&conn, "BEGIN", "terminal ledger", async {
-        // In the ledger's transaction: one commit for both. Best effort, as on its own.
+        // Read stamps, the ledger and the cost estimates: one commit. The stamps and the
+        // estimates are best effort, as they would be on their own.
         db::touch_read_in(&conn, l.touched).await;
-        write_terminal_ledger(&conn, l).await
+        write_terminal_ledger(&conn, l).await?;
+        upsert_cost_estimates(&conn, l.cost_snapshot).await;
+        Ok(())
     })
     .await;
     if let Err(error) = result {
@@ -637,44 +640,47 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
     }
     // Only a committed outcome replaces the process-liveness witness.
     crate::run_owner::release(db_path, l.run_id);
-
-    // Persist the measured-cost EWMA so the next run starts pre-warmed and
-    // skips the cold-start probe entirely. (Inline — this fn already holds
-    // the process-wide DB guard.) Best effort, in one transaction of its own after the
-    // ledger's: one commit instead of one per partition key (#460).
-    if !l.cost_snapshot.is_empty() {
-        let _ = db::with_tx(&conn, "BEGIN", "cost estimates", async {
-        if let Ok(mut upsert) = db::prepare(
-            &conn,
-            "INSERT INTO cost_estimates (node_id, base_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
-             ON CONFLICT(node_id) DO UPDATE SET
-                 estimate_seconds = ?3, cpu_seconds = ?4, max_rss_bytes = ?5,
-                 samples = ?6, updated_at = datetime('now')",
-        )
-        .await
-        {
-            for (node_id, est) in l.cost_snapshot {
-                let base = crate::StepId::parse(node_id).base_id().to_string();
-                upsert
-                    .execute([
-                        node_id.clone(),
-                        base,
-                        est.estimate_seconds.to_string(),
-                        est.cpu_seconds.to_string(),
-                        est.max_rss_bytes.to_string(),
-                        est.samples.to_string(),
-                    ])
-                    .await
-                    .ok();
-            }
-        }
-        Ok(())
-        })
-        .await;
-    }
-
     Ok(())
+}
+
+/// Persist the measured-cost EWMA so the next run starts pre-warmed and skips the cold-start
+/// probe entirely. Best effort: a statement that fails is skipped, and SQLite rolls back only
+/// that statement, not the ledger's transaction it runs in. One prepared statement for every
+/// key (#460), and no commit of its own: a commit is a sync of the log, about a millisecond
+/// of every run that executed something.
+async fn upsert_cost_estimates(
+    conn: &libsql::Connection,
+    snapshot: &[(String, crate::cost::NodeEstimate)],
+) {
+    if snapshot.is_empty() {
+        return;
+    }
+    let Ok(mut upsert) = db::prepare(
+        conn,
+        "INSERT INTO cost_estimates (node_id, base_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+         ON CONFLICT(node_id) DO UPDATE SET
+             estimate_seconds = ?3, cpu_seconds = ?4, max_rss_bytes = ?5,
+             samples = ?6, updated_at = datetime('now')",
+    )
+    .await
+    else {
+        return;
+    };
+    for (node_id, est) in snapshot {
+        let base = crate::StepId::parse(node_id).base_id().to_string();
+        upsert
+            .execute([
+                node_id.clone(),
+                base,
+                est.estimate_seconds.to_string(),
+                est.cpu_seconds.to_string(),
+                est.max_rss_bytes.to_string(),
+                est.samples.to_string(),
+            ])
+            .await
+            .ok();
+    }
 }
 
 #[cfg(test)]
