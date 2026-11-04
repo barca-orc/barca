@@ -3830,13 +3830,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("metadata.db").display().to_string();
         super::init_db(&path).await.unwrap();
-        let cache = super::CacheReader::open(&path).await.unwrap();
-        cache.conn().execute(
+        // Filled outside the process-wide guard: the 500k rows take seconds to write, and a
+        // concurrent test's timed read must not wait for them.
+        let db = libsql::Builder::new_local(&path).build().await.unwrap();
+        let fill = db.connect().unwrap();
+        fill.execute(
             "WITH RECURSIVE history(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM history WHERE n < 500000) \
              INSERT INTO materializations(node_id, run_hash, output_hash, artifact_path, evicted_at) \
              SELECT 'sensor', 'run', 'old', 'restored', 'yesterday' FROM history", (),
         ).await.unwrap();
-        cache.conn().execute(
+        fill.execute(
             "INSERT INTO materializations(node_id, output_hash, observation_hash, artifact_path, evicted_at) VALUES \
              ('sensor', 'bytes', 'revision', 'restored', NULL), \
              ('sensor[key=a]', 'a-old', NULL, 'a', NULL), \
@@ -3844,6 +3847,9 @@ mod tests {
              ('sensor[key=a]', 'a', NULL, 'a', NULL), \
              ('other', 'other', NULL, 'other', NULL)", (),
         ).await.unwrap();
+        drop(fill);
+        drop(db);
+        let cache = super::CacheReader::open(&path).await.unwrap();
         let started = std::time::Instant::now();
         let hashes = super::last_output_hashes(&cache, &["sensor"])
             .await
