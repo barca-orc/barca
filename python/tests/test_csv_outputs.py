@@ -16,6 +16,8 @@ from barca._artifacts import deserialize, serialize_hashed
 from barca._worker import _write_sinks
 from barca.api import _find_binary
 
+from .daemon_steps import run_steps
+
 
 @pytest.mark.parametrize("writer", ["pandas", "polars", "polars_lazy", "pyarrow", "duckdb"])
 @pytest.mark.parametrize("reader", ["pandas", "polars", "polars_lazy", "pyarrow", "duckdb"])
@@ -136,31 +138,21 @@ def total(orders: pl.LazyFrame):
 
 
 @pytest.mark.parametrize("kind", ["sensor", "task"])
-def test_csv_sensor_and_task_execution(tmp_path, kind, capsys):
-    from barca._worker import run_batch
-
+def test_csv_sensor_and_task_execution(tmp_path, kind):
     source = tmp_path / "steps.py"
     source.write_text("import pandas as pd\ndef frame(): return pd.DataFrame({'id': [7]})\n")
-    run_batch(
-        {
-            "stream_id": "csv-test",
-            "artifact_dir": str(tmp_path / "artifacts"),
-            "steps": [
-                {
-                    "node_id": "steps.py:frame",
-                    "source_file": str(source),
-                    "function_name": "frame",
-                    "kind": kind,
-                    "serializer": "csv",
-                }
-            ],
-        }
+    messages = run_steps(
+        [
+            {
+                "node_id": "steps.py:frame",
+                "source_file": str(source),
+                "function_name": "frame",
+                "kind": kind,
+                "serializer": "csv",
+            }
+        ],
+        tmp_path / "artifacts",
     )
-    messages = [
-        json.loads(line.removeprefix("BARCA:2:"))
-        for line in capsys.readouterr().err.splitlines()
-        if line.startswith("BARCA:2:")
-    ]
     assert len(messages) == 1 and messages[0]["type"] == "result"
     artifact = messages[0]["artifact"]
     assert artifact["format"] == "csv"

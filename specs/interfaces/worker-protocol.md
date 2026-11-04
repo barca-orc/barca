@@ -29,7 +29,7 @@ fields, so the key is additive within each protocol version.
 Version 5 requires helpers that preserve explicit sensor signals and report compact source
 observations. Version 4 and earlier helpers are refused
 before receiving work, with a reinstall message; matching barca packages are required.
-The historical standalone stderr batch protocol is independently version 2.
+The coordinator starts every worker as `python -m barca._worker --daemon`; the worker has no other mode (a v0.1 stderr batch mode, `BARCA:2:` lines, was removed in #800).
 
 ## Compact tables
 

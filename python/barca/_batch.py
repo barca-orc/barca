@@ -78,11 +78,15 @@ def _norm(key, dims: list[str]):
     return None
 
 
-_SUFFIX_FORMATS = {".parquet": "parquet", ".csv": "csv", ".json": "json"}
+# The formats DuckDB reads as a table; a pickle artifact is not one.
+_TABULAR_FORMATS = ("parquet", "csv", "json")
 
 
 def _tabular_format(path: str) -> "str | None":
-    return _SUFFIX_FORMATS.get(Path(path).suffix)
+    from barca._artifacts import FORMAT_OF_EXTENSION
+
+    fmt = FORMAT_OF_EXTENSION.get(Path(path).suffix)
+    return fmt if fmt in _TABULAR_FORMATS else None
 
 
 def _json_records(path: str) -> bool:

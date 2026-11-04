@@ -24,7 +24,7 @@ docs/engineering/       ← Non-normative architecture plans, rationale and disc
 DIRECTION.md            ← What barca is, standing non-goals, what is being worked on now
 python/barca/
   __init__.py           ← No-op decorator stubs (identity functions)
-  _worker.py            ← Batch worker (invoked by Rust via `python -m barca._worker`)
+  _worker.py            ← Daemon worker (invoked by Rust as `python -m barca._worker --daemon`)
   _artifacts.py         ← Serialization: json, pickle, parquet format detection + I/O
   _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
   __main__.py           ← Entry point for `python -m barca` (delegates to `_worker.main()`)

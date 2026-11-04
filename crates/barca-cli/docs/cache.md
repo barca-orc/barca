@@ -1246,6 +1246,10 @@ The change is local to the selected environment's metadata database.
 .barca/sql-cache/                           copies of store artifacts `barca sql` downloaded (`barca docs sql`)
 .barca/range-cache/<run_hash>-<version>/    byte ranges lazy inputs read from a store object (`barca docs remote`)
 .barca/gc-state.json                        what the last measurement of `.barca/` found ("Disk use")
+.barca/live-logs/<run_id>.jsonl             a run's output while it runs, for `barca logs -f` (removed once recorded)
+.barca/branches/<run>-<pid>/                what a run's `parallel()` branches returned (removed when the run ends)
+.barca/inspection-cache/<env>.json          disposable evidence `barca status` reuses (at most 8 MiB)
+.barca/auth/                                `barca serve` token state (`barca docs server-mode`)
 .barca/envs/<env>/                          the same layout for a named environment ("Environments")
 ```
 

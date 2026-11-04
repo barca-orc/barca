@@ -121,29 +121,11 @@ async fn accept_16_workers() {
 
 #[tokio::test]
 async fn accept_16_workers_with_barca_worker() {
-    //! This test uses actual barca workers (python -m barca._worker) with a
-    //! minimal batch JSON. Tests the real Python startup + socket connect path.
+    //! This test starts actual barca workers (python -m barca._worker --daemon), as the
+    //! coordinator does. Tests the real Python startup + socket connect path.
     let path = format!("/tmp/barca-test-{}-barca.sock", std::process::id());
     std::fs::remove_file(&path).ok();
     let listener = UnixListener::bind(&path).unwrap();
-
-    // Create a minimal batch file that the worker can process (one no-op step)
-    let batch = serde_json::json!({
-        "stream_id": "test-0",
-        "artifact_dir": "/tmp/barca-test-artifacts",
-        "steps": [{
-            "node_id": "test.py:noop",
-            "function_name": "noop",
-            "source_file": "/dev/null",
-            "kind": "task",
-            "inputs": {},
-            "timeout_seconds": 5,
-            "direct_args": [],
-            "direct_kwargs": {},
-            "serializer": "json",
-        }],
-        "provided_inputs": {}
-    });
 
     // Find python with barca installed
     let python = std::env::current_dir().unwrap().join(".venv/bin/python");
@@ -154,20 +136,17 @@ async fn accept_16_workers_with_barca_worker() {
     }
 
     // Spawn 16 barca workers pointing at this socket
-    let batch_json = serde_json::to_string(&batch).unwrap();
     let mut children = Vec::new();
     for i in 0..16 {
-        let batch_path = format!("/tmp/barca-test-batch-{i}.json");
-        std::fs::write(&batch_path, &batch_json).unwrap();
         let mut cmd = Command::new(&python);
-        cmd.args(["-m", "barca._worker", &batch_path])
+        cmd.args(["-m", "barca._worker", "--daemon"])
             .env("BARCA_SOCKET", &path)
             .env("BARCA_WORKER", "1")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
         let child = barca_core::helper_proc::spawn_std(&mut cmd);
         match child {
-            Ok(c) => children.push((c, batch_path)),
+            Ok(c) => children.push(c),
             Err(e) => {
                 println!("SKIP: failed to spawn worker {i}: {e}");
                 std::fs::remove_file(&path).ok();
@@ -197,10 +176,9 @@ async fn accept_16_workers_with_barca_worker() {
     println!("Accepted {connected}/16 barca workers in {:?}", accept_time);
 
     // Clean up
-    for (c, batch_path) in children.iter_mut() {
+    for c in children.iter_mut() {
         let _ = c.kill();
         let _ = c.wait();
-        std::fs::remove_file(batch_path.as_str()).ok();
     }
     std::fs::remove_file(&path).ok();
 

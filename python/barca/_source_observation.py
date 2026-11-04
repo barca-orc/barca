@@ -2,20 +2,9 @@
 
 import hashlib
 import json
-import math
 from pathlib import Path
 
-
-def _same(left, right):
-    if type(left) is not type(right):
-        return False
-    if isinstance(left, dict):
-        return left.keys() == right.keys() and all(_same(v, right[k]) for k, v in left.items())
-    if isinstance(left, list):
-        return len(left) == len(right) and all(_same(a, b) for a, b in zip(left, right))
-    if isinstance(left, float) and left == right == 0:
-        return math.copysign(1, left) == math.copysign(1, right)
-    return left == right
+from barca._wire import same
 
 
 def _membership(keys):
@@ -81,7 +70,7 @@ def observe(value, previous):
         return summary
     if not isinstance(old, dict):
         return summary
-    changed = {k: v for k, v in value.items() if k not in old or not _same(old[k], v)}
+    changed = {k: v for k, v in value.items() if k not in old or not same(old[k], v)}
     delta = {
         **summary,
         "previous_hash": previous["content_hash"],

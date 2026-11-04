@@ -1,11 +1,10 @@
 """Integration tests for barca._worker with artifact-based I/O.
 
 These tests exercise the full worker flow: execute a user function,
-serialize the result to an artifact file, emit a v2 protocol receipt,
-and resolve cross-phase artifact references as inputs.
+serialize the result to an artifact file, report it to the coordinator,
+and resolve upstream artifact references as inputs.
 """
 
-import json
 import textwrap
 from pathlib import Path
 
@@ -14,6 +13,8 @@ import pytest
 
 from barca import _storage
 from barca._artifacts import deserialize
+
+from .daemon_steps import run_steps
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -60,29 +61,8 @@ def _write_module(tmp_path, filename, code):
 
 
 def _run_batch_capture_protocol(batch):
-    """Run a batch through the worker and capture protocol messages from stderr.
-
-    Returns (protocol_messages: list[dict], error_lines: list[str]).
-    """
-    import io
-    from contextlib import redirect_stderr
-
-    from barca._worker import run_batch
-
-    buf = io.StringIO()
-    with redirect_stderr(buf):
-        run_batch(batch)
-
-    protocol_msgs = []
-    error_lines = []
-    for line in buf.getvalue().splitlines():
-        if line.startswith("BARCA:2:"):
-            json_str = line[len("BARCA:2:") :]
-            protocol_msgs.append(json.loads(json_str))
-        elif line.strip():
-            error_lines.append(line)
-
-    return protocol_msgs, error_lines
+    """Run a batch's steps through the daemon step runner and return (reports, [])."""
+    return run_steps(batch["steps"], batch["artifact_dir"], batch["provided_inputs"]), []
 
 
 # ─── Protocol emission tests ─────────────────────────────────────────────────
@@ -117,7 +97,7 @@ class TestProtocolEmission:
         assert "format" in msg["artifact"]
         assert "size_bytes" in msg["artifact"]
         assert msg["artifact"]["size_bytes"] > 0
-        assert "elapsed" in msg
+        assert "elapsed_seconds" in msg["artifact"]
 
     def test_artifact_file_exists(self, tmp_path):
         artifact_dir = tmp_path / "artifacts"
@@ -876,9 +856,9 @@ class TestErrorEmission:
             return 1
 
         try:
-            from barca._worker import _execute
+            from barca._worker import _run_with_timeout
 
-            _execute(takes_none, {"unexpected": 1}, {})
+            _run_with_timeout(takes_none, {"unexpected": 1}, 5)
         except TypeError as exc:
             tb = _user_traceback(exc)
         assert "_worker.py" not in tb

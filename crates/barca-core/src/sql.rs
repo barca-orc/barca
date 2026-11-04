@@ -601,6 +601,33 @@ mod tests {
         assert_eq!(format_of("x.csv"), "csv");
         assert_eq!(format_of("x"), "unknown");
     }
+
+    /// `format_of` reads every extension in the table of specs/interfaces/artifact-formats.md
+    /// ("Artifact file extensions") as that format, which is the map the Python worker uses
+    /// (`barca._artifacts.FORMAT_OF_EXTENSION`, checked by test_artifact_extensions.py).
+    #[test]
+    fn format_of_agrees_with_the_spec_table() {
+        let spec = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../specs/interfaces/artifact-formats.md");
+        let text = std::fs::read_to_string(spec).unwrap();
+        let section = text
+            .split("## Artifact file extensions")
+            .nth(1)
+            .expect("the spec has an extension table");
+        let rows: Vec<(String, String)> = section
+            .lines()
+            .take_while(|l| !l.starts_with("## "))
+            .filter(|l| l.starts_with("| `."))
+            .map(|l| {
+                let cells: Vec<&str> = l.split('|').map(|c| c.trim()).collect();
+                (cells[1].trim_matches('`').to_string(), cells[2].to_string())
+            })
+            .collect();
+        assert!(rows.len() >= 5, "extension table not found: {rows:?}");
+        for (ext, format) in rows {
+            assert_eq!(format_of(&format!("a/b{ext}")), format, "{ext}");
+        }
+    }
 }
 
 #[cfg(test)]

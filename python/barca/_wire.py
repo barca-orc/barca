@@ -1,13 +1,24 @@
 """Protocol v3 compact tables. Only metadata and artifact references cross the wire."""
 
+import math
 
-def _same(left, right):
+
+def same(left, right):
+    """Whether two decoded JSON values are the same value: equal and of the same types all the
+    way down, so `1`, `1.0` and `True` differ, and `-0.0` differs from `0.0`.
+
+    The one exact-equality rule for producer JSON: hoisting a column into a compact table's
+    header (which must not change any row's value) and a partition source's key comparison
+    (`_source_observation.observe`, whose `changed` keys a `-0.0` to `0.0` edit is in).
+    """
     if type(left) is not type(right):
         return False
     if isinstance(left, dict):
-        return left.keys() == right.keys() and all(_same(left[key], right[key]) for key in left)
+        return left.keys() == right.keys() and all(same(v, right[k]) for k, v in left.items())
     if isinstance(left, list):
-        return len(left) == len(right) and all(_same(a, b) for a, b in zip(left, right))
+        return len(left) == len(right) and all(same(a, b) for a, b in zip(left, right))
+    if isinstance(left, float) and left == right == 0:
+        return math.copysign(1, left) == math.copysign(1, right)
     return left == right
 
 
@@ -18,7 +29,7 @@ def encode_table(items, *, hoist=True):
         header = {
             key: items[0][key]
             for key in keys
-            if all(key in item and _same(item[key], items[0].get(key)) for item in items)
+            if all(key in item and same(item[key], items[0].get(key)) for item in items)
         }
     dims = [key for key in keys if key not in header]
     rows = [[item.get(key) for key in dims] for item in items]
