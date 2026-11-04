@@ -175,6 +175,11 @@ front of it. They run `target-local/debug/barca` or `target/debug/barca`, or the
 `BARCA_BIN` (CI sets it to the wheel's). Install the browser once with
 `pnpm --dir ui exec playwright install chromium`.
 
+In CI the Playwright step does not gate the full tier yet (`continue-on-error`). Seven specs in
+`ui/e2e` fail on `main`, listed in [#807](https://github.com/barca-orc/barca/issues/807), and
+`ui/e2e-auth` runs only after `ui/e2e` passes. The step's result and the uploaded traces
+(`playwright-results`) still show every failure. It gates again when #807 closes.
+
 ## Manual, help and contract tests
 
 These keep the documentation and the command line in agreement.
@@ -225,7 +230,7 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **python (fast)**: the quick subset in `scripts/fast-tests.txt`, about 20 s of tests | backends | | yes | |
 | **perf**: the performance budgets, `scripts/perf-gate.py` against that wheel (see below) | test | | yes | yes |
 | **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | | yes |
-| **ui**: the web UI's typecheck, lint and unit tests, then the Playwright suites in `ui/e2e` and `ui/e2e-auth` against that wheel | backends | | | yes |
+| **ui**: the web UI's typecheck, lint and unit tests, then the Playwright suites in `ui/e2e` and `ui/e2e-auth` against that wheel (not gating yet, see below) | backends | | | yes |
 | **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | | yes |
 | **python (1/3 .. 3/3, duckdb 1.x)**: the whole Python suite in shards, with the emulators, the duckdb 1.x rerun and the minute checkpoint test | backends | | | yes |
 
