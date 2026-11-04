@@ -20,7 +20,6 @@ const ALLOWED: &[(&str, &str)] = &[
     ("gc/mod.rs", "moving to an owner"),
     ("incremental/publication.rs", "moving to an owner"),
     ("ledger.rs", "moving to an owner"),
-    ("metadata_size.rs", "moving to an owner"),
     ("pending_uploads.rs", "moving to an owner"),
     ("persist.rs", "moving to an owner"),
     ("sink_publications.rs", "moving to an owner"),
