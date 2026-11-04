@@ -432,9 +432,7 @@ pub async fn plan(State(state): State<AppState>) -> Result<Json<PlanResult>, Api
             .as_ref()
             .map(|c| (c.total() as usize, c.source())),
     );
-    let result = queries::plan_from_dag(&dag, sizing);
-    state.cache.write().unwrap().plan = Some(result.clone());
-    Ok(Json(result))
+    Ok(Json(queries::plan_from_dag(&dag, sizing)))
 }
 
 /// `GET /assets` — every node as `barca list --json` shows it: `freshness` a lowercase
@@ -448,7 +446,6 @@ pub async fn assets(State(state): State<AppState>) -> Result<Json<Vec<Value>>, A
         .iter()
         .map(|a| barca_core::report::list_node_json(a, next_fires.get(&a.id)))
         .collect();
-    state.cache.write().unwrap().assets = Some(result);
     Ok(Json(nodes))
 }
 

@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 mod cadence;
-pub use cadence::Request;
+pub use cadence::{BUDGET, Request, SLACK, interval};
 
 /// What a backup's `<name>.json` sidecar says about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

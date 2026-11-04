@@ -43,7 +43,7 @@ pub(crate) const DYNAMIC_KEYS_MAX_AGE: Duration = Duration::from_secs(30);
 
 /// How long source files must have been still before their state is trusted. Source files are
 /// written by people and editors, rarely twice in a second.
-const SOURCES_SETTLED: Duration = Duration::from_secs(2);
+pub(crate) const SOURCES_SETTLED: Duration = Duration::from_secs(2);
 
 /// The same for the metadata DB, which barca writes many times a second during a run: longer
 /// than the timestamp resolution of any filesystem barca runs on, short enough that the cache
