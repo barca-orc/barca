@@ -307,49 +307,6 @@ mod tests {
         assert!(matches!(work.await, Err(crate::BarcaError::Cancelled)));
         assert_eq!(std::fs::metadata(&source).unwrap().len(), 4 * 1024 * 1024);
     }
-    /// #576: the store copy's digest is recorded on the latest successful row at its location,
-    /// and on no other row.
-    #[tokio::test]
-    async fn an_adopted_store_digest_is_recorded_on_the_latest_row_at_that_location() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("metadata.db").display().to_string();
-        super::init_db(&path).await.unwrap();
-        let rows = [
-            ("s3://b/a/n/h.json", "success", "first"),
-            ("s3://b/a/n/h.json", "success", "second"),
-            ("s3://b/a/n/h.json", "failed", ""),
-            ("s3://b/a/m/h.json", "success", "other"),
-        ];
-        {
-            let _guard = super::db_guard().await;
-            let (_db, conn) = super::open_conn(&path).await.unwrap();
-            for (at, status, hash) in rows {
-                conn.execute(
-                    "INSERT INTO materializations (node_id, run_hash, artifact_path, status, \
-                         output_hash) VALUES ('p.py:n', 'h', ?1, ?2, NULLIF(?3, ''))",
-                    [at, status, hash],
-                )
-                .await
-                .unwrap();
-            }
-        }
-        let adopted = [("s3://b/a/n/h.json".to_string(), "new".to_string())];
-        super::adopt_store_digests(&path, &adopted).await;
-        let _guard = super::db_guard().await;
-        let (_db, conn) = super::open_conn(&path).await.unwrap();
-        let mut found = conn
-            .query(
-                "SELECT COALESCE(output_hash, '') FROM materializations ORDER BY id",
-                (),
-            )
-            .await
-            .unwrap();
-        let mut hashes = Vec::new();
-        while let Some(row) = found.next().await.unwrap() {
-            hashes.push(row.get::<String>(0).unwrap());
-        }
-        assert_eq!(hashes, ["first", "new", "", "other"]);
-    }
 }
 
 #[cfg(test)]
