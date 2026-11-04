@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from barca._artifacts import deserialize
+from barca._artifacts import _FORMAT_EXTENSIONS, deserialize
 
 
 class BarcaError(Exception):
@@ -224,7 +224,7 @@ def _server_output(url: str, run_id: str, fmt: str) -> Any:
             body = resp.read()
     except (urllib.error.URLError, OSError) as e:
         raise BarcaError(f"cannot read the output of run {run_id} from {url}: {e}") from e
-    suffix = {"parquet": ".parquet", "pickle": ".pkl", "csv": ".csv", "json": ".json"}.get(fmt, "")
+    suffix = _FORMAT_EXTENSIONS.get(fmt, "")
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / f"output{suffix}"
         path.write_bytes(body)

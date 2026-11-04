@@ -1,10 +1,12 @@
 # Artifact formats
 
-Status: implemented. Specification version: 3 (sinks republished by cache hits, #662; version
-2: dataset sinks and failing sinks, 0.30.0).
+Status: implemented. Specification version: 4 (the artifact file extension table pinned, #800;
+version 3: sinks republished by cache hits, #662; version 2: dataset sinks and failing sinks,
+0.30.0).
 Scope: choosing CSV artifacts and sinks, dataset sinks, reading them and inspecting cached
 results.
-Conformance: `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
+Conformance: `python/tests/test_artifact_extensions.py`, `crates/barca-core/src/sql.rs`
+(`format_of_agrees_with_the_spec_table`), `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
 `python/tests/test_sink_republish.py`, `crates/barca-core/src/sink_publications.rs`,
 `crates/barca-core/src/sink_args.rs`, `crates/barca-core/tests/grammar_spec.rs`.
 
@@ -32,6 +34,24 @@ Status inspection counts CSV rows and reports columns and sampled cells as strin
 Remote inspection retains the existing whole-object size cap. SQL registers CSV
 results using DuckDB's CSV inference with headers. Cache hits preserve CSV format
 and downstream steps use the corresponding CSV reader.
+
+## Artifact file extensions
+
+An artifact file's extension names its format. Barca reads a format from an extension with this
+table, in the worker (`barca._artifacts.FORMAT_OF_EXTENSION`) and in `barca sql`
+(`sql::format_of`), and writes each format with the extension marked *written*. Any other
+extension is not an artifact format: the worker reads it as JSON, `barca sql` reports it as
+`unknown`.
+
+| Extension | Format | Written |
+| --- | --- | --- |
+| `.json` | json | yes |
+| `.pkl` | pickle | yes |
+| `.pickle` | pickle | no |
+| `.parquet` | parquet | yes |
+| `.csv` | csv | yes |
+
+A dataset sink writes JSON as `.jsonl` files, which are sink files, not artifacts.
 
 ## Dataset sinks
 
