@@ -24,6 +24,7 @@ pub(crate) mod notifications;
 pub(crate) mod run_queue;
 pub(crate) mod runs;
 mod schedule;
+mod schema;
 pub(crate) mod sink_publications;
 mod snapshots;
 pub(crate) mod uploads;
@@ -37,6 +38,9 @@ pub use schedule::{
     ScheduleFailures, SchedulePause, get_schedule_failures, get_schedule_pauses,
     get_schedule_state, set_schedule_failures, set_schedule_pause, upsert_schedule_state,
 };
+use schema::{has_column, has_index, initialized};
+pub use schema::{init_db, init_db_as, probe_metadata};
+pub(crate) use schema::{init_locked, init_schema};
 pub(crate) use snapshots::copy_for_backup;
 pub use snapshots::{DbSnapshot, ReadView};
 
@@ -1248,107 +1252,6 @@ pub fn wal_is_clean(db_path: &str) -> bool {
     }
 }
 
-pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
-    init_db_as(db_path, db_path).await.map(|_| ())
-}
-
-/// [`init_db`] on the file at `path`, naming `shown` when the database cannot be used (a
-/// snapshot names the database it copies). Returns the format version (`PRAGMA user_version`,
-/// [`crate::db_schema::VERSION`] once initialized).
-///
-/// An empty file (0 bytes, no write-ahead log) holds no history, so it is initialized as a new
-/// database, with a note naming it: a `touch`, a backup tool or a reader that opened the path
-/// before barca created the database leaves one (#537). A database this release cannot use is
-/// [`BarcaError::MetadataUnusable`]: a file that is not SQLite, a newer format, or a malformed
-/// schema. A lock or I/O failure is [`BarcaError::Db`].
-pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
-    let _g = db_guard().await;
-    initialized(path, shown)
-        .await
-        .map(|(handle, conn, version)| {
-            // The connection keeps the file open (and its SQLite locks) until it is dropped,
-            // so it goes before the handle releases barca's lock (#537).
-            drop(conn);
-            drop(handle);
-            version
-        })
-        .map_err(|e| named(e, shown))
-}
-
-/// The database at `path` opened under its lock and initialized ([`init_db_as`]), with its
-/// format version. The caller holds the in-process guard, and drops the connection before the
-/// handle.
-async fn initialized(
-    path: &str,
-    shown: &str,
-) -> Result<(DbHandle, libsql::Connection, i64), BarcaError> {
-    // Under the lock: a database another process is creating is empty until it commits.
-    let lock = acquire_file_lock(path, DB_FILE_LOCK_WAIT).await?;
-    if empty_file(path) {
-        // Replaced rather than opened in place: nothing in it, and a new file is what a
-        // missing database gets.
-        fs::remove_file(path)?;
-        // A snapshot's copy is initialized silently: the note is for the file itself.
-        if path == shown {
-            crate::errln!(
-                "[barca] note: the metadata DB {shown} was empty (0 bytes); initialized it \
-                 as a new database"
-            );
-        }
-    } else if let Some(why) = unusable_file(path) {
-        return Err(unusable(why));
-    }
-    if Path::new(path).exists() {
-        // A read-write SQLite connection may checkpoint on close, even after a failed
-        // schema check. Judge compatibility read-only before opening the writer.
-        let (_db, read) = connect_read_only(path).await?;
-        let version = crate::db_schema::check(&read).await?;
-        if version == crate::db_schema::VERSION {
-            crate::state_validate::Schema::read(&read)
-                .await?
-                .columns_fit(true)
-                .map_err(unusable)?;
-        } else {
-            crate::state_validate::legacy_schema(&read)
-                .await?
-                .map_err(unusable)?;
-        }
-    }
-    let (db, conn) = connect_write(path).await?;
-    let handle = DbHandle {
-        _db: db,
-        _lock: Some(lock),
-    };
-    let version = match init_schema(&conn).await {
-        Ok(()) => crate::db_schema::read_version(&conn).await,
-        Err(e) => Err(e),
-    };
-    match version {
-        Ok(version) => {
-            // Preserve the existing WAL metadata format for newly created databases too.
-            let wal = async {
-                let mut rows = conn.query("PRAGMA journal_mode=WAL", ()).await?;
-                while rows.next().await?.is_some() {}
-                Ok::<_, libsql::Error>(())
-            }
-            .await;
-            if let Err(error) = wal {
-                drop(conn);
-                drop(handle);
-                return Err(BarcaError::Db(format!(
-                    "failed to enable metadata WAL: {error}"
-                )));
-            }
-            Ok((handle, conn, version))
-        }
-        Err(e) => {
-            drop(conn);
-            drop(handle);
-            Err(e)
-        }
-    }
-}
-
 /// What a run reads from the metadata DB as it starts ([`start_run`]).
 pub struct StartedRun {
     /// Logical-node scheduling priors for the requested plan.
@@ -1408,252 +1311,6 @@ fn named(error: BarcaError, shown: &str) -> BarcaError {
         }
         e => e,
     }
-}
-
-/// The format version of the metadata DB at `path`, read in place when compatible, otherwise
-/// from a private snapshot without writing the file: `None` when there is no database yet. A database this release cannot use
-/// is [`BarcaError::MetadataUnusable`] naming `path`. For a read-only server, which never
-/// migrates the file itself.
-pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
-    directory_check(path)?;
-    if ReadView::open(path).await?.is_some() {
-        return Ok(Some(crate::db_schema::VERSION));
-    }
-    let Some(snapshot) = DbSnapshot::take(path).await? else {
-        return Ok(None);
-    };
-    // The copy is private, so it can be judged without a lock. An empty file holds no history:
-    // the same as none, which a writer initializes ([`init_db_as`]).
-    if empty_file(snapshot.path()) {
-        crate::errln!("[barca] note: the metadata DB {path} is empty (0 bytes): no history yet");
-        return Ok(None);
-    }
-    if let Some(why) = unusable_file(snapshot.path()) {
-        return Err(BarcaError::MetadataUnusable {
-            path: path.to_string(),
-            why,
-        });
-    }
-    // The format the file is in, before the copy is migrated.
-    let version = {
-        let _g = db_guard().await;
-        let (_db, conn) = open_conn(snapshot.path())
-            .await
-            .map_err(|e| named(e, path))?;
-        crate::db_schema::read_version(&conn)
-            .await
-            .map_err(|e| named(e, path))?
-    };
-    init_db_as(snapshot.path(), path).await?;
-    Ok(Some(version))
-}
-
-/// Migrate legacy metadata atomically, preserving authoritative history. Unknown versions
-/// are refused before any write; complete current databases are left unchanged.
-///
-/// Format 1 is additive: a format-1 database written by an earlier release may lack a
-/// nullable column, a table or an index added since (`materializations.bytes_changed` in
-/// 0.24.0; see `db_schema::ADDED_TABLES` and `db_schema::INDEXES`). It gets the same additive
-/// migration as a legacy database, in one transaction, and an older release still reads the
-/// result.
-pub(crate) async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
-    let version = crate::db_schema::check(conn).await?;
-    if version == crate::db_schema::VERSION {
-        // Read once and judged twice: this runs at the start of every run.
-        let schema = crate::state_validate::Schema::read(conn).await?;
-        if crate::db_schema::additions_missing_in(&schema) {
-            // A table that is there but lacks a column the additions do not bring is malformed,
-            // not behind: refuse it before any write.
-            schema.columns_fit(true).map_err(unusable)?;
-            return add_to_current_schema(conn).await;
-        }
-        return schema.columns_fit(false).map_err(unusable);
-    }
-    crate::state_validate::legacy_schema(conn)
-        .await?
-        .map_err(unusable)?;
-    with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
-        migrate_legacy_schema(conn).await?;
-        crate::state_validate::usable_schema(conn)
-            .await?
-            .map_err(unusable)?;
-        conn.execute(
-            &format!("PRAGMA user_version = {}", crate::db_schema::VERSION),
-            (),
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to record schema version: {e}")))?;
-        Ok(())
-    })
-    .await
-}
-
-/// Add this release's additive columns and indexes to a version-1 database written by an
-/// earlier release, in one transaction: rows are untouched, and an error leaves the schema as it
-/// was. The format stays version 1 (see `specs/interfaces/metadata-schema.md`).
-async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
-    with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
-        for (table, definitions) in crate::db_schema::ADDED_COLUMNS {
-            crate::db_schema::add_columns(conn, table, definitions).await?;
-        }
-        crate::db_schema::add_tables(conn).await?;
-        for index in crate::db_schema::INDEXES {
-            conn.execute(index, ())
-                .await
-                .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
-        }
-        crate::state_validate::usable_schema(conn)
-            .await?
-            .map_err(unusable)?;
-        Ok(())
-    })
-    .await
-}
-
-async fn migrate_legacy_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS materializations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id TEXT NOT NULL,
-            run_hash TEXT,
-            output_json TEXT,
-            artifact_path TEXT,
-            artifact_format TEXT,
-            artifact_size_bytes INTEGER,
-            elapsed_seconds REAL,
-            status TEXT NOT NULL DEFAULT 'success',
-            error_message TEXT,
-            error_traceback TEXT,
-            attempts INTEGER DEFAULT 1,
-            sinks_json TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        )",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create materializations table: {e}")))?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mat_node_run ON materializations(node_id, run_hash)",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
-
-    // Migrate existing databases: add artifact columns if missing.
-    crate::db_schema::add_columns(
-        conn,
-        "materializations",
-        crate::db_schema::MATERIALIZATION_COLUMNS,
-    )
-    .await?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mat_run ON materializations(run_id)",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
-
-    // Per-node cost estimates: the persisted EWMA that seeds the next run's
-    // batch sizing, so the 30s cold-start probe is paid once ever per stable
-    // node, not once per run. One row per exact node id (including partition
-    // suffix) — current estimate only, no history vector.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS cost_estimates (
-            node_id TEXT PRIMARY KEY,
-            base_id TEXT NOT NULL,
-            estimate_seconds REAL NOT NULL,
-            cpu_seconds REAL,
-            max_rss_bytes INTEGER,
-            samples INTEGER DEFAULT 0,
-            updated_at TEXT DEFAULT (datetime('now'))
-        )",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create cost_estimates table: {e}")))?;
-
-    // Run history table.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT UNIQUE NOT NULL,
-            command TEXT NOT NULL,
-            files TEXT NOT NULL,
-            target TEXT,
-            status TEXT NOT NULL DEFAULT 'running',
-            steps_total INTEGER,
-            steps_executed INTEGER DEFAULT 0,
-            steps_cached INTEGER DEFAULT 0,
-            started_at TEXT DEFAULT (datetime('now')),
-            finished_at TEXT,
-            elapsed_seconds REAL
-        )",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create runs table: {e}")))?;
-    // Who is executing a `running` run (#214): the coordinator's pid and host, so a run whose
-    // process died without recording an outcome can be told from one still in progress.
-    crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
-    // Indexes and tables added within format 1 (`db_schema::INDEXES`, `ADDED_TABLES`).
-    for index in crate::db_schema::INDEXES {
-        conn.execute(index, ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
-    }
-    crate::db_schema::add_tables(conn).await?;
-
-    // Unfinished runs are looked up by status (`interrupted_runs`): through this index that
-    // costs the number of such runs, not the length of the history.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
-
-    // Scheduler durability: the last time each scheduled node was fired, as
-    // unix epoch seconds. Lets `barca serve` catch up a single missed tick
-    // after downtime instead of silently skipping it.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS schedule_state (
-            node_id TEXT PRIMARY KEY,
-            last_fired_at INTEGER NOT NULL
-        )",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create schedule_state table: {e}")))?;
-    crate::db_schema::add_columns(
-        conn,
-        "schedule_state",
-        crate::db_schema::SCHEDULE_STATE_COLUMNS,
-    )
-    .await?;
-
-    // Captured user stdout, one row per line. Rust owns persistence; workers
-    // stream lines over the socket and the coordinator writes them here.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            node_id TEXT NOT NULL,
-            seq INTEGER NOT NULL,
-            line TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now'))
-        )",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create logs table: {e}")))?;
-    crate::db_schema::add_columns(conn, "logs", crate::db_schema::LOG_COLUMNS).await?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_logs_run ON logs(run_id, seq)",
-        (),
-    )
-    .await
-    .map_err(|e| BarcaError::Db(format!("failed to create logs index: {e}")))?;
-    Ok(())
 }
 
 /// The elapsed seconds of each node's last `window` successful materializations, its partition
@@ -2205,44 +1862,6 @@ pub async fn get_run_outcome(db_path: &str, run_id: &str) -> Result<Option<Strin
         .filter(|s| !s.is_empty()))
 }
 
-/// Whether `table` has `column` (an inspected snapshot may predate it).
-/// Whether the database has the index `name` (a snapshot of an older database may not).
-async fn has_index(conn: &libsql::Connection, name: &str) -> Result<bool, BarcaError> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = ?1",
-            [name],
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to inspect indexes: {e}")))?;
-    Ok(rows
-        .next()
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to inspect indexes: {e}")))?
-        .is_some())
-}
-
-async fn has_column(
-    conn: &libsql::Connection,
-    table: &str,
-    column: &str,
-) -> Result<bool, BarcaError> {
-    let mut rows = conn
-        .query(&format!("PRAGMA table_info({table})"), ())
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to inspect {table} columns: {e}")))?;
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to read {table} columns: {e}")))?
-    {
-        if row.get::<String>(1).ok().as_deref() == Some(column) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 /// This machine's host name ("" when it cannot be read). Stored on a run row next to the pid:
 /// a database restored from another machine's backup holds that machine's runs, whose pids
 /// mean nothing here.
@@ -2432,12 +2051,6 @@ pub(crate) async fn connect_locked(
     db_path: &str,
 ) -> Option<(libsql::Database, libsql::Connection)> {
     connect(db_path).await.ok()
-}
-
-/// Create barca's tables in a new database at `db_path`, for a caller that holds its lock.
-pub(crate) async fn init_locked(db_path: &str) -> Result<(), BarcaError> {
-    let (_db, conn) = connect(db_path).await?;
-    init_schema(&conn).await
 }
 
 /// A `running` run of another process whose owner is alive, and what it runs: see
@@ -4949,25 +4562,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_has_timing_columns() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-
-        let (_db, conn) = open_conn(&db_path).await.unwrap();
-        let mut rows = conn
-            .query("PRAGMA table_info(materializations)", ())
-            .await
-            .unwrap();
-        let mut columns = Vec::new();
-        while let Some(row) = rows.next().await.unwrap() {
-            columns.push(row.get::<String>(1).unwrap());
-        }
-        assert!(columns.contains(&"cpu_seconds".to_string()));
-        assert!(columns.contains(&"max_rss_bytes".to_string()));
-    }
-
-    #[tokio::test]
     async fn a_running_run_whose_process_is_gone_is_reported_as_interrupted() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
@@ -5707,33 +5301,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 3);
-    }
-
-    #[tokio::test]
-    async fn schema_has_artifact_columns() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-
-        let (_db, conn) = open_conn(&db_path).await.unwrap();
-        let mut rows = conn
-            .query("PRAGMA table_info(materializations)", ())
-            .await
-            .unwrap();
-        let mut columns = Vec::new();
-        while let Some(row) = rows.next().await.unwrap() {
-            columns.push(row.get::<String>(1).unwrap());
-        }
-
-        assert!(columns.contains(&"artifact_path".to_string()));
-        assert!(columns.contains(&"artifact_format".to_string()));
-        assert!(columns.contains(&"artifact_size_bytes".to_string()));
-        // Error/retry tracking columns.
-        assert!(columns.contains(&"error_message".to_string()));
-        assert!(columns.contains(&"error_traceback".to_string()));
-        assert!(columns.contains(&"attempts".to_string()));
-        // Old column still exists for backward compat
-        assert!(columns.contains(&"output_json".to_string()));
     }
 
     #[tokio::test]
