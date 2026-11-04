@@ -124,8 +124,8 @@ own row above.
 - `barca queue`: stays experimental. It reads `serve`'s run queue, which stays experimental,
   and its JSON has no schema snapshot.
 - `barca tokens` and `barca tokens bootstrap`: stay experimental. New in 0.36.0 (RFC-0016); the
-  token format may evolve, and token access has been checked on loopback only, not in a cloud
-  deployment behind a proxy.
+  token format may evolve, and the cost of token access in a cloud deployment is not
+  established.
 
 ## Commands
 

@@ -39,7 +39,7 @@ from approved decisions.
 | Owner | Scope | Status / evidence |
 | --- | --- | --- |
 | [Freshness](behavior/freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules with a known historical-selection defect; bounded historical-selection evidence; named invariants and real integration checks |
-| [Execution](behavior/execution.md) | Runs, logical keys vs calls/processes, batches, partial failure, cancellation and recovery | Implemented rules; in-flight asset sharing between server runs (cancellation survival and durable handoff are gaps); bounded full execution remains a gap |
+| [Execution](behavior/execution.md) | Runs, logical keys vs calls/processes, batches, partial failure, cancellation and recovery | Implemented rules; shared in-flight asset steps between a server's runs implemented as experimental in 0.39.4, with three gaps: cancellation survival, a durable handoff and a decide-to-lease race (#654); bounded full execution remains a gap (#655) |
 | [Inspection](behavior/inspection.md) | Validity, execution, availability and current counts | Implemented behavior; explicit checking and independent status tracking are approved design only |
 | [Performance](behavior/performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |
 | [Python runtime](behavior/python-runtime.md) | Cached modules, process-local DuckDB state and temporary input views | Implemented; real worker connection controls |
