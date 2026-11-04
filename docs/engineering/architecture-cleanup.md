@@ -166,6 +166,13 @@ incremental saves, checkpoint writes, terminal writes and server-ledger acceptan
 Build on #658 once its actual status is known. Preserve current behavior with existing
 [history reconciliation](../../python/tests/test_history_reconcile.py) and persistence coverage.
 
+Note, 2026-11-04 (#800, item 16): every write to the metadata database now goes through a
+named owner function, in `db.rs`, `db/` (one module per table family) or
+`persist/recording.rs`; callers keep their transactions, checks and error messages.
+`db/write_boundary_tests.rs` fails on an `INSERT`, `UPDATE`, `DELETE` or `REPLACE` literal in
+non-test code anywhere else in `barca-core` (`db_schema.rs` migrations and the read-only `sql/`
+aside). This is the boundary only: no write is ordered or guarded differently.
+
 Follow with a separate behavior PR defining the reconciliation scope/order and guarded
 publication. Add real controlled overlaps: newer completion first, newer observation reusing
 old bytes, removal while old work runs, cache-only selection and restart between byte
@@ -205,8 +212,9 @@ step and take its artifact as a cache hit. Execution lifetime still belongs to t
 run's pool. It is kept on under `serve` as experimental (#800, item 8). What remains of this
 step, in #654: shared work surviving the cancellation of the run that started it
 (INV-CANCEL-01), a handoff that waits for the owner's durable row (step 2b's guarded
-publication), and an atomic decide-and-claim that closes the decide-to-lease race. Step 2b
-(one metadata write boundary) and step 3 are still not done.
+publication), and an atomic decide-and-claim that closes the decide-to-lease race. Step 2b's
+write boundary is in place (#800, item 16, below); its guarded publication and step 3 are
+still not done.
 
 ### 5. Bound retained work and inspection
 

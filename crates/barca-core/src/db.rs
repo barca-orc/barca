@@ -13,6 +13,20 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, MutexGuard};
 
+// The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
+// this file, one of these owners (a table family each) or `persist/recording.rs`.
+pub(crate) mod cost_estimates;
+pub(crate) mod freshness_proofs;
+pub(crate) mod ledger_posts;
+pub(crate) mod materializations;
+pub(crate) mod notifications;
+pub(crate) mod run_queue;
+pub(crate) mod runs;
+pub(crate) mod sink_publications;
+pub(crate) mod uploads;
+#[cfg(test)]
+mod write_boundary_tests;
+
 /// Process-wide serialization of `metadata.db` operations. The server can run
 /// multiple pipelines in parallel (they execute Python concurrently), but their
 /// brief reads/writes to the shared SQLite file must not overlap. Every DB
@@ -30,18 +44,6 @@ use tokio::sync::{Mutex, MutexGuard};
 /// runs. The Engine extraction (#80) replaces this with a single owner holding
 /// a persistent connection.
 static DB_LOCK: Mutex<()> = Mutex::const_new(());
-
-pub(crate) mod cost_estimates;
-pub(crate) mod freshness_proofs;
-pub(crate) mod ledger_posts;
-pub(crate) mod materializations;
-pub(crate) mod notifications;
-pub(crate) mod run_queue;
-pub(crate) mod runs;
-pub(crate) mod sink_publications;
-pub(crate) mod uploads;
-#[cfg(test)]
-mod write_boundary_tests;
 
 /// Prepare `sql` once for a loop that runs it per row. The driver parses and plans the SQL of every
 /// `Connection::execute` again, which dominated recording thousands of rows (#460); a prepared
