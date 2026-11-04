@@ -139,4 +139,11 @@
   --graph-mask:  rgba(8, 11, 10, 0.72);      /* what the minimap dims outside the viewport */
   --glow-running: 0 0 14px -5px rgba(54, 203, 211, 0.6);  /* a running node's halo */
 
+  /* Chains: one accent per open chain. Clear of the status hues (green, amber, red, cyan). */
+  --chain-1: #6FA2F7;
+  --chain-2: #E38FD6;
+  --chain-3: #B79BF5;
+  --chain-4: #D9B98C;
+  --chain-5: #8FB8C9;
+  --chain-6: #F09A8A;
 }

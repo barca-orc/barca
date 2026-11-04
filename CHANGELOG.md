@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- UI (prototype): chains, named and possibly overlapping sets of nodes to look at together. The sidebar lists them above Files, with checkboxes to open several at once; a chain shows its nodes numbered by step (`1, 2a, 2b, 3`, with `A1`/`B1` for unconnected lines), as a table with the node panel or as a graph that connects open chains through the nodes between them. A chains overview, worst first, is the landing page when chains exist, and a scratch chain is built in the browser and copied as code. Chains are declared in the UI for now; `chain()` in Python comes next.
+
 ### Bug Fixes
 
 - UI: one state vocabulary everywhere. A task or sensor shows its last execution (Healthy, Failed, Not run) in tables, as group health already did; Not run, Unknown and Always runs are grey wherever they appear, leaving the queued colour to queued run work; "State unknown" is "Unknown". Node, file and group names use the sans-serif instead of monospace, dark-theme borders and hover/selection backgrounds have more contrast, and table rows stack a name over its file at any width, with the table beside the node panel leaving out last success, typical and next run instead of squeezing every column.

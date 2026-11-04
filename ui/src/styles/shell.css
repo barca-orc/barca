@@ -703,3 +703,12 @@
 }
 .barca-schema-cell-more:hover, .barca-schema-cell-more:focus-visible { color: var(--text-strong); outline: none; text-decoration: underline dotted; }
 .barca-schema-cell-more[aria-expanded="true"] { white-space: pre-wrap; }
+.barca-chain-check {
+  flex: none; width: 13px; height: 13px; margin: 0 2px 0 3px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px solid var(--text-muted); border-radius: 3px; background: none;
+  color: var(--bg-canvas, var(--c-ink-900)); cursor: pointer; transition: var(--t-all);
+}
+.barca-chain-check:hover { border-color: var(--text-strong); }
+.barca-chain-check[aria-checked='true'] { background: var(--text-strong); border-color: var(--text-strong); }
+.barca-sidebar[data-collapsed] .barca-chain-check { display: none; }

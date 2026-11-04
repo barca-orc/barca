@@ -30,6 +30,8 @@ const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: Por
 const FIT_INSET: Inset = { top: 32, right: 32, bottom: 64, left: 56 }
 const FIT_INSET_BESIDE_MINIMAP: Inset = { ...FIT_INSET, right: 236 }
 const FIT_DURATION = 200
+/** How far a whole-graph fit may zoom out before it pans instead. */
+const WHOLE_MIN_ZOOM = 0.35
 
 /** Below this many nodes the whole graph fits on screen, and a minimap only covers it. */
 const MINIMAP_FROM = 60
@@ -57,6 +59,8 @@ interface GraphCanvasProps {
   /** Persistent state with active-run overlays. */
   states: Record<string, GraphState>
   handleRef?: Ref<GraphCanvasHandle>
+  /** Fit shows every node, zooming out below readable size if it must (small graphs). */
+  fitWhole?: boolean
 }
 
 function viewNodes(nodes: GraphNode[]): ViewNode[] {
@@ -79,7 +83,7 @@ function viewNodes(nodes: GraphNode[]): ViewNode[] {
  * A fit never goes below the readable zoom (1:1): a graph that fits is shown whole at that
  * size, a bigger one from its selected node, else its failed nodes (`fitTarget`).
  */
-function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes: GraphNode[]; layoutKey: string; focus: string | null; minimap: boolean; handleRef?: Ref<GraphCanvasHandle> }) {
+function FitController({ nodes, layoutKey, focus, minimap, handleRef, fitWhole }: { nodes: GraphNode[]; layoutKey: string; focus: string | null; minimap: boolean; handleRef?: Ref<GraphCanvasHandle>; fitWhole?: boolean }) {
   const { fitView } = useReactFlow()
   const width = useStore((s) => s.width)
   const height = useStore((s) => s.height)
@@ -92,15 +96,15 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
 
   const fit = useCallback(() => {
     const { nodes, focus, width, height, inset } = latest.current
-    const target = fitTarget(viewNodes(nodes), width, height, inset, focus)
+    const target = fitWhole ? viewNodes(nodes) : fitTarget(viewNodes(nodes), width, height, inset, focus)
     void fitView({
       nodes: target.map(({ id }) => ({ id })),
       padding: { top: `${inset.top}px`, right: `${inset.right}px`, bottom: `${inset.bottom}px`, left: `${inset.left}px` },
-      minZoom: READABLE_ZOOM,
+      minZoom: fitWhole ? WHOLE_MIN_ZOOM : READABLE_ZOOM,
       maxZoom: READABLE_ZOOM,
       duration: FIT_DURATION,
     })
-  }, [fitView])
+  }, [fitView, fitWhole])
 
   useEffect(() => {
     // Fit after mount and on every layout-direction change. A short settle
@@ -128,6 +132,7 @@ export function GraphCanvas({
   onOpenGroup,
   states,
   handleRef,
+  fitWhole,
 }: GraphCanvasProps) {
   // Re-layout only when structure or direction changes — never on selection or
   // a live status tick. A big graph is laid out in a worker: `null` until it is.
@@ -232,7 +237,7 @@ export function GraphCanvas({
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-grid)" />
         <Controls showInteractive={false} />
         {minimap && <MiniMap nodeColor={n => statusMeta(nodeStates.get(n.id) ?? 'skipped').color} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
-        <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={handleRef} />
+        <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={handleRef} fitWhole={fitWhole} />
       </ReactFlow>
     </ReactFlowProvider>
   )

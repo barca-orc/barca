@@ -101,6 +101,13 @@
 
   --status-skipped:      #9AA69E;
   --status-skipped-bg:   rgba(154, 166, 158, 0.16);
+
+  --chain-1: #2F6BD8;
+  --chain-2: #B2479F;
+  --chain-3: #7350D0;
+  --chain-4: #8C6A33;
+  --chain-5: #3F7489;
+  --chain-6: #C2503D;
 }
 
 [data-theme="light"] ::selection {

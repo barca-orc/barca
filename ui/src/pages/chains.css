@@ -1,0 +1,58 @@
+.barca-chain-desc { margin: 0 0 8px; color: var(--text-muted); font-size: var(--text-sm); }
+.barca-chain-table th.num, .barca-chain-table td.num { width: 56px; }
+.barca-chain-step {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 20px; padding: 0 6px; border-radius: 10px;
+  font-family: var(--font-sans); font-size: var(--text-xs); font-variant-numeric: tabular-nums; font-weight: 500;
+  background: var(--bg-active); color: var(--text-strong);
+}
+.barca-chain-step[data-parallel] { background: none; box-shadow: inset 0 0 0 1px var(--border-strong, var(--text-faint)); }
+.barca-chain-also { display: flex; flex-wrap: wrap; gap: 4px; }
+.barca-chain-pill {
+  border: 0; border-radius: 9px; padding: 1px 8px; cursor: pointer;
+  font-size: var(--text-2xs); background: var(--bg-hover); color: var(--text-muted);
+}
+.barca-chain-pill:hover { color: var(--text-strong); }
+.barca-chain-picker { position: relative; display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--text-muted); }
+.barca-chain-picker input {
+  flex: 1; max-width: 360px; height: 26px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid var(--border, var(--bg-active)); background: transparent; color: var(--text-strong);
+}
+.barca-chain-matches {
+  position: absolute; top: 30px; left: 19px; z-index: 10; width: 360px;
+  display: flex; flex-direction: column; padding: 4px; border-radius: 8px;
+  background: var(--bg-raised, var(--bg)); box-shadow: var(--shadow-md, var(--shadow-sm));
+}
+.barca-chain-matches button {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 0; border-radius: 5px;
+  background: none; color: var(--text-strong); text-align: left; cursor: pointer;
+}
+.barca-chain-matches button:hover { background: var(--bg-hover); }
+.barca-side-sub { padding: 2px 12px 0 14px; }
+.barca-chain-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.barca-chain-key {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border-radius: 6px;
+  font-size: var(--text-xs); color: var(--text-strong); background: var(--bg-hover);
+  box-shadow: inset 3px 0 0 var(--chain);
+}
+.barca-chain-key b { color: var(--chain); font-weight: 600; }
+.barca-chain-steps { display: flex; gap: 3px; justify-content: flex-end; }
+.barca-chain-step[data-color] { background: none; color: var(--chain); box-shadow: inset 0 0 0 1px var(--chain); }
+.barca-chain-pill[data-open] { cursor: default; color: var(--chain); box-shadow: inset 0 0 0 1px var(--chain); background: none; }
+.barca-chain-table th.num, .barca-chain-table td.num { width: auto; min-width: 56px; white-space: nowrap; }
+.barca-chain-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; padding: 4px 0 24px; }
+.barca-chain-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 14px 16px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-raised);
+  color: var(--text-default); text-align: left; cursor: pointer; transition: var(--t-all);
+}
+.barca-chain-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.barca-chain-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%; }
+.barca-chain-card-head strong { font-size: var(--text-md, var(--text-sm)); font-weight: 600; color: var(--text-strong); }
+.barca-chain-card-desc { margin: -4px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
+.barca-chain-card-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.barca-chain-card-list li { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
+.barca-chain-card-list .name { color: var(--text-strong); font-family: var(--font-name); }
+.barca-chain-card-list .barca-cell-sub { margin: 0 0 0 auto; }
+.barca-sect-link { border: 0; background: none; padding: 0; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.barca-sect-link:hover, .barca-sect-link[aria-current='page'] { color: var(--text-strong); }
