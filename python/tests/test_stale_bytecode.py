@@ -258,46 +258,36 @@ def test_dynamic_partition_values(project):
     assert second["final_output"] == ["a", "c"]
 
 
-def _run_batch_mode(project: Path, source: Path) -> int:
-    """Run one step through `python -m barca._worker <batch.json>` and return its value."""
-    art = project / "artifacts"
-    batch = {
-        "stream_id": "test-w0",
-        "artifact_dir": str(art),
-        "provided_inputs": {},
-        "steps": [
-            {
-                "node_id": "val",
-                "kind": "asset",
-                "function_name": "val",
-                "source_file": str(source),
-                "inputs": {},
-            }
-        ],
-    }
-    batch_file = project / "batch.json"
-    batch_file.write_text(json.dumps(batch))
+DAEMON_STEP = """
+import socket, sys
+from barca import _runtime, _worker
+from barca._artifacts import artifact_path, deserialize
+_runtime._socket, peer = socket.socketpair()
+step = {"node_id": "val", "kind": "asset", "function_name": "val", "source_file": sys.argv[1],
+        "inputs": {}}
+assert _worker._run_daemon_step(step, {}, sys.argv[2], _worker._ArtifactLRU())
+print(deserialize(artifact_path(sys.argv[2], "val", "json"), "json"))
+"""
+
+
+def _run_worker_step(project: Path, source: Path) -> int:
+    """Run one step through the daemon worker's step runner in a fresh interpreter (so the
+    module is imported from disk, with any `__pycache__` it left) and return its value."""
     env = {
         k: v for k, v in os.environ.items() if k not in ("PYTHONDONTWRITEBYTECODE", "BARCA_SOCKET")
     }
     proc = subprocess.run(
-        [sys.executable, "-m", "barca._worker", str(batch_file)],
+        [sys.executable, "-c", DAEMON_STEP, str(source), str(project / "artifacts")],
         cwd=project,
         env=env,
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
-    results = [
-        json.loads(line[len("BARCA:2:") :])
-        for line in proc.stderr.splitlines()
-        if line.startswith("BARCA:2:")
-    ]
-    result = next(m for m in results if m.get("type") == "result")
-    return json.loads(Path(result["artifact"]["path"]).read_text())
+    return int(proc.stdout.strip().splitlines()[-1])
 
 
-def test_batch_mode_worker(project):
+def test_worker_step(project):
     write_pinned(
         project / "helpers.py",
         """
@@ -315,13 +305,13 @@ def test_batch_mode_worker(project):
             return compute() + 1
         """,
     )
-    assert _run_batch_mode(project, p) == 11
+    assert _run_worker_step(project, p) == 11
 
     same_size_edit(p, "compute() + 1", "compute() + 2")
-    assert _run_batch_mode(project, p) == 12
+    assert _run_worker_step(project, p) == 12
 
     same_size_edit(project / "helpers.py", "return 10", "return 20")
-    assert _run_batch_mode(project, p) == 22
+    assert _run_worker_step(project, p) == 22
 
 
 # ─── The loader itself ───────────────────────────────────────────────────────

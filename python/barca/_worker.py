@@ -1,13 +1,7 @@
-"""Barca worker — executes a batch of steps sequentially.
+"""Barca worker: runs steps the coordinator sends over its Unix domain socket.
 
-Invoked by Rust: python -m barca._worker <batch.json>
-
-Protocol:
-  - Input: batch JSON file with steps, provided_inputs, and artifact_dir
-  - Protocol output: prefixed JSON lines on STDERR: BARCA:2:{...}
-  - User output: stdout passes through to terminal (print() works normally)
-  - Non-prefixed stderr lines are treated as errors/tracebacks
-  - No DB access — Rust owns all persistence
+Started by Rust as ``python -m barca._worker --daemon`` (`io_loop.rs`, `worker_command`).
+The wire protocol is `specs/interfaces/worker-protocol.md`; this module has no DB access.
 """
 
 import contextlib
@@ -22,6 +16,7 @@ from typing import Any
 from barca import _duckdb, _sinks, _storage
 from barca._artifacts import (
     _FORMAT_EXTENSIONS,
+    FORMAT_OF_EXTENSION,
     LAZY_FRAME_TYPES,
     _frame_kind,
     artifact_path,
@@ -35,14 +30,6 @@ from barca._artifacts import (
     serialize_hashed,
 )
 from barca._source_import import activate_source_path, load_pipeline_module
-
-_EXT_FORMATS = {
-    ".json": "json",
-    ".pkl": "pickle",
-    ".pickle": "pickle",
-    ".parquet": "parquet",
-    ".csv": "csv",
-}
 
 
 class _LineEmitter(io.TextIOBase):
@@ -458,32 +445,21 @@ def _default_artifact_dir() -> str:
     return str(Path(".barca/artifacts").resolve())
 
 
-_PROTOCOL_VERSION = 2
-_use_socket = False
-
-
 def _emit(msg_type, **fields):
-    """Emit a protocol message — via socket if available, else stderr."""
-    if _use_socket:
-        from barca import _runtime
+    """Report a step's outcome to the coordinator over the worker socket."""
+    from barca import _runtime
 
-        if msg_type == "result":
-            _runtime.emit_step_completed(fields["node_id"], fields["artifact"])
-        elif msg_type == "error":
-            _runtime.emit_step_error(
-                node_id=fields["node_id"],
-                error_type=fields["error_type"],
-                message=fields["message"],
-                traceback=fields["traceback"],
-                elapsed=fields.get("elapsed", 0.0),
-                phase=fields.get("phase", USER_CODE),
-            )
-        elif msg_type == "blocked":
-            _runtime.emit_blocked(fields["node_id"], fields["reason"])
-        return
-    # Original stderr protocol
-    payload = json.dumps({"type": msg_type, **fields})
-    print(f"BARCA:{_PROTOCOL_VERSION}:{payload}", file=sys.stderr, flush=True)
+    if msg_type == "result":
+        _runtime.emit_step_completed(fields["node_id"], fields["artifact"])
+    elif msg_type == "error":
+        _runtime.emit_step_error(
+            node_id=fields["node_id"],
+            error_type=fields["error_type"],
+            message=fields["message"],
+            traceback=fields["traceback"],
+            elapsed=fields.get("elapsed", 0.0),
+            phase=fields.get("phase", USER_CODE),
+        )
 
 
 # Where a step failed (the `phase` of a `step_error`). A closed set: the coordinator reads any
@@ -542,19 +518,6 @@ def _user_traceback(exc) -> str:
     return text.rstrip("\n")
 
 
-def _emit_error(node_id, exc, elapsed=0.0, phase=USER_CODE):
-    """Emit a structured failure for a single step. Rust owns the retry decision."""
-    _emit(
-        "error",
-        node_id=node_id,
-        error_type=type(exc).__name__,
-        message=str(exc),
-        traceback=_traceback_for(exc, phase),
-        elapsed=elapsed,
-        phase=phase,
-    )
-
-
 def load_module(source_file):
     return load_pipeline_module(source_file)
 
@@ -595,19 +558,6 @@ def _run_with_timeout(fn, kwargs, timeout_seconds, *, label=None):
     return result
 
 
-def _resolve_input(raw_value, *, frame_type=None):
-    """Resolve a provided input: artifact ref → deserialized value, else raw.
-
-    For collected (fan-in) inputs, deserializes each partition artifact into a list.
-    """
-    if isinstance(raw_value, dict):
-        if raw_value.get("_collected") and "artifacts" in raw_value:
-            return _load_collected_artifacts(raw_value["artifacts"], frame_type=frame_type)
-        if "path" in raw_value and "format" in raw_value:
-            return deserialize(raw_value["path"], raw_value["format"], frame_type=frame_type)
-    return raw_value
-
-
 def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     """Resolve one artifact path to its deserialized value via the tier-1 LRU
     cache, falling through to the artifact store on miss."""
@@ -618,7 +568,7 @@ def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     if not _storage.exists(path):
         raise FileNotFoundError(f"Input artifact not found: {path}")
     if fmt is None:
-        fmt = _EXT_FORMATS.get(_storage.suffix(path), "json")
+        fmt = FORMAT_OF_EXTENSION.get(_storage.suffix(path), "json")
     value = deserialize(path, fmt, frame_type=frame_type)
     if cacheable:
         lru.admit(path, value, frame_type)
@@ -669,7 +619,7 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
             if param is not None:
                 raise FileNotFoundError(f"Input artifact for parameter '{param}' not found: {path}")
             raise FileNotFoundError(f"Input artifact not found: {path}")
-        fmt = artifact.get("format") or _EXT_FORMATS.get(_storage.suffix(path), "json")
+        fmt = artifact.get("format") or FORMAT_OF_EXTENSION.get(_storage.suffix(path), "json")
         value = deserialize(path, fmt, frame_type=frame_type)
         # The size lookup is I/O too (a request, for a remote path), so it runs in the pool.
         return value, (_artifact_size(path) if lru is not None else None)
@@ -823,21 +773,6 @@ def _sensor_result(result):
     return None, result
 
 
-def _execute(fn, kwargs, step):
-    """Run a step function with optional timeout, unpacking sensor tuples."""
-    timeout = step.get("timeout_seconds", 0)
-    t0 = time.perf_counter()
-    if timeout and timeout > 0:
-        result = _run_with_timeout(fn, kwargs, timeout, label=step.get("node_id"))
-    else:
-        result = fn(**kwargs) if kwargs else fn()
-    elapsed = time.perf_counter() - t0
-
-    if step.get("kind") == "sensor":
-        step["sensor_changed"], result = _sensor_result(result)
-    return result, elapsed
-
-
 def _sink_dest(path: str, node_id: str) -> str:
     """Sink destination path, with a partition suffix injected before the
     extension for partitioned assets so partitions don't clobber each other
@@ -886,7 +821,7 @@ def _write_sink(result, sink, step, node_id, primary_fmt):
     if _sinks.is_dataset(dest):
         base = node_id.split("[", 1)[0]
         return _sinks.write(result, sink, _partition_values(step, node_id), base)
-    fmt = sink.get("serializer") or _EXT_FORMATS.get(_storage.suffix(dest)) or primary_fmt
+    fmt = sink.get("serializer") or FORMAT_OF_EXTENSION.get(_storage.suffix(dest)) or primary_fmt
     if fmt not in ("json", "pickle", "parquet", "csv"):
         raise ValueError(
             f"sink serializer '{fmt}' is not supported yet (supported: json, pickle, parquet, csv)"
@@ -957,9 +892,7 @@ def _materialize(
     else:
         fmt = resolve_format(result, detect_format(result, explicit=explicit_fmt))
     # Run-hash layout when the coordinator supplies a run hash.
-    # Batch mode's legacy partitioned loop reuses the step-level hash only for
-    # unpartitioned steps (a per-step hash is wrong per-partition; the daemon
-    # path gets a per-item hash from Rust and batch mode is test-only).
+    # The step-level hash names this step's own output only, never another node id's.
     run_hash = step.get("run_hash") if node_id == step.get("node_id") else None
     branch_path = step.get("branch_path")
     if branch_path:
@@ -1010,8 +943,6 @@ def _materialize(
         artifact["upload_snapshot"] = upload_snapshot
     if content_hash is not None:
         artifact["content_hash"] = content_hash
-    if isinstance(step.get("sensor_changed"), bool):
-        artifact["sensor_changed"] = step["sensor_changed"]
     if step.get("branch") and fmt in ("parquet", "csv"):
         # The caller of parallel() gets back the frame type the branch returned.
         from barca import _branches
@@ -1035,188 +966,6 @@ def _materialize(
         before_emit()
     _emit("result", node_id=node_id, artifact=artifact, elapsed=elapsed)
     return artifact
-
-
-def run_batch(batch):
-    cache = {}
-    modules = {}
-    # node_ids (base or partition-suffixed) that failed or were blocked. A step is
-    # skipped (blocked) if any input it depends on is unavailable — this lets
-    # independent chains bundled in the same batch finish even when one fails.
-    unavailable = set()
-
-    # Artifact directory for writing outputs (local path or remote URI).
-    art_dir = batch.get("artifact_dir") or os.environ.get("BARCA_ARTIFACT_URI")
-    if art_dir and not _storage.is_remote(art_dir):
-        Path(art_dir).mkdir(parents=True, exist_ok=True)
-    clean_staging()
-
-    # Pre-load provided inputs (cross-phase values injected by Rust).
-    # Values may be artifact references — resolve them lazily when accessed.
-    provided = batch.get("provided_inputs", {})
-    for key, value in provided.items():
-        cache[key] = _resolve_input(value)
-
-    for step in batch["steps"]:
-        partition_keys = step.get("partition_keys", [])
-        if partition_keys:
-            # Late partition expansion: worker loops over partition_keys internally.
-            # Each partition key is a dict like {"ticker": "AAPL"}. Partitions are
-            # independent — one bad partition does not block the others.
-            for pk in partition_keys:
-                suffix = ",".join(f"{k}={v}" for k, v in sorted(pk.items()))
-                full_node_id = f"{step['node_id']}[{suffix}]"
-
-                # Is any upstream this partition depends on unavailable?
-                blocked_on = None
-                for _param, upstream_id in step.get("inputs", {}).items():
-                    aligned_id = f"{upstream_id}[{suffix}]"
-                    if aligned_id in unavailable or upstream_id in unavailable:
-                        blocked_on = upstream_id
-                        break
-                if blocked_on is not None:
-                    unavailable.add(full_node_id)
-                    _emit(
-                        "blocked",
-                        node_id=full_node_id,
-                        reason=f"upstream '{blocked_on}' unavailable",
-                    )
-                    continue
-
-                phase = USER_CODE
-                try:
-                    source = str(Path(step["source_file"]).resolve())
-                    activate_source_path(source)
-                    if source not in modules:
-                        modules[source] = load_module(source)
-                    fn = getattr(modules[source], step["function_name"])
-
-                    # Direct args/kwargs from parallel() dispatch — skip artifact lookup.
-                    if "direct_args" in step or "direct_kwargs" in step:
-                        d_args = step.get("direct_args", [])
-                        d_kwargs = step.get("direct_kwargs", {})
-                        timeout = step.get("timeout_seconds", 0)
-                        t0 = time.time()
-                        if timeout and timeout > 0:
-                            result = _run_with_timeout(
-                                lambda: fn(*d_args, **d_kwargs),
-                                {},
-                                timeout,
-                                label=step.get("node_id"),
-                            )
-                        else:
-                            result = fn(*d_args, **d_kwargs)
-                        elapsed = time.time() - t0
-                        cache[full_node_id] = result
-                        phase = WRITE_OUTPUT
-                        _materialize(result, full_node_id, art_dir, step, elapsed)
-                        continue
-                    else:
-                        kwargs = {}
-                        for param_name, upstream_id in step.get("inputs", {}).items():
-                            if param_name.startswith("_"):
-                                kwargs[param_name] = None
-                                continue
-                            aligned_id = f"{upstream_id}[{suffix}]"
-                            if aligned_id in cache:
-                                kwargs[param_name] = cache[aligned_id]
-                            elif upstream_id in cache:
-                                kwargs[param_name] = cache[upstream_id]
-                            else:
-                                phase = LOAD_INPUTS
-                                raise RuntimeError(
-                                    f"Input '{param_name}' (from '{upstream_id}') not found in cache. "
-                                    f"Tried aligned '{aligned_id}' and base '{upstream_id}'. "
-                                    f"Available: {list(cache.keys())}"
-                                )
-                        kwargs.update(pk)  # inject partition values (e.g., ticker="AAPL").
-
-                    result, elapsed = _execute(fn, kwargs, step)
-                except Exception as exc:
-                    unavailable.add(full_node_id)
-                    if phase == WRITE_OUTPUT:
-                        phase = _output_phase(exc)
-                    _emit_error(full_node_id, exc, phase=phase)
-                    continue
-
-                try:
-                    _materialize(result, full_node_id, art_dir, step, elapsed)
-                except _sinks.SinkError as exc:
-                    unavailable.add(full_node_id)
-                    _emit_error(full_node_id, exc, phase=SINK)
-                    continue
-                cache[full_node_id] = result
-        else:
-            node_id = step["node_id"]
-
-            # Is any upstream this step depends on unavailable?
-            blocked_on = None
-            for _param, upstream_id in step.get("inputs", {}).items():
-                if upstream_id in unavailable:
-                    blocked_on = upstream_id
-                    break
-            if blocked_on is not None:
-                unavailable.add(node_id)
-                _emit("blocked", node_id=node_id, reason=f"upstream '{blocked_on}' unavailable")
-                continue
-
-            phase = USER_CODE
-            try:
-                source = str(Path(step["source_file"]).resolve())
-                activate_source_path(source)
-                if source not in modules:
-                    modules[source] = load_module(source)
-                fn = getattr(modules[source], step["function_name"])
-
-                # Direct args/kwargs from parallel() dispatch — skip artifact lookup.
-                if "direct_args" in step or "direct_kwargs" in step:
-                    d_args = step.get("direct_args", [])
-                    d_kwargs = step.get("direct_kwargs", {})
-                    timeout = step.get("timeout_seconds", 0)
-                    t0 = time.time()
-                    if timeout and timeout > 0:
-                        result = _run_with_timeout(
-                            lambda: fn(*d_args, **d_kwargs), {}, timeout, label=step.get("node_id")
-                        )
-                    else:
-                        result = fn(*d_args, **d_kwargs)
-                    elapsed = time.time() - t0
-                    cache[node_id] = result
-                    phase = WRITE_OUTPUT
-                    _materialize(result, node_id, art_dir, step, elapsed)
-                    continue
-                else:
-                    kwargs = {}
-                    for param_name, upstream_id in step.get("inputs", {}).items():
-                        if param_name.startswith("_"):
-                            kwargs[param_name] = None
-                            continue
-                        if upstream_id in cache:
-                            kwargs[param_name] = cache[upstream_id]
-                        else:
-                            phase = LOAD_INPUTS
-                            raise RuntimeError(
-                                f"Input '{param_name}' (from '{upstream_id}') not found in cache. "
-                                f"Available: {list(cache.keys())}"
-                            )
-                    if "partition" in step:
-                        kwargs.update(step["partition"])
-
-                result, elapsed = _execute(fn, kwargs, step)
-            except Exception as exc:
-                unavailable.add(node_id)
-                if phase == WRITE_OUTPUT:
-                    phase = _output_phase(exc)
-                _emit_error(node_id, exc, phase=phase)
-                continue
-
-            try:
-                _materialize(result, node_id, art_dir, step, elapsed)
-            except _sinks.SinkError as exc:
-                unavailable.add(node_id)
-                _emit_error(node_id, exc, phase=SINK)
-                continue
-            cache[node_id] = result
 
 
 # What a worker does with Ctrl-C (SIGINT). The terminal sends it to every process of the job,
@@ -1392,7 +1141,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 kwargs[param] = None
                 continue
             # Fan-in (collect()): every partition artifact of the upstream,
-            # deserialized into a list — matches batch mode's _resolve_input.
+            # deserialized into a list.
             # Cache misses load concurrently (see _load_collected_artifacts).
             if isinstance(value, dict) and value.get("_collected"):
                 kwargs[param] = _load_collected_artifacts(
@@ -1845,7 +1594,6 @@ def _run_daemon_call(steps, call, modules, art_dir, lru):
 
 def run_daemon():
     """Daemon mode: read execute commands from socket, run each step, send results."""
-    global _use_socket
 
     _ctrl_c_does_nothing()
     _join_the_job()
@@ -1855,7 +1603,6 @@ def run_daemon():
     if _runtime.connect() is None:
         print("BARCA_SOCKET not set", file=sys.stderr)
         sys.exit(1)
-    _use_socket = True
 
     # Collapse repeated library warnings (barca docs agents, "Repeated warnings").
     from barca import _dedupe
@@ -1934,32 +1681,10 @@ def run_daemon():
 
 
 def main():
-    global _use_socket
-
-    if len(sys.argv) >= 2 and sys.argv[1] == "--daemon":
-        run_daemon()
-        return
-
-    if len(sys.argv) < 2:
-        print("Usage: python -m barca._worker <batch.json>", file=sys.stderr)
-        sys.exit(1)
-
-    # Connect to executor's Unix socket if available.
-    from barca import _runtime
-
-    if _runtime.connect() is not None:
-        _use_socket = True
-        _runtime.start_heartbeat()
-
-    with open(sys.argv[1]) as f:
-        batch = json.load(f)
-
-    try:
-        run_batch(batch)
-    finally:
-        if _use_socket:
-            _runtime.stop_heartbeat()
-            _runtime.disconnect()
+    if sys.argv[1:2] != ["--daemon"]:
+        print("Usage: python -m barca._worker --daemon", file=sys.stderr)
+        sys.exit(2)
+    run_daemon()
 
 
 if __name__ == "__main__":
