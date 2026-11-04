@@ -1550,11 +1550,12 @@ async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_b
     checked(&router, "GET", "/state/reset", "/state/reset", 405).await;
 }
 
-/// `Cache.state` and `Cache.reason` list exactly what barca-core writes ([`STATES`],
-/// [`CACHE_REASONS`], which a barca-core test checks against `status.rs` itself).
+/// `Cache.reason` lists exactly what barca-core writes ([`CACHE_REASONS`], which a
+/// barca-core test checks against `status.rs` itself); `Cache.state` is checked against the
+/// `CacheState` enum in `cache_state_enum_matches_the_rust_enum`.
 #[test]
-fn cache_state_and_reason_enums_match_the_code() {
-    use barca_core::status::{CACHE_REASONS, STATES};
+fn cache_reason_enum_matches_the_code() {
+    use barca_core::status::CACHE_REASONS;
     let props = &contract()["components"]["schemas"]["Cache"]["properties"];
     let listed = |key: &str| -> Vec<String> {
         props[key]["enum"]
@@ -1564,6 +1565,5 @@ fn cache_state_and_reason_enums_match_the_code() {
             .map(|v| v.as_str().unwrap().to_string())
             .collect()
     };
-    assert_eq!(listed("state"), STATES, "Cache.state");
     assert_eq!(listed("reason"), CACHE_REASONS, "Cache.reason");
 }
