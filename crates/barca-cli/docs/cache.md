@@ -582,6 +582,10 @@ A missing or evicted artifact that nothing needs to read leaves the node `cached
   typo never silently does nothing.
 - It does **not** rebuild the upstream of what you name, or assets in the cone that do not depend
   on it. Those keep serving from cache.
+- It does **not** reach assets outside the target's cone. When a refresh writes new bytes, a
+  consumer that another target reads keeps its run hash and its old result, and `barca status`
+  reports it `cached`: refresh again with a target below it, or name it in `--refresh`
+  (`barca docs partitions`, "When a consumer's keys are stale").
 - The cascade stops at an `@asset(cutoff=True)`: what reads it is decided by the bytes the
   refresh wrote ("Early cutoff" below). Same bytes, it stays cached and carries no warning; new
   bytes, it runs as `not_materialized`. Name it in `--refresh`, or use `--refresh-all`, to
@@ -630,7 +634,8 @@ strings in its `refresh` array. Both use the CLI's cache engine.
 
 For external data that changes in place (a blob overwritten at the same path), the canonical
 answer is a sensor ("External data that changes in place" above). Without one, `--refresh`
-the asset that reads it, and everything built from it re-runs.
+the asset that reads it with a target downstream of everything built from it: what is built from
+it in that target's cone re-runs.
 
 Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
 consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
