@@ -1785,12 +1785,12 @@ counts every node even when `nodes` is truncated.
 | `truncated` | boolean | always |
 <!-- END GENERATED schema status -->
 
-- `cache.state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`, `unknown` or
-  `always_runs`: the same snake_case spelling as the `summary` keys (the human table prints
+- `cache.state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`, `blocked`, `unknown`
+  or `always_runs`: the same snake_case spelling as the `summary` keys (the human table prints
   `never-run`; `summary.unsynced` is always present);
-  `cache.reason` is `materialized`, `local_only`, `store_only`, `mismatch`, `not_in_ledger`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
+  `cache.reason` is `materialized`, `local_only`, `store_only`, `mismatch`, `not_in_ledger`, `changed`, `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`,
   `evicted` (experimental), `no_record`, `partitions_missing`, `partitions_unknown`,
-  `sensor_output_unknown`, `cutoff_pending` (experimental), `task` or `sensor`.
+  `sensor_output_unknown`, `cutoff_pending` (experimental), `not_planned`, `task` or `sensor`.
 - `cache.changed` (experimental, 0.29.0) appears on a `stale` node (reason `changed` or
   `upstream_stale`) whose last successful materialization recorded its run-hash components: an
   array of strings naming what differs, `code`, `decorator argument NAME`, `decorator NAME`,

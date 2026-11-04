@@ -3924,6 +3924,8 @@ components:
           - unknown
           - always_runs
         reason:
+          description: barca docs status lists what each reason means; not_planned is a node the dry
+            run status is computed from has no step for (state unknown).
           type: string
           enum:
           - materialized
@@ -3942,6 +3944,7 @@ components:
           - partitions_unknown
           - sensor_output_unknown
           - cutoff_pending
+          - not_planned
           - task
           - sensor
         detail: *id003

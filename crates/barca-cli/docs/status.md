@@ -117,7 +117,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
 | `blocked` | a partitioned asset whose missing keys wait on the same keys of an input, which failed: a run computes its other keys and skips these (`barca docs partitions`, "Failed keys block their own keys") | `upstream_failed` (`detail`: `39 of 39 missing keys wait on 'demand_forecast': the same keys of it failed`) |
-| `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, an asset reading a sensor with no recorded output, or an asset reading an `@asset(cutoff=True)` that would run first (and what depends on any of them) | `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending` |
+| `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, an asset reading a sensor with no recorded output, or an asset reading an `@asset(cutoff=True)` that would run first (and what depends on any of them); `not_planned` when the dry run status is computed from has no step for the node | `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`, `not_planned` |
 | `always_runs` | tasks and sensors are never cached | `task`, `sensor` |
 
 - `cache.change_causes` (on a `stale` node, and a failed one that once succeeded) sorts the same
