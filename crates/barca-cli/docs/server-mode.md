@@ -26,7 +26,7 @@ once, experimentally since 0.39.4 (`barca docs scheduling`, "Runs share the step
 common"): cancelling the run that computes it makes the waiting run execute it again, the result
 reaches the waiting run before the computing run's row is durable, and a run that decided the step
 before another run finished it can execute it a second time. A stable designation
-also requires that shared work survive the cancellation of the run that started it (#654), bounded cold/full-domain planning and
+also requires closing those gaps (#654), bounded cold/full-domain planning and
 inspection (#655, #656), and sustained multi-host proxy/store validation at the supported
 scale. Opt-in tokens, bounded event replay and configurable backups address deployment
 capabilities; they do not establish those remaining properties. Tokens grant full project
