@@ -230,14 +230,14 @@ Variables that override `barca.toml`:
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
 | `BARCA_REQUIRE_ENV` | `require_env` | `1` (or `true`, `yes`) requires `--env` or `BARCA_ENV`; `0` (or `false`, `no`) does not; anything else exits 2. |
 | `BARCA_CAPACITY` | `[execution].capacity` | Experimental. A whole number of at least 1; anything else exits 2. |
-| `BARCA_SERVER_AUTH` | server authentication mode, `off` (default) or `token`; overrides `[server] auth`, overridden by `serve --auth`; invalid values are exit 2 (`barca docs server-mode`) | experimental |
-| `BARCA_SERVER_TOKEN` | server-only bearer credential for every CLI and deprecated Python Client request; nonempty ASCII without whitespace or control characters; cannot be combined with URL userinfo; invalid credentials are exit 2; removed from Python helper environments (`barca docs server-mode`) | experimental |
+| `BARCA_SERVER_AUTH` | `[server].auth` | Experimental. `off` (default) or `token`; overridden by `serve --auth`; anything else exits 2. See [Server Mode](/reference/server-mode/). |
 | `BARCA_SERVER_RECONNECT` | none | Experimental. Seconds a `--server` client following a run (and `logs -f --server`) waits for a restarting server to come back (default 60; `0` gives up at once). Not a number of seconds exits 2. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |
 | `BARCA_REMOTE` | process override | `off` uses local artifacts/history, takes no backups and overrides all remote settings. Unset/empty keeps normal resolution; other values exit 2. |
 | `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage and history backups on. |
 | `BARCA_TRANSFER_CONCURRENCY` | `[remote].transfer_concurrency` | A positive integer. In 0.18.0 an invalid value exits 3, not 2. |
 | `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt. In 0.18.0 an invalid value exits 3, not 2. |
+| `BARCA_TRANSFER_RETRIES` | none | Experimental. How many times a failed artifact upload or download is retried after its first attempt (default 3), with waits of 0.5 s, 1 s, 2 s, ...; a missing object or an authentication error is not retried. Read by the Python transfer helper as written, not checked by barca. |
 | `BARCA_BACKUP_INTERVAL` | `[remote].backup_interval` | Overrides routine backup cadence, including served-run completion; `off` retains final CLI/server shutdown backups. |
 | `BARCA_STORAGE_OPTIONS` | `[remote.storage_options.*]` | JSON keyed by protocol, merged over the toml tables key by key. |
 | `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`). Overridden by both of the above. |
@@ -259,10 +259,18 @@ Variables with no `barca.toml` key:
 | `BARCA_TRACE_TIMING` | When set, prints a timing breakdown on stderr. |
 | `BARCA_TELEMETRY` | `datadog` sends finished runs to Datadog. See [Telemetry](/reference/telemetry/) for it and the `DD_*` variables. |
 | `BARCA_COMM_COST_SECONDS` | The scheduler's estimate of the cost of dispatching one step. |
+| `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. See [Telemetry](/reference/telemetry/). |
+| `BARCA_SLACK_WEBHOOK_URL` | A Slack incoming webhook (`https://`): barca posts when a job starts failing, recovers, or is still failing a day later. Never printed. See [Telemetry](/reference/telemetry/). |
+| `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value warns and `changes` applies. |
+| `BARCA_UI_URL` | Base URL of the web UI; Slack posts link the run id to it. |
+| `BARCA_SERVER_TOKEN` | Experimental. The bearer credential the CLI and the deprecated Python `Client` send to a server with token auth; not combinable with URL userinfo; an invalid one exits 2. See [Server Mode](/reference/server-mode/). |
+| `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr; `text` or unset is the default. Under `serve` any other value exits 2; other commands ignore it with a warning. See [Telemetry](/reference/telemetry/). |
 
 The [CLI contract](/reference/cli-contract/#environment-variables) marks each variable stable or
-experimental. `BARCA_SOCKET`, `BARCA_WORKER` and `BARCA_WORKER_ID` are set by barca for its own
-worker processes; do not set them.
+experimental. `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` and `BARCA_WORKER_AGENT` are set by barca for its
+own worker processes, and `BARCA_LIFELINE`, `BARCA_JOB_PGID`, `BARCA_UPLOAD_SNAPSHOT_PREFIX` and
+`BARCA_DOCTOR_REQUEST` for its Python helpers; do not set them. `BARCA_TEST_*` variables are hooks
+for barca's own tests.
 
 Credentials are read by the storage libraries from their usual variables (`AWS_*`,
 `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*`). `BARCA_REMOTE_URI` plus those is a

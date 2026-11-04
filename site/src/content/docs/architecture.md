@@ -3,8 +3,10 @@ title: Architecture
 description: The crates, modules, worker protocol and storage that make up barca.
 ---
 
-Barca is a Rust binary and a Python package shipped in one wheel. The binary parses Python
-source without importing it, builds a dependency graph, decides what needs to run, and
+Barca is a Rust binary and a Python package shipped in one wheel. The binary reads Python
+source statically (a nonliteral `partitions(...)` or `batches(...)` expression and a
+`batches_by` function are evaluated in a resolver subprocess that imports the module), builds a
+dependency graph, decides what needs to run, and
 dispatches steps to Python worker processes. The Python package holds the decorators and the
 worker.
 

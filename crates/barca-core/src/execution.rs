@@ -1193,10 +1193,8 @@ async fn open_run<'a, 'r>(
     prepared: &'a Prepared,
     mut started: RunStart,
 ) -> Result<RunSession<'a, 'r>, BarcaError> {
-    if let Ok(secs) = std::env::var("BARCA_TEST_BEFORE_START_WORKERS_SECS")
-        && let Ok(secs) = secs.parse::<u64>()
-    {
-        tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+    if let Some(wait) = crate::test_hooks::before_start_workers() {
+        tokio::time::sleep(wait).await;
     }
     let (cost_model, avg_times, partitioned_avg_times) =
         open_state(request, prepared, &mut started).await?;

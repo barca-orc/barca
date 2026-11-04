@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 3. Status: implemented for pending 0.36.0.
+Specification version: 3. Status: implemented in 0.36.0.
 Scope: token storage, bootstrap, request authentication, administration and browser access.
 Stream cursor resume follows the implemented [event replay owner](server-event-replay.md).
 Exact HTTP shapes belong to [OpenAPI](../interfaces/server-api.openapi.yaml); client
@@ -97,5 +97,5 @@ checks preserve revocation and token rotation; a fresh host restoring the same l
 no credentials. Private-clock tests cover exact API/bootstrap/connection expiry boundaries
 and prove clock rollback cannot resurrect revoked/replaced credentials.
 
-UI/token management and bounded replay are tracked in #730 and #731. Full release
-conformance must pass before 0.36.0; these auth tests do not establish cloud deployment cost.
+UI/token management and bounded replay shipped in 0.36.0 (#730, #731). These auth tests do not
+establish cloud deployment cost.

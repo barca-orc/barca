@@ -12,6 +12,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - UI: one state vocabulary everywhere. A task or sensor shows its last execution (Healthy, Failed, Not run) in tables, as group health already did; Not run, Unknown and Always runs are grey wherever they appear, leaving the queued colour to queued run work; "State unknown" is "Unknown". Node, file and group names use the sans-serif instead of monospace, dark-theme borders and hover/selection backgrounds have more contrast, and table rows stack a name over its file at any width, with the table beside the node panel leaving out last success, typical and next run instead of squeezing every column.
 
+### Documentation
+
+- The deprecated HTTP aliases (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `GET /events/{run_id}`) and `barca.Client` have one stated lifetime everywhere, the manual, the CLI contract, the OpenAPI spec and `Client`'s `DeprecationWarning`: no scheduled removal; a removal migrates `Client` first and lands as a breaking change in a minor release.
+- CLI contract: `partitions.failed` and `batch_execution` are marked new in 0.38.0 instead of "the next release"; a stale note promising a change to the `run failed:` line (shipped in 0.24.0) is gone; `steps_page.nodes[].status` and `blocked_by` (from `history RUN_ID` with a server) are listed as experimental, and `failing_since`, `consecutive_failures`, `steps_failed` and `first_failure` as HTTP-only.
+- `BARCA_TRANSFER_RETRIES` is documented, and the configuration page now lists `BARCA_LOG`, `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL`, `BARCA_TRACE_LIBRARIES` and `BARCA_SERVER_TOKEN`. A test keeps every `BARCA_*` variable in the source documented in the CLI contract or named as internal.
+- The landing page, Getting Started, Philosophy and Architecture no longer say barca never imports your source: it reads source statically, and a nonliteral `partitions(...)` or `batches(...)` expression and a `batches_by` function are evaluated in a resolver subprocess that imports the module.
+- The cache reason `not_planned` (state `unknown`), which `status` could already report, is listed in the OpenAPI `Cache.reason` enum, the CLI contract and `barca docs status`; the contract's lists also gain the `blocked` state and the `upstream_failed` reason. Tests keep the code's states and reasons equal to the OpenAPI enums.
+- The OpenAPI spec documents a skipped step's reasons, including `upstream_key_failed`, and `specs/README.md` states each owner's status for the current code (token auth and event replay shipped in 0.36.0).
+
 ## 0.39.4 (2026-11-03)
 
 ### Features

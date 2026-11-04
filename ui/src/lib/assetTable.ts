@@ -131,6 +131,7 @@ function staleReason(reason: CacheStatus['reason']): string {
       'no_record',
       'partitions_missing',
       'partitions_unknown',
+      'not_planned',
       'task',
       'sensor',
       () => reason.replace(/_/g, ' '),

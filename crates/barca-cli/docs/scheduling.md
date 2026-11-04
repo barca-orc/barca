@@ -375,7 +375,7 @@ place of the loopback address above. The older `POST /get/<target>`, `POST /run/
 From Python, `barca.get("daily_report", server="http://127.0.0.1:8274")` (or `server=True`
 with `BARCA_SERVER` or `[server] url` set) runs it on the server and returns its value.
 `barca.Client`, the older standard-library HTTP client, is deprecated: it warns when
-constructed and will be removed in a later minor release.
+constructed, with no scheduled removal (a removal lands in a minor release).
 
 With a remote store configured, `barca serve` uploads artifacts and backs its metadata DB up
 every minute it changed (`barca docs remote`, "Backups and restore"); `barca state restore`

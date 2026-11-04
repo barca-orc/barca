@@ -12,9 +12,10 @@ state: CacheState,
  * `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
  * `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`, `evicted`, `no_record`,
  * `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`,
- * `task` or `sensor`.
+ * `not_planned` (the dry run status is computed from has no step for it), `task` or
+ * `sensor`: [`CACHE_REASONS`].
  */
-reason: "materialized" | "local_only" | "store_only" | "mismatch" | "not_in_ledger" | "changed" | "upstream_stale" | "upstream_failed" | "failed" | "artifact_missing" | "evicted" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "cutoff_pending" | "task" | "sensor",
+reason: "materialized" | "local_only" | "store_only" | "mismatch" | "not_in_ledger" | "changed" | "upstream_stale" | "upstream_failed" | "failed" | "artifact_missing" | "evicted" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "cutoff_pending" | "not_planned" | "task" | "sensor",
 /**
  * The reason in words.
  */

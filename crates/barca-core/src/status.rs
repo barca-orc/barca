@@ -207,6 +207,29 @@ pub async fn attach_schedules(
 /// The `cache.state` values, as JSON and `--state` spell them.
 pub const STATES: [CacheState; 8] = CacheState::ALL;
 
+/// The `cache.reason` values (`specs/interfaces/server-api.openapi.yaml` lists the same).
+pub const CACHE_REASONS: &[&str] = &[
+    "materialized",
+    "local_only",
+    "store_only",
+    "mismatch",
+    "not_in_ledger",
+    "changed",
+    "upstream_stale",
+    "upstream_failed",
+    "failed",
+    "artifact_missing",
+    "evicted",
+    "no_record",
+    "partitions_missing",
+    "partitions_unknown",
+    "sensor_output_unknown",
+    "cutoff_pending",
+    "not_planned",
+    "task",
+    "sensor",
+];
+
 /// Which nodes `barca status --state` / `--problems` (and `GET /nodes?state=&problems=`) keep.
 /// The summary always counts every node in scope.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -343,11 +366,12 @@ pub struct CacheStatus {
     /// `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
     /// `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`, `evicted`, `no_record`,
     /// `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`,
-    /// `task` or `sensor`.
+    /// `not_planned` (the dry run status is computed from has no step for it), `task` or
+    /// `sensor`: [`CACHE_REASONS`].
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"upstream_failed\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"cutoff_pending\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"upstream_failed\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"cutoff_pending\" | \"not_planned\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -1641,6 +1665,67 @@ mod tests {
             error: Some(error.into()),
         });
         n
+    }
+
+    /// Every reason this file writes into a `CacheStatus` is one of [`CACHE_REASONS`], and the
+    /// TypeScript type of `reason` lists exactly them: `cache(<state>, "<reason>", ...)` calls,
+    /// `.reason = "<reason>"` assignments and `reason: "<reason>"` fields, read from the source
+    /// with whitespace collapsed so a call split over lines counts.
+    #[test]
+    fn every_cache_reason_written_here_is_listed() {
+        let src = include_str!("status.rs");
+        let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+        let literal = |rest: &str| -> Option<String> {
+            let rest = rest.trim_start().strip_prefix('"')?;
+            let end = rest.find('"')?;
+            let name = &rest[..end];
+            (!name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+                .then(|| name.to_string())
+        };
+        let mut found = std::collections::BTreeSet::new();
+        for (at, _) in flat.match_indices("cache(") {
+            let before = flat[..at].chars().last();
+            if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue; // `cache_status(`, `remote_cache(`, ...
+            }
+            let args = &flat[at + "cache(".len()..];
+            if let Some(comma) = args.find(',')
+                && let Some(reason) = literal(&args[comma + 1..])
+            {
+                found.insert(reason);
+            }
+        }
+        for needle in [".reason = ", "cache.reason = ", " reason: "] {
+            for (at, _) in flat.match_indices(needle) {
+                if let Some(reason) = literal(&flat[at + needle.len()..]) {
+                    found.insert(reason);
+                }
+            }
+        }
+        assert!(
+            found.contains("not_planned") && found.len() > 10,
+            "{found:?}"
+        );
+        let unlisted: Vec<_> = found
+            .iter()
+            .filter(|r| !CACHE_REASONS.contains(&r.as_str()))
+            .collect();
+        assert!(
+            unlisted.is_empty(),
+            "add to CACHE_REASONS and the OpenAPI Cache.reason enum: {unlisted:?}"
+        );
+
+        let ts = src
+            .split("pub reason: String")
+            .next()
+            .and_then(|head| head.rsplit("type = \"").next())
+            .and_then(|t| t.split("\"\n").next())
+            .unwrap();
+        let ts: Vec<String> = ts
+            .split(" | ")
+            .map(|r| r.trim_matches(|c| c == '\\' || c == '"').to_string())
+            .collect();
+        assert_eq!(ts, CACHE_REASONS, "the ts(type) of CacheStatus::reason");
     }
 
     #[test]

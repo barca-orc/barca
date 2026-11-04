@@ -405,10 +405,7 @@ fn stray_root_db_warning(cfg: &barca_core::config::ResolvedConfig) {
 /// What runs in flight in this process hold is left alone.
 async fn cache_checkpoint(state: AppState) {
     // tests/simulation compresses long use, so it cannot wait a real minute per check.
-    let secs = std::env::var("BARCA_TEST_CACHE_CHECKPOINT_SECS")
-        .ok()
-        .and_then(|secs| secs.parse().ok())
-        .unwrap_or(60);
+    let secs = barca_core::test_hooks::cache_checkpoint_secs().unwrap_or(60);
     let mut every = tokio::time::interval(std::time::Duration::from_secs(secs));
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {

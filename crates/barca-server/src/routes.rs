@@ -63,7 +63,8 @@ pub fn router(state: AppState) -> Router {
         // A schedule id is a node id: percent-encode a `/` in it.
         .route("/schedule/{id}/pause", post(pause::pause))
         .route("/schedule/{id}/resume", post(pause::resume))
-        // Aliases of the run routes, kept for one minor release.
+        // Deprecated aliases of the run routes, with no scheduled removal: the Python `Client`
+        // still uses them. A removal migrates `Client` first and lands in a minor release.
         .route("/run", post(runs::run_all))
         // The target takes the rest of the path, so a full node id with a directory in it
         // (`sub/pipeline.py:orders`) works with its `/` percent-encoded or not.
