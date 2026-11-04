@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Stop metadata backups from holding up every other barca process: a `barca serve` with a store hashed and copied the whole database under its lock, so a CLI command beside it waited for the copy (about 6 s per command against a 1.5 GB database, now 0.02 s). Only the log fold takes the lock; a read transaction keeps the file still while it is copied.
+
 ## 0.39.5 (2026-11-04)
 
 ### Bug Fixes

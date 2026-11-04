@@ -897,7 +897,109 @@ mod tests {
 
 #[cfg(test)]
 mod fold_log_tests {
+    use super::{
+        acquire_file_lock, connect, copy_for_backup, create_run, file_sha256, fold_log, init_db,
+        lock_db, wal_is_clean,
+    };
+    use crate::db::snapshots::pin_main_file;
     use libsql::Builder;
+
+    /// The guarantee a backup copies under: while the pin is held, commits from other
+    /// connections land in the log and no checkpoint (automatic or asked for) writes them to the
+    /// main file, so the copy reads stable bytes without barca's lock.
+    #[tokio::test]
+    async fn a_pinned_main_file_takes_writes_without_changing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        create_run(&path, "before", "get", "p.py", None, None)
+            .await
+            .unwrap();
+        let pin = {
+            let _lock = lock_db(&path).await.unwrap();
+            fold_log(&path).await.unwrap();
+            pin_main_file(&path).await.unwrap()
+        };
+        let before = std::fs::read(&path).unwrap();
+        // Enough commits to pass the automatic checkpoint's 1000 pages.
+        for i in 0..300 {
+            create_run(
+                &path,
+                &format!("during-{i}"),
+                "get",
+                &"p".repeat(4000),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        {
+            let (_db, conn) = connect(&path).await.unwrap();
+            let mut rows = conn
+                .query("PRAGMA wal_checkpoint(PASSIVE)", ())
+                .await
+                .unwrap();
+            while rows.next().await.unwrap().is_some() {}
+        }
+        assert!(!wal_is_clean(&path), "the writes are in the log");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "the main file did not change"
+        );
+        drop(pin);
+        let _lock = lock_db(&path).await.unwrap();
+        fold_log(&path).await.unwrap();
+        assert_ne!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(open_and_count(&path, "runs").await, 301);
+    }
+
+    /// A backup leaves barca's lock while it hashes and copies: a run's writes go on beside it,
+    /// and the copy is still one whole database whose digest is the one returned.
+    #[tokio::test]
+    async fn a_backup_copies_beside_writes_without_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        {
+            // Some megabytes of history, so the copy lasts while the run below writes.
+            let _lock = lock_db(&path).await.unwrap();
+            let (_db, conn) = connect(&path).await.unwrap();
+            conn.execute(
+                "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 2000) \
+                 INSERT INTO runs (run_id, command, files, status) \
+                 SELECT 'old-' || i, 'get', printf('%.2000c', 'p'), 'complete' FROM n",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let writer = {
+            let path = path.clone();
+            tokio::spawn(async move {
+                for i in 0..200 {
+                    create_run(&path, &format!("new-{i}"), "get", "p.py", None, None)
+                        .await
+                        .unwrap();
+                }
+            })
+        };
+        let copy = dir.path().join("backup.db");
+        let digest = copy_for_backup(&path, &copy, None, crate::helper_proc::Until::done())
+            .await
+            .unwrap()
+            .unwrap();
+        writer.await.unwrap();
+        assert_eq!(file_sha256(&copy).unwrap(), digest);
+        let copied = open_and_count(&copy.display().to_string(), "runs").await;
+        assert!((2000..=2200).contains(&copied), "{copied}");
+        assert_eq!(open_and_count(&path, "runs").await, 2200);
+        // Nothing is held after the backup: the lock is free at once.
+        acquire_file_lock(&path, std::time::Duration::from_millis(100))
+            .await
+            .unwrap();
+    }
 
     async fn open_and_count(db_path: &str, table: &str) -> u64 {
         let db = Builder::new_local(db_path).build().await.unwrap();

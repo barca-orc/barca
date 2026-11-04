@@ -1,6 +1,7 @@
 //! Copies and views of the metadata DB for readers and backups: a [`ReadView`] reads the live
 //! database in place, a [`DbSnapshot`] reads a private copy, and [`copy_for_backup`] copies it
-//! whole under its lock. Every read of the file goes through [`held_file`].
+//! whole, holding its lock only to fold the log in. Every read of the file goes through
+//! [`held_file`].
 
 use super::*;
 
@@ -84,20 +85,28 @@ async fn view_usable(conn: &libsql::Connection) -> bool {
 }
 
 /// Fold the local database's write-ahead log into its main file and, unless that file's
-/// SHA-256 is `unless`, copy it to `copy`; all under the database's lock. The copy is then one
-/// consistent database, whatever other barca processes do to the database meanwhile: a running
-/// write never produces a torn backup (RFC-0009). Returns the digest of what was copied, or
-/// `None` when the database is still the one `unless` names and nothing was copied. A copy cut
-/// short (cancelled, failed) is removed.
+/// SHA-256 is `unless`, copy it to `copy`. The copy is one consistent database, whatever other
+/// barca processes do to the database meanwhile: a running write never produces a torn backup
+/// (RFC-0009). Returns the digest of what was copied, or `None` when the database is still the
+/// one `unless` names and nothing was copied. A copy cut short (cancelled, failed) is removed.
+///
+/// Only the checkpoint holds the database's lock. Before releasing it, a read transaction is
+/// opened on the folded database ([`pin_main_file`]), which keeps every checkpoint from writing
+/// to the main file until the copy is done; other processes' writes meanwhile go to the log.
+/// Hashing and copying a database of gigabytes thus no longer stop every other barca process
+/// (a `barca serve` backing up held off the CLI for as long as the copy took).
 pub(crate) async fn copy_for_backup(
     db_path: &str,
     copy: &Path,
     unless: Option<&str>,
     until: crate::helper_proc::Until<'_>,
 ) -> Result<Option<String>, BarcaError> {
-    let _lock = lock_db_with_until(db_path, until).await?;
-    // Finish the admitted WAL checkpoint safely, then observe cancellation again.
-    fold_log(db_path).await?;
+    let pin = {
+        let _lock = lock_db_with_until(db_path, until).await?;
+        // Finish the admitted WAL checkpoint safely, then observe cancellation again.
+        fold_log(db_path).await?;
+        pin_main_file(db_path).await?
+    };
     until.check()?;
     let tracing = std::env::var_os("BARCA_TRACE_TIMING").is_some();
     let hashing = Instant::now();
@@ -131,10 +140,39 @@ pub(crate) async fn copy_for_backup(
             copied.is_ok()
         );
     }
+    drop(pin);
     if copied.is_err() {
         let _ = fs::remove_file(copy);
     }
     copied.map(|()| Some(digest))
+}
+
+/// A read transaction on the database at `db_path`, opened while its write-ahead log is empty
+/// (the caller holds the database's lock and has just folded the log in). Until it is dropped
+/// the main file does not change: a reader that started with nothing in the log reads the main
+/// file alone, so SQLite lets no checkpoint copy later commits into it (it waits for that
+/// reader's lock, `WAL_READ_LOCK(0)`, and leaves the commits in the log). Writers are not held
+/// up; the log just grows until the pin is dropped.
+pub(super) async fn pin_main_file(db_path: &str) -> Result<MainFilePin, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to start a read of {db_path}: {e}"));
+    let (db, conn) = connect_read_only(db_path).await?;
+    conn.execute("BEGIN", ()).await.map_err(failed)?;
+    // A deferred transaction takes its read lock at its first read.
+    let mut rows = conn
+        .query("SELECT COUNT(*) FROM sqlite_master", ())
+        .await
+        .map_err(failed)?;
+    while rows.next().await.map_err(failed)?.is_some() {}
+    Ok(MainFilePin {
+        _conn: conn,
+        _db: db,
+    })
+}
+
+/// See [`pin_main_file`]. Field order: the connection (and its transaction) closes first.
+pub(super) struct MainFilePin {
+    _conn: libsql::Connection,
+    _db: libsql::Database,
 }
 
 /// Each chunk of the database file at `path`, in order, read through [`held_file`].

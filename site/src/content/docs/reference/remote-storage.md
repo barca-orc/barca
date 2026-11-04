@@ -200,8 +200,11 @@ server-mode`, "Backups").
 A backup whose bytes would equal the newest one is not taken. None is taken under
 `BARCA_REMOTE=off`, or when only `BARCA_ARTIFACT_URI` / `[remote] artifacts_uri` name the store.
 
-A backup is the database's main file, copied under the database's lock right after its
-write-ahead log is folded in, so a write in progress never produces a torn copy. It is written
+A backup is the database's main file, copied right after its write-ahead log is folded in,
+so a write in progress never produces a torn copy. Only the fold holds the database's lock: a read
+of the folded file, started before the lock is released, keeps every checkpoint out of the main
+file until the copy is hashed and written, so other barca processes (the CLI beside a `barca
+serve` that is backing up) keep reading and recording meanwhile. It is written
 locally first, to `.barca/backups/<name>.db` (for a named environment
 `.barca/envs/<env>/backups/`), named like `2026-10-14T18-02-11.482Z-3f9a1c2e.db`: the UTC time
 to the millisecond and a suffix from this machine's host name, the database's path and the
