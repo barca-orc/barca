@@ -45,11 +45,34 @@ KEYS=50000,200000 REPEATS=3 COORDINATOR_MAX_KIB=19531 \
 
 Set `BARCA_BIN` and `PATH` as the [harness](../../benchmarks/incremental_dag/bench.py) requires.
 19,531 KiB is a conservative executable threshold below 20,000,000 bytes. A budget is
-enforced only when the harness receives its limit variables; the existence of a benchmark
-script alone is not a CI gate. CPU measurements include native work, not worker CPU;
+enforced only when the harness receives its limit variables; CI's merge tier passes them on
+every merge (Gates, below). CPU measurements include native work, not worker CPU;
 whole-process-tree RSS includes Python and must not be presented as native footprint.
 Record binary/source identity, Python/dependency versions, machine, worker count, affinity,
 warm-up/seed treatment, sample count and concurrent load. Preserve failed samples.
+
+### Gates
+
+`scripts/perf-gate.py` runs in the `perf` job of CI's merge tier, so a merge group over these
+limits does not reach `main`. It runs against the wheel CI builds (the `fast` Cargo profile, no
+whole-program LTO) on a shared 4-CPU runner and takes a few seconds:
+
+| Check | Limit | Reference measurement (2026-11-04, `fast` wheel, Ryzen AI MAX+ 395, load 3.1-3.2) |
+| --- | --- | --- |
+| Trivial pipeline (`benchmarks/trivial`, `get --refresh-all`), median wall of 15 runs | <150 ms | 38.8-41.0 ms |
+| Same, median coordinator CPU | <50 ms ([resources](resources.md) ordinary-overhead target) | 9.2-9.8 ms |
+| Same, coordinator peak in every run | <19,531 KiB ([resources](resources.md) simple coordination) | 16.7 MiB |
+| `incremental_dag/bench.py`, 5,000 keys, every warm one-key and unchanged run: coordinator peak | <19,531 KiB | 16.9 MiB |
+| Same, coordinator CPU | <40 ms | 13.7-18.0 ms |
+
+The wall-time limit is about 3.7 times the reference median: it fails a fixed cost of about
+100 ms more per run (a survey of `.barca/`, a sleep, a second interpreter), not a few
+milliseconds, which shared runners cannot resolve. The CI CPU limit is twice the 20 ms budget
+above, which this machine still meets with the release binary and the `fast` wheel nearly
+reaches (18.0 ms); slower runner cores would fail it without a regression. The 5,000-key
+domain keeps the cold seed (excluded from the budget) near two seconds; the 50k and 200k
+budgets above are measured, not gated. A check over its limit is measured again from scratch,
+and fails the job only if it fails twice.
 
 ## Invariants
 

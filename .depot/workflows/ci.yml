@@ -25,9 +25,10 @@ concurrency:
 # - fast (a pull request): `checks`, `clippy`, `changes` only, so a PR can enter the merge
 #   queue about a minute after a push. Everything else is skipped, and the aggregators
 #   accept those skips.
-# - merge (a merge group): the fast set plus `rust-tests`, the wheel `build` and one `python`
-#   job running the quick subset in scripts/fast-tests.txt. About two minutes; this is the
-#   gate every merge to main passes.
+# - merge (a merge group): the fast set plus `rust-tests`, the wheel `build`, one `python`
+#   job running the quick subset in scripts/fast-tests.txt and `perf`, the performance
+#   budgets (scripts/perf-gate.py). About two minutes; this is the gate every merge to main
+#   passes.
 # - full (a release): everything, with the object-store emulators, the duckdb 1.x rerun and
 #   the real minute checkpoint test on. A release PR (head branch `release/v*`) runs it as
 #   its PR run, and its merge group (checked-out commit `chore(release): ...`) runs it again. A PR
@@ -52,7 +53,7 @@ env:
     tier = os.environ["TIER"]
     runs = {
         "fast": {"checks", "clippy", "changes"},
-        "merge": {"checks", "clippy", "changes", "rust-tests", "build", "python"},
+        "merge": {"checks", "clippy", "changes", "rust-tests", "build", "python", "perf"},
     }.get(tier)  # None: full, every job runs
     results = {job: v["result"] for job, v in json.loads(os.environ["RESULTS"]).items()}
     for job, result in results.items():
@@ -287,10 +288,42 @@ jobs:
           ln -sf "$(command -v barca)" .venv/bin/barca
           bash tests/integration/test_benchmark_examples.sh
 
+  perf:
+    # The performance budgets of specs/behavior/performance.md ("Gates"): the trivial
+    # pipeline's wall time, coordinator CPU and memory, and the incremental_dag native budgets,
+    # against the wheel `build` makes. Under a minute. Tier merge and up.
+    needs: [build]
+    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) }}
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download the wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: barca-wheel
+          path: dist-wheel
+
+      - name: Install barca
+        run: uv pip install --system dist-wheel/*.whl
+
+      - name: Performance budgets
+        timeout-minutes: 5
+        run: python3 scripts/perf-gate.py
+
   test:
     # The required `CI / test` check. It always runs, so a failed, cancelled or (in a full run)
     # skipped job fails it instead of leaving the check missing.
-    needs: [changes, checks, clippy, rust-tests, build, integration]
+    needs: [changes, checks, clippy, rust-tests, build, integration, perf]
     if: always()
     runs-on: depot-ubuntu-latest
     timeout-minutes: 5
