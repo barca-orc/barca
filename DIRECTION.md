@@ -1,6 +1,6 @@
 # Direction
 
-Last updated: 2026-10-30, preparing v0.36.0 after v0.35.3. The pinned
+Last updated: 2026-11-04, preparing v0.39.5 (the 0.39 cleanup, #800) after v0.39.4. The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -18,42 +18,26 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 - Built-in user accounts and SSO/OIDC providers. Opt-in API tokens issued and validated by
   barca are the approved 0.36.0 exception (#187); existing proxy deployments remain supported.
 - More than one project root per server.
-- A worker pool or engine shared across runs; warm workers across runs.
+- A worker pool or engine shared across runs, and warm workers across runs. A server may deduplicate identical in-flight asset steps between its own runs (experimental, 0.39.4, #654).
 - Approval gates or workflows that wait on external events.
 
 ## Now, in order
 
 An issue's milestone is the release it ships in; the items below are the order.
 
-The decisions in [#707](https://github.com/barca-orc/barca/issues/707) set this order:
+The 0.39 cleanup ([#800](https://github.com/barca-orc/barca/issues/800), milestone `0.39 cleanup`,
+shipping as 0.39.5) sets this order. It adds no commands, flags, keys, routes, decorator arguments
+or UI features; #800 has the detail of each item.
 
-1. **Shipped in 0.35.2: inspection and everyday server use.** Includes #708 (read-only WAL
-   inspection, bounded history queries, work off request threads), #710 (metadata before
-   scoped status), #709 (grouped-page and node-panel run actions), and #706's credential
-   masking, first-use documentation (#650) and concise help (#651).
-   Rechecked #654–656 against the newer implementation. The evidence in
-   #716 still reproduces duplicate overlapping asset work, large bootstrap memory and
-   expensive cold/post-run inspection; those issues stay open with current measurements.
-   The real planning fixture has 116 nodes and scales table rows; its smoke run is separate
-   from the synthetic 1,000-node/1.2M-key coordinator workload.
-2. **Shipped as 0.35.3: stable streamed partition artifacts (#721).** A batched DuckDB, Arrow or Polars
-   result with the same rows in another physical order produced different Parquet bytes, so an
-   unchanged refresh reran its cutoff consumers (26 of 32 keys on a million-row fixture). Each
-   streamed partition is now sorted by all columns before it is hashed. The first refresh after
-   upgrading rewrites existing partition artifacts and reruns their consumers once.
-3. **0.36.0: server mode behind a proxy (#706).** RFC-0015's configurable backup cadence
-   and separate local-backup accounting are implemented, awaiting this release. Complete
-   release validation of the implemented client credentials, UI token management and
-   `Last-Event-ID` stream resume. Include the cost of
-   hashing and remotely checking every artifact during status. Userinfo remains supported;
-   bearer credentials reach every client request. The user chose barca-issued and
-   barca-validated UI tokens in an opt-in mode with no user-account system (#187). RFC-0016
-   specifies bootstrap access, browser security and revocation; implementation and conformance
-   are merged. Publication remains required.
-4. **Then the cleanup week.** Triage #666 into 0.36.1 or 0.37.0: a failed key must not stop
-   independent keys' downstream work. Batch the small feedback in #668, #671, #672 and #673.
-   Keep #674 (incremental fan-ins) parked pending discussion, alongside #667, #669, #670,
-   #675 and #676. Final scheduling follows the 0.36.0 RFC decisions.
+1. **Correctness:** #799, a refresh cascade that left stale partition caches, is fixed with a test, or its workaround is documented and the issue stays open (#804).
+2. **Measure before deciding:** benchmark 0.39.4, attribute the trivial run's time, price the 0.35.3 partition sort, gate performance in the merge tier and put the measured number in the README (#810: a trivial run takes 31.7 ms on the 0.39.4 wheel, against 26.3 ms at 0.1.5 and 60.3 ms at 0.28.0).
+3. **Make the documents true:** this file, the #796 decision, one alias lifetime, `contract.md` hygiene, the experimental graduation list, an environment-variable contract test, the static-read claim, `specs/README.md` and the milestones (#803).
+4. **Structure, in dependency order:** one `CacheState` enum (#802), one metadata write boundary, serve out of the embedded hot loop, `db.rs` split by table family, one graph cache and one backup-cadence authority, the Python dedupe and `.barca/` layout spec (#805).
+5. **Tests and CI:** per-test timeouts, Playwright and type drift in CI, the simulation's `--strict-reads` failure, optional imports that skip (#806), isolated backup tests (#809), Dependabot at zero critical and high (#808).
+
+0.39.5 ships when items 1 to 3 are done and the `CacheState` enum at minimum; the rest of item 4
+can roll into 0.39.6, and nothing new lands until it is done. The UI redesign comes after
+(Decided, November 2026).
 
 RFC-0014 pipeline fuzzing is deferred, with no action on its working branch. It has no
 scheduled release. DuckDB 1.x and 2.x remain supported (`duckdb>=1.4,<3`), with CI on both.
@@ -90,7 +74,17 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.35.1 | 2026-10-28 | Cache-size accounting off request threads; transfer-helper handshake before planning | #702, [release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.1) |
 | 0.35.2 | 2026-10-29 | Read-only status, metadata-first UI, run actions, credential masking and first-use/help docs | #708, #710, #709, #706 part 3, #650, #651 |
 | 0.35.3 | 2026-10-29 | Streamed batched partitions sort by all columns, so a refresh with the same rows in another order keeps cutoff consumers cached | [#721](https://github.com/barca-orc/barca/pull/721), [release notes](https://github.com/barca-orc/barca/releases/tag/v0.35.3) |
-| 0.36.0 | planned | Configurable backups, proxy credentials and UI token management, resumable streams and store inspection costs | #706, #187 |
+| 0.36.0 | 2026-10-30 | Breaking: attempt-scoped event IDs with bounded replay, served-run backups on the routine interval, store inspection evidence reused for five minutes; configurable backup cadence, opt-in project tokens and UI token management, credentials on every request | #706, #187 |
+| 0.36.1 | 2026-10-30 | The UI says what is broken and why at thousands of nodes; `GET /state` scoped by group and file | [#740](https://github.com/barca-orc/barca/pull/740) |
+| 0.37.0 | 2026-10-30 | UI: command palette, failures by cause, one name per state, Run names its target; `file`/`line` in `list`, `cache.change_causes` in `status` | #742 |
+| 0.37.1 | 2026-10-30 | The metadata database keeps to its share of the size limit (a 41 GB production database came down to 848 MB) | [#751](https://github.com/barca-orc/barca/pull/751) |
+| 0.38.0 | 2026-10-31 | Batched calls reported per node; the UI at partition scale (`GET /assets/{name}/partitions`, failed keys in `status`) | [#753](https://github.com/barca-orc/barca/pull/753) |
+| 0.39.0 | 2026-10-31 | A failed partition key blocks only the keys that read it (`blocked`, `upstream_key_failed`); run page, actionable node panel, key search, one time zone, readable graph | #666 (#764), #757 to #767 |
+| 0.39.1 | 2026-10-31 | `--refresh 'source[key]'` keeps the whole target DAG; the metadata trim no longer evicts artifacts that fit; a seeded simulation of long server use | #784, [#783](https://github.com/barca-orc/barca/pull/783) |
+| 0.39.2 | 2026-11-02 | `barca.sql()` in the Python API; UI duration estimates scoped to each node's partition history | [#788](https://github.com/barca-orc/barca/pull/788), [#789](https://github.com/barca-orc/barca/pull/789) |
+| 0.39.3 | 2026-11-02 | Failed partition batches split into smaller calls, down to single partitions | [#787](https://github.com/barca-orc/barca/pull/787) |
+| 0.39.4 | 2026-11-03 | A server's runs share identical in-flight asset steps (experimental); a requeued run's re-executed steps are recorded under their new run hashes | #654 (part, [#796](https://github.com/barca-orc/barca/pull/796)), #794 |
+| 0.39 cleanup (shipping as 0.39.5) | planned | No features: #799, measured overhead and a performance gate, documents and milestones made true, structure, tests and CI | #800, #799, #807 |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
@@ -110,10 +104,42 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- **Store inspection, due by 0.36.0 (#706):** bound/reuse artifact
-  integrity evidence without making `cached` mean unchecked. Record the cost as the DB grows.
+None at 0.39.5.
 
 Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s, exit 1 after a forced stop; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
+
+## Decided, November 2026
+
+**The 0.39 cleanup (2026-11-04, #800).** The cleanup weeks after 0.36, 0.37, 0.38 and 0.39 were
+skipped: four minors and six patches shipped in five days with no checklist pass. 0.39.5 is the
+catch-up, one cleanup release for all four, following the checklist under "Cleanup releases".
+
+**Shared in-flight steps (#796, 0.39.4).** Kept on under `serve` and experimental: two runs of
+one server that need the same asset step under the same run hash compute it once. The non-goal
+above is amended to allow it. Three gaps remain, tracked in #654: cancelling the owning run
+makes the waiting run re-execute the step, the handoff happens before the owner's row is
+durable, and a decide-to-lease race can execute a step twice. A setting to turn it off is new
+surface and belongs to a minor.
+
+**The UI.** The UI is a vocabulary-faithful view of the ledger. It uses the CLI's state words
+(`cached`, `stale`, `unsynced`, `blocked`, `never_run`, `partial`, `always_runs`, `unknown`)
+and no others, maps each state once from the shared `CacheState` enum via generated types, and
+shows exactly what `barca status --json` shows, with client-side muting removed. The current UI
+does not meet this, so the redesign is scoped after 0.39.5; #807 tracks the stale Playwright
+specs.
+
+**Metadata durability (2026-11-04, #810).** The metadata database keeps SQLite's full
+synchronous mode. The 0.39.4 benchmark attributes 3 to 4 ms of a 32 ms trivial run to WAL
+fsyncs; `synchronous=NORMAL` would recover them at the cost of losing the last commits on power
+loss. The database is the ledger, so the milliseconds are not worth a durability caveat. Revisit
+only with a measured need and a persistence-spec change.
+
+**Store inspection (0.36.0, #706).** Artifact integrity evidence is bounded and reused without
+making `cached` mean unchecked: local digest and shape evidence is keyed by file identity and
+dropped when the file changes, cloud availability and remote shape observations live five
+minutes, and required reads, transfers and ledger acceptance always verify directly
+(`specs/behavior/inspection.md`, "Artifact inspection evidence"). The cost of cold inspection
+as the database grows is still unmeasured and stays with #656.
 
 ## Decided, October 2026
 

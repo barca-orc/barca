@@ -198,6 +198,16 @@ owner death, retry races and restart. Existing
 [concurrent CLI tests](../../python/tests/test_concurrent_processes.py) show coexistence, not
 single-owner execution. Track this work with issue #654.
 
+Note, 2026-11-04: [#796](https://github.com/barca-orc/barca/pull/796) (0.39.4) shipped the
+incremental part of this step ahead of steps 2b and 3: a server-wide claim per asset step
+([`claims.rs`](../../crates/barca-core/src/claims.rs)) lets a run wait on another run's in-flight
+step and take its artifact as a cache hit. Execution lifetime still belongs to the originating
+run's pool. It is kept on under `serve` as experimental (#800, item 8). What remains of this
+step, in #654: shared work surviving the cancellation of the run that started it
+(INV-CANCEL-01), a handoff that waits for the owner's durable row (step 2b's guarded
+publication), and an atomic decide-and-claim that closes the decide-to-lease race. Step 2b
+(one metadata write boundary) and step 3 are still not done.
+
 ### 5. Bound retained work and inspection
 
 Once result durability has one boundary, introduce backpressure from persistence through

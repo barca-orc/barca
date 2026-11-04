@@ -46,7 +46,6 @@ outside the `GENERATED` blocks is written by hand.
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `/events/{run_id}`) are deprecated aliases with no scheduled removal; a removal migrates the Python `Client` first and lands as a breaking change in a minor release |
-| `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
 | `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences `barca docs server-mode` lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
 | `barca sql` with a server (`GET /sql/views`, `GET /materializations`) and the `barca` schema (`barca.runs`, `barca.materializations`, `barca.nodes`) | new in 0.29.3: the columns of barca's tables, the limit of rows read from a server and the wording of the notes may change after field use; the result JSON is `sql`'s |
@@ -82,6 +81,52 @@ HTTP-only keys: `failing_since` and `consecutive_failures` (rows of `GET /state`
   its output is a manual meant to be read or pasted into a model's context, so the terminal rule
   does not apply. `--json` and `--fields` give the JSON index or topic.
 
+### Deprecated compat flags
+
+These older spellings keep working and are not experimental: their behavior does not change.
+Each is removed only in a minor release, and only at least one minor release after barca starts
+printing a stderr notice naming its replacement; no notice is printed yet, so none is scheduled
+for removal.
+
+- `get -o json` and `get -o pretty`: the older spellings of `--json` and `--pretty`.
+  `get -o path`, `get -o value` and `get -o url` are not deprecated.
+- `run -o json` and `run -o pretty` (`run --output`): the older spellings of `--json` and
+  `--pretty`. `run -o value` has no other spelling yet and keeps working.
+
+### Experimental surface: what graduates when
+
+Each whole-command experimental entry, decided for 0.40.0 (#800, item 11). Graduation is
+proposed only where the output contract has not changed for at least three minor releases;
+nothing has graduated yet. An experimental flag or key inside a graduating command keeps its
+own row above.
+
+- `barca sql`: graduates in 0.40.0. Shipped since 0.13.0; the `sql.txt` JSON snapshot is
+  unchanged since 0.13.0 and the help since 0.35.2. `sql --server` and the `barca` schema stay
+  experimental.
+- `barca history <RUN_ID>`: graduates in 0.40.0. Shipped since 0.29.3; the `history_run.txt`
+  JSON snapshot is unchanged since 0.34.0. `steps_page.nodes`, `max_rss_bytes` and
+  `output_tail` stay experimental.
+- `barca doctor`: graduates in 0.40.0. Shipped since 0.24.0; the `doctor.txt` JSON snapshot last
+  changed additively in 0.36.0 (`budget_bytes`, `backup_bytes`) and not at all in 0.37 to 0.39.
+  New checks stay additive; the server checks stay experimental with `--server`.
+- `barca state reset`: graduates in 0.40.0. Shipped since 0.28.0; its JSON
+  `{database, moved_to, moved, undo}` is unchanged since 0.28.0 and pinned by
+  `python/tests/test_state_reset.py`. `POST /state/reset` stays with `serve`.
+- `barca plan`: stays experimental. Its JSON (unchanged since 0.31.0) is the planner's internal
+  phase and stream layout, which the bounded-scheduling work in #655 is expected to change.
+- `barca gc`: stays experimental. Its JSON changed in 0.36.0, and the eviction order is
+  size-based where `specs/behavior/operations.md` approves a three-version retention policy;
+  a killed worker's `.barca/.batch-*` directory and a killed run's `live-logs/` file count
+  toward the budget but are never cleaned up.
+- `barca serve`: stays experimental. Its HTTP API changed in every minor from 0.36.0 to 0.39.0,
+  shared in-flight steps have three open gaps (#654), and bounded cold planning and inspection
+  are unmet (#655, #656).
+- `barca queue`: stays experimental. It reads `serve`'s run queue, which stays experimental,
+  and its JSON has no schema snapshot.
+- `barca tokens` and `barca tokens bootstrap`: stay experimental. New in 0.36.0 (RFC-0016); the
+  token format may evolve, and the cost of token access in a cloud deployment is not
+  established.
+
 ## Commands
 
 `barca <command> --help` (or `-h`) prints concise flags, common examples and manual pointers.
@@ -103,7 +148,7 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release | Manage runs, schedules and results on a server |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open | Manage runs, schedules and results on a server |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
@@ -202,7 +247,7 @@ default, and any aliases.
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
 | `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use | Override declared batching: none, all, N or NODE=N (experimental) |
 | `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
-| `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Choose the result output mode (see possible values) |
+| `-o, --output` | `json\|value\|pretty` | - | deprecated: -o json\|pretty are the older spellings of --json / --pretty; -o value has no replacement yet and keeps working | Choose the result output mode (see possible values) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |

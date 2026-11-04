@@ -282,6 +282,8 @@ see [Deploying](/deploying/#in-a-container).
 
 ## Overlapping runs share their steps
 
+Experimental since 0.39.4, with known gaps: cancelling the run that computes a step makes the waiting run execute it again from the start, the result is handed to the waiting run before the computing run's row is durable, and a run that decided a step before another run finished it but leases it after that run's claim ended executes it a second time (#654).
+
 When two runs of one `barca serve` need the same asset step at the same time (same node,
 partition key and run hash), it is computed once. A scheduled tick and an API request for the
 same report, or two targets that share an upstream, wait for each other's steps instead of

@@ -447,6 +447,8 @@ cannot loop.
 
 ### Runs share the steps they have in common
 
+Experimental (new in 0.39.4). Known gaps: cancelling the run that computes a step makes the waiting run execute it again from the start, the result is handed to the waiting run before the computing run's row is durable, and a run that decided a step before another run finished it but leases it after that run's claim ended executes it a second time (#654).
+
 Two runs of the server that need the same asset step at the same time compute it once: the same
 node, the same partition key and the same run hash (code, inputs and everything else that goes
 into it). The run that reaches the step second waits for the first and reports it `cached`, with

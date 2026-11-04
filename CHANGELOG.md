@@ -20,6 +20,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - The landing page, Getting Started, Philosophy and Architecture no longer say barca never imports your source: it reads source statically, and a nonliteral `partitions(...)` or `batches(...)` expression and a `batches_by` function are evaluated in a resolver subprocess that imports the module.
 - The cache reason `not_planned` (state `unknown`), which `status` could already report, is listed in the OpenAPI `Cache.reason` enum, the CLI contract and `barca docs status`; the contract's lists also gain the `blocked` state and the `upstream_failed` reason. Tests keep the code's states and reasons equal to the OpenAPI enums.
 - The OpenAPI spec documents a skipped step's reasons, including `upstream_key_failed`, and `specs/README.md` states each owner's status for the current code (token auth and event replay shipped in 0.36.0).
+- DIRECTION.md carries the 0.39 cleanup's order (#800), the releases 0.36.0 to 0.39.4, and the November decisions: the skipped cleanup weeks, shared in-flight steps kept on as experimental with the non-goal amended, the UI as a view of the ledger in the CLI's state words, and store inspection settled by 0.36.0.
+- Sharing in-flight asset steps between a server's runs (0.39.4) is labelled experimental in `barca docs scheduling`, `barca docs server-mode`, the `serve` entry of `barca docs contract` and the specs, with its three known gaps (#654).
+- `barca docs contract` lists which experimental commands graduate in 0.40.0 (`sql`, `history RUN_ID`, `doctor`, `state reset`) and which stay experimental and why, and moves `get -o json|pretty` and `run -o/--output` from the experimental items to a new "Deprecated compat flags" section: they keep working, and none is removed before at least one minor release after a notice naming the replacement.
 
 ## 0.39.4 (2026-11-03)
 
