@@ -465,7 +465,7 @@ async fn execute(
         return;
     }
     if let Err(e) =
-        barca_core::run_queue::mark_running(&state.config.resolved.db_path, &run_id).await
+        barca_core::serve::run_queue::mark_running(&state.config.resolved.db_path, &run_id).await
     {
         barca_core::errln!("[barca] warning: run {run_id}: {e}");
     }
@@ -521,11 +521,12 @@ async fn execute(
                 cancel: cancel.clone(),
                 event_tx: Some(event_tx),
                 options: RunOptions {
-                    server_owned: true,
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
-                    shared_capacity: state.capacity.clone(),
-                    shared_steps: Some(state.shared_steps.clone()),
+                    host: std::sync::Arc::new(barca_core::serve::ServeHost::new(
+                        state.capacity.clone(),
+                        state.shared_steps.clone(),
+                    )),
                     batch: barca_core::batch::BatchOverride::parse(&spec.batch).unwrap_or_default(),
                 },
                 partition: spec.partition.clone(),
@@ -687,11 +688,12 @@ async fn execute(
     crate::queue::dispatch(&state);
 }
 
-/// Put a run the stopping server stopped back in the queue ([`barca_core::run_queue::requeue`]):
+/// Put a run the stopping server stopped back in the queue ([`barca_core::serve::run_queue::requeue`]):
 /// the next server starts it again, under the same id. Its event stream ends without
 /// `run_finished` when the server stops; a client following it reconnects to the next one.
 async fn requeue(state: &AppState, run_id: &str) {
-    match barca_core::run_queue::requeue(&state.config.resolved.db_path, run_id, None).await {
+    match barca_core::serve::run_queue::requeue(&state.config.resolved.db_path, run_id, None).await
+    {
         Ok(()) => {
             barca_core::errln!(
                 "[barca] run {run_id} stopped and put back in the queue: it starts again when \
@@ -735,7 +737,9 @@ async fn finish(
         barca_core::errln!("[barca] could not record the outcome of run {run_id}: {e}");
     }
     // Recorded: it leaves the queue.
-    if let Err(e) = barca_core::run_queue::remove(&state.config.resolved.db_path, run_id).await {
+    if let Err(e) =
+        barca_core::serve::run_queue::remove(&state.config.resolved.db_path, run_id).await
+    {
         barca_core::errln!("[barca] warning: run {run_id}: {e}");
     }
     let error = outcome.envelope().map(|e| e.error);

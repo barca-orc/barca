@@ -33,7 +33,7 @@ not implement the remaining ownership, snapshot or bounded-work requirements bel
 The CLI delegates execution through [core commands](../../crates/barca-core/src/commands.rs).
 On the server, [runs](../../crates/barca-server/src/runs.rs) validates requests and drives
 execution; [queue](../../crates/barca-server/src/queue.rs) admits runs using run slots and
-[durable queue records](../../crates/barca-core/src/run_queue.rs). [Server state](../../crates/barca-server/src/state.rs)
+[durable queue records](../../crates/barca-core/src/serve/run_queue.rs). [Server state](../../crates/barca-server/src/state.rs)
 holds live run state, events, slots and shared capacity. [Server lifecycle](../../crates/barca-server/src/lib.rs)
 owns startup and drain. Queue acceptance is durable before acknowledgement.
 
@@ -61,7 +61,7 @@ of ordered current-result publication.
 
 [Coordinator](../../crates/barca-core/src/coordinator.rs) already separates scheduling state
 from [worker I/O](../../crates/barca-core/src/io_loop.rs). Keep that separation. The worker pool
-is reused across phases of one run, while [capacity](../../crates/barca-core/src/capacity.rs)
+is reused across phases of one run, while [capacity](../../crates/barca-core/src/serve/capacity.rs)
 can be shared across server runs. Sharing capacity does not deduplicate matching work.
 The coordinator's per-item retries are also distinct from a new user-requested invocation attempt.
 
@@ -200,7 +200,7 @@ single-owner execution. Track this work with issue #654.
 
 Note, 2026-11-04: [#796](https://github.com/barca-orc/barca/pull/796) (0.39.4) shipped the
 incremental part of this step ahead of steps 2b and 3: a server-wide claim per asset step
-([`claims.rs`](../../crates/barca-core/src/claims.rs)) lets a run wait on another run's in-flight
+([`claims.rs`](../../crates/barca-core/src/serve/claims.rs)) lets a run wait on another run's in-flight
 step and take its artifact as a cache hit. Execution lifetime still belongs to the originating
 run's pool. It is kept on under `serve` as experimental (#800, item 8). What remains of this
 step, in #654: shared work surviving the cancellation of the run that started it

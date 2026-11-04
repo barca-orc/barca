@@ -847,7 +847,7 @@ pub(crate) enum Cli {
         files: Vec<PathBuf>,
         /// Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth
         #[arg(long)]
-        auth: Option<barca_core::config::AuthMode>,
+        auth: Option<barca_core::serve::AuthMode>,
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
         port: u16,

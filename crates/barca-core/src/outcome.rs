@@ -91,21 +91,29 @@ pub fn rfc3339(epoch: i64) -> String {
 
 /// What a run is given besides its targets: the id to record it under (allocated by the
 /// caller, so the id a server answers with is the database id) and what started it.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RunOptions {
-    /// A served run's end is routine; the server owns the final shutdown backup.
-    pub server_owned: bool,
     /// The run id to use; a new one when `None`.
     pub run_id: Option<String>,
     pub trigger: Trigger,
-    /// The capacity every run of a `barca serve` shares (`[server] capacity`): the run's steps
-    /// are admitted against it as well as against the run's own (#628).
-    pub shared_capacity: Option<std::sync::Arc<crate::capacity::SharedCapacity>>,
-    /// The asset steps the runs of a `barca serve` are executing (#654): the run waits for a
-    /// step another run is computing instead of computing it again ([`crate::claims`]).
-    pub shared_steps: Option<std::sync::Arc<crate::claims::SharedSteps>>,
+    /// What hosts the run: [`crate::run_host::LocalHost`] for a run on its own, a
+    /// [`crate::serve::ServeHost`] for a run of `barca serve`, whose runs share a capacity
+    /// (#628) and in-flight asset steps (#654) and whose end is routine (the server owns the
+    /// final shutdown backup).
+    pub host: std::sync::Arc<dyn crate::run_host::RunHost>,
     /// `--batch` (RFC-0013): the run's override of the `batch=` of the nodes that declare one.
     pub batch: crate::batch::BatchOverride,
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            run_id: None,
+            trigger: Trigger::default(),
+            host: crate::run_host::LocalHost::shared(),
+            batch: crate::batch::BatchOverride::default(),
+        }
+    }
 }
 
 /// `get` or `run`.

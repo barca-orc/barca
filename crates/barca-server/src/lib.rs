@@ -158,7 +158,7 @@ pub enum Stopped {
 /// second signal comes first, they are cancelled (workers terminated, runs recorded
 /// `cancelled` with reason `server shutdown`) and [`Stopped::Forced`] is returned.
 pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
-    if config.resolved.server_auth == barca_core::config::AuthMode::Token {
+    if config.resolved.server_auth == barca_core::serve::AuthMode::Token {
         auth::Store::open(&config.resolved.project_root)
             .map_err(|error| ServeError::Load(barca_core::BarcaError::Other(error.to_string())))?;
         barca_core::errln!(
@@ -672,7 +672,8 @@ async fn drain_then_stop(
         .collect();
     if !state.config.read_only
         && let Err(e) =
-            barca_core::run_queue::mark_draining(&state.config.resolved.db_path, &flying).await
+            barca_core::serve::run_queue::mark_draining(&state.config.resolved.db_path, &flying)
+                .await
     {
         barca_core::errln!("[barca] warning: could not mark the runs in flight draining: {e}");
     }

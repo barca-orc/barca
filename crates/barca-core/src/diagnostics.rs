@@ -110,7 +110,7 @@ fn cache_size(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
 /// How many workers a run starts and the capacity their steps' `weight=` shares (#436).
 /// Informational.
 fn capacity(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
-    let sizing = crate::execution::sizing_for(cfg, None);
+    let sizing = crate::execution::sizing_for(cfg, &crate::run_host::LocalHost);
     let (capacity, source, pool_size, pool_source) = (
         sizing.capacity,
         sizing.capacity_source,

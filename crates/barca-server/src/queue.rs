@@ -22,7 +22,7 @@ use axum::extract::State;
 use barca_core::cache::CachePolicy;
 use barca_core::db;
 use barca_core::outcome::{RunCommand, Trigger, TriggeredBy};
-use barca_core::run_queue::{self, QueueState};
+use barca_core::serve::run_queue::{self, QueueState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
@@ -499,7 +499,7 @@ pub struct QueueView {
     /// The capacity every run shares (`--capacity`, `[server] capacity`): the weight in use,
     /// by run, and the steps waiting for it, in the order they are admitted. `null` when the
     /// server has none (each run has only its own).
-    pub capacity: Option<barca_core::capacity::CapacitySnapshot>,
+    pub capacity: Option<barca_core::serve::capacity::CapacitySnapshot>,
 }
 
 fn entry(run: &RunState, position: Option<usize>) -> QueueEntry {

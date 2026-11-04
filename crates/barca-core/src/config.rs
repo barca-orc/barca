@@ -9,6 +9,7 @@
 //! > built-in default.
 
 use crate::BarcaError;
+use crate::serve::AuthMode;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -130,25 +131,6 @@ fn execution_with(
 pub struct CacheToml {
     /// `"20GB"`, `"500MB"`, `"20GiB"`, a number of bytes, `"10%"` of the filesystem, or `"off"`.
     pub max_size: Option<toml::Value>,
-}
-
-/// Whether the server requires project API tokens.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthMode {
-    #[default]
-    Off,
-    Token,
-}
-impl std::str::FromStr for AuthMode {
-    type Err = String;
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        match raw {
-            "off" => Ok(Self::Off),
-            "token" => Ok(Self::Token),
-            _ => Err("server auth must be off or token".into()),
-        }
-    }
 }
 
 /// `[server]`: the `barca serve` this project's commands talk to (RFC-0007), and how

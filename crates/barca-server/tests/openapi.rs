@@ -314,7 +314,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let queue = validator(&json!({"$ref":"#/components/schemas/Queue"}));
     let mut view = json!({"paused":false,"paused_at":null,"draining":false,"max_runs":4,"running":[],"queued":[],"capacity":null});
     assert!(queue.is_valid(&view));
-    let capacity = barca_core::capacity::SharedCapacity::new(4, "--capacity");
+    let capacity = barca_core::serve::capacity::SharedCapacity::new(4, "--capacity");
     assert!(capacity.try_acquire("r1", "p.py:a", 3));
     assert!(!capacity.try_acquire("r2", "p.py:b", 2));
     view["capacity"] = serde_json::to_value(capacity.snapshot()).unwrap();
@@ -1209,7 +1209,7 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
     assert_eq!(queue["queued"][3]["run_id"], body["run_id"]);
     // Recorded: the next server resumes them.
     let recorded =
-        barca_core::run_queue::list(&dir.path().join("metadata.db").display().to_string())
+        barca_core::serve::run_queue::list(&dir.path().join("metadata.db").display().to_string())
             .await
             .unwrap();
     assert_eq!(recorded.len(), 4);
@@ -1275,16 +1275,19 @@ async fn queue_pause_and_resume_match_contract() {
     // A server started on the same database keeps the pause and the queued run.
     let db = dir.path().join("metadata.db").display().to_string();
     assert!(
-        barca_core::run_queue::paused_at(&db)
+        barca_core::serve::run_queue::paused_at(&db)
             .await
             .unwrap()
             .is_some()
     );
-    assert_eq!(barca_core::run_queue::list(&db).await.unwrap().len(), 1);
+    assert_eq!(
+        barca_core::serve::run_queue::list(&db).await.unwrap().len(),
+        1
+    );
     let resumed = checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;
     assert_eq!(resumed["paused"], false);
     assert!(
-        barca_core::run_queue::paused_at(&db)
+        barca_core::serve::run_queue::paused_at(&db)
             .await
             .unwrap()
             .is_none()
@@ -1292,7 +1295,10 @@ async fn queue_pause_and_resume_match_contract() {
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
     assert_eq!(done["status"], "complete", "{done}");
     assert!(
-        barca_core::run_queue::list(&db).await.unwrap().is_empty(),
+        barca_core::serve::run_queue::list(&db)
+            .await
+            .unwrap()
+            .is_empty(),
         "a finished run leaves the queue"
     );
     checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;

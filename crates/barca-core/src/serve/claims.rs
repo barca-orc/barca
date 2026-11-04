@@ -24,8 +24,7 @@ use std::sync::Mutex;
 
 use tokio::sync::watch;
 
-/// What identifies shared work: the step's display id (with its partition key) and its run hash.
-pub type StepKey = (String, String);
+pub use crate::run_host::StepKey;
 
 /// The asset steps the runs of one server are executing now.
 #[derive(Debug, Default)]
