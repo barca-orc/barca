@@ -7,12 +7,7 @@
 use std::path::{Path, PathBuf};
 
 /// Owners: a file here, or under a directory here, may write.
-const OWNERS: &[&str] = &[
-    "db/",
-    "persist/recording.rs",
-    "db_schema.rs",
-    "sql/",
-];
+const OWNERS: &[&str] = &["db/", "persist/recording.rs", "db_schema.rs", "sql/"];
 
 /// Files that still write outside an owner, each with why.
 const ALLOWED: &[(&str, &str)] = &[];
