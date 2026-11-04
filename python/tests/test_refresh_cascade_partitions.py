@@ -101,8 +101,10 @@ def test_cli_refresh_cascades_to_consumer_keys(project, refresh, refreshed):
     assert calls(project) == sorted(expected + [f"monetized {k}" for k in touched] + ["app"])
     assert step(result, "monetized")["reason"] == "refresh_cascade"
     assert step(result, "monetized")["partitions"]["cached"] == 3 - len(touched)
-    version = {node: {k: "v2" if k in refreshed.get(node, []) else "v1" for k in KEYS}
-               for node in ("drivers", "cutoffs")}
+    version = {
+        node: {k: "v2" if k in refreshed.get(node, []) else "v1" for k in KEYS}
+        for node in ("drivers", "cutoffs")
+    }
     assert value(project) == rows(version["drivers"], version["cutoffs"])
 
 
