@@ -22,7 +22,7 @@ use axum::extract::State;
 use barca_core::cache::CachePolicy;
 use barca_core::db;
 use barca_core::outcome::{RunCommand, Trigger, TriggeredBy};
-use barca_core::run_queue::{self, QueueState};
+use barca_core::serve::run_queue::{self, QueueState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;

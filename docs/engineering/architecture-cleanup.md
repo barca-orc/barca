@@ -33,7 +33,7 @@ not implement the remaining ownership, snapshot or bounded-work requirements bel
 The CLI delegates execution through [core commands](../../crates/barca-core/src/commands.rs).
 On the server, [runs](../../crates/barca-server/src/runs.rs) validates requests and drives
 execution; [queue](../../crates/barca-server/src/queue.rs) admits runs using run slots and
-[durable queue records](../../crates/barca-core/src/run_queue.rs). [Server state](../../crates/barca-server/src/state.rs)
+[durable queue records](../../crates/barca-core/src/serve/run_queue.rs). [Server state](../../crates/barca-server/src/state.rs)
 holds live run state, events, slots and shared capacity. [Server lifecycle](../../crates/barca-server/src/lib.rs)
 owns startup and drain. Queue acceptance is durable before acknowledgement.
 

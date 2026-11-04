@@ -676,7 +676,8 @@ async fn drain_then_stop(
         .collect();
     if !state.config.read_only
         && let Err(e) =
-            barca_core::run_queue::mark_draining(&state.config.resolved.db_path, &flying).await
+            barca_core::serve::run_queue::mark_draining(&state.config.resolved.db_path, &flying)
+                .await
     {
         barca_core::errln!("[barca] warning: could not mark the runs in flight draining: {e}");
     }
