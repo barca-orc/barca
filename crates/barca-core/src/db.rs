@@ -31,6 +31,8 @@ use tokio::sync::{Mutex, MutexGuard};
 /// a persistent connection.
 static DB_LOCK: Mutex<()> = Mutex::const_new(());
 
+pub(crate) mod run_queue;
+pub(crate) mod runs;
 #[cfg(test)]
 mod write_boundary_tests;
 

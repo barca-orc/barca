@@ -23,7 +23,6 @@ const ALLOWED: &[(&str, &str)] = &[
     ("metadata_size.rs", "moving to an owner"),
     ("pending_uploads.rs", "moving to an owner"),
     ("persist.rs", "moving to an owner"),
-    ("run_queue.rs", "moving to an owner"),
     ("sink_publications.rs", "moving to an owner"),
     ("telemetry/history.rs", "moving to an owner"),
 ];

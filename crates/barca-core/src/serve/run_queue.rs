@@ -130,17 +130,9 @@ pub async fn push(
             .is_some()
         {}
         drop(rows);
-        conn.execute(
-            "INSERT INTO run_queue (run_id, seq, state, spec, queued_at) VALUES (?1, ?2, 'queued', ?3, ?4)",
-            [
-                run_id.to_string(),
-                seq.to_string(),
-                spec.to_string(),
-                queued_at.to_string(),
-            ],
-        )
-        .await
-        .map_err(failed("adding a run"))?;
+        db::run_queue::insert_queued(&conn, run_id, seq, spec, queued_at)
+            .await
+            .map_err(failed("adding a run"))?;
         Ok(seq)
     })
     .await
@@ -183,12 +175,9 @@ pub async fn mark_running(db_path: &str, run_id: &str) -> Result<(), BarcaError>
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
-    conn.execute(
-        "UPDATE run_queue SET state = 'running' WHERE run_id = ?1 AND state = 'queued'",
-        [run_id],
-    )
-    .await
-    .map_err(failed("marking a run"))?;
+    db::run_queue::mark_running(&conn, run_id)
+        .await
+        .map_err(failed("marking a run"))?;
     Ok(())
 }
 
@@ -203,12 +192,9 @@ pub async fn mark_draining(db_path: &str, run_ids: &[String]) -> Result<(), Barc
     ensure(&conn).await?;
     db::with_tx(&conn, "BEGIN IMMEDIATE", "run queue drain", async {
         for run_id in run_ids {
-            conn.execute(
-                "UPDATE run_queue SET state = 'draining' WHERE run_id = ?1",
-                [run_id.as_str()],
-            )
-            .await
-            .map_err(failed("marking a run draining"))?;
+            db::run_queue::mark_draining(&conn, run_id)
+                .await
+                .map_err(failed("marking a run draining"))?;
         }
         Ok(())
     })
@@ -222,7 +208,7 @@ pub async fn remove(db_path: &str, run_id: &str) -> Result<(), BarcaError> {
     if !has_table(&conn, "run_queue").await? {
         return Ok(());
     }
-    conn.execute("DELETE FROM run_queue WHERE run_id = ?1", [run_id])
+    db::run_queue::delete(&conn, run_id)
         .await
         .map_err(failed("removing a run"))?;
     Ok(())
@@ -240,24 +226,18 @@ pub async fn requeue(db_path: &str, run_id: &str, spec: Option<&str>) -> Result<
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
     db::with_tx(&conn, "BEGIN IMMEDIATE", "run requeue", async {
-        conn.execute(
-            "UPDATE run_queue SET state = 'queued' WHERE run_id = ?1",
-            [run_id],
-        )
-        .await
-        .map_err(failed("requeueing a run"))?;
-        if let Some(spec) = spec {
-            conn.execute(
-                "UPDATE run_queue SET spec = ?2 WHERE run_id = ?1",
-                [run_id, spec],
-            )
+        db::run_queue::mark_queued(&conn, run_id)
             .await
             .map_err(failed("requeueing a run"))?;
+        if let Some(spec) = spec {
+            db::run_queue::set_spec(&conn, run_id, spec)
+                .await
+                .map_err(failed("requeueing a run"))?;
         }
-        conn.execute("DELETE FROM runs WHERE run_id = ?1", [run_id])
+        db::runs::delete_run(&conn, run_id)
             .await
             .map_err(failed("forgetting the stopped attempt"))?;
-        conn.execute("DELETE FROM logs WHERE run_id = ?1", [run_id])
+        db::runs::delete_logs(&conn, run_id)
             .await
             .map_err(failed("forgetting the stopped attempt's lines"))?;
         Ok(())
@@ -297,16 +277,10 @@ pub async fn set_paused(db_path: &str, at: Option<i64>) -> Result<(), BarcaError
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
     match at {
-        Some(at) => conn
-            .execute(
-                "INSERT INTO server_state (key, value) VALUES (?1, ?2)
-                 ON CONFLICT(key) DO UPDATE SET value = ?2",
-                [PAUSED_AT.to_string(), at.to_string()],
-            )
+        Some(at) => db::run_queue::set_state(&conn, PAUSED_AT, &at.to_string())
             .await
             .map_err(failed("pausing"))?,
-        None => conn
-            .execute("DELETE FROM server_state WHERE key = ?1", [PAUSED_AT])
+        None => db::run_queue::clear_state(&conn, PAUSED_AT)
             .await
             .map_err(failed("resuming"))?,
     };
