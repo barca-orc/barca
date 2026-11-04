@@ -2,8 +2,8 @@
 
 Start here for what Barca promises and what is still design. Terms are defined in the
 [glossary](../GLOSSARY.md); product direction lives in [DIRECTION.md](../DIRECTION.md).
-This cleanup describes the implemented 0.33.0 baseline at `fa396a5d` and explicitly identified
-gaps. [PR #658](https://github.com/barca-orc/barca/pull/658) was closed without merging; its sequential
+Each status below describes the code on `main` and its explicitly identified gaps.
+[PR #658](https://github.com/barca-orc/barca/pull/658) was closed without merging; its sequential
 historical-selection fix is now carried here with regression controls. A specification describes its stated scope; a passing grammar
 check or benchmark is not evidence for unrelated runtime behavior.
 
@@ -38,13 +38,13 @@ from approved decisions.
 
 | Owner | Scope | Status / evidence |
 | --- | --- | --- |
-| [Freshness](behavior/freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules; bounded historical-selection evidence; named invariants and real integration checks |
+| [Freshness](behavior/freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules with a known historical-selection defect; bounded historical-selection evidence; named invariants and real integration checks |
 | [Execution](behavior/execution.md) | Runs, logical keys vs calls/processes, batches, partial failure, cancellation and recovery | Implemented rules; in-flight asset sharing between server runs (cancellation survival and durable handoff are gaps); bounded full execution remains a gap |
 | [Inspection](behavior/inspection.md) | Validity, execution, availability and current counts | Implemented behavior; explicit checking and independent status tracking are approved design only |
 | [Performance](behavior/performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |
 | [Python runtime](behavior/python-runtime.md) | Cached modules, process-local DuckDB state and temporary input views | Implemented; real worker connection controls |
-| [Server event replay](behavior/server-event-replay.md) | Attempt-scoped cursors and bounded serialized retention | Server implemented for pending 0.36.0; CLI/UI integration and cost probes incomplete |
-| [Server authentication](behavior/server-authentication.md) | Project token storage, local bootstrap and request protection | Implemented for pending 0.36.0; browser access implemented; replay has a separate owner |
+| [Server event replay](behavior/server-event-replay.md) | Attempt-scoped cursors and bounded serialized retention | Implemented in 0.36.0: server, CLI and browser resume; cost probes are local loopback measurements, real proxy/cloud latency not established |
+| [Server authentication](behavior/server-authentication.md) | Project token storage, local bootstrap and request protection | Implemented in 0.36.0, including browser access; cloud deployment cost not established; replay has a separate owner |
 | [Cache decisions](behavior/cache-decisions.md) | Reuse, provenance, early cutoff and durable run records | Implemented; selection deviation remains explicit |
 
 Each owner links its exact conformance sources and records known limitations. Existing wire
@@ -56,7 +56,7 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 
 | Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 17 | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 18 | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
 | Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-core/tests/grammar_spec.rs), [argument owner](../crates/barca-core/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
 | CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
 | Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-core/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
@@ -75,8 +75,8 @@ and CLI contract, with [backup tests](../python/tests/test_store_backup_restore.
 Their accepted designs are [RFC-0009](../site/src/content/docs/rfcs/0009-store-backup-and-restore.md)
 and [RFC-0011](../site/src/content/docs/rfcs/0011-signed-urls.md).
 [RFC-0015](../site/src/content/docs/rfcs/0015-backup-cadence.md) accepts configurable backup
-cadence and separate local-backup accounting for 0.36.0. The manual and CLI contract own
-the implementation, which is not yet released. Conformance includes
+cadence and separate local-backup accounting, shipped in 0.36.0. The manual and CLI contract own
+the implementation. Conformance includes
 [backup cadence](../python/tests/test_backup_cadence.py),
 [backup accounting](../python/tests/test_backup_storage_accounting.py), the core admission
 and GC tests, and the recorder's skipped-progress test.
@@ -90,13 +90,12 @@ These owners have not been relocated or copied into new schemas.
 the bootstrap, token lifecycle, browser credential and event-resume boundaries for #706 and
 #187. The accepted design preserves the user-chosen opt-in Barca issuance/validation boundary
 without accounts. Server issuance/validation now follows [project token authentication](behavior/server-authentication.md);
-Browser token management and [attempt-scoped replay](behavior/server-event-replay.md) are
-implemented for pending 0.36.0. Client transport now implements
+Browser token management and [attempt-scoped replay](behavior/server-event-replay.md) shipped
+in 0.36.0. Client transport implements
 `BARCA_SERVER_TOKEN` and URL Basic credentials, scoped redirects and error redaction, as
 documented in the [server-mode manual](../crates/barca-cli/docs/server-mode.md) and checked by
 [authenticated proxy tests](../python/tests/test_server_credentials.py).
-Current HTTP/CLI contracts and the implemented behavioral owners are authoritative; release
-conformance and publication are still required.
+Current HTTP/CLI contracts and the implemented behavioral owners are authoritative.
 
 [Architecture map and cleanup sequence](../docs/engineering/architecture-cleanup.md) connects the inspected
 implementation to approved responsibilities and orders structural refactors before changes

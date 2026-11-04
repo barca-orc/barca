@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 1. Status: server, CLI and browser implementation for pending 0.36.0;
+Specification version: 1. Status: server, CLI and browser implementation, shipped in 0.36.0;
 cost probes are recorded in the benchmark fixture. Scope: in-memory event retention, cursor validation,
 replay/live attachment and subscriber lifetime. Exact HTTP shapes belong to
 [OpenAPI](../interfaces/server-api.openapi.yaml); accepted full behavior is
