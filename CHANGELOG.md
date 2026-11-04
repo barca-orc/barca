@@ -20,6 +20,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ### Bug Fixes
 
 - UI: one state vocabulary everywhere. A task or sensor shows its last execution (Healthy, Failed, Not run) in tables, as group health already did; Not run, Unknown and Always runs are grey wherever they appear, leaving the queued colour to queued run work; "State unknown" is "Unknown". Node, file and group names use the sans-serif instead of monospace, dark-theme borders and hover/selection backgrounds have more contrast, and table rows stack a name over its file at any width, with the table beside the node panel leaving out last success, typical and next run instead of squeezing every column.
+- A `--read-only` server reading beside a writer no longer loses reads to `database disk image is malformed` (a cache lookup counted as a miss, a failed request). Its check of the database file's header closed a descriptor of the file, which drops every SQLite lock the process holds on it, so a writer in another process closing its last connection took the database as its alone: it checkpointed past the reader's snapshot and deleted the write-ahead log under the reader's queries. barca now reads the database file only through a descriptor it keeps open, as SQLite does. The same applied to a `barca serve` process's own reads during its metadata backups.
 
 ### Documentation
 

@@ -1152,8 +1152,8 @@ pub(crate) async fn lookup_cached(
 }
 
 /// A lookup the database could not answer is a miss: the step runs again, which costs time and
-/// never gives a wrong result. A `--read-only` server can see this while the writer runs
-/// `VACUUM`.
+/// never gives a wrong result. A `--read-only` server saw this beside a writer's `VACUUM` while
+/// barca dropped its own SQLite locks ([`crate::db::held_file`]).
 fn lookup_failed(node_id: &str, e: libsql::Error) -> Option<dispatch::OutputRef> {
     crate::errln!("[barca] warning: cache lookup of {node_id} failed: {e}");
     None
