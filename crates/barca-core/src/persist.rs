@@ -1183,7 +1183,7 @@ sys.exit(_state.main())
         // executable on its first exec, which made the first backup start about 150ms late.
         // Without arguments it prints its usage and exits.
         crate::helper_proc::output_std(&mut std::process::Command::new(&python)).unwrap();
-        let mut cfg = crate::config::resolve_in(None, root).unwrap();
+        let mut cfg = crate::config::resolve_with(None, root, crate::config::Vars::NONE).unwrap();
         cfg.db_path = root.join("meta/metadata.db").to_string_lossy().into_owned();
         cfg.backup_uri = Some(root.join("store").to_string_lossy().into_owned());
         cfg.backup_interval =

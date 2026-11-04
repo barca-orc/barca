@@ -959,7 +959,7 @@ async fn gc_says_what_holds_the_space_it_cannot_free() {
 #[tokio::test]
 async fn a_survey_keeps_the_store_checks_and_each_store_has_its_own() {
     let (f, _) = project().await;
-    let mut cfg = crate::config::resolve_in(None, f.root()).unwrap();
+    let mut cfg = crate::config::resolve_with(None, f.root(), crate::config::Vars::NONE).unwrap();
     cfg.artifact_root = "s3://bucket/p/default/artifacts".into();
     update_store_checks(&f.project, StoreCheck::of(&cfg, 100), true);
     let mut other = cfg.clone();

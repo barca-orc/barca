@@ -163,7 +163,8 @@ mod tests {
     #[tokio::test]
     async fn disabled_busy_restart_and_final_admission() {
         let dir = tempfile::tempdir().unwrap();
-        let mut cfg = crate::config::resolve_in(None, dir.path()).unwrap();
+        let mut cfg =
+            crate::config::resolve_with(None, dir.path(), crate::config::Vars::NONE).unwrap();
         cfg.db_path = dir
             .path()
             .join("metadata.db")
