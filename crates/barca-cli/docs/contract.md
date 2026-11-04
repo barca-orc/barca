@@ -148,7 +148,7 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release | Manage runs, schedules and results on a server |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open | Manage runs, schedules and results on a server |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
@@ -247,7 +247,7 @@ default, and any aliases.
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
 | `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use | Override declared batching: none, all, N or NODE=N (experimental) |
 | `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
-| `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Choose the result output mode (see possible values) |
+| `-o, --output` | `json\|value\|pretty` | - | deprecated: -o json\|pretty are the older spellings of --json / --pretty; -o value has no replacement yet and keeps working | Choose the result output mode (see possible values) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |

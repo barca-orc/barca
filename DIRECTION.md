@@ -128,6 +128,12 @@ shows exactly what `barca status --json` shows, with client-side muting removed.
 does not meet this, so the redesign is scoped after 0.39.5; #807 tracks the stale Playwright
 specs.
 
+**Metadata durability (2026-11-04, #810).** The metadata database keeps SQLite's full
+synchronous mode. The 0.39.4 benchmark attributes 3 to 4 ms of a 32 ms trivial run to WAL
+fsyncs; `synchronous=NORMAL` would recover them at the cost of losing the last commits on power
+loss. The database is the ledger, so the milliseconds are not worth a durability caveat. Revisit
+only with a measured need and a persistence-spec change.
+
 **Store inspection (0.36.0, #706).** Artifact integrity evidence is bounded and reused without
 making `cached` mean unchecked: local digest and shape evidence is keyed by file identity and
 dropped when the file changes, cloud availability and remote shape observations live five
