@@ -731,7 +731,8 @@ command on the server through the CLI's `--server` and return the value, as a lo
 A parquet or pickle result is read from `GET /runs/{run_id}/output`.
 
 `barca.Client` is **deprecated** in favour of them: constructing one emits a
-`DeprecationWarning`, and it will be removed in a later minor release. The standard-library SDK
+`DeprecationWarning`. There is no scheduled removal; a removal migrates `Client` off the deprecated
+routes first and lands as a breaking change in a minor release. The standard-library SDK
 wraps this API:
 
 ```python

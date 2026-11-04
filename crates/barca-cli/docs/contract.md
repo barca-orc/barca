@@ -45,7 +45,7 @@ outside the `GENERATED` blocks is written by hand.
 |---|---|
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
-| `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
+| `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `/events/{run_id}`) are deprecated aliases with no scheduled removal; a removal migrates the Python `Client` first and lands as a breaking change in a minor release |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
 | `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences `barca docs server-mode` lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
@@ -69,9 +69,12 @@ outside the `GENERATED` blocks is written by hand.
 | `require_env` in `barca.toml`, `BARCA_REQUIRE_ENV` and the `[barca] note: no --env given, ...` line | new in 0.31 (#627): which commands count as touching an environment, and when the note is printed, may change after field use |
 | `@asset(deterministic=False)` | new in 0.31 (#627): may be extended to other decorators |
 | `max_rss_bytes` and `median_max_rss_bytes` in `barca stats`, `steps[].max_rss_bytes` and `steps[].output_tail` in `barca history RUN_ID` | new in 0.31 (#627): what the peak covers (the worker's baseline is included) and how many lines the tail keeps may change |
-| `partitions.failed` and `partitions.failed_keys` in `status --json`, `steps_page.nodes` in `history RUN_ID --json`, `recent_runs[].keys` and `recent_runs[].failed_keys` in `stats --json` | new in the next release: what counts as a failed key (its latest attempt failed, with no later success) may change after field use |
-| `steps[].batch_execution` and `metadata_seconds` in `get`/`run` JSON, the `[barca] batch:<node> ...` and `[barca] metadata ...` lines | new in the next release (RFC-0013): which phases are reported and what each one covers may change after field use |
+| `partitions.failed` and `partitions.failed_keys` in `status --json`, `steps_page.nodes` in `history RUN_ID --json`, `recent_runs[].keys` and `recent_runs[].failed_keys` in `stats --json` | new in 0.38.0: what counts as a failed key (its latest attempt failed, with no later success) may change after field use |
+| `steps[].batch_execution` and `metadata_seconds` in `get`/`run` JSON, the `[barca] batch:<node> ...` and `[barca] metadata ...` lines | new in 0.38.0 (RFC-0013): which phases are reported and what each one covers may change after field use |
+| `steps_page.nodes[].status` (`ran`, `cached`, `skipped`) and `steps_page.nodes[].blocked_by` in `history RUN_ID --json` with a server | the server lists every planned node of a finished run whose plan it can rebuild; the local `history RUN_ID` lists only nodes with recorded steps and never has these keys (`barca docs server-mode`) |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
+
+HTTP-only keys: `failing_since` and `consecutive_failures` (rows of `GET /state`), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
 
 ### Accepted exceptions
 
@@ -100,7 +103,7 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility | Manage runs, schedules and results on a server |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release | Manage runs, schedules and results on a server |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
@@ -496,6 +499,7 @@ value of its first key only.
 | `BARCA_BACKUP_INTERVAL` | overrides `[remote].backup_interval`: positive whole duration in seconds or with s/m/h/d suffix, or off; default 1m; routine requests share the interval before copy/hash/upload, final backups remain; invalid values exit 2 | experimental |
 | `BARCA_TRANSFER_CONCURRENCY` | positive integer: concurrent artifact transfers (`[remote].transfer_concurrency`, default 4); invalid values exit 3 | stable |
 | `BARCA_TRANSFER_TIMEOUT` | positive integer seconds per transfer attempt (`[remote].transfer_timeout`, default 600); invalid values exit 3 | stable |
+| `BARCA_TRANSFER_RETRIES` | whole number: how many times the transfer helper retries a failed artifact upload or download after its first attempt (default 3), waiting 0.5 s, then 1 s, 2 s, ... between attempts; a missing object or an authentication or configuration error is not retried. Read by the Python helper as written, not checked by barca | experimental |
 | `BARCA_STORAGE_OPTIONS` | JSON object keyed by protocol, merged over `[remote.storage_options.*]` | stable |
 | `BARCA_ARTIFACT_URI` | literal artifact root, bypassing the environment prefix (warns with a non-default env) | experimental |
 | `BARCA_PROGRESS_SECS` | seconds between `still running` lines (default 15, `0` turns them off) | experimental |
@@ -537,8 +541,9 @@ stream-drop messages, SQL provenance and doctor JSON. Network authentication and
 identity still use the configured URL; response schemas are unchanged.
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID`, `BARCA_WORKER_AGENT` (and passes `BARCA_ARTIFACT_URI`,
-`BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
-contract. `BARCA_TEST_*` variables are hooks for barca's own test suite, also not part of the
+`BARCA_STORAGE_OPTIONS`) for its own worker processes, and `BARCA_LIFELINE`, `BARCA_JOB_PGID`,
+`BARCA_UPLOAD_SNAPSHOT_PREFIX` and `BARCA_DOCTOR_REQUEST` for its Python helpers; these are
+internal, not part of the contract. `BARCA_TEST_*` variables are hooks for barca's own test suite, also not part of the
 contract. Variables your nodes declare with `@asset(env=[...])` are yours (`barca docs assets`).
 
 Removed in 0.26.0 (breaking, RFC-0009): `BARCA_STATE`, `BARCA_STATE_URI`, `BARCA_PUSH_RETRIES`
@@ -2635,7 +2640,6 @@ Failed runs keep the complete `steps` fan-out and `failed_node` in JSON. Human o
 reports blocked downstream nodes as one count in the final line. This count is per node,
 including a partitioned node once. A multi-target failure uses its first failed step for
 the summary and counts all blocked downstream nodes; detailed outcomes remain in JSON.
-The change to the stable `run failed:` line and its position ships in the next minor release.
 
 `env` values: `<unset>` for an unset variable, `<redacted>` for secret-looking names (`*_TOKEN`,
 `*_SECRET`, `*_KEY`, `*_PASSWORD`), double quotes around values with spaces. With several targets

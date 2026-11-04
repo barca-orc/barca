@@ -3,8 +3,8 @@
 .. deprecated::
     ``barca.Client`` is deprecated in favour of :mod:`barca.api`, which runs a command on a
     server with ``server=True`` (``barca.get("daily_report", server=True)``) and returns the
-    same values as a local run. ``Client`` warns when constructed and will be removed in a
-    later minor release (RFC-0007 §3.2).
+    same values as a local run. ``Client`` warns when constructed. There is no scheduled removal; a
+    removal lands as a breaking change in a minor release (RFC-0007 §3.2).
 
 Unlike :mod:`barca.api` (which shells out to the ``barca`` binary for one-shot
 commands), this talks to a long-running server: trigger runs, poll their status,
@@ -124,7 +124,7 @@ class Client:
 
     def __init__(self, base_url: str = DEFAULT_URL, timeout: float = 30.0) -> None:
         warnings.warn(
-            "barca.Client is deprecated and will be removed in a later minor release; use "
+            "barca.Client is deprecated (no scheduled removal; a removal lands in a minor release); use "
             "barca.api with server=True instead, e.g. barca.get('daily_report', server=True) "
             "(barca docs server-mode)",
             DeprecationWarning,

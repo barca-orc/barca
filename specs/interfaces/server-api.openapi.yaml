@@ -3,14 +3,14 @@ openapi: 3.1.0
 info:
   title: Barca current HTTP API
   version: '18'
-  description: 'Normative current wire contract; specification version 17 is independent of package versions.
+  description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
     consumes its own one-use local credential. No cookies or CORS credentials are accepted. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
     /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset, and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
-    envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases retained for Python Client compatibility. Conformance: crates/barca-server/tests/openapi.rs
+    envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases retained for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
@@ -1835,8 +1835,8 @@ paths:
                 $ref: '#/components/schemas/Error'
             text/plain:
               schema: *id003
-      description: Here target is the run id. Deprecated alias of DELETE /runs/{run_id}, kept for one
-        minor release.
+      description: Here target is the run id. Deprecated alias of DELETE /runs/{run_id}, retained for Python Client compatibility
+        with no scheduled removal; a removal migrates Client first and lands in a minor release.
       parameters:
       - name: target
         in: path
@@ -3692,7 +3692,12 @@ components:
           - sensor
         action: *id003
         status: *id003
-        reason: *id003
+        reason:
+          description: Why the step ran or was skipped (barca docs contract, steps[]). A skipped
+            step has reason upstream_failed (a node it reads in full failed), upstream_key_failed
+            (the same key of a node it reads key for key failed; detail names the key) or
+            partition_selection.
+          type: string
         detail: *id003
         changed:
           description: Dry run, a step with no cached result that succeeded before; what changed in its run hash since then (0.29.0).

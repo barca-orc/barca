@@ -345,7 +345,8 @@ barca.run("deploy", server=True)
 
 `barca.api` runs the binary, so it follows the same configuration: without `server=` a
 configured server is the ledger of the local run. `barca.Client` is deprecated in favour of it:
-constructing one warns, and it will be removed in a later minor release.
+constructing one warns. There is no scheduled removal; a removal lands as a breaking change
+in a minor release.
 
 ## Deploying and the HTTP routes
 
