@@ -34,6 +34,7 @@ static DB_LOCK: Mutex<()> = Mutex::const_new(());
 pub(crate) mod materializations;
 pub(crate) mod run_queue;
 pub(crate) mod runs;
+pub(crate) mod uploads;
 #[cfg(test)]
 mod write_boundary_tests;
 

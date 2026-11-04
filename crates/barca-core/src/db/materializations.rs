@@ -43,3 +43,20 @@ pub(crate) async fn delete_unnamed_definitions(conn: &Connection) -> Result<u64,
     )
     .await
 }
+
+/// Record `sha256` as the digest of the successful rows at `artifact_path` that have none.
+pub(crate) async fn set_upload_digest(
+    conn: &Connection,
+    artifact_path: &str,
+    sha256: &str,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "UPDATE materializations SET output_hash = ?2 \
+         WHERE artifact_path = ?1 AND status = 'success' AND output_hash IS NULL",
+        [
+            libsql::Value::Text(artifact_path.to_string()),
+            libsql::Value::Text(sha256.to_string()),
+        ],
+    )
+    .await
+}

@@ -124,28 +124,11 @@ pub(crate) async fn record(db_path: &str, uploads: &[PendingUpload]) -> Result<(
         .await
         .map_err(failed("creating the table"))?;
     let host = db::local_host();
-    let mut insert = db::prepare(
-        &conn,
-        "INSERT INTO pending_uploads (store_path, node_id, run_hash, run_id, local_path, host, error, attempts) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1) \
-             ON CONFLICT(store_path) DO UPDATE SET node_id = ?2, run_hash = ?3, run_id = ?4, \
-             local_path = ?5, host = ?6, error = ?7, attempts = attempts + 1, updated_at = datetime('now')",
-    )
-    .await
-    .map_err(failed("recording"))?;
+    let mut insert = db::uploads::RecordPending::prepare(&conn)
+        .await
+        .map_err(failed("recording"))?;
     for u in uploads {
-        insert
-            .execute([
-                Value::Text(u.store_path.clone()),
-                Value::Text(u.node_id.clone()),
-                u.run_hash.clone().map_or(Value::Null, Value::Text),
-                u.run_id.clone().map_or(Value::Null, Value::Text),
-                Value::Text(u.local_path.clone()),
-                Value::Text(host.clone()),
-                u.error.clone().map_or(Value::Null, Value::Text),
-            ])
-            .await
-            .map_err(failed("recording"))?;
+        insert.run(u, &host).await.map_err(failed("recording"))?;
     }
     Ok(())
 }
@@ -175,36 +158,24 @@ pub(crate) async fn settle(
         return Ok(());
     }
     for (store_path, outcome) in outcomes {
-        let at = Value::Text(store_path.clone());
         match outcome {
             Settled::Uploaded(sha256) => {
-                conn.execute(
-                    "DELETE FROM pending_uploads WHERE store_path = ?1",
-                    [at.clone()],
-                )
-                .await
-                .map_err(failed("clearing an upload"))?;
-                if let Some(sha256) = sha256 {
-                    conn.execute(
-                        "UPDATE materializations SET output_hash = ?2 \
-                         WHERE artifact_path = ?1 AND status = 'success' AND output_hash IS NULL",
-                        [at, Value::Text(sha256.clone())],
-                    )
+                db::uploads::delete(&conn, store_path)
                     .await
-                    .map_err(failed("recording an upload's digest"))?;
+                    .map_err(failed("clearing an upload"))?;
+                if let Some(sha256) = sha256 {
+                    db::materializations::set_upload_digest(&conn, store_path, sha256)
+                        .await
+                        .map_err(failed("recording an upload's digest"))?;
                 }
             }
             Settled::Failed(error) => {
-                conn.execute(
-                    "UPDATE pending_uploads SET error = ?2, attempts = attempts + 1, \
-                     updated_at = datetime('now') WHERE store_path = ?1",
-                    [at, Value::Text(error.clone())],
-                )
-                .await
-                .map_err(failed("recording a failed retry"))?;
+                db::uploads::record_failed_retry(&conn, store_path, error)
+                    .await
+                    .map_err(failed("recording a failed retry"))?;
             }
             Settled::Dropped => {
-                conn.execute("DELETE FROM pending_uploads WHERE store_path = ?1", [at])
+                db::uploads::delete(&conn, store_path)
                     .await
                     .map_err(failed("dropping an upload"))?;
             }
