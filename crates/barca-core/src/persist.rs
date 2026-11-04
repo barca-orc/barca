@@ -1205,15 +1205,18 @@ sys.exit(_state.main())
         names
     }
 
-    /// The minute checkpoint backs the database up when the run recorded something since the
-    /// last one, and only then; a store outage is retried at the next tick (not in a busy
-    /// loop) and the copy reaches the store once it is back.
+    /// A checkpoint that admission skips (the interval since the last attempt has not passed)
+    /// leaves the progress it found dirty: once admission is due, a later checkpoint backs the
+    /// same rows up without a new one arriving.
+    ///
+    /// No wall-clock race: the interval is an hour, so every checkpoint is refused until the
+    /// test makes admission due by back-dating the attempt stamp the cadence gate reads.
     #[tokio::test]
     async fn skipped_checkpoints_keep_progress_dirty_until_admission_is_due() {
         let dir = tempfile::tempdir().unwrap();
         let (mut cfg, python) = backup_test_config(&dir);
         cfg.backup_interval =
-            crate::config::BackupInterval(Some(std::time::Duration::from_secs(1)));
+            crate::config::BackupInterval(Some(std::time::Duration::from_secs(3600)));
         db::init_db(&cfg.db_path).await.unwrap();
         db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(1))
             .await
@@ -1221,6 +1224,13 @@ sys.exit(_state.main())
         crate::backup::take(&python, &cfg, Some("r1"), helper_proc::Until::done())
             .await
             .unwrap();
+        let local = cfg.local_backup_dir();
+        assert_eq!(backups_in(&local).len(), 1);
+        // Every admission attempt opens (and creates) the lock file before it checks the
+        // cadence, and a checkpoint attempts admission only with unbacked progress. Its
+        // reappearance proves a checkpoint saw the new row and was refused.
+        let lock = local.join(".admission.lock");
+        std::fs::remove_file(&lock).unwrap();
         let recorder = StepRecorder::start_with_intervals(
             cfg.db_path.clone(),
             "r1".into(),
@@ -1233,12 +1243,34 @@ sys.exit(_state.main())
             std::time::Duration::from_millis(20),
         );
         recorder.record(Fixture::new().row("f.py:a"));
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let local = cfg.local_backup_dir();
-        assert_eq!(backups_in(&local).len(), 1);
-        // No further rows arrive after the skipped checkpoint. The original row must
-        // still cause a later backup, rather than having been marked covered.
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !lock.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("no checkpoint attempted admission for the recorded row");
+        assert_eq!(
+            backups_in(&local).len(),
+            1,
+            "a refused checkpoint took a copy"
+        );
+        // Make admission due: the last attempt was an interval ago. Replaced atomically,
+        // as admission writes it, so a checkpoint never reads half a stamp.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .saturating_sub(std::time::Duration::from_secs(3600))
+            .as_nanos();
+        std::fs::write(local.join(".last-attempt.test"), stamp.to_string()).unwrap();
+        std::fs::rename(
+            local.join(".last-attempt.test"),
+            local.join(".last-attempt"),
+        )
+        .unwrap();
+        // No further rows arrive after the skipped checkpoints. The original row must
+        // still cause a backup, rather than having been marked covered.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
             while backups_in(&local).len() < 2 {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
@@ -1248,6 +1280,9 @@ sys.exit(_state.main())
         recorder.finish().await.unwrap();
     }
 
+    /// The minute checkpoint backs the database up when the run recorded something since the
+    /// last one, and only then; a store outage is retried at the next tick (not in a busy
+    /// loop) and the copy reaches the store once it is back.
     #[tokio::test]
     async fn the_checkpoint_backs_up_new_progress_and_retries_an_outage() {
         let dir = tempfile::tempdir().unwrap();
