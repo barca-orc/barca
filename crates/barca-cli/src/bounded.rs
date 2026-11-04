@@ -282,7 +282,7 @@ mod tests {
             inputs: vec![],
             partitioned: true,
             cache: CacheStatus {
-                state: String::new(),
+                state: barca_core::status::CacheState::Cached,
                 reason: String::new(),
                 detail: String::new(),
                 run_hash: None,

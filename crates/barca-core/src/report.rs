@@ -7,6 +7,7 @@
 mod commands;
 pub use commands::*;
 
+use crate::cache_state::CacheState;
 use crate::targets::short_name;
 use crate::{
     cache::{Decision, RunReason},
@@ -204,15 +205,15 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
         .map(|n| {
             let why = match &n.partitions {
                 // `39 of 39 missing keys wait on 'demand_forecast': ...` (#764).
-                Some(_) if n.cache.state == "blocked" => n.cache.detail.clone(),
-                Some(p) if n.cache.state != "cached" => {
+                Some(_) if n.cache.state == CacheState::Blocked => n.cache.detail.clone(),
+                Some(p) if n.cache.state != CacheState::Cached => {
                     format!(
                         "{} of {} keys cached; {}",
                         p.cached, p.total, n.cache.reason
                     )
                 }
                 // Human form of an `unsynced` reason: `local only`, `not in ledger`.
-                _ if n.cache.state == "unsynced" => n.cache.reason.replace('_', " "),
+                _ if n.cache.state == CacheState::Unsynced => n.cache.reason.replace('_', " "),
                 // `changed: helper pipelines/common.py:bucket_ltv (+1 more)` (#558).
                 _ if n.cache.reason == "changed" && n.cache.changed.is_some() => {
                     n.cache.detail.clone()
@@ -221,7 +222,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
             };
             // A failure's message in short: `failed: ZeroDivisionError: division by zero`.
             let why = match n.last_materialization.as_ref() {
-                Some(m) if m.status == "failed" && n.cache.state != "cached" => {
+                Some(m) if m.status == "failed" && n.cache.state != CacheState::Cached => {
                     let error = m
                         .error
                         .as_deref()
@@ -230,7 +231,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                         .unwrap_or_else(|| "no message".to_string());
                     if n.cache.reason == "failed" {
                         format!("failed: {error}")
-                    } else if n.cache.state == "always_runs" {
+                    } else if n.cache.state == CacheState::AlwaysRuns {
                         format!("last run failed: {error}")
                     } else {
                         format!("{why}; last run failed: {error}")
@@ -262,7 +263,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                 n.name.clone(),
                 n.kind.clone(),
                 // Human form: `never-run`, `always-runs` (JSON says `never_run`, `always_runs`).
-                n.cache.state.replace('_', "-"),
+                n.cache.state.as_str().replace('_', "-"),
                 why,
                 last,
                 n.shape
