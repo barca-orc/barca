@@ -13,8 +13,9 @@ import pytest
 from barca import _storage
 from barca._artifacts import deserialize
 
-pd = pytest.importorskip("pandas")
 from .daemon_steps import run_steps
+
+pd = pytest.importorskip("pandas")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
