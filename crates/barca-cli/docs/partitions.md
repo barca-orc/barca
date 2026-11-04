@@ -461,6 +461,29 @@ def scored(retailer: list[str], cleaned: dict[str, pd.DataFrame]) -> dict:
 - **The dry run** counts calls from the keys it lists: for `batches(...)` and `batches_by(...)`
   over more than 20 keys, `calls` is `null`.
 
+### When a consumer's keys are stale
+
+`--batch` (`RunRequest.batch` over HTTP, `batch=` in `barca.get`) groups the keys that already
+need to run. It is not part of any hash, so on its own it recomputes nothing: `barca get scored
+pipeline.py --batch scored=all` after a full run runs no step. To recompute a partitioned
+consumer's keys, name it, or an asset above it, in `--refresh`:
+
+```bash
+barca get scored pipeline.py --refresh cleaned                         # cleaned, then every key of scored
+barca get scored pipeline.py --refresh scored --batch scored=all       # every key of scored, in one call
+```
+
+- **A refresh reaches its own cone only.** It recomputes the assets it names and what is below
+  them on the way to the run's target. Run hashes cover code and inputs, not output bytes, so
+  when a refreshed asset writes new bytes (its data changed in place), a consumer outside that
+  cone keeps its run hash and its old result: after `barca get cleaned pipeline.py --refresh
+  cleaned`, `scored` is served from cache as it was, and `barca status` reports it `cached`.
+  Refresh with a target below it (`barca get scored pipeline.py --refresh cleaned`), or name it
+  in `--refresh`. Data that changes in place is better read through a sensor or
+  `freshness=Manual`: their bytes count in what reads them (`barca docs cache`).
+- **A request with both `refresh` and `batch`** recomputes because of `refresh`: the same
+  `refresh` list without `batch` recomputes the same keys, grouped by the declared `batch=`.
+
 ## Getting partitions
 
 `barca get` on a partitioned asset returns every key, sorted by key: one artifact path per key,
