@@ -7476,8 +7476,8 @@ mod read_view_tests {
     /// look at the file (the header check every open makes) must not close one.
     #[tokio::test]
     async fn looking_at_the_database_file_keeps_this_process_s_locks() {
-        const WRITER: &str = "BARCA_TEST_LAST_CONNECTION_WRITER";
-        if let Some(path) = std::env::var_os(WRITER) {
+        const WRITER: &str = crate::test_hooks::LAST_CONNECTION_WRITER;
+        if let Some(path) = crate::test_hooks::last_connection_writer() {
             // The other process: one write, then its connection closes.
             let path = path.to_string_lossy().into_owned();
             create_run(&path, "theirs", "get", "[]", None, Some(1))

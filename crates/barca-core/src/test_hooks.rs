@@ -47,3 +47,14 @@ pub fn slack_remind_after() -> Option<Duration> {
 /// Set on the child process `helper_proc`'s storage-options test re-executes itself as.
 #[cfg(test)]
 pub const HELPER_OPTIONS_PROBE: &str = "BARCA_TEST_HELPER_OPTIONS_PROBE";
+
+/// Set on the child process `db`'s lock test re-executes itself as: the path of the database
+/// that child writes once and then closes.
+#[cfg(test)]
+pub const LAST_CONNECTION_WRITER: &str = "BARCA_TEST_LAST_CONNECTION_WRITER";
+
+/// The database path from [`LAST_CONNECTION_WRITER`], when this process is that child.
+#[cfg(test)]
+pub fn last_connection_writer() -> Option<std::ffi::OsString> {
+    std::env::var_os(LAST_CONNECTION_WRITER)
+}
