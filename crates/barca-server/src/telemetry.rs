@@ -92,6 +92,7 @@ async fn deliver(
 mod tests {
     use super::*;
     use barca_core::telemetry::RunReport;
+    use std::sync::atomic::Ordering;
     use std::{future::Future, pin::Pin, sync::Arc};
     struct Recorder {
         signals: Arc<std::sync::Mutex<Vec<ServerPhase>>>,
@@ -142,7 +143,7 @@ mod tests {
         )
         .unwrap();
         state.loaded_dag().await.unwrap();
-        assert!(state.cache.read().unwrap().assets.is_none());
+        assert_eq!(state.reads.dag_loads.load(Ordering::Relaxed), 0);
         assert_eq!(report(&state, ServerPhase::Start).nodes, Some(2));
 
         // A heartbeat must neither inspect changed sources nor wait for a loader.
@@ -202,7 +203,7 @@ mod tests {
             ]
         );
         assert!(state.runs.is_empty());
-        assert!(state.cache.read().unwrap().assets.is_none());
+        assert_eq!(state.reads.dag_loads.load(Ordering::Relaxed), 0);
         assert!(!dir.path().join(".barca").exists());
     }
     #[tokio::test(start_paused = true)]

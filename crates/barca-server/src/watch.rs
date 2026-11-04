@@ -1,5 +1,6 @@
-//! Dev-mode file watcher (`--watch`). Invalidates the cached DAG/plan whenever a
-//! source file changes so `/assets` and `/plan` reflect edits without a restart.
+//! Dev-mode file watcher (`--watch`). Bumps [`AppState::dag_generation`] and reloads the
+//! graph whenever a source file changes, so the read routes ([`crate::read_cache`]) and the
+//! scheduler reflect edits without a restart.
 //!
 //! This is a local-development convenience only. In production the server is
 //! started without `--watch`, no watcher thread is spawned, and the static
@@ -29,7 +30,6 @@ impl Drop for SourceWatcher {
 
 /// Watch original configured sources, including files currently excluded from the graph.
 pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
-    let cache = state.cache.clone();
     let generation = state.dag_generation.clone();
     // A watch channel stores one pending refresh, regardless of editor event volume.
     let (changed, mut changes) = tokio::sync::watch::channel(());
@@ -50,11 +50,8 @@ pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
             return;
         }
 
-        if let Ok(mut c) = cache.write() {
-            c.assets = None;
-            c.plan = None;
-        }
-        // Signal the scheduler to re-read its job set on its next tick.
+        // The scheduler re-reads its job set on its next tick, and the read cache loads the
+        // graph again ([`AppState::inspect_dag`]).
         generation.fetch_add(1, Ordering::Relaxed);
         changed.send_replace(());
     })?;

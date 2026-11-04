@@ -2,7 +2,7 @@
 
 use barca_core::CancellationToken;
 use barca_core::db;
-use barca_core::results::{AssetSummary, GetResult, PlanResult};
+use barca_core::results::GetResult;
 use dashmap::DashMap;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -115,14 +115,6 @@ pub struct RunState {
     pub cancel_requested: bool,
 }
 
-/// Cached inspection results, invalidated by the file watcher in `--watch`
-/// mode. Trigger validation additionally checks source stamps on every request.
-#[derive(Default)]
-pub struct DagCache {
-    pub assets: Option<Vec<AssetSummary>>,
-    pub plan: Option<PlanResult>,
-}
-
 /// The size, modification time and change time of each source file, in the order of
 /// `ServeConfig::files`. The change time is the one a program cannot set: an edit that keeps
 /// the size and puts the old modification time back (`touch -r`, some sync tools) still
@@ -161,8 +153,9 @@ impl SourceStamp {
             .map(Self)
     }
 
-    /// True when every file was last modified or changed more than [`Self::SETTLED`] before
-    /// `now`.
+    /// True when every file was last modified or changed more than
+    /// [`crate::read_cache::SOURCES_SETTLED`] before `now`, the same wait the read cache
+    /// gives the sources before it keeps a graph.
     ///
     /// A file's times are only as fine as the filesystem's clock (a few milliseconds on
     /// Linux). A file read just after it was written can be written again
@@ -171,13 +164,12 @@ impl SourceStamp {
     /// been still for a moment.
     pub fn settled(&self, now: std::time::SystemTime) -> bool {
         self.0.iter().all(|file| {
-            [file.modified, file.changed]
-                .iter()
-                .all(|at| now.duration_since(*at).is_ok_and(|age| age > Self::SETTLED))
+            [file.modified, file.changed].iter().all(|at| {
+                now.duration_since(*at)
+                    .is_ok_and(|age| age > crate::read_cache::SOURCES_SETTLED)
+            })
         })
     }
-
-    const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
 }
 
 #[cfg(test)]
@@ -337,7 +329,6 @@ pub struct AppState {
     pub load_errors: Arc<RwLock<Vec<barca_core::load::LoadError>>>,
     pub config: Arc<ServeConfig>,
     pub runs: Arc<DashMap<String, RunState>>,
-    pub cache: Arc<RwLock<DagCache>>,
     /// Live event channels per run handle (logs + step/run lifecycle).
     pub events: Arc<DashMap<String, RunChannel>>,
     /// Bounds how many runs execute concurrently (`--max-runs`). Runs execute Python in
@@ -407,7 +398,6 @@ impl AppState {
             load_errors: Arc::new(RwLock::new(Vec::new())),
             config: Arc::new(config),
             runs: Arc::new(DashMap::new()),
-            cache: Arc::new(RwLock::new(DagCache::default())),
             events: Arc::new(DashMap::new()),
             run_slots: Arc::new(Semaphore::new(run_slot_count)),
             queue: Arc::new(crate::queue::Queue::new(run_slot_count)),
@@ -561,10 +551,6 @@ impl AppState {
                 stamp: before,
                 dag: dag.clone(),
             });
-            let mut cache = self.cache.write().unwrap();
-            cache.assets = None;
-            cache.plan = None;
-
             return Ok(dag);
         }
         Err(barca_core::BarcaError::Usage(
