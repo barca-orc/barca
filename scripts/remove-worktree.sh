@@ -60,8 +60,13 @@ find_procs() {
         lsof -n -w -a -d cwd -Fpn 2>/dev/null | awk -v t="$tree" '
             /^p/ { pid = substr($0, 2) }
             /^n/ { n = substr($0, 2); if (n == t || index(n, t "/") == 1) print pid }'
-        # Command line naming the tree.
-        pgrep -f -- "$tree" 2>/dev/null || true
+        # Command line naming the tree: the path followed by `/` or a space, or at the end.
+        # Not `pgrep -f "$tree"`, a regular expression matched anywhere: `.worktrees/ci` also
+        # matched every process of `.worktrees/ci-hygiene`. The comparison is literal.
+        ps -eo pid=,args= 2>/dev/null | awk -v t="$tree" '
+            { pid = $1; cmd = substr($0, index($0, $1) + length($1) + 1) }
+            index(cmd, t "/") || index(cmd, t " ") ||
+            (length(cmd) >= length(t) && substr(cmd, length(cmd) - length(t) + 1) == t) { print pid }'
     } | sort -un | while read -r pid; do
         case "$protected" in *" $pid "*) continue ;; esac
         cmd=$(ps -o command= -p "$pid" 2>/dev/null) || continue
