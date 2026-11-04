@@ -55,6 +55,10 @@ backups of the metadata database.
 | `.barca/staging/<pid>/` | Temporary files of a running worker writing to a remote `@sink` (a remote dataset sink stages a directory per write) or fetching a remote input. Directories of dead workers are removed when a worker starts. | Yes, when no barca command is running. |
 | `.barca/gc-state.json` | From 0.25: what the last full measurement of `.barca/` found, so the check after each command does not walk the artifact directories ([Cache size](#cache-size)). | Yes; the next check measures again. |
 | `.barca/.gitignore` | Written by barca, containing `*`, so git ignores everything under `.barca/`. | It is written again. |
+| `.barca/live-logs/<run_id>.jsonl` | A run's output while it runs, read by `barca logs -f` and `barca serve`. The run deletes it once its lines are in `metadata.db`; a killed run's file stays. | Yes, when no run is going. |
+| `.barca/branches/<run>-<pid>/` | What a run's `parallel()` branches returned. Removed when the calling step and the run end, and by the next run when its run was killed. | Yes, when no run is going. |
+| `.barca/inspection-cache/<env>.json` | Disposable evidence `barca status` reuses (with `.lock` and `.epoch` files), at most 8 MiB. | Yes, always. |
+| `.barca/auth/` | `barca serve` token state ([server mode](/reference/server-mode/)), owner-only. | Not while `barca serve` runs; deleting it discards every token. |
 
 Some rows appear only in the situations named. For backups see `barca docs remote`; for a missing artifact see
 `barca docs cache`, "A cached result whose artifact is missing".
