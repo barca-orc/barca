@@ -217,6 +217,16 @@ jobs:
         timeout-minutes: 20
         run: cargo nextest run --workspace --no-fail-fast
 
+      # The web UI's wire types are generated from Rust by ts-rs (ui/ARCHITECTURE.md). This is
+      # what `pnpm gen:types` runs; any difference from the committed ui/src/lib/generated,
+      # a new file included, fails the build.
+      - name: The UI's generated types match Rust
+        timeout-minutes: 15
+        run: |
+          bash ui/scripts/regen-types.sh
+          git add --intent-to-add ui/src/lib/generated
+          git diff --exit-code -- ui/src/lib/generated
+
       # Saved from a PR's own runs, and from a merge group as main's next entry. Incremental
       # session dirs not used for 2 days are pruned first, which bounds the entry's size.
       - name: Save the build directory
@@ -338,8 +348,8 @@ jobs:
   #
   #   changes ──┐
   #   build ────┴─ python (matrix: PYTHON_SHARDS shards of python/tests [+ duckdb 1.x])
-  #         └───── proxy (nginx/Traefik and server-mode shell tests)
-  #   ui (typecheck, lint, unit tests)
+  #         ├───── proxy (nginx/Traefik and server-mode shell tests)
+  #         └───── ui (typecheck, lint, unit tests, then the Playwright e2e suites)
   #
   # In the merge tier `python` is one job running scripts/fast-tests.txt. In the full tier it
   # is the shards, with the object-store emulators, the duckdb 1.x rerun and the real minute
@@ -403,12 +413,13 @@ jobs:
           cat "$GITHUB_OUTPUT"
 
   ui:
-    needs: changes
-    # The web UI's own checks. The build job builds `ui/dist` (or restores it) on its own.
+    needs: [changes, build]
+    # The web UI's own checks, then the Playwright suites (ui/e2e, ui/e2e-auth) against the
+    # wheel `build` makes. The build job builds `ui/dist` (or restores it) on its own.
     # Tier full only.
     if: ${{ needs.changes.outputs.tier == 'full' }}
     runs-on: depot-ubuntu-24.04-4
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -428,6 +439,37 @@ jobs:
           pnpm --dir ui typecheck
           pnpm --dir ui lint
           pnpm --dir ui test
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download the wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: barca-wheel
+          path: dist-wheel
+
+      - name: Install barca and Playwright's Chromium
+        run: |
+          uv pip install --system dist-wheel/*.whl
+          pnpm --dir ui exec playwright install --with-deps chromium
+
+      # Each config starts `barca serve` on its fixture and the Vite dev server in front of it.
+      - name: Playwright end-to-end tests
+        timeout-minutes: 15
+        run: BARCA_BIN="$(command -v barca)" pnpm --dir ui test:e2e
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: ui/test-results
+          if-no-files-found: ignore
 
   build:
     # Builds the wheel once, for both checks: the integration tests, the Python shards and
