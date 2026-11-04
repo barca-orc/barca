@@ -100,6 +100,7 @@ def _run_step(tmp_path, monkeypatch, body, function_name, inputs, param_types):
     source.write_text(textwrap.dedent(body))
     errors = []
     monkeypatch.setattr(_runtime, "emit_step_error", lambda **kw: errors.append(kw))
+    monkeypatch.setattr(_runtime, "emit_step_completed", lambda node_id, artifact: None)
     step = {
         "node_id": f"mod.py:{function_name}",
         "function_name": function_name,
@@ -173,6 +174,7 @@ def test_relation_over_a_remote_input_is_materialized(store, tmp_path, monkeypat
     source.write_text(textwrap.dedent(body))
     errors = []
     monkeypatch.setattr(_runtime, "emit_step_error", lambda **kw: errors.append(kw))
+    monkeypatch.setattr(_runtime, "emit_step_completed", lambda node_id, artifact: None)
     step = {
         "node_id": "mod.py:small",
         "function_name": "small",
