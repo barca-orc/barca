@@ -359,7 +359,10 @@ The function returns either:
   (`-0.0` and `0.0`, distinct NaNs, strings under a case-insensitive collation) can still
   change the bytes; normalize them in the step. DuckDB 2 sorts while it writes; DuckDB 1.x, a
   key written as several files and tables with a BIT or BIGNUM column are read back and
-  rewritten sorted, one extra pass over that key.
+  rewritten sorted, one extra pass over that key. Either way the sort about doubles the write:
+  one key of a million rows and four columns took 102-112 ms against 53 ms unsorted with 32
+  DuckDB threads, and 154-166 ms against 73 ms with 4; the extra pass took 101-103 ms and
+  136-149 ms (barca 0.39.4, DuckDB 2.0.0, `benchmarks/RESULTS.md`).
 
 ```python
 import pandas as pd

@@ -204,6 +204,7 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes | yes |
 | **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes | yes |
 | **python (fast)**: the quick subset in `scripts/fast-tests.txt`, about 20 s of tests | backends | | yes | |
+| **perf**: the performance budgets, `scripts/perf-gate.py` against that wheel (see below) | test | | yes | yes |
 | **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | | yes |
 | **ui**: the web UI's typecheck, lint and unit tests | backends | | | yes |
 | **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | | yes |
@@ -215,6 +216,16 @@ since the previous release. Fix it there (or revert) and push to the release bra
 wheels are built by the release workflow with `--release`, not by CI.
 
 No crate has a runnable doctest, so `cargo test --doc` does not run.
+
+**perf** runs `scripts/perf-gate.py` on a 4-CPU sandbox against the wheel. It checks the
+budgets in `specs/behavior/performance.md` ("Gates"): the one-asset pipeline of
+`benchmarks/trivial` (`barca get --refresh-all`, 15 runs after three warm-ups) for median wall
+time, median coordinator CPU and peak coordinator memory, and
+`benchmarks/incremental_dag/bench.py` at 5,000 keys for the coordinator's memory and CPU on
+warm one-key and unchanged runs, with that harness's own work-count assertions. A check over
+budget is measured once more from scratch and fails the job only if it fails again. Run it
+locally with `BARCA_BIN=.venv/bin/barca python3 scripts/perf-gate.py`; on a loaded machine
+the wall-time check can fail without a regression.
 
 **python** installs the wheel with the `test` extra (with uv) and runs the suite split by file
 into shards (`PYTHON_SHARDS` in the workflow), each on an 8-CPU sandbox with one pytest worker
