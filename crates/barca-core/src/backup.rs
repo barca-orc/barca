@@ -1399,7 +1399,7 @@ mod tests {
     }
 
     fn cfg(dir: &Path) -> ResolvedConfig {
-        let mut cfg = crate::config::resolve_in(None, dir).unwrap();
+        let mut cfg = crate::config::resolve_with(None, dir, crate::config::Vars::NONE).unwrap();
         cfg.db_path = dir
             .join(".barca/metadata.db")
             .to_string_lossy()

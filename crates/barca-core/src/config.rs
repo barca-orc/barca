@@ -51,7 +51,15 @@ pub type PoolSetting = Option<(usize, &'static str)>;
 /// `BARCA_POOL_SIZE` that is not a positive whole number is ignored, as it always was; the
 /// file's value must be a whole number of at least 1.
 pub fn pool_setting(file: Option<&ExecutionToml>) -> Result<PoolSetting, BarcaError> {
-    if let Some(n) = env_var("BARCA_POOL_SIZE")
+    pool_setting_with(Vars::Process, file)
+}
+
+fn pool_setting_with(
+    vars: Vars<'_>,
+    file: Option<&ExecutionToml>,
+) -> Result<PoolSetting, BarcaError> {
+    if let Some(n) = vars
+        .get("BARCA_POOL_SIZE")
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
     {
@@ -74,12 +82,19 @@ pub type CapacitySetting = Option<(usize, &'static str)>;
 /// `BARCA_CAPACITY` > `[execution] capacity` > not set (the pool size applies). Anything but a
 /// whole number of at least 1 is a usage error naming where it came from.
 pub fn capacity_setting(file: Option<&ExecutionToml>) -> Result<CapacitySetting, BarcaError> {
+    capacity_setting_with(Vars::Process, file)
+}
+
+fn capacity_setting_with(
+    vars: Vars<'_>,
+    file: Option<&ExecutionToml>,
+) -> Result<CapacitySetting, BarcaError> {
     let invalid = |source: &str, got: &str| {
         BarcaError::Usage(format!(
             "{source}: expected a whole number of at least 1, got {got}"
         ))
     };
-    if let Some(raw) = env_var("BARCA_CAPACITY") {
+    if let Some(raw) = vars.get("BARCA_CAPACITY") {
         return match raw.trim().parse::<usize>() {
             Ok(n) if n >= 1 => Ok(Some((n, "BARCA_CAPACITY"))),
             _ => Err(invalid("BARCA_CAPACITY", &format!("'{raw}'"))),
@@ -95,10 +110,17 @@ pub fn capacity_setting(file: Option<&ExecutionToml>) -> Result<CapacitySetting,
 /// The capacity and pool size settings of the project at `cwd` (its barca.toml and the
 /// environment), for commands that resolve nothing else (`barca plan`).
 pub fn execution_in(cwd: &Path) -> Result<(CapacitySetting, PoolSetting), BarcaError> {
+    execution_with(cwd, Vars::Process)
+}
+
+fn execution_with(
+    cwd: &Path,
+    vars: Vars<'_>,
+) -> Result<(CapacitySetting, PoolSetting), BarcaError> {
     let file = load_toml(cwd)?.unwrap_or_default();
     Ok((
-        capacity_setting(file.execution.as_ref())?,
-        pool_setting(file.execution.as_ref())?,
+        capacity_setting_with(vars, file.execution.as_ref())?,
+        pool_setting_with(vars, file.execution.as_ref())?,
     ))
 }
 
@@ -529,8 +551,8 @@ pub fn load_toml(cwd: &Path) -> Result<Option<BarcaToml>, BarcaError> {
 
 /// Whether `--env` (or `BARCA_ENV`) is required, and the setting that says so:
 /// `BARCA_REQUIRE_ENV` (`1`/`true`/`yes` or `0`/`false`/`no`) > `require_env` in barca.toml.
-fn require_env(file: Option<bool>) -> Result<Option<&'static str>, BarcaError> {
-    if let Some(raw) = env_var("BARCA_REQUIRE_ENV") {
+fn require_env(vars: Vars<'_>, file: Option<bool>) -> Result<Option<&'static str>, BarcaError> {
+    if let Some(raw) = vars.get("BARCA_REQUIRE_ENV") {
         return match raw.trim().to_ascii_lowercase().as_str() {
             "1" | "true" | "yes" => Ok(Some("BARCA_REQUIRE_ENV")),
             "0" | "false" | "no" => Ok(None),
@@ -568,8 +590,42 @@ fn valid_env_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-fn env_var(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.is_empty())
+/// Where configuration reads its `BARCA_*` environment variables.
+///
+/// Barca reads the process environment ([`Vars::Process`]). Tests pass fixed values
+/// ([`Vars::Fixed`], [`Vars::NONE`]) rather than setting process variables: a crate's tests run
+/// on parallel threads of one process, so a test that sets a variable changes what every other
+/// test's configuration resolves to while it runs (#800).
+#[derive(Clone, Copy, Debug)]
+pub enum Vars<'a> {
+    /// The process environment.
+    Process,
+    /// Exactly these variables, as `(name, value)`; any other is unset.
+    Fixed(&'a [(&'a str, &'a str)]),
+}
+
+impl Vars<'static> {
+    /// No variable set.
+    pub const NONE: Self = Vars::Fixed(&[]);
+}
+
+impl Vars<'_> {
+    /// The value as set: `NotPresent` when unset, `NotUnicode` when it is not UTF-8.
+    fn var(self, name: &str) -> Result<String, std::env::VarError> {
+        match self {
+            Vars::Process => std::env::var(name),
+            Vars::Fixed(vars) => vars
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+                .ok_or(std::env::VarError::NotPresent),
+        }
+    }
+
+    /// The value when it is set and not empty.
+    fn get(self, name: &str) -> Option<String> {
+        self.var(name).ok().filter(|v| !v.is_empty())
+    }
 }
 
 fn join_uri(base: &str, segment: &str) -> String {
@@ -586,6 +642,16 @@ pub fn resolve(cli_env: Option<&str>) -> Result<ResolvedConfig, BarcaError> {
 
 /// Testable variant with an explicit cwd for barca.toml discovery.
 pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, BarcaError> {
+    resolve_with(cli_env, cwd, Vars::Process)
+}
+
+/// [`resolve_in`] reading the `BARCA_*` variables from `vars`. Tests pass [`Vars::NONE`] or
+/// [`Vars::Fixed`], so that what they resolve does not depend on the process environment.
+pub fn resolve_with(
+    cli_env: Option<&str>,
+    cwd: &Path,
+    vars: Vars<'_>,
+) -> Result<ResolvedConfig, BarcaError> {
     let file = load_toml(cwd)?.unwrap_or_default();
     let remote = file.remote.unwrap_or_default();
     let drain_timeout_secs = file
@@ -593,7 +659,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         .as_ref()
         .and_then(|server| server.drain_timeout)
         .unwrap_or(DEFAULT_DRAIN_TIMEOUT_SECS);
-    let server_auth = match std::env::var("BARCA_SERVER_AUTH") {
+    let server_auth = match vars.var("BARCA_SERVER_AUTH") {
         Ok(raw) => raw.parse().map_err(BarcaError::Usage)?,
         Err(std::env::VarError::NotPresent) => file
             .server
@@ -640,7 +706,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     };
 
     // env name: CLI > BARCA_ENV > default_env in toml > "default"
-    let (env, env_source) = match (cli_env, env_var("BARCA_ENV"), file.default_env) {
+    let (env, env_source) = match (cli_env, vars.get("BARCA_ENV"), file.default_env) {
         (Some(flag), _, _) => (flag.to_string(), EnvSource::Flag),
         (None, Some(var), _) => (var, EnvSource::EnvVar),
         (None, None, Some(toml)) => (toml, EnvSource::DefaultEnv),
@@ -661,7 +727,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 known.join(", ")
             }
         };
-        if let Some(source) = require_env(file.require_env)? {
+        if let Some(source) = require_env(vars, file.require_env)? {
             return Err(BarcaError::Usage(format!(
                 "no environment given, and {source} requires one: pass --env NAME or set \
                  BARCA_ENV (environments here: {})",
@@ -683,11 +749,11 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         }
     }
 
-    let (cache_max_size, cache_max_size_source) = cache_max_size(file.cache.as_ref())?;
-    let capacity = capacity_setting(file.execution.as_ref())?;
-    let pool_size = pool_setting(file.execution.as_ref())?;
-    removed_settings(&remote)?;
-    let backup_interval = match std::env::var("BARCA_BACKUP_INTERVAL") {
+    let (cache_max_size, cache_max_size_source) = cache_max_size(vars, file.cache.as_ref())?;
+    let capacity = capacity_setting_with(vars, file.execution.as_ref())?;
+    let pool_size = pool_setting_with(vars, file.execution.as_ref())?;
+    removed_settings(vars, &remote)?;
+    let backup_interval = match vars.var("BARCA_BACKUP_INTERVAL") {
         Ok(raw) => BackupInterval::parse(&raw)
             .map_err(|e| BarcaError::Usage(format!("BARCA_BACKUP_INTERVAL: {e}")))?,
         Err(std::env::VarError::NotPresent) => {
@@ -700,7 +766,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         }
     };
 
-    match env_var("BARCA_REMOTE").as_deref() {
+    match vars.get("BARCA_REMOTE").as_deref() {
         Some("off") => {
             let local = crate::db::env_local_paths(&env);
             return Ok(ResolvedConfig {
@@ -723,7 +789,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 server_auth,
                 server_capacity,
                 server_run_timeout_secs,
-                server_url: env_var("BARCA_SERVER").or_else(|| {
+                server_url: vars.get("BARCA_SERVER").or_else(|| {
                     file.server
                         .as_ref()
                         .and_then(|s| s.url.clone())
@@ -744,14 +810,14 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     }
 
     // remote root: BARCA_REMOTE_URI > [remote].uri
-    let remote_uri = env_var("BARCA_REMOTE_URI").or(remote.uri);
+    let remote_uri = vars.get("BARCA_REMOTE_URI").or(remote.uri);
 
     // Local layout (default env keeps the legacy paths — zero migration).
     let local = crate::db::env_local_paths(&env);
 
     // artifacts: BARCA_ARTIFACT_URI (0.4.0 back-compat, literal) >
     //            [remote].artifacts_uri (literal) > {uri}/{env}/artifacts > local
-    let artifact_env_override = env_var("BARCA_ARTIFACT_URI");
+    let artifact_env_override = vars.get("BARCA_ARTIFACT_URI");
     if artifact_env_override.is_some() && env != DEFAULT_ENV {
         crate::errln!(
             "[barca] warning: BARCA_ARTIFACT_URI is set — it is used literally and \
@@ -772,14 +838,14 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         .as_deref()
         .map(|u| join_uri(u, &format!("{env}/state/backups")));
 
-    let server_url = env_var("BARCA_SERVER").or_else(|| {
+    let server_url = vars.get("BARCA_SERVER").or_else(|| {
         file.server
             .as_ref()
             .and_then(|s| s.url.clone())
             .filter(|u| !u.is_empty())
     });
 
-    let transfer_concurrency = match env_var("BARCA_TRANSFER_CONCURRENCY") {
+    let transfer_concurrency = match vars.get("BARCA_TRANSFER_CONCURRENCY") {
         Some(v) => v.parse::<usize>().ok().filter(|&n| n > 0).ok_or_else(|| {
             BarcaError::Other(format!(
                 "invalid BARCA_TRANSFER_CONCURRENCY '{v}' (expected a positive integer)"
@@ -796,7 +862,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         },
     };
 
-    let transfer_timeout_secs = match env_var("BARCA_TRANSFER_TIMEOUT") {
+    let transfer_timeout_secs = match vars.get("BARCA_TRANSFER_TIMEOUT") {
         Some(v) => v.parse::<u64>().ok().filter(|&n| n > 0).ok_or_else(|| {
             BarcaError::Other(format!(
                 "invalid BARCA_TRANSFER_TIMEOUT '{v}' (expected a positive number of seconds)"
@@ -813,7 +879,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         },
     };
 
-    let storage_options_json = merge_storage_options(remote.storage_options.as_ref())?;
+    let storage_options_json = merge_storage_options(vars, remote.storage_options.as_ref())?;
 
     Ok(ResolvedConfig {
         project_root: cwd.to_path_buf(),
@@ -846,6 +912,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
 /// `BARCA_CACHE_MAX_SIZE` > `[cache] max_size` > [`crate::gc::size::DEFAULT`], and which one it
 /// was. An invalid value is a usage error naming where it came from.
 fn cache_max_size(
+    vars: Vars<'_>,
     file: Option<&CacheToml>,
 ) -> Result<(crate::gc::MaxSize, &'static str), BarcaError> {
     let parse = |raw: &str, source: &'static str| {
@@ -853,7 +920,7 @@ fn cache_max_size(
             .map(|size| (size, source))
             .map_err(|e| BarcaError::Usage(format!("{source}: {e}")))
     };
-    if let Some(raw) = env_var("BARCA_CACHE_MAX_SIZE") {
+    if let Some(raw) = vars.get("BARCA_CACHE_MAX_SIZE") {
         return parse(&raw, "BARCA_CACHE_MAX_SIZE");
     }
     match file.and_then(|c| c.max_size.as_ref()) {
@@ -870,7 +937,7 @@ fn cache_max_size(
 /// Refuse the settings of the shared history, which 0.26.0 removed (RFC-0009), by name: a
 /// project that still sets one must learn that it no longer shares anything, rather than have
 /// it silently ignored.
-fn removed_settings(remote: &RemoteToml) -> Result<(), BarcaError> {
+fn removed_settings(vars: Vars<'_>, remote: &RemoteToml) -> Result<(), BarcaError> {
     let toml_keys = [
         ("state", remote.state.is_some()),
         ("state_uri", remote.state_uri.is_some()),
@@ -884,7 +951,7 @@ fn removed_settings(remote: &RemoteToml) -> Result<(), BarcaError> {
         .or_else(|| {
             env_vars
                 .iter()
-                .find(|var| env_var(var).is_some())
+                .find(|var| vars.get(var).is_some())
                 .map(|var| format!("the environment variable {var}"))
         });
     match what {
@@ -902,7 +969,10 @@ fn removed_settings(remote: &RemoteToml) -> Result<(), BarcaError> {
 /// Merge `[remote.storage_options.*]` with `BARCA_STORAGE_OPTIONS` (env keys
 /// win per protocol, per key). Returns the merged JSON string, or None when
 /// both sources are empty.
-fn merge_storage_options(from_toml: Option<&toml::Table>) -> Result<Option<String>, BarcaError> {
+fn merge_storage_options(
+    vars: Vars<'_>,
+    from_toml: Option<&toml::Table>,
+) -> Result<Option<String>, BarcaError> {
     let mut merged: BTreeMap<String, BTreeMap<String, serde_json::Value>> = BTreeMap::new();
 
     if let Some(table) = from_toml {
@@ -922,7 +992,7 @@ fn merge_storage_options(from_toml: Option<&toml::Table>) -> Result<Option<Strin
         }
     }
 
-    if let Some(raw) = env_var("BARCA_STORAGE_OPTIONS") {
+    if let Some(raw) = vars.get("BARCA_STORAGE_OPTIONS") {
         let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
             BarcaError::Usage(format!("BARCA_STORAGE_OPTIONS is not valid JSON: {e}"))
         })?;
@@ -976,7 +1046,14 @@ impl ServerSource {
 /// project root above `cwd`. `None` when neither is set. The URL is not checked here; see
 /// [`check_server_url`].
 pub fn configured_server(cwd: &Path) -> Result<Option<(String, ServerSource)>, BarcaError> {
-    if let Some(url) = env_var("BARCA_SERVER") {
+    configured_server_with(cwd, Vars::Process)
+}
+
+fn configured_server_with(
+    cwd: &Path,
+    vars: Vars<'_>,
+) -> Result<Option<(String, ServerSource)>, BarcaError> {
+    if let Some(url) = vars.get("BARCA_SERVER") {
         return Ok(Some((url, ServerSource::EnvVar)));
     }
     let root = find_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
@@ -1045,58 +1122,18 @@ mod tests {
         assert_eq!(rebase("/p", "/p/sub"), PathBuf::from("."));
         assert_eq!(rebase("..", "/p/sub"), PathBuf::from("."));
     }
-    use std::sync::{Mutex, MutexGuard};
-
-    /// Env-var tests mutate process state — serialize them.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct EnvGuard {
-        _g: MutexGuard<'static, ()>,
-        saved: Vec<(&'static str, Option<String>)>,
+    /// Resolve `dir` with no `BARCA_*` variable set, whatever the process environment holds.
+    fn resolve_none(cli_env: Option<&str>, dir: &Path) -> Result<ResolvedConfig, BarcaError> {
+        resolve_with(cli_env, dir, Vars::NONE)
     }
 
-    const VARS: &[&str] = &[
-        "BARCA_ENV",
-        "BARCA_REMOTE",
-        "BARCA_REMOTE_URI",
-        "BARCA_ARTIFACT_URI",
-        "BARCA_STATE_URI",
-        "BARCA_STATE",
-        "BARCA_PUSH_RETRIES",
-        "BARCA_STORAGE_OPTIONS",
-        "BARCA_TRANSFER_CONCURRENCY",
-        "BARCA_TRANSFER_TIMEOUT",
-        "BARCA_BACKUP_INTERVAL",
-        "BARCA_CACHE_MAX_SIZE",
-        "BARCA_SERVER",
-        "BARCA_SERVER_AUTH",
-        "BARCA_CAPACITY",
-        "BARCA_REQUIRE_ENV",
-        "BARCA_POOL_SIZE",
-    ];
-
-    fn clean_env() -> EnvGuard {
-        let g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = VARS
-            .iter()
-            .map(|&v| {
-                let old = std::env::var(v).ok();
-                unsafe { std::env::remove_var(v) };
-                (v, old)
-            })
-            .collect();
-        EnvGuard { _g: g, saved }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (var, old) in &self.saved {
-                match old {
-                    Some(v) => unsafe { std::env::set_var(var, v) },
-                    None => unsafe { std::env::remove_var(var) },
-                }
-            }
-        }
+    /// Resolve `dir` with exactly `vars` set, whatever the process environment holds.
+    fn resolve_vars(
+        cli_env: Option<&str>,
+        dir: &Path,
+        vars: &[(&str, &str)],
+    ) -> Result<ResolvedConfig, BarcaError> {
+        resolve_with(cli_env, dir, Vars::Fixed(vars))
     }
 
     fn write_toml(dir: &Path, body: &str) {
@@ -1105,58 +1142,51 @@ mod tests {
 
     #[test]
     fn backup_interval_defaults_overrides_and_rejects_invalid_values() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().backup_interval.0,
+            resolve_none(None, dir.path()).unwrap().backup_interval.0,
             Some(std::time::Duration::from_secs(60))
         );
         write_toml(dir.path(), "[remote]\nbackup_interval = \"2h\"\n");
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().backup_interval.0,
+            resolve_none(None, dir.path()).unwrap().backup_interval.0,
             Some(std::time::Duration::from_secs(7200))
         );
-        unsafe {
-            std::env::set_var("BARCA_BACKUP_INTERVAL", "off");
-        }
+        let off = [("BARCA_BACKUP_INTERVAL", "off")];
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().backup_interval.0,
+            resolve_vars(None, dir.path(), &off)
+                .unwrap()
+                .backup_interval
+                .0,
             None
         );
         for raw in ["", "0", "1.2h"] {
-            unsafe {
-                std::env::set_var("BARCA_BACKUP_INTERVAL", raw);
-            }
             assert!(
-                matches!(resolve_in(None, dir.path()), Err(BarcaError::Usage(message)) if message.contains("BARCA_BACKUP_INTERVAL"))
+                matches!(resolve_vars(None, dir.path(), &[("BARCA_BACKUP_INTERVAL", raw)]), Err(BarcaError::Usage(message)) if message.contains("BARCA_BACKUP_INTERVAL"))
             );
-        }
-        unsafe {
-            std::env::remove_var("BARCA_BACKUP_INTERVAL");
         }
         write_toml(dir.path(), "[remote]\nbackup_interval = 1\n");
         assert!(matches!(
-            resolve_in(None, dir.path()),
+            resolve_none(None, dir.path()),
             Err(BarcaError::Usage(_))
         ));
     }
 
     #[test]
     fn remote_off_overrides_uris_state_and_remote_options() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(
             dir.path(),
             "[remote]\nuri = \"s3://toml/p\"\ntransfer_concurrency = 0\n",
         );
-        unsafe {
-            std::env::set_var("BARCA_REMOTE", "off");
-            std::env::set_var("BARCA_REMOTE_URI", "s3://env/p");
-            std::env::set_var("BARCA_ARTIFACT_URI", "s3://literal/artifacts");
-            std::env::set_var("BARCA_STORAGE_OPTIONS", "invalid JSON");
-            std::env::set_var("BARCA_TRANSFER_TIMEOUT", "invalid");
-        }
-        let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
+        let vars = [
+            ("BARCA_REMOTE", "off"),
+            ("BARCA_REMOTE_URI", "s3://env/p"),
+            ("BARCA_ARTIFACT_URI", "s3://literal/artifacts"),
+            ("BARCA_STORAGE_OPTIONS", "invalid JSON"),
+            ("BARCA_TRANSFER_TIMEOUT", "invalid"),
+        ];
+        let cfg = resolve_vars(Some("dev"), dir.path(), &vars).unwrap();
         assert!(cfg.remote_off);
         assert!(!cfg.remote_artifacts());
         assert!(cfg.backup_uri.is_none());
@@ -1167,25 +1197,24 @@ mod tests {
 
     #[test]
     fn server_auth_is_opt_in_and_env_overrides_toml_across_environments() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().server_auth,
+            resolve_none(None, dir.path()).unwrap().server_auth,
             AuthMode::Off
         );
         write_toml(dir.path(), "[server]\nauth = \"token\"\n");
-        let prod = resolve_in(Some("prod"), dir.path()).unwrap();
+        let prod = resolve_none(Some("prod"), dir.path()).unwrap();
         assert_eq!(prod.server_auth, AuthMode::Token);
         assert_eq!(prod.project_root, dir.path());
-        unsafe { std::env::set_var("BARCA_SERVER_AUTH", "off") };
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().server_auth,
+            resolve_vars(None, dir.path(), &[("BARCA_SERVER_AUTH", "off")])
+                .unwrap()
+                .server_auth,
             AuthMode::Off
         );
         for invalid in ["", "on", "TOKEN", " token "] {
-            unsafe { std::env::set_var("BARCA_SERVER_AUTH", invalid) };
             assert!(matches!(
-                resolve_in(None, dir.path()),
+                resolve_vars(None, dir.path(), &[("BARCA_SERVER_AUTH", invalid)]),
                 Err(BarcaError::Usage(_))
             ));
         }
@@ -1193,36 +1222,38 @@ mod tests {
 
     #[test]
     fn the_server_resolves_env_over_toml_and_an_empty_env_is_unset() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir_all(&sub).unwrap();
-        assert!(configured_server(&sub).unwrap().is_none());
+        let configured_server = |vars| configured_server_with(&sub, Vars::Fixed(vars));
+        assert!(configured_server(&[]).unwrap().is_none());
         std::fs::write(
             dir.path().join(CONFIG_FILE),
             "[server]\nurl = \"https://toml.example.com/\"\n",
         )
         .unwrap();
-        let (url, source) = configured_server(&sub).unwrap().unwrap();
+        let (url, source) = configured_server(&[]).unwrap().unwrap();
         assert_eq!(
             (url.as_str(), source),
             ("https://toml.example.com/", ServerSource::Toml)
         );
-        unsafe { std::env::set_var("BARCA_SERVER", "") };
         assert_eq!(
-            configured_server(&sub).unwrap().unwrap().1,
+            configured_server(&[("BARCA_SERVER", "")])
+                .unwrap()
+                .unwrap()
+                .1,
             ServerSource::Toml
         );
-        unsafe { std::env::set_var("BARCA_SERVER", "http://env:8274") };
-        let (url, source) = configured_server(&sub).unwrap().unwrap();
+        let (url, source) = configured_server(&[("BARCA_SERVER", "http://env:8274")])
+            .unwrap()
+            .unwrap();
         assert_eq!(
             (url.as_str(), source),
             ("http://env:8274", ServerSource::EnvVar)
         );
         std::fs::write(dir.path().join(CONFIG_FILE), "[server]\nport = 1\n").unwrap();
-        unsafe { std::env::remove_var("BARCA_SERVER") };
         assert!(
-            configured_server(&sub).is_err(),
+            configured_server(&[]).is_err(),
             "unknown [server] keys are refused"
         );
     }
@@ -1250,15 +1281,14 @@ mod tests {
 
     #[test]
     fn empty_remote_and_uri_values_retain_configured_storage() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "[remote]\nuri = \"s3://toml/p\"\n");
-        unsafe {
-            std::env::set_var("BARCA_REMOTE", "");
-            std::env::set_var("BARCA_REMOTE_URI", "");
-            std::env::set_var("BARCA_ARTIFACT_URI", "");
-        }
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let vars = [
+            ("BARCA_REMOTE", ""),
+            ("BARCA_REMOTE_URI", ""),
+            ("BARCA_ARTIFACT_URI", ""),
+        ];
+        let cfg = resolve_vars(None, dir.path(), &vars).unwrap();
         assert!(!cfg.remote_off);
         assert!(cfg.artifact_root.starts_with("s3://toml/p/"));
         assert_eq!(
@@ -1269,12 +1299,10 @@ mod tests {
 
     #[test]
     fn remote_switch_rejects_unrequested_modes() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         for value in ["on", "false", "OFF", "local"] {
-            unsafe { std::env::set_var("BARCA_REMOTE", value) };
             assert!(matches!(
-                resolve_in(None, dir.path()),
+                resolve_vars(None, dir.path(), &[("BARCA_REMOTE", value)]),
                 Err(BarcaError::Usage(_))
             ));
         }
@@ -1301,9 +1329,8 @@ mod tests {
 
     #[test]
     fn defaults_without_toml_or_env() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let cfg = resolve_none(None, dir.path()).unwrap();
         assert_eq!(cfg.env, "default");
         assert!(cfg.backup_uri.is_none());
         assert_eq!(cfg.local_backup_dir(), Path::new(".barca/backups"));
@@ -1314,70 +1341,72 @@ mod tests {
 
     #[test]
     fn the_capacity_is_unset_by_default_and_the_env_var_wins_over_the_toml() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(resolve_in(None, dir.path()).unwrap().capacity, None);
+        assert_eq!(resolve_none(None, dir.path()).unwrap().capacity, None);
         write_toml(dir.path(), "[execution]\ncapacity = 3\n");
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().capacity,
+            resolve_none(None, dir.path()).unwrap().capacity,
             Some((3, "[execution] capacity"))
         );
         assert_eq!(
-            execution_in(dir.path()).unwrap().0,
+            execution_with(dir.path(), Vars::NONE).unwrap().0,
             Some((3, "[execution] capacity"))
         );
-        unsafe { std::env::set_var("BARCA_CAPACITY", "5") };
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().capacity,
+            resolve_vars(None, dir.path(), &[("BARCA_CAPACITY", "5")])
+                .unwrap()
+                .capacity,
             Some((5, "BARCA_CAPACITY"))
         );
         for bad in ["0", "-1", "two"] {
-            unsafe { std::env::set_var("BARCA_CAPACITY", bad) };
-            let err = resolve_in(None, dir.path()).unwrap_err();
+            let err = resolve_vars(None, dir.path(), &[("BARCA_CAPACITY", bad)]).unwrap_err();
             assert!(matches!(err, BarcaError::Usage(_)), "{bad}: {err}");
             assert!(err.to_string().contains("BARCA_CAPACITY"), "{err}");
         }
-        unsafe { std::env::remove_var("BARCA_CAPACITY") };
         for bad in ["capacity = 0", "capacity = \"4\"", "capacity = 1.5"] {
             write_toml(dir.path(), &format!("[execution]\n{bad}\n"));
-            let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+            let err = resolve_none(None, dir.path()).unwrap_err().to_string();
             assert!(err.contains("[execution] capacity"), "{bad}: {err}");
         }
     }
 
     #[test]
     fn the_drain_timeout_defaults_to_30_seconds_and_server_drain_timeout_sets_it() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(resolve_in(None, dir.path()).unwrap().drain_timeout_secs, 30);
+        assert_eq!(
+            resolve_none(None, dir.path()).unwrap().drain_timeout_secs,
+            30
+        );
         write_toml(dir.path(), "[server]\ndrain_timeout = 120\n");
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().drain_timeout_secs,
+            resolve_none(None, dir.path()).unwrap().drain_timeout_secs,
             120
         );
-        unsafe { std::env::set_var("BARCA_REMOTE", "off") };
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().drain_timeout_secs,
+            resolve_vars(None, dir.path(), &[("BARCA_REMOTE", "off")])
+                .unwrap()
+                .drain_timeout_secs,
             120
         );
-        unsafe { std::env::remove_var("BARCA_REMOTE") };
-        assert_eq!(resolve_in(None, dir.path()).unwrap().server_max_runs, None);
+        assert_eq!(
+            resolve_none(None, dir.path()).unwrap().server_max_runs,
+            None
+        );
         write_toml(dir.path(), "[server]\nmax_runs = 2\n");
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().server_max_runs,
+            resolve_none(None, dir.path()).unwrap().server_max_runs,
             Some(2)
         );
         write_toml(dir.path(), "[server]\nmax_runs = 0\n");
-        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        let err = resolve_none(None, dir.path()).unwrap_err().to_string();
         assert!(err.contains("max_runs"), "{err}");
         write_toml(dir.path(), "[server]\ndrain = 1\n");
-        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        let err = resolve_none(None, dir.path()).unwrap_err().to_string();
         assert!(err.contains("drain"), "{err}");
     }
 
     #[test]
     fn toml_remote_uri_derives_env_prefixed_layout() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(
             dir.path(),
@@ -1387,7 +1416,7 @@ default_env = "dev"
 uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 "#,
         );
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let cfg = resolve_none(None, dir.path()).unwrap();
         assert_eq!(cfg.env, "dev");
         assert_eq!(
             cfg.artifact_root,
@@ -1404,7 +1433,6 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
     #[test]
     fn require_env_refuses_a_command_without_env_or_barca_env() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".barca/envs/prod")).unwrap();
         std::fs::create_dir_all(dir.path().join(".barca/envs/staging")).unwrap();
@@ -1413,51 +1441,45 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
             dir.path(),
             "default_env = \"staging\"\nrequire_env = true\n",
         );
-        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        let err = resolve_none(None, dir.path()).unwrap_err().to_string();
         assert!(
             err.contains("require_env = true in barca.toml requires one"),
             "{err}"
         );
         assert!(err.contains("environments here: prod, staging"), "{err}");
-        assert_eq!(resolve_in(Some("prod"), dir.path()).unwrap().env, "prod");
-        unsafe { std::env::set_var("BARCA_ENV", "prod") };
-        assert_eq!(resolve_in(None, dir.path()).unwrap().env, "prod");
-        unsafe { std::env::remove_var("BARCA_ENV") };
-        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "0") };
-        assert_eq!(resolve_in(None, dir.path()).unwrap().env, "staging");
-        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "sometimes") };
-        assert!(resolve_in(None, dir.path()).is_err());
+        assert_eq!(resolve_none(Some("prod"), dir.path()).unwrap().env, "prod");
+        let env = |vars| resolve_vars(None, dir.path(), vars);
+        assert_eq!(env(&[("BARCA_ENV", "prod")]).unwrap().env, "prod");
+        assert_eq!(env(&[("BARCA_REQUIRE_ENV", "0")]).unwrap().env, "staging");
+        assert!(env(&[("BARCA_REQUIRE_ENV", "sometimes")]).is_err());
         write_toml(dir.path(), "");
-        unsafe { std::env::set_var("BARCA_REQUIRE_ENV", "1") };
-        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        let err = env(&[("BARCA_REQUIRE_ENV", "1")]).unwrap_err().to_string();
         assert!(err.contains("BARCA_REQUIRE_ENV requires one"), "{err}");
     }
 
     #[test]
     fn cli_env_beats_env_var_beats_toml() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "default_env = \"from-toml\"\n");
 
-        unsafe { std::env::set_var("BARCA_ENV", "from-env") };
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let vars = [("BARCA_ENV", "from-env")];
+        let cfg = resolve_vars(None, dir.path(), &vars).unwrap();
         assert_eq!(cfg.env, "from-env");
 
-        let cfg = resolve_in(Some("from-cli"), dir.path()).unwrap();
+        let cfg = resolve_vars(Some("from-cli"), dir.path(), &vars).unwrap();
         assert_eq!(cfg.env, "from-cli");
     }
 
     #[test]
     fn the_startup_line_names_an_env_from_barca_toml_or_a_store() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let cfg = resolve_none(None, dir.path()).unwrap();
         assert_eq!(
             cfg.startup_line(),
             None,
             "nothing configured: nothing to say"
         );
-        let cfg = resolve_in(Some("prod"), dir.path()).unwrap();
+        let cfg = resolve_none(Some("prod"), dir.path()).unwrap();
         assert_eq!(
             cfg.startup_line(),
             None,
@@ -1465,7 +1487,7 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
         );
 
         write_toml(dir.path(), "default_env = \"prod\"\n");
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let cfg = resolve_none(None, dir.path()).unwrap();
         assert_eq!(
             cfg.startup_line().unwrap(),
             "[barca] env prod (default_env in barca.toml); artifact store local (.barca/envs/prod/artifacts)"
@@ -1475,7 +1497,7 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
             dir.path(),
             "[remote]\nuri = \"s3://user:secret@bucket/proj\"\n",
         );
-        let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
+        let cfg = resolve_none(Some("dev"), dir.path()).unwrap();
         assert_eq!(
             cfg.startup_line().unwrap(),
             "[barca] env dev (--env); artifact store s3://<redacted>@bucket/proj/dev/artifacts"
@@ -1484,16 +1506,15 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
     #[test]
     fn the_serve_startup_line_adds_the_metadata_db_and_its_format() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         // `serve` always prints it, even with nothing configured.
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let cfg = resolve_none(None, dir.path()).unwrap();
         assert_eq!(
             cfg.serve_startup_line(Some(Ok(1))),
             "[barca] env default (built-in default); artifact store local (.barca/artifacts); \
              metadata .barca/metadata.db (db format 1)"
         );
-        let cfg = resolve_in(Some("prod"), dir.path()).unwrap();
+        let cfg = resolve_none(Some("prod"), dir.path()).unwrap();
         assert_eq!(
             cfg.serve_startup_line(None),
             "[barca] env prod (--env); artifact store local (.barca/envs/prod/artifacts); \
@@ -1507,11 +1528,10 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
     #[test]
     fn env_var_overrides_toml_uri() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "[remote]\nuri = \"s3://toml-bucket/proj\"\n");
-        unsafe { std::env::set_var("BARCA_REMOTE_URI", "s3://env-bucket/proj") };
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let vars = [("BARCA_REMOTE_URI", "s3://env-bucket/proj")];
+        let cfg = resolve_vars(None, dir.path(), &vars).unwrap();
         assert!(cfg.artifact_root.starts_with("s3://env-bucket/proj/"));
         assert!(
             cfg.backup_uri
@@ -1524,7 +1544,6 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
     /// even under BARCA_REMOTE=off (RFC-0009).
     #[test]
     fn removed_shared_history_settings_are_usage_errors_naming_the_release() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         for key in [
             "state = \"optimistic\"",
@@ -1537,36 +1556,30 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
                 &format!("[remote]\nuri = \"s3://b/p\"\n{key}\n"),
             );
             let name = key.split(' ').next().unwrap();
-            for remote in [None, Some("off")] {
-                match remote {
-                    Some(v) => unsafe { std::env::set_var("BARCA_REMOTE", v) },
-                    None => unsafe { std::env::remove_var("BARCA_REMOTE") },
-                }
-                let err = resolve_in(None, dir.path()).unwrap_err();
+            for vars in [&[][..], &[("BARCA_REMOTE", "off")]] {
+                let err = resolve_vars(None, dir.path(), vars).unwrap_err();
                 assert!(matches!(err, BarcaError::Usage(_)), "{key}");
                 let msg = err.to_string();
                 assert!(msg.contains(&format!("`[remote] {name}`")), "{msg}");
                 assert!(msg.contains(SHARED_HISTORY_REMOVED_IN), "{msg}");
             }
         }
-        unsafe { std::env::remove_var("BARCA_REMOTE") };
         write_toml(dir.path(), "[remote]\nuri = \"s3://b/p\"\n");
         for var in ["BARCA_STATE", "BARCA_STATE_URI", "BARCA_PUSH_RETRIES"] {
-            unsafe { std::env::set_var(var, "off") };
-            let msg = resolve_in(None, dir.path()).unwrap_err().to_string();
+            let msg = resolve_vars(None, dir.path(), &[(var, "off")])
+                .unwrap_err()
+                .to_string();
             assert!(
                 msg.contains(var) && msg.contains(SHARED_HISTORY_REMOVED_IN),
                 "{msg}"
             );
-            unsafe { std::env::remove_var(var) };
         }
     }
 
     #[test]
     fn local_artifacts_are_not_remote_by_default() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let cfg = resolve_none(None, dir.path()).unwrap();
         assert_eq!(cfg.local_artifact_dir, cfg.artifact_root);
         assert!(!cfg.remote_artifacts());
         assert_eq!(cfg.transfer_concurrency, 4);
@@ -1574,10 +1587,9 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
     #[test]
     fn remote_uri_makes_artifacts_remote_with_env_scoped_local_dir() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "[remote]\nuri = \"s3://b/p\"\n");
-        let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
+        let cfg = resolve_none(Some("dev"), dir.path()).unwrap();
         assert!(cfg.remote_artifacts());
         assert!(
             cfg.local_artifact_dir
@@ -1589,63 +1601,61 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
     fn plain_path_remote_root_is_remote() {
         // A shared local/NFS directory is a store too — workers still write
         // to .barca/artifacts and the transfer helper copies.
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "[remote]\nuri = \"/mnt/shared/proj\"\n");
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let cfg = resolve_none(None, dir.path()).unwrap();
         assert_eq!(cfg.artifact_root, "/mnt/shared/proj/default/artifacts");
         assert!(cfg.remote_artifacts());
     }
 
     #[test]
     fn artifact_uri_pointing_at_local_dir_is_not_remote() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         for v in [
             ".barca/artifacts",
             "./.barca/artifacts",
             ".barca/artifacts/",
         ] {
-            unsafe { std::env::set_var("BARCA_ARTIFACT_URI", v) };
-            let cfg = resolve_in(None, dir.path()).unwrap();
+            let cfg = resolve_vars(None, dir.path(), &[("BARCA_ARTIFACT_URI", v)]).unwrap();
             assert!(!cfg.remote_artifacts(), "{v} should be the local store");
         }
     }
 
     #[test]
     fn artifact_uri_env_makes_artifacts_remote() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("BARCA_ARTIFACT_URI", "memory://arts") };
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let vars = [("BARCA_ARTIFACT_URI", "memory://arts")];
+        let cfg = resolve_vars(None, dir.path(), &vars).unwrap();
         assert!(cfg.remote_artifacts());
     }
 
     #[test]
     fn transfer_concurrency_toml_then_env() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(
             dir.path(),
             "[remote]\nuri = \"s3://b/p\"\ntransfer_concurrency = 8\n",
         );
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().transfer_concurrency,
+            resolve_none(None, dir.path()).unwrap().transfer_concurrency,
             8
         );
-        unsafe { std::env::set_var("BARCA_TRANSFER_CONCURRENCY", "16") };
+        let vars = [("BARCA_TRANSFER_CONCURRENCY", "16")];
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().transfer_concurrency,
+            resolve_vars(None, dir.path(), &vars)
+                .unwrap()
+                .transfer_concurrency,
             16
         );
     }
 
     #[test]
     fn transfer_timeout_default_toml_and_env() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            resolve_none(None, dir.path())
+                .unwrap()
+                .transfer_timeout_secs,
             600
         );
         write_toml(
@@ -1653,18 +1663,21 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
             "[remote]\nuri = \"s3://b/p\"\ntransfer_timeout = 120\n",
         );
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            resolve_none(None, dir.path())
+                .unwrap()
+                .transfer_timeout_secs,
             120
         );
-        unsafe { std::env::set_var("BARCA_TRANSFER_TIMEOUT", "30") };
+        let vars = [("BARCA_TRANSFER_TIMEOUT", "30")];
         assert_eq!(
-            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            resolve_vars(None, dir.path(), &vars)
+                .unwrap()
+                .transfer_timeout_secs,
             30
         );
         for bad in ["0", "soon"] {
-            unsafe { std::env::set_var("BARCA_TRANSFER_TIMEOUT", bad) };
             assert!(
-                resolve_in(None, dir.path()).is_err(),
+                resolve_vars(None, dir.path(), &[("BARCA_TRANSFER_TIMEOUT", bad)]).is_err(),
                 "{bad} should be rejected"
             );
         }
@@ -1672,12 +1685,10 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
     #[test]
     fn transfer_concurrency_rejects_zero_and_garbage() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         for bad in ["0", "lots"] {
-            unsafe { std::env::set_var("BARCA_TRANSFER_CONCURRENCY", bad) };
             assert!(
-                resolve_in(None, dir.path()).is_err(),
+                resolve_vars(None, dir.path(), &[("BARCA_TRANSFER_CONCURRENCY", bad)]).is_err(),
                 "{bad} should be rejected"
             );
         }
@@ -1685,17 +1696,15 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
     #[test]
     fn artifact_uri_back_compat_is_literal() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("BARCA_ARTIFACT_URI", "memory://arts") };
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let vars = [("BARCA_ARTIFACT_URI", "memory://arts")];
+        let cfg = resolve_vars(None, dir.path(), &vars).unwrap();
         assert_eq!(cfg.artifact_root, "memory://arts"); // no env prefix
         assert!(cfg.backup_uri.is_none());
     }
 
     #[test]
     fn storage_options_merge_env_wins_per_key() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(
             dir.path(),
@@ -1707,13 +1716,11 @@ anon = false
 region = "us-east-1"
 "#,
         );
-        unsafe {
-            std::env::set_var(
-                "BARCA_STORAGE_OPTIONS",
-                r#"{"abfs": {"account_name": "env-acct"}}"#,
-            )
-        };
-        let cfg = resolve_in(None, dir.path()).unwrap();
+        let vars = [(
+            "BARCA_STORAGE_OPTIONS",
+            r#"{"abfs": {"account_name": "env-acct"}}"#,
+        )];
+        let cfg = resolve_vars(None, dir.path(), &vars).unwrap();
         let merged: serde_json::Value =
             serde_json::from_str(cfg.storage_options_json.as_deref().unwrap()).unwrap();
         assert_eq!(merged["abfs"]["account_name"], "env-acct"); // env wins
@@ -1723,26 +1730,23 @@ region = "us-east-1"
 
     #[test]
     fn invalid_env_name_rejected() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        let err = resolve_in(Some("bad/name"), dir.path()).unwrap_err();
+        let err = resolve_none(Some("bad/name"), dir.path()).unwrap_err();
         assert!(err.to_string().contains("invalid environment name"));
     }
 
     #[test]
     fn malformed_toml_is_hard_error() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "[remote\nuri = 3");
-        let err = resolve_in(None, dir.path()).unwrap_err();
+        let err = resolve_none(None, dir.path()).unwrap_err();
         assert!(err.to_string().contains("barca.toml"));
     }
 
     #[test]
     fn unknown_toml_key_is_hard_error() {
-        let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "[remote]\nurii = \"typo\"\n");
-        assert!(resolve_in(None, dir.path()).is_err());
+        assert!(resolve_none(None, dir.path()).is_err());
     }
 }
