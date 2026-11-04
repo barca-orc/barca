@@ -22,12 +22,16 @@ from barca.api import _find_binary
 from .test_incremental_persist import PIPELINE
 from .test_serve_robustness import _env, wait_for
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("BARCA_TEST_MINUTE_CHECKPOINT") == "0",
-    reason="the real minute checkpoint test (about 2 min) is off for this CI run: it runs in "
-    "the full tier, on release/v* and with the ci-full label (unset "
-    "BARCA_TEST_MINUTE_CHECKPOINT to run it)",
-)
+# It waits on the real one-minute timer: about 125 s, past the default per-test timeout.
+pytestmark = [
+    pytest.mark.timeout(300),
+    pytest.mark.skipif(
+        os.environ.get("BARCA_TEST_MINUTE_CHECKPOINT") == "0",
+        reason="the real minute checkpoint test (about 2 min) is off for this CI run: it runs in "
+        "the full tier, on release/v* and with the ci-full label (unset "
+        "BARCA_TEST_MINUTE_CHECKPOINT to run it)",
+    ),
+]
 
 
 def backup_rows(path):

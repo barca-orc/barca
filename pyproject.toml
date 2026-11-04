@@ -44,6 +44,8 @@ remote = ["fsspec", "adlfs", "s3fs", "gcsfs", "google-cloud-storage"]
 test = [
     "pytest",
     "pytest-xdist>=3.8,<4",
+    # A hung test fails at its timeout instead of holding a CI job (`[tool.pytest.ini_options]`).
+    "pytest-timeout>=2.3,<3",
     "jsonschema>=4,<5",
     "PyYAML>=6,<7",
     "pandas",
@@ -62,6 +64,16 @@ test = [
     "ddtrace>=3,<5",
     "msgpack",
 ]
+
+[tool.pytest.ini_options]
+# pytest-timeout (the `test` extra): a test still running after this many seconds fails, with
+# every thread's stack, instead of holding a CI job until its own limit. The slowest test
+# without a mark of its own took 43 s locally with the emulators; the slower files raise it
+# with a module-level `pytest.mark.timeout(...)`. `signal` raises in the test (SIGALRM), so its
+# fixtures still tear down, its child processes are reaped, and the pytest worker carries on
+# with the next test.
+timeout = 120
+timeout_method = "signal"
 
 [tool.maturin]
 bindings = "bin"
