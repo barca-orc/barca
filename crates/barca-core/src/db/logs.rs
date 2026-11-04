@@ -2,6 +2,7 @@
 //! Deleting a run's lines is in [`super::runs`].
 
 use super::*;
+use serde::{Deserialize, Serialize};
 
 /// One recorded output line of a run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

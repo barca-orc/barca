@@ -3,6 +3,7 @@
 //! attempt failed, which `barca status` reports ([`failed_partition_keys`]).
 
 use super::*;
+use serde::{Deserialize, Serialize};
 
 /// A partitioned node's keys whose latest recorded attempt failed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

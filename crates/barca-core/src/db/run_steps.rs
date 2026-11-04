@@ -3,6 +3,7 @@
 //! had that recorded none ([`planned_run_nodes`]) and a failed step's last output lines.
 
 use super::*;
+use serde::{Deserialize, Serialize};
 
 /// A step recorded by this run: one it executed (`success`) or one that failed. Cached
 /// steps have no new materialization row, so they are not listed (a live run on a server also

@@ -2,6 +2,7 @@
 //! partitioned node's successful rows read in one pass.
 
 use super::*;
+use crate::dispatch::OutputRef;
 
 /// A short-lived handle for one phase's cache lookups. It holds the in-process guard
 /// *and* the cross-process lock for as long as it lives, so open it for the lookups

@@ -6,6 +6,7 @@
 
 use super::*;
 use libsql::Connection;
+use serde::{Deserialize, Serialize};
 
 pub(crate) async fn delete_run(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
     conn.execute("DELETE FROM runs WHERE run_id = ?1", [run_id])

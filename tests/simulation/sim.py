@@ -666,7 +666,7 @@ class Sim:
     def failed_lookups(self) -> int:
         """Reads a `--read-only` server lost to the writer: a cache lookup the database could not
         answer. `database disk image is malformed` here was barca dropping its own SQLite locks
-        (`HELD_FILES` in crates/barca-core/src/db.rs)."""
+        (`HELD_FILES` in crates/barca-core/src/db/mod.rs)."""
         return self.reader.log.read_text(errors="replace").count("cache lookup of")
 
     def close(self) -> None:

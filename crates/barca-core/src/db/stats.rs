@@ -3,6 +3,7 @@
 //! a run starts with ([`get_avg_elapsed`]).
 
 use super::*;
+use serde::{Deserialize, Serialize};
 
 /// Aggregated statistics for a single asset node.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -5,6 +5,7 @@
 //! [`crate::persist`]'s; one-key cache lookups are [`super::CacheReader`]'s.
 
 use super::*;
+use crate::dispatch::OutputRef;
 use libsql::Connection;
 
 fn id_list(ids: &[i64]) -> String {

@@ -5,7 +5,7 @@ Status: implemented. Specification version: 5 (2: `RUN_ID` is optional; 3: stder
 5: clarify the implemented complete-line recording threshold).
 Scope: local CLI get/run stdout routing and recorded-log inspection.
 Conformance: `python/tests/test_task_logs.py`, `python/tests/test_live_logs.py`, CLI
-contract/help snapshots, log transaction tests in `crates/barca-core/src/db.rs`,
+contract/help snapshots, log transaction tests in `crates/barca-core/src/db/logs.rs`,
 `crates/barca-core/src/run_logs.rs`.
 
 Unpartitioned task return values retain format-specific CLI artifact references.

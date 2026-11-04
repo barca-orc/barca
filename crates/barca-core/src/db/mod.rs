@@ -1,12 +1,17 @@
-//! Database operations — schema init, output persistence, connection helpers.
+//! Database operations on `.barca/metadata.db`. This file holds what every family shares:
+//! the process-wide guard and the cross-process lock ([`db_guard`], [`lock_db`]), opening a
+//! connection ([`open_conn`]) and waiting on SQLite's own locks, the database files this
+//! process keeps open ([`held_file`]), checkpoints, prepared statements and transactions. Each
+//! table family is a submodule ([`schema`] opens and migrates; [`runs`], [`run_steps`],
+//! [`run_liveness`], [`logs`], [`materializations`], [`cache_reader`], [`history`], [`stats`],
+//! [`partition_keys`], [`schedule`], [`cost_estimates`], [`snapshots`], ...) whose public items
+//! are re-exported here, so callers name them `db::X`.
 //!
 //! All functions are `async` and run on whatever runtime the caller provides —
 //! this crate never constructs a runtime of its own.
 
 use crate::BarcaError;
-use crate::dispatch::OutputRef;
 use libsql::Builder;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, MutexGuard};
 
 // The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
-// this file, one of these owners (a table family each) or `persist/recording.rs`.
+// this directory (one file per table family) or `persist/recording.rs`.
 mod cache_reader;
 pub(crate) mod cost_estimates;
 pub(crate) mod freshness_proofs;
@@ -36,6 +41,9 @@ mod stats;
 pub(crate) mod uploads;
 #[cfg(test)]
 mod write_boundary_tests;
+
+// Every family's items keep their `db::X` path. The private `use`s are `pub(super)` helpers one
+// family calls in another; each family file starts with `use super::*`.
 pub use cache_reader::CacheReader;
 pub(crate) use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;

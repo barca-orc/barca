@@ -3,6 +3,7 @@
 //! nodes whose bytes changed in a run ([`changed_bytes_in_run`]).
 
 use super::*;
+use serde::{Deserialize, Serialize};
 
 /// One row of `materializations`, as `barca status` reports it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
