@@ -34,6 +34,7 @@ static DB_LOCK: Mutex<()> = Mutex::const_new(());
 pub(crate) mod freshness_proofs;
 pub(crate) mod ledger_posts;
 pub(crate) mod materializations;
+pub(crate) mod notifications;
 pub(crate) mod run_queue;
 pub(crate) mod runs;
 pub(crate) mod sink_publications;
