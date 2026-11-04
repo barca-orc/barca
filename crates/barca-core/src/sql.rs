@@ -15,6 +15,7 @@
 //! ([`tables`]): `barca.runs`, `barca.materializations` and `barca.nodes`.
 
 use crate::BarcaError;
+use crate::cache_state::CacheState;
 use crate::config::ResolvedConfig;
 use crate::status;
 use serde::{Deserialize, Serialize};
@@ -293,12 +294,12 @@ async fn resolve(
                 .collect();
             catalog
                 .views
-                .push(view(format, files, n.cache.state != "cached"));
+                .push(view(format, files, n.cache.state != CacheState::Cached));
             continue;
         }
         let last = n.last_materialization.as_ref();
         let (path, format, stale) = match (&n.cache.artifact, last) {
-            (Some(path), _) if n.cache.state == "cached" => {
+            (Some(path), _) if n.cache.state == CacheState::Cached => {
                 let format = last
                     .filter(|m| m.artifact.as_deref() == Some(path.as_str()))
                     .and_then(|m| m.format.clone())
@@ -313,7 +314,7 @@ async fn resolve(
             {
                 let path = m.artifact.clone().unwrap_or_default();
                 let format = m.format.clone().unwrap_or_else(|| format_of(&path));
-                (path, format, n.cache.state == "stale")
+                (path, format, n.cache.state == CacheState::Stale)
             }
             _ => {
                 catalog.missing.push(missing(None));

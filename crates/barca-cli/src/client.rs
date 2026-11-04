@@ -35,6 +35,7 @@ use barca_core::BarcaError;
 use barca_core::config::{ServerSource, check_server_url, configured_server};
 use barca_core::envelope::ErrorEnvelope;
 use barca_core::outcome::{API_VERSION, Outcome, RunCommand, RunRequest};
+use barca_core::status::CacheState;
 use barca_core::{RunEvent, lines::LineWhen};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -1606,8 +1607,8 @@ impl Server {
             // The server's `store_only` (RFC-0009) is about the server's own disk: its result is
             // in the ledger and its object in the store, which is `cached` for this machine,
             // whether or not a copy is here (`local` says).
-            if node.cache.state == "unsynced" && node.cache.reason == "store_only" {
-                node.cache.state = "cached".to_string();
+            if node.cache.state == CacheState::Unsynced && node.cache.reason == "store_only" {
+                node.cache.state = CacheState::Cached;
                 node.cache.reason = "materialized".to_string();
                 node.cache.detail =
                     "a successful materialization matches this code and these inputs".to_string();
@@ -2540,6 +2541,30 @@ async fn unsynced_posts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_newer_servers_unknown_cache_state_still_parses() {
+        // Enum values are additive (contract): a state this CLI does not know is `unknown`,
+        // with the server's reason and detail kept.
+        let body = json!({
+            "target": null,
+            "nodes": [{
+                "id": "p.py:a", "name": "a", "kind": "asset", "inputs": [],
+                "partitioned": false,
+                "cache": {"state": "future_state", "reason": "future_reason", "detail": "why"},
+                "last_materialization": null, "shape": null
+            }],
+            "summary": {"cached": 0, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0,
+                        "blocked": 0, "unknown": 1, "always_runs": 0}
+        });
+        let result: barca_core::status::StatusResult = serde_json::from_value(body).unwrap();
+        let cache = &result.nodes[0].cache;
+        assert_eq!(cache.state, CacheState::Unknown);
+        assert_eq!(
+            (cache.reason.as_str(), cache.detail.as_str()),
+            ("future_reason", "why")
+        );
+    }
 
     #[test]
     fn unexpected_answers_and_dropped_streams_keep_credentials_out_of_every_error_field() {

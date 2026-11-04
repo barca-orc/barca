@@ -8,6 +8,7 @@
 
 use crate::BarcaError;
 use crate::cache::CachePolicy;
+pub use crate::cache_state::CacheState;
 use crate::db;
 use crate::results::StepReport;
 use serde::{Deserialize, Serialize};
@@ -204,16 +205,7 @@ pub async fn attach_schedules(
 }
 
 /// The `cache.state` values, as JSON and `--state` spell them.
-pub const STATES: &[&str] = &[
-    "cached",
-    "unsynced",
-    "stale",
-    "never_run",
-    "partial",
-    "blocked",
-    "unknown",
-    "always_runs",
-];
+pub const STATES: [CacheState; 8] = CacheState::ALL;
 
 /// Which nodes `barca status --state` / `--problems` (and `GET /nodes?state=&problems=`) keep.
 /// The summary always counts every node in scope.
@@ -221,7 +213,7 @@ pub const STATES: &[&str] = &[
 pub struct StatusFilter {
     /// Keep nodes whose `cache.state` is one of these (snake_case, as in JSON).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub states: Vec<String>,
+    pub states: Vec<CacheState>,
     /// Keep nodes that need attention ([`needs_attention`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub problems: bool,
@@ -233,15 +225,15 @@ pub struct StatusFilter {
 impl StatusFilter {
     /// Parse `--state a,b` (or `?state=a,b`): each one of [`STATES`], `never-run` spelled either
     /// way. An unknown state is an error naming the valid ones.
-    pub fn parse_states(raw: &[String]) -> Result<Vec<String>, String> {
-        let mut out: Vec<String> = Vec::new();
+    pub fn parse_states(raw: &[String]) -> Result<Vec<CacheState>, String> {
+        let mut out: Vec<CacheState> = Vec::new();
         for state in raw.iter().flat_map(|s| s.split(',')) {
             let state = state.trim();
             if state.is_empty() {
                 continue;
             }
             let snake = state.replace('-', "_");
-            if !STATES.contains(&snake.as_str()) {
+            let Ok(parsed) = snake.parse::<CacheState>() else {
                 let hint = if snake == "failed" {
                     " A failed node is `stale` or `never_run` with reason `failed`: --problems \
                      shows it."
@@ -250,11 +242,11 @@ impl StatusFilter {
                 };
                 return Err(format!(
                     "unknown state '{state}'\nUse one of {}.{hint}",
-                    STATES.join(", ")
+                    STATES.map(CacheState::as_str).join(", ")
                 ));
-            }
-            if !out.contains(&snake) {
-                out.push(snake);
+            };
+            if !out.contains(&parsed) {
+                out.push(parsed);
             }
         }
         Ok(out)
@@ -291,7 +283,8 @@ impl StatusFilter {
             parts.push("--problems".to_string());
         }
         if !self.states.is_empty() {
-            parts.push(format!("--state {}", self.states.join(",")));
+            let states: Vec<&str> = self.states.iter().map(|s| s.as_str()).collect();
+            parts.push(format!("--state {}", states.join(",")));
         }
         parts.join(" ")
     }
@@ -301,8 +294,11 @@ impl StatusFilter {
 /// (`unsynced`, `stale`, `never_run`, `partial`, `unknown`), a task or sensor whose last run
 /// failed, and a node whose schedule is paused or failing.
 pub fn needs_attention(node: &NodeStatus) -> bool {
-    let state_ok = matches!(node.cache.state.as_str(), "cached" | "always_runs");
-    let last_failed = node.cache.state == "always_runs"
+    let state_ok = matches!(
+        node.cache.state,
+        CacheState::Cached | CacheState::AlwaysRuns
+    );
+    let last_failed = node.cache.state == CacheState::AlwaysRuns
         && node
             .last_materialization
             .as_ref()
@@ -342,13 +338,7 @@ pub fn short_error(error: &str, max: usize) -> String {
 pub struct CacheStatus {
     /// `cached`, `unsynced`, `stale`, `never_run`, `partial`, `blocked`, `unknown` or
     /// `always_runs`.
-    #[cfg_attr(
-        feature = "ts",
-        ts(
-            type = "\"cached\" | \"unsynced\" | \"stale\" | \"never_run\" | \"partial\" | \"blocked\" | \"unknown\" | \"always_runs\""
-        )
-    )]
-    pub state: String,
+    pub state: CacheState,
     /// Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`,
     /// `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
     /// `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`, `evicted`, `no_record`,
@@ -466,15 +456,15 @@ impl StatusSummary {
     pub fn of(nodes: &[NodeStatus]) -> Self {
         let mut summary = StatusSummary::default();
         for n in nodes {
-            match n.cache.state.as_str() {
-                "cached" => summary.cached += 1,
-                "unsynced" => summary.unsynced += 1,
-                "stale" => summary.stale += 1,
-                "never_run" => summary.never_run += 1,
-                "partial" => summary.partial += 1,
-                "blocked" => summary.blocked += 1,
-                "always_runs" => summary.always_runs += 1,
-                _ => summary.unknown += 1,
+            match n.cache.state {
+                CacheState::Cached => summary.cached += 1,
+                CacheState::Unsynced => summary.unsynced += 1,
+                CacheState::Stale => summary.stale += 1,
+                CacheState::NeverRun => summary.never_run += 1,
+                CacheState::Partial => summary.partial += 1,
+                CacheState::Blocked => summary.blocked += 1,
+                CacheState::AlwaysRuns => summary.always_runs += 1,
+                CacheState::Unknown => summary.unknown += 1,
             }
         }
         summary
@@ -497,7 +487,7 @@ pub struct PendingPost {
 /// and so is one whose current run hash differs from the pending one (the server's code moved
 /// on). Returns true when `node` changed.
 pub fn not_in_ledger(node: &mut NodeStatus, pending: &[PendingPost]) -> bool {
-    if node.cache.state == "cached" || node.kind != "asset" {
+    if node.cache.state == CacheState::Cached || node.kind != "asset" {
         return false;
     }
     let Some(p) = pending_for(
@@ -508,7 +498,7 @@ pub fn not_in_ledger(node: &mut NodeStatus, pending: &[PendingPost]) -> bool {
     ) else {
         return false;
     };
-    node.cache.state = "unsynced".to_string();
+    node.cache.state = CacheState::Unsynced;
     node.cache.reason = "not_in_ledger".to_string();
     node.cache.detail = format!(
         "computed here and not recorded on the server yet: {}; the next get or run against the \
@@ -654,7 +644,7 @@ pub(crate) async fn status_from_dag_with_membership(
     };
 
     let mut nodes: Vec<NodeStatus> = Vec::new();
-    let mut states: HashMap<String, String> = HashMap::new();
+    let mut states: HashMap<String, CacheState> = HashMap::new();
     // Each blocked node: how many of its keys wait, and on which failed node.
     let mut blocked: HashMap<String, (usize, String)> = HashMap::new();
     for id in ids {
@@ -698,10 +688,13 @@ pub(crate) async fn status_from_dag_with_membership(
         // computes the node's other keys and skips these. Its own failed keys come first.
         if let Some(p) = partitions.as_ref().filter(|p| p.failed == 0)
             && !node.extracted.partitions.is_empty()
-            && matches!(cache.state.as_str(), "stale" | "never_run" | "partial")
+            && matches!(
+                cache.state,
+                CacheState::Stale | CacheState::NeverRun | CacheState::Partial
+            )
             && let Some((count, origin)) = blocked_by(dag, node, &failed_keys, &blocked, p.missing)
         {
-            cache.state = "blocked".to_string();
+            cache.state = CacheState::Blocked;
             cache.reason = "upstream_failed".to_string();
             cache.detail = format!(
                 "{count} of {} missing keys wait on '{}': the same keys of it failed",
@@ -710,7 +703,7 @@ pub(crate) async fn status_from_dag_with_membership(
             );
             blocked.insert(id.to_string(), (count, origin));
         }
-        states.insert(id.to_string(), cache.state.clone());
+        states.insert(id.to_string(), cache.state);
 
         let last_materialization = history.latest.map(|m| LastMaterialization {
             content_hash: m.content_hash,
@@ -834,7 +827,7 @@ fn local_only(
     partitioned: bool,
     pending: &[crate::pending_uploads::PendingUpload],
 ) {
-    if cache.state != "cached" {
+    if cache.state != CacheState::Cached {
         return;
     }
     let mine = pending.iter().find(|p| {
@@ -844,7 +837,7 @@ fn local_only(
     let Some(p) = mine else {
         return;
     };
-    cache.state = "unsynced".to_string();
+    cache.state = CacheState::Unsynced;
     cache.reason = "local_only".to_string();
     cache.detail = format!(
         "computed here and not in the artifact store yet: {}; the next get or run uploads it",
@@ -933,7 +926,7 @@ async fn check_store_copies(
     // (node index, store path, local path, recorded digest)
     let mut wanted: Vec<(usize, String, std::path::PathBuf, Option<String>)> = Vec::new();
     for (i, n) in nodes.iter().enumerate() {
-        if n.cache.state != "cached" || n.partitioned {
+        if n.cache.state != CacheState::Cached || n.partitioned {
             continue;
         }
         let Some(hash) = n.cache.run_hash.as_deref() else {
@@ -993,30 +986,30 @@ async fn check_store_copies(
                 continue;
             }
             Copies::LocalOnly => (
-                "unsynced",
+                CacheState::Unsynced,
                 "local_only",
                 format!(
                     "computed here and not in the artifact store ({at}); the next get uploads it"
                 ),
             ),
             Copies::StoreOnly => (
-                "unsynced",
+                CacheState::Unsynced,
                 "store_only",
                 format!("in the artifact store ({at}), not on this machine; get fetches it"),
             ),
-            Copies::Mismatch(why) => ("unsynced", "mismatch", format!("{why} ({at})")),
+            Copies::Mismatch(why) => (CacheState::Unsynced, "mismatch", format!("{why} ({at})")),
             Copies::Missing => (
-                "stale",
+                CacheState::Stale,
                 "artifact_missing",
                 format!(
                     "the artifact is neither on this machine nor in the store ({at}); a run computes it again"
                 ),
             ),
         };
-        c.state = state.to_string();
+        c.state = state;
         c.reason = reason.to_string();
         c.detail = detail;
-        if state != "cached" && state != "unsynced" {
+        if state != CacheState::Cached && state != CacheState::Unsynced {
             c.artifact = None;
         }
     }
@@ -1079,9 +1072,9 @@ pub(crate) async fn stat_objects(
     }
 }
 
-fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
+fn cache(state: CacheState, reason: &str, detail: impl Into<String>) -> CacheStatus {
     CacheStatus {
-        state: state.to_string(),
+        state,
         reason: reason.to_string(),
         detail: detail.into(),
         run_hash: None,
@@ -1096,34 +1089,42 @@ fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
 fn cache_status(
     report: Option<&StepReport>,
     inputs: &[String],
-    states: &HashMap<String, String>,
+    states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
 ) -> CacheStatus {
     let Some(r) = report else {
-        return cache("unknown", "not_planned", "not part of the execution plan");
+        return cache(
+            CacheState::Unknown,
+            "not_planned",
+            "not part of the execution plan",
+        );
     };
     let action = r.action.as_deref().unwrap_or("unknown");
     let mut c = match (action, r.reason.as_deref()) {
-        (_, Some("task")) => cache("always_runs", "task", "tasks always re-run"),
-        (_, Some("sensor")) => cache("always_runs", "sensor", "sensors always re-run"),
+        (_, Some("task")) => cache(CacheState::AlwaysRuns, "task", "tasks always re-run"),
+        (_, Some("sensor")) => cache(CacheState::AlwaysRuns, "sensor", "sensors always re-run"),
         ("unknown", _) => cache(
-            "unknown",
+            CacheState::Unknown,
             r.reason.as_deref().unwrap_or("unknown"),
             r.detail.clone().unwrap_or_default(),
         ),
         ("cached", _) => cache(
-            "cached",
+            CacheState::Cached,
             "materialized",
             "a successful materialization matches this code and these inputs",
         ),
         // The result is recorded, but its artifact is gone and a run would have to read it.
         ("run", Some("artifact_missing")) => cache(
-            "stale",
+            CacheState::Stale,
             "artifact_missing",
             r.detail.clone().unwrap_or_default(),
         ),
         // The same, because the cache size limit deleted the file (RFC-0012).
-        ("run", Some("evicted")) => cache("stale", "evicted", r.detail.clone().unwrap_or_default()),
+        ("run", Some("evicted")) => cache(
+            CacheState::Stale,
+            "evicted",
+            r.detail.clone().unwrap_or_default(),
+        ),
         ("partial", _) => {
             let (cached, total) = r
                 .partitions
@@ -1131,7 +1132,7 @@ fn cache_status(
                 .map(|p| (p.cached, p.total))
                 .unwrap_or_default();
             cache(
-                "partial",
+                CacheState::Partial,
                 "partitions_missing",
                 format!("{cached} of {total} partition keys cached"),
             )
@@ -1149,7 +1150,7 @@ fn cache_status(
         c.detail = format!("{}; {note}", c.detail);
     }
     c.run_hash = r.run_hash.clone();
-    if c.state == "cached" {
+    if c.state == CacheState::Cached {
         c.artifact = r.artifact.clone();
     }
     c
@@ -1160,20 +1161,24 @@ fn cache_status(
 fn not_cached(
     r: &StepReport,
     inputs: &[String],
-    states: &HashMap<String, String>,
+    states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
 ) -> CacheStatus {
     let state = if history.ever_succeeded {
-        "stale"
+        CacheState::Stale
     } else {
-        "never_run"
+        CacheState::NeverRun
     };
     let upstream_stale = inputs.iter().find(|up| {
         let base = up.split('[').next().unwrap_or(up);
         states.get(base).is_some_and(|s| {
             matches!(
-                s.as_str(),
-                "stale" | "never_run" | "partial" | "blocked" | "unknown"
+                s,
+                CacheState::Stale
+                    | CacheState::NeverRun
+                    | CacheState::Partial
+                    | CacheState::Blocked
+                    | CacheState::Unknown
             )
         })
     });
@@ -1326,7 +1331,7 @@ async fn read_shapes_inner(
                 wanted.push((i, selected.path, selected.format));
             }
         } else if verified_local.contains(&i)
-            && n.cache.state == "cached"
+            && n.cache.state == CacheState::Cached
             && n.cache.artifact.as_deref() == Some(path.as_str())
         {
             // Use the selected, verified local copy instead of reopening remote payloads.
@@ -1338,7 +1343,7 @@ async fn read_shapes_inner(
                 local.map_or_else(|| path.clone(), |path| path.to_string_lossy().into_owned()),
                 m.format.clone().unwrap_or_default(),
             ));
-        } else if n.cache.state == "unsynced" && n.cache.reason != "store_only" {
+        } else if n.cache.state == CacheState::Unsynced && n.cache.reason != "store_only" {
             // Not in the store, or not the same there (#390, RFC-0009): read this machine's
             // copy. A `store_only` result is read from the store like a cached one.
             let layout =
@@ -1416,7 +1421,7 @@ mod tests {
             inputs: vec![],
             partitioned: false,
             cache: CacheStatus {
-                state: state.into(),
+                state: state.parse().unwrap(),
                 reason: "no_record".into(),
                 detail: String::new(),
                 run_hash: run_hash.map(String::from),
@@ -1519,7 +1524,7 @@ mod tests {
         let c = cache_status(
             Some(&changed),
             &["p.py:b".to_string()],
-            &HashMap::from([("p.py:b".to_string(), "stale".to_string())]),
+            &HashMap::from([("p.py:b".to_string(), CacheState::Stale)]),
             &h,
         );
         assert_eq!(c.reason, "upstream_stale");
@@ -1545,7 +1550,7 @@ mod tests {
             ("stale", "artifact_missing", "the artifact file is missing")
         );
 
-        let up: HashMap<String, String> = [("p.py:u".to_string(), "stale".to_string())].into();
+        let up: HashMap<String, CacheState> = [("p.py:u".to_string(), CacheState::Stale)].into();
         let c = cache_status(
             Some(&report("run", Some("not_materialized"))),
             &["p.py:u".to_string()],
@@ -1571,9 +1576,9 @@ mod tests {
         assert!(c.detail.contains("boom"));
 
         let c = cache_status(Some(&report("run", Some("task"))), &[], &none, &h);
-        assert_eq!(c.state, "always_runs");
+        assert_eq!(c.state, CacheState::AlwaysRuns);
         let c = cache_status(Some(&report("cached", None)), &[], &none, &h);
-        assert_eq!(c.state, "cached");
+        assert_eq!(c.state, CacheState::Cached);
     }
 
     #[test]
@@ -1641,8 +1646,12 @@ mod tests {
     #[test]
     fn problems_are_every_state_but_cached_and_always_runs() {
         for state in STATES {
-            let fine = matches!(*state, "cached" | "always_runs");
-            assert_eq!(needs_attention(&node(state, None)), !fine, "{state}");
+            let fine = matches!(state, CacheState::Cached | CacheState::AlwaysRuns);
+            assert_eq!(
+                needs_attention(&node(state.as_str(), None)),
+                !fine,
+                "{state}"
+            );
         }
     }
 
@@ -1689,7 +1698,7 @@ mod tests {
         assert_eq!(result.nodes.len(), 2);
         assert_eq!(result.summary, summary);
         let filter = result.filter.as_ref().unwrap();
-        assert_eq!(filter.states, ["never_run", "stale"]);
+        assert_eq!(filter.states, [CacheState::NeverRun, CacheState::Stale]);
         assert_eq!(filter.matched, 2);
         assert_eq!(filter.describe(), "--state never_run,stale");
         let json = serde_json::to_value(&result).unwrap();

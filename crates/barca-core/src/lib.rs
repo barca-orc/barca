@@ -5,6 +5,7 @@
 pub mod backup;
 pub mod batch;
 pub mod cache;
+pub mod cache_state;
 pub mod capacity;
 pub mod changes;
 pub mod claims;

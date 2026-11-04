@@ -209,6 +209,23 @@ async fn not_modified(router: &Router, url: &str, path: &str) {
 }
 
 #[test]
+fn cache_state_enum_matches_the_rust_enum() {
+    // `cache.state` is one Rust enum; the contract lists exactly its spellings, in its order.
+    let listed: Vec<&str> =
+        contract()["components"]["schemas"]["Cache"]["properties"]["state"]["enum"]
+            .as_array()
+            .expect("Cache.state enum")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+    let rust: Vec<&str> = barca_core::status::CacheState::ALL
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    assert_eq!(listed, rust);
+}
+
+#[test]
 fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let source = include_str!("../src/routes.rs");
     let mut registered = BTreeSet::new();
