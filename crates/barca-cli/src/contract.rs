@@ -97,7 +97,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "serve",
-        "the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release",
+        "the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open",
     ),
     (
         "serve --capacity",
@@ -106,10 +106,6 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
         "state reset",
         "new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use",
-    ),
-    (
-        "run --output",
-        "kept for compatibility; --json / --pretty are the canonical spelling",
     ),
     (
         "get --expires",
@@ -200,6 +196,15 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.29.2: how the end of a followed run is reported may change after field use",
     ),
 ];
+
+/// Compatibility spellings that keep working but have a canonical replacement, each with the
+/// replacement. Keyed like `EXPERIMENTAL`. One is removed only in a minor release, at least one
+/// minor after a stderr notice naming its replacement first ships (contract.md, "Deprecated
+/// compat flags").
+pub const DEPRECATED: &[(&str, &str)] = &[(
+    "run --output",
+    "-o json|pretty are the older spellings of --json / --pretty; -o value has no replacement yet and keeps working",
+)];
 
 fn updating() -> bool {
     std::env::var("BARCA_UPDATE_SNAPSHOTS").is_ok_and(|v| !v.is_empty() && v != "0")
@@ -371,6 +376,9 @@ fn experimental(key: &str) -> Option<&'static str> {
 /// An argument of an experimental command (`state reset --yes` of `state reset`) is
 /// experimental with it.
 fn stability(key: &str) -> String {
+    if let Some((_, why)) = DEPRECATED.iter().find(|(k, _)| *k == key) {
+        return format!("deprecated: {why}");
+    }
     if let Some(why) = experimental(key) {
         return format!("experimental: {why}");
     }
@@ -641,8 +649,12 @@ fn generated_blocks_in_the_contract_match_the_cli() {
 #[test]
 fn every_experimental_key_names_a_real_command_or_argument() {
     let root = built();
-    for (key, why) in EXPERIMENTAL {
+    for (key, why) in EXPERIMENTAL.iter().chain(DEPRECATED) {
         assert!(!why.is_empty(), "`{key}` needs a reason");
+        assert!(
+            !(EXPERIMENTAL.iter().any(|(k, _)| k == key) && DEPRECATED.iter().any(|(k, _)| k == key)),
+            "`{key}` is both experimental and deprecated"
+        );
         let (cmd, arg) = key.split_once(' ').unwrap_or((key, ""));
         let command = if cmd == "barca" {
             &root
