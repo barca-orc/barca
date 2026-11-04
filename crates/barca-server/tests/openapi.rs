@@ -314,7 +314,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let queue = validator(&json!({"$ref":"#/components/schemas/Queue"}));
     let mut view = json!({"paused":false,"paused_at":null,"draining":false,"max_runs":4,"running":[],"queued":[],"capacity":null});
     assert!(queue.is_valid(&view));
-    let capacity = barca_core::capacity::SharedCapacity::new(4, "--capacity");
+    let capacity = barca_core::serve::capacity::SharedCapacity::new(4, "--capacity");
     assert!(capacity.try_acquire("r1", "p.py:a", 3));
     assert!(!capacity.try_acquire("r2", "p.py:b", 2));
     view["capacity"] = serde_json::to_value(capacity.snapshot()).unwrap();

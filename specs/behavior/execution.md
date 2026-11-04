@@ -157,7 +157,7 @@ Configuration details: [remote manual](../../crates/barca-cli/docs/remote.md).
 ## Open questions and gaps
 
 Runs of one `barca serve` share the asset steps they have in flight
-([#654](https://github.com/barca-orc/barca/issues/654), [`claims.rs`](../../crates/barca-core/src/claims.rs)):
+([#654](https://github.com/barca-orc/barca/issues/654), [`claims.rs`](../../crates/barca-core/src/serve/claims.rs)):
 a step is claimed under its display id (partition key included) and run hash when one of the
 run's workers leases it, and another run that reaches the same step while the claim is held
 waits instead of executing it, then reports it `cached` and records no row of its own. Tasks,
@@ -165,7 +165,7 @@ sensors and `parallel()` branches are never shared; different run hashes and key
 not have in common are independent. A claim ends without a result when its step fails an
 attempt, loses its worker, or its run ends or is cancelled; one waiting run then claims and
 executes the step. Conformance: [shared steps](../../python/tests/test_serve_shared_steps.py),
-[claims](../../crates/barca-core/src/claims.rs).
+[claims](../../crates/barca-core/src/serve/claims.rs).
 
 Known gaps against [the approved design](current-state-and-execution.md): cancelling the run that
 owns a shared step stops it, and the waiting run executes it again from the start

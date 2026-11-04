@@ -499,7 +499,7 @@ pub struct QueueView {
     /// The capacity every run shares (`--capacity`, `[server] capacity`): the weight in use,
     /// by run, and the steps waiting for it, in the order they are admitted. `null` when the
     /// server has none (each run has only its own).
-    pub capacity: Option<barca_core::capacity::CapacitySnapshot>,
+    pub capacity: Option<barca_core::serve::capacity::CapacitySnapshot>,
 }
 
 fn entry(run: &RunState, position: Option<usize>) -> QueueEntry {

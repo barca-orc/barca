@@ -158,7 +158,7 @@ pub enum Stopped {
 /// second signal comes first, they are cancelled (workers terminated, runs recorded
 /// `cancelled` with reason `server shutdown`) and [`Stopped::Forced`] is returned.
 pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
-    if config.resolved.server_auth == barca_core::config::AuthMode::Token {
+    if config.resolved.server_auth == barca_core::serve::AuthMode::Token {
         auth::Store::open(&config.resolved.project_root)
             .map_err(|error| ServeError::Load(barca_core::BarcaError::Other(error.to_string())))?;
         barca_core::errln!(

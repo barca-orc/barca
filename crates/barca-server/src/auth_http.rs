@@ -9,8 +9,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use barca_core::{
-    config::{AuthMode, ResolvedConfig},
+    config::ResolvedConfig,
     envelope::{ErrorEnvelope, ErrorKind},
+    serve::AuthMode,
 };
 use chrono::{DateTime, Utc};
 use futures::StreamExt;

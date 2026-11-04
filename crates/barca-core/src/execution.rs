@@ -131,7 +131,7 @@ fn sizing_with(
 /// capacity between its runs.
 pub(crate) fn sizing_for(
     cfg: &crate::config::ResolvedConfig,
-    shared: Option<&crate::capacity::SharedCapacity>,
+    shared: Option<&crate::serve::capacity::SharedCapacity>,
 ) -> Sizing {
     sizing(
         cfg.capacity,

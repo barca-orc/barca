@@ -5,7 +5,8 @@ use axum::{
     http::{Request, StatusCode, header},
     response::Response,
 };
-use barca_core::config::{AuthMode, resolve_in};
+use barca_core::config::resolve_in;
+use barca_core::serve::AuthMode;
 use barca_server::{ServeConfig, app, auth::Store};
 use serde_json::{Value, json};
 use tower::ServiceExt;

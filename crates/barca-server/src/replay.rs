@@ -694,7 +694,7 @@ mod http_tests {
         let root = tempfile::tempdir().unwrap();
         let mut state = state(root.path());
         let mut config = (*state.config).clone();
-        config.resolved.server_auth = barca_core::config::AuthMode::Token;
+        config.resolved.server_auth = barca_core::serve::AuthMode::Token;
         state.auth = Arc::new(crate::auth_http::Access::new(&config.resolved));
         state.config = Arc::new(config);
         let router = crate::routes::router(state);

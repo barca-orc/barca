@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 pub(crate) async fn serve_cmd(
     env: Option<&str>,
-    auth: Option<barca_core::config::AuthMode>,
+    auth: Option<barca_core::serve::AuthMode>,
     files: Vec<PathBuf>,
     host: std::net::IpAddr,
     port: u16,

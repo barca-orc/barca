@@ -53,11 +53,11 @@ pub struct IoConfig {
     /// unless `[execution] capacity` or `BARCA_CAPACITY` sets it.
     pub capacity: usize,
     /// The capacity every run of a `barca serve` shares (`[server] capacity`, #628): a step is
-    /// leased only once this admits it too ([`crate::capacity`]).
-    pub shared: Option<std::sync::Arc<crate::capacity::SharedCapacity>>,
+    /// leased only once this admits it too ([`crate::serve::capacity`]).
+    pub shared: Option<std::sync::Arc<crate::serve::capacity::SharedCapacity>>,
     /// The asset steps the server's runs are executing (#654): a step another run is
-    /// executing is waited for instead of executed again ([`crate::claims`]).
-    pub shared_steps: Option<std::sync::Arc<crate::claims::SharedSteps>>,
+    /// executing is waited for instead of executed again ([`crate::serve::claims`]).
+    pub shared_steps: Option<std::sync::Arc<crate::serve::claims::SharedSteps>>,
     pub run_id: String,
     /// Present only when the Datadog integration successfully configured.
     pub datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
@@ -140,7 +140,7 @@ enum IoEvent {
     RetryReady {
         item_id: ItemId,
     },
-    /// Another run's claim on a step this run waited for ended ([`crate::claims`]): with the
+    /// Another run's claim on a step this run waited for ended ([`crate::serve::claims`]): with the
     /// owner's artifact when it finished the step, `None` when this run must execute it.
     Settled {
         item_id: ItemId,
@@ -165,7 +165,7 @@ impl Drop for Acceptor {
     }
 }
 
-/// This run's part of a capacity the server's runs share ([`crate::capacity`]).
+/// This run's part of a capacity the server's runs share ([`crate::serve::capacity`]).
 ///
 /// `held` is what the run has taken from it: the weight of the steps its workers have leased
 /// (as [`WorkerPool::running_weight`] counts them, against the shared capacity) plus `grant`,
@@ -173,7 +173,7 @@ impl Drop for Acceptor {
 /// brought back in line with what the run is running after every event
 /// ([`WorkerPool::sync_share`]); everything is given back when the run's pool goes.
 struct Share {
-    capacity: std::sync::Arc<crate::capacity::SharedCapacity>,
+    capacity: std::sync::Arc<crate::serve::capacity::SharedCapacity>,
     changed: tokio::sync::watch::Receiver<u64>,
     run_id: String,
     held: u32,
@@ -188,12 +188,12 @@ impl Drop for Share {
     }
 }
 
-/// This run's claims on the asset steps the server's runs share ([`crate::claims`]).
+/// This run's claims on the asset steps the server's runs share ([`crate::serve::claims`]).
 struct Steps {
-    shared: std::sync::Arc<crate::claims::SharedSteps>,
+    shared: std::sync::Arc<crate::serve::claims::SharedSteps>,
     run_id: String,
     /// The claims this run holds: the steps its workers have leased.
-    held: std::collections::HashSet<crate::claims::StepKey>,
+    held: std::collections::HashSet<crate::serve::claims::StepKey>,
     /// Steps of this run waiting on another run's claim, and the task that waits.
     awaiting: HashMap<ItemId, JoinHandle<()>>,
     /// Steps another run finished for this one, by display id: cache hits, not executed here.
@@ -211,7 +211,7 @@ impl Drop for Steps {
 
 /// What identifies `item` as work runs may share: an asset step with a run hash, not a
 /// `parallel()` branch. `None` for a task, a sensor or a branch.
-fn share_key(item: &crate::coordinator::Item) -> Option<crate::claims::StepKey> {
+fn share_key(item: &crate::coordinator::Item) -> Option<crate::serve::claims::StepKey> {
     if item.spec.kind != "asset" || item.group.is_some() {
         return None;
     }
@@ -542,7 +542,7 @@ impl WorkerPool {
     }
 
     /// The steps another run of the server finished while this run waited for them
-    /// ([`crate::claims`]), by display id, since the last call: cache hits for this run.
+    /// ([`crate::serve::claims`]), by display id, since the last call: cache hits for this run.
     pub fn take_from_other_runs(&mut self) -> Vec<String> {
         self.steps
             .as_mut()
@@ -1401,7 +1401,7 @@ impl WorkerPool {
         }
     }
 
-    /// Claim the asset steps of `batch` for this run ([`crate::claims`]) and return the ones
+    /// Claim the asset steps of `batch` for this run ([`crate::serve::claims`]) and return the ones
     /// to lease. A step another run is executing is kept out: it waits for that run's claim
     /// to end ([`IoEvent::Settled`]), leased to no worker.
     fn claim_batch(&mut self, coord: &Coordinator, batch: Vec<ItemId>) -> Vec<ItemId> {
@@ -1415,11 +1415,11 @@ impl WorkerPool {
                 continue;
             };
             match steps.shared.claim(&steps.run_id, &key) {
-                crate::claims::Claim::Mine => {
+                crate::serve::claims::Claim::Mine => {
                     steps.held.insert(key);
                     lease.push(item_id);
                 }
-                crate::claims::Claim::Theirs { owner, result } => {
+                crate::serve::claims::Claim::Theirs { owner, result } => {
                     if self.trace_on {
                         crate::errln!(
                             "[trace]  {:>8.1}ms  {} waits for run {owner}, which is computing it",
@@ -1429,7 +1429,7 @@ impl WorkerPool {
                     }
                     let tx = self.event_tx.clone();
                     let task = tokio::spawn(async move {
-                        let artifact = crate::claims::settled(result).await;
+                        let artifact = crate::serve::claims::settled(result).await;
                         let _ = tx.send(IoEvent::Settled { item_id, artifact }).await;
                     });
                     steps.awaiting.insert(item_id, task);
@@ -1467,7 +1467,7 @@ impl WorkerPool {
         if steps.held.is_empty() {
             return;
         }
-        let leased: std::collections::HashSet<crate::claims::StepKey> = self
+        let leased: std::collections::HashSet<crate::serve::claims::StepKey> = self
             .workers
             .values()
             .flat_map(|w| w.leases.iter().copied())
@@ -1551,7 +1551,7 @@ impl WorkerPool {
     /// Bring what this run holds of the shared capacity in line with what it runs: the weight
     /// of its leased steps (against the shared capacity) and the weight admitted for its head.
     /// Ended steps give their weight back here; a step resumed after its `parallel()` branches
-    /// takes its weight back here ([`crate::capacity::SharedCapacity::force`]).
+    /// takes its weight back here ([`crate::serve::capacity::SharedCapacity::force`]).
     fn sync_share(&mut self, coord: &Coordinator) {
         let Some(total) = self.share.as_ref().map(|s| s.capacity.total()) else {
             return;
