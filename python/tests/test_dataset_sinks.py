@@ -26,12 +26,13 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import duckdb
 import pytest
 
 from barca.api import _find_binary
 
 from . import emulators
+
+duckdb = pytest.importorskip("duckdb")
 
 WRITERS = ("pandas", "arrow", "polars", "polars_lazy", "duckdb")
 

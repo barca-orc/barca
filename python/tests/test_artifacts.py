@@ -2,8 +2,6 @@
 
 import datetime
 
-import pandas as pd
-import polars as pl
 import pytest
 
 from barca import _storage
@@ -15,6 +13,9 @@ from barca._artifacts import (
     safe_node_id,
     serialize,
 )
+
+pd = pytest.importorskip("pandas")
+pl = pytest.importorskip("polars")
 
 
 class _Point:
