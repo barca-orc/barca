@@ -521,11 +521,12 @@ async fn execute(
                 cancel: cancel.clone(),
                 event_tx: Some(event_tx),
                 options: RunOptions {
-                    server_owned: true,
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
-                    shared_capacity: state.capacity.clone(),
-                    shared_steps: Some(state.shared_steps.clone()),
+                    host: std::sync::Arc::new(barca_core::serve::ServeHost::new(
+                        state.capacity.clone(),
+                        state.shared_steps.clone(),
+                    )),
                     batch: barca_core::batch::BatchOverride::parse(&spec.batch).unwrap_or_default(),
                 },
                 partition: spec.partition.clone(),

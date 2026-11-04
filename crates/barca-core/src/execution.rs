@@ -127,16 +127,16 @@ fn sizing_with(
     }
 }
 
-/// [`sizing`] for a run with this configuration, under `shared` when `barca serve` shares a
-/// capacity between its runs.
+/// [`sizing`] for a run with this configuration, under the capacity its host shares between
+/// its runs, when `barca serve` shares one.
 pub(crate) fn sizing_for(
     cfg: &crate::config::ResolvedConfig,
-    shared: Option<&crate::serve::capacity::SharedCapacity>,
+    host: &dyn crate::run_host::RunHost,
 ) -> Sizing {
     sizing(
         cfg.capacity,
         cfg.pool_size,
-        shared.map(|s| (s.total() as usize, s.source())),
+        host.shared_capacity().map(|s| (s.total as usize, s.source)),
     )
 }
 
@@ -993,8 +993,7 @@ async fn start_workers(
         python: python.to_path_buf(),
         pool_size,
         capacity: prepared.capacity,
-        shared: request.options.shared_capacity.clone(),
-        shared_steps: request.options.shared_steps.clone(),
+        host: request.options.host.clone(),
         run_id: run_id.clone(),
         datadog: telemetry
             .iter()
@@ -2488,7 +2487,7 @@ async fn record_and_publish(
             cfg: session.request.cfg,
             interrupt: &session.request.interrupt,
             trigger: &session.request.options.trigger,
-            server_owned: session.request.options.server_owned,
+            server_owned: session.request.options.host.server_owned(),
         },
         |point| trace_point!(session.started.trace, "{point}"),
     )
@@ -2851,7 +2850,7 @@ async fn prepare_run(
             .join(",")
     });
 
-    let sizing = sizing_for(request.cfg, request.options.shared_capacity.as_deref());
+    let sizing = sizing_for(request.cfg, request.options.host.as_ref());
     let pool_size = sizing.pool_size;
     let config = ResourceConfig {
         pool_size,
@@ -2899,11 +2898,11 @@ async fn prepare_run(
         capacity,
         sizing.capacity_source,
     );
-    if let Some(shared) = &request.options.shared_capacity {
+    if let Some(shared) = request.options.host.shared_capacity() {
         warn_over_capacity(
             &planned_weights(&exec_plan),
-            shared.total() as usize,
-            shared.source(),
+            shared.total as usize,
+            shared.source,
         );
     }
 
@@ -3136,7 +3135,7 @@ pub(crate) async fn explain_dag_with_membership(
     let Planned { cone, pinned, .. } =
         pin_manual(dag, &mut targets, cfg, &policy, rules, file_args).await?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let pool_size = sizing_for(cfg, None).pool_size;
+    let pool_size = sizing_for(cfg, &crate::run_host::LocalHost).pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
@@ -3298,8 +3297,12 @@ pub(crate) async fn explain_dag_with_membership(
     for r in &mut steps {
         r.weight = weights.get(recover::base_of(&r.id)).copied();
     }
-    let capacity = sizing_for(cfg, None).capacity;
-    warn_over_capacity(&weights, capacity, sizing_for(cfg, None).capacity_source);
+    let capacity = sizing_for(cfg, &crate::run_host::LocalHost).capacity;
+    warn_over_capacity(
+        &weights,
+        capacity,
+        sizing_for(cfg, &crate::run_host::LocalHost).capacity_source,
+    );
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
         crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)

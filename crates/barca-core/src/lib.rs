@@ -57,6 +57,7 @@ mod recover;
 pub mod report;
 mod result_journal;
 pub mod results;
+pub mod run_host;
 pub mod run_logs;
 mod run_owner;
 pub mod schedule;
