@@ -75,7 +75,7 @@ uses an unbounded channel and run state retains per-key maps: current warm incre
 optimizations are not a bound on cold/full-domain execution.
 
 [Freshness state](../../crates/barca-core/src/freshness.rs), incremental proof saving and
-[database operations](../../crates/barca-core/src/db.rs) participate in current-state decisions.
+[database operations](../../crates/barca-core/src/db/mod.rs) participate in current-state decisions.
 [Observation](../../crates/barca-core/src/observation.rs) and
 [source observations](../../crates/barca-core/src/source_observation.rs) provide evidence;
 their hashes do not supply a monotonic reconciliation order. Result history, current
@@ -167,8 +167,10 @@ Build on #658 once its actual status is known. Preserve current behavior with ex
 [history reconciliation](../../python/tests/test_history_reconcile.py) and persistence coverage.
 
 Note, 2026-11-04 (#800, item 16): every write to the metadata database now goes through a
-named owner function, in `db.rs`, `db/` (one module per table family) or
-`persist/recording.rs`; callers keep their transactions, checks and error messages.
+named owner function, in `db/` (one module per table family) or
+`persist/recording.rs`; callers keep their transactions, checks and error messages. Item 18
+then split the rest of `db.rs` into the same `db/` families; `db/mod.rs` keeps the connection,
+lock and transaction helpers.
 `db/write_boundary_tests.rs` fails on an `INSERT`, `UPDATE`, `DELETE` or `REPLACE` literal in
 non-test code anywhere else in `barca-core` (`db_schema.rs` migrations and the read-only `sql/`
 aside). This is the boundary only: no write is ordered or guarded differently.

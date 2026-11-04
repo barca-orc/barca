@@ -27,7 +27,7 @@ crates/
     coordinator.rs            ready queue, dependencies, retries, parallel groups (no I/O)
     io_loop.rs, protocol.rs   worker pool, leased batches, length-prefixed JSON over a Unix socket
     cost.rs                   measured step cost and batch sizing
-    db.rs, config.rs          the metadata database; project root, barca.toml, environment, flags
+    db/, config.rs            the metadata database; project root, barca.toml, environment, flags
     run_owner.rs              conservative process-liveness evidence for interrupted runs
     transfer.rs, backup.rs    remote store: artifact transfer, and backups of the metadata DB
     store_sync.rs             a run's link to the store: upload results, fetch remote inputs, wait at the end

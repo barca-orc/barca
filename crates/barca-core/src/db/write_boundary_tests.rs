@@ -1,19 +1,13 @@
 //! The metadata write boundary (architecture-cleanup step 2b, #800 item 16): every
 //! `INSERT`/`UPDATE`/`DELETE`/`REPLACE` of `.barca/metadata.db` is issued by an owner in `db/`
-//! (or `db.rs`) or by the history recorder in `persist/recording.rs`. Everything else calls a
+//! or by the history recorder in `persist/recording.rs`. Everything else calls a
 //! named owner function and keeps its own transaction and eligibility rules. `db_schema.rs`
 //! (migrations) and `sql/` (read-only) are outside the rule, and so is test code.
 
 use std::path::{Path, PathBuf};
 
 /// Owners: a file here, or under a directory here, may write.
-const OWNERS: &[&str] = &[
-    "db.rs",
-    "db/",
-    "persist/recording.rs",
-    "db_schema.rs",
-    "sql/",
-];
+const OWNERS: &[&str] = &["db/", "persist/recording.rs", "db_schema.rs", "sql/"];
 
 /// Files that still write outside an owner, each with why.
 const ALLOWED: &[(&str, &str)] = &[];

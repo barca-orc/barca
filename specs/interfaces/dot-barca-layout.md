@@ -37,7 +37,7 @@ Everything else is shared by the project's environments.
 | Entry | Owner | What it is | Removed by | Evicted by `barca gc` | In the budget |
 | --- | --- | --- | --- | --- | --- |
 | `.gitignore` | Rust (`db::ensure_env_dirs`); Python (`_sql.py`) writes it too when it is missing | `*`, so git ignores `.barca/` | never | no | yes |
-| `metadata.db` | Rust (`db.rs`) | the local libSQL metadata database | the user (`barca state reset` moves it aside) | no | yes |
+| `metadata.db` | Rust (`db/`) | the local libSQL metadata database | the user (`barca state reset` moves it aside) | no | yes |
 | `metadata.db-wal` | Rust (libSQL) | the database's write-ahead log | libSQL; `barca state reset` | no | yes |
 | `metadata.db-shm` | Rust (libSQL) | the write-ahead log's shared-memory index | libSQL; `barca state reset` | no | yes |
 | `metadata.db.lock` | Rust (`db::acquire_file_lock`) | cross-process lock file, held while a process uses the DB | never (empty) | no | yes |
