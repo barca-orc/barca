@@ -4,7 +4,7 @@
 
 pub(crate) mod recording;
 pub(crate) use recording::record_post;
-use recording::{StepInsert, write_terminal_ledger};
+use recording::{StepInsert, advance_steps_executed, write_terminal_ledger};
 
 use crate::BarcaError;
 use crate::dag::Dag;
@@ -392,14 +392,13 @@ async fn record_steps_with_until(
             written += insert.run(row, run_id).await.map_err(failed)?;
         }
         drop(insert);
-        let updated = conn.execute(
-            "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
-            [written.to_string(), run_id.to_string()],
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to update progress count: {e}")))?;
+        let updated = advance_steps_executed(&conn, run_id, written)
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to update progress count: {e}")))?;
         if written > 0 && updated != 1 {
-            return Err(BarcaError::Db("cannot record new progress for a missing or finished run".to_string()));
+            return Err(BarcaError::Db(
+                "cannot record new progress for a missing or finished run".to_string(),
+            ));
         }
         Ok(written)
     })
@@ -655,31 +654,12 @@ async fn upsert_cost_estimates(
     if snapshot.is_empty() {
         return;
     }
-    let Ok(mut upsert) = db::prepare(
-        conn,
-        "INSERT INTO cost_estimates (node_id, base_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
-         ON CONFLICT(node_id) DO UPDATE SET
-             estimate_seconds = ?3, cpu_seconds = ?4, max_rss_bytes = ?5,
-             samples = ?6, updated_at = datetime('now')",
-    )
-    .await
-    else {
+    let Ok(mut upsert) = db::cost_estimates::UpsertEstimate::prepare(conn).await else {
         return;
     };
     for (node_id, est) in snapshot {
         let base = crate::StepId::parse(node_id).base_id().to_string();
-        upsert
-            .execute([
-                node_id.clone(),
-                base,
-                est.estimate_seconds.to_string(),
-                est.cpu_seconds.to_string(),
-                est.max_rss_bytes.to_string(),
-                est.samples.to_string(),
-            ])
-            .await
-            .ok();
+        upsert.run(node_id, &base, est).await.ok();
     }
 }
 

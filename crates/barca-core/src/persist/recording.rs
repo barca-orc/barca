@@ -48,6 +48,20 @@ impl StepInsert {
     }
 }
 
+/// Count `written` more executed steps of `run_id`, while it is running. Rows updated: 1, or 0
+/// for a missing or finished run. Inside the caller's progress transaction.
+pub(super) async fn advance_steps_executed(
+    conn: &libsql::Connection,
+    run_id: &str,
+    written: u64,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
+        [written.to_string(), run_id.to_string()],
+    )
+    .await
+}
+
 /// The steps of `run_id` already recorded, by node id and run hash: an earlier attempt of a
 /// requeued run may have recorded a node under a run hash this attempt no longer computes.
 async fn steps_of_run(

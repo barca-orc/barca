@@ -16,7 +16,7 @@ const OWNERS: &[&str] = &[
 ];
 
 /// Files that still write outside an owner, each with why.
-const ALLOWED: &[(&str, &str)] = &[("persist.rs", "moving to an owner")];
+const ALLOWED: &[(&str, &str)] = &[];
 
 #[derive(Debug, PartialEq)]
 enum Tok {

@@ -31,6 +31,7 @@ use tokio::sync::{Mutex, MutexGuard};
 /// a persistent connection.
 static DB_LOCK: Mutex<()> = Mutex::const_new(());
 
+pub(crate) mod cost_estimates;
 pub(crate) mod freshness_proofs;
 pub(crate) mod ledger_posts;
 pub(crate) mod materializations;
