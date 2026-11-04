@@ -31,6 +31,9 @@ use tokio::sync::{Mutex, MutexGuard};
 /// a persistent connection.
 static DB_LOCK: Mutex<()> = Mutex::const_new(());
 
+#[cfg(test)]
+mod write_boundary_tests;
+
 /// Prepare `sql` once for a loop that runs it per row. The driver parses and plans the SQL of every
 /// `Connection::execute` again, which dominated recording thousands of rows (#460); a prepared
 /// statement is parsed once and rebound for each row. Every per-row write statement goes
