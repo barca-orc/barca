@@ -1,4 +1,5 @@
-//! Per-database admission, separate from the database's short write lock.
+//! The routine backup cadence: how often a routine backup is due, how long `barca serve`
+//! gives one, and per-database admission, separate from the database's short write lock.
 use crate::{BarcaError, config::ResolvedConfig, helper_proc::Until};
 use std::{
     collections::HashMap,
@@ -6,6 +7,19 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
+
+/// How often routine backups are due (`[remote] backup_interval`, `BARCA_BACKUP_INTERVAL`);
+/// `None` when they are off. Final backups are taken either way.
+pub fn interval(cfg: &ResolvedConfig) -> Option<Duration> {
+    cfg.backup_interval.0
+}
+
+/// How long one of `barca serve`'s routine backups may take, upload included, and the most
+/// its last one, at shutdown, is given.
+pub const BUDGET: Duration = Duration::from_secs(30);
+
+/// How long `barca serve` waits for its last backup beyond that backup's own budget.
+pub const SLACK: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -71,7 +85,7 @@ pub async fn admit(
     until: Until<'_>,
 ) -> Result<Option<Admission>, BarcaError> {
     until.check()?;
-    if request == Request::Routine && cfg.backup_interval.0.is_none() {
+    if request == Request::Routine && interval(cfg).is_none() {
         return Ok(None);
     }
     let dir = cfg.local_backup_dir();
@@ -127,7 +141,7 @@ pub async fn admit(
         .unwrap_or_else(|e| e.into_inner());
     if let (Request::Routine, Some(interval), Some(stamp)) = (
         request,
-        cfg.backup_interval.0,
+        interval(cfg),
         std::fs::read_to_string(&path)
             .ok()
             .and_then(|s| s.parse::<u128>().ok()),
@@ -148,9 +162,9 @@ pub async fn admit(
         key,
         Evidence {
             stamp: wall,
-            interval: cfg.backup_interval.0.unwrap_or_default(),
+            interval: interval(cfg).unwrap_or_default(),
             observed: now,
-            remaining: cfg.backup_interval.0.unwrap_or_default(),
+            remaining: interval(cfg).unwrap_or_default(),
         },
     );
     Ok(Some(guard))

@@ -206,7 +206,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         false,
     );
     let backup_task = backups.map(|(python, resolved)| {
-        tokio::spawn(backup_every_minute(
+        tokio::spawn(routine_backups(
             python,
             resolved,
             backup_stop.clone(),
@@ -318,7 +318,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     let stopped = lifecycle.await;
     backup_stop.cancel();
     if let Some(task) = backup_task {
-        let _ = tokio::time::timeout(stop.backup + BACKUP_SLACK, task).await;
+        let _ = tokio::time::timeout(stop.backup + barca_core::backup::SLACK, task).await;
     }
     if let Some(telemetry) = telemetry.as_mut() {
         telemetry.finish().await;
@@ -417,33 +417,32 @@ async fn cache_checkpoint(state: AppState) {
     }
 }
 
-/// How often `barca serve` backs its metadata DB up, when it changed (RFC-0009).
-const BACKUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// How long one of those backups may take, upload included.
-const BACKUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Back the database up every [`BACKUP_INTERVAL`] until `stopping`, then once more.
-/// A copy identical to the newest one is not taken. Three failures in a row are reported once,
-/// until a backup succeeds again.
-async fn backup_every_minute(
+/// Back the database up every [`barca_core::backup::interval`] (RFC-0009; none when it is
+/// off) until `stopping`, then once more. Each routine backup gets
+/// [`barca_core::backup::BUDGET`]. A copy identical to the newest one is not taken. Three
+/// failures in a row are reported once, until a backup succeeds again.
+async fn routine_backups(
     python: std::path::PathBuf,
     cfg: barca_core::config::ResolvedConfig,
     stopping: barca_core::CancellationToken,
     last_budget: std::time::Duration,
 ) {
-    let mut tick = tokio::time::interval_at(
-        tokio::time::Instant::now() + cfg.backup_interval.0.unwrap_or(BACKUP_INTERVAL),
-        cfg.backup_interval.0.unwrap_or(BACKUP_INTERVAL),
-    );
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut tick = barca_core::backup::interval(&cfg).map(|every| {
+        let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tick
+    });
     let mut failures = 0u32;
     loop {
         let last = tokio::select! {
-            _ = tick.tick(), if cfg.backup_interval.0.is_some() => false,
+            _ = async { tick.as_mut().expect("guarded").tick().await }, if tick.is_some() => false,
             _ = stopping.cancelled() => true,
         };
-        let budget = if last { last_budget } else { BACKUP_BUDGET };
+        let budget = if last {
+            last_budget
+        } else {
+            barca_core::backup::BUDGET
+        };
         let until = barca_core::helper_proc::Until {
             cancel: None,
             deadline: Some(std::time::Instant::now() + budget),
@@ -489,9 +488,6 @@ async fn backup_every_minute(
     }
 }
 
-/// How long the backup taken at shutdown is waited for beyond its own budget.
-const BACKUP_SLACK: std::time::Duration = std::time::Duration::from_secs(1);
-
 /// What a stopping server may take after its drain: the time it gives the runs it stops to
 /// terminate their workers and record themselves, open connections to finish, the last
 /// metadata backup (with a store) and the telemetry flush (with telemetry). The supervisor's
@@ -525,7 +521,7 @@ impl StopBudget {
         } else {
             Duration::from_secs(1)
         };
-        let backup = drain.clamp(Duration::from_secs(5), Duration::from_secs(30));
+        let backup = drain.clamp(Duration::from_secs(5), barca_core::backup::BUDGET);
         Self {
             drain,
             runs,
@@ -540,7 +536,7 @@ impl StopBudget {
     pub fn after_drain_secs(&self) -> u64 {
         let mut total = self.runs + self.connections;
         if self.with_backup {
-            total += self.backup + BACKUP_SLACK;
+            total += self.backup + barca_core::backup::SLACK;
         }
         if let Some(t) = self.telemetry {
             total += t;
