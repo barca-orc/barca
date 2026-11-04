@@ -30,7 +30,7 @@ shipping as 0.39.5) sets this order. It adds no commands, flags, keys, routes, d
 or UI features; #800 has the detail of each item.
 
 1. **Correctness:** #799, a refresh cascade that left stale partition caches, is fixed with a test, or its workaround is documented and the issue stays open (#804).
-2. **Measure before deciding:** benchmark 0.39.4, attribute the trivial run's time, price the 0.35.3 partition sort, gate performance in the merge tier and put the measured number in the README (#810).
+2. **Measure before deciding:** benchmark 0.39.4, attribute the trivial run's time, price the 0.35.3 partition sort, gate performance in the merge tier and put the measured number in the README (#810: a trivial run takes 31.7 ms on the 0.39.4 wheel, against 26.3 ms at 0.1.5 and 60.3 ms at 0.28.0).
 3. **Make the documents true:** this file, the #796 decision, one alias lifetime, `contract.md` hygiene, the experimental graduation list, an environment-variable contract test, the static-read claim, `specs/README.md` and the milestones (#803).
 4. **Structure, in dependency order:** one `CacheState` enum (#802), one metadata write boundary, serve out of the embedded hot loop, `db.rs` split by table family, one graph cache and one backup-cadence authority, the Python dedupe and `.barca/` layout spec (#805).
 5. **Tests and CI:** per-test timeouts, Playwright and type drift in CI, the simulation's `--strict-reads` failure, optional imports that skip (#806), isolated backup tests (#809), Dependabot at zero critical and high (#808).
@@ -111,7 +111,7 @@ Settled by what shipped, and documented in the manual: drain defaults (#190: `--
 ## Decided, November 2026
 
 **The 0.39 cleanup (2026-11-04, #800).** The cleanup weeks after 0.36, 0.37, 0.38 and 0.39 were
-skipped: four minors and nine patches shipped in five days with no checklist pass. 0.39.5 is the
+skipped: four minors and six patches shipped in five days with no checklist pass. 0.39.5 is the
 catch-up, one cleanup release for all four, following the checklist under "Cleanup releases".
 
 **Shared in-flight steps (#796, 0.39.4).** Kept on under `serve` and experimental: two runs of
@@ -124,7 +124,7 @@ surface and belongs to a minor.
 **The UI.** The UI is a vocabulary-faithful view of the ledger. It uses the CLI's state words
 (`cached`, `stale`, `unsynced`, `blocked`, `never_run`, `partial`, `always_runs`, `unknown`)
 and no others, maps each state once from the shared `CacheState` enum via generated types, and
-shows exactly what `barca status --json` shows. Client-side muting is removed. The current UI
+shows exactly what `barca status --json` shows, with client-side muting removed. The current UI
 does not meet this, so the redesign is scoped after 0.39.5; #807 tracks the stale Playwright
 specs.
 
