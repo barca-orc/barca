@@ -652,7 +652,8 @@ fn every_experimental_key_names_a_real_command_or_argument() {
     for (key, why) in EXPERIMENTAL.iter().chain(DEPRECATED) {
         assert!(!why.is_empty(), "`{key}` needs a reason");
         assert!(
-            !(EXPERIMENTAL.iter().any(|(k, _)| k == key) && DEPRECATED.iter().any(|(k, _)| k == key)),
+            !(EXPERIMENTAL.iter().any(|(k, _)| k == key)
+                && DEPRECATED.iter().any(|(k, _)| k == key)),
             "`{key}` is both experimental and deprecated"
         );
         let (cmd, arg) = key.split_once(' ').unwrap_or((key, ""));
