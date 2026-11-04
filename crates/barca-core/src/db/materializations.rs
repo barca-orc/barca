@@ -60,3 +60,16 @@ pub(crate) async fn set_upload_digest(
     )
     .await
 }
+
+/// Mark the successful rows at `artifact_path` evicted, now.
+pub(crate) async fn mark_evicted(
+    conn: &Connection,
+    artifact_path: &str,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "UPDATE materializations SET evicted_at = datetime('now') \
+         WHERE artifact_path = ?1 AND status = 'success'",
+        [artifact_path],
+    )
+    .await
+}
