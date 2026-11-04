@@ -46,3 +46,18 @@ def test_large_removed_key_sets_use_full_validation_instead_of_large_frames(tmp_
     observed = observe({}, old)
     assert observed["count"] == 0
     assert "previous_hash" not in observed
+
+
+def test_negative_zero_differs_from_zero_in_every_json_comparison():
+    """One `same()` (barca._wire) for both callers: a partition source edit from 0.0 to -0.0 is
+    a changed key, and a compact table never hoists 0.0 over a row's -0.0 (which would
+    change that row's value)."""
+    import math
+
+    from barca._wire import decode_table, encode_table, same
+
+    assert same(0.0, 0.0) and same(-0.0, -0.0)
+    assert not same(0.0, -0.0) and not same({"a": [0.0]}, {"a": [-0.0]})
+    assert not same(0, 0.0) and not same(1, True)
+    rows = decode_table(encode_table([{"x": 0.0, "y": 1}, {"x": -0.0, "y": 1}]))
+    assert [math.copysign(1, row["x"]) for row in rows] == [1, -1]
