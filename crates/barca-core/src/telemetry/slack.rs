@@ -94,10 +94,8 @@ impl Slack {
         };
         // Test hooks, not part of the contract: a fake webhook speaks plain HTTP, and the
         // reminder is due sooner.
-        let allow_http = env_var("BARCA_TEST_SLACK_ALLOW_HTTP").is_some();
-        let remind_after = env_var("BARCA_TEST_SLACK_REMIND_SECS")
-            .and_then(|s| s.parse::<u64>().ok())
-            .map_or(REMIND_AFTER, Duration::from_secs);
+        let allow_http = crate::test_hooks::slack_allow_http();
+        let remind_after = crate::test_hooks::slack_remind_after().unwrap_or(REMIND_AFTER);
         if !webhook_ok(&webhook, allow_http) {
             return Err(format!("{WEBHOOK_VAR} is not an https:// URL"));
         }

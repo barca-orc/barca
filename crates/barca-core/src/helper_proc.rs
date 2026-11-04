@@ -436,7 +436,7 @@ mod tests {
     /// supply the options, and config tests mutating environment variables cannot race this.
     #[tokio::test]
     async fn toml_storage_options_reach_python_helpers_and_workers() {
-        const PROBE: &str = "BARCA_TEST_HELPER_OPTIONS_PROBE";
+        const PROBE: &str = crate::test_hooks::HELPER_OPTIONS_PROBE;
         if std::env::var_os(PROBE).is_none() {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap());
             child
