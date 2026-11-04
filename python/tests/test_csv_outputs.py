@@ -12,11 +12,12 @@ from barca._artifacts import deserialize, serialize_hashed
 from barca._worker import _write_sinks
 from barca.api import _find_binary
 
+from .daemon_steps import run_steps
+
 duckdb = pytest.importorskip("duckdb")
 pd = pytest.importorskip("pandas")
 pl = pytest.importorskip("polars")
 pa = pytest.importorskip("pyarrow")
-from .daemon_steps import run_steps
 
 
 @pytest.mark.parametrize("writer", ["pandas", "polars", "polars_lazy", "pyarrow", "duckdb"])
