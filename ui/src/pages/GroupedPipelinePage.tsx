@@ -42,6 +42,11 @@ import { healthCounts } from '@/lib/health'
 import { FailuresView } from './FailuresView'
 import { GroupedTable, GroupPanel, LineagePicker } from './GroupedView'
 
+/** The hash route's query, as it is now (`#/assets?pipeline=…`). */
+function currentParams(): URLSearchParams {
+  return new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+}
+
 /**
  * A pipeline (or every pipeline) by its groups: the open level as a table or a graph, the
  * failures in scope, and the selected group's or node's panel. This component only fetches,
@@ -127,9 +132,11 @@ export function GroupedPipelinePage() {
   // How many nodes in view a run is working on now, whoever started it.
   const runningHere = runningCount(scopeIds, byId, live)
 
-  // Against the URL as it is when the change lands, not the render's copy: a navigation is a
-  // transition, and a keystroke right after a click would otherwise write the click's URL back.
-  const update = (changes: ParamChanges) => setParams((current) => applyChanges(current, changes), { replace: true })
+  // Against the URL as it is when the change lands, never the render's copy: a navigation is a
+  // transition, and a keystroke right after a click (a search typed after going up a level)
+  // would otherwise write the click's URL back. react-router's functional form reads the render's
+  // params too, so the hash itself is read.
+  const update = (changes: ParamChanges) => setParams(applyChanges(currentParams(), changes), { replace: true })
   const select = (id: string | null) => update(selectChanges(graph, id))
   const openGroup = (id: string | null) => update(openGroupChanges(id, sole))
   const revealNode = (id: string) => update(revealChanges(id, tree, graph))
