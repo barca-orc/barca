@@ -27,7 +27,7 @@ tempfile = "3"
 sha2 = "0.10"
 chrono = { version = "0.4.45", features = ["serde"] }
 chrono-tz = "0.10.4"
-croner = "3.0.1"
+croner = "4.0.2"
 futures = "0.3"
 libc = "0.2"
 tokio-util = "0.7"
