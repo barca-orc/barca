@@ -49,7 +49,7 @@ pub enum Freshness {
 
 impl Freshness {
     /// Default freshness for a given node kind.
-    pub fn default_for(kind: NodeKind) -> Self {
+    pub(crate) fn default_for(kind: NodeKind) -> Self {
         match kind {
             NodeKind::Asset | NodeKind::Task => Freshness::Always,
             NodeKind::Sensor => Freshness::Manual,
@@ -156,7 +156,7 @@ impl PartitionKey {
     }
 
     /// Format as `"base[k1=v1,k2=v2]"` or just `"base"` if empty.
-    pub fn display_id(&self, base: &str) -> String {
+    pub(crate) fn display_id(&self, base: &str) -> String {
         if self.0.is_empty() {
             base.to_string()
         } else {
@@ -167,7 +167,7 @@ impl PartitionKey {
     /// Parse a node_id string into (base, PartitionKey).
     /// `"test.py:foo[region=us,tier=1]"` → `("test.py:foo", PartitionKey({region: "us", tier: "1"}))`
     /// `"test.py:foo"` → `("test.py:foo", PartitionKey({}))`
-    pub fn parse_from_id(id: &str) -> (&str, PartitionKey) {
+    pub(crate) fn parse_from_id(id: &str) -> (&str, PartitionKey) {
         if let Some(bracket) = id.find('[') {
             let base = &id[..bracket];
             let inner = id[bracket + 1..].trim_end_matches(']');
@@ -238,7 +238,7 @@ impl StepId {
         }
     }
 
-    pub fn unpartitioned(base: impl Into<Arc<str>>) -> Self {
+    pub(crate) fn unpartitioned(base: impl Into<Arc<str>>) -> Self {
         Self {
             base: base.into(),
             partition: PartitionKey::empty(),
@@ -300,7 +300,7 @@ impl ValueType {
     }
 
     /// True for types whose reader fetches only what the step's query uses.
-    pub fn is_lazy(self) -> bool {
+    pub(crate) fn is_lazy(self) -> bool {
         matches!(
             self,
             ValueType::PolarsLazy | ValueType::DuckDB | ValueType::PyArrowDataset
@@ -370,7 +370,7 @@ pub struct SinkDecl {
 
 impl SinkDecl {
     /// A path ending in `/` is a dataset prefix, written as a Hive-partitioned dataset.
-    pub fn is_dataset(&self) -> bool {
+    pub(crate) fn is_dataset(&self) -> bool {
         self.path.ends_with('/')
     }
 }
@@ -619,7 +619,7 @@ impl DagNode {
     pub fn function_name(&self) -> &str {
         &self.extracted.function_name
     }
-    pub fn source_file(&self) -> &str {
+    pub(crate) fn source_file(&self) -> &str {
         &self.extracted.source_file
     }
 }

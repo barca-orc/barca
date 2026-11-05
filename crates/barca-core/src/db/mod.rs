@@ -14,12 +14,23 @@ use crate::BarcaError;
 use libsql::Builder;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{Mutex, MutexGuard};
 
+/// The index hint every lookup of a node's materializations by run hash carries: Turso
+/// otherwise intersects the node and run indexes, scanning the run for each partition. A macro
+/// so it concatenates into SQL literals (`concat!`); [`BY_NODE_RUN`] is the same text for
+/// `format!`.
+macro_rules! by_node_run {
+    () => {
+        "INDEXED BY idx_mat_node_run"
+    };
+}
+pub(crate) const BY_NODE_RUN: &str = by_node_run!();
+
 // The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
-// this directory (one file per table family) or `persist/recording.rs`.
+// this directory (one file per table family); `persist/recording.rs` drives the recording ones.
 mod cache_reader;
 pub(crate) mod cost_estimates;
 pub(crate) mod freshness_proofs;
@@ -34,7 +45,7 @@ pub(crate) mod run_queue;
 mod run_steps;
 pub(crate) mod runs;
 mod schedule;
-mod schema;
+pub(crate) mod schema;
 pub(crate) mod sink_publications;
 mod snapshots;
 mod stats;
@@ -44,43 +55,48 @@ mod write_boundary_tests;
 
 // Every family's items keep their `db::X` path. The private `use`s are `pub(super)` helpers one
 // family calls in another; each family file starts with `use super::*`.
-pub use cache_reader::CacheReader;
+pub(crate) use cache_reader::CacheReader;
 pub(crate) use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;
-pub use cost_estimates::{load_cost_estimates, upsert_cost_estimates};
+#[cfg(test)]
+pub(crate) use history::MaterializationRecord;
 pub(crate) use history::changed_bytes_in_run;
 use history::query_i64;
-pub use history::{
-    BytesChange, MaterializationRecord, NodeAge, NodeHistory, RunTotals, node_ages, node_histories,
-};
-pub use logs::{LogEntry, get_logs, insert_logs};
+pub use history::{BytesChange, NodeAge, RunTotals, node_ages};
+pub(crate) use history::{NodeHistory, node_histories};
+pub use logs::insert_logs;
+pub use logs::{LogEntry, get_logs};
+pub(crate) use materializations::last_output_hashes;
+pub use materializations::persist_outputs;
 use materializations::record_definitions;
 pub(crate) use materializations::{
     adopt_store_digests, confirmed_object, evicted_among, evicted_paths, key_range,
     last_success_components, latest_success, latest_success_id, partition_artifacts_for_config,
     touch_read, touch_read_in, touch_read_on,
 };
-pub use materializations::{
-    last_output_hashes, max_materialization_id, persist_output_refs, persist_outputs,
-    succeeded_since,
-};
-pub use partition_keys::{
-    FailedKeys, PartitionErrorGroup, PartitionKeyRow, PartitionKeys, PartitionKeysFilter,
-    failed_partition_keys, partition_keys,
-};
-pub use run_liveness::{AliveRun, alive_running_runs, alive_running_runs_in, local_host};
+pub use materializations::{max_materialization_id, succeeded_since};
+pub(crate) use partition_keys::FailedKeys;
+pub(crate) use partition_keys::failed_partition_keys;
+pub use partition_keys::{PartitionKeys, PartitionKeysFilter, partition_keys};
+pub(crate) use run_liveness::local_host;
+pub use run_liveness::{AliveRun, alive_running_runs, alive_running_runs_in};
 use run_liveness::{interrupted_runs, mark_interrupted_runs};
 pub(crate) use run_liveness::{live_runs, pid_alive, runs_alive_here};
+pub(crate) use run_steps::get_run_steps;
+#[cfg(test)]
+pub(crate) use run_steps::worker_exit;
 pub use run_steps::{
-    OUTPUT_TAIL_LINES, RUN_STEPS_LIMIT, RunNodeSummary, RunStep, StepRow, StepsPage, get_run_steps,
-    get_run_steps_page, planned_run_nodes, read_step_rows, run_node_summaries, worker_exit,
+    RUN_STEPS_LIMIT, RunStep, StepRow, StepsPage, get_run_steps_page, planned_run_nodes,
+    read_step_rows, run_node_summaries,
 };
+#[cfg(test)]
+pub(crate) use runs::create_run_with;
 pub use runs::{
-    NewRun, RunFailure, RunRecord, StartedRun, count_runs, create_run, create_run_with,
-    decode_files, encode_files, finish_run, generate_run_id, get_recent_runs, get_run,
-    get_run_outcome, reconcile_run, record_unstarted_run, replace_run_outcome, run_artifact,
-    set_run_outcome, split_exception, start_run,
+    NewRun, RunRecord, count_runs, create_run, encode_files, finish_run, generate_run_id,
+    get_recent_runs, get_run, get_run_outcome, reconcile_run, record_unstarted_run,
+    replace_run_outcome, run_artifact, set_run_outcome,
 };
+pub(crate) use runs::{RunFailure, StartedRun, split_exception, start_run};
 pub use schedule::{
     ScheduleFailures, SchedulePause, get_schedule_failures, get_schedule_pauses,
     get_schedule_state, set_schedule_failures, set_schedule_pause, upsert_schedule_state,
@@ -90,10 +106,7 @@ pub use schema::{init_db, init_db_as, probe_metadata};
 pub(crate) use schema::{init_locked, init_schema};
 pub(crate) use snapshots::copy_for_backup;
 pub use snapshots::{DbSnapshot, ReadView};
-pub use stats::{
-    AssetRunEntry, AssetStats, get_asset_stats, get_avg_elapsed, get_avg_elapsed_for_partitioned,
-    recent_durations,
-};
+pub use stats::{AssetRunEntry, AssetStats, get_asset_stats, recent_durations};
 use stats::{IN_LIST_CHUNK, KEY_ROWS, avg_elapsed_on, partitioned_avg_elapsed_on};
 
 /// Process-wide serialization of `metadata.db` operations. The server can run
@@ -236,51 +249,14 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
     // index, and a reader that comes then waits for it instead of failing.
     wait_when_busy(&conn)?;
     let _ = conn.execute("PRAGMA cache_size = -32768", ()).await;
-    crate::db_schema::check(&conn)
+    crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
 }
 
-/// Local filesystem locations for one environment.
-#[derive(Debug, Clone)]
-pub struct LocalPaths {
-    pub db_path: String,
-    pub artifact_dir: String,
-}
-
-/// Path derivation for an environment, with no filesystem side effects.
-/// The default env keeps the legacy layout so existing projects need no
-/// migration; named envs live under `.barca/envs/<name>/`.
-pub fn env_local_paths(env: &str) -> LocalPaths {
-    let base = if env == crate::config::DEFAULT_ENV {
-        PathBuf::from(".barca")
-    } else {
-        PathBuf::from(".barca").join("envs").join(env)
-    };
-    LocalPaths {
-        db_path: base.join("metadata.db").to_string_lossy().to_string(),
-        artifact_dir: base.join("artifacts").to_string_lossy().to_string(),
-    }
-}
-
-/// Create the `.barca` tree for an environment and return its paths.
-pub fn ensure_env_dirs(env: &str) -> Result<LocalPaths, BarcaError> {
-    let paths = env_local_paths(env);
-    let db_dir = Path::new(&paths.db_path)
-        .parent()
-        .expect("db path has a parent")
-        .to_path_buf();
-    fs::create_dir_all(&db_dir)
-        .map_err(|e| BarcaError::Db(format!("failed to create {}: {e}", db_dir.display())))?;
-    fs::create_dir_all(&paths.artifact_dir)
-        .map_err(|e| BarcaError::Db(format!("failed to create artifacts dir: {e}")))?;
-    let gitignore = PathBuf::from(".barca").join(".gitignore");
-    if !gitignore.exists() {
-        let _ = fs::write(&gitignore, "*\n");
-    }
-    Ok(paths)
-}
+// barca-server names these as `db::` paths; the `.barca/` layout is `crate::layout`'s.
+pub use crate::layout::{ensure_env_dirs, env_local_paths};
 
 /// How long one barca process waits for another's DB operation before giving up.
 /// Operations are brief (a few queries), so hitting this means a stuck process.
@@ -323,12 +299,8 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
             )));
         }
         // Back off with a little jitter so waiters don't wake in lockstep.
-        let jitter = Duration::from_micros(u64::from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() % 2000)
-                .unwrap_or(0),
-        ));
+        let jitter =
+            Duration::from_micros((crate::time::unix_nanos(SystemTime::now()) % 2000) as u64);
         tokio::time::sleep(delay + jitter).await;
         delay = (delay * 2).min(Duration::from_millis(40));
     }
@@ -404,23 +376,6 @@ pub(crate) fn held_file(path: &Path) -> std::io::Result<std::sync::Arc<fs::File>
     let file = std::sync::Arc::new(file);
     held.insert(key, file.clone());
     Ok(file)
-}
-
-/// The SHA-256 of the file at `path`, as lowercase hex.
-pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 16];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Checkpoint the database at `db_path` and verify that its main file is now the whole
@@ -556,7 +511,7 @@ async fn connect_read_only(
         .map_err(db_open_error)?;
     let conn = db.connect().map_err(db_open_error)?;
     wait_when_busy(&conn)?;
-    crate::db_schema::check(&conn)
+    crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
@@ -589,7 +544,7 @@ async fn connect_write(path: &str) -> Result<(libsql::Database, libsql::Connecti
     // A checkpoint hands back the log file past this size. It otherwise stays at the size the
     // largest transaction left it.
     let _ = conn.query("PRAGMA journal_size_limit = 67108864", ()).await;
-    crate::db_schema::check(&conn)
+    crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
@@ -898,8 +853,8 @@ mod tests {
 #[cfg(test)]
 mod fold_log_tests {
     use super::{
-        acquire_file_lock, connect, copy_for_backup, create_run, file_sha256, fold_log, init_db,
-        lock_db, wal_is_clean,
+        acquire_file_lock, connect, copy_for_backup, create_run, fold_log, init_db, lock_db,
+        wal_is_clean,
     };
     use crate::db::snapshots::pin_main_file;
     use libsql::Builder;
@@ -991,7 +946,7 @@ mod fold_log_tests {
             .unwrap()
             .unwrap();
         writer.await.unwrap();
-        assert_eq!(file_sha256(&copy).unwrap(), digest);
+        assert_eq!(crate::hash::file_sha256(&copy).unwrap(), digest);
         let copied = open_and_count(&copy.display().to_string(), "runs").await;
         assert!((2000..=2200).contains(&copied), "{copied}");
         assert_eq!(open_and_count(&path, "runs").await, 2200);

@@ -31,13 +31,6 @@ pub enum Tier {
 }
 
 impl Tier {
-    pub const ALL: [Tier; 4] = [
-        Tier::Leftovers,
-        Tier::Superseded,
-        Tier::StoreHeld,
-        Tier::Current,
-    ];
-
     /// The tier's name in JSON (`leftovers`, `superseded`, `store_held`, `current`).
     pub fn code(self) -> &'static str {
         match self {

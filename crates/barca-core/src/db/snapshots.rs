@@ -64,14 +64,14 @@ impl Drop for ReadView {
 /// Whether the database behind `conn` is read as it is: this release's format with nothing
 /// to add, in WAL mode.
 async fn view_usable(conn: &libsql::Connection) -> bool {
-    if !matches!(crate::db_schema::read_version(conn).await, Ok(v) if v == crate::db_schema::VERSION)
+    if !matches!(crate::db::schema::ddl::read_version(conn).await, Ok(v) if v == crate::db::schema::ddl::VERSION)
     {
         return false;
     }
     let Ok(schema) = crate::state_validate::Schema::read(conn).await else {
         return false;
     };
-    if crate::db_schema::additions_missing_in(&schema) {
+    if crate::db::schema::ddl::additions_missing_in(&schema) {
         return false;
     }
     let Ok(mut rows) = conn.query("PRAGMA journal_mode", ()).await else {

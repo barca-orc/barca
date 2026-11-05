@@ -9,7 +9,7 @@ use crate::dispatch::OutputRef;
 /// and drop it before any step runs: another barca process can then use the DB while
 /// this run executes Python. (Fields drop in order: connection, database + file lock,
 /// then the in-process guard.)
-pub struct CacheReader {
+pub(crate) struct CacheReader {
     /// The statement of a one-key cache lookup, compiled on first use and kept for the
     /// reader's life ([`crate::cache::lookup_cached`]): compiling it cost more than the lookup.
     lookup: tokio::sync::Mutex<Option<libsql::Statement>>,
@@ -65,7 +65,7 @@ impl CacheReader {
             .is_none_or(|root| crate::config::local_artifact(path, root))
     }
 
-    pub fn conn(&self) -> &libsql::Connection {
+    pub(crate) fn conn(&self) -> &libsql::Connection {
         &self.conn
     }
 
@@ -116,12 +116,15 @@ impl CacheReader {
             return None;
         }
         const CHUNK: usize = 4096;
-        const SQL: &str = "SELECT k.key, m.artifact_path, m.artifact_format, \
+        const SQL: &str = concat!(
+            "SELECT k.key, m.artifact_path, m.artifact_format, \
              m.artifact_size_bytes, m.output_hash FROM json_each(?1) AS k \
-             JOIN materializations m INDEXED BY idx_mat_node_run \
-             ON m.node_id = json_extract(k.value, '$[0]') \
+             JOIN materializations m ",
+            by_node_run!(),
+            " ON m.node_id = json_extract(k.value, '$[0]') \
              AND m.run_hash = json_extract(k.value, '$[1]') \
-             WHERE m.status = 'success' ORDER BY k.key, m.id DESC";
+             WHERE m.status = 'success' ORDER BY k.key, m.id DESC"
+        );
         let mut out: Vec<Option<OutputRef>> = Vec::with_capacity(keys.len());
         for chunk in keys.chunks(CHUNK) {
             let pairs = serde_json::to_string(chunk).ok()?;

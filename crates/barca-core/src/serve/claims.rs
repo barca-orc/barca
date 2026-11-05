@@ -24,7 +24,7 @@ use std::sync::Mutex;
 
 use tokio::sync::watch;
 
-pub use crate::run_host::StepKey;
+pub(crate) use crate::run_host::StepKey;
 
 /// The asset steps the runs of one server are executing now.
 #[derive(Debug, Default)]
@@ -42,7 +42,7 @@ struct Held {
 
 /// The outcome of [`SharedSteps::claim`].
 #[derive(Debug)]
-pub enum Claim {
+pub(crate) enum Claim {
     /// The step is this run's to execute.
     Mine,
     /// Another run is executing it: wait with [`settled`].
@@ -58,7 +58,7 @@ impl SharedSteps {
     }
 
     /// Claim `key` for `run_id`. A claim `run_id` already holds is its own again.
-    pub fn claim(&self, run_id: &str, key: &StepKey) -> Claim {
+    pub(crate) fn claim(&self, run_id: &str, key: &StepKey) -> Claim {
         let mut inner = self.inner.lock().unwrap();
         match inner.get(key) {
             Some(held) if held.owner != run_id => Claim::Theirs {

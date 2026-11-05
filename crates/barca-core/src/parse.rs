@@ -70,7 +70,7 @@ fn syntax_message(source: &str, error: &ruff_python_parser::ParseError) -> Strin
 
 /// Where a file stops parsing, and why: `line 12, column 18: Expected ':', found newline`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SyntaxProblem {
+pub(crate) struct SyntaxProblem {
     /// 1-based.
     pub line: usize,
     /// 1-based, in characters.
@@ -102,7 +102,7 @@ impl SyntaxProblem {
     }
 
     /// The line, and a caret under the column: what an editor would point at.
-    pub fn excerpt(&self) -> String {
+    pub(crate) fn excerpt(&self) -> String {
         let pad: String = self
             .text
             .chars()

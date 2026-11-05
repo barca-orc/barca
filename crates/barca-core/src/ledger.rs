@@ -30,7 +30,9 @@ use crate::BarcaError;
 use crate::db;
 use crate::dispatch::OutputRef;
 use crate::envelope::ErrorEnvelope;
-pub use futures::future::BoxFuture;
+/// A boxed `Send` future, the return type of the [`Ledger`] and [`ObjectStat`] methods (what
+/// `futures::future::BoxFuture` spells; barca-cli implements the traits without `futures`).
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -299,7 +301,7 @@ impl Ledger {
     /// Once per command: print which server this command uses, check that it is one this
     /// machine can share results with, and (unless `retry` is false, as for a dry run, which
     /// writes nothing) post again the runs this machine could not post before.
-    pub async fn prepare(
+    pub(crate) async fn prepare(
         &self,
         cfg: &crate::config::ResolvedConfig,
         retry: bool,
@@ -801,7 +803,7 @@ pub mod posts {
     /// A post that has not been accepted yet.
     pub const UNSYNCED: &str = "unsynced";
     /// A post the server accepted.
-    pub const SHARED: &str = "shared";
+    pub(crate) const SHARED: &str = "shared";
 
     fn failed(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
         move |e| BarcaError::Db(format!("ledger posts: {what}: {e}"))
@@ -1116,10 +1118,10 @@ impl From<BarcaError> for Rejection {
     }
 }
 
-pub use crate::status::StoreObject;
+use crate::store_inspect::StoreObject;
 
 /// How the server asks its store about the objects a post names. `barca serve` uses
-/// [`crate::status::stat_objects`]; tests use a closure.
+/// [`crate::store_inspect::stat_objects`]; tests use a closure.
 pub trait ObjectStat: Send + Sync {
     fn stat<'a>(&'a self, paths: &'a [String]) -> BoxFuture<'a, Result<Vec<StoreObject>, String>>;
 }
@@ -1134,7 +1136,7 @@ impl ObjectStat for HelperStat<'_> {
     fn stat<'a>(&'a self, paths: &'a [String]) -> BoxFuture<'a, Result<Vec<StoreObject>, String>> {
         Box::pin(async move {
             let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-            crate::status::stat_objects(self.python, self.cfg, &paths).await
+            crate::store_inspect::stat_objects(self.python, self.cfg, &paths).await
         })
     }
 }

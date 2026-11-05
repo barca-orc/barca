@@ -14,7 +14,7 @@ pub enum MaxSize {
 }
 
 /// The limit when nothing is configured: 10% of the filesystem (decided 2026-10-20, RFC-0012).
-pub const DEFAULT: MaxSize = MaxSize::Percent(10.0);
+pub(crate) const DEFAULT: MaxSize = MaxSize::Percent(10.0);
 
 /// Parse `500MB`, `20GB`, `20GiB`, `1.5 TB`, a bare number of bytes, `10%` or `off`.
 /// Units are case-insensitive; `KB`/`MB`/`GB`/`TB` are decimal, `KiB`/`MiB`/`GiB`/`TiB` binary.

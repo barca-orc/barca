@@ -83,7 +83,7 @@ impl StepKeyed {
 
 /// What a `partitions_from` source returned.
 #[derive(Debug, PartialEq)]
-pub enum SourceKeys {
+pub(crate) enum SourceKeys {
     /// A list: its values are the keys (strings, and numbers in their JSON form).
     List(Vec<String>),
     /// A dict: its keys in artifact order, and each key's value hash.
@@ -116,7 +116,7 @@ impl<'de> serde::de::Visitor<'de> for OrderedSource {
 
 /// Read a source's JSON artifact text: a list of keys, or a dict of key -> value. Anything else
 /// is an error in words naming the types a source may return.
-pub fn read_source(text: &str) -> Result<SourceKeys, String> {
+pub(crate) fn read_source(text: &str) -> Result<SourceKeys, String> {
     match text.trim_start().as_bytes().first() {
         Some(b'[') => {
             let values: Vec<Value> =
@@ -164,14 +164,14 @@ fn raw_value_hash(raw: &RawValue) -> Result<String, String> {
 }
 
 /// The hash of one key's value: SHA-256 of its canonical JSON ([`canonical_json`]), hex.
-pub fn value_hash(value: &Value) -> String {
+pub(crate) fn value_hash(value: &Value) -> String {
     let mut text = String::new();
     canonical_json(value, &mut text);
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
 /// `value` as JSON with object keys sorted at every level and no whitespace.
-pub fn canonical_json(value: &Value, out: &mut String) {
+pub(crate) fn canonical_json(value: &Value, out: &mut String) {
     match value {
         Value::Object(map) => {
             let mut entries: Vec<(&String, &Value)> = map.iter().collect();

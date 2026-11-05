@@ -59,3 +59,6 @@ benchmarks/docker/out/
 target-local/
 # Per-worktree cargo config (target-local/ build dir, sccache) written by scripts/new-worktree.sh
 /.cargo/config.toml
+
+# ts-rs scratch output of `cargo test -p barca-core --features ts` (the UI types live in ui/src/lib/generated)
+crates/barca-core/bindings/

@@ -1,9 +1,13 @@
 //! Opening a metadata DB for use: initialization under its lock ([`init_db_as`]), the format
 //! probe of a read-only server ([`probe_metadata`]), the migration of a legacy or older
 //! format-1 schema ([`init_schema`]) and column and index checks of a database read as it is.
-//! The table and index definitions are in [`crate::db_schema`].
+//! The table and index definitions are in [`ddl`].
 
 use super::*;
+
+/// Tables, columns, indexes and the format version: what [`init_schema`] creates and
+/// the migrations add.
+pub(crate) mod ddl;
 
 pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     init_db_as(db_path, db_path).await.map(|_| ())
@@ -11,7 +15,7 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 
 /// [`init_db`] on the file at `path`, naming `shown` when the database cannot be used (a
 /// snapshot names the database it copies). Returns the format version (`PRAGMA user_version`,
-/// [`crate::db_schema::VERSION`] once initialized).
+/// [`crate::db::schema::ddl::VERSION`] once initialized).
 ///
 /// An empty file (0 bytes, no write-ahead log) holds no history, so it is initialized as a new
 /// database, with a note naming it: a `touch`, a backup tool or a reader that opened the path
@@ -59,8 +63,8 @@ pub(super) async fn initialized(
         // A read-write SQLite connection may checkpoint on close, even after a failed
         // schema check. Judge compatibility read-only before opening the writer.
         let (_db, read) = connect_read_only(path).await?;
-        let version = crate::db_schema::check(&read).await?;
-        if version == crate::db_schema::VERSION {
+        let version = crate::db::schema::ddl::check(&read).await?;
+        if version == crate::db::schema::ddl::VERSION {
             crate::state_validate::Schema::read(&read)
                 .await?
                 .columns_fit(true)
@@ -77,7 +81,7 @@ pub(super) async fn initialized(
         _lock: Some(lock),
     };
     let version = match init_schema(&conn).await {
-        Ok(()) => crate::db_schema::read_version(&conn).await,
+        Ok(()) => crate::db::schema::ddl::read_version(&conn).await,
         Err(e) => Err(e),
     };
     match version {
@@ -113,7 +117,7 @@ pub(super) async fn initialized(
 pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
     directory_check(path)?;
     if ReadView::open(path).await?.is_some() {
-        return Ok(Some(crate::db_schema::VERSION));
+        return Ok(Some(crate::db::schema::ddl::VERSION));
     }
     let Some(snapshot) = DbSnapshot::take(path).await? else {
         return Ok(None);
@@ -136,7 +140,7 @@ pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
         let (_db, conn) = open_conn(snapshot.path())
             .await
             .map_err(|e| named(e, path))?;
-        crate::db_schema::read_version(&conn)
+        crate::db::schema::ddl::read_version(&conn)
             .await
             .map_err(|e| named(e, path))?
     };
@@ -149,15 +153,15 @@ pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
 ///
 /// Format 1 is additive: a format-1 database written by an earlier release may lack a
 /// nullable column, a table or an index added since (`materializations.bytes_changed` in
-/// 0.24.0; see `db_schema::ADDED_TABLES` and `db_schema::INDEXES`). It gets the same additive
+/// 0.24.0; see `ddl::ADDED_TABLES` and `ddl::INDEXES`). It gets the same additive
 /// migration as a legacy database, in one transaction, and an older release still reads the
 /// result.
 pub(crate) async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
-    let version = crate::db_schema::check(conn).await?;
-    if version == crate::db_schema::VERSION {
+    let version = crate::db::schema::ddl::check(conn).await?;
+    if version == crate::db::schema::ddl::VERSION {
         // Read once and judged twice: this runs at the start of every run.
         let schema = crate::state_validate::Schema::read(conn).await?;
-        if crate::db_schema::additions_missing_in(&schema) {
+        if crate::db::schema::ddl::additions_missing_in(&schema) {
             // A table that is there but lacks a column the additions do not bring is malformed,
             // not behind: refuse it before any write.
             schema.columns_fit(true).map_err(unusable)?;
@@ -174,7 +178,7 @@ pub(crate) async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaEr
             .await?
             .map_err(unusable)?;
         conn.execute(
-            &format!("PRAGMA user_version = {}", crate::db_schema::VERSION),
+            &format!("PRAGMA user_version = {}", crate::db::schema::ddl::VERSION),
             (),
         )
         .await
@@ -189,11 +193,11 @@ pub(crate) async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaEr
 /// was. The format stays version 1 (see `specs/interfaces/metadata-schema.md`).
 async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
     with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
-        for (table, definitions) in crate::db_schema::ADDED_COLUMNS {
-            crate::db_schema::add_columns(conn, table, definitions).await?;
+        for (table, definitions) in crate::db::schema::ddl::ADDED_COLUMNS {
+            crate::db::schema::ddl::add_columns(conn, table, definitions).await?;
         }
-        crate::db_schema::add_tables(conn).await?;
-        for index in crate::db_schema::INDEXES {
+        crate::db::schema::ddl::add_tables(conn).await?;
+        for index in crate::db::schema::ddl::INDEXES {
             conn.execute(index, ())
                 .await
                 .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
@@ -236,10 +240,10 @@ async fn migrate_legacy_schema(conn: &libsql::Connection) -> Result<(), BarcaErr
     .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
 
     // Migrate existing databases: add artifact columns if missing.
-    crate::db_schema::add_columns(
+    crate::db::schema::ddl::add_columns(
         conn,
         "materializations",
-        crate::db_schema::MATERIALIZATION_COLUMNS,
+        crate::db::schema::ddl::MATERIALIZATION_COLUMNS,
     )
     .await?;
     conn.execute(
@@ -290,14 +294,14 @@ async fn migrate_legacy_schema(conn: &libsql::Connection) -> Result<(), BarcaErr
     .map_err(|e| BarcaError::Db(format!("failed to create runs table: {e}")))?;
     // Who is executing a `running` run (#214): the coordinator's pid and host, so a run whose
     // process died without recording an outcome can be told from one still in progress.
-    crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
-    // Indexes and tables added within format 1 (`db_schema::INDEXES`, `ADDED_TABLES`).
-    for index in crate::db_schema::INDEXES {
+    crate::db::schema::ddl::add_columns(conn, "runs", crate::db::schema::ddl::RUN_COLUMNS).await?;
+    // Indexes and tables added within format 1 (`ddl::INDEXES`, `ADDED_TABLES`).
+    for index in crate::db::schema::ddl::INDEXES {
         conn.execute(index, ())
             .await
             .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
     }
-    crate::db_schema::add_tables(conn).await?;
+    crate::db::schema::ddl::add_tables(conn).await?;
 
     // Unfinished runs are looked up by status (`interrupted_runs`): through this index that
     // costs the number of such runs, not the length of the history.
@@ -320,10 +324,10 @@ async fn migrate_legacy_schema(conn: &libsql::Connection) -> Result<(), BarcaErr
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create schedule_state table: {e}")))?;
-    crate::db_schema::add_columns(
+    crate::db::schema::ddl::add_columns(
         conn,
         "schedule_state",
-        crate::db_schema::SCHEDULE_STATE_COLUMNS,
+        crate::db::schema::ddl::SCHEDULE_STATE_COLUMNS,
     )
     .await?;
 
@@ -342,7 +346,7 @@ async fn migrate_legacy_schema(conn: &libsql::Connection) -> Result<(), BarcaErr
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create logs table: {e}")))?;
-    crate::db_schema::add_columns(conn, "logs", crate::db_schema::LOG_COLUMNS).await?;
+    crate::db::schema::ddl::add_columns(conn, "logs", crate::db::schema::ddl::LOG_COLUMNS).await?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_logs_run ON logs(run_id, seq)",
         (),
@@ -397,52 +401,4 @@ pub(crate) async fn init_locked(db_path: &str) -> Result<(), BarcaError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn schema_has_timing_columns() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-
-        let (_db, conn) = open_conn(&db_path).await.unwrap();
-        let mut rows = conn
-            .query("PRAGMA table_info(materializations)", ())
-            .await
-            .unwrap();
-        let mut columns = Vec::new();
-        while let Some(row) = rows.next().await.unwrap() {
-            columns.push(row.get::<String>(1).unwrap());
-        }
-        assert!(columns.contains(&"cpu_seconds".to_string()));
-        assert!(columns.contains(&"max_rss_bytes".to_string()));
-    }
-
-    #[tokio::test]
-    async fn schema_has_artifact_columns() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-
-        let (_db, conn) = open_conn(&db_path).await.unwrap();
-        let mut rows = conn
-            .query("PRAGMA table_info(materializations)", ())
-            .await
-            .unwrap();
-        let mut columns = Vec::new();
-        while let Some(row) = rows.next().await.unwrap() {
-            columns.push(row.get::<String>(1).unwrap());
-        }
-
-        assert!(columns.contains(&"artifact_path".to_string()));
-        assert!(columns.contains(&"artifact_format".to_string()));
-        assert!(columns.contains(&"artifact_size_bytes".to_string()));
-        // Error/retry tracking columns.
-        assert!(columns.contains(&"error_message".to_string()));
-        assert!(columns.contains(&"error_traceback".to_string()));
-        assert!(columns.contains(&"attempts".to_string()));
-        // Old column still exists for backward compat
-        assert!(columns.contains(&"output_json".to_string()));
-    }
-}
+mod tests;

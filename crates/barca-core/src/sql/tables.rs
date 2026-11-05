@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 /// The schema barca's tables live in, apart from the views.
-pub const SCHEMA: &str = "barca";
+pub(crate) const SCHEMA: &str = "barca";
 
 /// Most rows of one table `barca sql` reads from a server.
 pub const SERVER_ROWS: usize = 10_000;
@@ -46,7 +46,7 @@ const B: &str = "BOOLEAN";
 const L: &str = "VARCHAR[]";
 
 /// `barca history --json`'s run keys.
-pub const RUN_COLUMNS: &[(&str, &str)] = &[
+pub(crate) const RUN_COLUMNS: &[(&str, &str)] = &[
     ("run_id", V),
     ("command", V),
     ("files", L),
@@ -70,7 +70,7 @@ pub const RUN_COLUMNS: &[(&str, &str)] = &[
 ];
 
 /// [`StepRow`]'s keys.
-pub const MATERIALIZATION_COLUMNS: &[(&str, &str)] = &[
+pub(crate) const MATERIALIZATION_COLUMNS: &[(&str, &str)] = &[
     ("node_id", V),
     ("partition", V),
     ("run_id", V),
@@ -91,7 +91,7 @@ pub const MATERIALIZATION_COLUMNS: &[(&str, &str)] = &[
 
 /// `barca status --json`'s node, flattened: `cache.*` without the prefix, `partitions.*` and
 /// `last_materialization.*` as `partitions_*` and `last_*`.
-pub const NODE_COLUMNS: &[(&str, &str)] = &[
+pub(crate) const NODE_COLUMNS: &[(&str, &str)] = &[
     ("id", V),
     ("name", V),
     ("kind", V),

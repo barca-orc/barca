@@ -196,7 +196,7 @@ named owner function, in `db/` (one module per table family) or
 then split the rest of `db.rs` into the same `db/` families; `db/mod.rs` keeps the connection,
 lock and transaction helpers.
 `db/write_boundary_tests.rs` fails on an `INSERT`, `UPDATE`, `DELETE` or `REPLACE` literal in
-non-test code anywhere else in `barca-core` (`db_schema.rs` migrations and the read-only `sql/`
+non-test code anywhere else in `barca-core` (`db/schema/ddl.rs` migrations and the read-only `sql/`
 aside). This is the boundary only: no write is ordered or guarded differently.
 
 Follow with a separate behavior PR defining the reconciliation scope/order and guarded

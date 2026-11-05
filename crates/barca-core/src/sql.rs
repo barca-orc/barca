@@ -26,7 +26,7 @@ pub mod tables;
 
 /// Local copies of remote artifacts, laid out as `<scheme>/<bucket>/<path>`. Every environment
 /// shares it: the object's full URI is the key.
-pub const CACHE_DIR: &str = ".barca/sql-cache";
+pub(crate) const CACHE_DIR: &str = ".barca/sql-cache";
 
 /// One file of a view: a stored result, and for a partitioned asset its key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// `Schedule(cron)` without `max_failures=`: consecutive failed ticks before the schedule is
 /// skipped and reported `failing`.
-pub const DEFAULT_MAX_FAILURES: u32 = 5;
+pub(crate) const DEFAULT_MAX_FAILURES: u32 = 5;
 
 /// The freshness rules a run follows, besides its cache policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

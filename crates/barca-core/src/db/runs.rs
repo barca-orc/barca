@@ -44,7 +44,7 @@ pub fn encode_files(files: &[String]) -> String {
 }
 
 /// See [`encode_files`].
-pub fn decode_files(raw: &str) -> Vec<String> {
+pub(crate) fn decode_files(raw: &str) -> Vec<String> {
     if raw.trim_start().starts_with('[')
         && let Ok(files) = serde_json::from_str::<Vec<String>>(raw)
     {
@@ -102,7 +102,7 @@ pub struct RunRecord {
 /// A recorded step error as (type, message, traceback). A worker reports a Python exception as
 /// the generic `WorkerError` whose text is `Type: message` followed by the traceback frames;
 /// this takes the type and the frames back out of it.
-pub fn split_exception(
+pub(crate) fn split_exception(
     error_type: &str,
     message: &str,
     traceback: &str,
@@ -165,7 +165,7 @@ impl RunFailure {
 }
 
 /// What a run reads from the metadata DB as it starts ([`start_run`]).
-pub struct StartedRun {
+pub(crate) struct StartedRun {
     /// Logical-node scheduling priors for the requested plan.
     pub cost_estimates: Vec<(String, crate::cost::NodeEstimate)>,
     /// [`get_avg_elapsed`] of the run's unpartitioned nodes.
@@ -260,7 +260,7 @@ pub struct NewRun<'a> {
 }
 
 /// Create a new run record at the start of execution.
-pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
+pub(crate) async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     insert_run(&conn, db_path, &run).await;
@@ -669,6 +669,105 @@ pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
         .map(|r| r.get::<i64>(0).unwrap_or(0))
         .unwrap_or(0);
     Ok(n.max(0) as usize)
+}
+
+// ─── Recording (driven by `crate::persist`) ──────────────────────────────────
+
+/// Count `written` more executed steps of `run_id`, while it is running. Rows updated: 1, or 0
+/// for a missing or finished run. Inside the caller's progress transaction.
+pub(crate) async fn advance_steps_executed(
+    conn: &Connection,
+    run_id: &str,
+    written: u64,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
+        [written.to_string(), run_id.to_string()],
+    )
+    .await
+}
+
+/// The row of `run_id` as `running`, by this process on this host, unless the run has one.
+pub(crate) async fn insert_run_if_absent(
+    conn: &Connection,
+    run_id: &str,
+    command: &str,
+    files: &str,
+    target: Option<&str>,
+    steps_total: usize,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
+        [
+            run_id.to_string(),
+            command.to_string(),
+            files.to_string(),
+            target.unwrap_or("").to_string(),
+            steps_total.to_string(),
+            std::process::id().to_string(),
+            local_host(),
+        ],
+    )
+    .await
+}
+
+/// The terminal row of `run_id`: its status, counts, elapsed time, finish time and job. Rows
+/// updated: 1, or 0 for a run with no row. Inside the caller's transaction.
+pub(crate) async fn finish_run_in(
+    conn: &Connection,
+    run_id: &str,
+    status: &str,
+    steps_executed: usize,
+    steps_cached: usize,
+    elapsed_seconds: f64,
+    job: &str,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now'), job = NULLIF(?6, '') WHERE run_id = ?5",
+        [
+            status.to_string(),
+            steps_executed.to_string(),
+            steps_cached.to_string(),
+            elapsed_seconds.to_string(),
+            run_id.to_string(),
+            job.to_string(),
+        ],
+    )
+    .await
+}
+
+/// The row of a run another machine posted to this ledger (`triggered_by = 'client'`), under
+/// the id this database gave it; `run.run_id` is kept as `client_run_id`.
+pub(crate) async fn insert_posted_run(
+    conn: &Connection,
+    run_id: &str,
+    run: &crate::ledger::LedgerRun,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, \
+         steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, host, \
+         triggered_by, client_run_id) \
+         VALUES (?1, ?2, ?3, NULLIF(?4, ''), ?5, NULLIF(?6, ''), ?7, ?8, ?9, NULLIF(?10, ''), \
+         NULLIF(?11, ''), NULLIF(?12, ''), 'client', ?13)",
+        [
+            run_id.to_string(),
+            run.command.clone(),
+            encode_files(&run.files),
+            run.target.clone().unwrap_or_default(),
+            run.status.clone(),
+            run.steps_total.map(|n| n.to_string()).unwrap_or_default(),
+            run.steps_executed.to_string(),
+            run.steps_cached.to_string(),
+            run.started_at.clone(),
+            run.finished_at.clone().unwrap_or_default(),
+            run.elapsed_seconds
+                .map(|n| n.to_string())
+                .unwrap_or_default(),
+            run.host.clone().unwrap_or_default(),
+            run.run_id.clone(),
+        ],
+    )
+    .await
 }
 
 #[cfg(test)]

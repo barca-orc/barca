@@ -26,7 +26,7 @@ pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Ve
 }
 
 /// Describe jobs using the configured server timezone.
-pub async fn describe_schedule_in(
+pub(crate) async fn describe_schedule_in(
     files: &[String],
     python: &std::path::Path,
     zone: &Zone,

@@ -20,7 +20,7 @@ use crate::model::BatchSpec;
 // ─── Reading `batch=` ────────────────────────────────────────────────────────
 
 /// The fix shown with every invalid `batch=`.
-pub const FIX: &str = "write batch=N (a whole number of at least 1), batch=\"all\", \
+pub(crate) const FIX: &str = "write batch=N (a whole number of at least 1), batch=\"all\", \
                        batch=batches([[...], ...]) or batch=batches_by(fn, max_size=N) on a \
                        partitioned @asset or @task (see `barca docs partitions`, \"Processing \
                        many keys per call\")";
@@ -424,7 +424,7 @@ fn names_node(node: &crate::model::DagNode, name: &str) -> bool {
 
 /// How one node's keys are grouped in a run: its `batch=`, or the run's override of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Grouping {
+pub(crate) enum Grouping {
     One,
     Size(usize),
     All,
@@ -453,7 +453,7 @@ impl Grouping {
 
 /// The grouping of `node` in a run with `over`: `None` for a node that does not declare
 /// `batch=` (one key per call, and its function takes a single key).
-pub fn effective(node: &crate::model::DagNode, over: &BatchOverride) -> Option<Grouping> {
+pub(crate) fn effective(node: &crate::model::DagNode, over: &BatchOverride) -> Option<Grouping> {
     let spec = node.extracted.batch.as_ref()?;
     if let Some(v) = over.value_for(node) {
         return Some(match v {
@@ -489,7 +489,7 @@ pub fn effective(node: &crate::model::DagNode, over: &BatchOverride) -> Option<G
 /// as indexes into `keys`. `labels` is required for [`Grouping::By`] (one per key).
 ///
 /// Linear in the keys given: the keys that run, not the keys declared.
-pub fn group_keys(
+pub(crate) fn group_keys(
     keys: &[String],
     grouping: &Grouping,
     labels: Option<&[String]>,
@@ -708,7 +708,7 @@ pub(crate) fn check_label_function(
 }
 
 /// The `batches_by` label of each key (inner display forms, `retailer=r1`).
-pub fn evaluate_labels(
+pub(crate) fn evaluate_labels(
     python: &std::path::Path,
     source_file: &str,
     expr: &str,
@@ -757,7 +757,7 @@ fn calls_for(n: usize, grouping: &Grouping) -> Option<usize> {
 }
 
 /// "3 keys in 1 call (batch=all)".
-pub fn grouping_line(plan: &crate::results::BatchPlan) -> String {
+pub(crate) fn grouping_line(plan: &crate::results::BatchPlan) -> String {
     let keys = format!("{} key{}", plan.keys, if plan.keys == 1 { "" } else { "s" });
     match plan.calls {
         Some(c) => format!(
@@ -771,7 +771,7 @@ pub fn grouping_line(plan: &crate::results::BatchPlan) -> String {
 
 /// Add the grouping of each batched node's keys that will run to its dry-run report: `batch`,
 /// and the line at the end of `detail`.
-pub fn annotate(
+pub(crate) fn annotate(
     dag: &crate::dag::Dag,
     steps: &mut [crate::results::StepReport],
     over: &BatchOverride,

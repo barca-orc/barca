@@ -39,7 +39,7 @@ pub fn plan_from_dag(dag: &crate::dag::Dag, sizing: crate::execution::Sizing) ->
 
 /// [`plan_from_dag`] narrowed to `partition` (`barca plan --partition`), as a `get` with no
 /// target narrows its plan; a usage error as for `get`.
-pub fn plan_selected(
+pub(crate) fn plan_selected(
     dag: &crate::dag::Dag,
     sizing: crate::execution::Sizing,
     partition: Option<&crate::selection::PartitionSelection>,
@@ -96,7 +96,7 @@ pub async fn history(
     limit: Option<usize>,
     filter: &crate::history_filter::HistoryFilter,
 ) -> Result<(Vec<db::RunRecord>, usize), BarcaError> {
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     history_at(&cfg.db_path, limit, filter).await
 }
@@ -137,7 +137,7 @@ pub async fn run_detail(
     run_id: &str,
     limit: Option<usize>,
 ) -> Result<RunDetail, BarcaError> {
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     let Some(run) = db::get_run(&cfg.db_path, run_id).await? else {
         return Err(BarcaError::Usage(format!(
@@ -158,15 +158,17 @@ pub async fn reconcile_run(
     cfg: &crate::config::ResolvedConfig,
     run_id: &str,
 ) -> Result<db::RunRecord, BarcaError> {
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     db::reconcile_run(&cfg.db_path, run_id).await
 }
 
 /// The most recent run (the newest row of `barca history`), for `barca logs` without a run id.
 /// A usage error when no run is recorded in this environment.
-pub async fn latest_run(cfg: &crate::config::ResolvedConfig) -> Result<db::RunRecord, BarcaError> {
-    db::ensure_env_dirs(&cfg.env)?;
+pub(crate) async fn latest_run(
+    cfg: &crate::config::ResolvedConfig,
+) -> Result<db::RunRecord, BarcaError> {
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     db::get_recent_runs(&cfg.db_path, 1)
         .await?
@@ -184,7 +186,7 @@ pub async fn latest_run(cfg: &crate::config::ResolvedConfig) -> Result<db::RunRe
 /// A run's recorded lines: the `logs` rows of the database at `read_path` (the metadata DB at
 /// `db_path`, or a snapshot of it), else its spool beside `db_path`: a run still in progress,
 /// or one whose process died before recording them.
-pub async fn run_log_lines(
+pub(crate) async fn run_log_lines(
     db_path: &str,
     read_path: &str,
     run_id: &str,
@@ -259,7 +261,7 @@ pub async fn logs(
     step: Option<&str>,
     stream: Option<crate::LogStream>,
 ) -> Result<Vec<db::LogEntry>, BarcaError> {
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     logs_at(&cfg.db_path, &cfg.db_path, run_id, step, stream).await
 }
@@ -318,7 +320,7 @@ pub async fn run_to_read(
     if !running {
         return latest_run(cfg).await;
     }
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     let recent = db::get_recent_runs(&cfg.db_path, RUNNING_LOOKBACK).await?;
     match pick_run(recent, true) {
@@ -332,7 +334,7 @@ pub async fn run_record(
     cfg: &crate::config::ResolvedConfig,
     run_id: &str,
 ) -> Result<Option<db::RunRecord>, BarcaError> {
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     db::get_run(&cfg.db_path, run_id).await
 }
@@ -352,7 +354,7 @@ pub async fn stats(
 
     let target_id = find_target_id(&dag, target_name)?;
 
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     db::get_asset_stats(&cfg.db_path, &target_id).await
 }

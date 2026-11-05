@@ -28,7 +28,7 @@ pub enum Request {
 }
 
 /// Held through copy, hashing and upload. Dropping it also handles cancellation/crashes.
-pub struct Admission(std::fs::File);
+pub(crate) struct Admission(std::fs::File);
 
 impl Drop for Admission {
     fn drop(&mut self) {
@@ -130,10 +130,7 @@ pub async fn admit(
             .unwrap_or(dir.clone())
             .join(".last-attempt")
     });
-    let wall = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+    let wall = crate::time::unix_nanos(std::time::SystemTime::now());
     let now = Instant::now();
     let mut observations = OBSERVATIONS
         .get_or_init(Mutex::default)

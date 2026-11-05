@@ -8,6 +8,7 @@ use crate::cache::CachePolicy;
 use crate::envelope::{Context, ErrorEnvelope, ErrorKind};
 use crate::report::{self, RenderedOutput, ResultFormat};
 use crate::results::{GetResult, MultiResult};
+use crate::step_status::StepStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -82,12 +83,9 @@ impl Trigger {
     }
 }
 
-/// Unix seconds as RFC 3339 in UTC (`2026-10-20T05:00:00Z`).
-pub fn rfc3339(epoch: i64) -> String {
-    chrono::DateTime::from_timestamp(epoch, 0)
-        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-        .unwrap_or_default()
-}
+// barca-server names this path (`pause.rs`, `queue.rs`, `inspect.rs`); the helper lives in
+// `time`.
+pub use crate::time::rfc3339;
 
 /// What a run is given besides its targets: the id to record it under (allocated by the
 /// caller, so the id a server answers with is the database id) and what started it.
@@ -238,11 +236,6 @@ impl RunRequest {
             .as_deref()
             .map(crate::selection::PartitionSelection::parse)
             .transpose()
-    }
-
-    /// The target label `barca history` shows for this run: the targets, comma-separated.
-    pub fn target_label(&self) -> Option<String> {
-        (!self.targets.is_empty()).then(|| self.targets.join(","))
     }
 }
 
@@ -468,7 +461,7 @@ impl Outcome {
         let skipped = value["steps"].as_array().map_or(0, |steps| {
             steps
                 .iter()
-                .filter(|s| s["status"].as_str() == Some("skipped"))
+                .filter(|s| StepStatus::Skipped.is(s["status"].as_str()))
                 .count()
         });
         let envelope = match value.as_object_mut().and_then(|o| o.remove("envelope")) {

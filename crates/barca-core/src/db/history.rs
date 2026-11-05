@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// One row of `materializations`, as `barca status` reports it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MaterializationRecord {
+pub(crate) struct MaterializationRecord {
     pub content_hash: Option<String>,
     /// Exact node id, including the partition suffix for a partitioned step.
     pub node_id: String,
@@ -211,7 +211,7 @@ pub async fn node_ages(db_path: &str) -> Result<HashMap<String, NodeAge>, BarcaE
 
 /// What the metadata DB knows about one node (all partition keys of a partitioned node).
 #[derive(Debug, Clone, Default)]
-pub struct NodeHistory {
+pub(crate) struct NodeHistory {
     pub last_bytes_change: Option<BytesChange>,
     /// The most recent materialization attempt, successful or not.
     pub latest: Option<MaterializationRecord>,
@@ -221,7 +221,7 @@ pub struct NodeHistory {
 
 /// Latest materialization and success flag for each base node id. Rows of partitioned steps
 /// (`<base>[k=v]`) count toward their base id. Read-only; the caller ensures the DB exists.
-pub async fn node_histories(
+pub(crate) async fn node_histories(
     db_path: &str,
     base_ids: &[String],
 ) -> Result<HashMap<String, NodeHistory>, BarcaError> {
@@ -251,9 +251,7 @@ async fn node_history(conn: &libsql::Connection, base: &str) -> Result<NodeHisto
     for (filter, params) in [&exact, &keys] {
         let id = query_i64(
             conn,
-            &format!(
-                "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run WHERE {filter}"
-            ),
+            &format!("SELECT max(id) FROM materializations {BY_NODE_RUN} WHERE {filter}"),
             params.clone(),
         )
         .await?;
@@ -262,7 +260,7 @@ async fn node_history(conn: &libsql::Connection, base: &str) -> Result<NodeHisto
             h.ever_succeeded = query_i64(
                 conn,
                 &format!(
-                    "SELECT 1 FROM materializations INDEXED BY idx_mat_node_run \
+                    "SELECT 1 FROM materializations {BY_NODE_RUN} \
                      WHERE {filter} AND status = 'success' LIMIT 1"
                 ),
                 params.clone(),
@@ -380,7 +378,7 @@ async fn first_key_of_latest_run(
     let (filter, params) = with_run(exact);
     if let Some(id) = query_i64(
         conn,
-        &format!("SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run WHERE {filter}"),
+        &format!("SELECT max(id) FROM materializations {BY_NODE_RUN} WHERE {filter}"),
         params,
     )
     .await?
@@ -392,7 +390,7 @@ async fn first_key_of_latest_run(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT node_id FROM materializations INDEXED BY idx_mat_node_run WHERE {filter} \
+                "SELECT node_id FROM materializations {BY_NODE_RUN} WHERE {filter} \
                  ORDER BY node_id LIMIT 1"
             ),
             params,
@@ -413,8 +411,11 @@ async fn first_key_of_latest_run(
     };
     Ok(query_i64(
         conn,
-        "SELECT max(id) FROM materializations INDEXED BY idx_mat_node_run \
-         WHERE node_id = ?1 AND run_id = ?2",
+        concat!(
+            "SELECT max(id) FROM materializations ",
+            by_node_run!(),
+            " WHERE node_id = ?1 AND run_id = ?2"
+        ),
         vec![libsql::Value::Text(first), libsql::Value::Text(run)],
     )
     .await?

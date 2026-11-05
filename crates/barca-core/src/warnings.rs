@@ -36,10 +36,10 @@ pub fn warn_once(message: &str) -> bool {
 }
 
 /// The `kind` of the unused-input warning.
-pub const UNUSED_INPUT: &str = "unused_input";
+pub(crate) const UNUSED_INPUT: &str = "unused_input";
 
 /// The `kind` of the undeclared-environment warning (#574).
-pub const UNDECLARED_ENV: &str = "undeclared_env";
+pub(crate) const UNDECLARED_ENV: &str = "undeclared_env";
 
 /// At most this many variable names are spelled out in a step's message; JSON has them all.
 const NAMES_IN_LINE: usize = 6;
@@ -97,7 +97,7 @@ pub fn for_plan(dag: &Dag, plan: &ExecutionPlan) -> Vec<PlanWarning> {
 ///
 /// An input whose upstream is a sensor is not reported: depending on a sensor without reading
 /// its value is how a step is made to re-run when outside state changes (`barca docs cache`).
-pub fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarning> {
+pub(crate) fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarning> {
     let from_sensor = |param: &String| {
         node.resolved_inputs
             .get(param)
@@ -139,7 +139,7 @@ pub fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarning> {
 /// One warning per environment variable `node`'s code reads without declaring it
 /// ([`crate::env_reads`]). Every item of a step carries the same message, naming all of them;
 /// stderr gets one summary line for the whole command instead ([`print`]).
-pub fn undeclared_env_warnings(node: &DagNode) -> Vec<PlanWarning> {
+pub(crate) fn undeclared_env_warnings(node: &DagNode) -> Vec<PlanWarning> {
     let names = node.extracted.undeclared_env();
     if names.is_empty() {
         return Vec::new();
@@ -195,7 +195,7 @@ pub fn print(warnings: &[PlanWarning]) {
 /// `N steps read environment variables not declared in env=: A, B, C (+K more); barca status
 /// lists them`, with at most [`NAMES_IN_SUMMARY`] names or patterns, sorted. `None` when no
 /// step has an undeclared read.
-pub fn undeclared_env_summary(warnings: &[PlanWarning]) -> Option<String> {
+pub(crate) fn undeclared_env_summary(warnings: &[PlanWarning]) -> Option<String> {
     let mut steps = HashSet::new();
     let mut names = std::collections::BTreeSet::new();
     for w in warnings.iter().filter(|w| w.kind == UNDECLARED_ENV) {

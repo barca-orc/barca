@@ -24,7 +24,7 @@ use std::time::Duration;
 pub const NAME: &str = "slack";
 /// The switch: an incoming webhook URL. Only this name turns the integration on; a generic
 /// `SLACK_WEBHOOK_URL` that other tools set is ignored.
-pub const WEBHOOK_VAR: &str = "BARCA_SLACK_WEBHOOK_URL";
+pub(crate) const WEBHOOK_VAR: &str = "BARCA_SLACK_WEBHOOK_URL";
 /// While a job keeps failing, the next reminder is due this long after the last post.
 const REMIND_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 /// The first line of an exception message is cut to this many characters.
@@ -88,7 +88,7 @@ fn webhook_ok(url: &str, allow_http: bool) -> bool {
 impl Slack {
     /// `Ok(None)` while `BARCA_SLACK_WEBHOOK_URL` is unset or empty. An `Err` never contains
     /// the URL.
-    pub fn from_env() -> Result<Option<Self>, String> {
+    pub(crate) fn from_env() -> Result<Option<Self>, String> {
         let Some(webhook) = env_var(WEBHOOK_VAR) else {
             return Ok(None);
         };
