@@ -19,8 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
+from . import helpers
 from .get_values import value_args
 
 PIPELINE = """
@@ -68,13 +67,7 @@ def project(tmp_path) -> Path:
 
 
 def run(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=project,
-        env=os.environ,
-        capture_output=True,
-        text=True,
-    )
+    return helpers.barca(project, *value_args(args), env=dict(os.environ))
 
 
 def barca(project: Path, *args: str) -> dict:

@@ -12,12 +12,13 @@ here through the real binary.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import clean_env
+from . import helpers
 
 PREFIX = "[barca] warning: "
 
@@ -268,17 +269,7 @@ def gate(raw: dict) -> None:
 
 
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["BARCA_PROGRESS_SECS"] = "0"
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    return helpers.barca(cwd, *args, env=clean_env(scrub=("BARCA_",), BARCA_PROGRESS_SECS="0"))
 
 
 def write(tmp_path: Path, source: str) -> Path:

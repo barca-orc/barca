@@ -12,11 +12,11 @@ purpose (#283, 0.19.0 in CHANGELOG.md). See `RUN_HASHES_0_19_0`.
 """
 
 import json
-import subprocess
+import os
 import textwrap
 from pathlib import Path
 
-from barca.api import _find_binary
+from .helpers import barca
 
 FILES = {
     "barca.toml": "",
@@ -215,18 +215,13 @@ def cold_run_hashes(root: Path, files: dict | None = None) -> dict:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(textwrap.dedent(code).lstrip("\n"))
     hashes = {}
-    listing = subprocess.run(
-        [_find_binary(), "list", "--json", "--all"], cwd=root, capture_output=True, text=True
-    )
+    listing = barca(root, "list", "--json", "--all", env=dict(os.environ))
     assert listing.returncode == 0, listing.stderr
     for node in json.loads(listing.stdout)["nodes"]:
-        proc = subprocess.run(
-            # --refresh-all: a cold Manual target is computed only when refreshed (RFC-0008);
-            # refreshing does not change run hashes.
-            [_find_binary(), "get", node["id"], "--dry-run", "--json", "--refresh-all"],
-            cwd=root,
-            capture_output=True,
-            text=True,
+        # --refresh-all: a cold Manual target is computed only when refreshed (RFC-0008);
+        # refreshing does not change run hashes.
+        proc = barca(
+            root, "get", node["id"], "--dry-run", "--json", "--refresh-all", env=dict(os.environ)
         )
         assert proc.returncode == 0, proc.stderr
         for step in json.loads(proc.stdout)["steps"]:

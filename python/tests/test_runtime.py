@@ -19,6 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
+from .helpers import wait_until
+
 # ─── Framing round-trip ──────────────────────────────────────────────────────
 
 
@@ -722,10 +724,11 @@ class TestHeartbeat:
             assert msg == {"type": "heartbeat"}
 
             _runtime.stop_heartbeat()
-            # Give the thread time to stop
-            import time
-
-            time.sleep(0.1)
+            wait_until(
+                lambda: not _runtime._heartbeat_thread.is_alive(),
+                "the heartbeat thread to stop",
+                timeout=2,
+            )
         finally:
             _runtime._socket = original_socket
             _runtime._heartbeat_thread = original_thread

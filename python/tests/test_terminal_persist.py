@@ -3,21 +3,13 @@
 import json
 import os
 import sqlite3
-import subprocess
 from pathlib import Path
 
-from barca.api import _find_binary
+from .helpers import QUICK, barca
 
 
 def run(project: Path, *args: str):
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env={**os.environ, "BARCA_POOL_SIZE": "1"},
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    return barca(project, *args, env={**os.environ, "BARCA_POOL_SIZE": "1"}, timeout=QUICK)
 
 
 def sql(project: Path, statement: str):

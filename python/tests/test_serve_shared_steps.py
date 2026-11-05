@@ -10,14 +10,14 @@ test, not by timing.
 """
 
 import json
-import subprocess
+import os
 import time
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-from tests.test_serve_queue import Server, _free_port, wait_for
+from .helpers import barca, clean_env, wait_until
+from .served import Serve
 
 PIPELINE = """
 import os
@@ -72,10 +72,8 @@ def project(tmp_path) -> Path:
 
 
 @pytest.fixture()
-def server(project):
-    s = Server(project, _free_port(), "--no-schedule", "--max-runs", "4")
-    yield s
-    s.kill()
+def server(project, serve):
+    return serve("--no-schedule", "--max-runs", "4", env=clean_env(BARCA_POOL_SIZE="2"))
 
 
 def calls(project: Path) -> list[str]:
@@ -83,7 +81,7 @@ def calls(project: Path) -> list[str]:
     return path.read_text().split() if path.exists() else []
 
 
-def submit(server: Server, command: str, target: str, partition: str | None = None) -> str:
+def submit(server: Serve, command: str, target: str, partition: str | None = None) -> str:
     body: dict = {"command": command, "targets": [target]}
     if partition is not None:
         body["partition"] = partition
@@ -97,7 +95,7 @@ def release(project: Path, *names: str) -> None:
         (project / f"release-{name}").write_text("")
 
 
-def steps(server: Server, run_id: str) -> dict[str, dict]:
+def steps(server: Serve, run_id: str) -> dict[str, dict]:
     """The step reports of a finished run, by node id."""
     run = server.finished(run_id)
     assert run["status"] == "success", run
@@ -107,12 +105,13 @@ def steps(server: Server, run_id: str) -> dict[str, dict]:
 
 def settle() -> None:
     """Give a run just submitted time to plan and reach the step it waits for."""
+    # A fixed wait: a run blocked on another run's step is not observable from outside.
     time.sleep(1.5)
 
 
 def test_two_runs_of_the_same_uncached_asset_compute_it_once(project, server):
     first = submit(server, "get", "shared")
-    wait_for(lambda: calls(project) == ["shared"], "the first run to start shared")
+    wait_until(lambda: calls(project) == ["shared"], "the first run to start shared")
     second = submit(server, "get", "below")
     settle()
     release(project, "shared")
@@ -127,7 +126,7 @@ def test_two_runs_of_the_same_uncached_asset_compute_it_once(project, server):
 def test_two_runs_of_a_task_run_it_twice(project, server):
     first = submit(server, "run", "explicit")
     second = submit(server, "run", "explicit")
-    wait_for(lambda: calls(project).count("explicit") == 2, "both runs to start the task")
+    wait_until(lambda: calls(project).count("explicit") == 2, "both runs to start the task")
     release(project, "explicit")
     for run in (first, second):
         assert server.finished(run)["status"] == "success"
@@ -135,10 +134,10 @@ def test_two_runs_of_a_task_run_it_twice(project, server):
 
 def test_runs_share_only_the_partition_keys_they_have_in_common(project, server):
     first = submit(server, "get", "part", partition="k=1")
-    wait_for(lambda: calls(project) == ["part-1"], "the first run to start key 1")
+    wait_until(lambda: calls(project) == ["part-1"], "the first run to start key 1")
     second = submit(server, "get", "part")
     # The keys the first run does not compute start in the second at once.
-    wait_for(
+    wait_until(
         lambda: sorted(calls(project)) == ["part-1", "part-2", "part-3"],
         "the second run to start keys 2 and 3",
     )
@@ -153,7 +152,7 @@ def test_runs_share_only_the_partition_keys_they_have_in_common(project, server)
 def test_a_run_waiting_on_a_step_that_fails_executes_it_itself(project, server):
     (project / "fail-shared").write_text("")
     first = submit(server, "get", "shared")
-    wait_for(lambda: calls(project) == ["shared"], "the first run to start shared")
+    wait_until(lambda: calls(project) == ["shared"], "the first run to start shared")
     second = submit(server, "get", "shared")
     settle()
     release(project, "shared")
@@ -165,31 +164,26 @@ def test_a_run_waiting_on_a_step_that_fails_executes_it_itself(project, server):
 
 def test_a_run_waiting_on_a_cancelled_run_executes_the_step_itself(project, server):
     first = submit(server, "get", "shared")
-    wait_for(lambda: calls(project) == ["shared"], "the first run to start shared")
+    wait_until(lambda: calls(project) == ["shared"], "the first run to start shared")
     second = submit(server, "get", "shared")
     settle()
     status, body = server.request("DELETE", f"/runs/{first}")
     assert status in (200, 202), body
     assert server.finished(first)["status"] == "cancelled"
-    wait_for(lambda: calls(project) == ["shared", "shared"], "the waiter to start shared itself")
+    wait_until(lambda: calls(project) == ["shared", "shared"], "the waiter to start shared itself")
     release(project, "shared")
     assert steps(server, second)["pipeline.py:shared"]["status"] == "ran"
 
 
 def test_the_shared_result_is_recorded_once(project, server):
     first = submit(server, "get", "shared")
-    wait_for(lambda: calls(project) == ["shared"], "the first run to start shared")
+    wait_until(lambda: calls(project) == ["shared"], "the first run to start shared")
     second = submit(server, "get", "shared")
     settle()
     release(project, "shared")
     steps(server, first)
     steps(server, second)
-    status = subprocess.run(
-        [_find_binary(), "status", "pipeline.py", "--json"],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    status = barca(project, "status", "pipeline.py", "--json", env=dict(os.environ))
+    assert status.returncode == 0, status.stderr
     node = next(n for n in json.loads(status.stdout)["nodes"] if n["id"] == "pipeline.py:shared")
     assert node["cache"]["state"] == "cached", node

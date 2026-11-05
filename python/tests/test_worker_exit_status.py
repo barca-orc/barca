@@ -2,11 +2,10 @@
 
 import json
 import os
-import subprocess
 
 import pytest
 
-from barca.api import _find_binary
+from . import helpers
 
 PIPELINE = """
 import os, signal
@@ -31,14 +30,7 @@ def chore():
 
 
 def barca(root, *args, env=None):
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env={**os.environ, "BARCA_REMOTE": "off", **(env or {})},
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
+    return helpers.barca(root, *args, env={**os.environ, "BARCA_REMOTE": "off", **(env or {})})
 
 
 @pytest.fixture

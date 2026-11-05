@@ -6,10 +6,11 @@ inherited barca's stdout and step prints landed ahead of the JSON result.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
-from barca.api import _find_binary
+from .helpers import barca
 
 PIPELINE = """
 import sys
@@ -31,9 +32,7 @@ def chatty(x: dict) -> dict:
 
 
 def _barca(tmp: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=tmp, capture_output=True, text=True, timeout=120
-    )
+    return barca(tmp, *args, env=dict(os.environ))
 
 
 def test_step_prints_go_to_stderr_and_stdout_is_pure_json(tmp_path: Path) -> None:

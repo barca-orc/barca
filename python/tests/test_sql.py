@@ -7,6 +7,7 @@ recorded, and the only write under .barca/ is the read time of the queried resul
 """
 
 import json
+import os
 import sqlite3
 import subprocess
 import textwrap
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from . import helpers
 
 pytest.importorskip("duckdb")
 pytest.importorskip("pandas")
@@ -70,9 +71,7 @@ def validate(r: pd.DataFrame) -> dict:
 
 
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=cwd, capture_output=True, text=True, check=False
-    )
+    return helpers.barca(cwd, *args, env=dict(os.environ))
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:

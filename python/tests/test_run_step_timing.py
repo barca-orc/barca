@@ -2,21 +2,14 @@
 
 import json
 import os
-import subprocess
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import barca
 
 
 def cli(root, *args, code=0):
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env={**os.environ, "BARCA_REMOTE": "off"},
-        capture_output=True,
-        text=True,
-        timeout=45,
-    )
+    proc = barca(root, *args, env={**os.environ, "BARCA_REMOTE": "off"})
     assert proc.returncode == code, proc.stderr
     return proc
 

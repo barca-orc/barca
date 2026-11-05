@@ -3,11 +3,11 @@
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import barca
 
 PIPELINE = """
 from barca import asset, task
@@ -38,17 +38,14 @@ def project(tmp_path):
 
 
 def cli(project, *args, code=0):
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
+    proc = barca(
+        project,
+        *args,
         env={
             **os.environ,
             "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
             "BARCA_OUTPUT": "human",
         },
-        text=True,
-        capture_output=True,
-        timeout=60,
     )
     assert proc.returncode == code, proc.stderr
     return proc

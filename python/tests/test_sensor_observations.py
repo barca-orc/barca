@@ -5,10 +5,10 @@ Contract: specs/behavior/freshness.md (INV-OBS-01, INV-OBS-02, INV-OBS-03).
 
 import json
 import os
-import subprocess
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import QUICK, barca
 
 
 @pytest.mark.parametrize("observation", ["changed", "(changed, None)"])
@@ -38,13 +38,16 @@ def silver(bronze):
     def get(changed, value):
         (tmp_path / "changed").write_text("yes" if changed else "no")
         (tmp_path / "value").write_text(str(value))
-        result = subprocess.run(
-            [_find_binary(), "get", "silver", "pipeline.py", "--json", "-o", "value"],
-            cwd=tmp_path,
+        result = barca(
+            tmp_path,
+            "get",
+            "silver",
+            "pipeline.py",
+            "--json",
+            "-o",
+            "value",
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
@@ -78,13 +81,16 @@ def report(source):
     def get(changed, factor):
         (tmp_path / "pipeline.py").write_text(pipeline.replace("FACTOR", str(factor)))
         (tmp_path / "changed").write_text("yes" if changed else "no")
-        result = subprocess.run(
-            [_find_binary(), "get", "report", "pipeline.py", "--json", "-o", "value"],
-            cwd=tmp_path,
+        result = barca(
+            tmp_path,
+            "get",
+            "report",
+            "pipeline.py",
+            "--json",
+            "-o",
+            "value",
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
@@ -114,20 +120,15 @@ def report(source):
         env.pop(name, None)
     for value in (1, 2, 3):
         (tmp_path / "value").write_text(str(value))
-        result = subprocess.run(
-            [
-                _find_binary(),
-                "get" if kind == "asset" else "run",
-                "report",
-                "pipeline.py",
-                "--json",
-                *(["-o", "value"] if kind == "asset" else []),
-            ],
-            cwd=tmp_path,
+        result = barca(
+            tmp_path,
+            "get" if kind == "asset" else "run",
+            "report",
+            "pipeline.py",
+            "--json",
+            *(["-o", "value"] if kind == "asset" else []),
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert json.loads(result.stdout)["final_output"] == value

@@ -21,12 +21,9 @@ import barca
 import pytest
 from barca.api import BarcaError
 
+from . import helpers
 
-@pytest.fixture(autouse=True)
-def clean_barca_dir(tmp_path, monkeypatch):
-    # The API resolves .barca relative to cwd. Give each test its own project,
-    # so another pytest worker cannot delete its database or input artifacts.
-    monkeypatch.chdir(tmp_path)
+pytestmark = pytest.mark.usefixtures("clean_barca_dir")
 
 
 @pytest.fixture
@@ -43,10 +40,9 @@ def state(tmp_path, monkeypatch):
 def write_module(tmp_path, filename, body):
     """Write the shared PREAMBLE + a per-test asset block. Each piece is dedented
     separately so they concatenate into valid column-0 module source."""
-    code = textwrap.dedent(PREAMBLE) + textwrap.dedent(body)
-    p = tmp_path / filename
-    p.write_text(code)
-    return str(p)
+    return helpers.write_module(
+        tmp_path, filename, textwrap.dedent(PREAMBLE) + textwrap.dedent(body)
+    )
 
 
 # Shared fixture-module preamble: records this worker process's PID once at import,
