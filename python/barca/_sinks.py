@@ -17,6 +17,9 @@ How a key is written:
    new one. On an object store each file is uploaded (one object at a time is atomic), then the
    key's old files that the new write does not have are deleted.
 
+A sink whose path is a file (no trailing ``/``) is one artifact written at the user's path
+(``write_sink``); ``write_sinks`` writes every sink a step declares.
+
 ``python -m barca._sinks prune`` deletes the directories of keys that no longer exist (the
 coordinator runs it after a run with the asset's whole key set). ``python -m barca._sinks
 republish`` writes the sinks of cached steps from their cached artifacts, when a sink holds
@@ -37,6 +40,7 @@ from typing import Any
 from urllib.parse import quote
 
 from barca import _storage
+from barca._artifacts import FORMAT_OF_EXTENSION, resolve_format, safe_node_id, serialize
 
 MARKER = "_barca_sink.json"
 # The Hive name of a null (or empty) partition value, as pyarrow, polars and DuckDB write it.
@@ -685,6 +689,94 @@ class _RemoteTarget:
         return {"removed": len(keys)}
 
 
+# ─── File sinks, and every sink of a step ────────────────────────────────────
+
+
+def _sink_dest(path: str, node_id: str) -> str:
+    """Sink destination path, with a partition suffix injected before the
+    extension for partitioned assets so partitions don't clobber each other
+    (e.g. out.parquet → out_ticker_AAPL.parquet). A partition step's id is
+    `<base>[<key>]`; the suffix comes from the bracketed key."""
+    bracket = node_id.find("[")
+    if bracket < 0:
+        return path
+    part = safe_node_id(node_id[bracket:])
+    ext = _storage.suffix(path)
+    if ext:
+        return path[: -len(ext)] + part + ext
+    return path + part
+
+
+def _through_symlink(dest: str) -> str:
+    """Where a sink is really written when its path is a symlink.
+
+    A sink path is the user's: barca writes the file there and changes nothing else.
+    `serialize` installs a file by renaming a temp file over its path, which would replace a
+    symlink by a regular file. So the link is followed first: the file it points to is
+    written (as `open(path, "w")` would do) and the link stays. A link to a directory then
+    fails the sink like a directory does.
+    """
+    local = _storage.local_path_of(dest)
+    if local is not None and os.path.islink(local):
+        return os.path.realpath(local)
+    return dest
+
+
+def _partition_values(step: dict, node_id: str) -> dict[str, Any]:
+    """The partition key of the step being written, by dimension name."""
+    values = dict(step.get("partition") or {})
+    values.update(step.get("direct_kwargs") or {})
+    bracket = node_id.find("[")
+    if bracket >= 0 and node_id.endswith("]"):
+        for pair in node_id[bracket + 1 : -1].split(","):
+            name, sep, value = pair.partition("=")
+            if sep:
+                values.setdefault(name, value)
+    return values
+
+
+def write_sink(result: Any, sink: dict, step: dict, node_id: str, primary_fmt: str) -> dict:
+    """Write one `@sink` of a step: a dataset (`write`) or one file at the sink's path."""
+    dest = sink.get("path", "")
+    if is_dataset(dest):
+        base = node_id.split("[", 1)[0]
+        return write(result, sink, _partition_values(step, node_id), base)
+    fmt = sink.get("serializer") or FORMAT_OF_EXTENSION.get(_storage.suffix(dest)) or primary_fmt
+    if fmt not in ("json", "pickle", "parquet", "csv"):
+        raise ValueError(
+            f"sink serializer '{fmt}' is not supported yet (supported: json, pickle, parquet, csv)"
+        )
+    if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
+        # An artifact may fall back to pickle (barca picks its file name), but a sink's
+        # path is the user's promise to another system: never write pickle bytes there.
+        raise ValueError(
+            f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
+            "Arrow table or DuckDB relation, or sink it as json or pickle"
+        )
+    dest = _sink_dest(dest, node_id)
+    size = serialize(result, _through_symlink(dest), fmt)
+    return {"path": str(dest), "status": "ok", "size_bytes": size}
+
+
+def write_sinks(result: Any, step: dict, node_id: str, primary_fmt: str) -> list[dict]:
+    """Write each @sink declared on the step.
+
+    Every sink is attempted. If any failed, the step fails with a `SinkError` naming each
+    failed sink: a missing export must not pass unnoticed in automation.
+    """
+    outcomes = []
+    failures = []
+    for sink in step.get("sinks") or []:
+        dest = sink.get("path", "")
+        try:
+            outcomes.append(write_sink(result, sink, step, node_id, primary_fmt))
+        except Exception as exc:
+            failures.append(f"sink {dest}: {type(exc).__name__}: {exc}")
+    if failures:
+        raise SinkError("; ".join(_storage.safe_error(f) for f in failures))
+    return outcomes
+
+
 # ─── Pruning: `python -m barca._sinks prune` ─────────────────────────────────
 
 
@@ -720,9 +812,9 @@ def _cached_value(item: dict) -> Any:
     if fmt == "pickle" and item.get("source_file"):
         # A pickled value may hold instances of the user's classes: import the module as the
         # worker does, so they resolve.
-        from barca._worker import load_module
+        from barca._source_import import load_pipeline_module
 
-        load_module(item["source_file"])
+        load_pipeline_module(item["source_file"])
     frame_type = item.get("frame_type")
     if frame_type == "pyarrow_dataset":
         frame_type = "pyarrow"
@@ -744,8 +836,6 @@ def republish(request: dict) -> dict:
     step runs. Answers ``{"items": [{"node_id", "sinks": [{"path"} | {"path", "error"}]}]}``
     (a dataset sink's size warning as ``warning``).
     """
-    from barca._worker import _write_sink
-
     out = []
     for item in request.get("items", []):
         node_id = item["node_id"]
@@ -763,7 +853,7 @@ def republish(request: dict) -> dict:
         results = []
         for sink in sinks:
             try:
-                outcome = _write_sink(value, sink, step, node_id, item["format"])
+                outcome = write_sink(value, sink, step, node_id, item["format"])
                 done: dict = {"path": sink["path"]}
                 if outcome.get("warning"):
                     done["warning"] = outcome["warning"]

@@ -387,7 +387,7 @@ def _stop(signum, frame) -> None:
 
 
 def main() -> int:
-    if not os.environ.get("BARCA_SOCKET"):
+    if _runtime.socket_path() is None:
         print("BARCA_SOCKET not set", file=sys.stderr)
         return 1
     import argparse
@@ -417,7 +417,7 @@ def main() -> int:
             return 0
         print(
             f"[barca] transfer helper: cannot reach the coordinator at "
-            f"{os.environ['BARCA_SOCKET']}: {type(exc).__name__}: {exc}",
+            f"{_runtime.socket_path()}: {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
         return 1

@@ -137,6 +137,14 @@ def _staging_dir() -> Path:
     return d
 
 
+def batch_staging(art_dir: str, call_id: str) -> Path:
+    """Where one batched call's keys are split to before they are installed (RFC-0013):
+    ``<artifact dir>/.batch-<pid>-<call id>/``, or under ``.barca/`` when the artifact
+    directory is a remote store. Removed when the call ends, whichever way."""
+    root = Path(art_dir) if not _storage.is_remote(art_dir) else Path(".barca")
+    return root / f".batch-{os.getpid()}-{call_id}"
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)

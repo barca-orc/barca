@@ -91,10 +91,22 @@ def _read(artifact: dict, source_file: str):
             raise
         # The value's class lives in the branch's module, which the branch's worker loaded
         # under barca's name for it. This worker may know the file only as an ordinary import.
-        from barca._worker import load_module
+        from barca._source_import import load_pipeline_module
 
-        load_module(source_file)
+        load_pipeline_module(source_file)
         return deserialize(path, fmt)
+
+
+def serializable(value):
+    """`value` with every `ParallelError` in it (a failed branch a step returns as part of its
+    result) replaced by its dict, so the result can be written as JSON."""
+    from barca import ParallelError
+
+    if isinstance(value, ParallelError):
+        return value.to_dict()
+    if isinstance(value, list):
+        return [serializable(v) for v in value]
+    return value
 
 
 def collect(results: list[dict], items: list[dict]) -> list:

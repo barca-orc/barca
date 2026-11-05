@@ -827,7 +827,8 @@ class TestRemoteArtifactStore:
 
 class TestErrorEmission:
     def test_user_traceback_strips_barca_frames(self, tmp_path):
-        from barca._worker import _user_traceback, load_module
+        from barca._source_import import load_pipeline_module as load_module
+        from barca._worker import _user_traceback
 
         src = _write_module(
             tmp_path,

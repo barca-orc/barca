@@ -31,6 +31,12 @@ _send_lock = threading.Lock()
 _recv_lock = threading.Lock()
 
 
+def socket_path() -> str | None:
+    """The coordinator's Unix socket (`BARCA_SOCKET`), set for every helper the coordinator
+    starts; None outside one. The one place the variable is read."""
+    return os.environ.get("BARCA_SOCKET") or None
+
+
 def connect(role: str = "worker") -> socket.socket | None:
     """Connect to the executor's Unix socket (once per worker process).
     Returns None if not running inside a barca worker.
@@ -39,7 +45,7 @@ def connect(role: str = "worker") -> socket.socket | None:
     if _socket is not None:
         return _socket
 
-    path = os.environ.get("BARCA_SOCKET")
+    path = socket_path()
     if not path:
         return None
 
@@ -86,7 +92,7 @@ def connect(role: str = "worker") -> socket.socket | None:
 
 def is_worker() -> bool:
     """Are we running inside a barca worker process?"""
-    return os.environ.get("BARCA_SOCKET") is not None
+    return socket_path() is not None
 
 
 # ─── Framing ──────────────────────────────────────────────────────────────────
