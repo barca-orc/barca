@@ -93,13 +93,13 @@ def _prefix(path: str) -> str:
 
 def write(result: Any, sink: dict, key: dict[str, Any], asset: str) -> dict:
     """Write one key of a dataset sink. Returns the outcome recorded for the step."""
-    from barca._artifacts import _frame_kind
+    from barca._artifacts import dataframe_library
 
     prefix = _prefix(sink["path"])
     dims = list(sink.get("dims") or [])
     partition_by = list(sink.get("partition_by") or [])
     rows_per_file = sink.get("rows_per_file")
-    kind = _frame_kind(result)
+    kind = dataframe_library(result)
     fmt = sink.get("serializer") or ("parquet" if kind else "json")
     if fmt not in FORMATS:
         raise SinkError(

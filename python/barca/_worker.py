@@ -598,7 +598,7 @@ def _materialize(
         # The caller of parallel() gets back the frame type the branch returned.
         from barca import _branches
 
-        artifact["frame_type"] = _branches.frame_type(result, fmt)
+        artifact["frame_type"] = _branches.reader_name(result, fmt)
     if extra:
         artifact.update(extra)
     if elapsed_in_artifact:

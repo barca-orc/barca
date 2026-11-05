@@ -26,8 +26,9 @@ from typing import Any
 from barca import _artifacts
 
 
-def _frame_type(fmt: str) -> "str | None":
-    """pyarrow keeps a table's column types without pandas; fall back to the default reader."""
+def _pyarrow_reader_if_available(fmt: str) -> str | None:
+    """The reader for a tabular artifact: pyarrow, which keeps a table's column types without
+    pandas, when it is installed; None (the default reader) otherwise, or for other formats."""
     if fmt not in ("parquet", "csv"):
         return None
     try:
@@ -74,7 +75,11 @@ def _plain(value: Any) -> Any:
 def value(path: str, fmt: str) -> dict:
     """One artifact as {"value": ...}, or {"error": ...}. Never raises."""
     try:
-        return {"value": _plain(_artifacts.deserialize(path, fmt, frame_type=_frame_type(fmt)))}
+        return {
+            "value": _plain(
+                _artifacts.deserialize(path, fmt, frame_type=_pyarrow_reader_if_available(fmt))
+            )
+        }
     except Exception as e:  # noqa: BLE001 — reported per artifact, never fails the command
         first = str(e).splitlines()[0] if str(e) else ""
         return {"error": f"{type(e).__name__}: {first}".rstrip(": ")}

@@ -150,16 +150,17 @@ def unwritable(step: dict, value, exc: BaseException) -> Exception:
     )
 
 
-def frame_type(value, fmt: str) -> str | None:
-    """The reader that gives back the type `value` has, when it was written as parquet."""
+def reader_name(value: Any, fmt: str) -> str | None:
+    """The name of the reader (`_artifacts.deserialize`'s `frame_type`) that gives back the type
+    `value` has, when it was written as parquet or CSV; None for another format."""
     if fmt not in ("parquet", "csv"):
         return None
-    from barca._artifacts import _frame_kind
+    from barca._artifacts import dataframe_library
 
-    kind = _frame_kind(value)
-    if kind == "polars" and type(value).__name__ == "LazyFrame":
+    library = dataframe_library(value)
+    if library == "polars" and type(value).__name__ == "LazyFrame":
         return "polars_lazy"
-    return kind
+    return library
 
 
 def _read(artifact: dict, source_file: str):

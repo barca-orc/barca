@@ -50,11 +50,12 @@ _FORMAT_EXTENSIONS = {
 _STAGING_DIR = ".barca/staging"
 
 
-def _frame_kind(value: Any) -> str | None:
-    """Classify a value as a frame-like type we can write to parquet, without imports.
+def dataframe_library(value: Any) -> str | None:
+    """Which dataframe library `value` belongs to, without importing any of them.
 
-    Returns "pandas", "polars", "pyarrow", "duckdb", or None. Matching is by
-    type/module name so none of these libraries has to be importable here.
+    Returns "pandas", "polars" (a DataFrame or LazyFrame), "pyarrow" (a Table), "duckdb" (a
+    relation), or None for anything that is not a frame. Matching is by type/module name so
+    none of these libraries has to be importable here.
     """
     type_name = type(value).__name__
     module = type(value).__module__ or ""
@@ -85,7 +86,7 @@ def detect_format(value: Any, explicit: str | None = None) -> str:
         return explicit
 
     # Check for frame types without requiring the imports at module level.
-    if _frame_kind(value) is not None:
+    if dataframe_library(value) is not None:
         return "parquet"
 
     # Try JSON — must succeed without default=str to be considered safe.
@@ -103,7 +104,7 @@ def resolve_format(value: Any, fmt: str, warn: bool = True) -> str:
     """
     if fmt != "parquet":
         return fmt
-    if _frame_kind(value) is not None or hasattr(value, "to_parquet"):
+    if dataframe_library(value) is not None or hasattr(value, "to_parquet"):
         return fmt
 
     if warn:
@@ -342,7 +343,7 @@ def publish_file(
 
 def _write_csv(value: Any, path: Path) -> None:
     """Write tabular CSV with a header and no pandas index column."""
-    kind = _frame_kind(value)
+    kind = dataframe_library(value)
     if kind == "pandas":
         value.to_csv(str(path), index=False)
     elif kind == "polars":
@@ -365,7 +366,7 @@ def _write_csv(value: Any, path: Path) -> None:
 def _write_parquet(value: Any, path: Path) -> None:
     """Write a frame to parquet: pandas, polars (incl. LazyFrame), pyarrow Table, duckdb relation."""
     type_name = type(value).__name__
-    kind = _frame_kind(value)
+    kind = dataframe_library(value)
 
     if kind == "polars":
         if type_name == "LazyFrame":

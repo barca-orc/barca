@@ -11,7 +11,7 @@ from collections import OrderedDict
 from typing import Any, Literal
 
 from barca import _storage
-from barca._artifacts import LAZY_FRAME_TYPES, _frame_kind
+from barca._artifacts import LAZY_FRAME_TYPES, dataframe_library
 
 # Tier-1 cache limits. Sizes are bytes of the serialized artifact: known without touching the
 # value, and the same unit for every type and for local and remote artifacts.
@@ -43,7 +43,7 @@ def cacheable_frame_type(value: Any) -> str | None | Literal[False]:
     Returns the frame type (None for non-frame values, which every reader ignores), or False
     when the result must not be cached: a lazy value, or a frame of a type no reader returns.
     """
-    library = _frame_kind(value)
+    library = dataframe_library(value)
     if library is None:
         return None
     if library == "duckdb" or type(value).__name__ == "LazyFrame":
@@ -81,7 +81,7 @@ def _cacheable(value: Any) -> bool:
     its own. The check is one `infer_dtype` scan per object column, made once when a value is
     offered to the cache; frames without object columns are not scanned at all.
     """
-    if _frame_kind(value) != "pandas":
+    if dataframe_library(value) != "pandas":
         return True
     from pandas.api.types import infer_dtype, is_object_dtype
 
@@ -122,7 +122,7 @@ def _isolated_copy(value: Any) -> Any:
       converting to pyarrow (`pa.Table.from_pandas(df)`) and writing through
       `np.frombuffer` on a column's buffer does.
     """
-    if _frame_kind(value) == "polars":
+    if dataframe_library(value) == "polars":
         return value.clone()
     import copy
 

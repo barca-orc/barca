@@ -242,12 +242,6 @@ def unbind() -> None:
 # ─── Outputs ────────────────────────────────────────────────────────────────
 
 
-def _frame_kind(value) -> "str | None":
-    from barca._artifacts import _frame_kind as kind
-
-    return kind(value)
-
-
 def split(result, keys: list, dims: list[str], staging: Path) -> dict:
     """What a batched call returned, as {normalized key: value}. A missing key is absent; an
     extra key, or a result that is neither a dict nor a table with the dimension columns, is a
@@ -268,7 +262,9 @@ def split(result, keys: list, dims: list[str], staging: Path) -> dict:
                 )
             out[n] = v
         return out
-    kind = _frame_kind(result)
+    from barca._artifacts import dataframe_library
+
+    kind = dataframe_library(result)
     if kind is None:
         raise TypeError(
             f"a batched step returns a dict of key to value, or a table with the column"
