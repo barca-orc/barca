@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Release merge groups must retain the full release gates without payload commit text."""
 
 from pathlib import Path

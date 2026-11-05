@@ -23,6 +23,17 @@ toml = "0.8"
 # native-tls; no default features, so no HTTP/2, proxy discovery, cookies or decompression.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tempfile = "3"
+sha2 = "0.10"
+chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10.4"
+croner = "3.0.1"
+futures = "0.3"
+libc = "0.2"
+tokio-util = "0.7"
+# TypeScript binding generation (`ts` features of barca-core and barca-server), never in the
+# production binary; regenerates ui/src/lib/generated/.
+ts-rs = "12"
 
 [profile.release]
 # Jobs run in worker processes; compact coordinator code keeps resident instruction

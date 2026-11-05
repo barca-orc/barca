@@ -65,6 +65,14 @@ test = [
     "msgpack",
 ]
 
+# The linters prek.toml runs, at the versions it pins (scripts/check-version-sync.sh keeps the
+# two in step), so uv.lock pins them and `uv sync` puts them in the venv.
+[dependency-groups]
+dev = [
+    "ruff==0.14.14",
+    "ty==0.0.97",
+]
+
 [tool.pytest.ini_options]
 # pytest-timeout (the `test` extra): a test still running after this many seconds fails, with
 # every thread's stack, instead of holding a CI job until its own limit. The slowest test

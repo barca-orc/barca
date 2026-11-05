@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Wait for an exact Linux wheel on both official PyPI metadata surfaces."""
 
 import argparse

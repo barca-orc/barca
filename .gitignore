@@ -34,10 +34,11 @@ vendor/
 # Git worktrees (agents create only under .worktrees/<slug>; see AGENTS.md)
 .worktrees/
 
-# Editors / OS / AI
+# Editors / OS / AI (.cursor/worktrees.json is tracked: Cursor's worktree hook, see AGENTS.md)
 .vscode/
 .idea/
-.cursor/
+.cursor/*
+!.cursor/worktrees.json
 .claude/
 *.swp
 *.swo
