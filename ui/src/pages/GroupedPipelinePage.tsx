@@ -127,7 +127,9 @@ export function GroupedPipelinePage() {
   // How many nodes in view a run is working on now, whoever started it.
   const runningHere = runningCount(scopeIds, byId, live)
 
-  const update = (changes: ParamChanges) => setParams(applyChanges(params, changes), { replace: true })
+  // Against the URL as it is when the change lands, not the render's copy: a navigation is a
+  // transition, and a keystroke right after a click would otherwise write the click's URL back.
+  const update = (changes: ParamChanges) => setParams((current) => applyChanges(current, changes), { replace: true })
   const select = (id: string | null) => update(selectChanges(graph, id))
   const openGroup = (id: string | null) => update(openGroupChanges(id, sole))
   const revealNode = (id: string) => update(revealChanges(id, tree, graph))
