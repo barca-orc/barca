@@ -199,7 +199,7 @@ impl RunResults {
         attempts: u32,
         clock: Option<(std::time::SystemTime, std::time::Duration)>,
         phase: Option<crate::dispatch::ErrorPhase>,
-    ) {
+    ) -> &StepFailure {
         self.failures.push(StepFailure {
             node_id,
             error: crate::dispatch::StepError {
@@ -212,6 +212,7 @@ impl RunResults {
                 elapsed_seconds: clock.map(|(_, wall)| wall.as_secs_f64()),
             },
         });
+        self.failures.last().expect("just pushed")
     }
 
     /// Run hashes identify plan steps. Other coordinator outputs are parallel children,

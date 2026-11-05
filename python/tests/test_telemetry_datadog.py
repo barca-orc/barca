@@ -1,4 +1,5 @@
-"""`BARCA_TELEMETRY=datadog`: a finished run reaches the Datadog Agent as one trace.
+"""`BARCA_TELEMETRY=datadog`: every step that ran or failed reaches the Datadog Agent as a
+trace of its own, as it ends, and the run as one more.
 
 A local HTTP server stands in for the Agent's trace intake and records what it is sent.
 """
@@ -15,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+
+from barca.api import _find_binary
 
 from . import helpers
 from .helpers import QUICK, RUN, clean_env, wait_until
@@ -107,10 +110,34 @@ class FakeAgent:
         self.server.shutdown()
         self.server.server_close()
 
+    def traces(self) -> list[list[dict]]:
+        """Every trace the coordinator sent, one per request, in arrival order."""
+        out = []
+        for request in self.requests:
+            (trace,) = request["body"]
+            out.append(trace)
+        return out
+
     def spans(self) -> list[dict]:
-        """Spans of the only trace of the latest request."""
-        (trace,) = self.requests[-1]["body"]
-        return trace
+        """Every span the coordinator sent."""
+        return [span for trace in self.traces() for span in trace]
+
+    def runs(self) -> list[dict]:
+        """The `barca.run` spans, one per run."""
+        return [s for s in self.spans() if s["name"] == "barca.run"]
+
+    def run(self) -> dict:
+        """The one run's `barca.run` span."""
+        (root,) = self.runs()
+        return root
+
+    def steps(self) -> list[dict]:
+        """The `barca.step` spans: one per step that ran or failed, each the root of a trace."""
+        return [s for s in self.spans() if s["name"] == "barca.step"]
+
+    def by_node_id(self) -> dict[str, dict]:
+        """`barca.step` spans by node id (with the partition key, for a key)."""
+        return {s["meta"]["barca.node_id"]: s for s in self.steps()}
 
 
 @pytest.fixture
@@ -145,11 +172,20 @@ def datadog(agent: FakeAgent, **extra: str) -> dict[str, str]:
 
 
 def by_node(spans: list[dict]) -> dict[str, dict]:
-    """`barca.step` spans by resource: the node's short name."""
+    """`barca.step` spans by resource: the node's short name (one per node without keys)."""
     return {s["resource"]: s for s in spans if s["name"] == "barca.step"}
 
 
-def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
+def own_trace(span: dict, root: dict) -> None:
+    """`span` is the root of a trace of its own, kept, apart from the run's trace `root`."""
+    assert "parent_id" not in span, span
+    assert span["trace_id"] != root["trace_id"]
+    assert span["metrics"]["_sampling_priority_v1"] == 2
+    assert span["meta"]["_dd.p.dm"] == "-4"
+    assert len(span["meta"]["_dd.p.tid"]) == 16
+
+
+def test_each_step_is_a_trace_of_its_own_and_the_run_one_more(project, agent):
     before = time.time_ns()
     proc = cli(
         project,
@@ -162,13 +198,16 @@ def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
     )
     after = time.time_ns()
     assert proc.returncode == 0, proc.stderr
-    assert len(agent.requests) == 1
-    request = agent.requests[0]
-    assert request["path"] == "/v0.4/traces"
-    assert request["headers"]["Content-Type"] == "application/json"
+    # Three steps ran: three traces, then the run's. Each request is one trace.
+    assert len(agent.requests) == 4
+    for request in agent.requests:
+        assert request["path"] == "/v0.4/traces"
+        assert request["headers"]["Content-Type"] == "application/json"
+        assert request["headers"]["X-Datadog-Trace-Count"] == "1"
+        assert len(request["body"]) == 1 and len(request["body"][0]) == 1
+    assert agent.requests[-1]["body"][0][0]["name"] == "barca.run", "the run's trace comes last"
 
-    spans = agent.spans()
-    (root,) = [s for s in spans if s["name"] == "barca.run"]
+    root = agent.run()
     assert root["resource"] == "run publish"
     assert root["meta"]["barca.job"] == "pipeline.py:publish"
     assert root["meta"]["barca.target"] == "publish"
@@ -182,20 +221,24 @@ def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
     assert root["meta"]["barca.status"] == "success"
     assert root["meta"]["barca.run_id"] == json.loads(proc.stdout)["run_id"]
     assert root["metrics"]["barca.steps.executed"] == 3
+    assert "parent_id" not in root
     assert before <= root["start"] <= after
     assert root["start"] + root["duration"] <= after
 
-    steps = by_node(spans)
+    steps = by_node(agent.spans())
     assert set(steps) == {"orders", "report", "publish"}
     for name, span in steps.items():
-        assert span["trace_id"] == root["trace_id"]
-        assert span["parent_id"] == root["span_id"]
+        own_trace(span, root)
+        assert span["meta"]["barca.run_id"] == root["meta"]["barca.run_id"]
+        assert span["meta"]["barca.job"] == "pipeline.py:publish"
         assert span["meta"]["barca.outcome"] == "ran"
         assert span["meta"]["barca.asset"] == name
         assert span["meta"]["barca.node_id"] == f"pipeline.py:{name}"
         assert span["meta"]["barca.file"] == "pipeline.py"
         assert span["service"] == "planning" and span["type"] == "worker"
+        assert span["meta"]["env"] == "staging" and span["meta"]["team"] == "data"
         assert root["start"] <= span["start"] <= after
+    assert len({s["trace_id"] for s in steps.values()}) == 3, "one trace per step"
     assert steps["orders"]["duration"] >= 200_000_000
     assert steps["orders"]["meta"]["barca.kind"] == "asset"
     assert steps["publish"]["meta"]["barca.kind"] == "task"
@@ -211,7 +254,7 @@ def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
     for span in steps.values():
         assert span["start"] + span["duration"] <= root["start"] + root["duration"] + 50_000_000
         assert span["metrics"]["barca.attempts"] == 1
-    assert len({s["span_id"] for s in spans}) == len(spans)
+    assert len({s["span_id"] for s in agent.spans()}) == 4
     # Lineage and what was written: direct upstream ids, and the digest the run recorded.
     assert "barca.upstream" not in steps["orders"]["meta"]
     assert steps["report"]["meta"]["barca.upstream"] == "pipeline.py:orders"
@@ -226,38 +269,77 @@ def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
         assert steps[name]["metrics"]["barca.bytes"] == recorded["size_bytes"]
 
 
-def test_a_cached_step_is_reported_as_cached(project, agent):
+def test_a_step_trace_is_sent_when_the_step_ends_not_when_the_run_does(tmp_path, agent):
+    (tmp_path / "pipeline.py").write_text(
+        "import time\n"
+        "from barca import task\n\n\n"
+        "@task()\n"
+        "def first() -> int:\n"
+        "    return 3\n\n\n"
+        "@task(inputs={'first': first})\n"
+        "def slow(first: int) -> None:\n"
+        "    time.sleep(first)\n"
+    )
+    proc = subprocess.Popen(
+        [_find_binary(), "run", "slow", "--json"],
+        cwd=tmp_path,
+        env={**base_env(), **datadog(agent)},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        # `first`'s trace arrives while `slow` is still running, long before the run ends.
+        wait_until(
+            lambda: "pipeline.py:first" in agent.by_node_id(),
+            "the first step's trace",
+            timeout=QUICK,
+            proc=proc,
+        )
+        assert proc.poll() is None, "the run was still going"
+        assert agent.runs() == []
+        assert agent.by_node_id()["pipeline.py:first"]["meta"]["barca.outcome"] == "ran"
+    finally:
+        out, err = proc.communicate(timeout=RUN)
+    assert proc.returncode == 0, err
+    assert set(agent.by_node_id()) == {"pipeline.py:first", "pipeline.py:slow"}
+    assert agent.run()["metrics"]["barca.steps.executed"] == 2
+
+
+def test_a_cached_step_sends_no_trace_and_the_run_counts_it(project, agent):
     assert cli(project, "get", "report", "--json").returncode == 0
     assert agent.requests == [], "telemetry is off unless BARCA_TELEMETRY names it"
 
     assert cli(project, "run", "publish", "--json", **datadog(agent)).returncode == 0
-    spans = agent.spans()
-    (root,) = [s for s in spans if s["name"] == "barca.run"]
-    steps = by_node(spans)
-    assert steps["orders"]["meta"]["barca.outcome"] == "cached"
-    assert steps["report"]["meta"]["barca.outcome"] == "cached"
+    # `orders` and `report` were cached: only `publish` ran, so only it and the run are traces.
+    assert len(agent.traces()) == 2
+    steps = by_node(agent.spans())
+    assert set(steps) == {"publish"}
     assert steps["publish"]["meta"]["barca.outcome"] == "ran"
-    assert steps["orders"]["duration"] == 0
-    # A cached step wrote nothing: no digest, but its lineage is the same.
-    assert "barca.digest" not in steps["report"]["meta"]
-    assert steps["report"]["meta"]["barca.upstream"] == "pipeline.py:orders"
+    assert steps["publish"]["meta"]["barca.upstream"] == "pipeline.py:report"
+    root = agent.run()
     assert root["metrics"]["barca.steps.cached"] == 2
+    assert root["metrics"]["barca.steps.executed"] == 1
     assert root["service"] == "barca"
 
 
-def test_a_failed_step_marks_its_span_and_the_run_as_errors(project, agent):
+def test_a_failed_step_is_an_error_trace_and_the_run_names_it(project, agent):
     proc = cli(project, "run", "broken", "--json", **datadog(agent))
     assert proc.returncode == 1
-    spans = agent.spans()
-    (root,) = [s for s in spans if s["name"] == "barca.run"]
+    root = agent.run()
     assert root["error"] == 1 and root["meta"]["barca.status"] == "failed"
-    broken = by_node(spans)["broken"]
+    assert root["meta"]["barca.failed_asset"] == "broken"
+    assert root["meta"]["error.message"] == "broken: cannot publish"
+    steps = by_node(agent.spans())
+    broken = steps["broken"]
+    own_trace(broken, root)
     assert broken["error"] == 1
     assert broken["meta"]["barca.outcome"] == "failed"
     assert broken["meta"]["error.type"] == "ValueError"
     assert broken["meta"]["error.message"] == "cannot publish"
     assert 'raise ValueError("cannot publish")' in broken["meta"]["error.stack"]
-    assert by_node(spans)["report"]["error"] == 0
+    assert broken["metrics"]["barca.attempts"] == 1
+    assert steps["report"]["error"] == 0
 
 
 def test_a_failed_step_span_lasts_from_its_first_attempt_to_its_failure(tmp_path, agent):
@@ -276,9 +358,8 @@ def test_a_failed_step_span_lasts_from_its_first_attempt_to_its_failure(tmp_path
         proc = cli(tmp_path, "run", name, "--json", **datadog(agent))
         assert proc.returncode == 1, proc.stderr
         (row,) = json.loads(proc.stdout)["steps"]
-        spans = agent.spans()
-        (root,) = [s for s in spans if s["name"] == "barca.run"]
-        step = by_node(spans)[name]
+        root = agent.runs()[-1]
+        step = by_node(agent.spans())[name]
         assert step["meta"]["barca.outcome"] == "failed"
         # A timeout reports about its timeout; retries are inside the span.
         assert low * 1e9 <= step["duration"] <= high * 1e9, step["duration"]
@@ -299,7 +380,9 @@ def test_an_unreachable_agent_warns_and_does_not_fail_the_run(project):
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["status"] == "success"
-    assert "telemetry 'datadog' did not receive run" in proc.stderr
+    # The first delivery that fails is reported, the step's or the run's; the rest are silent.
+    assert proc.stderr.count("telemetry 'datadog' did not receive") == 1, proc.stderr
+    assert "cannot reach the Datadog Agent" in proc.stderr
 
 
 def test_an_agent_that_refuses_the_trace_warns(project):
@@ -320,7 +403,7 @@ def test_an_unknown_integration_name_warns(project, agent):
     )
     assert proc.returncode == 0, proc.stderr
     assert "unknown telemetry integration 'nope'" in proc.stderr
-    assert len(agent.requests) == 1
+    assert len(agent.runs()) == 1
 
 
 def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
@@ -487,14 +570,18 @@ def test_barca_log_json_under_serve_writes_json_lines_joined_to_the_trace(tmp_pa
     for tick in joined:
         assert tick["level"] == "info"
         assert tick["node"] == "pipeline.py:heartbeat"
+        # The step's own trace, at its root span.
         span = steps[(tick["run_id"], "pipeline.py:heartbeat")]
+        assert "parent_id" not in span
         assert tick["dd.trace_id"] == str(span["trace_id"])
         assert tick["dd.span_id"] == str(span["span_id"])
-    # A step line names its node; the end-of-run line is joined to the run span.
+        assert tick["dd.trace_id"] != str(roots[tick["run_id"]]["trace_id"])
+    # A step line names its node; the end-of-run line is joined to the run's trace.
     run_id = joined[0]["run_id"]
     of_run = [line for line in lines if line.get("run_id") == run_id]
     done = [line for line in of_run if "steps | done in" in line["msg"]]
     assert len(done) == 1 and "node" not in done[0], of_run
+    assert done[0]["dd.trace_id"] == str(roots[run_id]["trace_id"])
     assert done[0]["dd.span_id"] == str(roots[run_id]["span_id"])
     completed = [line for line in of_run if line["msg"].startswith("step:pipeline.py:heartbeat ")]
     assert completed and completed[0]["node"] == "pipeline.py:heartbeat", of_run
@@ -553,7 +640,7 @@ def test_dd_trace_enabled_false_switches_datadog_off_silently(project, agent, va
 def test_dd_trace_enabled_true_sends(project, agent):
     proc = cli(project, "run", "publish", "--json", **datadog(agent, DD_TRACE_ENABLED="true"))
     assert proc.returncode == 0, proc.stderr
-    assert len(agent.requests) == 1
+    assert len(agent.runs()) == 1
 
 
 def test_under_serve_a_delivery_failure_is_reported_once_until_it_recovers(tmp_path):
@@ -576,20 +663,21 @@ def test_under_serve_a_delivery_failure_is_reported_once_until_it_recovers(tmp_p
     err = server.stderr
 
     assert err.count("scheduled run") >= 3, err
-    assert err.count("telemetry 'datadog' did not receive run") == 1, err
+    # Once for the streak, whether the first delivery to fail was a step's or the run's.
+    assert err.count("telemetry 'datadog' did not receive") == 1, err
 
 
 def test_cli_aliases_group_under_the_same_job(project, agent):
     for target in ("publish", "pipeline.py:publish"):
         proc = cli(project, "run", target, "--json", **datadog(agent))
         assert proc.returncode == 0, proc.stderr
-        root = agent.spans()[0]
+        root = agent.runs()[-1]
         assert root["resource"] == "run publish"
         assert root["meta"]["barca.target"] == target
         assert all(s["meta"]["barca.job"] == "pipeline.py:publish" for s in agent.spans())
-    assert len(agent.requests) == 2
-    assert (
-        agent.requests[0]["body"][0][0]["trace_id"] != agent.requests[1]["body"][0][0]["trace_id"]
+    assert len(agent.runs()) == 2
+    assert len({s["trace_id"] for s in agent.spans()}) == len(agent.spans()), (
+        "every step of every run is a trace of its own"
     )
 
 
@@ -618,7 +706,7 @@ def test_python_calls_are_children_of_the_step_in_one_service(project, agent):
         **datadog(agent, DD_SERVICE="jobs", DD_TRACE_SQLITE3_ENABLED="true", DD_ENV="prod"),
     )
     assert proc.returncode == 0, proc.stderr
-    root = agent.spans()[0]
+    root = agent.run()
     (step,) = by_node(agent.spans()).values()
     (execution,) = [s for s in agent.python_spans if s["name"] == "barca.execute"]
     (user,) = [s for s in agent.python_spans if s["name"] == "user.work"]
@@ -626,7 +714,9 @@ def test_python_calls_are_children_of_the_step_in_one_service(project, agent):
     assert sql, agent.python_spans
     assert execution["resource"] == "traced"
     assert execution["type"] == "worker"
+    # The Python call is a child of the step's root span, in the step's own trace.
     assert execution["parent_id"] == step["span_id"]
+    assert execution["trace_id"] == step["trace_id"] != root["trace_id"]
     assert execution["meta"]["component"] == "python"
     assert execution["meta"]["span.kind"] == "internal"
     assert execution["meta"]["barca.asset"] == "traced"
@@ -634,11 +724,11 @@ def test_python_calls_are_children_of_the_step_in_one_service(project, agent):
     assert execution["meta"]["barca.job"] == "pipeline.py:traced"
     assert execution["meta"]["barca.version"] == root["meta"]["barca.version"]
     assert execution["meta"]["env"] == "prod"
-    # One 128-bit trace: the upper half travels as _dd.p.tid, as on the coordinator's root.
-    assert execution["meta"]["_dd.p.tid"] == root["meta"]["_dd.p.tid"]
+    # One 128-bit trace: the upper half travels as _dd.p.tid, as on the step's root.
+    assert execution["meta"]["_dd.p.tid"] == step["meta"]["_dd.p.tid"]
     assert user["parent_id"] == execution["span_id"]
     assert all(s["parent_id"] == user["span_id"] for s in sql)
-    assert all(s["trace_id"] == root["trace_id"] for s in agent.python_spans)
+    assert all(s["trace_id"] == step["trace_id"] for s in agent.python_spans)
     # One service: barca's spans, the user's and the library's.
     assert {s["service"] for s in agent.python_spans} == {"jobs"}
     assert root["service"] == "jobs"
@@ -674,8 +764,10 @@ def test_python_failure_is_delivered_before_worker_is_replaced(project, agent):
     assert failed["error"] == 1
     assert failed["meta"]["error.type"].endswith("ValueError")
     assert failed["meta"]["error.message"] == "cannot publish"
-    root = agent.spans()[0]
-    assert all(s["trace_id"] == root["trace_id"] for s in spans)
+    root = agent.run()
+    steps = agent.by_node_id()
+    # Each Python call is in its own step's trace, and every trace is this run's.
+    assert all(s["trace_id"] == steps[s["meta"]["barca.node_id"]]["trace_id"] for s in spans)
     assert all(s["meta"]["barca.run_id"] == root["meta"]["barca.run_id"] for s in spans)
 
 
@@ -700,11 +792,12 @@ def retrying():
     assert len(executions) == 2
     assert sorted(s["metrics"]["barca.attempt"] for s in executions) == [1, 2]
     assert sorted(s.get("error", 0) for s in executions) == [0, 1]
-    root = agent.spans()[0]
     (step,) = by_node(agent.spans()).values()
-    assert all(s["trace_id"] == root["trace_id"] for s in executions)
+    # Both attempts are in the step's one trace, under its root span.
+    assert all(s["trace_id"] == step["trace_id"] for s in executions)
     assert all(s["parent_id"] == step["span_id"] for s in executions)
     assert len({s["span_id"] for s in executions}) == 2
+    assert step["metrics"]["barca.attempts"] == 2
 
 
 def test_parallel_python_calls_have_a_reported_parent(project, agent):
@@ -727,9 +820,10 @@ def fanout():
 """)
     proc = cli(project, "run", "fanout", "--json", **datadog(agent))
     assert proc.returncode == 0, proc.stderr
-    root = agent.spans()[0]
+    root = agent.run()
     (step,) = by_node(agent.spans()).values()
-    assert all(s["trace_id"] == root["trace_id"] for s in agent.python_spans)
+    # parallel() children have no trace of their own: they join the calling step's.
+    assert all(s["trace_id"] == step["trace_id"] for s in agent.python_spans)
     # This run's spans only, each once (see FakeAgent): the caller and its two children.
     run_id = root["meta"]["barca.run_id"]
     spans = [s for s in agent.python_spans if s["meta"].get("barca.run_id") == run_id]
@@ -920,7 +1014,7 @@ company = group("Company", members=[sales], output=sales)
 
 
 def tree(spans: list[dict]) -> list[str]:
-    """The trace as indented `name resource {key tags}` lines, siblings sorted."""
+    """The traces as indented `name resource {key tags}` lines, roots and siblings sorted."""
     children: dict[int, list[dict]] = {}
     ids = {s["span_id"] for s in spans}
     roots = []
@@ -940,13 +1034,12 @@ def tree(spans: list[dict]) -> list[str]:
         "error.message",
         "component",
     )
+    roots.sort(key=lambda r: (r["name"], r["resource"], r["meta"].get("barca.partition", "")))
     lines: list[str] = []
 
     def walk(span: dict, depth: int) -> None:
         tags = {k: span["meta"][k] for k in keys if k in span["meta"]}
-        tags.update(
-            {k: int(v) for k, v in span["metrics"].items() if k.startswith("barca.partitions.")}
-        )
+        tags.update({k: int(v) for k, v in span["metrics"].items() if k.startswith("barca.steps.")})
         lines.append(
             f"{'  ' * depth}{span['name']} [{span['resource']}] service={span['service']} "
             f"type={span.get('type')} error={span.get('error', 0)} {json.dumps(tags, sort_keys=True)}"
@@ -962,31 +1055,41 @@ def tree(spans: list[dict]) -> list[str]:
     return lines
 
 
-def test_a_pipeline_trace_shows_groups_partitions_and_the_failure(tmp_path, agent):
+def test_a_pipeline_is_a_trace_per_step_with_groups_partitions_and_the_failure(tmp_path, agent):
     (tmp_path / "pipeline.py").write_text(SHOP)
     proc = cli(tmp_path, "run", "report,publish", "--json", **datadog(agent))
     assert proc.returncode == 1, proc.stderr
-    spans = agent.spans()
-    root = spans[0]
+    root = agent.run()
     assert root["resource"] == "run publish,report"
     assert root["meta"]["barca.failed_asset"] == "regional"
     assert root["meta"]["error.message"] == "regional[region=apac]: no data for apac"
-    steps = by_node(spans)
-    assert steps["orders"]["meta"]["barca.group"] == "Company/Sales"
-    assert steps["publish"]["meta"]["barca.group"] == "Company/Sales"
-    assert "barca.group" not in steps["regional"]["meta"]
-    regional = steps["regional"]
-    assert regional["metrics"]["barca.partitions.total"] == 3
-    assert regional["metrics"]["barca.partitions.failed"] == 1
-    keys = [s for s in spans if s["name"] == "barca.partition"]
+    assert root["metrics"]["barca.steps.failed"] == 1
+    assert root["metrics"]["barca.steps.skipped"] == 1
+    # Three plain steps, three keys of `regional`, and the run: seven traces. The skipped
+    # `report` has none.
+    assert len(agent.traces()) == 7
+    steps = agent.by_node_id()
+    assert steps["pipeline.py:orders"]["meta"]["barca.group"] == "Company/Sales"
+    assert steps["pipeline.py:publish"]["meta"]["barca.group"] == "Company/Sales"
+    assert "pipeline.py:report" not in steps
+    keys = [s for s in agent.steps() if s["resource"] == "regional"]
     assert {k["meta"]["barca.partition"] for k in keys} == {
         "region=emea",
         "region=amer",
         "region=apac",
     }
-    assert all(k["resource"] == "regional" and k["parent_id"] == regional["span_id"] for k in keys)
-    assert steps["report"]["meta"]["barca.outcome"] == "skipped"
-    assert root["metrics"]["barca.steps.skipped"] == 1
+    assert {k["meta"]["barca.node_id"] for k in keys} == {
+        f"pipeline.py:regional[region={r}]" for r in ("emea", "amer", "apac")
+    }
+    for key in keys:
+        own_trace(key, root)
+        assert "barca.group" not in key["meta"]
+        assert key["metrics"]["barca.attempts"] == 1
+    assert len({k["trace_id"] for k in keys}) == 3, "one trace per key"
+    apac = steps["pipeline.py:regional[region=apac]"]
+    assert apac["error"] == 1 and apac["meta"]["barca.outcome"] == "failed"
+    assert apac["meta"]["error.message"] == "no data for apac"
+    assert all(k["error"] == 0 for k in keys if k is not apac)
 
 
 def find_test_agent() -> str | None:
@@ -1060,11 +1163,12 @@ def test_a_pipeline_trace_passes_the_datadog_test_agent(tmp_path):
         )
         assert proc.returncode == 1, proc.stderr
 
-        # Python spans are flushed before each step reports; give the agent a moment.
+        # Python spans are flushed before each step reports; give the agent a moment. Seven
+        # coordinator spans, six Python executions and two sqlite queries.
         def flushed():
             _, body = get("/test/traces")
             spans = json.loads(body)
-            return spans if sum(len(t) for t in spans) >= 17 else None
+            return spans if sum(len(t) for t in spans) >= 15 else None
 
         traces = wait_until(flushed, "the spans to reach the agent", timeout=30, interval=0.2)
         # The agent answers a payload that fails a check with 400, which barca would report.
@@ -1076,8 +1180,9 @@ def test_a_pipeline_trace_passes_the_datadog_test_agent(tmp_path):
         test_agent.terminate()
         test_agent.communicate(timeout=QUICK)
 
-    assert len(traces) == 1, "one run is one trace, Python spans included"
-    lines = tree(traces[0])
+    # Six steps and the run, the Python spans inside their steps' traces.
+    assert len(traces) == 7, [sorted(s["name"] for s in t) for t in traces]
+    lines = tree([span for trace in traces for span in trace])
     if os.environ.get("BARCA_UPDATE_SNAPSHOTS"):
         SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
         SNAPSHOT.write_text("\n".join(lines) + "\n")

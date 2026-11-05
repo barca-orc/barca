@@ -1,20 +1,30 @@
-//! Datadog: one APM trace per run, sent to the local Datadog Agent, and `barca serve`'s
-//! lifecycle as DogStatsD metrics.
+//! Datadog: one APM trace per step execution and one per run, sent to the local Datadog
+//! Agent as each finishes, and `barca serve`'s lifecycle as DogStatsD metrics.
 //!
-//! A trace is the pipeline as it ran. Every span reports as one service, `DD_SERVICE`
-//! (default `barca`), with `type: worker` and `span.kind: internal`:
+//! An asset DAG has thousands of steps and partitions; a run of it is not one request but
+//! thousands. So a step execution is the unit of a trace, as a request is for a web service,
+//! and the run is a small trace of its own:
 //!
 //! ```text
-//! barca.run          get daily_revenue      the run (root)
-//!   barca.step       orders                 one per node, resource = the node's short name
-//!     barca.partition  orders               one per partition key that ran (capped) or failed
-//!       barca.execute  orders               Python, from ddtrace in the worker (optional)
-//!         library spans                     opted in with DD_PATCH_MODULES and friends
+//! barca.step       orders                 the step (root), one trace per step that ran or failed
+//!   barca.execute  orders                 Python, from ddtrace in the worker (optional)
+//!     library spans                       opted in with DD_PATCH_MODULES and friends
+//!
+//! barca.run        get daily_revenue      the run: status, counts, the first failure
 //! ```
 //!
-//! Partition keys are the tag `barca.partition`, never part of a resource, so a node with
-//! 20,000 keys is still one resource. The trace goes to the Agent's trace intake as JSON over
-//! plain HTTP, the same place `ddtrace` sends to, so nothing but the Agent is needed.
+//! Every span reports as one service, `DD_SERVICE` (default `barca`), with `type: worker` and
+//! `span.kind: internal`. A partitioned node is one trace per key, the key in the tag
+//! `barca.partition` and never in the resource, so a node with 20,000 keys is one resource
+//! with 20,000 traces behind it. A cached or skipped step sends nothing; the run span counts
+//! them. A run's traces share `barca.run_id`.
+//!
+//! A step's trace is sent when the step ends ([`Dispatch::step_finished`],
+//! [`Dispatch::step_failed`]), in the background, so a failure is in Datadog seconds after it
+//! happens and a killed run has sent every step that finished. The run's trace goes at the end
+//! of the run ([`Integration::export`]), which also sends any step the live path did not. Each
+//! goes to the Agent's trace intake as JSON over plain HTTP, the same place `ddtrace` sends
+//! to, so nothing but the Agent is needed.
 //!
 //! Settings are Datadog's own environment variables:
 //!
@@ -39,24 +49,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// The trace intake. It takes JSON (by `Content-Type`) as well as `ddtrace`'s msgpack.
 const INTAKE_PATH: &str = "/v0.4/traces";
 /// Error text longer than this is cut. An exception message can be arbitrarily large, and an
-/// oversized payload makes the Agent refuse the whole trace, which loses the failed run.
+/// oversized payload makes the Agent refuse the trace, which loses the failed step.
 const MAX_MESSAGE_CHARS: usize = 2000;
 const MAX_STACK_CHARS: usize = 4000;
-/// A node's failed partitions after this many carry a short message and no stack: a change
-/// that breaks every key of a 20,000-key node fails them all the same way.
-const DETAILED_FAILURES_PER_NODE: usize = 20;
-const BRIEF_MESSAGE_CHARS: usize = 200;
-/// Partition keys that ran get a `barca.partition` span (and a Python `barca.execute` span)
-/// up to this many per node, and this many per run. A failed key always gets one. Past the
-/// cap the node's `barca.step` span counts its keys (`barca.partitions.*`) instead. 200 keys
-/// is a readable waterfall and about 150 KB of trace; 2,000 per run keeps the largest
-/// payload (with failures) well inside the Agent's 25 MB request limit and the 3 seconds a
-/// delivery may take.
-pub(crate) const KEY_SPANS_PER_NODE: usize = 200;
-pub(crate) const KEY_SPANS_PER_RUN: usize = 2_000;
-/// One request to the Agent carries at most this much; a larger trace goes in several
-/// requests (trace chunks with the same trace id, as a tracer's partial flush sends them).
-const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 /// barca's own version, the `barca.version` tag of every span and metric.
 pub(crate) const BARCA_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -204,8 +199,8 @@ fn wide_id(parts: &[&str]) -> u64 {
     (span_id(parts) << 1 | 1).max(1)
 }
 
-/// The lower 64 bits of a run's trace id: the `trace_id` field of every span, and the
-/// `dd.trace_id` of a `BARCA_LOG=json` line.
+/// The lower 64 bits of a run's trace id: the `trace_id` of its `barca.run` span, and the
+/// `dd.trace_id` of a `BARCA_LOG=json` line with no node.
 pub(crate) fn trace_id(run_id: &str) -> u64 {
     span_id(&["trace", run_id])
 }
@@ -220,74 +215,72 @@ pub(crate) fn run_span_id(run_id: &str) -> u64 {
     span_id(&["run", run_id])
 }
 
-/// The id of the span of `node` in a run: the `barca.step` span for a node id without a
-/// partition key, the `barca.partition` span for one with a key.
+/// The lower 64 bits of the trace id of the step `node` (a node id, with its partition key
+/// when it has one) in a run: deterministic in the run and the step, so a worker's Python
+/// spans, the step's log lines and the coordinator's root span agree without a message.
+pub(crate) fn step_trace_id(run_id: &str, node: &str) -> u64 {
+    span_id(&["step-trace", run_id, node])
+}
+
+/// The upper 64 bits of a step's 128-bit trace id.
+pub(crate) fn step_trace_id_high(run_id: &str, node: &str) -> u64 {
+    wide_id(&["step-trace-high", run_id, node])
+}
+
+/// The id of the `barca.step` span of `node` in a run: the root of the step's trace.
 pub(crate) fn step_span_id(run_id: &str, node: &str) -> u64 {
     span_id(&["step", run_id, node])
 }
 
-/// The span a `BARCA_LOG=json` line about `node` belongs to: the key's `barca.partition`
-/// span when it has one, else the node's `barca.step` span; the run's span for no node.
-pub(crate) fn log_span_id(run_id: &str, node: Option<&str>) -> u64 {
-    let Some(node) = node else {
-        return run_span_id(run_id);
-    };
-    let id = crate::StepId::parse(node);
-    if id.partition.is_empty() || has_key_span(run_id, node) {
-        step_span_id(run_id, node)
-    } else {
-        step_span_id(run_id, id.base_id())
+/// The trace and span a `BARCA_LOG=json` line belongs to, as `(trace_id, span_id)`: the
+/// step's own trace and its root span for a line about `node`; the run's for a line with no
+/// node.
+pub(crate) fn log_ids(run_id: &str, node: Option<&str>) -> (u64, u64) {
+    match node {
+        Some(node) => (step_trace_id(run_id, node), step_span_id(run_id, node)),
+        None => (trace_id(run_id), run_span_id(run_id)),
     }
 }
 
-/// Which partition keys of a run have a span of their own, decided when each is first sent
-/// to a worker, so the worker's `barca.execute` span, the log lines and the trace agree.
+/// The steps of a run whose traces the live path sent (or is sending), so the end-of-run
+/// export sends only the run's own trace and the steps nobody sent.
 #[derive(Default)]
-struct KeySpans {
-    total: usize,
-    per_node: HashMap<String, usize>,
-    keys: HashSet<String>,
+struct Sent {
+    steps: HashSet<String>,
+    deliveries: Vec<tokio::task::JoinHandle<()>>,
 }
 
-fn key_spans() -> &'static Mutex<HashMap<String, KeySpans>> {
-    static KEYS: OnceLock<Mutex<HashMap<String, KeySpans>>> = OnceLock::new();
-    KEYS.get_or_init(Default::default)
+fn sent() -> &'static Mutex<HashMap<String, Sent>> {
+    static SENT: OnceLock<Mutex<HashMap<String, Sent>>> = OnceLock::new();
+    SENT.get_or_init(Default::default)
 }
 
-/// Give partition `key` of node `base` a span in run `run_id` if the caps allow. True when
-/// it has one (also when it was given one before: a retry or a `parallel()` child).
-pub(crate) fn claim_key_span(run_id: &str, base: &str, key: &str) -> bool {
-    let Ok(mut all) = key_spans().lock() else {
-        return false;
-    };
-    let run = all.entry(run_id.to_string()).or_default();
-    if run.keys.contains(key) {
-        return true;
+fn note_sent(run_id: &str, node_id: String, delivery: tokio::task::JoinHandle<()>) {
+    if let Ok(mut all) = sent().lock() {
+        let run = all.entry(run_id.to_string()).or_default();
+        run.steps.insert(node_id);
+        run.deliveries.push(delivery);
     }
-    let count = run.per_node.entry(base.to_string()).or_default();
-    if *count >= KEY_SPANS_PER_NODE || run.total >= KEY_SPANS_PER_RUN {
-        return false;
-    }
-    *count += 1;
-    run.total += 1;
-    run.keys.insert(key.to_string());
-    true
 }
 
-fn has_key_span(run_id: &str, key: &str) -> bool {
-    key_spans()
-        .lock()
-        .is_ok_and(|all| all.get(run_id).is_some_and(|run| run.keys.contains(key)))
-}
-
-/// The keys of run `run_id` that have a span; forgets the run.
-pub(crate) fn take_key_spans(run_id: &str) -> HashSet<String> {
-    key_spans()
+/// What the live path sent for run `run_id`; forgets the run.
+fn take_sent(run_id: &str) -> Sent {
+    sent()
         .lock()
         .ok()
         .and_then(|mut all| all.remove(run_id))
-        .map(|run| run.keys)
         .unwrap_or_default()
+}
+
+/// The steps of `run` whose traces the end of the run sends: those that ran or failed and
+/// are not in `sent`. A cached or skipped step has no trace.
+fn to_send<'a>(
+    run: &'a RunReport,
+    sent: &'a HashSet<String>,
+) -> impl Iterator<Item = &'a StepReport> {
+    run.steps.iter().filter(move |s| {
+        matches!(s.outcome, StepOutcome::Ran | StepOutcome::Failed) && !sent.contains(&s.node_id)
+    })
 }
 
 /// `DD_SERVICE`, or `barca`: the one service every span reports as.
@@ -295,18 +288,37 @@ pub(crate) fn service_from_env() -> String {
     env_var("DD_SERVICE").unwrap_or_else(|| "barca".to_string())
 }
 
-/// What the coordinator tells a worker so its `barca.execute` span joins the run's trace.
+/// One run's live exporter: it tells each worker the trace its `barca.execute` span joins,
+/// and sends a step's trace the moment the step ends.
 #[derive(Debug, Clone)]
 pub(crate) struct Dispatch {
+    run_id: String,
     service: String,
     project: Option<String>,
     job: String,
     nodes: HashMap<String, Arc<NodeContext>>,
+    /// Each node's direct upstream node ids, sorted, by base id.
+    upstream: HashMap<String, Vec<String>>,
+    /// `None` when `DD_TRACE_ENABLED` switches tracing off or the settings are malformed;
+    /// the configured integration has already said so.
+    exporter: Option<Arc<Datadog>>,
 }
 
 impl Dispatch {
-    pub fn new(dag: &crate::dag::Dag, job: &str) -> Self {
+    pub fn new(dag: &crate::dag::Dag, job: &str, run_id: &str) -> Self {
+        let upstream = dag
+            .topo_order()
+            .into_iter()
+            .map(|id| {
+                let mut ids: Vec<String> =
+                    dag.upstream(id).into_iter().map(str::to_string).collect();
+                ids.sort();
+                ids.dedup();
+                (id.to_string(), ids)
+            })
+            .collect();
         Self {
+            run_id: run_id.to_string(),
             service: service_from_env(),
             project: project_from_cwd(),
             job: job.to_string(),
@@ -314,29 +326,27 @@ impl Dispatch {
                 .into_iter()
                 .map(|(id, ctx)| (id, Arc::new(ctx)))
                 .collect(),
+            upstream,
+            exporter: Datadog::from_env().ok().flatten().map(Arc::new),
         }
     }
 
-    /// The `datadog` object of a step sent to a worker. `reported` is the step whose span the
-    /// execution belongs under (itself, or a `parallel()` call's nearest reported ancestor).
-    /// `None` for a partition key past the cap: it gets no Python span.
-    pub fn context(&self, run_id: &str, reported: &crate::StepId, attempt: u32) -> Option<Value> {
-        let base = reported.base_id();
-        let display = reported.display();
-        let parent = if reported.partition.is_empty() {
-            step_span_id(run_id, base)
-        } else if claim_key_span(run_id, base, &display) {
-            step_span_id(run_id, &display)
-        } else {
-            return None;
-        };
-        let node = self
-            .nodes
+    fn node(&self, base: &str) -> Arc<NodeContext> {
+        self.nodes
             .get(base)
             .cloned()
-            .unwrap_or_else(|| Arc::new(NodeContext::unknown(base)));
+            .unwrap_or_else(|| Arc::new(NodeContext::unknown(base)))
+    }
+
+    /// The `datadog` object of a step sent to a worker: the step's trace and its root span.
+    /// `reported` is the step whose trace the execution belongs in (itself, or a `parallel()`
+    /// call's nearest reported ancestor).
+    pub fn context(&self, reported: &crate::StepId, attempt: u32) -> Value {
+        let base = reported.base_id();
+        let display = reported.display();
+        let node = self.node(base);
         let mut tags = Map::new();
-        tags.insert("barca.run_id".into(), json!(run_id));
+        tags.insert("barca.run_id".into(), json!(self.run_id));
         tags.insert("barca.job".into(), json!(self.job));
         tags.insert("barca.node_id".into(), json!(display));
         node_meta(&mut tags, &node);
@@ -347,15 +357,129 @@ impl Dispatch {
         if let Some(project) = &self.project {
             tags.insert("barca.project".into(), json!(project));
         }
-        Some(json!({
-            "trace_id": trace_id(run_id),
-            "trace_id_high": trace_id_high(run_id),
-            "parent_id": parent,
+        json!({
+            "trace_id": step_trace_id(&self.run_id, &display),
+            "trace_id_high": step_trace_id_high(&self.run_id, &display),
+            "parent_id": step_span_id(&self.run_id, &display),
             "service": self.service,
             "resource": node.name,
             "tags": tags,
             "attempt": attempt,
-        }))
+        })
+    }
+
+    fn report(&self, node_id: &str, outcome: StepOutcome, start: u64, duration: u64) -> StepReport {
+        let id = crate::StepId::parse(node_id);
+        StepReport {
+            node_id: node_id.to_string(),
+            node: self.node(id.base_id()),
+            partition: (!id.partition.is_empty()).then(|| id.partition.suffix()),
+            outcome,
+            start_unix_ns: start,
+            duration_ns: duration,
+            attempts: None,
+            run_hash: None,
+            upstream: self.upstream.get(id.base_id()).cloned().unwrap_or_default(),
+            size_bytes: None,
+            digest: None,
+            cpu_seconds: None,
+            max_rss_bytes: None,
+            error_type: None,
+            error_message: None,
+            error_traceback: None,
+        }
+    }
+
+    /// A step ran: `artifact` is what its worker reported. Sends the step's trace.
+    pub(crate) fn step_finished(
+        &self,
+        node_id: &str,
+        artifact: &Value,
+        attempts: u32,
+        run_hash: &str,
+    ) {
+        self.send(self.finished_report(node_id, artifact, attempts, run_hash));
+    }
+
+    /// The report of a step that ran, from the artifact its worker reported.
+    fn finished_report(
+        &self,
+        node_id: &str,
+        artifact: &Value,
+        attempts: u32,
+        run_hash: &str,
+    ) -> StepReport {
+        let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
+        let number = |key: &str| artifact.get(key).and_then(|v| v.as_f64());
+        let now = crate::time::unix_nanos(std::time::SystemTime::now()) as u64;
+        // Placed by the worker's clock: the function and writing its result.
+        let (start, duration) = match (number("finished_at"), number("wall_seconds")) {
+            (Some(finished), Some(wall)) => (ns(finished - wall), ns(wall)),
+            _ => {
+                let wall = ns(number("elapsed_seconds").unwrap_or(0.0));
+                (now.saturating_sub(wall), wall)
+            }
+        };
+        let mut step = self.report(node_id, StepOutcome::Ran, start, duration);
+        step.attempts = Some(attempts);
+        step.run_hash = Some(run_hash.to_string());
+        step.size_bytes = artifact.get("size_bytes").and_then(|v| v.as_u64());
+        step.digest = artifact
+            .get("content_hash")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        step.cpu_seconds = number("cpu_seconds");
+        step.max_rss_bytes = artifact.get("max_rss_bytes").and_then(|v| v.as_u64());
+        step
+    }
+
+    /// A step failed for good (its retries spent). Sends the step's trace.
+    pub(crate) fn step_failed(&self, failure: &crate::dispatch::StepFailure) {
+        self.send(self.failed_report(failure));
+    }
+
+    /// The report of a step that failed for good.
+    fn failed_report(&self, failure: &crate::dispatch::StepFailure) -> StepReport {
+        let (error_type, error_message, error_traceback) =
+            crate::persist::exception_of(&failure.error);
+        let now = crate::time::unix_nanos(std::time::SystemTime::now()) as u64;
+        // From the first attempt's start to the failure, retries and backoff inside.
+        let (start, duration) = match (failure.error.started_unix_ns, failure.error.elapsed_seconds)
+        {
+            (Some(started), Some(wall)) => (started, (wall.max(0.0) * 1e9) as u64),
+            _ => (now, 0),
+        };
+        let mut step = self.report(&failure.node_id, StepOutcome::Failed, start, duration);
+        step.attempts = Some(failure.error.attempts);
+        step.error_type = Some(error_type);
+        step.error_message = Some(error_message);
+        step.error_traceback = error_traceback;
+        step
+    }
+
+    /// Send `step`'s trace in the background. Without a runtime to run it on (a test's sync
+    /// caller) nothing is sent here, and the end of the run sends it.
+    fn send(&self, step: StepReport) {
+        let Some(exporter) = self.exporter.clone() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let body = exporter.step_trace(&self.run_id, &self.job, &step);
+        let what = format!("step {}", step.node_id);
+        let delivery = runtime.spawn(async move {
+            let result = tokio::time::timeout(super::EXPORT_TIMEOUT, exporter.send(&body))
+                .await
+                .unwrap_or_else(|_| {
+                    Err(format!(
+                        "no reply within {}s",
+                        super::EXPORT_TIMEOUT.as_secs()
+                    ))
+                });
+            super::delivered("datadog", &what, result);
+        });
+        note_sent(&self.run_id, step.node_id, delivery);
     }
 }
 
@@ -383,6 +507,7 @@ fn project_from_cwd() -> Option<String> {
 
 /// A span's fields before the tags every span shares are added.
 struct Span {
+    trace_id: u64,
     id: u64,
     parent: Option<u64>,
     name: &'static str,
@@ -394,16 +519,16 @@ struct Span {
     metrics: Map<String, Value>,
 }
 
-/// Error tags for a failed step: the type, the message cut to `message_chars`, and with
-/// `stack` the end of the traceback.
-fn error_meta(meta: &mut Map<String, Value>, step: &StepReport, message_chars: usize, stack: bool) {
+/// Error tags for a failed step: the type, the message cut to its first characters, and the
+/// end of the traceback.
+fn error_meta(meta: &mut Map<String, Value>, step: &StepReport) {
     if let Some(t) = &step.error_type {
         meta.insert("error.type".into(), json!(t));
     }
     if let Some(m) = &step.error_message {
-        meta.insert("error.message".into(), json!(cut(m, message_chars)));
+        meta.insert("error.message".into(), json!(cut(m, MAX_MESSAGE_CHARS)));
     }
-    if stack && let Some(trace) = &step.error_traceback {
+    if let Some(trace) = &step.error_traceback {
         meta.insert(
             "error.stack".into(),
             json!(cut_keeping_the_end(trace, MAX_STACK_CHARS)),
@@ -427,20 +552,6 @@ fn cost_metrics(metrics: &mut Map<String, Value>, step: &StepReport) {
     }
 }
 
-/// The steps of a run grouped by node, in the order their first step appears.
-fn by_node(steps: &[StepReport]) -> Vec<Vec<&StepReport>> {
-    let mut index: HashMap<&str, usize> = HashMap::new();
-    let mut groups: Vec<Vec<&StepReport>> = Vec::new();
-    for step in steps {
-        let at = *index.entry(step.node.base_id.as_str()).or_insert_with(|| {
-            groups.push(Vec::new());
-            groups.len() - 1
-        });
-        groups[at].push(step);
-    }
-    groups
-}
-
 impl Datadog {
     /// Tags every span and metric carries, in a fixed order: `DD_TAGS`, `env`, `version`,
     /// `barca.version`, `barca.project`.
@@ -459,7 +570,7 @@ impl Datadog {
         tags
     }
 
-    fn finish(&self, run: &RunReport, span: Span) -> Value {
+    fn finish(&self, run_id: &str, span: Span) -> Value {
         let mut meta: Map<String, Value> = self
             .deployment_tags()
             .into_iter()
@@ -467,10 +578,10 @@ impl Datadog {
             .collect();
         meta.insert("component".into(), json!("barca"));
         meta.insert("span.kind".into(), json!("internal"));
-        meta.insert("barca.run_id".into(), json!(run.run_id));
+        meta.insert("barca.run_id".into(), json!(run_id));
         meta.extend(span.meta);
         let mut value = json!({
-            "trace_id": trace_id(&run.run_id),
+            "trace_id": span.trace_id,
             "span_id": span.id,
             "name": span.name,
             "resource": span.resource,
@@ -488,25 +599,8 @@ impl Datadog {
         value
     }
 
-    /// Every span of the run's trace, root first. `key_spans` are the partition keys that
-    /// were given a span when they ran ([`claim_key_span`]).
-    fn spans(&self, run: &RunReport, key_spans: &HashSet<String>) -> Vec<Value> {
-        let root_id = run_span_id(&run.run_id);
-        let mut spans = vec![self.root_span(run, root_id)];
-        for steps in by_node(&run.steps) {
-            if let [step] = steps.as_slice()
-                && step.partition.is_none()
-            {
-                spans.push(self.step_span(run, root_id, step));
-            } else {
-                self.partitioned_spans(run, root_id, &steps, key_spans, &mut spans);
-            }
-        }
-        spans
-    }
-
     /// `barca.run`: what ran, how it ended and, when it failed, which asset failed first.
-    fn root_span(&self, run: &RunReport, root_id: u64) -> Value {
+    fn root_span(&self, run: &RunReport) -> Value {
         let subject = if !run.targets.is_empty() {
             run.targets.join(",")
         } else if !run.files.is_empty() {
@@ -594,9 +688,10 @@ impl Datadog {
             json!(count(StepOutcome::Skipped)),
         );
         self.finish(
-            run,
+            &run.run_id,
             Span {
-                id: root_id,
+                trace_id: trace_id(&run.run_id),
+                id: run_span_id(&run.run_id),
                 parent: None,
                 name: "barca.run",
                 resource: format!("{} {subject}", run.command),
@@ -610,24 +705,18 @@ impl Datadog {
         )
     }
 
-    /// The tags of a `barca.step` span that every node has.
-    fn step_meta(&self, run: &RunReport, node: &NodeContext) -> Map<String, Value> {
+    /// `barca.step`, the root of a step's trace: the node, its place in the pipeline, how the
+    /// step ended and what it cost. `job` is the run's `barca.job`.
+    fn step_span(&self, run_id: &str, job: &str, step: &StepReport) -> Value {
+        let node = &step.node;
         let mut meta = Map::new();
-        meta.insert("barca.job".into(), json!(run.job));
-        meta.insert("barca.node_id".into(), json!(node.base_id));
-        node_meta(&mut meta, node);
-        meta
-    }
-
-    /// `barca.step` for a node without partitions.
-    fn step_span(&self, run: &RunReport, root_id: u64, step: &StepReport) -> Value {
-        let mut meta = self.step_meta(run, &step.node);
+        meta.insert("barca.job".into(), json!(job));
         meta.insert("barca.node_id".into(), json!(step.node_id));
+        node_meta(&mut meta, node);
+        if let Some(partition) = &step.partition {
+            meta.insert("barca.partition".into(), json!(partition));
+        }
         meta.insert("barca.outcome".into(), json!(step.outcome.as_str()));
-        meta.insert(
-            "barca.cached".into(),
-            json!((step.outcome == StepOutcome::Cached).to_string()),
-        );
         if let Some(hash) = &step.run_hash {
             meta.insert("barca.run_hash".into(), json!(hash));
         }
@@ -638,19 +727,17 @@ impl Datadog {
         if let Some(digest) = &step.digest {
             meta.insert("barca.digest".into(), json!(digest));
         }
-        error_meta(&mut meta, step, MAX_MESSAGE_CHARS, true);
+        error_meta(&mut meta, step);
         let mut metrics = Map::new();
-        // Ask Datadog to compute trace metrics (hits, errors, duration) for step spans
-        // too; by default only a service's entry span gets them.
-        metrics.insert("_dd.measured".into(), json!(1));
         cost_metrics(&mut metrics, step);
         self.finish(
-            run,
+            run_id,
             Span {
-                id: step_span_id(&run.run_id, &step.node.base_id),
-                parent: Some(root_id),
+                trace_id: step_trace_id(run_id, &step.node_id),
+                id: step_span_id(run_id, &step.node_id),
+                parent: None,
                 name: "barca.step",
-                resource: step.node.name.clone(),
+                resource: node.name.clone(),
                 start: step.start_unix_ns,
                 duration: step.duration_ns,
                 error: step.outcome == StepOutcome::Failed,
@@ -660,215 +747,36 @@ impl Datadog {
         )
     }
 
-    /// One `barca.step` for a partitioned node, summing its keys, and a `barca.partition`
-    /// child for each key in `key_spans` and each key that failed.
-    fn partitioned_spans(
-        &self,
-        run: &RunReport,
-        root_id: u64,
-        keys: &[&StepReport],
-        key_spans: &HashSet<String>,
-        out: &mut Vec<Value>,
-    ) {
-        let node = &keys[0].node;
-        let step_id = step_span_id(&run.run_id, &node.base_id);
-        let failed: Vec<&StepReport> = keys
-            .iter()
-            .copied()
-            .filter(|k| k.outcome == StepOutcome::Failed)
-            .collect();
-        let count = |outcome| keys.iter().filter(|k| k.outcome == outcome).count();
-        let extra_cached = run
-            .cached_partitions
-            .get(&node.base_id)
-            .copied()
-            .unwrap_or(0);
-        let (ran, cached) = (
-            count(StepOutcome::Ran),
-            count(StepOutcome::Cached) + extra_cached,
-        );
-        let outcome = if !failed.is_empty() {
-            StepOutcome::Failed
-        } else if ran > 0 {
-            StepOutcome::Ran
-        } else if cached > 0 {
-            StepOutcome::Cached
-        } else {
-            StepOutcome::Skipped
-        };
-        // The span covers the keys that did work; cached keys are marks at the run's start.
-        let worked: Vec<&&StepReport> = keys
-            .iter()
-            .filter(|k| matches!(k.outcome, StepOutcome::Ran | StepOutcome::Failed))
-            .collect();
-        let (start, duration) = match (
-            worked.iter().map(|k| k.start_unix_ns).min(),
-            worked
-                .iter()
-                .map(|k| k.start_unix_ns.saturating_add(k.duration_ns))
-                .max(),
-        ) {
-            (Some(start), Some(end)) => (start, end.saturating_sub(start)),
-            _ => (keys[0].start_unix_ns, 0),
-        };
-
-        let mut meta = self.step_meta(run, node);
-        meta.insert("barca.outcome".into(), json!(outcome.as_str()));
-        meta.insert(
-            "barca.cached".into(),
-            json!((outcome == StepOutcome::Cached).to_string()),
-        );
-        if !keys[0].upstream.is_empty() {
-            meta.insert("barca.upstream".into(), json!(keys[0].upstream.join(",")));
+    /// One trace as a request body, `[[root, ...]]`. The root carries what Datadog reads from
+    /// a trace's first span: the sampling decision (keep: these are jobs, not sampled
+    /// requests) and the trace id's upper half.
+    fn trace_body(&self, mut spans: Vec<Value>, trace_id_high: u64) -> Vec<u8> {
+        if let Some(root) = spans.first_mut() {
+            root["meta"]["_dd.p.tid"] = json!(format!("{trace_id_high:016x}"));
+            root["meta"]["_dd.p.dm"] = json!("-4");
+            root["metrics"]["_sampling_priority_v1"] = json!(2);
         }
-        if let Some(first) = failed
-            .iter()
-            .min_by_key(|k| (k.start_unix_ns.saturating_add(k.duration_ns), &k.node_id))
-        {
-            error_meta(&mut meta, first, MAX_MESSAGE_CHARS, true);
-            let key = first.partition.as_deref().unwrap_or("");
-            let message = first.error_message.as_deref().unwrap_or("failed");
-            let message = if failed.len() == 1 {
-                format!("[{key}] {message}")
-            } else {
-                format!(
-                    "{} of {} partitions failed; first [{key}] {message}",
-                    failed.len(),
-                    keys.len()
-                )
-            };
-            meta.insert(
-                "error.message".into(),
-                json!(cut(&message, MAX_MESSAGE_CHARS)),
-            );
-        }
-        let mut metrics = Map::new();
-        metrics.insert("_dd.measured".into(), json!(1));
-        metrics.insert(
-            "barca.partitions.total".into(),
-            json!(keys.len() + extra_cached),
-        );
-        metrics.insert("barca.partitions.executed".into(), json!(ran));
-        metrics.insert("barca.partitions.cached".into(), json!(cached));
-        metrics.insert("barca.partitions.failed".into(), json!(failed.len()));
-        let sum_u64 = |f: fn(&StepReport) -> Option<u64>| {
-            keys.iter().filter_map(|k| f(k)).reduce(|a, b| a + b)
-        };
-        if let Some(bytes) = sum_u64(|k| k.size_bytes) {
-            metrics.insert("barca.bytes".into(), json!(bytes));
-        }
-        if let Some(cpu) = keys
-            .iter()
-            .filter_map(|k| k.cpu_seconds)
-            .reduce(|a, b| a + b)
-        {
-            metrics.insert("barca.cpu_seconds".into(), json!(cpu));
-        }
-        if let Some(rss) = keys.iter().filter_map(|k| k.max_rss_bytes).max() {
-            metrics.insert("barca.max_rss_bytes".into(), json!(rss));
-        }
-        out.push(self.finish(
-            run,
-            Span {
-                id: step_id,
-                parent: Some(root_id),
-                name: "barca.step",
-                resource: node.name.clone(),
-                start,
-                duration,
-                error: outcome == StepOutcome::Failed,
-                meta,
-                metrics,
-            },
-        ));
-
-        let mut failures_seen = 0;
-        for key in keys {
-            let is_failed = key.outcome == StepOutcome::Failed;
-            if !is_failed && !key_spans.contains(&key.node_id) {
-                continue;
-            }
-            let mut meta = Map::new();
-            meta.insert("barca.node_id".into(), json!(key.node_id));
-            meta.insert("barca.asset".into(), json!(node.name));
-            if let Some(partition) = &key.partition {
-                meta.insert("barca.partition".into(), json!(partition));
-            }
-            meta.insert("barca.outcome".into(), json!(key.outcome.as_str()));
-            if let Some(hash) = &key.run_hash {
-                meta.insert("barca.run_hash".into(), json!(hash));
-            }
-            if let Some(digest) = &key.digest {
-                meta.insert("barca.digest".into(), json!(digest));
-            }
-            if is_failed {
-                let detailed = failures_seen < DETAILED_FAILURES_PER_NODE;
-                failures_seen += 1;
-                let chars = if detailed {
-                    MAX_MESSAGE_CHARS
-                } else {
-                    BRIEF_MESSAGE_CHARS
-                };
-                error_meta(&mut meta, key, chars, detailed);
-            }
-            let mut metrics = Map::new();
-            cost_metrics(&mut metrics, key);
-            out.push(self.finish(
-                run,
-                Span {
-                    id: step_span_id(&run.run_id, &key.node_id),
-                    parent: Some(step_id),
-                    name: "barca.partition",
-                    resource: node.name.clone(),
-                    start: key.start_unix_ns,
-                    duration: key.duration_ns,
-                    error: is_failed,
-                    meta,
-                    metrics,
-                },
-            ));
-        }
+        serde_json::to_vec(&json!([spans])).unwrap_or_default()
     }
 
-    /// Request bodies for the run's trace, each under [`MAX_REQUEST_BYTES`]. Each is one trace
-    /// chunk whose first span carries what Datadog reads from a chunk's root: the sampling
-    /// decision (keep: these are jobs, not sampled requests) and the trace id's upper half.
-    fn bodies(&self, run: &RunReport, key_spans: &HashSet<String>) -> Vec<Vec<u8>> {
-        let high = format!("{:016x}", trace_id_high(&run.run_id));
-        let mark_chunk_root = |span: &mut Value| {
-            span["meta"]["_dd.p.tid"] = json!(high);
-            span["meta"]["_dd.p.dm"] = json!("-4");
-            span["metrics"]["_sampling_priority_v1"] = json!(2);
-        };
-        let mut bodies = Vec::new();
-        let mut chunk: Vec<u8> = Vec::new();
-        for mut span in self.spans(run, key_spans) {
-            if chunk.is_empty() {
-                mark_chunk_root(&mut span);
-            }
-            let mut encoded = serde_json::to_vec(&span).unwrap_or_default();
-            if !chunk.is_empty() && chunk.len() + encoded.len() + 3 > MAX_REQUEST_BYTES {
-                chunk.extend_from_slice(b"]]");
-                bodies.push(std::mem::take(&mut chunk));
-                mark_chunk_root(&mut span);
-                encoded = serde_json::to_vec(&span).unwrap_or_default();
-            }
-            chunk.extend_from_slice(if chunk.is_empty() { b"[[" } else { b"," });
-            chunk.extend_from_slice(&encoded);
-        }
-        if !chunk.is_empty() {
-            chunk.extend_from_slice(b"]]");
-            bodies.push(chunk);
-        }
-        bodies
+    /// The run's own trace: its `barca.run` span.
+    pub(crate) fn run_trace(&self, run: &RunReport) -> Vec<u8> {
+        self.trace_body(vec![self.root_span(run)], trace_id_high(&run.run_id))
     }
 
-    /// The run as one trace, `[[spans...]]`, when it fits one request (tests).
+    /// A step's trace: its `barca.step` span (the worker's Python spans join it on their own).
+    pub(crate) fn step_trace(&self, run_id: &str, job: &str, step: &StepReport) -> Vec<u8> {
+        self.trace_body(
+            vec![self.step_span(run_id, job, step)],
+            step_trace_id_high(run_id, &step.node_id),
+        )
+    }
+
+    /// The root span of a trace body (tests).
     #[cfg(test)]
-    fn trace(&self, run: &RunReport, key_spans: &HashSet<String>) -> Value {
-        let bodies = self.bodies(run, key_spans);
-        assert_eq!(bodies.len(), 1, "the trace takes {} requests", bodies.len());
-        serde_json::from_slice(&bodies[0]).unwrap()
+    fn root_of(body: &[u8]) -> Value {
+        let traces: Value = serde_json::from_slice(body).unwrap();
+        traces[0][0].clone()
     }
 }
 
@@ -1008,15 +916,23 @@ impl Integration for Datadog {
         })
     }
 
+    /// The run's trace, then the trace of every step that ran or failed and that the live
+    /// path did not send (a failure recorded without a worker, a run without a runtime).
+    /// Cached and skipped steps send nothing.
     fn export<'a>(
         &'a self,
         run: &'a RunReport,
         _history: &'a super::JobHistory,
     ) -> super::Export<'a> {
         Box::pin(async move {
-            let key_spans = take_key_spans(&run.run_id);
-            for body in self.bodies(run, &key_spans) {
-                self.send(&body).await?;
+            let Sent { steps, deliveries } = take_sent(&run.run_id);
+            for delivery in deliveries {
+                let _ = delivery.await;
+            }
+            self.send(&self.run_trace(run)).await?;
+            for step in to_send(run, &steps) {
+                self.send(&self.step_trace(&run.run_id, &run.job, step))
+                    .await?;
             }
             Ok(())
         })

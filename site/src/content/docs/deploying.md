@@ -360,15 +360,17 @@ errors (Datadog's does) tags all of them, `step:... completed` included, as erro
 {"ts":"2026-10-20T19:45:44.067Z","level":"info","msg":"step:pipeline.py:orders completed 0.0s (1/2)","run_id":"2b585c3e0785","node":"pipeline.py:orders","dd.trace_id":"8371769010332850555","dd.span_id":"1894635935906895539"}
 ```
 
-With the Datadog integration on, the `dd.trace_id` and `dd.span_id` of a run's lines are its
-trace's ids, so a failing `barca.run` span leads to that run's lines and back. What a step writes
+With the Datadog integration on, the `dd.trace_id` and `dd.span_id` of a step's lines are the
+ids of the step's trace, and a run's other lines carry the run trace's, so a failing
+`barca.step` span leads to that step's lines and back. What a step writes
 to its own stderr (Python's `logging`, by default) stays on stderr. The fields and their
 limits are in [Telemetry](/reference/telemetry/#logs-under-barca-serve).
 
 ### Traces and metrics in Datadog
 
-With `BARCA_TELEMETRY=datadog` every run the server starts is one APM trace, sent to the
-Datadog Agent's trace port, and the server reports itself as DogStatsD metrics on the Agent's
+With `BARCA_TELEMETRY=datadog` every step a run executes is one APM trace, sent to the Datadog
+Agent's trace port the moment the step ends, every run one more trace when it finishes, and
+the server reports itself as DogStatsD metrics on the Agent's
 DogStatsD port. Point both at the Agent and name the service once; everything barca sends,
 Python and opted-in library spans included, is that one service:
 

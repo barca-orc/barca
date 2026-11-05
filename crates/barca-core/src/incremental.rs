@@ -735,7 +735,8 @@ impl Incremental {
         })
     }
 
-    /// Preserve logical counts and node spans without manufacturing one report per fresh key.
+    /// A node proven cached without one report per fresh key is still one cached step of the
+    /// run's report (a cached step sends no trace; the run span counts it).
     pub(crate) fn telemetry(&self, dag: &Dag, report: &mut crate::telemetry::RunReport) {
         use crate::telemetry::{StepOutcome, StepReport};
         let contexts = crate::telemetry::node_contexts(dag);
@@ -745,8 +746,7 @@ impl Incremental {
                 .iter()
                 .filter(|s| s.node.base_id == *base && self.seeded.contains(&s.node_id))
                 .count();
-            let mut omitted = count.saturating_sub(present);
-            if omitted == 0 {
+            if *count <= present {
                 continue;
             }
             let partitioned = dag
@@ -771,10 +771,6 @@ impl Incremental {
                     error_message: None,
                     error_traceback: None,
                 });
-                omitted -= 1;
-            }
-            if partitioned {
-                report.cached_partitions.insert(base.clone(), omitted);
             }
         }
     }

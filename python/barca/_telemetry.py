@@ -1,9 +1,10 @@
-"""Python spans for a step, inside the coordinator's Datadog trace.
+"""Python spans for a step, inside the step's own Datadog trace.
 
-With `BARCA_TELEMETRY=datadog` the coordinator sends each step the context of its span
-(`step["datadog"]`). When `ddtrace` is installed, the worker opens a `barca.execute` span
-under it: same trace, same service (`DD_SERVICE`, default `barca`), resource the node's short
-name. User spans (`tracer.trace(...)`) nest inside it.
+With `BARCA_TELEMETRY=datadog` every step execution is one trace, rooted at the coordinator's
+`barca.step` span; the coordinator sends each step that trace and root (`step["datadog"]`).
+When `ddtrace` is installed, the worker opens a `barca.execute` span under it: same trace, same
+service (`DD_SERVICE`, default `barca`), resource the node's short name. User spans
+(`tracer.trace(...)`) nest inside it.
 
 Library spans are opt-in. ddtrace's own switches choose which libraries are patched:
 `DD_PATCH_MODULES=sqlite3:true,requests:true` or `DD_TRACE_<LIB>_ENABLED=true`;

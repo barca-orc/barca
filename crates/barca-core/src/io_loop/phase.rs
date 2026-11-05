@@ -11,13 +11,18 @@ impl WorkerPool {
         out
     }
 
+    /// The run's Datadog exporter, when that integration is on.
+    pub(crate) fn datadog(&self) -> Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>> {
+        self.config.datadog.clone()
+    }
+
     /// Report steps that stay in flight longer than the progress interval, so a long
     /// step does not look like a hang.
     pub(crate) fn on_running(&mut self, hook: RunningHook) {
         self.running_hook = Some(hook);
     }
 
-    /// Add the remote parent context without requiring a Python SDK.
+    /// Add the step's trace context without requiring a Python SDK.
     pub(super) fn traced_step(
         &self,
         item: &crate::coordinator::Item,
@@ -25,17 +30,13 @@ impl WorkerPool {
     ) -> serde_json::Value {
         let mut step = build_step_json(item, coord);
         if let Some(dispatch) = &self.config.datadog {
-            // Dynamic parallel items have no span of their own in the run report.
-            // Attach their Python execution to the nearest reported ancestor.
+            // Dynamic parallel items have no trace of their own. Attach their Python
+            // execution to the nearest reported ancestor's.
             let mut parent = item;
             while let Some(group) = parent.group {
                 parent = coord.item(coord.group(group).parent);
             }
-            if let Some(context) =
-                dispatch.context(&self.config.run_id, &parent.step_id, item.attempts)
-            {
-                step["datadog"] = context;
-            }
+            step["datadog"] = dispatch.context(&parent.step_id, item.attempts);
         }
         step
     }

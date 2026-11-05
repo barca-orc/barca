@@ -192,8 +192,6 @@ pub struct StepReport {
 /// A finished run. Times are Unix nanoseconds.
 #[derive(Debug, Clone)]
 pub struct RunReport {
-    /// Cached partition keys represented by counts rather than per-key reports.
-    pub cached_partitions: std::collections::HashMap<String, usize>,
     pub run_id: String,
     /// `get` or `run`.
     pub command: String,
@@ -364,29 +362,38 @@ pub async fn export(
 ) {
     for (name, integration) in integrations {
         let outcome = tokio::time::timeout(EXPORT_TIMEOUT, integration.export(run, history)).await;
-        let problem = match outcome {
-            Ok(Ok(())) => {
-                if failing()
-                    .lock()
-                    .map(|mut f| f.remove(name))
-                    .unwrap_or(false)
-                {
-                    crate::errln!("[barca] telemetry '{name}' is receiving runs again");
-                }
-                continue;
-            }
-            Ok(Err(e)) => e,
-            Err(_) => format!("no reply within {}s", EXPORT_TIMEOUT.as_secs()),
+        let result = match outcome {
+            Ok(result) => result,
+            Err(_) => Err(format!("no reply within {}s", EXPORT_TIMEOUT.as_secs())),
         };
-        if failing()
-            .lock()
-            .map(|mut f| f.insert(name.clone()))
-            .unwrap_or(true)
-        {
-            crate::errln!(
-                "[barca] warning: telemetry '{name}' did not receive run {}: {problem}",
-                run.run_id
-            );
+        delivered(name, &format!("run {}", run.run_id), result);
+    }
+}
+
+/// Record how one delivery to integration `name` went. `what` names what was delivered
+/// (`run <id>`, `step <node id>`). A failure is reported when it starts and when it ends, not
+/// on every delivery: a backend that is down for a day should not write a line per step.
+pub(crate) fn delivered(name: &str, what: &str, result: Result<(), String>) {
+    match result {
+        Ok(()) => {
+            if failing()
+                .lock()
+                .map(|mut f| f.remove(name))
+                .unwrap_or(false)
+            {
+                crate::errln!("[barca] telemetry '{name}' is receiving runs again");
+            }
+        }
+        Err(problem) => {
+            if failing()
+                .lock()
+                .map(|mut f| f.insert(name.to_string()))
+                .unwrap_or(true)
+            {
+                crate::errln!(
+                    "[barca] warning: telemetry '{name}' did not receive {what}: {problem}"
+                );
+            }
         }
     }
 }
