@@ -394,7 +394,7 @@ def embed_c() -> dict:
 - The capacity is per run: each run has its own pool of workers. Two runs at the same time
   (two `barca get` commands) each fill their own capacity. Under `barca serve`, `--capacity N`
   or `[server] capacity = N` adds one capacity that every run of the server shares (experimental,
-  `barca docs scheduling`, "A capacity shared by every run"): a step starts only when it fits
+  `barca docs serve-ops`, "A capacity shared by every run"): a step starts only when it fits
   both its run's capacity and the server's.
 - `barca plan` shows `pool_size` and `pool_source` (where the pool size came from:
   `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the capacity setting that bounded the

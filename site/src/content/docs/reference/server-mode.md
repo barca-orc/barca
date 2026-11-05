@@ -32,7 +32,7 @@ history) and it is the only process that writes it. The artifact bytes stay in t
 https://barca.sh/team-server/.
 
 Server mode remains experimental after 0.36.0. Runs of one server compute a matching asset step
-once, experimentally since 0.39.4 ([`barca docs scheduling`](/scheduling/), "Runs share the steps they have in
+once, experimentally since 0.39.4 ([`barca docs serve-ops`](/reference/serve-ops/), "Runs share the steps they have in
 common"): cancelling the run that computes it makes the waiting run execute it again, the result
 reaches the waiting run before the computing run's row is durable, and a run that decided the step
 before another run finished it can execute it a second time. A stable designation
@@ -167,16 +167,9 @@ A server that is draining before it stops (SIGTERM, [`barca docs scheduling`](/s
 
 ### Backups
 
-The server backs up its database to the store (`<uri>/<env>/state/backups`, `barca docs
-remote`); the machines that use it take no backups, with or without `--local`, and print no
-`backed up the metadata DB` line. A client's history that matters is on the server, and a
-client's copies in the server's backup set would rotate the server's own out of it and be
-candidates for a restore of the server. Backups barca 0.29.1 and older took on a client stay
-in the store (pruning keeps every machine's newest; `barca state backups` lists them with their
-`host` and `project`), and you can delete them there. `barca state restore` without `--from`
-on the server takes the server's own newest and names any newer ones a client took; on a server
-with no backup of its own (a new host) it takes the newest and names who took it, so check
-`barca state backups` and pass `--from` with the server's.
+The server backs up its database to the store; the machines that use it take no backups. What
+a restore on the server takes, and the client backups older barca versions left in the store,
+are in [`barca docs backup`](/reference/backup/), "With a server".
 
 ### Two machines, same run hash, different bytes
 
@@ -301,7 +294,7 @@ the server, as JSON (a table as a list of row objects).
 A draining server (one that is restarting) accepts a new `--server` run into its run queue;
 the client keeps following it: when the stream breaks it waits up to 60 seconds
 (`BARCA_SERVER_RECONNECT`) for the server to come back and follows the same run id there, and
-only then exits 3 ([`barca docs scheduling`](/scheduling/), "Restarting without losing work"). On servers
+only then exits 3 ([`barca docs serve-ops`](/reference/serve-ops/), "Restarting without losing work"). On servers
 advertising event resume in `/health`, reconnects send the last successfully processed
 `Last-Event-ID`; older servers retain replay-count fallback. An attempt change resets live
 presentation while following the same run ID, without submitting another run.

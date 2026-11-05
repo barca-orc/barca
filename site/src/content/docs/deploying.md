@@ -144,7 +144,7 @@ killed drains in a row is recorded as interrupted). The queued runs survive it t
 | Docker | `docker stop -t`, `stop_grace_period` | 10 s | `45s` |
 | Kubernetes | `terminationGracePeriodSeconds` | 30 | `45` |
 
-More in `barca docs scheduling` ("The run queue", "Stopping the server").
+More in `barca docs serve-ops` ("The run queue", "Stopping the server").
 
 ## Listen on another interface
 
@@ -414,7 +414,7 @@ tracing are in [Telemetry](/reference/telemetry/#datadog).
   history. That holds for a `.barca` on a named volume, as here. With `.barca` on a bind mount from a Docker Desktop
   host the run can stay `running`: after a restart of the machine, or when another
   container was started before the replacement. The rule and its limits are in
-  `barca docs cache`, "While a run is going, and after one is killed".
+  `barca docs layout`, "While a run is going, and after one is killed".
 - **Runs are not resumed.** Nothing restarts a cancelled or killed run. The next tick or
   request starts a new one, which reuses whatever was cached.
 - **Schedules catch up once.** If a tick passed while the server was down, the job fires once

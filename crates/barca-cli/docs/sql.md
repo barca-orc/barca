@@ -63,7 +63,7 @@ barca: fetched 1 remote artifact (2.2 KB) into .barca/sql-cache/
   when they differ, for example after `barca get revenue --refresh revenue`.
 - The copies mirror the object's URI (`.barca/sql-cache/s3/my-bucket/...`). They count toward the
   cache size limit and are the first thing it evicts, least recently used first (a copy used in
-  the last 5 minutes is kept; `barca docs cache`, "Disk use"). Deleting `.barca/sql-cache/` is
+  the last 5 minutes is kept; `barca docs disk`). Deleting `.barca/sql-cache/` is
   always safe: it holds nothing but copies.
 - `show tables` lists remote views without downloading them.
 - The download uses the filesystem, credentials and `[remote.storage_options.*]` the steps use.

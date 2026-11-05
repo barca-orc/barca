@@ -507,7 +507,7 @@ killed in a container is `interrupted` too, once a container starts again on the
 volume (from 0.20.0; earlier versions left it `running`). For runs started with 0.20.0 or later, a run stays `running`
 whenever barca cannot establish that its process is gone. Earlier runs retain their legacy
 process-id and host-name checks. See
-`barca docs cache`, "While a run is going, and after one is killed", and the shared-state
+`barca docs layout`, "While a run is going, and after one is killed", and the shared-state
 [limitations](/reference/remote-storage/#limitations).
 
 ## gc
@@ -628,7 +628,7 @@ barca queue resume --server          # queued runs start again, in order
 ```
 
 `pause` and `resume` answer with the queue after the change, and exit 2 on a `--read-only`
-server. See `barca docs scheduling`, "The run queue".
+server. See `barca docs serve-ops`, "The run queue".
 
 With a remote store, `barca serve` backs its metadata DB up every minute it changed (not with
 `--read-only`), and `barca state restore` refuses to run while it is up. See

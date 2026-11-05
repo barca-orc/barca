@@ -29,6 +29,7 @@ use ruff_python_ast::visitor::{self, Visitor};
 const DELIBERATE: &[(&str, &str, &str)] = &[
     // The manual's own example of the warning, and the site page's "common mistake".
     ("crates/barca-cli/docs/assets.md", "report", "raw"),
+    ("site/src/content/docs/reference/assets.md", "report", "raw"),
     (
         "site/src/content/docs/patterns/03-ordering-only-deps.md",
         "seed_data",
@@ -123,6 +124,19 @@ const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
     // bare-name discovery).
     ("crates/barca-cli/docs/assets.md", "report", "raw"),
     ("crates/barca-cli/docs/assets.md", "amounts", "row"),
+    // The site page generated from that topic (SITE_PAGES in barca-cli's contract.rs) carries
+    // the same examples.
+    ("site/src/content/docs/reference/assets.md", "report", "raw"),
+    (
+        "site/src/content/docs/reference/assets.md",
+        "amounts",
+        "row",
+    ),
+    (
+        "site/src/content/docs/reference/assets.md",
+        "report",
+        "tags=",
+    ),
     ("python/tests/test_errors.py", "takes_one", "b"),
     ("python/tests/test_input_parameters.py", "amounts", "row"),
     ("python/tests/test_input_parameters.py", "amounts", "rows"),

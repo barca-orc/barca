@@ -93,7 +93,7 @@ whose copies do not agree as `unsynced` (below). Nothing is downloaded or upload
 Status reads the metadata DB as it is at that moment, and a run records each step as it
 finishes. So while a `barca get` is running, status in another terminal already shows the steps
 it has finished as `cached` (a partitioned asset as `partial`, with counts); see `barca docs
-cache`, "While a run is going, and after one is killed".
+layout`, "While a run is going, and after one is killed".
 
 Like `list`, status returns every node in JSON unless `--limit N` is explicit. The human
 table shows at most 100 nodes unless you pass `--limit N` or `--all`. The
@@ -162,8 +162,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   artifact that nothing would read does not make a node stale: it stays `cached`, and
   `cache.artifact` then names a file that is not there (`barca docs cache`, "A cached result
   whose artifact is missing").
-- `evicted`: the same, because the cache size limit deleted the artifact file (`barca docs cache`,
-  "Disk use"). A result the artifact store holds is not stale: a run downloads it again.
+- `evicted`: the same, because the cache size limit deleted the artifact file (`barca docs disk`). A result the artifact store holds is not stale: a run downloads it again.
 
 - `local_only`, `store_only`, `mismatch`: only with an artifact store. `local_only`: the result
   is on this machine and not in the store, or its upload is pending (`detail` then carries the

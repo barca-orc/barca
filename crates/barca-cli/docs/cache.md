@@ -539,7 +539,7 @@ file. `barca status` names the state each node is in; the table of states and re
 by `barca docs status`, "Cache state". In short: `cached` is served; `stale` runs again, because
 the run hash moved (`changed`, `upstream_stale`), the last attempt failed (`failed`), or the
 recorded file is gone and something needs to read it (`artifact_missing`, or `evicted` when the
-cache size limit deleted it, "Disk use"; a copy the artifact store holds is downloaded instead
+cache size limit deleted it, `barca docs disk`; a copy the artifact store holds is downloaded instead
 and is not stale); `unsynced` is cached but not where it should be, and the next `get` repairs
 that without running a step (`barca docs remote`, `barca docs server-mode`); `blocked` keys wait
 on failed keys of an input (`barca docs partitions`). A missing or evicted artifact that nothing
@@ -581,7 +581,7 @@ ledger publication still verify directly (`barca docs remote`, "Inspection cost 
 - It does **not** reach assets outside the target's cone. When a refresh writes new bytes, a
   consumer that another target reads keeps its run hash and its old result, and `barca status`
   reports it `cached`: refresh again with a target below it, or name it in `--refresh`
-  (`barca docs partitions`, "When a consumer's keys are stale").
+  (`barca docs batched-partitions`, "When a consumer's keys are stale").
 - The cascade stops at an `@asset(cutoff=True)`: what reads it is decided by the bytes the
   refresh wrote ("Early cutoff" below). Same bytes, it stays cached and carries no warning; new
   bytes, it runs as `not_materialized`. Name it in `--refresh`, or use `--refresh-all`, to
@@ -872,7 +872,7 @@ barca process wrote in the same instant is never renamed.
 in `.barca/artifacts/<node>/` (under `.barca/envs/<env>/artifacts/` for a named environment).
 Barca never reads one again and never lists them in `barca status` or any other command. They
 take disk space until you remove them, or until the size limit evicts them: they are the first
-thing it deletes ("Disk use"). To see them all:
+thing it deletes (`barca docs disk`). To see them all:
 
 ```
 find .barca -name '*.moved-aside*'
@@ -902,195 +902,9 @@ renames and replaces nothing anywhere else:
 
 ## Disk use
 
-`.barca/` has a size limit. Without one, every recompute under a new run hash (a code edit, an
-input change, a sensor tick) adds an artifact and keeps the old one, so the cache only grows.
-
-```toml
-# barca.toml
-[cache]
-max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the filesystem, or "off"
-```
-
-- With no `max_size`, the limit is **10% of the filesystem** `.barca/` is on. `"off"` removes the
-  limit.
-- `BARCA_CACHE_MAX_SIZE` overrides `barca.toml`, for a container that sets its limit when it is
-  deployed. An invalid value is a usage error (exit 2) naming where it came from.
-- `KB`, `MB`, `GB`, `TB` are decimal (`GB` = 10^9 bytes); `KiB`, `MiB`, `GiB`, `TiB` are binary;
-  a bare number is bytes. A percentage is of the filesystem's size, read at each check.
-- The budget covers `.barca/` across every environment: artifacts, metadata DBs, staging,
-  `sql-cache/` and `range-cache/`, excluding recognized local metadata backups. Each DB is
-  counted and keeps to its own share ("The metadata database" below). Backup files, owned sidecars, unsent markers and temporary
-  copies in `.barca/backups/` and `.barca/envs/<env>/backups/` are reported separately,
-  outside this budget; the five-copy rotation stays. Unrelated files and directories merely
-  named `backups` remain budgeted. Physical totals still include backup storage.
-
-**When.** At the end of `barca get` and `barca run` (after results are recorded and uploads have
-finished), after every run under `barca serve`, and once a minute under `barca serve`. When
-`.barca/` is over the limit, barca deletes files in this order until it is at or below **80%** of
-the limit:
-
-| Order | What | Which first | Costs when needed again |
-|---|---|---|---|
-| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, files in an artifact directory that no metadata row of any environment names, `sql-cache/` copies and `range-cache/` directories not used in the last 5 minutes | dead staging, then moved-aside, then unnamed files (oldest first), then the least recently used copies, then the least recently used range directories | nothing for most; a ranged read of a lazy input fetches its ranges again |
-| 2 | Superseded results: a node (a partition key, for a partitioned asset) whose newest successful result is another one | oldest first | a recompute, only if the code and inputs return to that exact state |
-| 3 | Local copies the artifact store holds (its upload was confirmed with a digest) | least recently read first | a download |
-| 4 | Current results | least recently read first | a recompute |
-
-**Never evicted:**
-
-- what the command produced, read or returns: a path `barca get` just printed still exists when
-  the command exits;
-- what a run in flight in the same process holds (under `barca serve`, every run in progress
-  pins the results it reads); while a run is starting and its plan is not known yet, only tiers
-  1 and 2 are evicted;
-- with a run in progress in **another process** on this `.barca/` (the `running` rows of
-  `barca history`, any environment), only tiers 1 and 2, and no staging directory (that process
-  may be in another container, where a pid that looks dead here is alive);
-- the current result of a `freshness=Manual` node that the store does not hold: nothing but a
-  person recomputes a `Manual` node. Barca finds `Manual` nodes by reading the project's source
-  files (no import); if one of them does not parse, no current result without a store copy is
-  evicted;
-- a result whose upload to the artifact store is still pending (`unsynced`, `local only` in `barca status`):
-  its local copy is the only one until the next command uploads it;
-- a file in an artifact directory that no result names, while a run is in progress on this
-  `.barca/` (in any process) or for a minute after it was written (unless it is older than the
-  metadata DB): its row may not be written yet;
-- the metadata DBs, their logs, locks and backups, and the databases `barca state reset` and
-  `barca state restore` moved aside (`metadata.db.reset-<UTC>`, `metadata.db.pre-restore`):
-  never deleted (a DB's old rows can be: "The metadata database" below). Backups are outside the budget; the DBs and moved-aside copies are counted.
-  Nothing outside `.barca/` is ever deleted, and the artifact store is
-  never touched.
-
-**The metadata database.** Each environment's database may use a tenth of the limit, at most
-1 GiB. When its file is past that, barca trims it down to 80% of its share, at the same moments as
-eviction and for at most 5 seconds at a time, and nothing is evicted in a check that ran out of
-that time still trimming. Eviction counts a database as at most its share, so one past it never
-deletes artifacts that fit: `.barca/` can exceed the limit by what the database holds past its
-share until a trim gets it back. `barca gc` trims until done, and `barca gc --dry-run` trims nothing. With the limit `off` only `barca gc` trims, to 1 GiB. The order:
-
-| Order | What goes | What you notice |
-|---|---|---|
-| 1 | The change digests (`components`) of results that are not a node's latest, and all those recorded before 0.37.1 | A node whose digests went says a plain `changed` until it next runs |
-| 2 | The stored outcome of all but the last 100 runs | `GET /runs/{id}` of an older run answers without `outcome` |
-| 3 | Results older than their node's latest success whose file is already gone | Going back to exactly that code and those inputs computes again, instead of fetching from the store; `barca history` and `barca stats` no longer count them |
-| 4 | All but the last 1000 runs, with their logs (not a run in the queue or still running) | `barca history` and `barca logs` no longer have them |
-
-Results whose file is on disk, a node's latest success and anything newer, and the newest byte
-change of a node are never removed, so a database whose current results alone take more than its
-share stays over it. It says what it did on stderr:
-
-```
-[barca] metadata 39.2 GB over its 1.1 GB share of the limit: now 848 MB; cleared 566986 component records and 16826 run reports, removed 0 old results and 0 old runs
-```
-
-The file shrinks through `VACUUM`, which holds the database's lock while it rewrites the live data
-(runs that start meanwhile wait) and which runs only when no run is alive, as do orders 3 and 4: they delete history, so they run only if a
-`VACUUM` of what orders 1 and 2 cleared was not enough. On a server that is never idle the file
-keeps its size and reuses the freed space until a moment with no run, and eviction still counts
-the whole file.
-
-**After `barca state reset` or `barca state restore`.** The artifacts the old database named stay
-on disk, and the new one names none of them (after a restore, none the restored copy does not
-name). They are leftovers: the next check past the limit evicts them first, and `barca gc
---max-size off` deletes them now. Until then, putting the old database back (`barca state restore
---from <the moved file>`) uses them again; one that was evicted is computed again when it is
-needed. A reset says how much stays:
-`[barca] the 129 KB of artifacts under .barca/artifacts stay on disk, and no record names them now: ...`.
-With a server, a result fetched from the store for a hit in the server's ledger is also a file
-this machine's database does not name; evicting it costs a download.
-
-**What you see.** One line on stderr when something was evicted:
-
-```
-[barca] cache 21.4 GB over its 20 GB limit; evicted 312 files (5.4 GB): 290 superseded results, 22 local copies held by the store
-```
-
-Under `--json` the run result gains `"cache": {"size_bytes", "limit_bytes", "evicted_files",
-"evicted_bytes"}` (sizes after eviction); the key is absent when nothing was over the limit. If
-backups exist, `size_bytes` includes them; only budgeted bytes trigger eviction. If
-everything that may be evicted is not enough, barca says so once per process:
-`[barca] warning: cache working set 26 GB is larger than max_size 20 GB; results will be
-recomputed often`.
-
-An evicted result is handled like a missing artifact ("A cached result whose artifact is
-missing", above), with its own wording: it is downloaded again if the store holds it, or computed
-again under the same run hash, only when something needs to read it.
-
-```
-[barca] pipeline.py:features: its cached result was evicted to stay under the cache limit; computing it again
-```
-
-The step's `reason` is `evicted`. `barca status` shows the node as `stale` with reason `evicted`,
-and `--dry-run` predicts `run` with reason `evicted`. A result the store holds is predicted
-`cached`: it costs a download, not a recompute.
-
-**`barca gc`** runs the same eviction now:
-
-```bash
-barca gc --dry-run              # what would be evicted, per tier, and what it leaves
-barca gc                        # evict now, down to 80% of max_size
-barca gc --max-size 5GB         # a one-off tighter budget
-barca gc --max-size off         # no limit: every leftover and superseded result, nothing else
-barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, held, ...}
-```
-
-GC JSON keeps `size_bytes` and `after_bytes` as physical totals including backups.
-`budget_before_bytes` and `budget_after_bytes` exclude `backup_bytes`; the limit and 80%
-target apply to those budgeted bytes. Human output labels backups as outside the budget.
-`barca doctor` reports `budget_bytes`, `backup_bytes` and physical `size_bytes` in its
-cache-size check. Excluding backups is not a free-space guarantee: they still occupy disk.
-
-`--dry-run` lists exactly what `barca gc` then deletes (the same order, from the same
-measurement), unless something changes in between. With the limit `off`, `barca gc` evicts every
-leftover and superseded result, which never costs a recompute of anything current. `--env NAME`
-evicts only that environment's results (leftovers are shared; every environment's rows decide
-which files are named). A file that cannot be deleted is skipped with one warning; `barca gc`
-exits 3 only when a metadata DB cannot be read.
-
-When `barca gc` cannot get down to its target, a `held by:` line says what holds the rest, and
-`held` in the JSON lists it, largest first, as `{what, bytes, evictable}`: `results` (files a
-result names), `unreferenced` (files none names, kept for now), `metadata` (the metadata DBs),
-`db_copies` (databases reset and restore moved aside), `backups` and `other`. The DBs, their
-moved-aside copies and the backups are never evicted (`evictable: false`); delete a
-`metadata.db.reset-<UTC>` yourself once you no longer need to undo the reset:
-
-```
-nothing to evict: 355 KB budgeted of 1 KB
-0 B metadata backups outside the budget; 355 KB physical total
-held by: 115 KB metadata databases (never evicted), 111 KB databases moved aside by state reset/restore (never evicted; delete them once you no longer need to undo), 2 B other
-```
-
-**How it is measured.** The check after a command adds the recorded sizes of the results the
-metadata DBs hold, walks everything outside the artifact directories, and applies what the last
-full walk of the artifact directories found. A full walk happens when that says `.barca/` is over
-the limit, at least once a day, and under `barca gc`. The check under the limit takes about 2 ms
-on a small project and about 0.1 s with 100,000 results recorded. Eviction after a command stops
-after 5 seconds; what is left waits for the next command. When eviction cannot get under the
-limit, the check does not plan again for 10 minutes unless the size grows.
-
-A full walk reads the metadata DBs 20,000 rows at a time and lets go of barca's lock between
-them, so runs, and `barca serve`'s other requests, go on while it reads; under `barca serve` it
-runs on a thread of its own. A result whose file the walk found is not looked at again. One
-full walk of a `.barca/` runs at a time in a process: a check that finds one under way (a run
-that ends while `barca serve` walks) skips its own, and the walk under way records the size.
-With 465,000 artifact files and 2.8M recorded results a full walk takes minutes on a cold
-filesystem cache.
-
-**Read times.** "Least recently read" is the `last_read_at` of a result: set when a step is given
-it as an input, when `barca get` returns it, and when a `barca sql` query names its view. File
-access times are not used (most filesystems do not keep them). A key of a partitioned asset
-with 256 keys or more whose `last_read_at` is less than an hour old keeps it: a run that reads
-200k cached keys does not write 200k rows, and an hour does not change which results are the
-least recently read.
-
-Known limits:
-
-- Sizes are file lengths, not the blocks the filesystem allocates.
-- barca reacts to its own limit only: it does not evict because something else filled the disk,
-  and a run that writes more than the free space fails with the operating system's error.
-- A run in another process that has just decided a superseded result is cached (an older run
-  hash it went back to) can find it gone while it reads it; it is then computed again.
-- Eviction deletes no `materializations` rows. Only trimming the metadata database does ("The metadata database").
+`.barca/` has a size limit (`[cache] max_size`, default 10% of its filesystem) and `barca gc`
+evicts down to it after every run; what counts, what is evicted in which order and how the
+metadata database keeps to its share are in `barca docs disk`.
 
 ## Environments
 
@@ -1132,151 +946,11 @@ when `default_env` is set, and `barca doctor` reports it as a failed `environmen
 BARCA_REQUIRE_ENV=1 barca history --env prod   # what a box that requires --env accepts
 ```
 
-## Concurrent runs
+## Where things live, concurrent runs, killed runs, upgrading
 
-Several barca processes can run in one project at once (parallel scripts or agents, `barca serve`
-alongside the CLI). The metadata DB is a single-file database that one process opens at a time,
-so each process holds a short lock on it (`.barca/metadata.db.lock`) only while it reads or
-writes, and releases it while your Python runs. Processes queue instead of failing. If a
-process waits more than 60 seconds for the lock you get an error that names the lock file;
-an `... File is locked by another process` error means something outside barca (a DB browser, a
-backup tool, an older barca) has `.barca/metadata.db` open.
+The project root, the `.barca/` directory, several barca processes in one project, what a run
+records while it goes and after it is killed, and what an upgrade recomputes are in
+`barca docs layout`.
 
-If a required database write fails, the command reports an infrastructure error (exit 3) and
-records no new outcome; what was already recorded stays. With an artifact store, a refresh in
-one process can replace an artifact another process is reading: the path names the computation,
-not the bytes. What an upload records in that case is specified in
-`specs/interfaces/artifact-upload-receipts.md`.
-
-## While a run is going, and after one is killed
-
-A run records each completed step in `.barca/metadata.db` while it runs, normally within about
-half a second (with an artifact store, once its upload is confirmed). The order of these writes
-and how a failed write is retried are specified in `specs/behavior/cache-decisions.md`.
-
-```bash
-barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
-barca history --json            # the run is `running`; `steps_executed` is the steps recorded so far
-```
-
-- **Progress.** `barca status` in a second terminal shows what a running `barca get` or
-  `barca run` has finished: an asset is `cached`, a partitioned asset is `partial` with its
-  `cached` / `missing` counts. A step that is still running shows its previous state.
-- **A killed run keeps what it finished.** If the process is killed (`kill -9`, out of memory, a
-  lost machine), the next `barca get` serves the recorded steps from cache and computes the rest.
-  A step is recorded only after its artifact is completely written, so a recorded step always has
-  its file. A step that finished in the last half second before the kill may not be recorded: it
-  runs again. Failed steps are recorded when the run ends, so a killed run records its successes
-  only.
-- **History says so.** `barca history` reports a run whose process no longer exists as
-  `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
-  `steps_executed` at what it had recorded. It does so as soon as the process is gone, and
-  also for a run killed with its container, once a container starts again on the same
-  `.barca` (see the limits below). The next `get` or `run` writes `interrupted` to the history.
-  Ctrl-C and SIGTERM (a supervisor, `docker stop`) are different: the run stops its workers,
-  records itself and is `cancelled` (exit 130). With an artifact store that also holds while
-  artifacts upload or download or the history is backed up, and the cancelled run then backs
-  its record up for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
-
-**When a run is `interrupted`.** Only when barca can observe that the run's process is gone;
-whenever it cannot, the run stays `running`. Barca looks at the process table on the same
-kernel, at a marker file the process holds open (`.barca/run-owners/`) from another container on
-the same kernel, and at whether the owner's kernel has shut down for a marker on a local disk
-(`specs/behavior/cache-decisions.md`). Machine ids, host names and clocks decide nothing: a killed run
-reads `interrupted` at once, and a suspended laptop or a stopped process (Ctrl-Z) does not make a
-live run look dead.
-
-Known limits:
-
-- With a store (`barca docs remote`) all of this holds on the machine the run is on. Newly
-  committed progress is backed up every minute in healthy operation, without ending the run,
-  and the final outcome when it ends; a backup is restored only by `barca state restore`.
-- With a remote artifact store, an unfinished upload is never recorded as reusable progress.
-  A failed upload is recorded at the end of the run as a pending upload, `unsynced` in
-  `barca status` and uploaded by the next command (`barca docs remote`, "When an upload fails
-  after the steps succeeded"). A failed backup leaves local history intact and is retried;
-  ticks with nothing new take no backup.
-- A run that is going is shown as `running` from everywhere that sees the project directory.
-  The one situation in which a history says `interrupted` for a run that is going somewhere is
-  a copy of the whole disk (a cloned or restored virtual machine) taken during the run and
-  started as another machine: the copy's history is a copy too, and in it the run will never
-  end. And two virtual machines resumed from the same memory snapshot are one machine as far as
-  anything observable goes (same boot id, same processes): if they share a project directory, a
-  run killed on one is shown as `interrupted` there while its twin on the other is still going.
-- What stays `running` although its process is gone:
-  - a run another machine started (its row came with a restored backup), until that machine
-    records it;
-  - with Docker Desktop, a run killed on the host as seen from a container, and a run
-    killed in a container as seen from the host: they are different kernels and the
-    directory between them is not a local disk. The side the run was on shows
-    `interrupted`, and once it has recorded that, so does the other;
-  - a run killed with its container when `.barca` is on a Docker Desktop bind mount (which
-    gives no file handle) and another container was started before the replacement, so
-    that the replacement got another pid namespace number. Restarting one container gives
-    the same number in practice. A named volume for `.barca` does not depend on it;
-  - a run killed in a container by a restart of the machine or of Docker's virtual machine
-    when `.barca` is on a bind mount from a Docker Desktop host or on a network
-    filesystem;
-  - a run killed by a restart of the machine when the project is on a network filesystem.
-- A marker is removed by its process when its runs have ended. One left by a killed process
-  stays while its run reads `running`, and is removed by a later `get` or `run` once no
-  `running` run names it and it is an hour old; so is one left by a process killed between
-  creating its marker and recording its run. Markers are empty files.
-
-After verifying that the process or container has stopped, explicitly reconcile an uncertain
-row with `barca history --reconcile RUN_ID --json`. This records only that row as
-`interrupted` and prints it in the normal history envelope (`runs`, `total: 1`,
-`truncated: false`); `--fields` and human output also work. It refuses a proven live owner,
-a terminal row, an unknown id, and combining `--reconcile` with `--limit` or `--all`.
-It preserves recorded step counts, successful materializations and artifacts, and leaves
-unknown end time and duration as `null`. It does not stop a process. Ordinary history reads
-still keep an uncertain owner `running`; reconciliation is your assertion that it stopped.
-The change is local to the selected environment's metadata database.
-
-## Where things live
-
-```
-.barca/metadata.db                          run history and materialization records (a local libSQL database)
-.barca/artifacts/<node>/<run_hash>.<ext>    one file per result
-.barca/envs/<env>/                          the same layout for a named environment ("Environments")
-.barca/backups/                             with a store: the five newest backups of the metadata DB (`barca docs remote`)
-```
-
-Every other entry barca writes under `.barca/` (locks, `run-owners/`, `staging/`, `sql-cache/`,
-`range-cache/`, `live-logs/`, `branches/`, `inspection-cache/`, `auth/`, `gc-state.json`, the
-files `state restore` and `state reset` move aside, a batched call's `.batch-*` directory), who
-owns it, when it is removed and whether `barca gc` evicts it or the size budget counts it, is the
-table in `specs/interfaces/dot-barca-layout.md`, the one owner of the layout; the site's
-configuration page points there too. Delete nothing by hand to force a recompute: use
-`--refresh` ("Forcing a recompute").
-
-`<ext>` is `.json`, `.pkl`, `.parquet` or `.csv` (see `barca docs types`). An artifact's path
-names the computation, not the bytes: the run hash covers the step's code and inputs, so the same
-step with the same inputs always writes the same path, and computing it again overwrites the file
-("Recompute byte checks"). To keep artifacts and a backup of the history in a bucket, set
-`BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
-
-`.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
-from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
-root. Barca changes into the root before doing anything, so:
-
-- running from a subdirectory reads and writes the same cache as running from the root
-  (`cd sub && barca get out ../pipeline.py` is a cache hit after `barca get out pipeline.py`);
-- file arguments are read relative to where you typed them, and node ids are relative to the
-  root, so `pipelines/p.py:out` is the same id from any directory;
-- steps run with the root as their working directory, so `Path("data.txt")` inside a step means
-  the root's `data.txt` wherever you invoke barca;
-- stderr says `barca: project root: <path>` whenever the root is not the current directory;
-- the project root is the boundary of the dependency cone ("Not followed").
-
-Put an empty `barca.toml` at the top of a project to anchor it. Barca records the metadata
-format version and refuses a database it does not support rather than rebuilding it
-(`specs/interfaces/metadata-schema.md`).
-
-## Upgrading
-
-A barca release that changes how run hashes are computed recomputes the affected steps once, on
-the first run after upgrading; the release notes say so (`CHANGELOG.md`, GitHub Releases).
-
-See also: `barca docs remote`, `barca docs types`, `barca docs partitions`, `barca docs status`,
-`barca docs server-mode`, `barca docs contract`.
+See also: `barca docs disk`, `barca docs layout`, `barca docs remote`, `barca docs types`,
+`barca docs partitions`, `barca docs status`, `barca docs server-mode`, `barca docs contract`.

@@ -8,7 +8,7 @@ description: 'max_size caps what barca keeps on disk. Past the limit, barca evic
   accepted for 0.36.0: recognized local metadata backups are reported outside the quota;
   physical totals continue to include them. The original design below records 0.25.0.
   From 0.37.1 the metadata database is trimmed to its own share of the limit, and old rows can
-  be deleted (`barca docs cache`, "The metadata database"), so "rows are never deleted" holds
+  be deleted (`barca docs disk`, "The metadata database"), so "rows are never deleted" holds
   for eviction only.
 - **Date:** 2026-10-20 (accepted 2026-10-20)
 - **Touches:** barca-core | barca-cli | HTTP server

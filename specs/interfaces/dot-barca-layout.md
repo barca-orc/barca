@@ -5,13 +5,13 @@ Scope: every path barca creates under a project's `.barca/`, which process owns 
 and removes it), and whether `barca gc` and the cache size budget (`[cache] max_size`) count
 it. What the files contain is owned elsewhere: the metadata DB by
 [metadata-schema.md](metadata-schema.md), artifacts by [artifact-formats.md](artifact-formats.md),
-backups by the remote manual (`barca docs remote`), disk use by the cache manual
-(`barca docs cache`, "Disk use" and "Where things live").
+backups by the backup manual (`barca docs backup`), disk use by `barca docs disk` and the
+project root by `barca docs layout`.
 Conformance: `python/tests/test_dot_barca_layout.py` (the top-level entries a pipeline run,
 `barca sql`, `barca status` and `barca gc` leave are a subset of the table below),
 `crates/barca-core/src/gc/tests.rs` (what `barca gc` evicts and measures).
 
-`.barca/` is in the project root (`barca docs cache`, "Where things live"). The default
+`.barca/` is in the project root (`barca docs layout`). The default
 environment uses `.barca/` itself; a named environment `<env>` keeps its own `metadata.db*`,
 `artifacts/`, `backups/` and `live-logs/` under `.barca/envs/<env>/`, with the same rules.
 Everything else is shared by the project's environments.
@@ -25,8 +25,7 @@ Everything else is shared by the project's environments.
 - **Budget.** The cache size budget measures every file under `.barca/` except
   `gc-state.json` (gc's own bookkeeping) and the backup files of `backups/`, which are
   reported separately (RFC-0015).
-- **Evicted by `barca gc`** lists what eviction may delete (the tiers in `barca docs cache`,
-  "Disk use"). Everything else stays until its owner removes it or the user deletes it.
+- **Evicted by `barca gc`** lists what eviction may delete (the tiers in `barca docs disk`). Everything else stays until its owner removes it or the user deletes it.
 - A name not in this table is not written by barca. Tests may create other files; barca
   measures them (as `other`) and never deletes them.
 

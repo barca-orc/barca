@@ -869,6 +869,47 @@ const SITE_PAGES: &[SitePage] = &[
                       cutoff, dry runs, environments and what a run reports.",
     },
     SitePage {
+        topic: "batched-partitions",
+        file: "batched-partitions.md",
+        slug: "reference/batched-partitions",
+        title: "Batched Partitions",
+        description: "batch=: one call of a partitioned step computes many keys; grouping, \
+                      the batch function, what stays the same, calls and known limits.",
+    },
+    SitePage {
+        topic: "disk",
+        file: "disk.md",
+        slug: "reference/disk",
+        title: "Disk Use",
+        description: "The size limit for .barca/, what barca gc evicts and in which order, and \
+                      how the metadata database keeps to its share.",
+    },
+    SitePage {
+        topic: "layout",
+        file: "layout.md",
+        slug: "reference/layout",
+        title: "Where Things Live",
+        description: "The project root, the .barca/ directory, concurrent runs, killed runs and \
+                      upgrading.",
+    },
+    SitePage {
+        topic: "backup",
+        file: "backup.md",
+        slug: "reference/backup",
+        title: "Metadata Backups",
+        description: "Backups of the metadata database in the store, barca state backups and \
+                      barca state restore, and how a server's backups differ.",
+    },
+    SitePage {
+        topic: "serve-ops",
+        file: "serve-ops.md",
+        slug: "reference/serve-ops",
+        title: "Serve Operations",
+        description: "Operating barca serve: the run queue, stopping and restarting without \
+                      losing work, the stop grace a supervisor needs, a shared capacity and the \
+                      run timeout.",
+    },
+    SitePage {
         topic: "types",
         file: "types.md",
         slug: "reference/types",
