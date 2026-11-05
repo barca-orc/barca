@@ -1,8 +1,8 @@
 //! The metadata write boundary (architecture-cleanup step 2b, #800 item 16): every
 //! `INSERT`/`UPDATE`/`DELETE`/`REPLACE` of `.barca/metadata.db` is issued by an owner in `db/`
-//! or by the history recorder in `persist/recording.rs`. Everything else calls a
-//! named owner function and keeps its own transaction and eligibility rules. `db_schema.rs`
-//! (migrations) and `sql/` (read-only) are outside the rule, and so is test code.
+//! (`db/schema/` holds the migrations). Everything else, `persist/recording.rs` included, calls
+//! a named owner function and keeps its own transaction and eligibility rules. `sql/`
+//! (read-only) is outside the rule, and so is test code.
 
 use crate::source_scan::{
     Tok, is_cfg_test, lex, rust_files, skip_cfg_test_item, test_module_files,
@@ -10,7 +10,7 @@ use crate::source_scan::{
 use std::path::Path;
 
 /// Owners: a file here, or under a directory here, may write.
-const OWNERS: &[&str] = &["db/", "persist/recording.rs", "db_schema.rs", "sql/"];
+const OWNERS: &[&str] = &["db/", "sql/"];
 
 /// Files that still write outside an owner, each with why.
 const ALLOWED: &[(&str, &str)] = &[];
@@ -95,8 +95,8 @@ fn metadata_writes_go_through_an_owner() {
     }
     assert!(
         offenders.is_empty(),
-        "metadata writes outside an owner (move each into a named function in db/ or \
-         persist/recording.rs, keeping the caller's transaction):\n{}",
+        "metadata writes outside an owner (move each into a named function in db/, keeping \
+         the caller's transaction):\n{}",
         offenders.join("\n")
     );
     let stale: Vec<_> = ALLOWED

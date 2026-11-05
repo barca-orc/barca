@@ -6,6 +6,7 @@ use crate::cache::{
 };
 use crate::dag::Dag;
 use crate::db;
+use crate::db::materializations::NewMaterialization;
 use crate::dispatch;
 use crate::dispatch::OutputRef;
 use crate::helper_proc;
@@ -33,8 +34,8 @@ use crate::results::{
 };
 
 use crate::persist::{
-    BackupCheckpoints, RunLedger, StepRecorder, StepRow, cancel_recorded_run, canonical_job,
-    persist_run, telemetry_report,
+    BackupCheckpoints, RunLedger, StepRecorder, cancel_recorded_run, canonical_job, persist_run,
+    telemetry_report,
 };
 use crate::store_sync::{StoreSync, transfer_remedy};
 
@@ -753,7 +754,7 @@ async fn open_state(
     let file_args = request.file_args;
     let target_label = &prepared.target_label;
     let exec_plan = &prepared.exec_plan;
-    db::ensure_env_dirs(&cfg.env)?;
+    crate::layout::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
 
     // One visit to the database: initialize it, record the run, and read the cost estimates
@@ -3180,7 +3181,7 @@ pub(crate) async fn explain_dag_with_membership(
         ledger
             .prefetch(crate::cache::cone_keys(dag, &exec_plan.phases))
             .await?;
-        db::ensure_env_dirs(&cfg.env)?;
+        crate::layout::ensure_env_dirs(&cfg.env)?;
         db::init_db(&cfg.db_path).await?;
     }
     // No metadata DB yet means nothing is cached. Do not create one just to look.
@@ -3996,7 +3997,7 @@ async fn dispatch_phase(
                 && let Some(run_hash) = run_hashes.get(node_id)
             {
                 recorder.record(
-                    StepRow::from_artifact(node_id, run_hash, artifact, attempts)
+                    NewMaterialization::from_artifact(node_id, run_hash, artifact, attempts)
                         .with_observation(crate::observation::from_artifact(
                             artifact,
                             decide_state.sensor_outputs.get(node_id),
@@ -4034,7 +4035,7 @@ async fn dispatch_phase(
                     s.produced(path);
                 }
                 let record = recorder.after_upload(
-                    StepRow::from_artifact(node_id, run_hash, artifact, attempts)
+                    NewMaterialization::from_artifact(node_id, run_hash, artifact, attempts)
                         .with_observation(crate::observation::from_artifact(
                             artifact,
                             decide_state.sensor_outputs.get(node_id),

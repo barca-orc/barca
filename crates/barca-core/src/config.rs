@@ -615,7 +615,7 @@ fn join_uri(base: &str, segment: &str) -> String {
 }
 
 /// Resolve the effective configuration. `cli_env` is the `--env` flag.
-/// Does not create any directories — see `db::ensure_env_dirs`.
+/// Does not create any directories — see [`crate::layout::ensure_env_dirs`].
 pub fn resolve(cli_env: Option<&str>) -> Result<ResolvedConfig, BarcaError> {
     let cwd = std::env::current_dir()
         .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
@@ -750,7 +750,7 @@ pub fn resolve_with(
 
     match vars.get("BARCA_REMOTE").as_deref() {
         Some("off") => {
-            let local = crate::db::env_local_paths(&env);
+            let local = crate::layout::env_local_paths(&env);
             return Ok(ResolvedConfig {
                 project_root: cwd.to_path_buf(),
                 remote_off: true,
@@ -795,7 +795,7 @@ pub fn resolve_with(
     let remote_uri = vars.get("BARCA_REMOTE_URI").or(remote.uri);
 
     // Local layout (default env keeps the legacy paths — zero migration).
-    let local = crate::db::env_local_paths(&env);
+    let local = crate::layout::env_local_paths(&env);
 
     // artifacts: BARCA_ARTIFACT_URI (0.4.0 back-compat, literal) >
     //            [remote].artifacts_uri (literal) > {uri}/{env}/artifacts > local

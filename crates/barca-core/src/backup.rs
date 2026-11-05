@@ -458,7 +458,7 @@ async fn count_rows(path: &Path) -> Result<(u64, i64), BarcaError> {
         .await
         .map_err(failed)?;
     let conn = db.connect().map_err(failed)?;
-    let format = crate::db_schema::read_version(&conn).await?;
+    let format = crate::db::schema::ddl::read_version(&conn).await?;
     let mut rows = conn
         .query(
             "SELECT (SELECT COUNT(*) FROM runs) + (SELECT COUNT(*) FROM materializations)",
@@ -1514,7 +1514,7 @@ mod tests {
         .unwrap();
         assert_eq!(sidecar.run_id.as_deref(), Some("r-1"));
         assert_eq!(sidecar.rows, 2);
-        assert_eq!(sidecar.db_format, crate::db_schema::VERSION);
+        assert_eq!(sidecar.db_format, crate::db::schema::ddl::VERSION);
         assert_eq!(
             sidecar.digest,
             crate::hash::file_sha256(&local.join(&name)).unwrap()

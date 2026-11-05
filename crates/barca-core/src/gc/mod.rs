@@ -305,7 +305,7 @@ fn envs(project: &Project) -> Vec<EnvDb> {
     names
         .into_iter()
         .map(|env| {
-            let local = crate::db::env_local_paths(&env);
+            let local = crate::layout::env_local_paths(&env);
             let layout = crate::config::resolve_in(Some(&env), &project.root)
                 .ok()
                 .filter(|cfg| cfg.remote_artifacts())

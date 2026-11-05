@@ -1,8 +1,9 @@
 //! Reads of `materializations` outside a cache lookup (latest successes, output hashes, a
 //! partitioned node's latest artifacts, evictions), the read times of the cache size limit, and
 //! the writes that change or remove rows (and the `definition_components` they name) after they
-//! were recorded: trimming, eviction marks and upload digests. Recording rows is
-//! [`crate::persist`]'s; one-key cache lookups are [`super::CacheReader`]'s.
+//! were recorded: trimming, eviction marks and upload digests; and the statements that record
+//! rows, which [`crate::persist`] drives (its transactions, its eligibility rules). One-key
+//! cache lookups are [`super::CacheReader`]'s.
 
 use super::*;
 use crate::dispatch::OutputRef;
@@ -341,19 +342,257 @@ pub async fn last_output_hashes(
     Ok(out)
 }
 
+/// Record `outputs` as materializations with no run (the legacy, run-less row), one connection
+/// for all of them; a row that cannot be written is skipped.
 pub async fn persist_outputs(
     db_path: &str,
     outputs: &HashMap<String, OutputRef>,
     run_hashes: &HashMap<String, String>,
 ) -> Result<(), BarcaError> {
-    crate::persist::recording::record_legacy_outputs(db_path, outputs, run_hashes).await
-}
-
-/// Alias for backward compat in tests — delegates to persist_outputs.
-pub async fn persist_output_refs(db_path: &str, outputs: &HashMap<String, OutputRef>) {
-    persist_outputs(db_path, outputs, &HashMap::new())
+    if outputs.is_empty() {
+        return Ok(());
+    }
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    for (node_id, oref) in outputs {
+        let run_hash = run_hashes.get(node_id).cloned().unwrap_or_default();
+        let elapsed_str = oref
+            .elapsed_seconds
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        conn.execute(
+            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds) VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''))",
+            [
+                node_id.clone(),
+                run_hash,
+                oref.path.clone(),
+                oref.format.clone(),
+                oref.size_bytes.to_string(),
+                elapsed_str,
+            ],
+        )
         .await
         .ok();
+    }
+    Ok(())
+}
+
+// ─── Recording (driven by `crate::persist`) ──────────────────────────────────
+
+/// One successful step as a `materializations` row. Built when the step finishes (for the
+/// [`StepRecorder`]) and again from the ledger at the end of the run.
+#[derive(Debug, Clone)]
+pub(crate) struct NewMaterialization {
+    pub(crate) node_id: String,
+    pub(crate) run_hash: String,
+    pub(crate) path: String,
+    pub(crate) format: String,
+    pub(crate) size_bytes: u64,
+    pub(crate) elapsed_seconds: Option<f64>,
+    pub(crate) attempts: u32,
+    pub(crate) sinks_json: Option<String>,
+    pub(crate) cpu_seconds: Option<f64>,
+    pub(crate) max_rss_bytes: Option<u64>,
+    /// Digest of the producer-owned serialized bytes.
+    pub(crate) output_hash: Option<String>,
+    pub(crate) observation_hash: Option<String>,
+    /// The run hash's components ([`crate::changes::step_components_json`]).
+    pub(crate) components: Option<String>,
+    /// The batched call that computed it (RFC-0013).
+    pub(crate) batch: Option<String>,
+}
+
+impl NewMaterialization {
+    /// From the artifact a worker reported for a finished step. Reads the same fields the
+    /// end-of-run ledger is built from, so both writers produce the same row.
+    pub(crate) fn from_artifact(
+        node_id: &str,
+        run_hash: &str,
+        artifact: &serde_json::Value,
+        attempts: u32,
+    ) -> Self {
+        let str_of = |key: &str| artifact.get(key).and_then(|v| v.as_str());
+        Self {
+            node_id: node_id.to_string(),
+            run_hash: run_hash.to_string(),
+            path: str_of("path").unwrap_or("").to_string(),
+            format: str_of("format").unwrap_or("json").to_string(),
+            size_bytes: artifact
+                .get("size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            elapsed_seconds: artifact.get("elapsed_seconds").and_then(|v| v.as_f64()),
+            attempts,
+            sinks_json: artifact
+                .get("sinks")
+                .and_then(|v| v.as_array())
+                .filter(|sinks| !sinks.is_empty())
+                .map(|sinks| serde_json::Value::from(sinks.clone()).to_string()),
+            cpu_seconds: artifact.get("cpu_seconds").and_then(|v| v.as_f64()),
+            max_rss_bytes: artifact.get("max_rss_bytes").and_then(|v| v.as_u64()),
+            output_hash: str_of("content_hash").map(str::to_string),
+            observation_hash: None,
+            components: None,
+            batch: str_of("batch").map(str::to_string),
+        }
+    }
+
+    pub(crate) fn with_observation(mut self, revision: Option<String>) -> Self {
+        self.observation_hash = revision;
+        self
+    }
+
+    /// With the run hash's components recorded ([`crate::changes`]).
+    pub(crate) fn with_components(mut self, components: Option<String>) -> Self {
+        self.components = components;
+        self
+    }
+}
+
+/// Appends successful steps' rows, unless the run already has a row for the node under the same
+/// run hash. A run requeued and resumed on new code keeps its run id, so a step it re-executes
+/// under a new run hash gets a new row rather than leaving the earlier attempt's (#794).
+/// Prepared once per transaction and rebound for each row (#460).
+pub(crate) struct StepInsert(Prepared);
+
+impl StepInsert {
+    // Turso otherwise intersects the node and run indexes, scanning this run
+    // for each partition. Bound deduplication to the node's own history.
+    const SQL: &'static str = concat!(
+        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations ",
+        by_node_run!(),
+        " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, '') WHERE NOT EXISTS (SELECT 1 FROM materializations ",
+        by_node_run!(),
+        " WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12)"
+    );
+
+    pub(crate) async fn prepare(conn: &Connection) -> Result<Self, libsql::Error> {
+        prepare(conn, Self::SQL).await.map(Self)
+    }
+
+    /// Rows written: 1, or 0 when the run already recorded the node under this run hash.
+    pub(crate) async fn run(
+        &mut self,
+        row: &NewMaterialization,
+        run_id: &str,
+    ) -> Result<u64, libsql::Error> {
+        let opt = |v: Option<String>| v.unwrap_or_default();
+        self.0
+            .execute([
+                row.node_id.clone(),
+                row.run_hash.clone(),
+                row.path.clone(),
+                row.format.clone(),
+                row.size_bytes.to_string(),
+                opt(row.elapsed_seconds.map(|e| e.to_string())),
+                row.attempts.to_string(),
+                opt(row.sinks_json.clone()),
+                opt(row.cpu_seconds.map(|c| c.to_string())),
+                opt(row.max_rss_bytes.map(|r| r.to_string())),
+                opt(row.output_hash.clone()),
+                run_id.to_string(),
+                opt(row.components.clone()),
+                opt(row.batch.clone()),
+                opt(row.observation_hash.clone()),
+            ])
+            .await
+    }
+}
+
+/// Appends a permanently failed step as a `status = 'failed'` row (artifact columns NULL);
+/// failed rows are never served as cache hits. Prepared once per transaction.
+pub(crate) struct FailedStepInsert(Prepared);
+
+impl FailedStepInsert {
+    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts, run_id, batch_id, error_phase) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''))";
+
+    pub(crate) async fn prepare(conn: &Connection) -> Result<Self, libsql::Error> {
+        prepare(conn, Self::SQL).await.map(Self)
+    }
+
+    /// `batch`: the batched call that computed the key, if any. The failure's own attempt
+    /// count is recorded: dispatches for a worker failure, transfer attempts for an upload.
+    pub(crate) async fn run(
+        &mut self,
+        failure: &crate::dispatch::StepFailure,
+        run_hash: String,
+        run_id: &str,
+        batch: String,
+    ) -> Result<u64, libsql::Error> {
+        self.0
+            .execute([
+                failure.node_id.clone(),
+                run_hash,
+                failure.error.error_type.clone(),
+                failure.error.message.clone(),
+                failure.error.traceback.clone(),
+                failure.error.attempts.to_string(),
+                run_id.to_string(),
+                batch,
+                failure.error.phase.map_or("", |p| p.as_str()).to_string(),
+            ])
+            .await
+    }
+}
+
+/// The digests the latest successful row of `node_id` under `run_hash` holds.
+pub(crate) struct HeldHashes {
+    /// Its output hash, when it recorded one (rows before digests were recorded have none).
+    pub(crate) output: Option<String>,
+    pub(crate) observation: Option<String>,
+}
+
+/// The latest successful row of `node_id` under `run_hash`, if any.
+pub(crate) async fn held_hashes(
+    conn: &Connection,
+    node_id: &str,
+    run_hash: &str,
+) -> Result<Option<HeldHashes>, libsql::Error> {
+    let mut rows = conn
+        .query(
+            "SELECT output_hash, observation_hash FROM materializations WHERE node_id = ?1 AND \
+             run_hash = ?2 AND status = 'success' ORDER BY id DESC LIMIT 1",
+            [node_id.to_string(), run_hash.to_string()],
+        )
+        .await?;
+    let held = rows.next().await?.map(|row| HeldHashes {
+        output: row.get::<String>(0).ok().filter(|h| !h.is_empty()),
+        observation: row.get::<String>(1).ok(),
+    });
+    while rows.next().await?.is_some() {}
+    Ok(held)
+}
+
+/// Record one step of a verified ledger post under `run_id`.
+pub(crate) async fn insert_posted_step(
+    conn: &Connection,
+    run_id: &str,
+    step: &crate::ledger::LedgerStep,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "INSERT INTO materializations (node_id, run_hash, artifact_path, \
+         artifact_format, artifact_size_bytes, elapsed_seconds, status, error_message, \
+         attempts, output_hash, run_id, observation_hash) \
+         VALUES (?1, ?2, NULLIF(?3, ''), NULLIF(?4, ''), NULLIF(?5, ''), NULLIF(?6, ''), \
+         ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), ?11, NULLIF(?12, ''))",
+        [
+            step.node_id.clone(),
+            step.run_hash.clone(),
+            step.path.clone().unwrap_or_default(),
+            step.format.clone().unwrap_or_default(),
+            step.size_bytes.map(|n| n.to_string()).unwrap_or_default(),
+            step.elapsed_seconds
+                .map(|n| n.to_string())
+                .unwrap_or_default(),
+            step.status.clone(),
+            step.error.clone().unwrap_or_default(),
+            step.attempts.unwrap_or(1).to_string(),
+            step.digest.clone().unwrap_or_default(),
+            run_id.to_string(),
+            step.observation_hash.clone().unwrap_or_default(),
+        ],
+    )
+    .await
 }
 
 // ─── Cache size limit (RFC-0012) ─────────────────────────────────────────────
@@ -740,7 +979,9 @@ mod tests {
             },
         );
 
-        persist_output_refs(&db_path, &outputs).await;
+        persist_outputs(&db_path, &outputs, &HashMap::new())
+            .await
+            .unwrap();
 
         let (_db, conn) = open_conn(&db_path).await.unwrap();
         let mut rows = conn
@@ -804,7 +1045,9 @@ mod tests {
             },
         );
 
-        persist_output_refs(&db_path, &outputs).await;
+        persist_outputs(&db_path, &outputs, &HashMap::new())
+            .await
+            .unwrap();
 
         let (_db, conn) = open_conn(&db_path).await.unwrap();
         let mut rows = conn

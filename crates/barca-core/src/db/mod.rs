@@ -14,7 +14,7 @@ use crate::BarcaError;
 use libsql::Builder;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -30,7 +30,7 @@ macro_rules! by_node_run {
 pub(crate) const BY_NODE_RUN: &str = by_node_run!();
 
 // The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
-// this directory (one file per table family) or `persist/recording.rs`.
+// this directory (one file per table family); `persist/recording.rs` drives the recording ones.
 mod cache_reader;
 pub(crate) mod cost_estimates;
 pub(crate) mod freshness_proofs;
@@ -45,7 +45,7 @@ pub(crate) mod run_queue;
 mod run_steps;
 pub(crate) mod runs;
 mod schedule;
-mod schema;
+pub(crate) mod schema;
 pub(crate) mod sink_publications;
 mod snapshots;
 mod stats;
@@ -72,8 +72,7 @@ pub(crate) use materializations::{
     touch_read, touch_read_in, touch_read_on,
 };
 pub use materializations::{
-    last_output_hashes, max_materialization_id, persist_output_refs, persist_outputs,
-    succeeded_since,
+    last_output_hashes, max_materialization_id, persist_outputs, succeeded_since,
 };
 pub use partition_keys::{
     FailedKeys, PartitionErrorGroup, PartitionKeyRow, PartitionKeys, PartitionKeysFilter,
@@ -247,51 +246,14 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
     // index, and a reader that comes then waits for it instead of failing.
     wait_when_busy(&conn)?;
     let _ = conn.execute("PRAGMA cache_size = -32768", ()).await;
-    crate::db_schema::check(&conn)
+    crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
 }
 
-/// Local filesystem locations for one environment.
-#[derive(Debug, Clone)]
-pub struct LocalPaths {
-    pub db_path: String,
-    pub artifact_dir: String,
-}
-
-/// Path derivation for an environment, with no filesystem side effects.
-/// The default env keeps the legacy layout so existing projects need no
-/// migration; named envs live under `.barca/envs/<name>/`.
-pub fn env_local_paths(env: &str) -> LocalPaths {
-    let base = if env == crate::config::DEFAULT_ENV {
-        PathBuf::from(".barca")
-    } else {
-        PathBuf::from(".barca").join("envs").join(env)
-    };
-    LocalPaths {
-        db_path: base.join("metadata.db").to_string_lossy().to_string(),
-        artifact_dir: base.join("artifacts").to_string_lossy().to_string(),
-    }
-}
-
-/// Create the `.barca` tree for an environment and return its paths.
-pub fn ensure_env_dirs(env: &str) -> Result<LocalPaths, BarcaError> {
-    let paths = env_local_paths(env);
-    let db_dir = Path::new(&paths.db_path)
-        .parent()
-        .expect("db path has a parent")
-        .to_path_buf();
-    fs::create_dir_all(&db_dir)
-        .map_err(|e| BarcaError::Db(format!("failed to create {}: {e}", db_dir.display())))?;
-    fs::create_dir_all(&paths.artifact_dir)
-        .map_err(|e| BarcaError::Db(format!("failed to create artifacts dir: {e}")))?;
-    let gitignore = PathBuf::from(".barca").join(".gitignore");
-    if !gitignore.exists() {
-        let _ = fs::write(&gitignore, "*\n");
-    }
-    Ok(paths)
-}
+// barca-server names these as `db::` paths; the `.barca/` layout is `crate::layout`'s.
+pub use crate::layout::{LocalPaths, ensure_env_dirs, env_local_paths};
 
 /// How long one barca process waits for another's DB operation before giving up.
 /// Operations are brief (a few queries), so hitting this means a stuck process.
@@ -546,7 +508,7 @@ async fn connect_read_only(
         .map_err(db_open_error)?;
     let conn = db.connect().map_err(db_open_error)?;
     wait_when_busy(&conn)?;
-    crate::db_schema::check(&conn)
+    crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
@@ -579,7 +541,7 @@ async fn connect_write(path: &str) -> Result<(libsql::Database, libsql::Connecti
     // A checkpoint hands back the log file past this size. It otherwise stays at the size the
     // largest transaction left it.
     let _ = conn.query("PRAGMA journal_size_limit = 67108864", ()).await;
-    crate::db_schema::check(&conn)
+    crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))

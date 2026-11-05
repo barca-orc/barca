@@ -724,12 +724,20 @@ async fn a_version_1_database_from_an_earlier_release_gains_the_columns() {
         )
         .await
         .unwrap();
-        assert!(crate::db_schema::additions_missing(&conn).await.unwrap());
+        assert!(
+            crate::db::schema::ddl::additions_missing(&conn)
+                .await
+                .unwrap()
+        );
     }
     crate::db::init_db(&path).await.unwrap();
     let _g = crate::db::db_guard().await;
     let (_h, conn) = crate::db::open_conn(&path).await.unwrap();
-    assert!(!crate::db_schema::additions_missing(&conn).await.unwrap());
+    assert!(
+        !crate::db::schema::ddl::additions_missing(&conn)
+            .await
+            .unwrap()
+    );
     let mut rows = conn
         .query(
             "SELECT COUNT(*) FROM materializations WHERE evicted_at IS NULL AND last_read_at IS NULL",
@@ -741,7 +749,10 @@ async fn a_version_1_database_from_an_earlier_release_gains_the_columns() {
         rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
         1
     );
-    assert_eq!(crate::db_schema::read_version(&conn).await.unwrap(), 1);
+    assert_eq!(
+        crate::db::schema::ddl::read_version(&conn).await.unwrap(),
+        1
+    );
 }
 
 /// #560: a command that wrote nothing (a warm run) is not checked again when the last check,
