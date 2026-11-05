@@ -36,6 +36,31 @@ ends. duckdb 2 refuses other work on a connection with an unfinished result; dis
 keeps the duckdb 1.x behavior, where the next statement replaced it. Results on the step's own
 cursors or connections are not touched.
 
+### Pickles written by older releases stay readable
+
+Before 0.39, a worker loaded the pipeline file under a synthetic module name,
+`_barca_<path>` (the file's path under the project root with `/` as `__`, without `.py`:
+`_barca_pipelines__orders` for `pipelines/orders.py`), so a pickled artifact that holds an
+instance of a class defined in the pipeline names that module. Modules now load under their
+ordinary identity (`pipelines.orders`), and the promise is that those artifacts, and the branch
+results and sinks republished from them, keep reading:
+
+- `load_pipeline_module` registers the loaded module under its legacy name as well, when that
+  name is free and no ordinary module owns it, so a pickle written by the same source reads
+  through `sys.modules` as before.
+- `_artifacts._ProjectUnpickler` sends a `_barca_*` module name it cannot import to
+  `_source_import.legacy_pickle_module`, which recovers the source: it probes the project
+  root for the one file whose legacy name is that name (every `__` is tried as a path
+  separator), bounded to 256 probes, loads it, and restores `sys.path` afterwards. A name
+  that matches no file, more than one file, or exceeds the bound is an `ImportError` naming
+  the identity and telling the user to refresh after resolving the layout; a legitimately
+  installed module whose name starts with `_barca_` is imported only after the project has
+  been shown to hold no match.
+
+The bounds: recovery is for sources under the project root (a pipeline file imported from
+outside it is recovered only when that worker already loaded it), and a pickle is never
+rewritten. Conformance: [legacy pickle tests](../../python/tests/test_explicit_project_imports.py).
+
 ## Invariants
 
 - **INV-WORKER-STATE-01:** Shared import-time setup survives calls on the same worker.

@@ -571,8 +571,8 @@ def artifact_path(
     With a run_hash the path is ``{dir}/{safe_node_id}/{run_hash}{ext}``: it names the
     computation (code and inputs), so it is the same on every machine and cache hits
     transfer across machines. It does not name the bytes: computing the result again
-    (a refresh, a missing artifact) overwrites the file. Without a run_hash (older
-    coordinators, parallel() children, batch mode) the legacy node-id-keyed layout is used.
+    (a refresh, a missing artifact) overwrites the file. Without a run_hash (a step the
+    coordinator sent none for) the path is ``{dir}/{safe_node_id}{ext}``, one file per node.
 
     Returns a Path for a local artifact_dir, or a URI string when
     artifact_dir is a remote prefix (e.g. BARCA_ARTIFACT_URI).
