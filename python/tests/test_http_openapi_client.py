@@ -4,23 +4,19 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
-import signal
-import socket
-import subprocess
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import pytest
-from barca.api import BarcaError, _find_binary
+from barca.api import BarcaError
 from barca.client import Client
 
+from .helpers import barca, clean_env, wait_until
+from .served import Serve
 from .test_serve_load_isolation import BROKEN, PIPELINE
-from .test_serve_robustness import Server
 
 jsonschema = pytest.importorskip("jsonschema")
 yaml = pytest.importorskip("yaml")
@@ -68,38 +64,14 @@ def annual() -> None:
     pass
 """
     )
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    process = subprocess.Popen(
-        [_find_binary(), "serve", "sub/pipeline.py", "--port", str(port)],
-        cwd=tmp_path,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    # Only BARCA_* is scrubbed here (as before): the store variables stay.
+    process = Serve(
+        tmp_path, files=("sub/pipeline.py",), env=clean_env(scrub=("BARCA_",)), timeout=20
     )
-    client = Client(f"http://127.0.0.1:{port}", timeout=10)
     try:
-        deadline = time.monotonic() + 20
-        while True:
-            try:
-                client.health()
-                break
-            except BarcaError:
-                if process.poll() is not None or time.monotonic() > deadline:
-                    raise AssertionError("HTTP contract fixture failed to start") from None
-                time.sleep(0.05)
-        yield client
+        yield Client(process.url, timeout=10)
     finally:
-        process.send_signal(signal.SIGTERM)
-        try:
-            _, stderr = process.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            _, stderr = process.communicate()
-        assert process.returncode == 0, stderr
+        assert process.stop() == 0, process.stderr
 
 
 def test_real_client_requests_and_terminal_parsing_match_openapi(server, monkeypatch):
@@ -136,10 +108,9 @@ def test_real_client_requests_and_terminal_parsing_match_openapi(server, monkeyp
     assert server.asset("value")["asset"]["id"].endswith(":value")
     assert server.plan()["total_steps"] > 0
     # Health is liveness; the scheduler initializes history asynchronously.
-    deadline = time.monotonic() + 10
-    while not (schedules := server.schedules()):
-        assert time.monotonic() < deadline, "scheduler did not publish the configured job"
-        time.sleep(0.02)
+    schedules = wait_until(
+        server.schedules, "the scheduler to publish the configured job", timeout=10, interval=0.02
+    )
     assert schedules[0]["cron"] == "0 0 1 1 *"
     assert server.get("value").wait(timeout=20, poll=0.02)["status"] == "complete"
     assert server.get("sub/pipeline.py:value").wait(timeout=20, poll=0.02)["status"] == "complete"
@@ -173,8 +144,8 @@ def test_real_client_partial_load_health_and_empty_admission_match_openapi(tmp_p
     (tmp_path / "barca.toml").write_text("")
     (tmp_path / "pipeline.py").write_text(BROKEN if empty else PIPELINE)
     (tmp_path / "broken.py").write_text(BROKEN)
-    process = Server(tmp_path, ".", "--no-schedule")
-    client = Client(f"http://127.0.0.1:{process.port}")
+    process = Serve(tmp_path, "--no-schedule", files=(".",), env=clean_env(BARCA_POOL_SIZE="2"))
+    client = Client(process.url)
     try:
         assets = client.assets()
         health = client.health()
@@ -192,7 +163,7 @@ def test_real_client_partial_load_health_and_empty_admission_match_openapi(tmp_p
             result = client.get("safe").wait(timeout=20, poll=0.02)
             assert result["status"] == "complete"
     finally:
-        process.stop()
+        process.kill()
 
 
 def _raw(server, method, path, body=None):
@@ -257,7 +228,7 @@ def publish(value: dict) -> None:
 def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
     (tmp_path / "barca.toml").write_text("")
     (tmp_path / "pipeline.py").write_text(CONTRACT_PIPELINE)
-    server = Server(tmp_path, "--no-schedule")
+    server = Serve(tmp_path, "--no-schedule", env=clean_env(BARCA_POOL_SIZE="2"))
     try:
         accepted, _ = _checked(
             server, "POST", "/runs", 202, {"command": "get", "targets": ["value"], "agent": True}
@@ -331,12 +302,8 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         assert plan["summary"]["cached"] == 1
 
         # Inspection bodies are the CLI's --json output, byte for byte.
-        env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-
         def cli(*args):
-            done = subprocess.run(
-                [_find_binary(), *args], cwd=tmp_path, env=env, capture_output=True, text=True
-            )
+            done = barca(tmp_path, *args, env=clean_env(scrub=("BARCA_",)))
             assert done.returncode == 0, done.stderr
             return done.stdout.rstrip("\n").encode()
 
@@ -373,4 +340,4 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         project, _ = _checked(server, "GET", "/project", 200)
         assert [f["path"] for f in project["files"]] == ["pipeline.py"]
     finally:
-        server.stop()
+        server.kill()

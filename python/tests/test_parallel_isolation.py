@@ -19,7 +19,6 @@ came from the other run is visible in the value itself.
 import json
 import os
 import signal
-import socket
 import subprocess
 from pathlib import Path
 
@@ -28,7 +27,9 @@ import pytest
 from barca.api import _find_binary
 from barca.client import Client
 
-from .test_remote_cancel import alive, wait_until
+from .helpers import QUICK, RUN, SERVE, clean_env, wait_until
+from .served import Serve
+from .test_remote_cancel import alive
 
 BRANCHES = 120
 # How often the concurrent pairs are run. On 0.18.1 cross-talk showed in most single pairs.
@@ -119,9 +120,9 @@ def waits() -> list:
 
 
 def env(pool: int | None = None) -> dict:
-    e = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    e["BARCA_POOL_SIZE"] = str(pool or os.environ.get("BARCA_POOL_SIZE", 4))
-    return e
+    # Only BARCA_* is scrubbed here (as before): the store variables stay.
+    pool_size = str(pool or os.environ.get("BARCA_POOL_SIZE", 4))
+    return clean_env(scrub=("BARCA_",), BARCA_POOL_SIZE=pool_size)
 
 
 def start(root: Path, *args: str, pool: int | None = None) -> subprocess.Popen:
@@ -136,7 +137,7 @@ def start(root: Path, *args: str, pool: int | None = None) -> subprocess.Popen:
     )
 
 
-def finish(proc: subprocess.Popen, timeout: float = 180) -> tuple[int, str, str]:
+def finish(proc: subprocess.Popen, timeout: float = SERVE) -> tuple[int, str, str]:
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -201,50 +202,19 @@ def test_two_barca_processes_in_one_project_do_not_read_each_others_branches(roo
         assert branch_files(root) == []
 
 
-def free_port() -> int:
-    """A free TCP port above 20000."""
-    for port in range(20000 + os.getpid() % 20000, 60000):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-            except OSError:
-                continue
-            return port
-    raise AssertionError("no free port")
-
-
 @pytest.fixture
 def server(root):
-    port = free_port()
-    # Its output goes to a file: nobody reads a pipe here, and a server prints a line a step.
-    log = open(root / "serve.log", "w")
-    proc = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule"],
-        cwd=root,
-        env=env(),
-        stdout=log,
-        stderr=log,
-        start_new_session=True,
-    )
-    client = Client(f"http://127.0.0.1:{port}")
-
-    def up() -> bool:
-        try:
-            return client.health().get("status") == "ok"
-        except Exception:
-            return False
-
+    # Its own process group: the fixture interrupts it as a terminal would (`os.killpg`).
+    served = Serve(root, "--no-schedule", env=env(), new_session=True)
     try:
-        wait_until(up, "the server to answer", proc)
-        yield client
+        yield Client(served.url)
     finally:
-        os.killpg(proc.pid, signal.SIGINT)
+        served.send(signal.SIGINT)
         try:
-            proc.wait(timeout=30)
+            served.exited(timeout=QUICK)
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-        log.close()
+            served.send(signal.SIGKILL)
+        served.stop()
 
 
 @pytest.mark.parametrize("targets", [("fan_a", "fan_b"), ("big_a", "big_b")], ids=["small", "big"])
@@ -296,8 +266,8 @@ def held_group(root: Path) -> subprocess.Popen:
     """`barca run waits`, up to the point where twenty branch results are written and the
     group is still open."""
     proc = start(root, "run", "waits", "pipeline.py", pool=4)
-    wait_until((root / "held.0.started").exists, "the held branch to start", proc)
-    wait_until(lambda: len(branch_results(root)) >= 20, "twenty branch results on disk", proc)
+    wait_until((root / "held.0.started").exists, "the held branch to start", proc=proc)
+    wait_until(lambda: len(branch_results(root)) >= 20, "twenty branch results on disk", proc=proc)
     return proc
 
 
@@ -370,9 +340,11 @@ def test_a_caller_killed_while_its_branches_run_fails_its_step(root):
     # The coordinator has noticed once the dead caller's branch results are gone. Only then is
     # the held branch let go: released at once, the group could finish first, and the caller
     # would be found dead as a running worker (the same outcome, with a shorter message).
-    wait_until(lambda: branch_files(root) == [], "the dead caller's branch results to go", proc)
+    wait_until(
+        lambda: branch_files(root) == [], "the dead caller's branch results to go", proc=proc
+    )
     (root / "release").write_text("")
-    code, out, err = finish(proc, timeout=60)
+    code, out, err = finish(proc, timeout=RUN)
     assert code == 1, (code, err)
     doc = json.loads(out)
     assert doc["failed_node"] == "pipeline.py:waits"

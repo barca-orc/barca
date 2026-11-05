@@ -11,15 +11,14 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 import barca
-from barca.api import _find_binary
+
+from . import helpers
 
 # Every step leaves a marker file in the working directory, so a test can tell what ran.
 MIXED = """
@@ -90,13 +89,8 @@ def project(tmp_path) -> Path:
 
 
 def barca_cli(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env={**os.environ, "BARCA_OUTPUT": "json"},
-        capture_output=True,
-        text=True,
-    )
+    # The machine's environment is inherited on purpose.
+    return helpers.barca(project, *args, env={**os.environ, "BARCA_OUTPUT": "json"})
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:
@@ -219,41 +213,15 @@ class TestPythonApi:
         assert ran(project) == set()
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def test_server_full_run_skips_tasks(project):
-    from barca.api import BarcaError
+def test_server_full_run_skips_tasks(project, serve):
     from barca.client import Client
 
-    port = _free_port()
-    proc = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule"],
-        cwd=project,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        client = Client(f"http://127.0.0.1:{port}")
-        for _ in range(150):
-            try:
-                if client.health().get("status") == "ok":
-                    break
-            except BarcaError:
-                time.sleep(0.2)
-        else:
-            pytest.fail("barca serve did not answer /health within 30 s")
+    # The machine's environment is inherited on purpose, as before this test used `Serve`.
+    server = serve("--no-schedule", env={**os.environ})
+    client = Client(server.url)
+    assert client.health().get("status") == "ok"
 
-        state = client.get().wait(timeout=60)  # no target: POST /run
-        assert state["status"] == "complete", state
-        assert names(state["result"]) == ASSETS_AND_SENSORS
-        assert ran(project) == ASSETS_AND_SENSORS
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    state = client.get().wait(timeout=60)  # no target: POST /run
+    assert state["status"] == "complete", state
+    assert names(state["result"]) == ASSETS_AND_SENSORS
+    assert ran(project) == ASSETS_AND_SENSORS

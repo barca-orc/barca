@@ -14,8 +14,10 @@ import time
 from pathlib import Path
 
 import pytest
+from barca.api import _find_binary
 
-from .test_remote_inspect import SCRUB, _find_binary
+from . import helpers
+from .helpers import QUICK, RUN, SERVE, clean_env, wait_until
 
 PIPELINE = """
 from barca import asset
@@ -33,16 +35,7 @@ def total(numbers: list) -> dict:
 
 
 def cli(cwd: Path, store: Path, *args: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**env, "BARCA_REMOTE_URI": str(store)},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    return helpers.barca(cwd, *args, env=clean_env(BARCA_REMOTE_URI=str(store)), timeout=SERVE)
 
 
 @pytest.fixture
@@ -259,71 +252,28 @@ def test_a_differing_copy_and_a_missing_object_are_told_apart(shared):
     assert json.loads(_one(store, "default/artifacts/*total*/*.json").read_text()) == {"sum": 10}
 
 
-def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path):
+def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path, serve):
     """`GET /status/{run_id}` carries the CLI's step entries, the marker included."""
-    import signal
-    import urllib.error
-    import urllib.request
-
-    from .served import _free_port
-
     store = tmp_path / "store"
     root = tmp_path / "project"
     root.mkdir()
     (root / "pipeline.py").write_text(PIPELINE)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     # Results are shared through the store; history stays on each machine.
-    env.update(BARCA_REMOTE_URI=str(store))
-    first = subprocess.run(
-        [_find_binary(), "get", "total", "-o", "value", "--json"],
-        cwd=root,
-        env=env,
-        capture_output=True,
-    )
+    env = clean_env(BARCA_REMOTE_URI=str(store))
+    first = helpers.barca(root, "get", "total", "-o", "value", "--json", env=env)
     assert first.returncode == 0, first.stderr
     # The store's copy is overwritten and this machine no longer has its own.
     _one(store, "default/artifacts/*total*/*.json").write_text('{"sum": 7}')
     _one(root, ".barca/artifacts/*total*/*.json").unlink()
 
-    port = _free_port()
-    server = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule"],
-        cwd=root,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    server = serve("--no-schedule", root=root, env=env)
+    handle = server.request("POST", "/get/total")[1]["run_id"]
+    run = server.wait(
+        f"GET /status/{handle}",
+        lambda: (r := server.get(f"/status/{handle}"))["status"] not in ("pending", "running")
+        and r,
     )
-
-    def call(method: str, path: str) -> dict:
-        req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method)
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read())
-
-    def poll(method: str, path: str, done) -> dict:
-        deadline = time.monotonic() + 60
-        while True:
-            assert server.poll() is None, "the server exited"
-            try:
-                body = call(method, path)
-                if done(body):
-                    return body
-            except (urllib.error.URLError, ConnectionError, TimeoutError):
-                pass  # not listening yet
-            assert time.monotonic() < deadline, f"timed out on {method} {path}"
-            time.sleep(0.05)
-
-    try:
-        poll("GET", "/health", lambda body: True)
-        handle = call("POST", "/get/total")["run_id"]
-        run = poll("GET", f"/status/{handle}", lambda r: r["status"] not in ("pending", "running"))
-    finally:
-        server.send_signal(signal.SIGTERM)
-        try:
-            server.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            server.kill()
-            server.communicate()
+    server.stop()
     assert run["status"] == "complete", run
     steps = {st["id"]: st for st in run["result"]["steps"]}
     assert steps["pipeline.py:total"]["artifact_mismatch"] is True
@@ -373,11 +323,10 @@ def _machine(tmp_path: Path, name: str) -> Path:
 
 
 def _start(cwd: Path, store: Path, *args: str, **env: str) -> subprocess.Popen:
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     return subprocess.Popen(
         [_find_binary(), *args],
         cwd=cwd,
-        env={**base, "BARCA_REMOTE_URI": str(store), **env},
+        env=clean_env(BARCA_REMOTE_URI=str(store), **env),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -385,7 +334,7 @@ def _start(cwd: Path, store: Path, *args: str, **env: str) -> subprocess.Popen:
 
 
 def _finish(proc: subprocess.Popen) -> subprocess.CompletedProcess:
-    out, err = proc.communicate(timeout=120)
+    out, err = proc.communicate(timeout=RUN)
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
@@ -394,7 +343,10 @@ def test_overlapping_runs_of_the_same_step_leave_other_machines_working(tmp_path
     result, and both machines (and a third) go on working."""
     store = tmp_path / "store"
     b = _start(_machine(tmp_path, "b"), store, "get", "slow", "-o", "value", "--json", SLOW="6")
-    time.sleep(2.5)
+    # `b` has computed `up` and put it in the store, and is now in `slow` for 6 s.
+    wait_until(
+        lambda: list(store.glob("default/artifacts/*up*/*.json")), "b's `up` in the store", proc=b
+    )
     a = _finish(_start(_machine(tmp_path, "a"), store, "get", "quick", "-o", "value", "--json"))
     assert a.returncode == 0, a.stderr
     b = _finish(b)
@@ -406,16 +358,23 @@ def test_overlapping_runs_of_the_same_step_leave_other_machines_working(tmp_path
         assert "id" in json.loads(proc.stdout)["final_output"]
 
 
+def _stored_up(store: Path) -> dict[str, bytes]:
+    """The store's copies of `up`, by path."""
+    return {str(p): p.read_bytes() for p in store.glob("default/artifacts/*up*/*.json")}
+
+
 def test_a_refresh_killed_after_its_upload_does_not_lock_the_step(tmp_path):
     store = tmp_path / "store"
     root = _machine(tmp_path, "d")
     assert cli(root, store, "get", "slow", "-o", "value", "--json").returncode == 0
+    before = _stored_up(store)
     killed = _start(
         root, store, "get", "slow", "--refresh", "up", "-o", "value", "--json", SLOW="30"
     )
-    time.sleep(5)
+    # The refresh has recomputed `up` and replaced the store's copy; it is now in `slow`.
+    wait_until(lambda: _stored_up(store) != before, "the refreshed `up` in the store", proc=killed)
     killed.kill()
-    killed.communicate(timeout=30)
+    killed.communicate(timeout=QUICK)
 
     proc = cli(root, store, "get", "up", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
@@ -447,11 +406,10 @@ def test_fetch_and_warning_lines_reach_a_terminal_through_the_progress_bar(share
     _one(store, "default/artifacts/*numbers*/*.json").write_text("[5, 5]")
     root = make("reader")
     master, slave = pty.openpty()
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     proc = subprocess.Popen(
         [_find_binary(), "get", "total", "--refresh", "total", "-o", "value", "--json"],
         cwd=root,
-        env={**env, "BARCA_REMOTE_URI": str(store), "TERM": "xterm"},
+        env=clean_env(BARCA_REMOTE_URI=str(store), TERM="xterm"),
         stdout=subprocess.PIPE,
         stderr=slave,
         text=True,
@@ -471,7 +429,7 @@ def test_fetch_and_warning_lines_reach_a_terminal_through_the_progress_bar(share
             chunks.append(data)
         elif proc.poll() is not None:
             break
-    out, _ = proc.communicate(timeout=60)
+    out, _ = proc.communicate(timeout=RUN)
     os.close(master)
     text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", b"".join(chunks).decode(errors="replace"))
     assert proc.returncode == 0, text

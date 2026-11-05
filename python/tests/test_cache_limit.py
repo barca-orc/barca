@@ -6,20 +6,18 @@ these check what a user sees: which files go, which stay, what comes back and wh
 
 import hashlib
 import json
-import os
 import re
-import socket
 import sqlite3
 import subprocess
-import time
-import urllib.request
 from contextlib import closing
 from pathlib import Path
 
 import pytest
 from barca.api import _find_binary
 
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from . import helpers
+from .helpers import RUN, clean_env, wait_until
+from .served import snapshot
 
 PIPELINE = """
 import time
@@ -66,21 +64,11 @@ def slow(_r: dict) -> None:
 
 
 def env(**extra: str) -> dict[str, str]:
-    out = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    out["BARCA_PROGRESS_SECS"] = "0"
-    out.update(extra)
-    return out
+    return clean_env(BARCA_PROGRESS_SECS="0", **extra)
 
 
 def barca(cwd: Path, *args: str, code: int = 0, **extra: str) -> subprocess.CompletedProcess:
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=env(**extra),
-        timeout=120,
-    )
+    proc = helpers.barca(cwd, *args, env=env(**extra))
     assert proc.returncode == code, (
         f"barca {' '.join(args)}: exit {proc.returncode}\nstdout: {proc.stdout}\n"
         f"stderr: {proc.stderr}"
@@ -93,11 +81,14 @@ def gc(cwd: Path, *args: str, **extra: str) -> dict:
 
 
 def rows(cwd: Path, sql: str, *params) -> list[tuple]:
-    with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
+    """Query a snapshot of the metadata DB (a barca run may be live, see `served`)."""
+    with snapshot(cwd) as conn:
+        assert conn is not None, "no metadata DB yet"
         return conn.execute(sql, params).fetchall()
 
 
 def execute(cwd: Path, sql: str, *params) -> None:
+    """Write to the metadata DB; only called while no barca process runs."""
     with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
         conn.execute(sql, params)
         conn.commit()
@@ -269,11 +260,7 @@ def test_a_live_run_in_another_process_leaves_all_but_tiers_1_and_2(project):
         text=True,
     )
     try:
-        deadline = time.monotonic() + 60
-        while not (project / "slow.started").exists():
-            assert slow.poll() is None, slow.communicate()
-            assert time.monotonic() < deadline, "the task never started"
-            time.sleep(0.05)
+        wait_until(lambda: (project / "slow.started").exists(), "the task to start", proc=slow)
         predicted = gc(project, "--max-size", "1", "--dry-run")
         done = gc(project, "--max-size", "1")
         assert done["restricted"] and "in progress" in done["restricted"]
@@ -283,7 +270,7 @@ def test_a_live_run_in_another_process_leaves_all_but_tiers_1_and_2(project):
             assert (project / current(project, node)).is_file(), node
     finally:
         (project / "release").write_text("")
-        _, err = slow.communicate(timeout=60)
+        _, err = slow.communicate(timeout=RUN)
     assert slow.returncode == 0, err
     # The run is over: the rest may go.
     assert "current" in {e["tier"] for e in gc(project, "--max-size", "1")["evicted"]}
@@ -429,64 +416,22 @@ def test_the_check_after_a_command_is_bounded_at_100k_rows(project):
 # ─── under serve ─────────────────────────────────────────────────────────────
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _request(port: int, method: str, path: str) -> dict:
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read())
-
-
-def _wait(predicate, what: str, timeout: float = 60.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.1)
-    pytest.fail(f"timed out waiting for {what}")
-
-
-def test_serve_evicts_after_runs_reports_health_and_warns_about_the_working_set_once(project):
-    port = _free_port()
-    log = project / "serve.log"
-    server = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule"],
-        cwd=project,
-        stdout=subprocess.DEVNULL,
-        stderr=log.open("w"),
-        env=env(BARCA_CACHE_MAX_SIZE="1"),
-    )
-    try:
-
-        def health():
-            try:
-                return _request(port, "GET", "/health")
-            except OSError:
-                assert server.poll() is None, log.read_text()
-                return None
-
-        _wait(health, "the server")
-        for _ in range(2):
-            run_id = _request(port, "POST", "/get/report")["run_id"]
-            _wait(
-                lambda run_id=run_id: (
-                    _request(port, "GET", f"/status/{run_id}")["status"]
-                    in ("complete", "failed", "cancelled")
-                ),
-                "the run",
-            )
-            state = _request(port, "GET", f"/status/{run_id}")
-            assert state["status"] == "complete", state
-            assert state["result"]["cache"]["limit_bytes"] == 1, state
-        cache = _wait(lambda: health()["cache"], "a measurement")
-        assert cache["limit_bytes"] == 1 and cache["size_bytes"] > 1
-    finally:
-        server.kill()
-        server.wait(timeout=30)
-    text = log.read_text()
+def test_serve_evicts_after_runs_reports_health_and_warns_about_the_working_set_once(
+    project, serve
+):
+    server = serve("--no-schedule", env=env(BARCA_CACHE_MAX_SIZE="1"))
+    for _ in range(2):
+        run_id = server.request("POST", "/get/report")[1]["run_id"]
+        server.wait(
+            "the run",
+            lambda: server.get(f"/status/{run_id}")["status"]
+            in ("complete", "failed", "cancelled"),
+        )
+        state = server.get(f"/status/{run_id}")
+        assert state["status"] == "complete", state
+        assert state["result"]["cache"]["limit_bytes"] == 1, state
+    cache = server.wait("a measurement", lambda: server.get("/health")["cache"])
+    assert cache["limit_bytes"] == 1 and cache["size_bytes"] > 1
+    server.kill()
+    text = server.stderr
     assert text.count("cache working set") == 1, text
