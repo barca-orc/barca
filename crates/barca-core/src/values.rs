@@ -121,7 +121,7 @@ fn helper(
 }
 
 /// Version of the `sign` request to `barca._value` (`specs/interfaces/worker-protocol.md`).
-pub const SIGN_VERSION: u32 = 1;
+pub(crate) const SIGN_VERSION: u32 = 1;
 
 /// One object to sign: its store URI and the name a browser downloads it as.
 #[derive(Debug, Clone)]

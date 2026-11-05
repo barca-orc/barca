@@ -296,7 +296,7 @@ pub(crate) async fn latest_success_id(cache: &CacheReader, node_id: &str) -> Opt
 /// base id itself, or any of its partitions), keyed by display id. Steps never recorded with an
 /// output hash (never ran, or ran before barca recorded sensor outputs) are absent; so is
 /// everything when the database predates the `output_hash` column.
-pub async fn last_output_hashes(
+pub(crate) async fn last_output_hashes(
     cache: &CacheReader,
     base_ids: &[&str],
 ) -> Result<HashMap<String, String>, BarcaError> {

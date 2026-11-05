@@ -5,7 +5,7 @@ use super::*;
 
 impl Coordinator {
     /// Mark an item as completed. Unblocks dependents into the ready queue.
-    pub fn on_item_completed(&mut self, item_id: ItemId) {
+    pub(crate) fn on_item_completed(&mut self, item_id: ItemId) {
         self.executing.remove(&item_id);
         self.done.insert(item_id);
         self.call_reported(item_id);
@@ -22,7 +22,7 @@ impl Coordinator {
 
     /// Mark an item as failed after an attempt that ran for `elapsed`. Retries if budget
     /// remains, else cascades. Backoff delay grows linearly: `retry_backoff_seconds * attempts`.
-    pub fn on_item_failed(
+    pub(crate) fn on_item_failed(
         &mut self,
         item_id: ItemId,
         error: String,
@@ -32,7 +32,7 @@ impl Coordinator {
     }
 
     /// [`Coordinator::on_item_failed`] for an attempt whose worker said where it failed.
-    pub fn on_item_failed_in(
+    pub(crate) fn on_item_failed_in(
         &mut self,
         item_id: ItemId,
         error: String,
@@ -98,7 +98,7 @@ impl Coordinator {
         }
     }
 
-    pub fn failed_items(&self) -> Vec<(ItemId, &str)> {
+    pub(crate) fn failed_items(&self) -> Vec<(ItemId, &str)> {
         self.failed
             .iter()
             .map(|(id, msg)| (*id, msg.as_str()))
@@ -107,7 +107,7 @@ impl Coordinator {
 
     /// When a permanently failed item's first attempt started, and the wall time from then
     /// to its permanent failure (retries and backoff included).
-    pub fn failure_clock(
+    pub(crate) fn failure_clock(
         &self,
         item_id: ItemId,
     ) -> Option<(std::time::SystemTime, std::time::Duration)> {
@@ -115,20 +115,20 @@ impl Coordinator {
     }
 
     /// Where a permanently failed item failed, when its worker reported it.
-    pub fn failure_phase(&self, item_id: ItemId) -> Option<crate::dispatch::ErrorPhase> {
+    pub(crate) fn failure_phase(&self, item_id: ItemId) -> Option<crate::dispatch::ErrorPhase> {
         self.failure_phases.get(&item_id).copied()
     }
 
-    pub fn skipped_items(&self) -> Vec<ItemId> {
+    pub(crate) fn skipped_items(&self) -> Vec<ItemId> {
         self.skipped.iter().copied().collect()
     }
 
-    pub fn is_done(&self, item_id: ItemId) -> bool {
+    pub(crate) fn is_done(&self, item_id: ItemId) -> bool {
         self.done.contains(&item_id)
     }
 
     /// Record an output artifact for a completed item.
-    pub fn record_output(&mut self, item_id: ItemId, artifact: serde_json::Value) {
+    pub(crate) fn record_output(&mut self, item_id: ItemId, artifact: serde_json::Value) {
         if let Some(item) = self.items.get(&item_id) {
             self.output_by_display
                 .insert(item.step_id.display(), item_id);
@@ -137,7 +137,7 @@ impl Coordinator {
     }
 
     /// The recorded output of the item whose display id is `display_id`, if any.
-    pub fn output_for_display(&self, display_id: &str) -> Option<&serde_json::Value> {
+    pub(crate) fn output_for_display(&self, display_id: &str) -> Option<&serde_json::Value> {
         self.output_by_display
             .get(display_id)
             .and_then(|id| self.outputs.get(id))

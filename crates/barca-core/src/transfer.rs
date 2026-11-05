@@ -77,7 +77,7 @@ impl ArtifactLayout {
     }
 
     /// The store root, without a trailing slash.
-    pub fn store_root(&self) -> &str {
+    pub(crate) fn store_root(&self) -> &str {
         &self.store_root
     }
 
@@ -116,7 +116,7 @@ impl ArtifactLayout {
 /// The file a recorded artifact path names on this machine: a plain path or a
 /// `file://` URI. None for a remote URI. The same rule as
 /// `barca._storage.local_path_of`, which is what a worker applies to the path.
-pub fn local_path(recorded: &str) -> Option<&Path> {
+pub(crate) fn local_path(recorded: &str) -> Option<&Path> {
     if let Some(file) = recorded.strip_prefix("file://") {
         return Some(Path::new(file));
     }
@@ -127,7 +127,7 @@ pub fn local_path(recorded: &str) -> Option<&Path> {
 
 /// A transfer that did not complete. `key` is the caller's label (node id).
 #[derive(Debug, Clone)]
-pub struct TransferFailure {
+pub(crate) struct TransferFailure {
     pub key: String,
     pub store: String,
     pub message: String,
@@ -141,7 +141,7 @@ pub struct TransferFailure {
 
 /// Outcome of [`TransferClient::drain`] / [`TransferClient::await_fetches`].
 #[derive(Debug, Default)]
-pub struct TransferReport {
+pub(crate) struct TransferReport {
     pub transferred: usize,
     pub bytes: u64,
     pub failures: Vec<TransferFailure>,
@@ -155,7 +155,7 @@ pub struct TransferReport {
 /// A finished transfer: the local file's size and hash, and whether bytes moved
 /// (false when a fetch found a local copy with the recorded hash).
 #[derive(Debug, Clone)]
-pub struct Transferred {
+pub(crate) struct Transferred {
     pub bytes: u64,
     pub sha256: Option<String>,
     pub fetched: bool,
@@ -211,7 +211,7 @@ struct Pending {
 /// this value: [`Self::stop`] stops it and waits for it to be gone, and dropping the value kills
 /// it on the spot. So a command that fails or is cancelled before its helper was ever used
 /// leaves no process behind to find the socket gone.
-pub struct Launching {
+pub(crate) struct Launching {
     child: Child,
     /// The helper's lifeline (see [`crate::helper_proc::give_lifeline`]). Kept out of `child`,
     /// whose `wait` would close it.
@@ -345,7 +345,7 @@ struct Deferred {
 }
 
 /// Handle to the transfer helper process.
-pub struct TransferClient {
+pub(crate) struct TransferClient {
     layout: ArtifactLayout,
     /// The helper process; `None` until a deferred client sends its first request.
     child: Option<Child>,
@@ -481,6 +481,7 @@ impl TransferClient {
         Ok((cmd, socket_path, layout))
     }
 
+    #[cfg(test)]
     /// Start `cmd` as the helper (it receives `BARCA_SOCKET`) and wait for it
     /// to connect.
     pub async fn spawn(
@@ -604,7 +605,7 @@ impl TransferClient {
     }
 
     /// Wait for the fetches of `locals` (paths not being fetched are ready).
-    pub async fn await_fetches(&mut self, locals: &[PathBuf]) -> TransferReport {
+    pub(crate) async fn await_fetches(&mut self, locals: &[PathBuf]) -> TransferReport {
         let mut report = TransferReport::default();
         for local in locals {
             let Some(p) = self.fetches.remove(local) else {
@@ -692,7 +693,7 @@ impl TransferClient {
     }
 
     /// Number of uploads queued since the helper started, drained or not.
-    pub fn uploads_queued(&self) -> usize {
+    pub(crate) fn uploads_queued(&self) -> usize {
         self.uploads_queued
     }
 

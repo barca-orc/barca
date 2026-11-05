@@ -39,7 +39,7 @@ pub fn plan_from_dag(dag: &crate::dag::Dag, sizing: crate::execution::Sizing) ->
 
 /// [`plan_from_dag`] narrowed to `partition` (`barca plan --partition`), as a `get` with no
 /// target narrows its plan; a usage error as for `get`.
-pub fn plan_selected(
+pub(crate) fn plan_selected(
     dag: &crate::dag::Dag,
     sizing: crate::execution::Sizing,
     partition: Option<&crate::selection::PartitionSelection>,
@@ -165,7 +165,9 @@ pub async fn reconcile_run(
 
 /// The most recent run (the newest row of `barca history`), for `barca logs` without a run id.
 /// A usage error when no run is recorded in this environment.
-pub async fn latest_run(cfg: &crate::config::ResolvedConfig) -> Result<db::RunRecord, BarcaError> {
+pub(crate) async fn latest_run(
+    cfg: &crate::config::ResolvedConfig,
+) -> Result<db::RunRecord, BarcaError> {
     crate::layout::ensure_env_dirs(&cfg.env)?;
     db::init_db(&cfg.db_path).await?;
     db::get_recent_runs(&cfg.db_path, 1)
@@ -184,7 +186,7 @@ pub async fn latest_run(cfg: &crate::config::ResolvedConfig) -> Result<db::RunRe
 /// A run's recorded lines: the `logs` rows of the database at `read_path` (the metadata DB at
 /// `db_path`, or a snapshot of it), else its spool beside `db_path`: a run still in progress,
 /// or one whose process died before recording them.
-pub async fn run_log_lines(
+pub(crate) async fn run_log_lines(
     db_path: &str,
     read_path: &str,
     run_id: &str,

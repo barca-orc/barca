@@ -15,17 +15,17 @@ pub fn rfc3339(secs: i64) -> String {
 }
 
 /// Whole seconds since the Unix epoch at `t` (0 before the epoch).
-pub fn unix_secs(t: SystemTime) -> u64 {
+pub(crate) fn unix_secs(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 /// Nanoseconds since the Unix epoch at `t` (0 before the epoch).
-pub fn unix_nanos(t: SystemTime) -> u128 {
+pub(crate) fn unix_nanos(t: SystemTime) -> u128 {
     t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos())
 }
 
 /// Whole seconds since the Unix epoch, now.
-pub fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     unix_secs(SystemTime::now())
 }
 

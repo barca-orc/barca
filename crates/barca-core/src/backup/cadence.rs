@@ -28,7 +28,7 @@ pub enum Request {
 }
 
 /// Held through copy, hashing and upload. Dropping it also handles cancellation/crashes.
-pub struct Admission(std::fs::File);
+pub(crate) struct Admission(std::fs::File);
 
 impl Drop for Admission {
     fn drop(&mut self) {

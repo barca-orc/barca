@@ -52,7 +52,7 @@ use std::rc::Rc;
 // ─── Modules ─────────────────────────────────────────────────────────────────
 
 /// One Python source file under the name Python imports it by.
-pub struct Module {
+pub(crate) struct Module {
     /// Dotted import name (`helpers`, `pkg.mod`; `pkg` for `pkg/__init__.py`).
     pub name: String,
     pub source: Rc<str>,
@@ -216,7 +216,7 @@ impl Module {
 }
 
 /// Resolves a dotted module name to the project file Python would import for it.
-pub trait ModuleSource {
+pub(crate) trait ModuleSource {
     /// `None` when `name` is not a project module (standard library, installed package,
     /// namespace package, or nothing at all).
     fn module(&self, name: &str) -> Option<Rc<Module>>;
@@ -246,7 +246,7 @@ impl ModuleSource for HashMap<String, Rc<Module>> {
 
 /// What a top-level name of a module is bound to.
 #[derive(Clone)]
-pub enum ModuleDef {
+pub(crate) enum ModuleDef {
     Function(Code),
     Class(Code),
     Assignment(Code),
@@ -299,29 +299,20 @@ struct LocalUse {
 
 // ─── The cone ────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
 /// The dependency cone hash of `function_name` in `pipeline`. Empty when the function reaches
 /// nothing (or is not a top-level function of the file).
-pub fn cone_hash(pipeline: &Module, function_name: &str, modules: &dyn ModuleSource) -> String {
-    collect(pipeline, function_name, modules).map_or_else(String::new, Cone::hash)
-}
-
-/// [`cone_hash`], and a short digest of each definition in the cone by label: `name` for a
-/// definition of the pipeline file itself, `path/to/module.py:name` for one of a project module
-/// ([`ModuleSource::file_label`]; `module.name:name` when the module has no file label), and
-/// `path/to/module.py` for a module added whole (rule 5; `module.name:*` without a file label). Recorded with each materialization so
-/// `barca status` can say which helper changed (#558); they are not part of any hash.
-pub fn cone_hash_and_parts(
+pub(crate) fn cone_hash(
     pipeline: &Module,
     function_name: &str,
     modules: &dyn ModuleSource,
-) -> (String, Vec<(String, String)>) {
-    let (hash, parts, _) = cone_hash_parts_and_sources(pipeline, function_name, modules);
-    (hash, parts)
+) -> String {
+    collect(pipeline, function_name, modules).map_or_else(String::new, Cone::hash)
 }
 
 /// [`cone_hash_and_parts`], and the source of every definition in the cone (for static checks
 /// over the code a step reaches, such as [`crate::env_reads`]; not part of any hash).
-pub fn cone_hash_parts_and_sources(
+pub(crate) fn cone_hash_parts_and_sources(
     pipeline: &Module,
     function_name: &str,
     modules: &dyn ModuleSource,

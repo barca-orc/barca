@@ -115,7 +115,7 @@ impl SharedCapacity {
     }
 
     /// What a step of `weight` counts for: at least 1, at most the whole capacity.
-    pub fn weight_of(&self, weight: u32) -> u32 {
+    pub(crate) fn weight_of(&self, weight: u32) -> u32 {
         weight.clamp(1, self.total)
     }
 
@@ -170,7 +170,7 @@ impl SharedCapacity {
 
     /// Take `run_id` out of the line: its head step no longer waits for this capacity (it does
     /// not fit the run's own, or the run has nothing ready).
-    pub fn withdraw(&self, run_id: &str) {
+    pub(crate) fn withdraw(&self, run_id: &str) {
         let mut inner = self.inner.lock().unwrap();
         let before = inner.line.len();
         inner.line.retain(|t| t.run_id != run_id);

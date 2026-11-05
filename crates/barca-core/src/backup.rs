@@ -38,7 +38,7 @@ pub use cadence::{BUDGET, Request, SLACK, interval};
 
 /// What a backup's `<name>.json` sidecar says about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Sidecar {
+pub(crate) struct Sidecar {
     /// The run that took it, when a run did (`null` for `barca serve`'s minute backup).
     pub run_id: Option<String>,
     /// Run and materialization rows in the copy.

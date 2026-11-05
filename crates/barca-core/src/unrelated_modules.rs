@@ -11,7 +11,7 @@
 
 /// Top-level modules of the Python standard library (`sys.stdlib_module_names` of CPython
 /// 3.14, public names, plus those removed since 3.12).
-pub const STDLIB: &[&str] = &[
+pub(crate) const STDLIB: &[&str] = &[
     "abc",
     "aifc",
     "annotationlib",
@@ -230,7 +230,7 @@ pub const STDLIB: &[&str] = &[
 
 /// Widely used third-party packages that do not resolve names from text against the caller's
 /// frame. The manual (`assets.md`, "Unused inputs") repeats this list; a test keeps them equal.
-pub const THIRD_PARTY: &[&str] = &[
+pub(crate) const THIRD_PARTY: &[&str] = &[
     "pyarrow",
     "numpy",
     "matplotlib",
@@ -267,7 +267,7 @@ pub const THIRD_PARTY: &[&str] = &[
 ];
 
 /// Whether `module` (a dotted name as imported) belongs to one of the lists above.
-pub fn is_unrelated(module: &str) -> bool {
+pub(crate) fn is_unrelated(module: &str) -> bool {
     let root = module.split('.').next().unwrap_or(module);
     STDLIB.contains(&root) || THIRD_PARTY.contains(&root)
 }

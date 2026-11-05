@@ -8,7 +8,7 @@
 
 use crate::BarcaError;
 use crate::cache::CachePolicy;
-pub use crate::cache_state::CacheState;
+use crate::cache_state::CacheState;
 use crate::db;
 use crate::results::StepReport;
 use crate::step_status::StepStatus;
@@ -120,7 +120,7 @@ pub struct ScheduleStatus {
 
 impl ScheduleStatus {
     /// A schedule that needs attention: paused, or skipped after `max_failures` failed ticks.
-    pub fn needs_attention(&self) -> bool {
+    pub(crate) fn needs_attention(&self) -> bool {
         self.paused || self.failing
     }
 
@@ -201,7 +201,7 @@ pub async fn attach_schedules(
 }
 
 /// The `cache.state` values, as JSON and `--state` spell them.
-pub const STATES: [CacheState; 8] = CacheState::ALL;
+pub(crate) const STATES: [CacheState; 8] = CacheState::ALL;
 
 /// The `cache.reason` values (`specs/interfaces/server-api.openapi.yaml` lists the same).
 pub const CACHE_REASONS: &[&str] = &[
@@ -312,7 +312,7 @@ impl StatusFilter {
 /// A node that is not fine (`--problems`): every state but `cached` and `always_runs`
 /// (`unsynced`, `stale`, `never_run`, `partial`, `unknown`), a task or sensor whose last run
 /// failed, and a node whose schedule is paused or failing.
-pub fn needs_attention(node: &NodeStatus) -> bool {
+pub(crate) fn needs_attention(node: &NodeStatus) -> bool {
     let state_ok = matches!(
         node.cache.state,
         CacheState::Cached | CacheState::AlwaysRuns
@@ -332,7 +332,7 @@ pub fn needs_attention(node: &NodeStatus) -> bool {
 
 /// The first line of a failure's message, at most `max` characters: `ZeroDivisionError:
 /// division by zero` out of a traceback.
-pub fn short_error(error: &str, max: usize) -> String {
+pub(crate) fn short_error(error: &str, max: usize) -> String {
     let lines: Vec<&str> = error
         .lines()
         .map(str::trim)
@@ -531,7 +531,7 @@ pub fn not_in_ledger(node: &mut NodeStatus, pending: &[PendingPost]) -> bool {
 
 /// The pending post of `node_id` that [`not_in_ledger`] counts: one of its steps (any key of a
 /// partitioned node), at the run hash the server's code gives it now when that is known.
-pub fn pending_for<'a>(
+pub(crate) fn pending_for<'a>(
     node_id: &str,
     partitioned: bool,
     run_hash: Option<&str>,

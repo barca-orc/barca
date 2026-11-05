@@ -355,7 +355,7 @@ pub(crate) fn refresh_name_matches(node_id: &str, name: &str) -> bool {
 
 /// "Did you mean ...?" for an unknown target `name` among node ids `available`: compared with
 /// the function names, or with the full ids when `name` is one (`pipeline.py:amount`).
-pub fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
+pub(crate) fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
     if name.contains(':') {
         crate::suggest::suggestion(name, available.iter().copied())
     } else {

@@ -79,11 +79,11 @@ pub struct RunStep {
 }
 
 /// How many lines of a failed step's output `barca history RUN_ID` shows ([`RunStep::output_tail`]).
-pub const OUTPUT_TAIL_LINES: usize = 20;
+pub(crate) const OUTPUT_TAIL_LINES: usize = 20;
 
 /// How the worker ended, read from the error barca recorded when a worker died
 /// (`worker for <node> exited with <how>`, or `worker disconnected`).
-pub fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<String> {
+pub(crate) fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<String> {
     if error_type != Some("WorkerError") {
         return None;
     }
@@ -98,7 +98,7 @@ pub fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<St
     Some(how.to_string())
 }
 
-pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
+pub(crate) async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
     Ok(get_run_steps_page(db_path, run_id, None).await?.0)
 }
 

@@ -7,7 +7,7 @@ impl Coordinator {
     /// Group the items this phase will load into calls, before [`Self::load_phase`]: each call
     /// is `(its id, the display ids of its keys in key order)`. An item of a call is leased
     /// with the rest of its call, once every one of them is ready.
-    pub fn assign_calls(&mut self, calls: Vec<(String, Vec<String>)>) {
+    pub(crate) fn assign_calls(&mut self, calls: Vec<(String, Vec<String>)>) {
         for (id, members) in calls {
             let index = self.calls.len();
             self.calls.push(Call {
@@ -41,12 +41,12 @@ impl Coordinator {
     }
 
     /// The id of the call `item` belongs to, if it is a key of a batched call.
-    pub fn call_id(&self, item: ItemId) -> Option<&str> {
+    pub(crate) fn call_id(&self, item: ItemId) -> Option<&str> {
         self.call_of.get(&item).map(|&c| self.calls[c].id.as_str())
     }
 
     /// Whether two items are keys of the same call.
-    pub fn same_call(&self, a: ItemId, b: ItemId) -> bool {
+    pub(crate) fn same_call(&self, a: ItemId, b: ItemId) -> bool {
         match (self.call_of.get(&a), self.call_of.get(&b)) {
             (Some(x), Some(y)) => x == y,
             _ => false,

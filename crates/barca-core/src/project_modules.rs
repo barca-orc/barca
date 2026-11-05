@@ -82,7 +82,7 @@ impl SourceFiles {
 
 /// How the worker imports one pipeline file.
 #[derive(Debug, PartialEq)]
-pub struct PipelineLayout {
+pub(crate) struct PipelineLayout {
     /// The name the file is imported under: `pipelines.reconcile` inside a package, otherwise
     /// a name with no package (the file is loaded by path).
     pub module: String,
@@ -93,6 +93,7 @@ pub struct PipelineLayout {
 }
 
 impl PipelineLayout {
+    #[cfg(test)]
     /// `file` and `root` (the project root, the worker's working directory) must both be
     /// canonical.
     pub fn of(file: &Path, root: &Path) -> Self {
@@ -272,7 +273,7 @@ impl ModuleSource for ImportPath {
 
 /// Computes the dependency cones of one plan's pipeline files. Everything read or parsed for
 /// one step is kept for the next.
-pub struct ProjectCones {
+pub(crate) struct ProjectCones {
     root: PathBuf,
     files: Rc<SourceFiles>,
     /// The plan's pipeline files, in the order given.
@@ -292,7 +293,7 @@ pub struct ProjectCones {
 /// A project module a pipeline file imports that does not parse (#550). The worker's import of
 /// the pipeline file would fail, so no step of that file can run.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrokenImport {
+pub(crate) struct BrokenImport {
     /// The module's file, relative to the project root when it is under it.
     pub file: String,
     /// The file whose `import` reaches it: the pipeline file or another project module.
@@ -584,7 +585,7 @@ fn canonical_file(path: &Path, canonical_dirs: &mut HashMap<PathBuf, PathBuf>) -
 }
 
 /// One pipeline file and the modules it can import.
-pub struct PipelineCones<'a> {
+pub(crate) struct PipelineCones<'a> {
     module: Module,
     modules: &'a ImportPath,
 }
@@ -600,21 +601,16 @@ impl PipelineCones<'_> {
         module.star_exports()
     }
 
+    #[cfg(test)]
     /// The cone hash of a top-level function of the file ([`cone::cone_hash`]).
     pub fn hash(&self, function_name: &str) -> String {
         cone::cone_hash(&self.module, function_name, self.modules)
     }
 
-    /// [`Self::hash`] and the digest of each definition in the cone
-    /// ([`cone::cone_hash_and_parts`]).
-    pub fn hash_and_parts(&self, function_name: &str) -> (String, Vec<(String, String)>) {
-        cone::cone_hash_and_parts(&self.module, function_name, self.modules)
-    }
-
     /// [`Self::hash_and_parts`], and the environment variables the definitions of the cone
     /// read ([`crate::env_reads`]). `scanned` keeps each source's reads across the steps of a
     /// load, so a helper reached by many steps is parsed once.
-    pub fn hash_parts_and_env_reads(
+    pub(crate) fn hash_parts_and_env_reads(
         &self,
         function_name: &str,
         scanned: &mut HashMap<Rc<str>, Rc<BTreeSet<String>>>,

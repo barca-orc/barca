@@ -24,7 +24,7 @@ use crate::model::{DeclaredInput, ValueType};
 ///
 /// This is the one place the lists live; the manual (`assets.md`, "Unused inputs") repeats
 /// them and a test keeps them in step.
-pub const DYNAMIC_ACCESS: &[&str] = &[
+pub(crate) const DYNAMIC_ACCESS: &[&str] = &[
     "locals",
     "vars",
     "eval",
@@ -38,7 +38,7 @@ pub const DYNAMIC_ACCESS: &[&str] = &[
 
 /// `inspect.stack` (as `inspect.stack`, under a module alias, or `from inspect import stack`)
 /// is dynamic access like [`DYNAMIC_ACCESS`]: the frames it returns hold the parameters.
-pub const STACK_MODULE: (&str, &str) = ("inspect", "stack");
+pub(crate) const STACK_MODULE: (&str, &str) = ("inspect", "stack");
 
 /// Calls that take a query, an expression or a table name as text and resolve names in it
 /// against the caller's variables: DuckDB (`duckdb.sql`, `con.execute`, `duckdb.query`,
@@ -60,7 +60,7 @@ pub const STACK_MODULE: (&str, &str) = ("inspect", "stack");
 /// other receiver silences: a local, a parameter, an attribute chain, a call result (it may be
 /// a connection, a cursor, a frame or a relation), and any module not on that list, such as
 /// a module of the project (`mylib.sql(QUERY)` may be a re-exported `duckdb.sql`).
-pub const SQL_ENTRY_POINTS: &[&str] = &[
+pub(crate) const SQL_ENTRY_POINTS: &[&str] = &[
     "sql",
     "execute",
     "executemany",

@@ -55,42 +55,48 @@ mod write_boundary_tests;
 
 // Every family's items keep their `db::X` path. The private `use`s are `pub(super)` helpers one
 // family calls in another; each family file starts with `use super::*`.
-pub use cache_reader::CacheReader;
+pub(crate) use cache_reader::CacheReader;
 pub(crate) use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;
-pub use cost_estimates::{load_cost_estimates, upsert_cost_estimates};
+#[cfg(test)]
+pub(crate) use history::MaterializationRecord;
 pub(crate) use history::changed_bytes_in_run;
 use history::query_i64;
-pub use history::{
-    BytesChange, MaterializationRecord, NodeAge, NodeHistory, RunTotals, node_ages, node_histories,
-};
-pub use logs::{LogEntry, get_logs, insert_logs};
+pub use history::{BytesChange, NodeAge, RunTotals, node_ages};
+pub(crate) use history::{NodeHistory, node_histories};
+pub use logs::insert_logs;
+pub use logs::{LogEntry, get_logs};
+pub(crate) use materializations::last_output_hashes;
+pub use materializations::persist_outputs;
 use materializations::record_definitions;
 pub(crate) use materializations::{
     adopt_store_digests, confirmed_object, evicted_among, evicted_paths, key_range,
     last_success_components, latest_success, latest_success_id, partition_artifacts_for_config,
     touch_read, touch_read_in, touch_read_on,
 };
-pub use materializations::{
-    last_output_hashes, max_materialization_id, persist_outputs, succeeded_since,
-};
-pub use partition_keys::{
-    FailedKeys, PartitionErrorGroup, PartitionKeyRow, PartitionKeys, PartitionKeysFilter,
-    failed_partition_keys, partition_keys,
-};
-pub use run_liveness::{AliveRun, alive_running_runs, alive_running_runs_in, local_host};
+pub use materializations::{max_materialization_id, succeeded_since};
+pub(crate) use partition_keys::FailedKeys;
+pub(crate) use partition_keys::failed_partition_keys;
+pub use partition_keys::{PartitionKeys, PartitionKeysFilter, partition_keys};
+pub(crate) use run_liveness::local_host;
+pub use run_liveness::{AliveRun, alive_running_runs, alive_running_runs_in};
 use run_liveness::{interrupted_runs, mark_interrupted_runs};
 pub(crate) use run_liveness::{live_runs, pid_alive, runs_alive_here};
+pub(crate) use run_steps::get_run_steps;
+#[cfg(test)]
+pub(crate) use run_steps::worker_exit;
 pub use run_steps::{
-    OUTPUT_TAIL_LINES, RUN_STEPS_LIMIT, RunNodeSummary, RunStep, StepRow, StepsPage, get_run_steps,
-    get_run_steps_page, planned_run_nodes, read_step_rows, run_node_summaries, worker_exit,
+    RUN_STEPS_LIMIT, RunStep, StepRow, StepsPage, get_run_steps_page, planned_run_nodes,
+    read_step_rows, run_node_summaries,
 };
+#[cfg(test)]
+pub(crate) use runs::create_run_with;
 pub use runs::{
-    NewRun, RunFailure, RunRecord, StartedRun, count_runs, create_run, create_run_with,
-    decode_files, encode_files, finish_run, generate_run_id, get_recent_runs, get_run,
-    get_run_outcome, reconcile_run, record_unstarted_run, replace_run_outcome, run_artifact,
-    set_run_outcome, split_exception, start_run,
+    NewRun, RunRecord, count_runs, create_run, encode_files, finish_run, generate_run_id,
+    get_recent_runs, get_run, get_run_outcome, reconcile_run, record_unstarted_run,
+    replace_run_outcome, run_artifact, set_run_outcome,
 };
+pub(crate) use runs::{RunFailure, StartedRun, split_exception, start_run};
 pub use schedule::{
     ScheduleFailures, SchedulePause, get_schedule_failures, get_schedule_pauses,
     get_schedule_state, set_schedule_failures, set_schedule_pause, upsert_schedule_state,
@@ -100,10 +106,7 @@ pub use schema::{init_db, init_db_as, probe_metadata};
 pub(crate) use schema::{init_locked, init_schema};
 pub(crate) use snapshots::copy_for_backup;
 pub use snapshots::{DbSnapshot, ReadView};
-pub use stats::{
-    AssetRunEntry, AssetStats, get_asset_stats, get_avg_elapsed, get_avg_elapsed_for_partitioned,
-    recent_durations,
-};
+pub use stats::{AssetRunEntry, AssetStats, get_asset_stats, recent_durations};
 use stats::{IN_LIST_CHUNK, KEY_ROWS, avg_elapsed_on, partitioned_avg_elapsed_on};
 
 /// Process-wide serialization of `metadata.db` operations. The server can run
@@ -253,7 +256,7 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
 }
 
 // barca-server names these as `db::` paths; the `.barca/` layout is `crate::layout`'s.
-pub use crate::layout::{LocalPaths, ensure_env_dirs, env_local_paths};
+pub use crate::layout::{ensure_env_dirs, env_local_paths};
 
 /// How long one barca process waits for another's DB operation before giving up.
 /// Operations are brief (a few queries), so hitting this means a stuck process.

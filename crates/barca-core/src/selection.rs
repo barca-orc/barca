@@ -102,7 +102,7 @@ impl PartitionSelection {
     /// the node is narrowed, keep only the selected values of each named dimension, so that
     /// the keys left out are never built. A dimension that would be left with no value is kept
     /// whole; [`Self::apply`] then removes the node's keys.
-    pub fn prefilter(&self, dims: &mut HashMap<String, Vec<String>>) {
+    pub(crate) fn prefilter(&self, dims: &mut HashMap<String, Vec<String>>) {
         if !self.0.keys().any(|d| dims.contains_key(d)) {
             return;
         }
@@ -488,7 +488,7 @@ impl Narrowing {
     /// Narrow a phase whose `partitions_from` keys were just expanded. A narrowed node whose
     /// expanded keys include none of the selected ones gets a warning: its keys were not known
     /// when the command started, so this is the first point to say so.
-    pub fn narrow_expanded(&mut self, phase: &mut Phase) {
+    pub(crate) fn narrow_expanded(&mut self, phase: &mut Phase) {
         let mut seen: BTreeMap<String, KeyCounts> = BTreeMap::new();
         for stream in &mut phase.streams {
             stream.steps.retain_mut(|step| {
@@ -539,7 +539,11 @@ impl Narrowing {
 
     /// The step reports of the skipped nodes: status `skipped` (action `skipped` in a dry run,
     /// whose steps have an action), reason `partition_selection`.
-    pub fn skipped_reports(&self, dag: &Dag, dry_run: bool) -> Vec<crate::results::StepReport> {
+    pub(crate) fn skipped_reports(
+        &self,
+        dag: &Dag,
+        dry_run: bool,
+    ) -> Vec<crate::results::StepReport> {
         self.skipped
             .iter()
             .map(|s| crate::results::StepReport {
@@ -588,7 +592,7 @@ impl Narrowing {
     }
 
     /// A usage error when `--refresh` names a node the selection skips.
-    pub fn check_refresh(&self, names: &[String]) -> Result<(), BarcaError> {
+    pub(crate) fn check_refresh(&self, names: &[String]) -> Result<(), BarcaError> {
         for name in names {
             if let Some(s) = self
                 .skipped
@@ -609,7 +613,7 @@ impl Narrowing {
 /// The keys of a partitioned node that a run returns, sorted by key (`dim=value,...`), with
 /// their artifacts. `None` when the node is not partitioned. Keys outside `selection` are
 /// left out, and so are keys with no output (a failed or skipped key).
-pub fn partition_outputs(
+pub(crate) fn partition_outputs(
     dag: &Dag,
     node_id: &str,
     all_outputs: &HashMap<String, OutputRef>,

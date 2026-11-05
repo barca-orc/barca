@@ -32,10 +32,10 @@
 use crate::args::ServerFlags;
 use crate::error::{CliError, Context, ErrorKind, list_hint};
 use barca_core::BarcaError;
+use barca_core::cache_state::CacheState;
 use barca_core::config::{ServerSource, check_server_url, configured_server};
 use barca_core::envelope::ErrorEnvelope;
 use barca_core::outcome::{API_VERSION, Outcome, RunCommand, RunRequest};
-use barca_core::status::CacheState;
 use barca_core::{RunEvent, lines::LineWhen};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};

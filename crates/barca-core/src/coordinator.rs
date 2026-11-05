@@ -14,21 +14,21 @@ mod outcomes;
 // ─── ID types ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ItemId(pub u64);
+pub(crate) struct ItemId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GroupId(pub u64);
+pub(crate) struct GroupId(pub u64);
 
 // ─── Dependency ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DepKind {
+pub(crate) enum DepKind {
     Data,
     Ordering,
 }
 
 #[derive(Debug, Clone)]
-pub struct Dep {
+pub(crate) struct Dep {
     pub upstream: ItemId,
     pub kind: DepKind,
 }
@@ -36,7 +36,7 @@ pub struct Dep {
 // ─── Item specification ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub struct ItemSpec {
+pub(crate) struct ItemSpec {
     pub fn_ref: String,
     pub function_name: String,
     pub source_file: String,
@@ -69,7 +69,6 @@ pub struct ItemSpec {
     /// Return frame type from the function's return annotation.
     pub return_type: Option<crate::model::ValueType>,
     pub kind: String,
-    pub is_dynamic: bool,
     /// A dict `partitions_from` source's value for this key (`crate::keyed`): param ->
     /// (the source's JSON artifact, the key). The worker reads the value from the artifact.
     pub keyed_inputs: HashMap<String, (String, String)>,
@@ -80,7 +79,7 @@ pub struct ItemSpec {
 }
 
 impl ItemSpec {
-    pub fn from_step(step: &crate::planner::StreamStep) -> Self {
+    pub(crate) fn from_step(step: &crate::planner::StreamStep) -> Self {
         Self {
             fn_ref: format!("{}:{}", step.source_file, step.function_name),
             function_name: step.function_name.to_string(),
@@ -100,7 +99,6 @@ impl ItemSpec {
             param_types: step.param_types.clone(),
             return_type: step.return_type,
             kind: format!("{:?}", step.kind).to_lowercase(),
-            is_dynamic: false,
             keyed_inputs: HashMap::new(),
             partition_source: step.keyed.is_source,
             previous_sensor: None,
@@ -113,7 +111,7 @@ impl ItemSpec {
 /// The weight an item counts for under `capacity`: its `weight=`, at least 1, and at most the
 /// capacity. A step heavier than the capacity counts as the whole of it, so it starts only when
 /// nothing else is running and then runs alone, rather than never (#436).
-pub fn effective_weight(weight: u32, capacity: u32) -> u32 {
+pub(crate) fn effective_weight(weight: u32, capacity: u32) -> u32 {
     weight.clamp(1, capacity.max(1))
 }
 
@@ -128,7 +126,7 @@ pub fn fits(running: u32, weight: u32, capacity: u32) -> bool {
 /// `waiting_retry` — the caller owns the timer and must call `requeue()`
 /// once the backoff elapses.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FailureAction {
+pub(crate) enum FailureAction {
     /// Re-queued immediately (no backoff configured).
     RetryNow,
     /// Parked for backoff; schedule `requeue(item_id)` after this delay.
@@ -152,8 +150,7 @@ pub struct Item {
 // ─── Parallel group ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub struct ParallelGroup {
-    pub id: GroupId,
+pub(crate) struct ParallelGroup {
     pub parent: ItemId,
     pub items: Vec<ItemId>,
     pub completed_count: usize,
@@ -242,7 +239,7 @@ impl ReadyQueue {
 
 // ─── Coordinator ──────────────────────────────────────────────────────────────
 
-pub struct Coordinator {
+pub(crate) struct Coordinator {
     /// All items.
     items: HashMap<ItemId, Item>,
     /// Reverse dep graph: item → items that depend on it.
@@ -371,7 +368,7 @@ impl Coordinator {
 
     /// Pop the next ready item. Returns None if nothing is ready.
     /// `attempts` counts dispatches, so it is incremented here.
-    pub fn next_ready(&mut self) -> Option<ItemId> {
+    pub(crate) fn next_ready(&mut self) -> Option<ItemId> {
         let id = self.ready.pop_front()?;
         self.executing.insert(id);
         if let Some(&c) = self.call_of.get(&id) {
@@ -399,7 +396,7 @@ impl Coordinator {
     /// killed after a step error) only the in-flight item failed — the
     /// unstarted remainder goes back for another worker, and the dispatch that
     /// never happened doesn't consume retry budget.
-    pub fn return_leased(&mut self, item_id: ItemId) {
+    pub(crate) fn return_leased(&mut self, item_id: ItemId) {
         if self.executing.remove(&item_id) {
             if let Some(item) = self.items.get_mut(&item_id) {
                 item.attempts = item.attempts.saturating_sub(1);
@@ -419,7 +416,7 @@ impl Coordinator {
     /// behind it, light ones included, until enough of what is running finishes. Letting
     /// lighter items past it would keep the capacity filled with them and a heavy step could
     /// wait for the rest of the run (#436).
-    pub fn head_fits(&self, running: u32, capacity: u32) -> bool {
+    pub(crate) fn head_fits(&self, running: u32, capacity: u32) -> bool {
         self.ready
             .iter()
             .next()
@@ -438,26 +435,26 @@ impl Coordinator {
         }
     }
 
-    pub fn ready_items(&self) -> impl Iterator<Item = ItemId> + '_ {
+    pub(crate) fn ready_items(&self) -> impl Iterator<Item = ItemId> + '_ {
         self.ready.iter()
     }
 
     /// How many items are ready to be assigned.
-    pub fn ready_count(&self) -> usize {
+    pub(crate) fn ready_count(&self) -> usize {
         self.ready.len()
     }
 
     /// How many items still have work ahead of them (ready now or blocked on
     /// upstreams). Note: batch sizing uses `ready_count` (the pull-eligible
     /// pool), not this — blocked items mustn't inflate a batch.
-    pub fn remaining_count(&self) -> usize {
+    pub(crate) fn remaining_count(&self) -> usize {
         self.ready.len() + self.pending.len() + self.waiting_retry.len()
     }
 
     // ─── Event handlers ───────────────────────────────────────────────────
 
     /// Returns true when all items are in a terminal state.
-    pub fn is_finished(&self) -> bool {
+    pub(crate) fn is_finished(&self) -> bool {
         // The three sets hold only items, so while their sizes add up to fewer than the items
         // some item is not terminal. This keeps the check, made once per event, from scanning
         // every item until the run is nearly over (#345).
@@ -479,11 +476,13 @@ impl Coordinator {
         &self.groups[&id]
     }
 
-    pub fn pending_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
         self.pending.len()
     }
 
-    pub fn done_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn done_count(&self) -> usize {
         self.done.len()
     }
 }

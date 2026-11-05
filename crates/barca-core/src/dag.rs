@@ -871,7 +871,7 @@ impl Dag {
 
     /// Get the subgraph of all nodes upstream of (and including) target.
     /// Returns node IDs in topological order (dependencies first).
-    pub fn subgraph(&self, target_id: &str) -> Vec<&str> {
+    pub(crate) fn subgraph(&self, target_id: &str) -> Vec<&str> {
         self.subgraph_many(&[target_id])
     }
 
@@ -921,7 +921,7 @@ impl Dag {
     /// the worker's import of the file would fail, after the steps before it had run. Only the
     /// steps given are looked at, so a command whose steps do not import the module is not
     /// affected. The first such step, in the order given, is named.
-    pub fn check_imports<'a>(
+    pub(crate) fn check_imports<'a>(
         &self,
         step_ids: impl IntoIterator<Item = &'a str>,
     ) -> Result<(), crate::BarcaError> {
@@ -970,7 +970,7 @@ impl Dag {
     }
 
     /// The nodes whose output `id`'s `partitions_from(...)` reads for its keys.
-    pub fn partition_sources(&self, id: &str) -> Vec<&str> {
+    pub(crate) fn partition_sources(&self, id: &str) -> Vec<&str> {
         let Some(&idx) = self.index.get(id) else {
             return vec![];
         };
@@ -982,7 +982,7 @@ impl Dag {
     }
 
     /// Whether a `partitions_from(...)` reads `id`'s output for its keys.
-    pub fn feeds_partitions(&self, id: &str) -> bool {
+    pub(crate) fn feeds_partitions(&self, id: &str) -> bool {
         let Some(&idx) = self.index.get(id) else {
             return false;
         };
@@ -1008,7 +1008,7 @@ impl Dag {
     /// (fan-in) deps must also force a phase break: a `collect()` consumer
     /// has to wait for *every* partition of its upstream to finish, which a
     /// fused single-succ/single-pred chain cannot guarantee (see #97).
-    pub fn execution_upstream(&self, id: &str) -> Vec<&str> {
+    pub(crate) fn execution_upstream(&self, id: &str) -> Vec<&str> {
         let Some(&idx) = self.index.get(id) else {
             return vec![];
         };
@@ -1020,24 +1020,6 @@ impl Dag {
             ) {
                 let source_idx = edge.source();
                 result.push(self.graph[source_idx].id.as_str());
-            }
-        }
-        result
-    }
-
-    /// Get downstream node IDs, excluding PartitionSource and Collect edges.
-    pub fn execution_downstream(&self, id: &str) -> Vec<&str> {
-        let Some(&idx) = self.index.get(id) else {
-            return vec![];
-        };
-        let mut result = Vec::new();
-        for edge in self.graph.edges_directed(idx, Direction::Outgoing) {
-            if !matches!(
-                *edge.weight(),
-                EdgeKind::PartitionSource | EdgeKind::Collect
-            ) {
-                let target_idx = edge.target();
-                result.push(self.graph[target_idx].id.as_str());
             }
         }
         result

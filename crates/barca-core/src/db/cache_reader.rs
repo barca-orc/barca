@@ -9,7 +9,7 @@ use crate::dispatch::OutputRef;
 /// and drop it before any step runs: another barca process can then use the DB while
 /// this run executes Python. (Fields drop in order: connection, database + file lock,
 /// then the in-process guard.)
-pub struct CacheReader {
+pub(crate) struct CacheReader {
     /// The statement of a one-key cache lookup, compiled on first use and kept for the
     /// reader's life ([`crate::cache::lookup_cached`]): compiling it cost more than the lookup.
     lookup: tokio::sync::Mutex<Option<libsql::Statement>>,
@@ -65,7 +65,7 @@ impl CacheReader {
             .is_none_or(|root| crate::config::local_artifact(path, root))
     }
 
-    pub fn conn(&self) -> &libsql::Connection {
+    pub(crate) fn conn(&self) -> &libsql::Connection {
         &self.conn
     }
 

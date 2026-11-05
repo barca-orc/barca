@@ -36,8 +36,9 @@
 pub mod plan;
 pub mod size;
 
-pub use plan::{Eviction, Goal, LeftoverKind, Plan, Protections, Tier};
-pub use size::MaxSize;
+pub use plan::Plan;
+pub(crate) use plan::{Eviction, Goal, LeftoverKind, Protections, Tier};
+pub(crate) use size::MaxSize;
 
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
@@ -50,7 +51,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Eviction stops once the size is at or below this share of the limit.
-pub const LOW_WATERMARK_PERCENT: u64 = 80;
+pub(crate) const LOW_WATERMARK_PERCENT: u64 = 80;
 
 /// How long eviction after a command may take; what is left waits for the next command.
 const AFTER_COMMAND_BUDGET: Duration = Duration::from_secs(5);
@@ -59,7 +60,7 @@ const AFTER_COMMAND_BUDGET: Duration = Duration::from_secs(5);
 const SURVEY_EVERY: Duration = Duration::from_secs(24 * 3600);
 
 /// Where lazy inputs keep the byte ranges they fetched (`barca._storage.RANGE_CACHE_DIR`).
-pub const RANGE_CACHE_DIR: &str = "range-cache";
+pub(crate) const RANGE_CACHE_DIR: &str = "range-cache";
 
 /// A `sql-cache` copy or a `range-cache` directory used this recently may be in use by a query:
 /// it is not evicted.
@@ -67,7 +68,7 @@ const SQL_CACHE_GRACE: Duration = Duration::from_secs(300);
 
 /// An artifact file no row names that was written this recently may belong to a step whose
 /// row is about to be written: it is not evicted.
-pub const UNREFERENCED_GRACE: Duration = Duration::from_secs(60);
+pub(crate) const UNREFERENCED_GRACE: Duration = Duration::from_secs(60);
 
 /// What the last full walk found, kept in `.barca/gc-state.json`.
 const STATE_FILE: &str = "gc-state.json";
@@ -493,7 +494,7 @@ impl StoreCheck {
 
 /// How long a successful check of the artifact store is trusted by a run that needs no
 /// transfer (#593): such a run starts no transfer helper.
-pub const STORE_CHECK_WINDOW: Duration = Duration::from_secs(300);
+pub(crate) const STORE_CHECK_WINDOW: Duration = Duration::from_secs(300);
 
 /// Whether the artifact store of `cfg` (its environment, store URI and storage options) was
 /// checked and found there less than [`STORE_CHECK_WINDOW`] ago, by this project's
@@ -572,7 +573,7 @@ fn record_measurement(project: &Project, measured: Measurement) {
 /// Forget the last full walk, so the next check walks `.barca/` again: the metadata database
 /// was replaced (`barca state reset`, `barca state restore`), and the recorded sizes the fast
 /// estimate adds up no longer describe the files on disk.
-pub fn forget_survey() {
+pub(crate) fn forget_survey() {
     if let Ok(project) = Project::here() {
         forget_survey_in(&project);
     }
@@ -1498,7 +1499,7 @@ async fn mark_evicted(db_path: &str, paths: &[&str]) {
 
 /// Files and bytes per tier.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TierTotals {
+pub(crate) struct TierTotals {
     pub files: usize,
     pub bytes: u64,
 }

@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+#[cfg(test)]
 /// Compute the run_hash for a step given its context. `env` is the step's declared env values
 /// ([`crate::envdeps::hash_input`]); `None` leaves the hash exactly as a node without `env=`.
 ///
@@ -11,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 /// (which covers only the sensor's code). Upstreams without an entry contribute their run hash
 /// alone, so a pipeline without sensors hashes exactly as it did before sensor outputs were
 /// hashed. This form knows no `@asset(cutoff=True)` upstream ([`compute_run_hash_with`]).
-pub fn compute_run_hash(
+pub(crate) fn compute_run_hash(
     def_hash: &str,
     partition_key: Option<&str>,
     upstream_ids: impl Iterator<Item = impl AsRef<str>>,

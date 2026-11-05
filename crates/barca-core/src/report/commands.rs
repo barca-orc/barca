@@ -59,7 +59,7 @@ fn metadata_field(out: &mut Value, seconds: Option<f64>) {
 }
 /// The stdout JSON body of a successful single-target `barca get --json` / `barca run --json`,
 /// before `--fields`. A served run's `outcome` is this body.
-pub fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
+pub(crate) fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
     let mut out = serde_json::json!({
         "status": "success",
         "run_id": result.run_id,
@@ -81,7 +81,7 @@ pub fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
 
 /// The human lines for `partition_selection`: the selection, each narrowed node's share of
 /// its keys, and the nodes it skips.
-pub fn selection_lines(selection: &crate::results::PartitionSelectionReport) -> String {
+pub(crate) fn selection_lines(selection: &crate::results::PartitionSelectionReport) -> String {
     let named: Vec<String> = selection
         .selection
         .iter()
@@ -122,7 +122,7 @@ fn selection_field(out: &mut Value, selection: Option<&crate::results::Partition
 
 /// What the human summary of a single-target run says it did: `got 'x'`, `all assets` or
 /// `ran 'x'`.
-pub fn run_label(command: &str, target: Option<&str>) -> String {
+pub(crate) fn run_label(command: &str, target: Option<&str>) -> String {
     match (command, target) {
         ("run", Some(t)) => format!("ran '{t}'"),
         ("run", None) => "ran ''".to_string(),
@@ -135,7 +135,7 @@ pub fn run_label(command: &str, target: Option<&str>) -> String {
 /// for a local run and for a served run's `outcome`. `final_output` is the value to show, or
 /// `None` when the run has none (a `get` of every asset); the body says `null` for both that
 /// and a target whose value is `None`.
-pub fn render_run_body(
+pub(crate) fn render_run_body(
     body: &Value,
     label: &str,
     final_output: Option<&Value>,
@@ -253,7 +253,7 @@ pub fn render_get(
 
 /// Render a successful single-target `get` from its JSON body ([`run_body`]): the one renderer
 /// for a local run and for a served run's `outcome`.
-pub fn render_get_body(
+pub(crate) fn render_get_body(
     body: &Value,
     target: Option<&str>,
     returned: &Returned,
@@ -306,7 +306,7 @@ pub fn render_get_body(
 
 /// What a `get` returned, read back from the pointers in its JSON `final_output` (an artifact
 /// pointer, or an object of them keyed by partition key): the paths to print.
-pub fn returned_from_pointers(final_output: Option<&Value>) -> Returned {
+pub(crate) fn returned_from_pointers(final_output: Option<&Value>) -> Returned {
     let path = |v: &Value| v["_barca_artifact"]["path"].as_str().map(str::to_string);
     let key_summary = final_output.and_then(crate::report::parse_key_summary);
     let listed = match (&key_summary, final_output) {
@@ -364,7 +364,7 @@ pub fn render_get_multi(
 
 /// Render a multi-target `get` from its two JSON parts ([`multi_parts`]) and what each target
 /// returned, in the same order: the one renderer for a local run and a served run's `outcome`.
-pub fn render_get_multi_parts(
+pub(crate) fn render_get_multi_parts(
     run: &Value,
     per_target: &[(String, Value)],
     returned: &[&Returned],
@@ -488,7 +488,7 @@ pub fn render_failed_get(
 }
 
 /// What a failed `get` prints outside JSON: the paths (or values) of the keys that succeeded.
-pub fn render_failed_get_returned(r: &Returned, shape: GetShape) -> RenderedOutput {
+pub(crate) fn render_failed_get_returned(r: &Returned, shape: GetShape) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
     if r.values {
         if let Some(v) = &r.final_output {
@@ -666,7 +666,7 @@ fn step_arg(failed: &crate::db::RunStep, steps: &[crate::db::RunStep]) -> String
 /// The command that prints a failed run's stderr: `barca logs RUN --step STEP --stream stderr`,
 /// then `select` (the `--server URL`, `--local` or `--env NAME` the caller was given, so the
 /// command reads the same history). `None` when no step failed.
-pub fn run_detail_hint(detail: &crate::queries::RunDetail, select: &str) -> Option<String> {
+pub(crate) fn run_detail_hint(detail: &crate::queries::RunDetail, select: &str) -> Option<String> {
     let failed = detail.steps.iter().find(|s| s.status == "failed")?;
     Some(format!(
         "barca logs {} --step {} --stream stderr{select}",
@@ -679,7 +679,7 @@ pub fn run_detail_hint(detail: &crate::queries::RunDetail, select: &str) -> Opti
 /// step its error, traceback and how its worker ended. JSON: `{run, steps, hint?}`.
 /// How many keys of one batched call `barca history RUN_ID` lists under the call's row; the
 /// JSON lists every recorded key.
-pub const CALL_KEYS_SHOWN: usize = 10;
+pub(crate) const CALL_KEYS_SHOWN: usize = 10;
 
 /// The rows of `barca history RUN_ID`: one per step, except that the keys of a batched call
 /// (RFC-0013) are listed under one row for the call, `node[N keys]`, with its total time and
@@ -1416,7 +1416,7 @@ fn multi_run(result: &MultiResult) -> Value {
 /// The JSON of a multi-target run, in two parts: the run's own keys (sorted, without
 /// `targets`) and each target's object in the order given. Printed, they are
 /// `{...run keys...,"targets":{...}}`.
-pub fn multi_parts(
+pub(crate) fn multi_parts(
     result: &MultiResult,
     final_outputs: &[Option<Value>],
 ) -> (Value, Vec<(String, Value)>) {
@@ -1449,7 +1449,7 @@ pub fn multi_parts(
 }
 
 /// `{...run keys...,"targets":{...}}` with the targets in the order given.
-pub fn multi_json(run: &Value, per_target: &[(String, Value)]) -> String {
+pub(crate) fn multi_json(run: &Value, per_target: &[(String, Value)]) -> String {
     let run = run.to_string();
     format!(
         "{},\"targets\":{}}}",
@@ -1472,7 +1472,7 @@ pub fn render_multi(
 
 /// Render a multi-target run from its two JSON parts ([`multi_parts`]). The one renderer for a
 /// local run and for a served run's `outcome`.
-pub fn render_multi_parts(
+pub(crate) fn render_multi_parts(
     run: &Value,
     per_target: &[(String, Value)],
     mode: ResultFormat,
@@ -1538,7 +1538,7 @@ pub fn render_multi_parts(
 
 /// The stdout JSON body of a failed single-target run: what ran before the failing step,
 /// the step and its error. `None` for any other error.
-pub fn failed_run_body(err: &crate::BarcaError) -> Option<Value> {
+pub(crate) fn failed_run_body(err: &crate::BarcaError) -> Option<Value> {
     let crate::BarcaError::WorkerFailed(f) = err else {
         return None;
     };

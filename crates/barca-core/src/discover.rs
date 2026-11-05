@@ -16,7 +16,7 @@ use crate::config::DiscoveryToml;
 use std::path::{Path, PathBuf};
 
 /// Directory names never walked (unless `include` names files in them).
-pub const EXCLUDED_DIRS: &[&str] = &[
+pub(crate) const EXCLUDED_DIRS: &[&str] = &[
     "__pycache__",
     "venv",
     "node_modules",
@@ -40,7 +40,7 @@ fn excluded_dir(name: &str) -> bool {
 }
 
 /// Whether a source mentions barca at the start of an import statement.
-pub fn mentions_barca(source: &str) -> bool {
+pub(crate) fn mentions_barca(source: &str) -> bool {
     source.lines().any(|line| {
         let l = line.trim_start();
         l.starts_with("from barca") || l.starts_with("import barca")
@@ -181,7 +181,7 @@ fn slash(p: &Path) -> String {
 
 /// Glob match on `/`-separated paths: `*` and `?` stay inside a segment, `**` spans segments
 /// (a trailing `dir/**` matches everything under `dir`).
-pub fn glob_match(pattern: &str, path: &str) -> bool {
+pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
     let pat: Vec<&str> = pattern.trim_start_matches("./").split('/').collect();
     let segs: Vec<&str> = path.split('/').collect();
     match_segments(&pat, &segs)

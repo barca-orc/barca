@@ -36,7 +36,7 @@ impl PostState {
         }
     }
 
-    pub fn is_failing(self) -> bool {
+    pub(crate) fn is_failing(self) -> bool {
         matches!(self, Self::Failing | Self::StillFailing)
     }
 }
@@ -166,7 +166,7 @@ impl JobHistory {
 
     /// Record that `integration` posted `state` about `job` at `posted_at` (UTC), replacing
     /// its previous post. `message_ref` stays empty: a webhook returns no message id.
-    pub async fn record_post(
+    pub(crate) async fn record_post(
         &self,
         job: &str,
         integration: &str,

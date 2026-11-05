@@ -94,7 +94,9 @@ pub fn short_name(base_id: &str) -> &str {
 }
 
 /// The [`NodeContext`] of every node of `dag`, by base id.
-pub fn node_contexts(dag: &crate::dag::Dag) -> std::collections::HashMap<String, NodeContext> {
+pub(crate) fn node_contexts(
+    dag: &crate::dag::Dag,
+) -> std::collections::HashMap<String, NodeContext> {
     use crate::model::{Freshness, NodeKind};
     use std::collections::HashMap;
 
@@ -274,7 +276,7 @@ pub trait Integration: Send + Sync {
 macro_rules! integrations {
     ($($name:literal => $ctor:path),+ $(,)?) => {
         /// Names accepted in `BARCA_TELEMETRY`.
-        pub const KNOWN: &[&str] = &[$($name),+];
+        pub(crate) const KNOWN: &[&str] = &[$($name),+];
 
         fn build(name: &str) -> Option<Result<Option<Box<dyn Integration>>, String>> {
             match name {

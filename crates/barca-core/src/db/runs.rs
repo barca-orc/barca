@@ -44,7 +44,7 @@ pub fn encode_files(files: &[String]) -> String {
 }
 
 /// See [`encode_files`].
-pub fn decode_files(raw: &str) -> Vec<String> {
+pub(crate) fn decode_files(raw: &str) -> Vec<String> {
     if raw.trim_start().starts_with('[')
         && let Ok(files) = serde_json::from_str::<Vec<String>>(raw)
     {
@@ -102,7 +102,7 @@ pub struct RunRecord {
 /// A recorded step error as (type, message, traceback). A worker reports a Python exception as
 /// the generic `WorkerError` whose text is `Type: message` followed by the traceback frames;
 /// this takes the type and the frames back out of it.
-pub fn split_exception(
+pub(crate) fn split_exception(
     error_type: &str,
     message: &str,
     traceback: &str,
@@ -165,7 +165,7 @@ impl RunFailure {
 }
 
 /// What a run reads from the metadata DB as it starts ([`start_run`]).
-pub struct StartedRun {
+pub(crate) struct StartedRun {
     /// Logical-node scheduling priors for the requested plan.
     pub cost_estimates: Vec<(String, crate::cost::NodeEstimate)>,
     /// [`get_avg_elapsed`] of the run's unpartitioned nodes.
@@ -260,7 +260,7 @@ pub struct NewRun<'a> {
 }
 
 /// Create a new run record at the start of execution.
-pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
+pub(crate) async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     insert_run(&conn, db_path, &run).await;

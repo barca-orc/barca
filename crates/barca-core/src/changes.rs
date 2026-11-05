@@ -241,7 +241,7 @@ pub fn summary(changed: &[String]) -> String {
 /// The named components of `changed` by cause, in a fixed order: `code_changed` (the function,
 /// its decorators, helpers, kind), `inputs_changed` (an upstream, a sensor, a source value),
 /// `env_changed` (a declared variable). A component this function does not know counts as code.
-pub fn causes(changed: &[String]) -> Vec<String> {
+pub(crate) fn causes(changed: &[String]) -> Vec<String> {
     let has = |cause: &str| {
         changed.iter().any(|c| {
             let is = match c.split(' ').next().unwrap_or(c) {

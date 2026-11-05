@@ -14,7 +14,7 @@ use crate::model::{PartitionKey, StepId};
 
 /// Resource configuration — the knobs the user controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceConfig {
+pub(crate) struct ResourceConfig {
     /// Max concurrent workers (default: cpu_count).
     pub pool_size: usize,
     /// Per-group concurrency limits from `tags={"concurrency_group": "..."}`.
@@ -34,7 +34,7 @@ pub struct ExecutionPlan {
 
 impl ExecutionPlan {
     /// The node id of every planned step, in plan order (a partitioned step once per stream).
-    pub fn step_ids(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn step_ids(&self) -> impl Iterator<Item = &str> {
         self.phases
             .iter()
             .flat_map(|p| &p.streams)
@@ -107,7 +107,7 @@ pub struct StreamStep {
 impl StreamStep {
     /// This step with `keys` in place of its partition keys, without copying its own (a
     /// partitioned step can hold 200k keys).
-    pub fn with_keys(&self, keys: Vec<PartitionKey>) -> StreamStep {
+    pub(crate) fn with_keys(&self, keys: Vec<PartitionKey>) -> StreamStep {
         StreamStep {
             step_id: self.step_id.clone(),
             kind: self.kind,
@@ -137,18 +137,16 @@ impl StreamStep {
 /// The decomposed structure of a DAG — chains and their relationships.
 /// This is the intermediate between raw DAG and execution plan.
 #[derive(Debug, Clone)]
-pub struct Topology {
+pub(crate) struct Topology {
     /// All chains (maximal sequential paths). Every node is in exactly one chain.
     pub chains: Vec<Chain>,
     /// Which chains each chain depends on.
     pub chain_deps: HashMap<usize, HashSet<usize>>,
-    /// Node → chain index lookup.
-    pub node_to_chain: HashMap<String, usize>,
 }
 
 /// A chain: maximal path where each internal node has single predecessor and successor.
 #[derive(Debug, Clone)]
-pub struct Chain {
+pub(crate) struct Chain {
     /// Ordered node IDs (head to tail).
     pub nodes: Vec<String>,
 }
@@ -158,7 +156,7 @@ pub struct Chain {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Decompose a DAG into its topological structure (chains + relationships).
-pub fn decompose(dag: &Dag) -> Topology {
+pub(crate) fn decompose(dag: &Dag) -> Topology {
     decompose_ordered(dag, dag.topo_order())
 }
 
@@ -190,11 +188,7 @@ fn decompose_ordered(dag: &Dag, order: Vec<&str>) -> Topology {
         chain_deps.insert(idx, deps);
     }
 
-    Topology {
-        chains,
-        chain_deps,
-        node_to_chain,
-    }
+    Topology { chains, chain_deps }
 }
 
 /// True if the node declares partitions, static or dynamic (`partitions_from`).
@@ -275,6 +269,7 @@ fn detect_chains(dag: &Dag, topo: &[&str]) -> Vec<Chain> {
 // Step 2: Plan — Topology × ResourceConfig → ExecutionPlan
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[cfg(test)]
 /// Generate an execution plan from a topology and resource config.
 pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> ExecutionPlan {
     plan_narrowed(dag, topology, config, None)
@@ -283,7 +278,7 @@ pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> Executio
 /// [`plan`], expanding only the selected keys of a static dimension that `selection` names
 /// (`--partition`), so a few keys out of many are never all built. A pre-filter only:
 /// [`crate::selection::PartitionSelection::apply`] narrows the plan and decides what is skipped.
-pub fn plan_narrowed(
+pub(crate) fn plan_narrowed(
     dag: &Dag,
     topology: &Topology,
     config: &ResourceConfig,
@@ -717,7 +712,7 @@ fn collect_static_partitions(
 /// Expand partition dimensions into all combinations.
 /// For single dimension {"ticker": ["A","B","C"]} → [{"ticker":"A"}, {"ticker":"B"}, {"ticker":"C"}]
 /// For multiple dimensions, produces the cartesian product.
-pub fn expand_partition_combos(
+pub(crate) fn expand_partition_combos(
     dims: &HashMap<String, Vec<String>>,
 ) -> Vec<HashMap<String, String>> {
     let mut combos = vec![HashMap::new()];
@@ -819,13 +814,14 @@ fn topo_sort_indices(count: usize, deps: &HashMap<usize, HashSet<usize>>) -> Vec
 // Convenience: full pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[cfg(test)]
 /// Full pipeline: DAG → decompose → plan.
 pub fn plan_from_dag(dag: &Dag, config: &ResourceConfig) -> ExecutionPlan {
     plan_from_dag_narrowed(dag, config, None)
 }
 
 /// [`plan_from_dag`] with the [`plan_narrowed`] pre-filter.
-pub fn plan_from_dag_narrowed(
+pub(crate) fn plan_from_dag_narrowed(
     dag: &Dag,
     config: &ResourceConfig,
     selection: Option<&crate::selection::PartitionSelection>,

@@ -5,7 +5,7 @@ use super::*;
 impl WorkerPool {
     /// Library warnings the workers printed once and then suppressed, with how many times
     /// each was suppressed, most repeated first. Drains the tally.
-    pub fn take_repeated_warnings(&mut self) -> Vec<(String, u64)> {
+    pub(crate) fn take_repeated_warnings(&mut self) -> Vec<(String, u64)> {
         let mut out = std::mem::take(&mut self.repeated_warnings);
         out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         out
@@ -13,7 +13,7 @@ impl WorkerPool {
 
     /// Report steps that stay in flight longer than the progress interval, so a long
     /// step does not look like a hang.
-    pub fn on_running(&mut self, hook: RunningHook) {
+    pub(crate) fn on_running(&mut self, hook: RunningHook) {
         self.running_hook = Some(hook);
     }
 
@@ -62,7 +62,7 @@ impl WorkerPool {
     /// Cancelling `cancel` returns `Err("run cancelled")` promptly; workers
     /// stay alive until [`WorkerPool::shutdown`], which the caller runs on
     /// every exit path.
-    pub async fn run_phase(
+    pub(crate) async fn run_phase(
         &mut self,
         coord: &mut Coordinator,
         cost: &mut CostModel,
@@ -354,7 +354,6 @@ impl WorkerPool {
                                     param_types: HashMap::new(),
                                     return_type: None,
                                     kind: "task".to_string(),
-                                    is_dynamic: false,
                                     keyed_inputs: HashMap::new(),
                                     partition_source: false,
                                     previous_sensor: None,

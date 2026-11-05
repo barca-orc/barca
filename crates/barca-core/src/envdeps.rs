@@ -20,17 +20,17 @@ use std::time::SystemTime;
 
 /// The dotenv file declared values are also read from, relative to the project root (barca's
 /// working directory).
-pub const DOTENV: &str = ".env";
+pub(crate) const DOTENV: &str = ".env";
 
 /// Shown in place of a secret-looking variable's value.
-pub const REDACTED: &str = "<redacted>";
+pub(crate) const REDACTED: &str = "<redacted>";
 
 /// Name suffixes treated as secrets: `*_TOKEN`, `*_SECRET`, `*_KEY`, `*_PASSWORD`
 /// (case-insensitive; the bare word counts too).
 const SECRET_WORDS: [&str; 4] = ["TOKEN", "SECRET", "KEY", "PASSWORD"];
 
 /// A declared variable and its value at plan time (`None` = unset).
-pub type EnvValue = (String, Option<String>);
+pub(crate) type EnvValue = (String, Option<String>);
 
 /// Read the declared variables, sorted by name: from this process's environment, else from the
 /// project's dotenv file ([`DOTENV`]).
@@ -75,7 +75,10 @@ fn dotenv(path: &Path) -> Option<Values> {
 /// `\\` escapes, and spanning lines), and `${NAME}` / `${NAME:-default}` expanded in unquoted and
 /// double-quoted values from `env` first, then from the lines above. A later line for the same
 /// key wins. A line without `=` is ignored.
-pub fn parse_dotenv(text: &str, env: impl Fn(&str) -> Option<String>) -> HashMap<String, String> {
+pub(crate) fn parse_dotenv(
+    text: &str,
+    env: impl Fn(&str) -> Option<String>,
+) -> HashMap<String, String> {
     let mut out: HashMap<String, String> = HashMap::new();
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
@@ -195,7 +198,10 @@ fn expand(
 }
 
 /// [`resolve`] with an injectable lookup (tests).
-pub fn resolve_with(names: &[String], lookup: impl Fn(&str) -> Option<String>) -> Vec<EnvValue> {
+pub(crate) fn resolve_with(
+    names: &[String],
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Vec<EnvValue> {
     let mut out: Vec<EnvValue> = names.iter().map(|n| (n.clone(), lookup(n))).collect();
     out.sort();
     out.dedup_by(|a, b| a.0 == b.0);
@@ -204,7 +210,7 @@ pub fn resolve_with(names: &[String], lookup: impl Fn(&str) -> Option<String>) -
 
 /// The canonical string folded into the run hash, or `None` when nothing is declared — so a node
 /// without `env=` hashes exactly as it did before this feature existed.
-pub fn hash_input(values: &[EnvValue]) -> Option<String> {
+pub(crate) fn hash_input(values: &[EnvValue]) -> Option<String> {
     if values.is_empty() {
         return None;
     }
@@ -213,7 +219,7 @@ pub fn hash_input(values: &[EnvValue]) -> Option<String> {
 }
 
 /// Does this variable name look like a secret?
-pub fn is_secret(name: &str) -> bool {
+pub(crate) fn is_secret(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     SECRET_WORDS
         .iter()
@@ -236,7 +242,7 @@ pub fn report(values: &[EnvValue]) -> BTreeMap<String, Option<String>> {
 
 /// The suffix for an `--agent` step line: ` env NAME=value OTHER=<unset>` (empty when nothing is
 /// declared). Values containing whitespace or quotes, or empty values, are double-quoted.
-pub fn agent_suffix(values: &[EnvValue]) -> String {
+pub(crate) fn agent_suffix(values: &[EnvValue]) -> String {
     if values.is_empty() {
         return String::new();
     }

@@ -173,33 +173,6 @@ pub async fn run_streaming(
     .into_single()
 }
 
-/// `barca get a,b` — several assets in one run. The union of their cones is planned once, so a
-/// shared upstream asset materializes once. Every target is attempted: a failure stops only the
-/// targets downstream of it, and is reported in that target's outcome (not as an `Err`).
-pub async fn get_many(
-    cfg: &crate::config::ResolvedConfig,
-    target_names: &[String],
-    file_args: &[String],
-    python: &std::path::Path,
-    policy: CachePolicy,
-    agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
-) -> Result<MultiResult, BarcaError> {
-    get_many_streaming(
-        cfg,
-        target_names,
-        file_args,
-        python,
-        policy,
-        agent_mode,
-        cancel,
-        None,
-        None,
-        Default::default(),
-    )
-    .await
-}
-
 /// Streaming counterpart that preserves the multi-target execution policy.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_many_streaming(

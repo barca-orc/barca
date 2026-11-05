@@ -52,13 +52,13 @@ const BRIEF_MESSAGE_CHARS: usize = 200;
 /// is a readable waterfall and about 150 KB of trace; 2,000 per run keeps the largest
 /// payload (with failures) well inside the Agent's 25 MB request limit and the 3 seconds a
 /// delivery may take.
-pub const KEY_SPANS_PER_NODE: usize = 200;
-pub const KEY_SPANS_PER_RUN: usize = 2_000;
+pub(crate) const KEY_SPANS_PER_NODE: usize = 200;
+pub(crate) const KEY_SPANS_PER_RUN: usize = 2_000;
 /// One request to the Agent carries at most this much; a larger trace goes in several
 /// requests (trace chunks with the same trace id, as a tracer's partial flush sends them).
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 /// barca's own version, the `barca.version` tag of every span and metric.
-pub const BARCA_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const BARCA_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The first `max_chars` characters of `text`, marked when something was dropped.
 fn cut(text: &str, max_chars: usize) -> String {
@@ -291,13 +291,13 @@ pub(crate) fn take_key_spans(run_id: &str) -> HashSet<String> {
 }
 
 /// `DD_SERVICE`, or `barca`: the one service every span reports as.
-pub fn service_from_env() -> String {
+pub(crate) fn service_from_env() -> String {
     env_var("DD_SERVICE").unwrap_or_else(|| "barca".to_string())
 }
 
 /// What the coordinator tells a worker so its `barca.execute` span joins the run's trace.
 #[derive(Debug, Clone)]
-pub struct Dispatch {
+pub(crate) struct Dispatch {
     service: String,
     project: Option<String>,
     job: String,
@@ -874,7 +874,7 @@ impl Datadog {
 
 impl Datadog {
     /// `Ok(None)` when `DD_TRACE_ENABLED` switches tracing off.
-    pub fn from_env() -> Result<Option<Self>, String> {
+    pub(crate) fn from_env() -> Result<Option<Self>, String> {
         // Read raw: an empty value is a setting too, and it means off.
         let enabled = std::env::var("DD_TRACE_ENABLED").ok();
         if !tracing_enabled(enabled.as_deref().map(str::trim)) {

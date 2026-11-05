@@ -20,7 +20,6 @@ fn spec(name: &str) -> ItemSpec {
         param_types: HashMap::new(),
         return_type: None,
         kind: "asset".to_string(),
-        is_dynamic: false,
         keyed_inputs: HashMap::new(),
         partition_source: false,
         previous_sensor: None,

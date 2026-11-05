@@ -3,9 +3,15 @@
 use super::*;
 
 impl Coordinator {
+    #[cfg(test)]
     /// Add an item. If all deps satisfied, push to ready queue.
     /// If has unsatisfied deps, add to pending.
-    pub fn add_item(&mut self, step_id: crate::StepId, spec: ItemSpec, deps: Vec<Dep>) -> ItemId {
+    pub(crate) fn add_item(
+        &mut self,
+        step_id: crate::StepId,
+        spec: ItemSpec,
+        deps: Vec<Dep>,
+    ) -> ItemId {
         let id = self.reserve_item_id();
         self.finalize_item(id, step_id, spec, deps);
         id
@@ -103,7 +109,7 @@ impl Coordinator {
     /// data dependencies, so a consumer's chunk can land in a stream
     /// processed before its producer's. With two passes, resolution order no
     /// longer depends on stream order at all.
-    pub fn load_phase(
+    pub(crate) fn load_phase(
         &mut self,
         phase: &crate::planner::Phase,
         provided: &HashMap<String, crate::dispatch::ProvidedInput>,

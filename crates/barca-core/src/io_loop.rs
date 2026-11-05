@@ -56,7 +56,7 @@ use shared::{Share, Steps, share_changed};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-pub struct IoConfig {
+pub(crate) struct IoConfig {
     pub upload_snapshot_prefix: Option<String>,
     pub python: PathBuf,
     pub pool_size: usize,
@@ -85,14 +85,14 @@ pub struct IoConfig {
 
 /// Callback invoked on each step completion with (node_id, artifact_json, attempts made).
 /// `Send` so the whole run future can be spawned onto a multi-thread runtime.
-pub type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value, u32) + Send + 'a>;
+pub(crate) type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value, u32) + Send + 'a>;
 
 /// Callback invoked with each live [`RunEvent`] as a run progresses.
-pub type EventCallback<'a> = Box<dyn FnMut(RunEvent) + Send + 'a>;
+pub(crate) type EventCallback<'a> = Box<dyn FnMut(RunEvent) + Send + 'a>;
 
 /// Called periodically while steps are running, with `(node_id, seconds running)` for each
 /// step that has been in flight longer than the progress interval.
-pub type RunningHook = Box<dyn FnMut(&[(String, f64)]) + Send + 'static>;
+pub(crate) type RunningHook = Box<dyn FnMut(&[(String, f64)]) + Send + 'static>;
 
 // ─── Worker handle ───────────────────────────────────────────────────────────
 
@@ -326,7 +326,7 @@ async fn worker_io_task(
 /// Workers keep their interpreter (and imported user modules) warm between
 /// phases — the dominant per-spawn cost is `importlib` + heavy imports, not
 /// the fork itself.
-pub struct WorkerPool {
+pub(crate) struct WorkerPool {
     config: IoConfig,
     socket_path: PathBuf,
     /// Takes connections to the socket ([`accept_connections`]); stopped at shutdown, or when

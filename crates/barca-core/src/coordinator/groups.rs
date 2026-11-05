@@ -6,7 +6,7 @@ use super::*;
 impl Coordinator {
     /// Handle parallel() request. Creates a group of child items and adds them
     /// to the ready queue. Returns (group_id, child_ids).
-    pub fn on_parallel_requested(
+    pub(crate) fn on_parallel_requested(
         &mut self,
         parent_id: ItemId,
         specs: Vec<ItemSpec>,
@@ -45,7 +45,6 @@ impl Coordinator {
         }
 
         let group = ParallelGroup {
-            id: group_id,
             parent: parent_id,
             items: child_ids.clone(),
             completed_count: 0,
@@ -57,7 +56,7 @@ impl Coordinator {
     }
 
     /// Say where a group's branches write their results (see [`ParallelGroup::result_dir`]).
-    pub fn set_group_result_dir(&mut self, group_id: GroupId, dir: std::path::PathBuf) {
+    pub(crate) fn set_group_result_dir(&mut self, group_id: GroupId, dir: std::path::PathBuf) {
         if let Some(group) = self.groups.get_mut(&group_id) {
             group.result_dir = Some(dir);
         }
@@ -65,7 +64,7 @@ impl Coordinator {
 
     /// Give up on a group whose caller is gone: its branches that have not started will not
     /// start. Those already running finish, and nobody reads what they return.
-    pub fn abandon_group(&mut self, group_id: GroupId) {
+    pub(crate) fn abandon_group(&mut self, group_id: GroupId) {
         let Some(group) = self.groups.get(&group_id) else {
             return;
         };
@@ -84,7 +83,7 @@ impl Coordinator {
     }
 
     /// Check if a parallel group is fully complete (all children done or failed).
-    pub fn is_group_complete(&self, group_id: GroupId) -> bool {
+    pub(crate) fn is_group_complete(&self, group_id: GroupId) -> bool {
         let group = &self.groups[&group_id];
         group.completed_count == group.items.len()
     }

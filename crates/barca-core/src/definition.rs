@@ -28,7 +28,7 @@ use crate::parse::{is_unsafe_decorator, match_node_decorator, try_extract_sink};
 
 /// Whether a part of a node's decorators is part of its definition hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Counts {
+pub(crate) enum Counts {
     /// The canonical form of the value is hashed, and the cone follows the names in it.
     Yes,
     /// Not hashed and not followed.
@@ -40,26 +40,28 @@ pub enum Counts {
 
 /// One row of the list: a part of a node's decorators, whether it counts, and why.
 #[derive(Debug, Clone, Copy)]
-pub struct Rule {
+pub(crate) struct Rule {
     /// The keyword argument of `@asset` / `@sensor` / `@task`, or one of the names below for a
     /// part that is not a keyword argument.
     pub part: &'static str,
     pub counts: Counts,
+    // For people, and for the tests that keep this table and the manual in step.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub reason: &'static str,
 }
 
 /// A stacked `@sink(...)` decorator.
-pub const SINK: &str = "@sink(...)";
+pub(crate) const SINK: &str = "@sink(...)";
 /// A decorator that is not one of barca's (`@functools.cache`, a wrapper of your own).
-pub const OTHER_DECORATOR: &str = "any other decorator";
+pub(crate) const OTHER_DECORATOR: &str = "any other decorator";
 /// A keyword argument of `@asset` / `@sensor` / `@task` that is not in the list, a positional
 /// argument, or a `**mapping`.
-pub const UNKNOWN_ARGUMENT: &str = "any other argument";
+pub(crate) const UNKNOWN_ARGUMENT: &str = "any other argument";
 /// The `@unsafe` marker.
-pub const UNSAFE: &str = "@unsafe";
+pub(crate) const UNSAFE: &str = "@unsafe";
 
 /// The list of what counts. Mirrored exactly in `crates/barca-cli/docs/cache.md`.
-pub const RULES: &[Rule] = &[
+pub(crate) const RULES: &[Rule] = &[
     Rule {
         part: "inputs",
         counts: Counts::Yes,
@@ -173,7 +175,7 @@ fn rule(part: &str) -> Counts {
 /// Hash rules keyed to the accepted node arguments, rather than a second signature table.
 /// Unknown arguments can reach the conservative fallback only for calls whose barca binding
 /// cannot be established; the parser validates positively bound barca calls first.
-pub fn node_argument_rules()
+pub(crate) fn node_argument_rules()
 -> impl Iterator<Item = (crate::decorator_args::Argument, &'static Rule)> {
     crate::decorator_args::arguments()
         .filter(|argument| matches!(argument.call, "asset" | "sensor" | "task"))
@@ -199,7 +201,7 @@ fn node_argument_counts(kind: crate::NodeKind, name: &str) -> Counts {
 }
 
 /// The hashed form of a node function.
-pub struct Definition<'a> {
+pub(crate) struct Definition<'a> {
     /// The canonical counted decorator parts, one per line, then the source from `def` on.
     pub text: String,
     /// The expressions inside counted parts whose names the cone follows, like names in the
@@ -217,7 +219,7 @@ pub struct Definition<'a> {
 /// else `None`. `source` is the text `func` was parsed from. Only names positively bound
 /// to barca imports receive barca metadata rules; other decorators count and are followed
 /// in full, including wrappers that happen to be named `asset`, `sensor` or `task`.
-pub fn node_definition<'a>(
+pub(crate) fn node_definition<'a>(
     func: &'a ast::StmtFunctionDef,
     source: &str,
     barca: &crate::decorator_args::BarcaNames,
@@ -476,7 +478,7 @@ fn def_start(func: &ast::StmtFunctionDef, source: &str) -> usize {
 ///
 /// f-strings, t-strings and lambdas are the exception: they are copied from `source` as
 /// written.
-pub fn canonical_expr(expr: &Expr, source: &str) -> String {
+pub(crate) fn canonical_expr(expr: &Expr, source: &str) -> String {
     let mut out = String::new();
     write_expr(expr, source, &mut out);
     out

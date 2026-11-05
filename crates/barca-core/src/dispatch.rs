@@ -68,12 +68,12 @@ impl ErrorPhase {
     }
 
     /// Whether the failure is in barca's own code rather than the step's.
-    pub const fn in_barca(self) -> bool {
+    pub(crate) const fn in_barca(self) -> bool {
         !matches!(self, ErrorPhase::UserCode)
     }
 
     /// What barca was doing, for a failure in its own code: `loading its inputs`.
-    pub const fn doing(self) -> &'static str {
+    pub(crate) const fn doing(self) -> &'static str {
         match self {
             ErrorPhase::LoadInputs => "loading its inputs",
             ErrorPhase::UserCode => "running it",
@@ -86,7 +86,7 @@ impl ErrorPhase {
 
 /// A structured failure reported by a worker for a single step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StepError {
+pub(crate) struct StepError {
     pub error_type: String,
     pub message: String,
     /// User-relevant traceback (barca-internal frames filtered out).
@@ -109,7 +109,7 @@ pub struct StepError {
 
 /// A permanently-failed step (retry budget exhausted), for the metadata DB.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StepFailure {
+pub(crate) struct StepFailure {
     pub node_id: String,
     pub error: StepError,
 }
@@ -127,7 +127,7 @@ fn find_partition_source<'a>(
 
 /// The partition-source outputs [`expand_pending_partitions`] will read from
 /// disk for this phase (so callers can make sure they are local first).
-pub fn partition_sources<'a>(
+pub(crate) fn partition_sources<'a>(
     phase: &Phase,
     all_outputs: &'a HashMap<String, OutputRef>,
 ) -> Vec<&'a OutputRef> {
@@ -142,7 +142,7 @@ pub fn partition_sources<'a>(
 
 /// What [`expand_pending_partitions`] made of a phase.
 #[derive(Debug, Default)]
-pub struct Expansion {
+pub(crate) struct Expansion {
     /// Complete membership counts before an execution-time key filter.
     pub(crate) key_counts: HashMap<String, usize>,
     /// The phase with every step that had pending partitions expanded into its keys; `None`
@@ -162,13 +162,14 @@ fn source_id_of(dag: &crate::dag::Dag, node: &str, source_name: &str) -> Option<
         .map(str::to_string)
 }
 
+#[cfg(test)]
 /// Expand steps with pending_partitions using materialized source outputs.
 ///
 /// A source that returned a list gives its values as keys; one that returned a dict gives its
 /// keys, and each key's value is passed to the steps that name the source
 /// ([`crate::keyed`]). A step whose source cannot be read is left out and listed in
 /// [`Expansion::failures`].
-pub fn expand_pending_partitions(
+pub(crate) fn expand_pending_partitions(
     dag: &crate::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
@@ -478,7 +479,7 @@ pub(crate) fn expand_pending_partitions_filtered(
 /// A provided input — either a single artifact or a collected list of partition artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ProvidedInput {
+pub(crate) enum ProvidedInput {
     Single(OutputRef),
     Collected(Vec<OutputRef>),
 }
@@ -488,7 +489,7 @@ pub enum ProvidedInput {
 /// Only data edges (`Direct`/`Collect`, surfaced via `step.inputs`) produce
 /// provided inputs. `After` edges carry no data — they never appear in
 /// `step.inputs`, so an after-ordered step receives no artifact from them.
-pub fn build_provided_inputs(
+pub(crate) fn build_provided_inputs(
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
 ) -> HashMap<String, ProvidedInput> {
@@ -580,7 +581,7 @@ pub fn build_provided_inputs(
 /// by its base id (`f:up`), never by one partition (`f:up[k=a]`), whether it reads one
 /// partition per key or all of them through `collect()`. So readers of the same upstream
 /// always name it the same way, and comparing ids is enough.
-pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
+pub(crate) fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
     let mut lazy = HashSet::new();
     let mut eager = HashSet::new();
     for step in phase.streams.iter().flat_map(|s| &s.steps) {

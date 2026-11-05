@@ -237,11 +237,6 @@ impl RunRequest {
             .map(crate::selection::PartitionSelection::parse)
             .transpose()
     }
-
-    /// The target label `barca history` shows for this run: the targets, comma-separated.
-    pub fn target_label(&self) -> Option<String> {
-        (!self.targets.is_empty()).then(|| self.targets.join(","))
-    }
 }
 
 /// How a run ended, the `status` of its [`Outcome`].

@@ -29,7 +29,7 @@ use ruff_python_ast::{self as ast, Expr};
 use ruff_text_size::Ranged;
 
 /// What one barca call accepts.
-pub struct Signature {
+pub(crate) struct Signature {
     /// The name as written in a pipeline: `asset`, `partitions`, `Schedule`.
     pub name: &'static str,
     /// Whether it is written with `@`.
@@ -50,7 +50,7 @@ pub struct Signature {
 
 /// Every barca call whose arguments are read from the source. `@unsafe` takes no call, and
 /// `parallel()` / `parallel_map()` run inside a task body: their arguments are yours.
-pub const SIGNATURES: &[Signature] = &[
+pub(crate) const SIGNATURES: &[Signature] = &[
     Signature {
         name: "group",
         decorator: false,
@@ -206,7 +206,7 @@ pub const SIGNATURES: &[Signature] = &[
 
 /// How an argument is passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Passing {
+pub(crate) enum Passing {
     /// By position only (`partitions(values)`, the path of `@sink`).
     Positional,
     /// By keyword only (`inputs=`, `serializer=`).
@@ -265,8 +265,9 @@ impl Signature {
         }
     }
 
+    #[cfg(test)]
     /// The row of this call in the tables of the manual and the site.
-    pub fn doc_row(&self) -> String {
+    pub(crate) fn doc_row(&self) -> String {
         let keywords = if self.keywords.is_empty() {
             "none".to_string()
         } else {
@@ -293,7 +294,7 @@ impl Signature {
 
 /// One argument a barca call does not take.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Problem {
+pub(crate) struct Problem {
     /// Byte offset of the argument in the source, for the line number.
     pub offset: usize,
     /// What is wrong, ending with what the call accepts.
@@ -602,6 +603,7 @@ pub(crate) fn literal_star_exports(source: &str) -> Option<Vec<String>> {
 }
 
 impl BarcaNames {
+    #[cfg(test)]
     pub fn contains(&self, name: &str) -> bool {
         self.proven.contains_key(name)
     }
@@ -1060,7 +1062,10 @@ impl BarcaNames {
 ///
 /// Only names in `barca` ([`BarcaNames`]) are checked: any other `asset`, `task` or `collect`
 /// is somebody else's function, and its arguments are its own business.
-pub fn check_decorators(decorators: &[ast::Decorator], barca: &BarcaNames) -> Option<Problem> {
+pub(crate) fn check_decorators(
+    decorators: &[ast::Decorator],
+    barca: &BarcaNames,
+) -> Option<Problem> {
     /// The helper calls inside a decorator's arguments.
     struct Helpers<'f> {
         barca: &'f BarcaNames,

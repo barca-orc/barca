@@ -10,10 +10,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{self, Read, Write};
+use std::io;
+#[cfg(test)]
+use std::io::{Read, Write};
 
 /// Negotiated worker/transfer wire version, independent of package and DB versions.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub(crate) const PROTOCOL_VERSION: u32 = 5;
 
 /// Negotiate before a helper can receive work. The caller bounds this together
 /// with connection startup and owns reaping the child on every error path.
@@ -55,7 +57,7 @@ where
 /// Messages sent from a Python worker to the Rust coordinator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum WorkerMessage {
+pub(crate) enum WorkerMessage {
     /// A step completed successfully with an artifact.
     StepCompleted {
         node_id: String,
@@ -114,7 +116,7 @@ pub enum WorkerMessage {
 
 /// A work item submitted via parallel().
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubmitItem {
+pub(crate) struct SubmitItem {
     /// Function reference: "module.py:function_name"
     pub fn_ref: String,
     /// Positional arguments (JSON values).
@@ -125,7 +127,7 @@ pub struct SubmitItem {
 
 /// Reference to a materialized artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArtifactRef {
+pub(crate) struct ArtifactRef {
     /// Run-owned bytes pinned before the reusable artifact path is published.
     /// Internal transfer source; never an artifact identity or persisted path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,7 +185,7 @@ pub struct ArtifactRef {
 
 /// Where one batched call's time went before its keys were written (RFC-0013).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-pub struct BatchPhases {
+pub(crate) struct BatchPhases {
     pub import_seconds: f64,
     pub load_seconds: f64,
     pub compute_seconds: f64,
@@ -193,7 +195,7 @@ pub struct BatchPhases {
 /// Outcome of a single `@sink` write. A sink that fails fails its step (0.30.0), so a
 /// current worker reports only successes; "error" is what workers before 0.30.0 sent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SinkOutcome {
+pub(crate) struct SinkOutcome {
     pub path: String,
     /// "ok" | "error"
     pub status: String,
@@ -214,7 +216,7 @@ pub struct SinkOutcome {
 /// Messages sent from the Rust coordinator to a Python worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum CoordinatorMessage {
+pub(crate) enum CoordinatorMessage {
     /// Response to a Submit request — results for all submitted items.
     ParallelResponse { results: Vec<ParallelResult> },
     /// Request the worker to shut down gracefully.
@@ -224,7 +226,7 @@ pub enum CoordinatorMessage {
 /// Result of a single parallel branch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ParallelResult {
+pub(crate) enum ParallelResult {
     /// The branch returned an artifact file reference. Values never ride this response.
     Ok {
         artifact: BranchArtifact,
@@ -237,7 +239,7 @@ pub enum ParallelResult {
 /// Where a branch's return value is: the artifact its worker wrote, like any step's output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BranchArtifact {
+pub(crate) struct BranchArtifact {
     pub path: String,
     /// `json`, `pickle` or `parquet`.
     pub format: String,
@@ -252,7 +254,7 @@ pub struct BranchArtifact {
 /// Many may be in flight at once; replies are matched by `id`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum TransferRequest {
+pub(crate) enum TransferRequest {
     /// Upload a local artifact file to the artifact store.
     Put {
         id: u64,
@@ -284,7 +286,7 @@ pub enum TransferRequest {
 /// already retried transient failures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum TransferReply {
+pub(crate) enum TransferReply {
     Done {
         id: u64,
         size_bytes: u64,
@@ -322,7 +324,7 @@ fn yes() -> bool {
 // ─── Framing functions ───────────────────────────────────────────────────────
 
 /// Encode a message as a length-prefixed JSON frame.
-pub fn encode_message<T: Serialize>(msg: &T) -> io::Result<Vec<u8>> {
+pub(crate) fn encode_message<T: Serialize>(msg: &T) -> io::Result<Vec<u8>> {
     let payload =
         serde_json::to_vec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if payload.len() > 256 * 1024 * 1024 {
@@ -338,16 +340,18 @@ pub fn encode_message<T: Serialize>(msg: &T) -> io::Result<Vec<u8>> {
     Ok(frame)
 }
 
+#[cfg(test)]
 /// Write a message to a stream (socket/pipe).
-pub fn write_message<W: Write, T: Serialize>(writer: &mut W, msg: &T) -> io::Result<()> {
+pub(crate) fn write_message<W: Write, T: Serialize>(writer: &mut W, msg: &T) -> io::Result<()> {
     let frame = encode_message(msg)?;
     writer.write_all(&frame)?;
     writer.flush()
 }
 
+#[cfg(test)]
 /// Read a message from a stream (socket/pipe). Blocks until complete.
 /// Returns None on EOF (clean disconnect).
-pub fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
+pub(crate) fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
     reader: &mut R,
 ) -> io::Result<Option<T>> {
     let mut len_buf = [0u8; 4];
@@ -374,7 +378,7 @@ pub fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
 }
 
 /// Async [`write_message`]: write one length-prefixed JSON frame.
-pub async fn write_frame<W, T>(writer: &mut W, msg: &T) -> io::Result<()>
+pub(crate) async fn write_frame<W, T>(writer: &mut W, msg: &T) -> io::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
     T: Serialize,
@@ -387,7 +391,7 @@ where
 
 /// Async [`read_message`]: read one length-prefixed JSON frame.
 /// Returns `None` on a clean EOF at a frame boundary.
-pub async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
+pub(crate) async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
 where
     R: tokio::io::AsyncRead + Unpin,
     T: for<'de> Deserialize<'de>,
@@ -418,9 +422,9 @@ where
 /// The longest Unix socket path `bind` accepts, in bytes: `sun_path` is 104 bytes on macOS
 /// and the BSDs and 108 on Linux, and holds the terminating NUL.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub const SOCKET_PATH_MAX: usize = 107;
+pub(crate) const SOCKET_PATH_MAX: usize = 107;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub const SOCKET_PATH_MAX: usize = 103;
+pub(crate) const SOCKET_PATH_MAX: usize = 103;
 
 /// A unique socket path for one coordination socket of this process:
 /// `<dir>/<pid>-<run_id>-<worker_id>.sock`, where `<dir>` is `barca-<uid>` (created 0700,
