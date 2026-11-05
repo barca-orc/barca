@@ -2,7 +2,7 @@
 
 Scope: metadata format compatibility, not the full table/DDL contract.
 Status: implemented. Specification version: 1 (database versions are described below).
-Conformance: `crates/barca-core/src/db_schema.rs`, `state_validate.rs`, and the tests in
+Conformance: `crates/barca-core/src/db/schema/ddl.rs`, `state_validate.rs`, and the tests in
 `db/schema.rs` and `db/snapshots.rs`. See [boundary inventory](../README.md).
 
 The metadata database contains durable run history, logs and schedules alongside
@@ -135,7 +135,7 @@ release keeps reading the result, because it leaves unknown nullable columns and
 tables alone. A backup being restored is accepted on the same terms before it is migrated.
 `barca status`, which reads the newer columns, completes the schema first.
 
-What format 1 gained since it first shipped, all listed in `db_schema.rs`
+What format 1 gained since it first shipped, all listed in `db/schema/ddl.rs`
 (`ADDED_COLUMNS`, which lists `MATERIALIZATION_COLUMNS`, `RUN_COLUMNS`, `SCHEDULE_STATE_COLUMNS`
 and `LOG_COLUMNS` by table; `INDEXES`; `ADDED_TABLES`), which `init_db`, the check that runs
 before the migration (`Schema::columns_fit`) and the additive migration (`additions_missing` /
@@ -244,7 +244,7 @@ every database from before 0.29.2 (#629):
 
 Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` and
 `a_format_1_database_from_0_24_3_gains_everything_added_since` and
-`a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_rows` in `db_schema.rs`,
+`a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_rows` in `db/schema/ddl.rs`,
 `the_table_list_is_exactly_the_schema_init_db_creates` in `state_validate.rs`, the job history
 tests in `crates/barca-core/src/telemetry/history.rs`, and
 `python/tests/test_upgrade_format1_columns.py`, and `python/tests/test_metadata_compat.py`, which
@@ -282,4 +282,4 @@ this release (these, or `bytes_changed`) gains them when it is opened for writin
 (`db::init_schema`): the missing columns and indexes are added and the schema validated in one
 transaction, rolled back on error, with every row preserved and the version left at 1. A
 database that already has them is only read. Conformance: the schema tests in
-`crates/barca-core/src/gc/tests.rs` and `db_schema.rs`.
+`crates/barca-core/src/gc/tests.rs` and `db/schema/ddl.rs`.
