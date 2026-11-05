@@ -58,8 +58,8 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: github-actions
-    # Covers .github/workflows and .github/actions; .depot/workflows/ci.yml is not a
-    # directory Dependabot reads, so bump its action versions by hand when these move.
+    # Covers .github/workflows; .depot/ (the CI workflow and its composite actions) is not
+    # a directory Dependabot reads, so bump those action versions by hand when these move.
     directory: /
     schedule:
       interval: weekly

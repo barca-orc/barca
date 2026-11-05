@@ -297,9 +297,9 @@ Cargo builds in the runner's local `target/` directory, incrementally (`CARGO_IN
 Each Rust job (clippy, rust-tests, build) restores that directory before the build from a
 cache entry keyed on the job, the rustc version, the `Cargo.lock` hash and the branch (a merge
 group starts from `main`'s latest), and saves a new entry after it under a key unique to the
-run (the composite actions `.github/actions/rust-cache-restore` and `rust-cache-save`; the
+run (the composite actions `.depot/actions/rust-cache-restore` and `rust-cache-save`; the
 jobs that test against the wheel set up Python, uv and the wheel with
-`.github/actions/setup-wheel`). A merge group saves under `main`, since its commit becomes `main`; concurrent merge groups
+`.depot/actions/setup-wheel`). A merge group saves under `main`, since its commit becomes `main`; concurrent merge groups
 write separate entries, and the next restore takes the newest.
 Building directly on Depot's shared cache disk caused truncated object files and invalid Rust
 metadata, including after target directories were separated by PR.
