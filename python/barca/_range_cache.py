@@ -28,6 +28,7 @@ import os
 import re
 import tempfile
 import threading
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
@@ -49,7 +50,7 @@ VERSION_KEYS = (
 )
 # duckdb caches what it reads per (path, mtime). A refresh can rewrite an artifact path, so the
 # store's real mtime is passed through; a store that has none gets this constant.
-_UNKNOWN_MTIME = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+_UNKNOWN_MTIME = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
 _range_fs_cache: dict[str, Any] = {}
 _range_fs_lock = threading.Lock()
 
@@ -60,7 +61,7 @@ def range_read_uri(path: str) -> str:
     return f"{_RANGE_SCHEME_PREFIX}{_storage._SCHEMES[scheme.lower()][0]}://{rest}"
 
 
-def range_read_fs(path: str):
+def range_read_fs(path: str) -> Any:
     """A read-only fsspec view of the store holding ``path`` that reads exact byte ranges.
 
     It wraps the store's own filesystem (``get_fs``), so credentials and options are the same.
@@ -77,7 +78,7 @@ def range_read_fs(path: str):
         return fs
 
 
-def _make_range_fs(inner, protocol: str):
+def _make_range_fs(inner: Any, protocol: str) -> Any:
     from fsspec.spec import AbstractFileSystem
 
     private = f"{_RANGE_SCHEME_PREFIX}{protocol}"
@@ -85,35 +86,41 @@ def _make_range_fs(inner, protocol: str):
     class RangeReadFileSystem(AbstractFileSystem):
         cachable = False
 
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.inner = inner
 
         @classmethod
-        def _strip_protocol(cls, path):
+        def _strip_protocol(cls, path: Any) -> str:
             return str(path)  # _real() translates; the inner fs strips its own scheme
 
-        def _real(self, path) -> str:
+        def _real(self, path: Any) -> str:
             path = str(path)
             if path.startswith(f"{private}://"):
                 return inner._strip_protocol(f"{protocol}://{path[len(private) + 3 :]}")
             return path
 
-        def info(self, path, **kwargs):
+        def info(self, path: Any, **kwargs: Any) -> Any:
             return inner.info(self._real(path), **kwargs)
 
-        def ls(self, path, detail=True, **kwargs):
+        def ls(self, path: Any, detail: bool = True, **kwargs: Any) -> Any:
             return inner.ls(self._real(path), detail=detail, **kwargs)
 
-        def modified(self, path):
+        def modified(self, path: Any) -> datetime.datetime:
             try:
                 return inner.modified(self._real(path))
             except NotImplementedError:
                 return _UNKNOWN_MTIME
 
         def _open(
-            self, path, mode="rb", block_size=None, autocommit=True, cache_options=None, **kwargs
-        ):
+            self,
+            path: Any,
+            mode: str = "rb",
+            block_size: int | None = None,
+            autocommit: bool = True,
+            cache_options: Any = None,
+            **kwargs: Any,
+        ) -> Any:
             if mode != "rb":
                 raise PermissionError(f"{private}:// is read-only")
             real = self._real(path)
@@ -133,7 +140,7 @@ def object_version(info: dict) -> str:
     return json.dumps(seen, sort_keys=True)
 
 
-def range_cache_key(real: str, info: dict) -> "str | None":
+def range_cache_key(real: str, info: dict) -> str | None:
     """The cache directory name for an artifact object: its run hash (the file name without
     the extension) and a digest of its version. ``None`` when the store reports nothing that
     identifies the version beyond its size, so nothing about it can be cached safely."""
@@ -150,7 +157,7 @@ def range_cache_key(real: str, info: dict) -> "str | None":
     return f"{run_hash}-{digest}"
 
 
-def _cached_range_file(fs, inner, real: str):
+def _cached_range_file(fs: Any, inner: Any, real: str) -> Any:
     """A file over ``real`` whose ranges are kept in the range cache, or ``None`` when its
     version cannot be identified or the cache cannot be written."""
     try:
@@ -190,21 +197,21 @@ def _cached_ranges(directory: str) -> list[tuple[int, int, str]]:
     return out
 
 
-def _make_cached_range_file_class():
+def _make_cached_range_file_class() -> type:
     from fsspec.spec import AbstractBufferedFile
 
     class CachedRangeFile(AbstractBufferedFile):
         """A read-only file over a store object that reads exact byte ranges, keeping each
         fetched range in its range-cache directory and serving later reads from there."""
 
-        def __init__(self, fs, inner, real, size, directory):
+        def __init__(self, fs: Any, inner: Any, real: str, size: int, directory: str) -> None:
             self._inner = inner
             self._real_path = real
             self._directory = directory
             self._ranges = _cached_ranges(directory)
             super().__init__(fs, real, mode="rb", cache_type="none", size=size)
 
-        def _fetch_range(self, start, end):
+        def _fetch_range(self, start: int, end: int) -> bytes:
             end = min(end, self.size)
             if start >= end:
                 return b""
@@ -238,7 +245,7 @@ def _make_cached_range_file_class():
                 pos = stop
             return bytes(out)
 
-        def _keep(self, start, end, data):
+        def _keep(self, start: int, end: int, data: bytes) -> tuple[int, int, str] | None:
             path = os.path.join(self._directory, _range_file_name(start, end))
             try:
                 fd, tmp = tempfile.mkstemp(dir=self._directory, prefix=".tmp-")
@@ -258,14 +265,14 @@ def _make_cached_range_file_class():
 
 
 @contextmanager
-def _suppress_oserror():
+def _suppress_oserror() -> Generator[None, None, None]:
     try:
         yield
     except OSError:
         pass
 
 
-def _read_kept(path: str, offset: int, length: int) -> "bytes | None":
+def _read_kept(path: str, offset: int, length: int) -> bytes | None:
     try:
         with open(path, "rb") as f:
             f.seek(offset)
@@ -278,7 +285,7 @@ def _read_kept(path: str, offset: int, length: int) -> "bytes | None":
 _cached_range_file_class: Any = None
 
 
-def _CachedRangeFile(fs, inner, real, size, directory):
+def _CachedRangeFile(fs: Any, inner: Any, real: str, size: int, directory: str) -> Any:
     global _cached_range_file_class
     if _cached_range_file_class is None:
         _cached_range_file_class = _make_cached_range_file_class()

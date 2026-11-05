@@ -61,14 +61,14 @@ def key_text(key, dims: list[str]) -> str:
     """``retailer=r7`` (or ``month=2026-10,retailer=r7``), for messages."""
     if len(dims) == 1:
         return f"{dims[0]}={key}"
-    return ",".join(f"{d}={v}" for d, v in zip(dims, key))
+    return ",".join(f"{d}={v}" for d, v in zip(dims, key, strict=False))
 
 
 def _norm(key, dims: list[str]):
     """A returned key, matched to the call's keys by its string form (``1`` is ``"1"``)."""
     if len(dims) == 1:
         return str(key)
-    if isinstance(key, (tuple, list)) and len(key) == len(dims):
+    if isinstance(key, tuple | list) and len(key) == len(dims):
         return tuple(str(v) for v in key)
     if isinstance(key, dict):
         try:
@@ -82,7 +82,7 @@ def _norm(key, dims: list[str]):
 _TABULAR_FORMATS = ("parquet", "csv", "json")
 
 
-def _tabular_format(path: str) -> "str | None":
+def _tabular_format(path: str) -> str | None:
     from barca._artifacts import FORMAT_OF_EXTENSION
 
     fmt = FORMAT_OF_EXTENSION.get(Path(path).suffix)
@@ -114,7 +114,7 @@ def lazy_table(param: str, frame_type: str, dims: list[str], keys: list, paths: 
     """One lazy table over ``paths`` (one artifact per key) with the column ``dim`` holding
     each row's key. Nothing is loaded until the table is queried."""
     formats = set()
-    for i, (k, p) in enumerate(zip(texts, paths)):
+    for i, (k, p) in enumerate(zip(texts, paths, strict=False)):
         fmt = _tabular_format(p)
         if fmt is None or (frame_type == "pyarrow_dataset" and fmt == "json"):
             raise _not_tabular(param, frame_type, k, p)

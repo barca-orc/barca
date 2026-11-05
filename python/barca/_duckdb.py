@@ -150,7 +150,8 @@ _MIXED_NOTE = (
     "Barca loads duckdb inputs on one shared connection per worker, the same one that "
     "duckdb.sql(...) and duckdb.read_parquet(...) use. Stay on those (or on "
     "barca.duckdb_connection()) instead of opening your own duckdb.connect().\n"
-    'If you need your own connection, copy an input onto it: con.register("name", input.to_arrow_table()).\n'
+    "If you need your own connection, copy an input onto it: "
+    'con.register("name", input.to_arrow_table()).\n'
     "See `barca docs types`."
 )
 
@@ -185,7 +186,8 @@ def explain_error(exc: BaseException, bound_views: list[str]) -> str | None:
             f"bound it on.\n"
             f"`{name}` is an input of this step, available as a view on barca's shared "
             f"connection. Query it with duckdb.sql(...) or barca.duckdb_connection().sql(...), "
-            f'or copy it onto your own connection: con.register("{name}", {name}.to_arrow_table()).\n'
+            f"or copy it onto your own connection: "
+            f'con.register("{name}", {name}.to_arrow_table()).\n'
             "See `barca docs types`."
         )
     return None

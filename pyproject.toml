@@ -87,6 +87,20 @@ include = ["LICENSE", { path = "ui/dist/**/*", format = "sdist" }]
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import order, pyupgrade (the package targets 3.12) and bugbear.
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+# Keep `import barca` in its own block after third-party imports, as the files are written.
+known-first-party = ["barca"]
+
+[tool.ruff.lint.per-file-ignores]
+# Everything but the package (the tests, benchmarks, demos, scripts) is held to pyflakes and
+# pycodestyle minus line length: import order, pyupgrade and bugbear there would rewrite most
+# of those files for no behavior.
+"!python/barca/**" = ["E501", "I", "UP", "B"]
+
 [tool.ty.environment]
 extra-paths = ["python"]
 # Check against the oldest supported Python, whatever interpreter the checker finds.

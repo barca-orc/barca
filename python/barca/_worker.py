@@ -313,7 +313,7 @@ def _keyed_value(path: str, key: str) -> Any:
     if key not in source:
         raise KeyError(f"key {key!r} is not in the partitions_from source written to {path}")
     value = source[key]
-    if isinstance(value, (dict, list)):
+    if isinstance(value, dict | list):
         import copy
 
         # The step may change what it receives; the next key of this worker must not see it.
@@ -444,7 +444,7 @@ def _check_partition_source(value: Any, step: Step) -> list[Any] | dict[str, Any
             f"partitions_from source '{name}' declares serializer={serializer!r}; a source is "
             f"read for keys and must be written as JSON"
         )
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         try:
             json.dumps(value, allow_nan=False)
         except (TypeError, ValueError):
@@ -465,7 +465,7 @@ def _check_partition_source(value: Any, step: Step) -> list[Any] | dict[str, Any
         )
     keys: dict[str, Any] = {}
     for k in value:
-        if isinstance(k, bool) or not isinstance(k, (str, int)):
+        if isinstance(k, bool) or not isinstance(k, str | int):
             raise TypeError(
                 f"partitions_from source '{name}' returned a dict with the key {k!r} "
                 f"({type(k).__name__}); keys must be strings or integers (an integer key is "
@@ -1047,7 +1047,7 @@ def _run_daemon_call(
                 )
     except BaseException as exc:
         _ctrl_c_does_nothing()
-        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+        if isinstance(exc, BrokenPipeError | ConnectionResetError):
             raise
         ok = _worker_survives(exc, True)
         phase = key_phase

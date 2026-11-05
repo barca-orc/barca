@@ -6,6 +6,8 @@ JSON frames. When running standalone, operations fall back to local
 execution.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import socket
@@ -80,7 +82,8 @@ def connect(role: str = "worker") -> socket.socket | None:
             PROTOCOL_VERSION,
         ):
             raise RuntimeError(
-                f"coordinator did not acknowledge {role} protocol v{PROTOCOL_VERSION}; reinstall barca"
+                f"coordinator did not acknowledge {role} protocol v{PROTOCOL_VERSION}; "
+                "reinstall barca"
             )
         sock.settimeout(None)
         return _socket
@@ -158,14 +161,14 @@ _result_batch = None
 class result_batch:
     """Coalesce results; an owned metadata journal preserves completed leases on a crash."""
 
-    def __init__(self, path):
+    def __init__(self, path: str | None) -> None:
         self.path = path
         self.messages = []
         self.stop = threading.Event()
         self.thread = None
         self.journal = None
 
-    def __enter__(self):
+    def __enter__(self) -> result_batch:
         global _result_batch
         if self.path is not None:
             self.journal = open(self.path, "ab", buffering=0)
@@ -174,7 +177,7 @@ class result_batch:
             self.thread.start()
         return self
 
-    def _notify(self):
+    def _notify(self) -> None:
         notified = 0
         while not self.stop.wait(0.01):
             count = len(self.messages)
@@ -185,7 +188,7 @@ class result_batch:
                     return
                 notified = count
 
-    def record(self, message):
+    def record(self, message: dict) -> None:
         from barca import _wire
 
         # Regular file writes survive a worker process crash; no filesystem durability
@@ -199,7 +202,7 @@ class result_batch:
             view = view[written:]
         self.messages.append(message)
 
-    def __exit__(self, *_):
+    def __exit__(self, *_: object) -> None:
         global _result_batch
         if self.journal is None or self.thread is None:
             return
@@ -215,7 +218,7 @@ class result_batch:
             _result_batch = None
 
 
-def _emit_result(message):
+def _emit_result(message: dict) -> None:
     if _result_batch is not None:
         _result_batch.record(message)
     else:

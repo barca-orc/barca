@@ -194,7 +194,7 @@ def _normalize(stage: Path, ext: str) -> list[Path]:
                 tmp = os.path.join(root, f".rename-{i}")
                 os.rename(os.path.join(root, name), tmp)
                 moved.append(tmp)
-            for tmp, name in zip(moved, wanted):
+            for tmp, name in zip(moved, wanted, strict=False):
                 os.rename(tmp, os.path.join(root, name))
         elif data != wanted:
             # The same names, sorted as text (`part-10` before `part-2`): already canonical.
@@ -345,7 +345,7 @@ def _json_default(value):
     import datetime
     import decimal
 
-    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+    if isinstance(value, datetime.date | datetime.datetime | datetime.time):
         return value.isoformat()
     if isinstance(value, decimal.Decimal):
         return float(value)
@@ -679,7 +679,9 @@ class _RemoteTarget:
                 continue
             parts = rel.split("/")
             levels = parts[: len(dims)]
-            ok = len(parts) > len(dims) and all(p.startswith(f"{d}=") for p, d in zip(levels, dims))
+            ok = len(parts) > len(dims) and all(
+                p.startswith(f"{d}=") for p, d in zip(levels, dims, strict=False)
+            )
             if not ok or "/".join(levels) not in keep:
                 doomed.append(obj)
                 keys.add("/".join(levels) if ok else rel)
@@ -792,7 +794,7 @@ def prune(request: dict) -> dict:
         path = ds["path"]
         try:
             dims = list(ds["dims"])
-            keep = {key_dir(dims, dict(zip(dims, k))) for k in ds["keys"]}
+            keep = {key_dir(dims, dict(zip(dims, k, strict=False))) for k in ds["keys"]}
             target = _target(_prefix(path))
             done = target.prune(ds["asset"], dims, keep, ds["digest"])
             out.append({"path": path, **done})

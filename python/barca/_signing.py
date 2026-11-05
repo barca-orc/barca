@@ -37,7 +37,7 @@ class SignError(Exception):
     - ``store``: the store could not be reached or answered with an error.
     """
 
-    def __init__(self, kind: str, message: str):
+    def __init__(self, kind: str, message: str) -> None:
         super().__init__(message)
         self.kind = kind
 
@@ -46,7 +46,7 @@ def expiry_seconds(expires: Any) -> int:
     """``expires`` (seconds, or a ``datetime.timedelta``) as whole seconds, at most 7 days."""
     if isinstance(expires, datetime.timedelta):
         seconds = expires.total_seconds()
-    elif isinstance(expires, (int, float)) and not isinstance(expires, bool):
+    elif isinstance(expires, int | float) and not isinstance(expires, bool):
         seconds = float(expires)
     else:
         raise SignError(
@@ -71,8 +71,8 @@ def _disposition(filename: str) -> str:
 
 
 def sign_url(
-    uri: str, expires: Any = DEFAULT_SIGNED_URL_SECONDS, filename: "str | None" = None
-) -> "tuple[str, datetime.datetime]":
+    uri: str, expires: Any = DEFAULT_SIGNED_URL_SECONDS, filename: str | None = None
+) -> tuple[str, datetime.datetime]:
     """A read-only HTTPS URL for the object at ``uri`` and when it stops working (UTC).
 
     ``uri`` is an ``s3://``/``s3a://`` (also R2 and MinIO, through the endpoint in
@@ -130,7 +130,7 @@ def _error_kind(exc: BaseException) -> str:
     return "store"
 
 
-def _require_object(fs, uri: str) -> None:
+def _require_object(fs: Any, uri: str) -> None:
     """One HEAD: a typo or a missing upload must not become a link that answers 404 later."""
     try:
         info = fs.info(uri)
@@ -141,10 +141,10 @@ def _require_object(fs, uri: str) -> None:
 
 
 def _now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    return datetime.datetime.now(datetime.UTC).replace(microsecond=0)
 
 
-def _sign_s3(fs, uri: str, seconds: int, disposition: str):
+def _sign_s3(fs: Any, uri: str, seconds: int, disposition: str) -> tuple[str, datetime.datetime]:
     """Presigned GET with SigV4, through an s3fs client built from the store's own options (so
     the endpoint, profile and credential chain are the same)."""
     fs.invalidate_cache()
@@ -159,7 +159,7 @@ def _sign_s3(fs, uri: str, seconds: int, disposition: str):
     return url, expires_at
 
 
-def _s3_signing_fs():
+def _s3_signing_fs() -> Any:
     """The store's s3fs options with SigV4 forced: botocore may otherwise presign with SigV2,
     which buckets created since 2020 reject and which has no 7-day limit."""
     import fsspec
@@ -170,7 +170,7 @@ def _s3_signing_fs():
     return fsspec.filesystem("s3", config_kwargs=config, skip_instance_cache=True, **options)
 
 
-def _s3_credential_expiry(fs) -> "datetime.datetime | None":
+def _s3_credential_expiry(fs: Any) -> datetime.datetime | None:
     try:
         signer = fs.s3._request_signer
         credentials = getattr(signer, "_credentials", None)
@@ -179,8 +179,8 @@ def _s3_credential_expiry(fs) -> "datetime.datetime | None":
         return None
     if isinstance(expiry, datetime.datetime):
         if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=datetime.timezone.utc)
-        return expiry.astimezone(datetime.timezone.utc)
+            expiry = expiry.replace(tzinfo=datetime.UTC)
+        return expiry.astimezone(datetime.UTC)
     return None
 
 
@@ -192,7 +192,7 @@ GCS_IMPERSONATE_HINT = (
 )
 
 
-def _gcs_signing_credentials(fs):
+def _gcs_signing_credentials(fs: Any) -> Any:
     """The credentials gcsfs authenticates with, or Google's default ones when it has none."""
     credentials = getattr(getattr(fs, "credentials", None), "credentials", None)
     from google.auth.credentials import AnonymousCredentials
@@ -206,7 +206,7 @@ def _gcs_signing_credentials(fs):
     return credentials
 
 
-def _sign_gcs(fs, uri: str, seconds: int, disposition: str):
+def _sign_gcs(fs: Any, uri: str, seconds: int, disposition: str) -> tuple[str, datetime.datetime]:
     """V4 signing: locally with a key, else through IAM signBlob as the service account."""
     fs.invalidate_cache()
     _require_object(fs, uri)
@@ -217,7 +217,9 @@ def _sign_gcs(fs, uri: str, seconds: int, disposition: str):
     return gcs_signed_url(credentials, bucket, key, seconds, disposition, endpoint), expires_at
 
 
-def gcs_signed_url(credentials, bucket: str, key: str, seconds: int, disposition: str, endpoint):
+def gcs_signed_url(
+    credentials: Any, bucket: str, key: str, seconds: int, disposition: str, endpoint: str
+) -> str:
     """A V4 signed GET for ``gs://bucket/key`` with ``credentials``."""
     from google.auth import credentials as google_credentials
     from google.cloud import storage
@@ -267,7 +269,7 @@ def gcs_signed_url(credentials, bucket: str, key: str, seconds: int, disposition
         ) from exc
 
 
-def _azure_service(fs):
+def _azure_service(fs: Any) -> tuple[Any, str | None]:
     """A synchronous BlobServiceClient with adlfs's settings, and the account key if any."""
     from azure.storage.blob import BlobServiceClient
 
@@ -299,7 +301,7 @@ def _azure_service(fs):
     return BlobServiceClient(account_url, credential=credential), None
 
 
-def _sign_azure(fs, uri: str, seconds: int, disposition: str):
+def _sign_azure(fs: Any, uri: str, seconds: int, disposition: str) -> tuple[str, datetime.datetime]:
     """A read-only blob SAS: a service SAS with an account key, else a user delegation SAS."""
     container, blob = fs.split_path(uri)[:2]
     service, account_key = _azure_service(fs)
@@ -315,7 +317,14 @@ def _sign_azure(fs, uri: str, seconds: int, disposition: str):
     return f"{client.url}?{sas}", expires_at
 
 
-def azure_blob_sas(service, container, blob, expires_at, disposition, account_key=None) -> str:
+def azure_blob_sas(
+    service: Any,
+    container: str,
+    blob: str,
+    expires_at: datetime.datetime,
+    disposition: str,
+    account_key: str | None = None,
+) -> str:
     """The SAS query string: signed with the account key, or with a user delegation key that
     lives exactly as long as the link (needs generateUserDelegationKey on the account)."""
     from azure.storage.blob import BlobSasPermissions, generate_blob_sas

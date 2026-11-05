@@ -28,6 +28,7 @@ import signal
 import sys
 import tempfile
 import threading
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -94,7 +95,7 @@ def storage_options(protocol: str) -> dict:
 def safe_error(message: str) -> str:
     """Remove URI passwords/signed queries and configured credentials from diagnostics."""
 
-    def uri(match):
+    def uri(match: re.Match[str]) -> str:
         value = match.group().split("?", 1)[0].split("#", 1)[0]
         return re.sub(r"(://)[^/@\s]*:[^/@\s]*@", r"\1<redacted>@", value)
 
@@ -104,7 +105,7 @@ def safe_error(message: str) -> str:
     except ValueError:
         options = {}
 
-    def redact(values):
+    def redact(values: Any) -> None:
         nonlocal message
         if not isinstance(values, dict):
             return
@@ -143,7 +144,7 @@ def safe_error(message: str) -> str:
     return message
 
 
-def get_fs(path: "str | Path"):
+def get_fs(path: "str | Path") -> Any:
     """Return the fsspec filesystem for a remote URI (cached per protocol)."""
     scheme = _scheme(path)
     if scheme is None or scheme == "file":
@@ -193,7 +194,7 @@ _leaving = False
 
 
 @contextmanager
-def _defer_staging_sigterm(cleanup_owned):
+def _defer_staging_sigterm(cleanup_owned: Callable[[], None]) -> Generator[None, None, None]:
     """Delay main-thread termination only until a new stage has an owner."""
     pending = []
     if threading.current_thread() is not threading.main_thread():
@@ -204,7 +205,7 @@ def _defer_staging_sigterm(cleanup_owned):
         yield
         return
 
-    def defer(signum, frame):
+    def defer(signum: int, frame: Any) -> None:
         if not pending:
             pending.append((signum, frame))
 
@@ -232,7 +233,7 @@ def _defer_staging_sigterm(cleanup_owned):
 
 
 @contextmanager
-def staged_beside(dest: Path):
+def staged_beside(dest: Path) -> Generator[Path, None, None]:
     """Yield a new temp file in ``dest``'s directory, to be written and renamed over ``dest``.
 
     The same directory means the same filesystem, so the rename is atomic and ``dest`` is
@@ -246,14 +247,14 @@ def staged_beside(dest: Path):
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = None
 
-    def remove_owned():
+    def remove_owned() -> None:
         if tmp is not None:
             with _staged_lock:
                 # Keep ownership visible to reentrant signal cleanup until removal succeeds.
                 Path(tmp).unlink(missing_ok=True)
                 _staged.discard(tmp)
 
-    def cleanup_owned():
+    def cleanup_owned() -> None:
         with _defer_staging_sigterm(remove_owned):
             remove_owned()
 
@@ -423,7 +424,7 @@ def get_file(src: str, local_path: "str | Path") -> None:
 # the provider actually accepted is `_identity.resolve`, which asks the SDK.
 
 
-def _fingerprint(value):
+def _fingerprint(value: Any) -> str | None:
     return (
         hashlib.sha256(value.encode()).hexdigest()[:16]
         if isinstance(value, str) and value
@@ -431,7 +432,7 @@ def _fingerprint(value):
     )
 
 
-def context(uri, fs=None):
+def context(uri: str, fs: Any = None) -> dict[str, Any]:
     """Configured target and credential source, available even when authentication failed."""
     scheme = _scheme(uri)
     protocol = {"s3a": "s3", "abfss": "abfs", "gs": "gcs"}.get(scheme, scheme)
@@ -453,9 +454,12 @@ def context(uri, fs=None):
         if _fingerprint(key):
             result["credential_fingerprint"] = _fingerprint(key)
         result["recovery"] = (
-            "Reload the selected S3 access key/session token in storage options or AWS environment variables; run aws sts get-caller-identity with those same credentials."
+            "Reload the selected S3 access key/session token in storage options or AWS "
+            "environment variables; run aws sts get-caller-identity with those same credentials."
             if key
-            else f"Run aws sts get-caller-identity using AWS_PROFILE={shlex.quote(profile)}; refresh that profile's credentials (for SSO: aws sso login --profile {shlex.quote(profile)})."
+            else f"Run aws sts get-caller-identity using AWS_PROFILE={shlex.quote(profile)}; "
+            f"refresh that profile's credentials (for SSO: aws sso login --profile "
+            f"{shlex.quote(profile)})."
         )
         hostname = (urlsplit(endpoint).hostname or "").lower()
         if hostname.endswith(".r2.cloudflarestorage.com"):
@@ -463,7 +467,10 @@ def context(uri, fs=None):
                 provider="r2",
                 account=hostname.split(".")[0],
                 source="R2 API access key",
-                recovery="Reload or rotate the bucket-scoped R2 API credentials in the s3 storage options.",
+                recovery=(
+                    "Reload or rotate the bucket-scoped R2 API credentials in the s3 storage "
+                    "options."
+                ),
             )
         elif endpoint and not (hostname == "amazonaws.com" or hostname.endswith(".amazonaws.com")):
             result.update(
@@ -485,12 +492,14 @@ def context(uri, fs=None):
         if client:
             result.update(source="Azure application credentials", configured_client_id=client)
             result["recovery"] = (
-                "Verify AZURE_CLIENT_ID and AZURE_CLIENT_SECRET for the configured tenant, or clear those overrides to use Azure CLI credentials."
+                "Verify AZURE_CLIENT_ID and AZURE_CLIENT_SECRET for the configured tenant, or "
+                "clear those overrides to use Azure CLI credentials."
             )
         else:
             tenant_flag = f" --tenant {shlex.quote(tenant)}" if tenant else ""
             result["recovery"] = (
-                f"Run az login{tenant_flag}; verify this identity has the required Storage Blob Data role on the selected account."
+                f"Run az login{tenant_flag}; verify this identity has the required Storage Blob "
+                "Data role on the selected account."
             )
         key = (
             getattr(fs, "account_key", None)
@@ -504,14 +513,19 @@ def context(uri, fs=None):
                 credential_fingerprint=_fingerprint(key or sas),
             )
             result["recovery"] = (
-                "Reload the selected account's shared key or SAS; verify its read and list permissions."
+                "Reload the selected account's shared key or SAS; verify its read and list "
+                "permissions."
             )
     elif protocol == "gcs":
         result.update(
             provider="gcs",
             account=getattr(fs, "project", None),
             source="Google application default or explicit credentials",
-            recovery="Run gcloud auth application-default login, or point GOOGLE_APPLICATION_CREDENTIALS at the intended identity; verify bucket list permission.",
+            recovery=(
+                "Run gcloud auth application-default login, or point "
+                "GOOGLE_APPLICATION_CREDENTIALS at the intended identity; verify bucket list "
+                "permission."
+            ),
         )
     elif protocol == "memory":
         result.update(
@@ -522,7 +536,7 @@ def context(uri, fs=None):
     return result
 
 
-def error_hint(uri, exc, fs=None):
+def error_hint(uri: str, exc: BaseException, fs: Any = None) -> str | None:
     """One safe human line before an authentication/authorization provider error."""
     if not is_remote(uri) or "Identity:" in str(exc):
         return None
@@ -550,7 +564,10 @@ def error_hint(uri, exc, fs=None):
         if details.get("configured_tenant")
         else ""
     )
-    return f"Identity: {details['source']}{account}{tenant}; effective principal unavailable after authentication failure. {details['recovery']}"
+    return (
+        f"Identity: {details['source']}{account}{tenant}; effective principal unavailable "
+        f"after authentication failure. {details['recovery']}"
+    )
 
 
 def describe_error(uri: str, exc: BaseException) -> str:

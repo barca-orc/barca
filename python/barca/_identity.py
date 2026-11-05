@@ -31,7 +31,8 @@ def _sync(fs, fn):
 
 
 def resolve(uri):
-    """Identify the credentials that successfully probed the store; lookup failures stay explicit."""
+    """Identify the credentials that successfully probed the store; lookup failures stay
+    explicit."""
     fs = _storage.get_fs(uri)
     result = context(uri, fs)
     try:

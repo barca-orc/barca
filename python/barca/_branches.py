@@ -139,7 +139,7 @@ def describe(fn_ref: str) -> str:
     return f"{os.path.basename(source)}:{name}" if source else name
 
 
-def unwritable(step: dict, value, exc: BaseException) -> Exception:
+def unwritable(step: dict, value: Any, exc: BaseException) -> Exception:
     """The error a branch's worker reports when the branch's return value cannot be written."""
     fn = describe(f"{step.get('source_file', '')}:{step.get('function_name', '?')}")
     return BranchResultError(
@@ -163,7 +163,7 @@ def reader_name(value: Any, fmt: str) -> str | None:
     return library
 
 
-def _read(artifact: dict, source_file: str):
+def _read(artifact: dict, source_file: str) -> Any:
     path, fmt = artifact["path"], artifact["format"]
     if "json" in artifact or not path:
         raise ValueError("branch results require an artifact file reference; reinstall barca")
@@ -194,7 +194,7 @@ def _read(artifact: dict, source_file: str):
         return deserialize(path, fmt)
 
 
-def serializable(value):
+def serializable(value: Any) -> Any:
     """`value` with every `ParallelError` in it (a failed branch a step returns as part of its
     result) replaced by its dict, so the result can be written as JSON."""
     if isinstance(value, ParallelError):

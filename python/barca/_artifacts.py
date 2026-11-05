@@ -364,7 +364,8 @@ def _write_csv(value: Any, path: Path) -> None:
 
 
 def _write_parquet(value: Any, path: Path) -> None:
-    """Write a frame to parquet: pandas, polars (incl. LazyFrame), pyarrow Table, duckdb relation."""
+    """Write a frame to parquet: pandas, polars (incl. LazyFrame), pyarrow Table, duckdb
+    relation."""
     type_name = type(value).__name__
     kind = dataframe_library(value)
 
@@ -506,7 +507,8 @@ def _deserialize_csv(path: Path, *, frame_type: str = "pandas") -> Any:
 
         return pd.read_csv(str(path))
     raise ValueError(
-        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, duckdb)"
+        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, "
+        "duckdb)"
     )
 
 
@@ -543,7 +545,8 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
         return pd.read_parquet(str(path))
 
     raise ValueError(
-        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, duckdb)"
+        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, "
+        "duckdb)"
     )
 
 

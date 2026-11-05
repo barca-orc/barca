@@ -26,10 +26,10 @@ import base64
 import json
 import os
 import time
-import warnings
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from typing import Any
 
 from barca.api import BarcaError
@@ -124,7 +124,8 @@ class Client:
 
     def __init__(self, base_url: str = DEFAULT_URL, timeout: float = 30.0) -> None:
         warnings.warn(
-            "barca.Client is deprecated (no scheduled removal; a removal lands in a minor release); use "
+            "barca.Client is deprecated (no scheduled removal; a removal lands in a minor "
+            "release); use "
             "barca.api with server=True instead, e.g. barca.get('daily_report', server=True) "
             "(barca docs server-mode)",
             DeprecationWarning,
@@ -157,7 +158,8 @@ class Client:
                 or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in token)
             ):
                 raise BarcaError(
-                    "BARCA_SERVER_TOKEN must be nonempty ASCII without whitespace or control characters"
+                    "BARCA_SERVER_TOKEN must be nonempty ASCII without whitespace or control "
+                    "characters"
                 )
             try:
                 token.encode("latin-1")
