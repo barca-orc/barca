@@ -2,6 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 #[doc(hidden)]
+pub mod artifact_format;
 pub mod backup;
 pub mod batch;
 pub mod cache;

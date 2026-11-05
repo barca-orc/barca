@@ -10,6 +10,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- The server's `GET /runs/{run_id}/output` reads a final artifact's format from the same extension table as the worker and `barca sql` (`crates/barca-core/src/artifact_format.rs`, mirrored from `barca._artifacts.FORMAT_OF_EXTENSION` by a test): it took every extension other than `.json`, `.parquet` and `.csv` for pickle, where `barca sql` reports `unknown`. The `Content-Type` it serves is unchanged (pickle and unknown are both `application/octet-stream`); the two tables can no longer disagree.
 - Stop metadata backups from holding up every other barca process: a `barca serve` with a store hashed and copied the whole database under its lock, so a CLI command beside it waited for the copy (about 6 s per command against a 1.5 GB database, now 0.02 s). Only the log fold takes the lock; a read transaction keeps the file still while it is copied.
 
 ## 0.39.5 (2026-11-04)

@@ -1345,7 +1345,10 @@ pub async fn output(
                 .ok_or_else(no_output)?;
             let node = step["id"].as_str().unwrap_or_default().to_string();
             match step["artifact"].as_str() {
-                Some(path) => (path.to_string(), format_of(path)),
+                Some(path) => (
+                    path.to_string(),
+                    barca_core::artifact_format::format_of(path).to_string(),
+                ),
                 None => {
                     let snapshot = snapshot_db(&state).await?;
                     db::run_artifact(&snapshot.path, &run_id, &node)
@@ -1364,27 +1367,8 @@ pub async fn output(
                 "the final artifact of run '{run_id}' cannot be read at {path}: {e}"
             ))
         })?;
-    let content_type = match format.as_str() {
-        "json" => "application/json",
-        "parquet" => "application/vnd.apache.parquet",
-        "csv" => "text/csv",
-        _ => "application/octet-stream",
-    };
+    let content_type = barca_core::artifact_format::content_type(&format);
     Ok(([(axum::http::header::CONTENT_TYPE, content_type)], bytes).into_response())
-}
-
-/// An artifact's format from its file name.
-fn format_of(path: &str) -> String {
-    match std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-    {
-        Some("json") => "json",
-        Some("parquet") => "parquet",
-        Some("csv") => "csv",
-        _ => "pickle",
-    }
-    .to_string()
 }
 
 // ─── the run list ───────────────────────────────────────────────────────────
