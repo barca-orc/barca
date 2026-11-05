@@ -367,9 +367,9 @@ def test_a_scheduled_tick_runs_only_the_changed_keys(tmp_path):
         )
 
 
-def test_datadog_reports_one_span_per_node_and_a_child_per_key_that_ran(project):
-    """A tick over many cached keys is not noisy: one `barca.step` per node with the counts,
-    and a `barca.partition` child only for the keys that ran."""
+def test_datadog_reports_a_trace_per_key_that_ran_and_none_for_the_cached_ones(project):
+    """A tick over many cached keys is not noisy: a trace for each key that ran, none for a
+    cached key, and the run's trace counts them."""
     from .test_telemetry_datadog import FakeAgent, datadog
 
     agent = FakeAgent()
@@ -381,17 +381,17 @@ def test_datadog_reports_one_span_per_node_and_a_child_per_key_that_ran(project)
             project, "get", "scored", "pipeline.py", "--json", env={**env(), **datadog(agent)}
         )
         assert proc.returncode == 0, proc.stderr
-        spans = agent.spans()
+        root = agent.run()
+        steps = agent.steps()
     finally:
         agent.close()
-    (root,) = [s for s in spans if s["name"] == "barca.run"]
     assert root["metrics"]["barca.steps.executed"] == 3
     assert root["metrics"]["barca.steps.cached"] == 38
-    steps = {s["resource"]: s for s in spans if s["name"] == "barca.step"}
-    for node in ("cleaned", "scored"):
-        assert steps[node]["meta"]["barca.outcome"] == "ran"
-        assert steps[node]["metrics"]["barca.partitions.executed"] == 1
-        assert steps[node]["metrics"]["barca.partitions.cached"] == 19
-    keys = [s for s in spans if s["name"] == "barca.partition"]
-    assert len(keys) == 2, keys
-    assert all(k["meta"].get("barca.partition") == "retailer=r7" for k in keys), keys
+    # The sensor and one key of each asset ran: three traces, and nothing for the 38 cached.
+    assert len(steps) == 3, [s["meta"]["barca.node_id"] for s in steps]
+    keys = {s["resource"]: s for s in steps if "barca.partition" in s["meta"]}
+    assert set(keys) == {"cleaned", "scored"}
+    for span in keys.values():
+        assert span["meta"]["barca.outcome"] == "ran"
+        assert span["meta"]["barca.partition"] == "retailer=r7"
+        assert "parent_id" not in span

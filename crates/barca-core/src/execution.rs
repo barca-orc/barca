@@ -1185,7 +1185,7 @@ async fn collect_failures(
                 .or_default()
                 .insert(item.step_id.partition.suffix());
         }
-        session.state.results.record_failure(
+        let failure = session.state.results.record_failure(
             node_id,
             "WorkerError",
             error_msg.to_string(),
@@ -1193,6 +1193,10 @@ async fn collect_failures(
             coord.failure_clock(item_id),
             phase,
         );
+        // The failed step's trace goes out now, not at the end of the run.
+        if let Some(datadog) = session.pool.as_ref().and_then(|p| p.datadog()) {
+            datadog.step_failed(failure);
+        }
     }
 
     // Steps the coordinator skipped because an in-phase dependency failed.

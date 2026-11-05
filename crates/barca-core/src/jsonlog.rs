@@ -12,10 +12,10 @@
 //!   line as barca would have printed it, without its `[barca] ` prefix.
 //! - `run_id` is the run's id (the one `barca.run` spans and `barca get --json` carry), present
 //!   on lines written while a run is going ([`in_run`]). `node` is the step the line is about.
-//! - `dd.trace_id` and `dd.span_id` are the ids of the run's trace (its lower 64 bits) and of
-//!   the step's span (a partition key's own span when it has one, else its node's; the run span
-//!   when there is no node) when the Datadog integration is on, so Datadog joins the line to
-//!   its trace.
+//! - `dd.trace_id` and `dd.span_id`, when the Datadog integration is on, are the ids of the
+//!   trace and span the line belongs to: a line about a step (a partition key is a step of its
+//!   own) joins the step's trace at its `barca.step` span, a line with no node the run's trace
+//!   at its `barca.run` span. The trace id is the lower 64 bits.
 //!
 //! A step's captured output (its `print()`) is written as `info` lines with the run and node.
 //! What a step writes to its stderr is not barca's: it stays on stderr as it is.
@@ -158,12 +158,10 @@ fn object(
         quoted(&mut out, node);
     }
     if trace_ids && let Some(run_id) = run_id {
-        use crate::telemetry::datadog::{log_span_id, trace_id};
+        let (trace, span) = crate::telemetry::datadog::log_ids(run_id, node);
         let _ = write!(
             out,
-            ",\"dd.trace_id\":\"{}\",\"dd.span_id\":\"{}\"",
-            trace_id(run_id),
-            log_span_id(run_id, node)
+            ",\"dd.trace_id\":\"{trace}\",\"dd.span_id\":\"{span}\""
         );
     }
     out.push('}');
@@ -284,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn trace_ids_are_the_ids_the_run_and_step_spans_use() {
+    fn trace_ids_are_the_ids_the_step_and_run_traces_use() {
         use crate::telemetry::datadog::span_id;
         let step: serde_json::Value = serde_json::from_str(&object(
             ts(),
@@ -295,21 +293,29 @@ mod tests {
             true,
         ))
         .unwrap();
+        // A step's line joins the step's own trace at its root span.
         assert_eq!(
             step["dd.trace_id"],
-            span_id(&["trace", "r1"]).to_string().as_str()
+            span_id(&["step-trace", "r1", "p.py:a"])
+                .to_string()
+                .as_str()
         );
         assert_eq!(
             step["dd.span_id"],
             span_id(&["step", "r1", "p.py:a"]).to_string().as_str()
         );
+        // A line with no node joins the run's trace at its root span.
         let run: serde_json::Value =
             serde_json::from_str(&object(ts(), Level::Info, "x", Some("r1"), None, true)).unwrap();
+        assert_eq!(
+            run["dd.trace_id"],
+            span_id(&["trace", "r1"]).to_string().as_str()
+        );
         assert_eq!(
             run["dd.span_id"],
             span_id(&["run", "r1"]).to_string().as_str()
         );
-        // A partition key without a span of its own (past the cap) joins its node's step span.
+        // A partition key is a step of its own, with a trace of its own.
         let key: serde_json::Value = serde_json::from_str(&object(
             ts(),
             Level::Info,
@@ -320,8 +326,14 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
+            key["dd.trace_id"],
+            span_id(&["step-trace", "r1", "p.py:a[k=1]"])
+                .to_string()
+                .as_str()
+        );
+        assert_eq!(
             key["dd.span_id"],
-            span_id(&["step", "r1", "p.py:a"]).to_string().as_str()
+            span_id(&["step", "r1", "p.py:a[k=1]"]).to_string().as_str()
         );
     }
 

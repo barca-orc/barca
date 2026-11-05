@@ -121,6 +121,7 @@ pub(super) async fn start_workers(
                 std::sync::Arc::new(crate::telemetry::datadog::Dispatch::new(
                     &prepared.dag,
                     job_name,
+                    run_id,
                 ))
             }),
         artifact_root: worker_artifact_root,

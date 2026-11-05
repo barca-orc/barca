@@ -1,7 +1,7 @@
 # Telemetry: Datadog traces and Slack notifications
 
-barca can report every finished run to a telemetry backend, and post to Slack when a job starts
-failing or recovers (see the Slack section below; it has its own switch). Each backend is off
+barca can report every step and every run to a telemetry backend, and post to Slack when a job
+starts failing or recovers (see the Slack section below; it has its own switch). Each backend is off
 unless you switch it on. Datadog is switched on by name:
 
 ```bash
@@ -14,18 +14,18 @@ it takes. It applies to `barca get`, `barca run` and to every run `barca serve` 
 ones included.
 
 Telemetry never fails a run. If an integration cannot deliver, the run finishes as it would
-have and stderr gets one line:
+have and stderr gets one line, naming the first delivery that failed (a step's or the run's):
 
 ```
-[barca] warning: telemetry 'datadog' did not receive run 0179afe0cb58: cannot reach the Datadog Agent at localhost:8126: Connection refused (os error 61)
+[barca] warning: telemetry 'datadog' did not receive step pipeline.py:orders: cannot reach the Datadog Agent at localhost:8126: Connection refused (os error 61)
 ```
 
 An unknown name in `BARCA_TELEMETRY`, or an integration whose settings are wrong, is a warning
 too, printed once per process. Settings are not checked while the integration is switched off.
-Each integration has 3 seconds to deliver a run.
+Each delivery has 3 seconds.
 
-Under `barca serve` a delivery failure is reported when it starts, not on every run, and a
-line says when delivery resumes:
+A delivery failure is reported when it starts, not on every step or run, and a line says when
+delivery resumes:
 
 ```
 [barca] telemetry 'datadog' is receiving runs again
@@ -33,40 +33,50 @@ line says when delivery resumes:
 
 ## Datadog
 
-Each run is one APM trace, sent to the Datadog Agent's trace intake (the same place `ddtrace`
-sends to). No Datadog library is needed, only a reachable Agent. The trace is the pipeline as it
-ran: which assets, files and groups ran, what each cost, and what failed.
+Every step that runs is one APM trace, and every run one more, sent to the Datadog Agent's
+trace intake (the same place `ddtrace` sends to). No Datadog library is needed, only a
+reachable Agent. An asset DAG has thousands of assets and partitions, so a run of it is not one
+request but thousands: each step execution is traced as a web service traces a request, with
+its own latency, error rate and throughput per asset on the service page, and the run is a
+small trace that says how the whole thing went.
 
 ```
-barca.run        get daily_revenue        the run; error.message names the first failed asset
-  barca.step     orders                   one per node
-    barca.execute  orders                 the Python call (optional ddtrace in the workers)
-  barca.step     regional                 a partitioned node: counts its keys
-    barca.partition  regional             one per key that ran (up to 200) or failed
-      barca.execute  regional
-        sqlite.query                      library spans, when opted in
+barca.step       orders                   one trace per step that ran or failed (the root)
+  barca.execute  orders                   the Python call (optional ddtrace in the workers)
+    sqlite.query                          library spans, when opted in
+
+barca.step       regional                 one trace per partition key; the key is a tag
+
+barca.run        get daily_revenue        one trace per run; error.message names the first failed asset
 ```
 
 - **One service.** Every span, Python and library spans included, reports as `DD_SERVICE`
   (default `barca`), with `type: worker` and `span.kind: internal`. Coordinator spans carry
   `component: barca`, Python spans `component: python`. Every span carries `env` and
   `version` (from `DD_ENV`, `DD_VERSION`) and `barca.version`, barca's own version.
-- **The run** is the root span, `barca.run`. Its resource is the command and the targets'
-  short names, `run publish` or `get daily_revenue,orders`; a run of everything in its files
-  is `get pipeline.py`, and one with no file named `get all`. `publish` and
-  `pipeline.py:publish` are the same resource. The target as typed stays in `barca.target`.
-  A scheduled tick is one run with several targets, the scheduled node and the `Always` nodes
-  below it (`barca docs scheduling`): its resource names all of them (`get inbox,orders`), its
-  `barca.job` is the scheduled node and its `barca.trigger` is `schedule`.
-- **A step** is a child span, `barca.step`, one per node, whose resource is the node's short
-  name (`orders`). Short names are unique in a project; when two files define a node of the same
-  name, both are named by their id (`a.py:orders`, `b.py:orders`).
-- **A partition key is never in a resource.** A partitioned node is one `barca.step` that counts
-  its keys (`barca.partitions.*`), with a `barca.partition` child for each key that ran, up to
-  200 keys per node and 2,000 per run, and for every key that failed. The cap keeps a
-  20,000-key node one readable span with bounded payloads; a key past it has no span of its own
-  and no Python span, and its log lines join the node's span.
-- Cached keys have no span; `barca.partitions.cached` counts them.
+- **A step** is the root span of its own trace, `barca.step`, whose resource is the node's
+  short name (`orders`). Short names are unique in a project; when two files define a node of
+  the same name, both are named by their id (`a.py:orders`, `b.py:orders`). Its trace is sent
+  the moment the step ends, so a failure is in Datadog seconds after it happens, hours before a
+  long run finishes, and a run that is killed has sent every step that finished.
+- **A partition key is a step of its own**, and never in a resource: a node with 20,000 keys is
+  one resource, `regional`, with a trace per key behind it, the key in `barca.partition` and in
+  `barca.node_id` (`pipeline.py:regional[region=apac]`). There is no cap on keys.
+- **A cached step sends nothing**, nor does a skipped one (planned, but something it depends on
+  failed or the run stopped first): the run span counts them (`barca.steps.cached`,
+  `barca.steps.skipped`), and a step that did no work makes no trace.
+- **The run** is one span, `barca.run`, the root of a trace of its own with no children. Its
+  resource is the command and the targets' short names, `run publish` or
+  `get daily_revenue,orders`; a run of everything in its files is `get pipeline.py`, and one
+  with no file named `get all`. `publish` and `pipeline.py:publish` are the same resource. The
+  target as typed stays in `barca.target`. A scheduled tick is one run with several targets, the
+  scheduled node and the `Always` nodes below it (`barca docs scheduling`): its resource names
+  all of them (`get inbox,orders`), its `barca.job` is the scheduled node and its
+  `barca.trigger` is `schedule`. It is sent when the run ends, after its steps.
+- **A run's traces share `barca.run_id`.** `@barca.run_id:0179afe0cb58` lists a run's steps
+  beside its run span; `@barca.job:pipeline.py:publish` every step of a job over time. Trace
+  ids are deterministic in the run and the step, so a worker's Python spans, the step's log
+  lines and the coordinator's root span agree without a message between them.
 
 Settings are Datadog's own environment variables, so a stack that already configures `ddtrace`
 services needs only `BARCA_TELEMETRY=datadog` (and usually its own `DD_SERVICE`):
@@ -100,42 +110,42 @@ What the spans carry:
 | run | `barca.trigger` | what started the run: `manual` (a command typed on a machine), `api` (an HTTP request to `barca serve`), `schedule` (a cron tick) or `client` |
 | run | `barca.scheduled_at`, `barca.schedule_id` | on a scheduled run or skipped tick only: the tick it was for (RFC 3339, UTC) and the scheduled node's id. `barca.run` start minus `barca.scheduled_at` is how late the run started |
 | run | `barca.steps.total`, `.executed`, `.cached`, `.failed`, `.skipped` | step counts; a partition key counts as a step |
-| step, partition | `barca.asset`, `barca.node_id` | the node's short name; its full id (with the key on a `barca.partition` span) |
+| step | `barca.asset`, `barca.node_id` | the node's short name; the step's full id, with its partition key (`pipeline.py:regional[region=apac]`) |
 | step | `barca.file`, `barca.kind` | the file that defines the node; `asset`, `task` or `sensor` |
 | step | `barca.group` | the `group()`s the node is in, outermost first, joined by `/` (`Company/Sales`); absent outside every group |
 | step | `barca.freshness`, `barca.schedule` | `always`, `manual` or `schedule`; the cron expression of a scheduled node |
 | step | `barca.upstream` | the node's direct upstream node ids, sorted and comma-separated; absent on a node with none |
-| step, partition | `barca.outcome` | `ran`, `cached`, `failed`, or `skipped` (planned, but something it depends on failed or the run stopped first; a zero-length span at the end of the run). A partitioned node is `failed` if any key failed, else `ran` if any ran |
-| step | `barca.cached` | `true` for a cached step |
-| partition | `barca.partition` | the key, `region=emea` (`key=value` pairs joined by `,`) |
-| step, partition | `barca.run_hash`, `barca.digest` | the step's run hash; on a step that ran, SHA-256 of the bytes it wrote, the `content_hash` `barca status --json` shows |
-| step, partition | `barca.attempts`, `barca.bytes` | attempts made (see Limits for partitions); size of the result, summed over a node's keys |
-| step, partition | `barca.cpu_seconds`, `barca.max_rss_bytes` | when the worker measured them; summed (CPU) or the largest (memory) over a node's keys |
-| step | `barca.partitions.total`, `.executed`, `.cached`, `.failed` | on a partitioned node: its keys in this run, and how each ended |
-| step, partition | `error.type`, `error.message`, `error.stack` | on a failure: the exception and its traceback. A partitioned node's span names the first failed key and how many failed |
+| step | `barca.outcome` | `ran` or `failed`: a cached or skipped step has no trace |
+| step | `barca.partition` | on a partition key: the key, `region=emea` (`key=value` pairs joined by `,`) |
+| step | `barca.run_hash`, `barca.digest` | the step's run hash; on a step that ran, SHA-256 of the bytes it wrote, the `content_hash` `barca status --json` shows |
+| step | `barca.attempts`, `barca.bytes` | attempts the step took, retries included; the size of its result |
+| step | `barca.cpu_seconds`, `barca.max_rss_bytes` | when the worker measured them |
+| step | `error.type`, `error.message`, `error.stack` | on a failure: the exception and its traceback |
 
 Timing:
 
 - A step that ran is placed by its worker's clock: the span covers the function and writing its
-  result. For a step that was retried, that is its last attempt. A partitioned node's span runs
-  from its first key's start to its last key's end.
-- A cached step is a zero-length span at the start of the run.
+  result. For a step that was retried, that is its last attempt.
 - A failed step carries its duration: the span runs from the start of its first attempt to the
   moment it failed for good, so retries and the wait between them are inside it, and a step that
   timed out lasts about its `timeout_seconds`. This is wall time, so it can be longer than the
   step's `elapsed_seconds` in `barca get --json`, which adds up only the time the attempts ran.
 - A step whose function ran but whose upload to a remote store failed (`UploadError`) is
   placed by its worker's clock like a step that ran.
+- The run span covers the run; its steps' traces are not inside it (they are traces of their
+  own), so the run's waterfall is one span.
 
-Every run is kept: the trace is sent with sampling priority 2 (kept by the user, `_dd.p.dm:-4`).
-Trace ids are 128 bits: the span's `trace_id` is the lower half and `_dd.p.tid` the upper. Step
-spans are marked as measured, which asks Datadog to compute its trace metrics for `barca.step`
-(per node) as well as `barca.run`.
+Every trace is kept: each is sent with sampling priority 2 (kept by the user, `_dd.p.dm:-4`).
+Trace ids are 128 bits: the span's `trace_id` is the lower half and `_dd.p.tid` the upper. A
+`barca.step` span is the entry span of its trace, so Datadog computes trace metrics (hits,
+errors, latency) for it per `resource`, the asset, as it does for an endpoint.
 
-Useful things to build on this in Datadog: a monitor on `barca.run` errors per `resource`; a
-monitor that a scheduled run's trace arrived in its window; step duration by `resource` (the
-node); `@barca.group:*Sales*` to see one group and the groups in it; the share of `@barca.outcome:cached` per
-run; `@barca.partitions.failed:>0` for partitioned nodes with failed keys.
+Useful things to build on this in Datadog: the service page's resource list is the assets, with
+requests, errors and latency per asset; a monitor on `barca.step` errors per `resource`; a
+monitor on `barca.run` errors per `resource`, or that a scheduled run's trace arrived in its
+window; `@barca.run_id:<id>` for everything one run did; `@barca.group:*Sales*` to see one
+group and the groups in it; `@barca.partition:region=apac` for one key's history;
+`@barca.outcome:failed @barca.asset:regional` for a node's failed keys.
 
 ## Python calls within jobs
 
@@ -149,9 +159,9 @@ export DD_SERVICE=barca
 barca run publish pipeline.py
 ```
 
-Without the SDK, the run and step timeline above still works. With it, each step's Python call
-is a `barca.execute` span, a child of its `barca.step` (or of its key's `barca.partition`) in the
-same trace and the same service. Its resource is the node's short name, like the step's, and it
+Without the SDK, the step and run traces above still work. With it, each step's Python call
+is a `barca.execute` span, a child of its `barca.step` in the step's trace and the same service.
+Its resource is the node's short name, like the step's, and it
 carries `component: python`, `barca.asset`, `barca.node_id`, `barca.file`, `barca.kind`,
 `barca.group`, `barca.partition`, `barca.job`, `barca.run_id`, `barca.version`,
 `barca.outcome` and the numeric `barca.attempt`. Retries produce separate executions.
@@ -176,7 +186,7 @@ worker sets `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED=true` (unless you
 The SDK flushes before the worker reports completion, including a failed attempt, because
 barca may immediately stop or replace that worker. This adds a delivery round trip per
 executed step and can delay jobs when the Agent is unavailable; the SDK's timeout and
-retry settings apply. Python spans can arrive before the finished run trace. A killed or
+retry settings apply. A step's Python spans can arrive before its `barca.step` root. A killed or
 cancelled worker may lose its in-flight Python span. SDK initialization or delivery failures
 never change a step's result.
 
@@ -207,7 +217,7 @@ barca serve pipeline.py
 | `msg` | the line as barca prints it without `BARCA_LOG`, less its `[barca] ` prefix |
 | `run_id` | the run the line belongs to: the `barca.run_id` of its spans and the id `barca logs` and `barca history` take. Absent on server lines (startup, schedule ticks, reloads) |
 | `node` | the step the line is about: on `step:` lines, on a step's output and on a schedule tick's lines |
-| `dd.trace_id`, `dd.span_id` | with the Datadog integration on: the run's trace id (its lower 64 bits) and the id of the step's span (a partition key's own span when it has one, else its node's), or of the run span on a line with no node, as decimal strings. Datadog's log pipeline reads these attributes as the trace and span ids, so a line links to its trace |
+| `dd.trace_id`, `dd.span_id` | with the Datadog integration on: the ids of the trace and span the line belongs to, as decimal strings. A line about a step (a partition key is a step of its own) joins the step's trace at its `barca.step` span; a line with no node joins the run's trace at its `barca.run` span. Datadog's log pipeline reads these attributes as the trace and span ids, so a line links to its trace |
 
 What a step prints (its stdout) is an `info` line with its run and node. Without `BARCA_LOG`
 `barca serve` does not write a step's output at all; it is kept with the run either way
@@ -232,8 +242,7 @@ Limits:
 ## What is sent
 
 Exception messages and tracebacks are sent as they are (the message cut to its first 2,000
-characters and the traceback to its last 4,000, each marked `[cut]`; a node's failed keys after
-its first 20 carry 200 characters of message and no traceback), so
+characters and the traceback to its last 4,000, each marked `[cut]`), so
 a secret that appears in an error message, and the absolute paths and source lines in a
 traceback, reach Datadog. So do node ids, partition keys, group names, cron expressions, the
 target as given, the files named on the command line, the project directory's name, run hashes,
@@ -247,29 +256,27 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
 - A run that fails before it starts sends nothing: a syntax error in the pipeline, an unknown
   target, or an artifact store that cannot be reached. Under `barca serve` a pipeline broken that way
   produces no error trace, so alert on missing runs as well as on errors.
-- A run that is killed sends nothing. A cancelled run is sent, without a span for the step that
-  was in flight.
-- A skipped step is reported for a node none of whose keys ran; a partitioned node some of whose
-  keys ran before the run stopped is reported by those keys, without a count of the rest.
-- A partition key past the cap (200 per node, 2,000 per run) has no `barca.partition` span and no
-  Python span; it is counted in its node's `barca.partitions.*`. A failed key always has a span.
-  A trace larger than 4 MB is sent in several requests to the Agent, as trace chunks.
+- A run that is killed has sent the traces of the steps that finished; its run trace, and the
+  step in flight, are lost. A cancelled run sends its run trace, without the step that was in
+  flight.
+- A skipped step has no trace; the run's `barca.steps.skipped` counts it, by node for a node
+  none of whose keys ran and by key for the keys of a node some of whose keys ran.
 - On a skipped tick's span, `barca.targets` is the node's name from its id, without the
   same-name check the other spans get.
-- `barca.attempts` is absent on a cached step, and on a partition that ran: attempts are
-  counted per step, not per key. A partition that failed does carry its own count.
-- Calls made through `parallel()` are not in `barca.steps.total` and have no synthetic
-  `barca.step` span; the optional Python SDK reports their executions as described above.
+- Calls made through `parallel()` are not in `barca.steps.total` and have no trace of their
+  own; the optional Python SDK reports their executions inside the calling step's trace.
+- A step's trace is one request to the Agent. A run of 20,000 keys makes 20,000 requests over
+  its course, as 20,000 web requests would; Datadog's ingestion controls apply per `resource`.
 - The traceback of a chained exception (`raise ... from e`) does not include its cause.
 - A failed upload to a remote store is not in the trace: the step shows as succeeded, and
   the upload is retried by the next command (`barca docs remote`).
 - The run is reported before the history is backed up. A backup that then fails is not
   reflected in the trace.
 - Uploads to a remote store, and the time spent waiting for them, are not spans.
-- Sending happens at the end of the run and can add up to 3 seconds to it when the Agent does
-  not answer. Under `barca serve` that run counts as still going, so a schedule faster than
-  that skips ticks. Resolving an Agent host name that does not resolve can keep the process
-  alive a little longer than the 3 seconds.
+- A step's trace is sent in the background and never delays the run. The run's trace is sent at
+  the end and can add up to 3 seconds to it when the Agent does not answer. Under `barca serve`
+  that run counts as still going, so a schedule faster than that skips ticks. Resolving an Agent
+  host name that does not resolve can keep the process alive a little longer than the 3 seconds.
 - `https://` Agent URLs and URLs with credentials are not supported. An IPv6 address goes in
   brackets: `http://[::1]:8126`.
 

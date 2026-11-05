@@ -8,6 +8,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Datadog: a step execution is the unit of a trace, not the run (#845). Every step that ran or failed is a trace of its own, rooted at `barca.step` (resource the asset's short name, the partition key in `barca.partition` and `barca.node_id`), with the worker's `barca.execute` and library spans inside it; the run is a separate one-span `barca.run` trace, and a run's traces share `barca.run_id`. Gone with the run-shaped trace: the `barca.partition` operation (a key is a `barca.step` of its own), the `barca.partitions.*` metrics and the 200-keys-per-node / 2,000-per-run caps (every key has a trace), the `barca.cached` tag and the zero-length spans of cached and skipped steps (they send nothing; `barca.steps.cached` and `.skipped` on the run span count them), and the per-node summing of `barca.bytes`, `barca.cpu_seconds` and `barca.max_rss_bytes`. Monitors and trace metrics on `barca.step` per `resource` and on `barca.run` keep working; `barca.attempts` is now on every step that ran or failed, keys included. `BARCA_LOG=json` lines about a step carry the step trace's ids.
+
+### Features
+
+- Datadog: a step's trace is sent the moment the step ends, in the background, instead of the whole run's at the end: a failure is in Datadog seconds after it happens, a run that is killed has sent every step that finished, and the coordinator holds no spans across the run. The run's trace goes at the end as before, and sends any step the live path could not. A delivery warning names what was not received (`did not receive step pipeline.py:orders`); it is still printed once per failure streak.
+
 ## 0.39.6 (2026-11-05)
 
 ### Features

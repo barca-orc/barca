@@ -69,7 +69,6 @@ fn failed(node_id: &str, message: &str) -> StepReport {
 
 fn run(status: &str, steps: Vec<StepReport>) -> RunReport {
     RunReport {
-        cached_partitions: Default::default(),
         run_id: "r1".to_string(),
         command: "run".to_string(),
         target: Some("publish".to_string()),
@@ -90,15 +89,25 @@ fn run(status: &str, steps: Vec<StepReport>) -> RunReport {
     }
 }
 
-fn spans(run: &RunReport, key_spans: &HashSet<String>) -> Vec<Value> {
-    datadog().trace(run, key_spans)[0]
-        .as_array()
-        .unwrap()
-        .clone()
+/// The run's trace: its one span.
+fn root(run: &RunReport) -> Value {
+    let body = datadog().run_trace(run);
+    let traces: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(traces.as_array().unwrap().len(), 1, "one trace per request");
+    assert_eq!(traces[0].as_array().unwrap().len(), 1, "the run span alone");
+    Datadog::root_of(&body)
 }
 
-fn named<'a>(spans: &'a [Value], name: &str) -> Vec<&'a Value> {
-    spans.iter().filter(|s| s["name"] == name).collect()
+/// A step's trace in run `r1`: its one span.
+fn step_root(step: &StepReport) -> Value {
+    let body = datadog().step_trace("r1", "p.py:publish", step);
+    let traces: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        traces[0].as_array().unwrap().len(),
+        1,
+        "the step span alone"
+    );
+    Datadog::root_of(&body)
 }
 
 #[test]
@@ -177,11 +186,11 @@ fn tags_split_on_commas_and_spaces() {
 fn a_scheduled_run_names_its_trigger_tick_and_schedule() {
     let mut scheduled = run("success", Vec::new());
     scheduled.trigger = crate::outcome::Trigger::schedule("p.py:publish", 1_800_000_000);
-    let root = &spans(&scheduled, &HashSet::new())[0];
+    let root = root(&scheduled);
     assert_eq!(root["meta"]["barca.trigger"], "schedule");
     assert_eq!(root["meta"]["barca.scheduled_at"], "2027-01-15T08:00:00Z");
     assert_eq!(root["meta"]["barca.schedule_id"], "p.py:publish");
-    let manual = &spans(&run("success", Vec::new()), &HashSet::new())[0];
+    let manual = super::super::datadog::tests::root(&run("success", Vec::new()));
     assert_eq!(manual["meta"]["barca.trigger"], "manual");
     assert!(manual["meta"].get("barca.scheduled_at").is_none());
     assert!(manual["meta"].get("barca.schedule_id").is_none());
@@ -194,6 +203,31 @@ fn ids_are_stable_non_zero_and_fit_in_63_bits() {
     assert_ne!(a, span_id(&["step", "r1", "p.py:other"]));
     assert_ne!(a, span_id(&["step", "r1p.py:", "orders"]));
     assert!(a > 0 && a < (1 << 63));
+    // Every step of a run has a trace of its own, apart from the run's and each other's; a
+    // partition key is a step of its own.
+    let run = trace_id("r1");
+    let orders = step_trace_id("r1", "p.py:orders");
+    let key = step_trace_id("r1", "p.py:weekly[week=w1]");
+    assert!(run != orders && orders != key && key != step_trace_id("r1", "p.py:weekly"));
+    assert_eq!(orders, step_trace_id("r1", "p.py:orders"));
+    assert_ne!(orders, step_trace_id("r2", "p.py:orders"));
+    assert_ne!(step_trace_id_high("r1", "p.py:orders"), trace_id_high("r1"));
+}
+
+#[test]
+fn a_log_line_joins_its_step_trace_or_the_run_trace() {
+    assert_eq!(
+        log_ids("r1", Some("p.py:a")),
+        (step_trace_id("r1", "p.py:a"), step_span_id("r1", "p.py:a"))
+    );
+    assert_eq!(
+        log_ids("r1", Some("p.py:a[k=1]")),
+        (
+            step_trace_id("r1", "p.py:a[k=1]"),
+            step_span_id("r1", "p.py:a[k=1]")
+        )
+    );
+    assert_eq!(log_ids("r1", None), (trace_id("r1"), run_span_id("r1")));
 }
 
 #[tokio::test]
@@ -223,25 +257,27 @@ async fn put_accepts_a_2xx_and_reports_anything_else() {
     assert!(bad.unwrap_err().contains("415"));
 }
 #[test]
-fn every_span_is_one_service_a_worker_and_carries_the_deployment_tags() {
-    let payload = spans(
-        &run(
-            "success",
-            vec![
-                step("p.py:orders", StepOutcome::Ran),
-                step("p.py:weekly[week=w1]", StepOutcome::Ran),
-            ],
-        ),
-        &["p.py:weekly[week=w1]".to_string()].into(),
+fn every_trace_is_one_service_a_worker_and_carries_the_deployment_tags() {
+    let report = run(
+        "success",
+        vec![
+            step("p.py:orders", StepOutcome::Ran),
+            step("p.py:weekly[week=w1]", StepOutcome::Ran),
+        ],
     );
+    let spans = [
+        root(&report),
+        step_root(&report.steps[0]),
+        step_root(&report.steps[1]),
+    ];
     assert_eq!(
-        payload
+        spans
             .iter()
             .map(|s| s["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["barca.run", "barca.step", "barca.step", "barca.partition"]
+        ["barca.run", "barca.step", "barca.step"]
     );
-    for span in &payload {
+    for span in &spans {
         assert_eq!(span["service"], "planning", "{span}");
         assert_eq!(span["type"], "worker");
         let meta = &span["meta"];
@@ -253,55 +289,57 @@ fn every_span_is_one_service_a_worker_and_carries_the_deployment_tags() {
         assert_eq!(meta["barca.version"], BARCA_VERSION);
         assert_eq!(meta["barca.project"], "shop");
         assert_eq!(meta["barca.run_id"], "r1");
-        assert_eq!(span["trace_id"], payload[0]["trace_id"]);
+        // Each is the root of a trace of its own, kept, with the trace id's upper half.
+        assert!(span.get("parent_id").is_none(), "{span}");
+        assert_eq!(span["metrics"]["_sampling_priority_v1"], 2);
+        assert_eq!(span["meta"]["_dd.p.dm"], "-4");
+        assert_eq!(span["meta"]["_dd.p.tid"].as_str().unwrap().len(), 16);
     }
-    // The chunk root carries the keep decision and the trace id's upper half; only it.
-    let root = &payload[0];
-    assert_eq!(root["metrics"]["_sampling_priority_v1"], 2);
-    assert_eq!(root["meta"]["_dd.p.dm"], "-4");
-    let tid = root["meta"]["_dd.p.tid"].as_str().unwrap();
-    assert_eq!(tid.len(), 16);
+    let ids: HashSet<u64> = spans
+        .iter()
+        .map(|s| s["trace_id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 3, "three traces");
+    let tid = spans[0]["meta"]["_dd.p.tid"].as_str().unwrap();
     assert_eq!(u64::from_str_radix(tid, 16).unwrap(), trace_id_high("r1"));
-    assert!(
-        payload[1..]
-            .iter()
-            .all(|s| s["meta"].get("_dd.p.tid").is_none())
+    let tid = spans[1]["meta"]["_dd.p.tid"].as_str().unwrap();
+    assert_eq!(
+        u64::from_str_radix(tid, 16).unwrap(),
+        step_trace_id_high("r1", "p.py:orders")
     );
 }
 
 #[test]
 fn the_run_resource_is_the_command_and_the_targets_short_names_or_the_files() {
-    let one = spans(&run("success", Vec::new()), &HashSet::new());
-    assert_eq!(one[0]["resource"], "run publish");
-    assert_eq!(one[0]["meta"]["barca.targets"], "publish");
-    assert_eq!(one[0]["meta"]["barca.files"], "p.py");
-    assert_eq!(one[0]["meta"]["barca.job"], "p.py:publish");
-    assert_eq!(one[0]["meta"]["barca.target"], "publish");
-    assert!(one[0].get("parent_id").is_none());
+    let one = root(&run("success", Vec::new()));
+    assert_eq!(one["resource"], "run publish");
+    assert_eq!(one["meta"]["barca.targets"], "publish");
+    assert_eq!(one["meta"]["barca.files"], "p.py");
+    assert_eq!(one["meta"]["barca.job"], "p.py:publish");
+    assert_eq!(one["meta"]["barca.target"], "publish");
+    assert_eq!(one["trace_id"], trace_id("r1"));
+    assert_eq!(one["span_id"], run_span_id("r1"));
 
     let mut two = run("success", Vec::new());
     two.command = "get".to_string();
     two.targets = vec!["daily_revenue".to_string(), "orders".to_string()];
-    assert_eq!(
-        spans(&two, &HashSet::new())[0]["resource"],
-        "get daily_revenue,orders"
-    );
+    assert_eq!(root(&two)["resource"], "get daily_revenue,orders");
 
     let mut whole = run("success", Vec::new());
     whole.command = "get".to_string();
     whole.targets = Vec::new();
     whole.target = None;
     whole.job = "all".to_string();
-    let payload = spans(&whole, &HashSet::new());
-    assert_eq!(payload[0]["resource"], "get p.py");
-    assert!(payload[0]["meta"].get("barca.targets").is_none());
+    let span = root(&whole);
+    assert_eq!(span["resource"], "get p.py");
+    assert!(span["meta"].get("barca.targets").is_none());
     whole.files = Vec::new();
-    assert_eq!(spans(&whole, &HashSet::new())[0]["resource"], "get all");
+    assert_eq!(root(&whole)["resource"], "get all");
 }
 
 #[test]
-fn a_step_is_named_by_its_node_and_carries_its_place_in_the_pipeline() {
-    let mut orders = step("p.py:orders", StepOutcome::Cached);
+fn a_step_is_the_root_of_its_own_trace_named_by_its_node_with_its_place_in_the_pipeline() {
+    let mut orders = step("p.py:orders", StepOutcome::Ran);
     orders.node = Arc::new(NodeContext {
         group: Some("Sales/Daily".to_string()),
         freshness: "schedule",
@@ -312,12 +350,14 @@ fn a_step_is_named_by_its_node_and_carries_its_place_in_the_pipeline() {
     orders.digest = Some("sha".to_string());
     orders.cpu_seconds = Some(0.5);
     orders.max_rss_bytes = Some(1024);
-    let payload = spans(&run("success", vec![orders]), &HashSet::new());
-    let step = &payload[1];
+    let step = step_root(&orders);
     assert_eq!(step["name"], "barca.step");
     assert_eq!(step["resource"], "orders");
-    assert_eq!(step["parent_id"], payload[0]["span_id"]);
+    assert_eq!(step["trace_id"], step_trace_id("r1", "p.py:orders"));
     assert_eq!(step["span_id"], step_span_id("r1", "p.py:orders"));
+    assert!(step.get("parent_id").is_none());
+    assert_eq!(step["start"], 1_000);
+    assert_eq!(step["duration"], 500);
     assert_eq!(step["error"], 0);
     let meta = &step["meta"];
     assert_eq!(meta["barca.asset"], "orders");
@@ -327,15 +367,14 @@ fn a_step_is_named_by_its_node_and_carries_its_place_in_the_pipeline() {
     assert_eq!(meta["barca.kind"], "asset");
     assert_eq!(meta["barca.freshness"], "schedule");
     assert_eq!(meta["barca.schedule"], "0 6 * * *");
-    assert_eq!(meta["barca.outcome"], "cached");
-    assert_eq!(meta["barca.cached"], "true");
+    assert_eq!(meta["barca.outcome"], "ran");
     assert_eq!(meta["barca.run_hash"], "abc");
     assert_eq!(meta["barca.upstream"], "p.py:raw,p.py:rates");
     assert_eq!(meta["barca.digest"], "sha");
     assert_eq!(meta["barca.job"], "p.py:publish");
     assert!(meta.get("barca.partition").is_none());
+    assert!(meta.get("error.type").is_none());
     let metrics = &step["metrics"];
-    assert_eq!(metrics["_dd.measured"], 1);
     assert_eq!(metrics["barca.bytes"], 42);
     assert_eq!(metrics["barca.attempts"], 1);
     assert_eq!(metrics["barca.cpu_seconds"], 0.5);
@@ -398,8 +437,8 @@ fn a_failed_run_names_its_first_failed_asset_and_error_on_the_root() {
     later.start_unix_ns = 5_000;
     let mut skipped = step("p.py:report", StepOutcome::Skipped);
     skipped.duration_ns = 0;
-    let payload = spans(&run("failed", vec![first, later, skipped]), &HashSet::new());
-    let root = &payload[0];
+    let report = run("failed", vec![first, later, skipped]);
+    let root = root(&report);
     assert_eq!(root["error"], 1);
     assert_eq!(root["meta"]["barca.status"], "failed");
     assert_eq!(root["meta"]["barca.failed_asset"], "publish");
@@ -411,8 +450,8 @@ fn a_failed_run_names_its_first_failed_asset_and_error_on_the_root() {
     assert_eq!(root["metrics"]["barca.steps.failed"], 2);
     assert_eq!(root["metrics"]["barca.steps.skipped"], 1);
 
-    let steps = named(&payload, "barca.step");
-    let publish = steps.iter().find(|s| s["resource"] == "publish").unwrap();
+    // The failed step's own trace carries the error, its message and traceback cut.
+    let publish = step_root(&report.steps[0]);
     assert_eq!(publish["error"], 1);
     assert_eq!(publish["meta"]["barca.outcome"], "failed");
     assert_eq!(publish["meta"]["error.type"], "ValueError");
@@ -420,36 +459,32 @@ fn a_failed_run_names_its_first_failed_asset_and_error_on_the_root() {
     assert!(stack.starts_with("[cut]") && stack.ends_with("  File \"p.py\", line 3"));
     assert!(stack.chars().count() < MAX_STACK_CHARS + 20);
     assert!(publish["metrics"].get("barca.attempts").is_none());
-    let report = steps.iter().find(|s| s["resource"] == "report").unwrap();
-    assert_eq!(report["meta"]["barca.outcome"], "skipped");
-    assert_eq!(report["error"], 0);
 }
 
 #[test]
 fn a_cancelled_or_skipped_run_says_why() {
     let mut cancelled = run("cancelled", Vec::new());
     cancelled.reason = Some("server shutdown".to_string());
-    let root = &spans(&cancelled, &HashSet::new())[0];
-    assert_eq!(root["error"], 1);
-    assert_eq!(root["meta"]["barca.reason"], "server shutdown");
-    assert_eq!(root["meta"]["error.type"], "Cancelled");
-    assert_eq!(root["meta"]["error.message"], "server shutdown");
+    let span = root(&cancelled);
+    assert_eq!(span["error"], 1);
+    assert_eq!(span["meta"]["barca.reason"], "server shutdown");
+    assert_eq!(span["meta"]["error.type"], "Cancelled");
+    assert_eq!(span["meta"]["error.message"], "server shutdown");
 
     let mut skipped = run("skipped", Vec::new());
     skipped.reason = Some("in_flight".to_string());
     skipped.in_flight_run = Some("abc123".to_string());
-    let payload = spans(&skipped, &HashSet::new());
-    assert_eq!(payload.len(), 1);
-    assert_eq!(payload[0]["error"], 0);
-    assert_eq!(payload[0]["meta"]["barca.status"], "skipped");
-    assert_eq!(payload[0]["meta"]["barca.reason"], "in_flight");
-    assert_eq!(payload[0]["meta"]["barca.in_flight_run"], "abc123");
-    assert!(payload[0]["meta"].get("error.type").is_none());
+    let span = root(&skipped);
+    assert_eq!(span["error"], 0);
+    assert_eq!(span["meta"]["barca.status"], "skipped");
+    assert_eq!(span["meta"]["barca.reason"], "in_flight");
+    assert_eq!(span["meta"]["barca.in_flight_run"], "abc123");
+    assert!(span["meta"].get("error.type").is_none());
 
-    let ok = &spans(&run("success", Vec::new()), &HashSet::new())[0];
+    let ok = root(&run("success", Vec::new()));
     assert!(ok["meta"].get("barca.reason").is_none());
     assert!(ok["meta"].get("error.message").is_none());
-    let broken = &spans(&run("failed", Vec::new()), &HashSet::new())[0];
+    let broken = root(&run("failed", Vec::new()));
     assert_eq!(broken["meta"]["error.type"], "RunFailed");
 }
 
@@ -474,186 +509,208 @@ fn partitioned(n: usize, ran: usize, failures: usize) -> Vec<StepReport> {
 }
 
 #[test]
-fn a_partitioned_node_is_one_step_with_a_child_per_key_that_has_a_span() {
-    let keys = partitioned(5, 3, 1);
-    let traced: HashSet<String> = keys[..2].iter().map(|k| k.node_id.clone()).collect();
-    let payload = spans(&run("failed", keys), &traced);
-    let steps = named(&payload, "barca.step");
-    assert_eq!(steps.len(), 1);
-    let step = steps[0];
-    assert_eq!(step["resource"], "weekly");
-    assert_eq!(step["span_id"], step_span_id("r1", "p.py:weekly"));
-    assert_eq!(step["error"], 1);
-    assert_eq!(step["meta"]["barca.outcome"], "failed");
-    assert_eq!(step["meta"]["barca.node_id"], "p.py:weekly");
-    assert!(step["meta"].get("barca.partition").is_none());
-    assert_eq!(
-        step["meta"]["error.message"], "[week=w00003] bad week 3",
-        "the one failed key names itself"
-    );
-    assert_eq!(step["metrics"]["barca.partitions.total"], 5);
-    assert_eq!(step["metrics"]["barca.partitions.executed"], 3);
-    assert_eq!(step["metrics"]["barca.partitions.cached"], 1);
-    assert_eq!(step["metrics"]["barca.partitions.failed"], 1);
-    assert_eq!(step["metrics"]["barca.bytes"], 42 * 5);
-    // The span covers the keys that did work, not the cached ones.
-    assert_eq!(step["start"], 1_000);
-    assert_eq!(step["duration"], 30 + 100);
-
-    // Two traced keys that ran, and the failed key, which was not traced.
-    let keys = named(&payload, "barca.partition");
-    assert_eq!(keys.len(), 3);
-    for key in &keys {
-        assert_eq!(key["resource"], "weekly", "no partition key in a resource");
-        assert_eq!(key["parent_id"], step["span_id"]);
-        assert_eq!(key["meta"]["barca.asset"], "weekly");
-        let id = key["meta"]["barca.node_id"].as_str().unwrap();
-        assert_eq!(key["span_id"], step_span_id("r1", id));
-        assert!(key["metrics"].get("_dd.measured").is_none());
+fn a_partition_key_is_a_step_of_its_own_with_the_key_in_a_tag_not_the_resource() {
+    let keys = partitioned(4, 2, 1);
+    let spans: Vec<Value> = keys[..3].iter().map(step_root).collect();
+    for (span, key) in spans.iter().zip(&keys) {
+        assert_eq!(span["name"], "barca.step");
+        assert_eq!(span["resource"], "weekly", "no partition key in a resource");
+        assert_eq!(span["meta"]["barca.asset"], "weekly");
+        assert_eq!(span["meta"]["barca.node_id"], key.node_id.as_str());
+        assert_eq!(
+            span["meta"]["barca.partition"],
+            key.partition.as_deref().unwrap()
+        );
+        assert_eq!(span["trace_id"], step_trace_id("r1", &key.node_id));
+        assert_eq!(span["span_id"], step_span_id("r1", &key.node_id));
+        assert!(span.get("parent_id").is_none());
+        assert_eq!(span["start"], key.start_unix_ns);
+        assert_eq!(span["duration"], 100);
+        assert_eq!(span["metrics"]["barca.attempts"], 1);
     }
-    assert_eq!(keys[0]["meta"]["barca.partition"], "week=w00000");
-    assert_eq!(keys[2]["meta"]["barca.partition"], "week=w00003");
-    assert_eq!(keys[2]["error"], 1);
-    assert_eq!(keys[2]["meta"]["error.message"], "bad week 3");
-    assert!(keys[2]["meta"]["error.stack"].is_string());
-    assert_eq!(
-        payload[0]["meta"]["error.message"],
-        "weekly[week=w00003]: bad week 3"
-    );
-    // Resources stay bounded however many keys there are.
-    let resources: HashSet<&str> = payload
+    let ids: HashSet<u64> = spans
         .iter()
-        .map(|s| s["resource"].as_str().unwrap())
+        .map(|s| s["trace_id"].as_u64().unwrap())
         .collect();
-    assert_eq!(resources, ["run publish", "weekly"].into());
-}
-
-#[test]
-fn many_failed_keys_each_get_a_span_and_only_the_first_ones_carry_detail() {
-    let keys = partitioned(20_000, 0, 20_000);
+    assert_eq!(ids.len(), 3, "one trace per key");
+    assert_eq!(spans[0]["meta"]["barca.partition"], "week=w00000");
+    assert_eq!(spans[2]["meta"]["barca.partition"], "week=w00002");
+    assert_eq!(spans[2]["error"], 1);
+    assert_eq!(spans[2]["meta"]["error.message"], "bad week 2");
+    assert!(spans[2]["meta"]["error.stack"].is_string());
+    // The run names the failed key.
     let report = run("failed", keys);
-    let bodies = datadog().bodies(&report, &HashSet::new());
-    let all: Vec<Value> = bodies
-        .iter()
-        .flat_map(|b| {
-            assert!(b.len() <= MAX_REQUEST_BYTES, "{} bytes", b.len());
-            let chunk: Value = serde_json::from_slice(b).unwrap();
-            let spans = chunk[0].as_array().unwrap().clone();
-            // Each request is a chunk whose first span says how to keep the trace.
-            assert_eq!(spans[0]["metrics"]["_sampling_priority_v1"], 2);
-            assert!(spans[0]["meta"]["_dd.p.tid"].is_string());
-            spans
-        })
+    assert_eq!(
+        root(&report)["meta"]["error.message"],
+        "weekly[week=w00002]: bad week 2"
+    );
+    // Only the keys that ran or failed have a trace: the cached one sends nothing.
+    let nothing_sent = HashSet::new();
+    let pending: Vec<&str> = to_send(&report, &nothing_sent)
+        .map(|s| s.node_id.as_str())
         .collect();
-    let keys = named(&all, "barca.partition");
-    assert_eq!(keys.len(), 20_000);
-    let detailed = keys
-        .iter()
-        .filter(|k| k["meta"].get("error.stack").is_some());
-    assert_eq!(detailed.count(), DETAILED_FAILURES_PER_NODE);
-    let step = named(&all, "barca.step")[0];
-    assert_eq!(step["metrics"]["barca.partitions.failed"], 20_000);
-    assert!(
-        step["meta"]["error.message"]
-            .as_str()
-            .unwrap()
-            .starts_with("20000 of 20000 partitions failed; first [week=w00000] bad week 0")
+    assert_eq!(
+        pending,
+        [
+            "p.py:weekly[week=w00000]",
+            "p.py:weekly[week=w00001]",
+            "p.py:weekly[week=w00002]"
+        ]
     );
-    assert!(bodies.len() > 1);
-    let total: usize = bodies.iter().map(Vec::len).sum();
-    assert!(total < 25 << 20, "{total} bytes");
 }
 
-#[test]
-fn key_spans_are_capped_per_node_and_per_run_and_remembered_for_retries() {
-    let run_id = "cap-test";
-    let claimed = (0..KEY_SPANS_PER_NODE + 50)
-        .filter(|i| claim_key_span(run_id, "p.py:a", &format!("p.py:a[k={i}]")))
-        .count();
-    assert_eq!(claimed, KEY_SPANS_PER_NODE);
+#[tokio::test]
+async fn the_end_of_the_run_sends_only_what_the_live_path_did_not() {
+    let report = run(
+        "failed",
+        vec![
+            step("p.py:orders", StepOutcome::Ran),
+            failed("p.py:publish", "no"),
+            step("p.py:cached", StepOutcome::Cached),
+            step("p.py:report", StepOutcome::Skipped),
+        ],
+    );
+    let run_id = "sent-test";
+    note_sent(run_id, "p.py:orders".to_string(), tokio::spawn(async {}));
+    let Sent { steps, deliveries } = take_sent(run_id);
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(steps, ["p.py:orders".to_string()].into());
+    let rest: Vec<&str> = to_send(&report, &steps)
+        .map(|s| s.node_id.as_str())
+        .collect();
+    assert_eq!(
+        rest,
+        ["p.py:publish"],
+        "the failure nobody sent; never a cached or skipped step"
+    );
     assert!(
-        claim_key_span(run_id, "p.py:a", "p.py:a[k=0]"),
-        "a retry keeps its span"
+        take_sent(run_id).steps.is_empty(),
+        "a run is forgotten once taken"
     );
-    assert!(!claim_key_span(run_id, "p.py:a", "p.py:a[k=999]"));
-    let mut total = KEY_SPANS_PER_NODE;
-    for node in 0.. {
-        let base = format!("p.py:n{node}");
-        let got = (0..KEY_SPANS_PER_NODE)
-            .filter(|i| claim_key_span(run_id, &base, &format!("{base}[k={i}]")))
-            .count();
-        total += got;
-        if got < KEY_SPANS_PER_NODE {
-            break;
-        }
-    }
-    assert_eq!(total, KEY_SPANS_PER_RUN);
-    // A line about a key with a span joins that span; about one without, the node's.
-    assert_eq!(
-        log_span_id(run_id, Some("p.py:a[k=0]")),
-        step_span_id(run_id, "p.py:a[k=0]")
-    );
-    assert_eq!(
-        log_span_id(run_id, Some("p.py:a[k=999]")),
-        step_span_id(run_id, "p.py:a")
-    );
-    assert_eq!(
-        log_span_id(run_id, Some("p.py:b")),
-        step_span_id(run_id, "p.py:b")
-    );
-    assert_eq!(log_span_id(run_id, None), run_span_id(run_id));
-    let taken = take_key_spans(run_id);
-    assert_eq!(taken.len(), KEY_SPANS_PER_RUN);
-    assert!(take_key_spans(run_id).is_empty());
 }
 
-#[test]
-fn a_worker_gets_the_parent_resource_and_tags_of_its_step() {
-    let nodes: HashMap<String, Arc<NodeContext>> = [
-        ("p.py:orders".to_string(), node("p.py:orders")),
-        ("p.py:weekly".to_string(), node("p.py:weekly")),
-    ]
-    .into();
-    let dispatch = Dispatch {
+fn dispatch() -> Dispatch {
+    Dispatch {
+        run_id: "dispatch-test".to_string(),
         service: "planning".to_string(),
         project: Some("shop".to_string()),
         job: "p.py:orders".to_string(),
-        nodes,
-    };
+        nodes: [
+            ("p.py:orders".to_string(), node("p.py:orders")),
+            ("p.py:weekly".to_string(), node("p.py:weekly")),
+        ]
+        .into(),
+        upstream: [("p.py:weekly".to_string(), vec!["p.py:orders".to_string()])].into(),
+        exporter: None,
+    }
+}
+
+#[test]
+fn a_worker_gets_its_steps_trace_root_resource_and_tags() {
+    let dispatch = dispatch();
     let run_id = "dispatch-test";
-    let ctx = dispatch
-        .context(run_id, &crate::StepId::parse("p.py:orders"), 2)
-        .unwrap();
-    assert_eq!(ctx["trace_id"], trace_id(run_id));
-    assert_eq!(ctx["trace_id_high"], trace_id_high(run_id));
+    let ctx = dispatch.context(&crate::StepId::parse("p.py:orders"), 2);
+    assert_eq!(ctx["trace_id"], step_trace_id(run_id, "p.py:orders"));
+    assert_eq!(
+        ctx["trace_id_high"],
+        step_trace_id_high(run_id, "p.py:orders")
+    );
     assert_eq!(ctx["parent_id"], step_span_id(run_id, "p.py:orders"));
     assert_eq!(ctx["resource"], "orders");
     assert_eq!(ctx["service"], "planning");
     assert_eq!(ctx["attempt"], 2);
     assert_eq!(ctx["tags"]["barca.asset"], "orders");
     assert_eq!(ctx["tags"]["barca.node_id"], "p.py:orders");
+    assert_eq!(ctx["tags"]["barca.run_id"], run_id);
     assert_eq!(ctx["tags"]["barca.version"], BARCA_VERSION);
     assert_eq!(ctx["tags"]["barca.project"], "shop");
     assert!(ctx["tags"].get("barca.partition").is_none());
 
-    let key = crate::StepId::parse("p.py:weekly[week=w1]");
-    let ctx = dispatch.context(run_id, &key, 1).unwrap();
-    assert_eq!(
-        ctx["parent_id"],
-        step_span_id(run_id, "p.py:weekly[week=w1]")
-    );
-    assert_eq!(ctx["resource"], "weekly");
-    assert_eq!(ctx["tags"]["barca.partition"], "week=w1");
-    for i in 0..KEY_SPANS_PER_NODE {
-        dispatch.context(
-            run_id,
-            &crate::StepId::parse(&format!("p.py:weekly[week=x{i}]")),
-            1,
-        );
+    // A key joins the key's own trace, however many keys the node has.
+    for i in 0..3_000 {
+        let key = crate::StepId::parse(&format!("p.py:weekly[week=w{i}]"));
+        let ctx = dispatch.context(&key, 1);
+        assert_eq!(ctx["trace_id"], step_trace_id(run_id, &key.display()));
+        assert_eq!(ctx["parent_id"], step_span_id(run_id, &key.display()));
+        assert_eq!(ctx["resource"], "weekly");
+        assert_eq!(ctx["tags"]["barca.partition"], format!("week=w{i}"));
     }
-    let past_cap = crate::StepId::parse("p.py:weekly[week=late]");
-    assert!(dispatch.context(run_id, &past_cap, 1).is_none());
-    take_key_spans(run_id);
+}
+
+#[test]
+fn a_finished_step_is_reported_by_its_workers_clock_and_what_it_wrote() {
+    let dispatch = dispatch();
+    let artifact = json!({
+        "path": "x.json", "size_bytes": 7, "content_hash": "sha-7",
+        "finished_at": 1_700_000_010.5, "wall_seconds": 2.5,
+        "cpu_seconds": 1.25, "max_rss_bytes": 4096
+    });
+    let step = dispatch.finished_report("p.py:weekly[week=w1]", &artifact, 3, "hash1");
+    assert_eq!(step.outcome, StepOutcome::Ran);
+    assert_eq!(step.node_id, "p.py:weekly[week=w1]");
+    assert_eq!(step.node.name, "weekly");
+    assert_eq!(step.partition.as_deref(), Some("week=w1"));
+    assert_eq!(step.start_unix_ns, 1_700_000_008_000_000_000);
+    assert_eq!(step.duration_ns, 2_500_000_000);
+    assert_eq!(step.attempts, Some(3));
+    assert_eq!(step.run_hash.as_deref(), Some("hash1"));
+    assert_eq!(step.upstream, ["p.py:orders"]);
+    assert_eq!(step.size_bytes, Some(7));
+    assert_eq!(step.digest.as_deref(), Some("sha-7"));
+    assert_eq!(step.cpu_seconds, Some(1.25));
+    assert_eq!(step.max_rss_bytes, Some(4096));
+
+    // Without the worker's clock the step ends now and lasts its elapsed seconds.
+    let before = crate::time::unix_nanos(std::time::SystemTime::now()) as u64;
+    let step = dispatch.finished_report("p.py:orders", &json!({"elapsed_seconds": 1.0}), 1, "h");
+    assert!(step.start_unix_ns + step.duration_ns >= before);
+    assert_eq!(step.duration_ns, 1_000_000_000);
+    assert!(step.upstream.is_empty());
+}
+
+#[test]
+fn a_failed_step_is_reported_from_its_first_attempt_with_its_exception() {
+    let dispatch = dispatch();
+    let failure = crate::dispatch::StepFailure {
+        node_id: "p.py:orders".to_string(),
+        error: crate::dispatch::StepError {
+            error_type: "WorkerError".to_string(),
+            // As a worker reports an exception: `Type: message`, then the frames.
+            message: "ValueError: no orders\n  File \"p.py\", line 3, in orders\n    raise ValueError(\"no orders\")".to_string(),
+            traceback: String::new(),
+            phase: None,
+            attempts: 3,
+            started_unix_ns: Some(5_000),
+            elapsed_seconds: Some(1.5),
+        },
+    };
+    let step = dispatch.failed_report(&failure);
+    assert_eq!(step.outcome, StepOutcome::Failed);
+    assert_eq!(step.start_unix_ns, 5_000);
+    assert_eq!(step.duration_ns, 1_500_000_000);
+    assert_eq!(step.attempts, Some(3));
+    assert_eq!(step.error_type.as_deref(), Some("ValueError"));
+    assert_eq!(step.error_message.as_deref(), Some("no orders"));
+    assert!(
+        step.error_traceback
+            .as_deref()
+            .unwrap()
+            .contains("raise ValueError")
+    );
+    // Its trace is an error that says so.
+    let span = Datadog::root_of(&datadog().step_trace("dispatch-test", "p.py:orders", &step));
+    assert_eq!(span["error"], 1);
+    assert_eq!(span["meta"]["error.type"], "ValueError");
+    assert_eq!(span["meta"]["error.message"], "no orders");
+
+    // An untimed failure (recorded without running the step) is a point at the time it was
+    // recorded.
+    let mut untimed = failure.clone();
+    untimed.error.started_unix_ns = None;
+    untimed.error.elapsed_seconds = None;
+    let step = dispatch.failed_report(&untimed);
+    assert_eq!(step.duration_ns, 0);
+    assert!(step.start_unix_ns > 1_700_000_000_000_000_000);
 }
 
 #[test]

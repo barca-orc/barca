@@ -343,7 +343,7 @@ async fn record_steps_with_until(
 
 /// The exception a step failure carries, as (type, message, traceback): see
 /// [`db::split_exception`]. The type is what groups errors in a telemetry backend.
-fn exception_of(error: &dispatch::StepError) -> (String, String, Option<String>) {
+pub(crate) fn exception_of(error: &dispatch::StepError) -> (String, String, Option<String>) {
     db::split_exception(&error.error_type, &error.message, &error.traceback)
 }
 
@@ -527,7 +527,6 @@ pub(crate) fn telemetry_report(
     targets.dedup();
 
     RunReport {
-        cached_partitions: Default::default(),
         run_id: l.run_id.to_string(),
         command: l.command.to_string(),
         target: l.target.map(str::to_string),

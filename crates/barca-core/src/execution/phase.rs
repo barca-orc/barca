@@ -261,9 +261,17 @@ pub(super) async fn dispatch_phase(
 
     // Progress callback — update bar as each step completes.
     let run_hashes = decide_state.run_hashes();
+    let datadog = pool.datadog();
     let on_step_cb: crate::io_loop::StepCallback<'_> = Box::new(
         |node_id: &str, artifact: &serde_json::Value, attempts: u32| {
             let handling = std::time::Instant::now();
+            // The step's trace goes out now, not at the end of the run. parallel() children
+            // (no run hash) have no trace of their own.
+            if let Some(datadog) = &datadog
+                && let Some(run_hash) = run_hashes.get(node_id)
+            {
+                datadog.step_finished(node_id, artifact, attempts, run_hash);
+            }
             // Hand the finished step to the recorder. The worker reports a step only after
             // its artifact is in place (an atomic rename), so the row never points at a
             // missing file. Steps without a run hash are parallel() children, which are

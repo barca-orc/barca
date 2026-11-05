@@ -53,7 +53,7 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
   _source_import.py     ← Import user code exactly as on disk, never from a stale `.pyc`
   _source_observation.py← Compare producer-owned JSON snapshots without copying source into Rust
   _dedupe.py            ← Collapse repeated library warnings in a worker
-  _telemetry.py         ← Python spans for a step inside the coordinator's Datadog trace
+  _telemetry.py         ← Python spans for a step inside the step's own Datadog trace
   _lifeline.py          ← A helper process must not outlive the coordinator that started it
   py.typed              ← PEP 561 marker
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)

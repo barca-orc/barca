@@ -962,8 +962,9 @@ const SITE_PAGES: &[SitePage] = &[
         file: "telemetry.md",
         slug: "reference/telemetry",
         title: "Telemetry",
-        description: "Report every run to Datadog as a trace of the pipeline and barca serve as \
-                      DogStatsD metrics, and post to Slack when a job starts failing or recovers.",
+        description: "Report every step and every run to Datadog as a trace of its own, barca \
+                      serve as DogStatsD metrics, and post to Slack when a job starts failing \
+                      or recovers.",
     },
 ];
 
