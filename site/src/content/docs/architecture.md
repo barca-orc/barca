@@ -79,7 +79,8 @@ pyproject.toml                maturin build: binary and Python package in one wh
 4. **Cache check.** Each asset's run hash is looked up in the metadata database. A hit is
    served from its artifact file. Sensors and tasks always run.
 5. **Execute.** Steps that need to run go on a ready queue. A pool of Python workers, one per
-   CPU by default (`BARCA_POOL_SIZE` overrides), takes them over a Unix domain socket.
+   CPU by default (`BARCA_POOL_SIZE` or `[execution] pool_size` overrides, capped at the
+   capacity when `weight=` steps set a smaller one), takes them over a Unix domain socket.
 6. **Record.** Each finished step is written to the metadata database as it finishes, and the
    run row is closed at the end. With a remote store, artifacts are uploaded in the background
    by the transfer helper, a step is recorded once its upload is confirmed (when the run

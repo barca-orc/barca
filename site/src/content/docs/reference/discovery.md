@@ -27,7 +27,7 @@ barca get total pipeline.py      # this file, plus the files it imports inputs f
 The root is the nearest directory at or above the current one that holds a `barca.toml`;
 without one, the current directory is the root. Barca changes into the root before it does
 anything, so `.barca/`, node ids and the working directory of your steps are the same wherever
-you run it (`barca docs cache`, "Where things live"). Put an empty `barca.toml` at the top of a
+you run it ([`barca docs layout`](/reference/layout/)). Put an empty `barca.toml` at the top of a
 project to anchor it.
 
 ## What a walk finds
@@ -229,4 +229,4 @@ the producer module's import-time setup once; it does not execute the producer a
 - Ids changed in 0.13: before, an id kept the spelling you typed (`./p.py:f`, an absolute path).
   Cache entries recorded under another spelling are not found once; the first run recomputes them.
 
-See also: `barca docs assets`, `barca docs cache`, [`barca docs doctor`](/reference/doctor/).
+See also: [`barca docs assets`](/reference/assets/), [`barca docs cache`](/reference/cache/), [`barca docs doctor`](/reference/doctor/).

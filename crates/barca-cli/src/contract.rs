@@ -8,8 +8,9 @@
 //!   subcommand, rendered at a fixed width of 100 columns (what the binary prints: clap is built
 //!   without `wrap_help`, so it never reads the terminal width).
 //! - the generated blocks in `docs/contract.md`: the command table, every command's arguments
-//!   with their stability, and the exit codes, all rendered from the clap definition and
-//!   [`ErrorKind`].
+//!   with their stability, the exit codes and the experimental list, all rendered from the clap
+//!   definition, [`EXPERIMENTAL`] and [`ErrorKind`]; and the command table of the repository's
+//!   `README.md`, from the same definition.
 //!
 //! - the site reference pages that are manual topics (`SITE_PAGES`): each is its topic with
 //!   site front matter and `barca docs <topic>` references turned into links.
@@ -586,6 +587,53 @@ fn exit_codes_block() -> String {
     out
 }
 
+/// The `experimental` block: every key of [`EXPERIMENTAL`] with its reason, so the contract's
+/// list of experimental commands and arguments cannot drift from the stability column.
+fn experimental_block() -> String {
+    let mut out = String::from("| Command or argument | Why it is experimental |\n|---|---|\n");
+    for (key, why) in EXPERIMENTAL {
+        out.push_str(&format!("| `barca {}` | {} |\n", cell(key), cell(why)));
+    }
+    out
+}
+
+/// The README's command table: one row per command a user types (parents with subcommands and
+/// clap's `help` left out), its positionals and its one-line purpose, with experimental ones
+/// marked. The same clap definition as the contract, so the README cannot describe a command
+/// the binary does not have or call a stable one experimental.
+fn readme_commands_block() -> String {
+    let root = built();
+    let mut out = String::from("| Command | What it does |\n|---|---|\n");
+    for (name, sub) in every_command(&root) {
+        if name == "help" || sub.get_subcommands().any(|n| n.get_name() != "help") {
+            continue;
+        }
+        let positionals: Vec<String> = sub
+            .get_arguments()
+            .filter(|a| a.is_positional())
+            .map(|a| {
+                let l = arg_label(a);
+                if a.is_required_set() {
+                    l
+                } else {
+                    format!("[{l}]")
+                }
+            })
+            .collect();
+        let command = if positionals.is_empty() {
+            format!("barca {name}")
+        } else {
+            format!("barca {name} {}", positionals.join(" "))
+        };
+        let mut purpose = one_line(sub.get_about());
+        if stability(&name).starts_with("experimental") && !purpose.contains("(experimental)") {
+            purpose.push_str(" (experimental)");
+        }
+        out.push_str(&format!("| `{}` | {} |\n", cell(&command), cell(&purpose)));
+    }
+    out
+}
+
 fn begin_marker(name: &str) -> String {
     format!("<!-- BEGIN GENERATED {name} -->")
 }
@@ -622,6 +670,7 @@ fn generated_blocks_in_the_contract_match_the_cli() {
         ("commands", commands_block()),
         ("flags", flags_block()),
         ("exit-codes", exit_codes_block()),
+        ("experimental", experimental_block()),
     ];
     if updating() {
         for (name, content) in &blocks {
@@ -644,6 +693,30 @@ fn generated_blocks_in_the_contract_match_the_cli() {
         }
     }
     check_site_page(&doc);
+}
+
+/// The README's command table is generated from the same clap definition as the contract.
+/// Skipped outside the repository (an sdist build has no README at the workspace root).
+#[test]
+fn readme_commands_table_matches_the_cli() {
+    let path = crate_dir().join("../../README.md");
+    let Ok(doc) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let content = readme_commands_block();
+    if updating() {
+        let doc = replace_block(&doc, "commands", &content)
+            .expect("README.md has no `commands` block markers");
+        std::fs::write(&path, doc).unwrap();
+        return;
+    }
+    let actual = block(&doc, "commands").expect("README.md has no `commands` block markers");
+    if actual != content.trim_matches('\n') {
+        panic!(
+            "the `commands` block of README.md is out of date.\n\n{}\n\n{UPDATE_HINT}",
+            first_difference(actual, &content)
+        );
+    }
 }
 
 #[test]
@@ -762,6 +835,119 @@ const SITE_PAGES: &[SitePage] = &[
         title: "Server Mode",
         description: "One barca serve as the team's ledger: laptops read its cache hits and post \
                       their runs, and --server runs a command on it.",
+    },
+    SitePage {
+        topic: "assets",
+        file: "assets.md",
+        slug: "reference/assets",
+        title: "Assets, Sensors and Inputs",
+        description: "@asset and @sensor: inputs, freshness, retries, environment variables, \
+                      heavy steps and how a node is identified.",
+    },
+    SitePage {
+        topic: "tasks",
+        file: "tasks.md",
+        slug: "reference/tasks",
+        title: "Tasks",
+        description: "@task and barca run: steps that always run, ordering-only dependencies, \
+                      fan-out from inside a task, and what is recorded.",
+    },
+    SitePage {
+        topic: "partitions",
+        file: "partitions.md",
+        slug: "reference/partitions",
+        title: "Partitions",
+        description: "Fan-out over keys and fan-in with collect: updating only what changed, \
+                      batched calls, failed keys and selecting keys.",
+    },
+    SitePage {
+        topic: "cache",
+        file: "cache.md",
+        slug: "reference/cache",
+        title: "The Cache",
+        description: "What the run hash covers, artifacts, --refresh and --refresh-all, early \
+                      cutoff, dry runs, environments and what a run reports.",
+    },
+    SitePage {
+        topic: "batched-partitions",
+        file: "batched-partitions.md",
+        slug: "reference/batched-partitions",
+        title: "Batched Partitions",
+        description: "batch=: one call of a partitioned step computes many keys; grouping, \
+                      the batch function, what stays the same, calls and known limits.",
+    },
+    SitePage {
+        topic: "disk",
+        file: "disk.md",
+        slug: "reference/disk",
+        title: "Disk Use",
+        description: "The size limit for .barca/, what barca gc evicts and in which order, and \
+                      how the metadata database keeps to its share.",
+    },
+    SitePage {
+        topic: "layout",
+        file: "layout.md",
+        slug: "reference/layout",
+        title: "Where Things Live",
+        description: "The project root, the .barca/ directory, concurrent runs, killed runs and \
+                      upgrading.",
+    },
+    SitePage {
+        topic: "backup",
+        file: "backup.md",
+        slug: "reference/backup",
+        title: "Metadata Backups",
+        description: "Backups of the metadata database in the store, barca state backups and \
+                      barca state restore, and how a server's backups differ.",
+    },
+    SitePage {
+        topic: "serve-ops",
+        file: "serve-ops.md",
+        slug: "reference/serve-ops",
+        title: "Serve Operations",
+        description: "Operating barca serve: the run queue, stopping and restarting without \
+                      losing work, the stop grace a supervisor needs, a shared capacity and the \
+                      run timeout.",
+    },
+    SitePage {
+        topic: "types",
+        file: "types.md",
+        slug: "reference/types",
+        title: "Output Formats and Types",
+        description: "json, pickle, parquet and CSV artifacts, and how annotations pick readers \
+                      (pandas, polars, pyarrow, duckdb).",
+    },
+    SitePage {
+        topic: "sinks",
+        file: "sinks.md",
+        slug: "reference/sinks",
+        title: "Sinks",
+        description: "@sink exports results to local or remote paths, as one file or a \
+                      partitioned dataset.",
+    },
+    SitePage {
+        topic: "status",
+        file: "status.md",
+        slug: "reference/status",
+        title: "Status",
+        description: "barca status: every node's cache state and why, its last run, its \
+                      artifact's shape, --problems and --state.",
+    },
+    SitePage {
+        topic: "logs",
+        file: "logs.md",
+        slug: "reference/logs",
+        title: "Logs",
+        description: "barca logs: a run's recorded step stdout and stderr, following a live \
+                      run, and how lines are kept.",
+    },
+    SitePage {
+        topic: "agents",
+        file: "agents.md",
+        slug: "reference/agents",
+        title: "Scripts and AI Agents",
+        description: "The output contract for scripts and AI agents: JSON on stdout, the error \
+                      envelope, exit codes, bounded output and a safe editing loop.",
     },
     SitePage {
         topic: "sql",
@@ -914,10 +1100,10 @@ fn site_pages_are_in_the_sidebar() {
 
 #[test]
 fn site_links_skip_code_and_unknown_topics() {
-    let body = "See `barca docs sql` and `barca docs cache`.\n```\n`barca docs sql`\n```\n";
+    let body = "See `barca docs sql` and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n";
     assert_eq!(
         link_topics(body),
-        "See [`barca docs sql`](/reference/sql/) and `barca docs cache`.\n```\n`barca docs sql`\n```\n"
+        "See [`barca docs sql`](/reference/sql/) and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n"
     );
 }
 

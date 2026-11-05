@@ -264,7 +264,7 @@ by eviction.
 
 ## Bounded size
 
-The database keeps to its own share of `[cache] max_size`, a tenth up to 1 GiB (`barca docs cache`,
+The database keeps to its own share of `[cache] max_size`, a tenth up to 1 GiB (`barca docs disk`,
 "The metadata database"; `crates/barca-core/src/metadata_size.rs`). Past it, in order: `components`
 of superseded rows and oversized older ones become `NULL`, `runs.outcome_json` becomes `NULL` but
 for the last 100 runs, rows older than their node's latest success whose artifact is evicted or

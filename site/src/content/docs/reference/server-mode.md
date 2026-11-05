@@ -32,7 +32,7 @@ history) and it is the only process that writes it. The artifact bytes stay in t
 https://barca.sh/team-server/.
 
 Server mode remains experimental after 0.36.0. Runs of one server compute a matching asset step
-once, experimentally since 0.39.4 ([`barca docs scheduling`](/scheduling/), "Runs share the steps they have in
+once, experimentally since 0.39.4 ([`barca docs serve-ops`](/reference/serve-ops/), "Runs share the steps they have in
 common"): cancelling the run that computes it makes the waiting run execute it again, the result
 reaches the waiting run before the computing run's row is durable, and a run that decided the step
 before another run finished it can execute it a second time. A stable designation
@@ -167,16 +167,9 @@ A server that is draining before it stops (SIGTERM, [`barca docs scheduling`](/s
 
 ### Backups
 
-The server backs up its database to the store (`<uri>/<env>/state/backups`, `barca docs
-remote`); the machines that use it take no backups, with or without `--local`, and print no
-`backed up the metadata DB` line. A client's history that matters is on the server, and a
-client's copies in the server's backup set would rotate the server's own out of it and be
-candidates for a restore of the server. Backups barca 0.29.1 and older took on a client stay
-in the store (pruning keeps every machine's newest; `barca state backups` lists them with their
-`host` and `project`), and you can delete them there. `barca state restore` without `--from`
-on the server takes the server's own newest and names any newer ones a client took; on a server
-with no backup of its own (a new host) it takes the newest and names who took it, so check
-`barca state backups` and pass `--from` with the server's.
+The server backs up its database to the store; the machines that use it take no backups. What
+a restore on the server takes, and the client backups older barca versions left in the store,
+are in [`barca docs backup`](/reference/backup/), "With a server".
 
 ### Two machines, same run hash, different bytes
 
@@ -197,7 +190,7 @@ With a server configured, `barca status`, `barca history`, `barca stats` and `ba
 from the server, as `--server` does, after printing `[barca] server <url> (<source>)`. The server
 answers for its deployed code. `barca logs` reads the server's runs (`GET /runs/{run_id}/logs`,
 and `-f` its event stream); the lines of a run this machine ran against the ledger stay here,
-with `--local` (`barca docs logs`, "Debugging a live pipeline"). Nothing falls back to this
+with `--local` ([`barca docs logs`](/reference/logs/), "Debugging a live pipeline"). Nothing falls back to this
 machine, but `barca logs RUN_ID` for a run only this machine has fails (exit 2) with the
 remediation `this run is on this machine: barca logs RUN_ID --local`, and `barca logs` without a
 run id adds `[barca] note: this machine has a newer run <id> (...); barca logs --local reads it`
@@ -233,7 +226,7 @@ unsynced result is not mixed into a view: the error or note says so and names `-
 `barca status --problems` (or `--state <states>`) keeps the nodes that need attention, the
 server's failures, stale results and failing or paused schedules among them, plus this
 machine's `not_in_ledger` results; each scheduled node carries the server scheduler's view in
-`schedule` (`barca docs status`, "Schedules"). `barca doctor` checks the server itself.
+`schedule` ([`barca docs status`](/reference/status/), "Schedules"). `barca doctor` checks the server itself.
 
 `barca history --reconcile` writes this machine's history and runs here. Add `--local` to see
 this machine's own runs, statuses and timings.
@@ -301,7 +294,7 @@ the server, as JSON (a table as a list of row objects).
 A draining server (one that is restarting) accepts a new `--server` run into its run queue;
 the client keeps following it: when the stream breaks it waits up to 60 seconds
 (`BARCA_SERVER_RECONNECT`) for the server to come back and follows the same run id there, and
-only then exits 3 ([`barca docs scheduling`](/scheduling/), "Restarting without losing work"). On servers
+only then exits 3 ([`barca docs serve-ops`](/reference/serve-ops/), "Restarting without losing work"). On servers
 advertising event resume in `/health`, reconnects send the last successfully processed
 `Last-Event-ID`; older servers retain replay-count fallback. An attempt change resets live
 presentation while following the same run ID, without submitting another run.
@@ -413,7 +406,7 @@ Auth state lives in owner-only `.barca/auth/`, shared across project environment
 separate from metadata backups. Preserve it separately when migrating; restoring metadata
 cannot resurrect a revoked token. Unreadable/corrupt auth state fails closed. Secrets never
 belong in URLs, logs, committed configuration or shell arguments. URL Basic credentials
-and Barca bearer mode cannot share one Authorization header; a layered proxy must forward
+and barca bearer mode cannot share one Authorization header; a layered proxy must forward
 bearer credentials and use another mechanism for its own outer authentication.
 
 Missing, invalid, revoked or expired tokens return 401 with `WWW-Authenticate: Bearer` and

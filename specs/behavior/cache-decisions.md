@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 4. Status: implemented; historical-selection deviation tracked in [freshness](freshness.md).
+Specification version: 5. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -17,6 +17,30 @@ A cache decision uses a complete computation identity and conservative dependenc
 Validated proofs are rebuildable evidence scoped to a logical node, layout and metadata
 generation. A run has completed artifacts, queued recording, committed progress and a
 terminal outcome; process ownership can be proven alive, proven gone or unknown.
+
+A node's **cache state** is the outcome of the decision `barca status` and `get --dry-run` make
+from the same function. It is one enum, `CacheState` in
+[cache_state.rs](../../crates/barca-core/src/cache_state.rs) (0.39.5, #802), used by status
+JSON (`cache.state`), the `--state` filter, the server's node state and, through generated
+TypeScript types, the UI; nothing else spells a state. Its eight values, in the order the
+manual, the OpenAPI `Cache.state` enum and `summary` list them:
+
+| Variant | JSON spelling | Meaning |
+| --- | --- | --- |
+| `Cached` | `cached` | a successful result matches this code and these inputs; `get` serves it |
+| `Unsynced` | `unsynced` | cached, but not where it should be: local copy, store object, digest or server ledger disagree |
+| `Stale` | `stale` | it ran before, but `get` would run it again |
+| `NeverRun` | `never_run` | no successful materialization is recorded |
+| `Partial` | `partial` | a partitioned asset with some keys cached |
+| `Blocked` | `blocked` | a partitioned asset whose missing keys wait on failed keys of an input |
+| `Unknown` | `unknown` | not decidable before something upstream runs (dynamic partitions, sensor output, cutoff, not planned) |
+| `AlwaysRuns` | `always_runs` | tasks and sensors are never cached |
+
+Parsing is strict (`never-run` is not a state; the table view prints that spelling itself);
+decoding JSON from a newer producer is lenient, an unknown string becomes `unknown`, so a
+client of a newer server still has a state and its `reason` and `detail` still say why. The
+reasons that accompany each state are the manual's (`barca docs status`, "Cache state") and the
+OpenAPI `Cache.reason` enum; a test keeps the code's states and reasons equal to those enums.
 
 ## Rules and transitions
 
@@ -229,7 +253,7 @@ cutoff, telemetry and startup suites; [benchmark](../../benchmarks/incremental_d
 
 ## Open questions and gaps
 
-The historical-selection deviation remains documented in [freshness](freshness.md).
+The concurrent-version ordering gap remains documented in [freshness](freshness.md).
 Ordered current selection, shared computation ownership and bounded full-domain retained
 state are approved requirements in [ownership](current-state-and-execution.md), not proved
 by the current cache engine or its warm incremental benchmarks.

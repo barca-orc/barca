@@ -98,13 +98,10 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   a failed step (a `phase` other than `user_code` means it failed in barca's own code around
   the step). `remediation` is usually the command to run next.
 
-| Exit | `kind`        | Meaning                                         | Do                   |
-|------|---------------|-------------------------------------------------|----------------------|
-| 0    |               | success                                         |                      |
-| 1    | `step_failed` | your code raised (stdout still has the result)  | fix the code, re-run |
-| 2    | `usage`       | bad arguments or names; nothing ran             | fix the command      |
-| 3    | `infra`       | barca or its environment (DB, workers, I/O)     | retry                |
-| 130  | `cancelled`   | interrupted                                     | re-run               |
+Exit codes (`barca docs contract`, "Exit codes", owns them): 0 success; 1 `step_failed`, your
+code raised (stdout still has the result), fix the code and re-run; 2 `usage`, bad arguments or
+names, nothing ran, fix the command; 3 `infra`, barca or its environment (DB, workers, I/O),
+retry; 130 `cancelled`, interrupted, re-run.
 
 Steps that finished before a failure, a cancel or a kill stay cached: re-running resumes.
 Cutting the output short (`barca list | head -1`, `barca run deploy 2>&1 | head -20`) stops

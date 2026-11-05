@@ -197,7 +197,7 @@ Then:
   `barca logs --step 'scored[retailer=r7]'` finds them.
 - **Peak memory:** recorded per call, for tuning `N`.
 - **Progress:** one line per batched node with its calls, keys and phase times, and the time spent
-  recording the run's results (`barca docs partitions`, "Seeing calls").
+  recording the run's results (`barca docs batched-partitions`, "Seeing calls").
 - **Telemetry:** one span per call, with the key count.
 
 ### 4.8 Composition

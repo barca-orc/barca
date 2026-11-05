@@ -203,13 +203,20 @@ number in the run, from `0`:
 | `step_finished` | `node_id`, `ok`, `cached?`, `elapsed_seconds?`, `error?`, `import_seconds?` | A step ran, failed, or was served from cache (`cached: true`). |
 | `run_finished` | `run_id`, `ok`, `outcome` | The run's [outcome](#outcomes). The stream ends after it. |
 
-A subscriber receives the run from its first event whenever it connects, and every event once,
-however slowly it reads: the server keeps the run's events for as long as it keeps the run (an
-hour after it finished, while finished runs hold at most 64 MB of memory; past that the oldest
-go first, never the run that finished last) and a lagging subscriber reads on from where it was. A connection that
-drops mid-run is not resumed: reconnecting replays the run from its first event, and resuming
-from `Last-Event-ID` is future work. The run goes on whether anyone is reading. Once the run is no
-longer kept, the stream is a `404`; `GET /runs/{run_id}` answers from the database then.
+A subscriber without `Last-Event-ID` receives the run from its first event whenever it connects,
+and every event once, however slowly it reads: the server keeps a run's events in memory while the
+run is live (until an hour after it finished) within bounded retention, at most 65,536 events or
+16 MiB per attempt and 64 MiB across the server; past a bound the oldest frames go first, and a
+lagging subscriber that reaches a gap is closed rather than skipping it. Each event carries an
+attempt-scoped `id`. A connection that drops mid-run is resumed by reconnecting with
+`Last-Event-ID` set to the last id processed: the stream continues strictly after it (`204` when
+that id was the run's last event). A malformed id is `400`, an id from another attempt of the run
+(a requeued or recovered attempt) is `409`, and an id whose events have expired is `410`; the
+CLI and the UI then fall back to polling `GET /runs/{run_id}` and say the live transcript is
+incomplete. Specification: `specs/behavior/server-event-replay.md` (shipped in 0.36.0,
+[RFC-0016](/rfcs/0016-server-tokens-and-stream-resume/)). The run goes on whether anyone is
+reading. Once the run is no longer kept, the stream is a `404`; `GET /runs/{run_id}` answers from
+the database then.
 
 The response carries `X-Accel-Buffering: no` so nginx passes events through as they happen, and a
 keep-alive comment every 15 seconds.

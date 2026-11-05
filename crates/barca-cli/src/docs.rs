@@ -53,9 +53,24 @@ pub const TOPICS: &[Topic] = &[
         "partitions.md"
     ),
     topic!(
+        "batched-partitions",
+        "batch=: one call of a partitioned step computes many keys (RFC-0013)",
+        "batched-partitions.md"
+    ),
+    topic!(
         "cache",
         "Run hashes, artifacts, --refresh / --refresh-all, environments",
         "cache.md"
+    ),
+    topic!(
+        "disk",
+        "The size limit for .barca/, what barca gc evicts and in which order",
+        "disk.md"
+    ),
+    topic!(
+        "layout",
+        "The project root, the .barca/ directory, concurrent and killed runs, upgrading",
+        "layout.md"
     ),
     topic!(
         "types",
@@ -104,6 +119,11 @@ pub const TOPICS: &[Topic] = &[
         "scheduling.md"
     ),
     topic!(
+        "serve-ops",
+        "Operating barca serve: the run queue, stopping, restarting, capacity, run timeout",
+        "serve-ops.md"
+    ),
+    topic!(
         "server-mode",
         "One server as the team's ledger; --server runs a command there; [server] url, BARCA_SERVER, --local",
         "server-mode.md"
@@ -112,6 +132,11 @@ pub const TOPICS: &[Topic] = &[
         "remote",
         "This machine's backup and read-through cache: S3, GCS, Azure; sharing means a server",
         "remote.md"
+    ),
+    topic!(
+        "backup",
+        "Metadata backups in the store, barca state backups / restore, a server's backups",
+        "backup.md"
     ),
     topic!(
         "telemetry",

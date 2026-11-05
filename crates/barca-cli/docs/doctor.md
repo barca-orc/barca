@@ -1,5 +1,9 @@
 # Doctor: check a project before running it
 
+`barca doctor` reports what a run would need (project root, Python, cache, metadata, stores,
+capacity, and a configured server) without executing a step, so a broken setup is found before
+the first `get`.
+
 ```bash
 barca doctor
 barca doctor pipeline.py --json

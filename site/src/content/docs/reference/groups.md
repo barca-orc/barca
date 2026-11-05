@@ -71,4 +71,4 @@ Groups that reference excluded definitions are omitted and reported through
 `/health.load_errors`; healthy executable nodes and other files remain available.
 One-shot CLI commands continue to reject invalid group declarations.
 
-See also: `barca docs assets`, [`barca docs scheduling`](/scheduling/).
+See also: [`barca docs assets`](/reference/assets/), [`barca docs scheduling`](/scheduling/).

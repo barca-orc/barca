@@ -10,6 +10,10 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/doct
 This page is the manual topic `barca docs doctor`: the CLI prints the same text.
 :::
 
+`barca doctor` reports what a run would need (project root, Python, cache, metadata, stores,
+capacity, and a configured server) without executing a step, so a broken setup is found before
+the first `get`.
+
 ```bash
 barca doctor
 barca doctor pipeline.py --json
@@ -21,7 +25,7 @@ configuration, actual Python executable and package version, local cache writabi
 metadata integrity, the capacity steps share (`capacity`: how much `weight=` may run at once,
 the pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it, and the pool size with
 where it came from, `pool_source`; with `[server] capacity`, a `server_capacity` check with what a
-run under `barca serve` gets; `barca docs assets`, "Heavy steps"), discovered source files and parse errors. It checks configured artifact
+run under `barca serve` gets; [`barca docs assets`](/reference/assets/), "Heavy steps"), discovered source files and parse errors. It checks configured artifact
 and shared-state stores with read/list operations. It runs no steps, imports no pipeline
 modules and does not evaluate dynamic partition expressions. Source checks are syntax and
 decorator extraction checks, not a complete execution plan.
@@ -34,7 +38,7 @@ Argument errors still exit 2. Check names and provider-specific `data` are exper
 
 `get` and `run` also print the selected environment and artifact store once at startup, on
 stderr, when the environment comes from `default_env` in `barca.toml` or a store is configured:
-`[barca] env prod (default_env in barca.toml); artifact store <store>` (`barca docs cache`,
+`[barca] env prod (default_env in barca.toml); artifact store <store>` ([`barca docs cache`](/reference/cache/),
 "Environments"). `serve` always prints it, with the metadata DB and its format added
 ([`barca docs scheduling`](/scheduling/), "The metadata DB at startup").
 
@@ -87,7 +91,7 @@ The failed check's `detail` ends with a line that says what to do (in the table,
 
 Doctor only reads: it changes nothing on the server and sends no pending post. The scheduler
 counts are those of `GET /schedule`, the numbers the web UI shows. `barca status --problems`
-lists the schedules that are paused or failing with their nodes' errors (`barca docs status`).
+lists the schedules that are paused or failing with their nodes' errors ([`barca docs status`](/reference/status/)).
 
 ## Local-only debugging profile
 
@@ -105,4 +109,4 @@ barca get --refresh-all
 `--env` overrides `BARCA_ENV` for an individual command.
 
 See also: [`barca docs remote`](/reference/remote-storage/) (store configuration), [`barca docs discovery`](/reference/discovery/) (project roots and
-source selection), [`barca docs server-mode`](/reference/server-mode/), `barca docs agents` ("Debugging pipelines").
+source selection), [`barca docs server-mode`](/reference/server-mode/), [`barca docs agents`](/reference/agents/) ("Debugging pipelines").

@@ -15,9 +15,10 @@ Approved requirements live in [product experience](../../specs/behavior/experien
 They describe intent, with incomplete implementation coverage. Existing behavior/wire owners
 remain indexed in [the specification index](../../specs/README.md).
 
-## Next three proposals — unanswered
+## Next proposals — unanswered
 
-Resume with the three [recovery and structured-outcome proposals](../../specs/proposals/api-ideas.md#recovery-and-structured-outcomes--unanswered).
+Resume with the two [recovery and structured-outcome proposals](../../specs/proposals/api-ideas.md#recovery-and-structured-outcomes--unanswered)
+(disk full, structured outcomes; the missing-bytes fallback has shipped).
 They remain unapproved. The proposal file owns their wording; do not treat this handoff as
 another requirements source or reopen already approved machine-information parity.
 
@@ -60,7 +61,9 @@ process-tree cleanup, stable IDs/attempts and retained-history availability. Add
 with each actual public behavior change and update the existing CLI/HTTP/manual owners.
 Do not present this documentation push as implementation or performance verification.
 
-Known audit work is tracked separately in issues #654 (overlapping asset ownership), #655
-(cold/full-domain memory), #656 (inspection cost), and #657 (historical selection), with
-[PR #658](https://github.com/barca-orc/barca/pull/658) addressing the last issue. Recheck live
-status before resuming; this list is a handoff, not a claim that those issues stay open.
+Known audit work is tracked separately in issues #654 (overlapping asset ownership, shared
+in-flight steps shipped as experimental in 0.39.4 with three gaps open), #655 (cold/full-domain
+memory) and #656 (inspection cost). #657 (historical selection) is closed: the sequential fix
+shipped in 0.34.0; [PR #658](https://github.com/barca-orc/barca/pull/658), the earlier attempt,
+was closed unmerged. Recheck live status before resuming; this list is a handoff, not a claim
+that the open issues stay open.
