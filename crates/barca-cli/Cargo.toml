@@ -11,15 +11,15 @@ path = "src/main.rs"
 [dependencies]
 barca-core = { path = "../barca-core" }
 barca-server = { path = "../barca-server" }
-chrono = "0.4.45"
+chrono = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 percent-encoding = "2"
-sha2 = "0.10"
+sha2 = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
