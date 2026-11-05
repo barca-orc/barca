@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc -b",
     "gen:types": "bash scripts/regen-types.sh",
-    "test:e2e": "playwright test && playwright test --config playwright.auth.config.ts",
+    "test:e2e": "playwright test && playwright test --config playwright.groups.config.ts && playwright test --config playwright.auth.config.ts",
+    "test:e2e:groups": "playwright test --config playwright.groups.config.ts",
     "test:e2e:auth": "playwright test --config playwright.auth.config.ts"
   },
   "dependencies": {

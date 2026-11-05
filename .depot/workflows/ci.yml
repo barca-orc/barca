@@ -459,20 +459,21 @@ jobs:
           uv pip install --system dist-wheel/*.whl
           pnpm --dir ui exec playwright install --with-deps chromium
 
-      # Each config starts `barca serve` on its fixture and the Vite dev server in front of it.
-      # Non-gating until #807 closes: seven ui/e2e specs fail on main (stale after the UI
-      # changes of #743-#798, two possibly real regressions). The step's result and the
-      # uploaded traces still show them; remove continue-on-error with that issue.
+      # Each config starts `barca serve` on its fixture and the Vite dev server in front of it:
+      # the flat project (ui/e2e), the project declared in groups (ui/e2e-groups) and token
+      # mode (ui/e2e-auth). Gating: a failing spec fails the job (#807).
       - name: Playwright end-to-end tests
-        continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: BARCA_BIN="$(command -v barca)" pnpm --dir ui test:e2e
 
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-results
-          path: ui/test-results
+          path: |
+            ui/test-results
+            ui/test-results-groups
+            ui/test-results-auth
           if-no-files-found: ignore
 
   build:

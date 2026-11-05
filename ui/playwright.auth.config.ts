@@ -7,6 +7,8 @@ const fixture = fileURLToPath(new URL('./e2e-auth/fixture', import.meta.url))
 const barca = process.env.BARCA_BIN ?? (existsSync(`${root}/target-local/debug/barca`) ? `${root}/target-local/debug/barca` : `${root}/target/debug/barca`)
 export default defineConfig({
   testDir: './e2e-auth',
+  // Its own artifacts: the flat suite's config clears test-results/ when it starts.
+  outputDir: './test-results-auth',
   workers: 1,
   reporter: 'list',
   // Credential-bearing requests and the one-time secret must not enter trace artifacts.
