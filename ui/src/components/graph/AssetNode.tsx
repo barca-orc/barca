@@ -34,6 +34,7 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         stateHint={data.stateHint}
         selected={selected}
         icon={leaf ? kindIcon(leaf) : undefined}
+        steps={data.steps}
       />
       <Handle type="source" position={data.direction === "TB" ? Position.Bottom : Position.Right} />
     </div>

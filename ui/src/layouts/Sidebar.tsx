@@ -1,13 +1,15 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useMemo, type CSSProperties, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, Layers, PanelLeft } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Layers, ListOrdered, PanelLeft, Plus } from 'lucide-react'
 import { IconButton, StatusDot } from '@/components'
 import { useAssetStates, useWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { useGroups } from '@/hooks/useGroups'
+import { useChains } from '@/hooks/useChains'
+import { SCRATCH } from '@/lib/chains'
 import { useProgram } from '@/hooks/useProgram'
 import { severityStatus } from '@/lib/assetTable'
-import { groupTree, leavesByGroup } from '@/lib/groups'
+import { groupHealth, groupTree, leavesByGroup } from '@/lib/groups'
 import { severityWord } from '@/lib/status'
 import { mergeStates, pipelineSummaries, type PipelineSummary } from '@/lib/pipeline'
 import { SIDEBAR_KEY, fileGroups, updateSidebar, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
@@ -32,10 +34,11 @@ export interface SidebarViewProps {
   onOpenGroup: (file: string, group: string) => void
   dispatch: Dispatch<SidebarMsg>
   footer?: ReactNode
+  chains?: ReactNode
 }
 
 /** The pipelines and, under an open one, its groups, for any model and server data. */
-export function SidebarView({ model, total, pipelines, groupsOf, selected, scope, onSelect, onOpenGroup, dispatch, footer }: SidebarViewProps) {
+export function SidebarView({ model, total, pipelines, groupsOf, selected, scope, onSelect, onOpenGroup, dispatch, footer, chains }: SidebarViewProps) {
   return (
     <aside className="barca-sidebar" data-collapsed={model.collapsed || undefined}>
       <div className="barca-brand">
@@ -48,8 +51,9 @@ export function SidebarView({ model, total, pipelines, groupsOf, selected, scope
         </span>
       </div>
 
+      {chains}
       <div className="barca-sect">
-        <span>Pipelines</span>
+        <span>{chains ? 'Files' : 'Pipelines'}</span>
       </div>
       <div className="barca-pipes">
         {total === null && <span className="barca-pipe-empty">loading…</span>}
@@ -165,6 +169,75 @@ export function Sidebar() {
     const search = next.toString()
     navigate({ pathname: path, search: search ? `?${search}` : '' })
   }
+  const chainParam = params.get('chain')
+  const chains = useChains()
+  const openChains = (chainParam ?? '').split(',').filter(Boolean)
+  /** Click opens one chain; Cmd/Ctrl/Shift-click adds or removes it from the open set. */
+  const openChain = (id: string, add = false) => {
+    const ids = add ? (openChains.includes(id) ? openChains.filter((c) => c !== id) : [...openChains, id]) : [id]
+    if (ids.length === 0) { select(null); return }
+    const next = new URLSearchParams({ chain: ids.join(',') })
+    const nodes = params.get('nodes')
+    if (nodes && ids.includes(SCRATCH)) next.set('nodes', nodes)
+    if (params.get('view') === 'graph') next.set('view', 'graph')
+    navigate({ pathname: '/assets', search: `?${next}` })
+  }
+  const chainSection = chains.length > 0 ? (
+    <>
+      <div className="barca-sect">
+        <button type="button" className="barca-sect-link" aria-current={params.get('chains') === 'all' ? 'page' : undefined} onClick={() => navigate('/assets?chains=all')}>Chains</button>
+        <button type="button" className="barca-pipe-chevron" title="New scratch chain" aria-label="New scratch chain" onClick={() => openChain(SCRATCH)}>
+          <Plus size={12} />
+        </button>
+      </div>
+      <div className="barca-pipes">
+        {chains.map(({ def, members }) => {
+          // The same rule as a group's health: any failed member makes the chain red.
+          const health = groupHealth(members, byId)
+          return (
+            <div key={def.id} className="barca-pipe-row barca-chain-row" data-multi={openChains.length > 0 || undefined}>
+            <button
+              type="button"
+              className="barca-chain-check"
+              role="checkbox"
+              aria-checked={openChains.includes(def.id)}
+              aria-label={`View ${def.name} together with the open chains`}
+              title="View with the open chains"
+              onClick={() => openChain(def.id, true)}
+            >
+              {openChains.includes(def.id) && <Check size={10} strokeWidth={3} />}
+            </button>
+            <button
+              className="barca-pipe"
+              title={`${def.description ?? def.name} · ⌘/Shift-click to view with other chains`}
+              data-active={openChains.includes(def.id) ? '' : undefined}
+              aria-pressed={openChains.includes(def.id)}
+              onClick={(e) => openChain(def.id, e.metaKey || e.ctrlKey || e.shiftKey)}
+            >
+              {members.every((m) => byId.has(m))
+                ? <StatusDot status={health.status} size={6} />
+                : <span className="barca-pipe-nodot" />}
+              <span className="barca-pipe-name">{def.name}</span>
+              {health.status === 'running' && <span className="barca-pipe-running">{health.label}</span>}
+              <span className="barca-pipe-count">{members.length}</span>
+            </button>
+            </div>
+          )
+        })}
+        {openChains.includes(SCRATCH) && (
+          <div className="barca-pipe-row barca-chain-row" data-multi>
+            <button type="button" className="barca-chain-check" role="checkbox" aria-checked aria-label="Close the scratch chain" onClick={() => openChain(SCRATCH, true)}>
+              <Check size={10} strokeWidth={3} />
+            </button>
+            <button className="barca-pipe" data-active="" aria-pressed>
+              <ListOrdered size={12} />
+              <span className="barca-pipe-name">Scratch chain</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  ) : undefined
   const openGroup = (file: string, group: string) => {
     const next = new URLSearchParams({ pipeline: file, group })
     navigate({ pathname: '/assets', search: `?${next}` })
@@ -176,11 +249,12 @@ export function Sidebar() {
       total={assets ? assets.length : null}
       pipelines={pipelines}
       groupsOf={(file) => fileGroups(file, tree, scope, leavesOf, byId)}
-      selected={selected}
+      selected={chainParam || params.get('chains') ? '__chain__' : selected}
       scope={scope}
       onSelect={select}
       onOpenGroup={openGroup}
       dispatch={dispatch}
+      chains={chainSection}
       footer={<>
         <Link className="barca-nav" to="/docs">Docs</Link>
         {authMode() === 'token' && <><Link className="barca-nav" to="/tokens">API tokens</Link><button className="barca-nav" onClick={() => connect(null)}>Disconnect</button></>}

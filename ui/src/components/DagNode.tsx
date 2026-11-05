@@ -14,6 +14,8 @@ export interface DagNodeProps {
   stateHint?: string
   selected?: boolean
   icon?: ReactNode
+  /** Chain step chips, beside the state. */
+  steps?: { label: string; color?: string; title?: string }[]
   style?: CSSProperties
   onClick?: () => void
 }
@@ -36,6 +38,7 @@ export function DagNode({
   stateHint,
   selected = false,
   icon,
+  steps,
   style,
   onClick,
 }: DagNodeProps) {
@@ -148,6 +151,28 @@ export function DagNode({
               }}
             >
               {statusLabel ?? metric}
+            </span>
+          )}
+          {steps && steps.length > 0 && (
+            <span style={{ display: 'inline-flex', gap: 3, marginLeft: 'auto' }}>
+              {steps.map((s, i) => (
+                <span
+                  key={i}
+                  title={s.title}
+                  style={{
+                    fontFamily: 'var(--font-sans)',
+                    fontVariantNumeric: 'tabular-nums',
+                    fontSize: 'var(--text-2xs)',
+                    lineHeight: '14px',
+                    padding: '0 5px',
+                    borderRadius: 7,
+                    color: s.color ?? 'var(--text-strong)',
+                    boxShadow: `inset 0 0 0 1px ${s.color ?? 'var(--border-strong)'}`,
+                  }}
+                >
+                  {s.label}
+                </span>
+              ))}
             </span>
           )}
         </div>

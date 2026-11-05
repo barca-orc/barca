@@ -16,8 +16,13 @@ export interface GraphNodeData {
   status: StatusKind
   metric?: string | null
   stateHint?: string
+  /** Step chips, one per chain the node is shown for. */
+  steps?: StepChip[]
   [key: string]: unknown
 }
+
+/** A chain step on a card: its label, in its chain's color. */
+export interface StepChip { label: string; color?: string; title?: string }
 
 export type GraphNode = Node<GraphNodeData>
 
@@ -34,6 +39,7 @@ export interface GraphEntry {
   outputName?: string
   /** How many dependencies an edge from an input stands for, when more than one. */
   inputWeights?: Record<string, number>
+  steps?: StepChip[]
   /** Placed apart from its edges: they would pull it into a column, or a chain off the screen. */
   loose?: boolean
 }
@@ -127,6 +133,7 @@ export function graphAt(assets: GraphEntry[], dir: LayoutDir, positions: LayoutP
         kind: a.kind,
         summary: a.summary,
         outputName: a.outputName,
+        steps: a.steps,
         status: RESTING_STATUS,
       },
       // dagre centers nodes; React Flow positions by top-left.
