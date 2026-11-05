@@ -85,11 +85,11 @@ SIGN_VERSION = 1
 
 def sign(obj: dict) -> dict:
     """One object as {"url", "expires_at"}, or {"error", "kind"}. Never raises."""
-    from barca import _storage
+    from barca import _signing, _storage
 
     try:
-        url, expires_at = _storage.sign_url(obj["uri"], obj["expires"], obj.get("filename"))
-    except _storage.SignError as e:
+        url, expires_at = _signing.sign_url(obj["uri"], obj["expires"], obj.get("filename"))
+    except _signing.SignError as e:
         return {"error": str(e), "kind": e.kind}
     except Exception as e:  # noqa: BLE001 — reported per object, as the coordinator decides
         message = _storage.safe_error(f"{type(e).__name__}: {e}")

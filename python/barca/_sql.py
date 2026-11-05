@@ -171,7 +171,9 @@ def cache_path(cache_dir: str, uri: str) -> str:
 
 
 def _version(info: dict) -> str:
-    return _storage.object_version(info)
+    from barca import _range_cache
+
+    return _range_cache.object_version(info)
 
 
 def fetch(uri: str, cache_dir: str) -> tuple[str, int]:

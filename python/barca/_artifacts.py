@@ -431,7 +431,9 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
 
 def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
     """A lazy reader over a remote parquet object, reading byte ranges in place."""
-    fs = _storage.range_read_fs(uri)
+    from barca import _range_cache
+
+    fs = _range_cache.range_read_fs(uri)
     if frame_type == "duckdb":
         from barca import _duckdb
 
@@ -443,7 +445,7 @@ def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
                     con.unregister_filesystem(name)
                 con.register_filesystem(fs)
                 _duckdb_registered[name] = fs
-        return con.read_parquet(_storage.range_read_uri(uri))
+        return con.read_parquet(_range_cache.range_read_uri(uri))
 
     import polars as pl
     import pyarrow.dataset as ds

@@ -426,11 +426,11 @@ def signed_url(uri: str, expires: "int | float | datetime.timedelta" = 3600) -> 
     credentials that cannot sign). Needs the store's extra (``barca[s3]``, ``barca[gcs]``,
     ``barca[azure]``), not the barca binary.
     """
-    from barca import _storage
+    from barca import _signing
 
     try:
-        url, _ = _storage.sign_url(uri, expires)
-    except _storage.SignError as exc:
+        url, _ = _signing.sign_url(uri, expires)
+    except _signing.SignError as exc:
         error = BarcaError(str(exc))
         error.kind = "usage" if exc.kind == "usage" else "infra"
         error.code = 2 if exc.kind == "usage" else 3
