@@ -18,16 +18,37 @@ crates/
   barca-cli/            ← CLI binary (the `barca` command)
     docs/               ← The manual: markdown topics embedded in the binary (`barca docs`)
   barca-server/         ← `barca serve`: axum HTTP API, cron scheduler, file watcher, embedded UI
-ui/                     ← The web UI (TypeScript, Vite); its build output is compiled into barca-server
+ui/                     ← The web UI (React, TypeScript, Vite); its build output is compiled into barca-server
 specs/                  ← Behavioral/interface contracts, design models and unapproved proposals (README.md is the index)
 docs/engineering/       ← Non-normative architecture plans, rationale and discussion handoff
 DIRECTION.md            ← What barca is, standing non-goals, what is being worked on now
-python/barca/
-  __init__.py           ← No-op decorator stubs (identity functions)
-  _worker.py            ← Daemon worker (invoked by Rust as `python -m barca._worker --daemon`)
-  _artifacts.py         ← Serialization: json, pickle, parquet format detection + I/O
-  _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
+python/barca/           ← `ls python/barca` is the truth; one line each:
+  __init__.py           ← No-op decorator stubs (identity functions), `__version__`, the public names
+  api.py                ← The Python API: `barca.get()`, `barca.sql()`, `barca.signed_url()`, `BarcaError`
+  client.py             ← `barca.Client`: a thin HTTP wrapper over a running `barca serve` (deprecated aliases)
   __main__.py           ← Entry point for `python -m barca` (delegates to `_worker.main()`)
+  _worker.py            ← Daemon worker (invoked by Rust as `python -m barca._worker --daemon`): runs steps
+  _runtime.py           ← Socket communication with the coordinator; `PROTOCOL_VERSION` lives here
+  _wire.py              ← Compact wire tables: only metadata and artifact references cross the socket
+  _batch.py             ← Batched partitions (RFC-0013): one call computes several keys
+  _branches.py          ← How a `parallel()` branch's return value gets back to its caller
+  _artifacts.py         ← Serialization: json, pickle, parquet, CSV format detection + I/O, staging
+  _storage.py           ← Storage backends: local filesystem and fsspec object stores, range cache
+  _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
+  _state.py             ← Metadata backups in the store, store checks for `barca status` (RFC-0009)
+  _sinks.py             ← Dataset sinks: `@sink("exports/scored/")` writes a Hive-partitioned dataset
+  _duckdb.py            ← DuckDB connections for steps that take or return relations
+  _sql.py               ← `barca sql`: invoked by Rust as `python -m barca._sql`
+  _value.py             ← `barca get -o value`: invoked by Rust as `python -m barca._value`
+  _inspect.py           ← Artifact shape for `barca status`: `python -m barca._inspect`
+  _inspection_cache.py  ← Disposable, bounded inspection evidence (never used by execution)
+  _doctor.py            ← `barca doctor`'s finite prerequisite probe (no pipeline imports)
+  _identity.py          ← Credential context and principal identity, never credential values
+  _source_import.py     ← Import user code exactly as on disk, never from a stale `.pyc`
+  _source_observation.py← Compare producer-owned JSON snapshots without copying source into Rust
+  _dedupe.py            ← Collapse repeated library warnings in a worker
+  _telemetry.py         ← Python spans for a step inside the coordinator's Datadog trace
+  _lifeline.py          ← A helper process must not outlive the coordinator that started it
   py.typed              ← PEP 561 marker
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)
 ```
@@ -90,7 +111,7 @@ BARCA_POOL_SIZE=2 scripts/check-fast.sh   # reproduce CI-only worker-pool failur
 
 # Benchmarks
 benchmarks/trivial/bench.sh 10
-benchmarks/chain_100/bench.sh 5   # (coming soon)
+benchmarks/chain_100/bench.sh 5
 ```
 
 ## Design principles

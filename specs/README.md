@@ -3,8 +3,10 @@
 Start here for what Barca promises and what is still design. Terms are defined in the
 [glossary](../GLOSSARY.md); product direction lives in [DIRECTION.md](../DIRECTION.md).
 Each status below describes the code on `main` and its explicitly identified gaps.
-[PR #658](https://github.com/barca-orc/barca/pull/658) was closed without merging; its sequential
-historical-selection fix is now carried here with regression controls. A specification describes its stated scope; a passing grammar
+The sequential historical-selection defect (#657) was fixed in 0.34.0 with regression controls
+([partition audit](../python/tests/test_partition_audit.py)); the earlier attempt,
+[PR #658](https://github.com/barca-orc/barca/pull/658), was closed unmerged on 2026-10-26 and
+nothing waits on it. A specification describes its stated scope; a passing grammar
 check or benchmark is not evidence for unrelated runtime behavior.
 
 The [pre-merge audit](../docs/engineering/spec-audit.md) separates unresolved contracts,
@@ -38,7 +40,7 @@ from approved decisions.
 
 | Owner | Scope | Status / evidence |
 | --- | --- | --- |
-| [Freshness](behavior/freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules with a known historical-selection defect; bounded historical-selection evidence; named invariants and real integration checks |
+| [Freshness](behavior/freshness.md) | Sensor meanings, partition membership, current selection and freshness policy | Implemented rules; the sequential historical-selection fix shipped in 0.34.0 with bounded historical-selection evidence; the concurrent-version ordering gap stays open (its "Open questions and gaps"); named invariants and real integration checks |
 | [Execution](behavior/execution.md) | Runs, logical keys vs calls/processes, batches, partial failure, cancellation and recovery | Implemented rules; shared in-flight asset steps between a server's runs implemented as experimental in 0.39.4, with three gaps: cancellation survival, a durable handoff and a decide-to-lease race (#654); bounded full execution remains a gap (#655) |
 | [Inspection](behavior/inspection.md) | Validity, execution, availability and current counts | Implemented behavior; explicit checking and independent status tracking are approved design only |
 | [Performance](behavior/performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |
@@ -98,14 +100,15 @@ documented in the [server-mode manual](../crates/barca-cli/docs/server-mode.md) 
 Current HTTP/CLI contracts and the implemented behavioral owners are authoritative.
 
 [Architecture map and cleanup sequence](../docs/engineering/architecture-cleanup.md) connects the inspected
-implementation to approved responsibilities and orders structural refactors before changes
-to publication, input lifetime and shared execution. It is an engineering plan, not another
-behavior owner or a runtime conformance claim.
+implementation to approved responsibilities and ordered the structural refactors; its close-out
+names what shipped where (#800, 0.39.5) and what remains, which DIRECTION.md schedules. It is an
+engineering record, not another behavior owner or a runtime conformance claim.
 
 [Current state and execution ownership](behavior/current-state-and-execution.md) records
 approved behavior for ordered publication, shared work, cancellation, pending reconciliation,
-checking and bounded execution. Its acceptance scenarios are obligations for implementation,
-not claims of passing conformance. [The TLA+ models](models/README.md) check only a finite
+checking and bounded execution. Its acceptance scenarios are obligations for implementation;
+only the sharing scenario for a server's in-flight asset steps passes today (0.39.4,
+experimental), as its "Acceptance and evidence" states. [The TLA+ models](models/README.md) check only a finite
 abstraction of the approved ownership/order rules. Model checking is not a proof of Rust
 conformance or performance.
 

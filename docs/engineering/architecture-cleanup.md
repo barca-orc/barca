@@ -1,11 +1,35 @@
 # Architecture map and cleanup sequence
 
-Status: implementation map and proposed engineering sequence, inspected at `ce56f197`
-on 2026-10-26. This is a starting point for refactoring, not a new behavioral contract or
-evidence that approved requirements are implemented. The runtime baseline is `fa396a5d`
-(0.33.0); subsequent commits on this branch describe requirements. Historical selection
-[PR #658](https://github.com/barca-orc/barca/pull/658) was still open when inspected.
-Recheck its status before changing selection; do not duplicate that fix.
+Status: close-out, 2026-11-04. This document was the implementation map and refactor
+sequence written at `ce56f197` on 2026-10-26 (runtime baseline `fa396a5d`, 0.33.0). It is kept
+as the record of what the map found and what the sequence became; it is not a behavioral
+contract, not evidence that approved requirements are implemented, and not a plan anyone
+works from: the remaining items are scheduled in [DIRECTION.md](../../DIRECTION.md), "Now, in
+order" (the 0.39.6 cleanup). The historical-selection PR this map waited on,
+[#658](https://github.com/barca-orc/barca/pull/658), was closed unmerged on 2026-10-26; the
+sequential fix shipped in 0.34.0 (#657, [behavior conformance](behavior-conformance.md)).
+
+What shipped, by step of the sequence below:
+
+- Step 1, bookkeeping out of execution: 0.33.1 ([#659](https://github.com/barca-orc/barca/pull/659),
+  `execution/bookkeeping.rs`).
+- Step 2, one publication boundary: the write boundary in 0.39.5 (#800 item 16,
+  [#819](https://github.com/barca-orc/barca/pull/819), `db/` and `persist/recording.rs`, a test
+  that fails on a write outside them), and `db.rs` split by table family after it
+  ([#821](https://github.com/barca-orc/barca/pull/821)). Guarded, ordered publication (step 2b)
+  is not done.
+- Step 4, shared computation: shipped first, as experimental, in 0.39.4
+  ([#796](https://github.com/barca-orc/barca/pull/796), `serve/claims.rs`), ahead of steps 2b
+  and 3; its three gaps are in #654.
+- Beside the sequence, 0.39.5 also delivered one `CacheState` enum (#802), serve out of the
+  embedded hot loop (`RunHost`, `serve/`, [#817](https://github.com/barca-orc/barca/pull/817)),
+  the `.barca/` layout specification (#805) and the Python dedupe.
+
+What remains: step 2b (ordered publication), step 3 (captured code/configuration and stable
+input bytes), the rest of step 4 (#654) and step 5 (#655, #656). The structural items the
+0.39.6 list adds (`execution.rs` split by phase, a `StepStatus` enum, one artifact format map,
+`runs.rs`/`client.rs` splits, store inspection out of `status.rs`, a narrower `barca-core` pub
+surface) come from a second audit on 2026-11-04 and are listed only in DIRECTION.md.
 
 Behavior owners remain in [the specification index](../../specs/README.md). The target responsibilities
 below follow [approved ownership](../../specs/behavior/current-state-and-execution.md),
@@ -163,7 +187,7 @@ Preserve failure/cancellation evidence, not just happy-path output snapshots.
 Second implementation PR: route existing successful-result recording and cache-reuse state
 updates through clearly owned operations. Keep current transaction semantics first; audit
 incremental saves, checkpoint writes, terminal writes and server-ledger acceptance for bypasses.
-Build on #658 once its actual status is known. Preserve current behavior with existing
+The sequential selection fix (0.34.0) is in place; build on it. Preserve current behavior with existing
 [history reconciliation](../../python/tests/test_history_reconcile.py) and persistence coverage.
 
 Note, 2026-11-04 (#800, item 16): every write to the metadata database now goes through a
@@ -235,16 +259,16 @@ new status representation.
 
 ## Decisions that should stay explicit
 
-Structural steps 1 and the first part of 2 can start now. Steps 3 onward add guarantees and
-must satisfy their scenario gates before activation. Lifecycle admission/recovery, invocation
+Structural step 1 and the first part of 2 are done (above). Steps 2b and 3 add guarantees and
+must satisfy their scenario gates before activation; step 4 shipped early as experimental and
+still owes its gates (#654). Lifecycle admission/recovery, invocation
 deduplication, retention and resource enforcement should be separate behavior changes with
 their own contract updates, rather than incidental changes during extraction.
 
-The three unanswered proposals in the [handoff](requirements-handoff.md) remain
+The unanswered proposals in the [handoff](requirements-handoff.md) remain
 unapproved. Retention version identity and remote deletion scope, direct-check deadlines,
-invocation deduplication lifetime and dependency snapshot scope also remain open. None blocks
-the first bookkeeping refactor. Do not implement a missing-byte fallback or new error schema
-by interpreting this architecture map as approval.
+invocation deduplication lifetime and dependency snapshot scope also remain open. Do not
+implement a new error schema by interpreting this architecture map as approval.
 
 Validation of this document checks navigation and evidence references only. No runtime
 refactor, snapshot isolation, shared execution or performance improvement ships with it.

@@ -2,7 +2,9 @@
 
 ## Scope and status
 
-Specification version: 2. Status: implemented rules with the known selection defect below.
+Specification version: 2. Status: implemented rules; the sequential historical-selection defect
+(#657) is fixed since 0.34.0 with regression controls, and the concurrent-version ordering gap
+below stays open.
 Scope: sensor meanings, current membership, cache selection, and freshness policy.
 Terms: [glossary](../../GLOSSARY.md). Hash completeness and publication mechanics remain owned by
 [cache decisions](cache-decisions.md); byte digests by [materialization

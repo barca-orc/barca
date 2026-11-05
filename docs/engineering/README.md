@@ -5,7 +5,7 @@ These documents are non-normative. Approved behavior and interface owners live i
 change those contracts.
 
 - [Pre-merge specification audit](spec-audit.md): separate unconsidered boundaries, implementation disagreements and spec-quality blockers.
-- [Architecture map and cleanup sequence](architecture-cleanup.md): inspected owners and staged refactors.
+- [Architecture map and cleanup sequence](architecture-cleanup.md): the October 2026 map and refactor sequence, closed out with what shipped where and what remains (scheduled in DIRECTION.md).
 - [Requirements discussion handoff](requirements-handoff.md): unanswered proposals and remaining decisions.
 - [User API rationale](user-api-decisions.md): reasons behind declaration choices.
 - [DuckDB lifetime investigation](history/duckdb-step-isolation.md): retained empirical evidence and rejected isolation alternatives.
@@ -15,8 +15,8 @@ change those contracts.
 
 Current behavior is recorded in specs and checked by its linked tests. The following completed
 plans were deleted rather than moved into a new archive; their original changes retain the
-historical reasoning and verification logs. Nine other superseded plans were already removed
-in the earlier specification cleanup commits on this branch.
+historical reasoning and verification logs. Nine other superseded plans were removed earlier,
+in the specification cleanup of October 2026 (0.33.1, #660).
 
 - `complete-upstream-cache-boundary`: [original change](https://github.com/barca-orc/barca/pull/365).
 - `explicit-project-imports`: [original change](https://github.com/barca-orc/barca/pull/371).
