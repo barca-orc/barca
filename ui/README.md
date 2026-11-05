@@ -45,11 +45,11 @@ and runs all 76 validators, leaving branch-specific runs in the history. Select
 The modeling UI demonstrates Python-declared organizational groups. Its 152 nodes appear as five
 top-level groups; double-click or press Enter to open nested groups, and use the
 breadcrumb to move up. List/Graph keeps the current group and selection in the
-URL. Group health includes every descendant, including validation tasks; the
-output's cache state is shown separately. “Preview failed check” simulates a
-fold 3 validation failure entirely in the browser, and “All nodes” restores the
-original flat view. Definitions live in `demo/modeling.py` using `group(...)`; the static parser
-serves metadata through `/groups`. Any pipeline with groups uses this view.
+URL. A group's health counts every descendant by its state word, validation tasks
+included, with failed last attempts beside the counts; the output's own state is shown
+separately. “All nodes” shows the flat view. Definitions live in `demo/modeling.py` using
+`group(...)`; the static parser serves metadata through `/groups`. Any pipeline with groups
+uses this view.
 `barca list --groups` exposes the same hierarchy in the terminal. Execution and
 cache behavior stay unchanged.
 
@@ -77,8 +77,10 @@ development build is several times slower and says little about what users get.
 ```bash
 pnpm --dir ui typecheck && pnpm --dir ui lint && pnpm --dir ui test
 pnpm --dir ui gen:types             # after changing a Rust type the UI uses
-cargo build -p barca && pnpm --dir ui test:e2e   # Playwright; starts barca serve + vite on e2e/fixture
+cargo build -p barca && pnpm --dir ui test:e2e   # Playwright: the flat, grouped and token-mode suites,
+                                                  # each starting barca serve + vite on its fixture
                                                   # BARCA_BIN=<path> uses another barca binary
+pnpm --dir ui test:e2e:groups       # only the grouped suite (e2e-groups/fixture)
 pnpm --dir ui dev                   # then /ui/#/kit: every component and page view in each state, no server needed
 ```
 
