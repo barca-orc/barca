@@ -26,7 +26,11 @@ It runs from the trunk or any tree and does the steps below: `git fetch origin m
 "sccache"` when sccache is installed), creates `.venv` and runs
 `maturin develop --uv --profile fast --extras test` into it. `--no-build` skips the build
 (docs-only work), `--release` builds with `--release` instead, and `--base <ref>` branches off
-something other than origin/main. By hand:
+something other than origin/main. The trunk's own `.cargo/config.toml` (also gitignored; a
+linker such as mold, `rustflags`) is not carried over by default, because `rustflags` change
+every crate's cache key (a tree with and a tree without them share nothing in sccache) and a
+linker path that exists on one machine fails the build on another: `--linker` copies its
+`[target.*]` tables into the new tree when you want the same linker there. By hand:
 
 ```bash
 # run from the trunk checkout (the primary clone, not an existing worktree)
@@ -176,8 +180,9 @@ sibling paths from your session.
 
 - Architecture and CLI/docs contract: [CLAUDE.md](CLAUDE.md)
 - New worktree setup: `scripts/new-worktree.sh`; Cursor's hook
-  [`.cursor/worktrees.json`](.cursor/worktrees.json) runs `uv sync` only (build into the
-  tree's own `target-local/` when you need a binary)
+  [`.cursor/worktrees.json`](.cursor/worktrees.json) (the one tracked file under the otherwise
+  ignored `.cursor/`) runs `uv sync` only (build into the tree's own `target-local/` when you
+  need a binary)
 - Releases: `scripts/release.sh X.Y.Z` (CLAUDE.md "Release")
 - Driving barca from scripts/agents: `barca docs agents` / `barca docs skill`
 - Release notes: put your `CHANGELOG.md` bullet under `## Pending`, never in a released

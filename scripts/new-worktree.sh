@@ -22,18 +22,22 @@
 #   --no-build      create the tree and .venv only; skip `maturin develop`
 #   --release       build with --release (what wheels ship) instead of --profile fast
 #   --base <ref>    branch off <ref> instead of origin/main
+#   --linker        copy the trunk's `[target.*]` tables (linker, rustflags) from its
+#                   <trunk>/.cargo/config.toml into the tree's; off by default because
+#                   rustflags change every crate's sccache key and a linker path is per machine
 #
 # Remove the tree with scripts/remove-worktree.sh <slug>.
 set -euo pipefail
 
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
-slug="" type="" build=1 base="origin/main" profile="--profile fast"
+slug="" type="" build=1 base="origin/main" profile="--profile fast" linker=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=0 ;;
         --release) profile="--release" ;;
         --base) base="${2:?--base needs a ref}"; shift ;;
+        --linker) linker=1 ;;
         -h|--help) usage ;;
         -*) echo "error: unknown option $1" >&2; usage ;;
         *) if [ -z "$slug" ]; then slug="$1"; elif [ -z "$type" ]; then type="$1"; else usage; fi ;;
@@ -74,7 +78,16 @@ mkdir -p "$tree/.cargo"
     if command -v sccache >/dev/null 2>&1; then
         echo "rustc-wrapper = \"sccache\""
     fi
+    # --linker: the trunk's [target.*] tables, from their header to the next other table.
+    if [ "$linker" -eq 1 ] && [ -f "$trunk/.cargo/config.toml" ]; then
+        echo
+        echo "# [target.*] tables copied from $trunk/.cargo/config.toml (--linker)."
+        awk '/^\[/ { keep = ($0 ~ /^\[target\./) } keep' "$trunk/.cargo/config.toml"
+    fi
 } > "$tree/.cargo/config.toml"
+if [ "$linker" -eq 1 ] && ! grep -q '^\[target\.' "$tree/.cargo/config.toml"; then
+    echo "warning: --linker: $trunk/.cargo/config.toml has no [target.*] table to copy" >&2
+fi
 
 if command -v sccache >/dev/null 2>&1; then
     echo "sccache: on (cache $(sccache --show-stats 2>/dev/null | sed -n 's/^Cache location *//p' | head -1))" >&2

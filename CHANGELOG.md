@@ -11,6 +11,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ### Bug Fixes
 
 - Stop metadata backups from holding up every other barca process: a `barca serve` with a store hashed and copied the whole database under its lock, so a CLI command beside it waited for the copy (about 6 s per command against a 1.5 GB database, now 0.02 s). Only the log fold takes the lock; a read transaction keeps the file still while it is copied.
+- `scripts/check-fast.sh` in a tree without a `.venv` (or whose `maturin develop` failed) skips the Python tests with one line saying how to make the venv and exits 1, instead of running hundreds of tests against a missing binary.
+
+### Documentation
+
+- CI's fast tier now runs the prek hooks on every pull request (ruff and ruff format at their pinned release, ty, `cargo fmt --check`, the version sync and `uv lock --check`), the same hooks `scripts/check-fast.sh` runs locally; the pins move to ruff 0.14.14 and ty 0.0.97, also pinned in pyproject.toml's `dev` dependency group. The release process refreshes `scripts/ci-test-durations.json` from the full tier's measurements (`scripts/release.sh`, the `durations` job), Dependabot proposes weekly grouped updates for Cargo, uv, the two npm trees and the actions, and `scripts/new-worktree.sh --linker` copies the trunk's linker settings into a new tree. `tests/README.md` describes the shell integration and simulation suites.
 
 ## 0.39.5 (2026-11-04)
 
