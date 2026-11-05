@@ -1,21 +1,18 @@
-"""Credential context and best available principal identity; never expose credential values."""
+"""The principal behind the store's credentials, probed through the provider's SDK; never
+exposes credential values. The configured context and the one-line hint on an authentication
+error live in `_storage` (`context`, `error_hint`), re-exported here for `barca doctor`."""
 
 import base64
-import hashlib
 import inspect
 import json
 import os
-import shlex
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 from urllib.request import urlopen
 
+from barca import _storage
+from barca._storage import context, error_hint
 
-def _fingerprint(value):
-    return (
-        hashlib.sha256(value.encode()).hexdigest()[:16]
-        if isinstance(value, str) and value
-        else None
-    )
+__all__ = ["context", "error_hint", "resolve"]
 
 
 def _claims(token):
@@ -27,132 +24,6 @@ def _claims(token):
         return {}
 
 
-def context(uri, fs=None):
-    """Configured target and credential source, available even when authentication failed."""
-    from barca import _storage
-
-    scheme = _storage._scheme(uri)
-    protocol = {"s3a": "s3", "abfss": "abfs", "gs": "gcs"}.get(scheme, scheme)
-    options = _storage.storage_options(protocol) if protocol else {}
-    result = {
-        "provider": protocol,
-        "subject": None,
-        "account": None,
-        "source": "provider default credential chain",
-        "recovery": "Verify the selected store's credentials and list permissions.",
-    }
-    if protocol == "s3":
-        endpoint = (getattr(fs, "client_kwargs", {}) or options.get("client_kwargs", {})).get(
-            "endpoint_url", ""
-        )
-        profile = options.get("profile") or os.environ.get("AWS_PROFILE", "default")
-        key = getattr(fs, "key", None) or options.get("key") or os.environ.get("AWS_ACCESS_KEY_ID")
-        result["source"] = f"AWS profile {profile}" if not key else "explicit access key"
-        if _fingerprint(key):
-            result["credential_fingerprint"] = _fingerprint(key)
-        result["recovery"] = (
-            "Reload the selected S3 access key/session token in storage options or AWS environment variables; run aws sts get-caller-identity with those same credentials."
-            if key
-            else f"Run aws sts get-caller-identity using AWS_PROFILE={shlex.quote(profile)}; refresh that profile's credentials (for SSO: aws sso login --profile {shlex.quote(profile)})."
-        )
-        hostname = (urlsplit(endpoint).hostname or "").lower()
-        if hostname.endswith(".r2.cloudflarestorage.com"):
-            result.update(
-                provider="r2",
-                account=hostname.split(".")[0],
-                source="R2 API access key",
-                recovery="Reload or rotate the bucket-scoped R2 API credentials in the s3 storage options.",
-            )
-        elif endpoint and not (hostname == "amazonaws.com" or hostname.endswith(".amazonaws.com")):
-            result.update(
-                provider="s3-compatible",
-                recovery="Verify the selected endpoint's access key and bucket list permission.",
-            )
-    elif protocol == "abfs":
-        account = (
-            getattr(fs, "account_name", None)
-            or options.get("account_name")
-            or os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-        )
-        if not account and "@" in urlsplit(uri).netloc:
-            account = urlsplit(uri).netloc.split("@", 1)[1].split(".")[0]
-        tenant = options.get("tenant_id") or os.environ.get("AZURE_TENANT_ID")
-        result.update(provider="azure", account=account, configured_tenant=tenant)
-        result["source"] = "Azure DefaultAzureCredential chain"
-        client = options.get("client_id") or os.environ.get("AZURE_CLIENT_ID")
-        if client:
-            result.update(source="Azure application credentials", configured_client_id=client)
-            result["recovery"] = (
-                "Verify AZURE_CLIENT_ID and AZURE_CLIENT_SECRET for the configured tenant, or clear those overrides to use Azure CLI credentials."
-            )
-        else:
-            tenant_flag = f" --tenant {shlex.quote(tenant)}" if tenant else ""
-            result["recovery"] = (
-                f"Run az login{tenant_flag}; verify this identity has the required Storage Blob Data role on the selected account."
-            )
-        key = (
-            getattr(fs, "account_key", None)
-            or options.get("account_key")
-            or os.environ.get("AZURE_STORAGE_ACCOUNT_KEY")
-        )
-        sas = getattr(fs, "sas_token", None) or options.get("sas_token")
-        if key or sas:
-            result.update(
-                source="Azure shared key" if key else "Azure SAS",
-                credential_fingerprint=_fingerprint(key or sas),
-            )
-            result["recovery"] = (
-                "Reload the selected account's shared key or SAS; verify its read and list permissions."
-            )
-    elif protocol == "gcs":
-        result.update(
-            provider="gcs",
-            account=getattr(fs, "project", None),
-            source="Google application default or explicit credentials",
-            recovery="Run gcloud auth application-default login, or point GOOGLE_APPLICATION_CREDENTIALS at the intended identity; verify bucket list permission.",
-        )
-    elif protocol == "memory":
-        result.update(
-            subject="in-process memory filesystem",
-            source="no credentials",
-            recovery="No cloud identity is required.",
-        )
-    return result
-
-
-def error_hint(uri, exc, fs=None):
-    """One safe human line before an authentication/authorization provider error."""
-    from barca import _storage
-
-    if not _storage.is_remote(uri) or "Identity:" in str(exc):
-        return None
-    names = {type(exc).__name__, type(exc.__cause__).__name__ if exc.__cause__ else ""}
-    credential_errors = {
-        "NoCredentialsError",
-        "PartialCredentialsError",
-        "DefaultCredentialsError",
-        "CredentialUnavailableError",
-        "ClientAuthenticationError",
-        "RefreshError",
-        "TokenRefreshError",
-        "AuthenticationError",
-    }
-    if not (
-        isinstance(exc, PermissionError)
-        or _storage.http_status(exc) in (401, 403)
-        or names & credential_errors
-    ):
-        return None
-    details = context(uri, fs)
-    account = f"; selected account {details['account']}" if details["account"] else ""
-    tenant = (
-        f"; configured tenant {details['configured_tenant']}"
-        if details.get("configured_tenant")
-        else ""
-    )
-    return f"Identity: {details['source']}{account}{tenant}; effective principal unavailable after authentication failure. {details['recovery']}"
-
-
 def _sync(fs, fn):
     from fsspec.asyn import sync
 
@@ -161,8 +32,6 @@ def _sync(fs, fn):
 
 def resolve(uri):
     """Identify the credentials that successfully probed the store; lookup failures stay explicit."""
-    from barca import _storage
-
     fs = _storage.get_fs(uri)
     result = context(uri, fs)
     try:
