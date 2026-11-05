@@ -89,9 +89,10 @@ a change run:
 scripts/update-cli-snapshots.sh
 ```
 
-It regenerates `crates/barca-cli/snapshots/help/`, the tables in
-`crates/barca-cli/docs/contract.md`, `python/tests/snapshots/cli_contract/` and
-`site/src/content/docs/reference/cli-contract.md`. Review the diff: it is the contract change.
+It regenerates `crates/barca-cli/snapshots/help/` and `snapshots/examples/`, the tables in
+`crates/barca-cli/docs/contract.md` and the README's command table,
+`python/tests/snapshots/cli_contract/` and the site pages generated from manual topics
+(`SITE_PAGES` in `crates/barca-cli/src/contract.rs`). Review the diff: it is the contract change.
 See [Testing](/contributing/testing/) for the tests that enforce this.
 
 ## The documentation site
@@ -103,9 +104,12 @@ npm run dev      # local preview
 npm run build
 ```
 
-The reference pages that are manual topics (`reference/cli-contract.md`, `discovery.md`,
-`doctor.md`, `groups.md`, `remote-storage.md`, `server-mode.md`, `sql.md`, `telemetry.md`) are
-generated from `crates/barca-cli/docs/` (`SITE_PAGES` in `crates/barca-cli/src/contract.rs`).
+The reference pages that are manual topics (`reference/cli-contract.md`, `agents.md`,
+`assets.md`, `cache.md`, `discovery.md`, `doctor.md`, `duckdb.md`, `groups.md`, `logs.md`,
+`partitions.md`, `remote-storage.md`, `server-mode.md`, `sinks.md`, `sql.md`, `status.md`,
+`tasks.md`, `telemetry.md`, `types.md`; the list is `SITE_PAGES` in
+`crates/barca-cli/src/contract.rs`) are generated from `crates/barca-cli/docs/`, each with an
+edit link back to its topic.
 Edit the manual topic, then regenerate them with
 `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract::` (`scripts/update-cli-snapshots.sh`
 does it too). Every other page is written by hand.

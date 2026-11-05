@@ -178,25 +178,33 @@ reads every `.py` file under the project root that imports barca (`barca docs di
 upstream assets come from the cache. Use `barca <command> --help` for concise usage, `barca <command> --examples` for the full
 runnable example collection, and `barca docs <topic>` for detailed behavior.
 
+<!-- BEGIN GENERATED commands -->
 | Command | What it does |
 |---|---|
-| `barca get [target] [files...]` | Bring assets up to date and print their artifact paths; `-o value` prints the values. No target: every asset and sensor. |
-| `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. |
-| `barca list [files...]` | Every asset, sensor and task, with its kind, freshness and inputs. |
-| `barca status [target] [files...]` | Per node: cached or stale and why, the last run (and its error), the artifact's rows and columns, and a schedule's state; `--problems` keeps what needs attention. |
-| `barca logs [RUN_ID]` | A run's recorded step stdout and stderr, without progress messages; the most recent run without an id, `-f` to follow a running one, from a configured server too. |
-| `barca history [RUN_ID]` | Recent runs, filtered by `--status`, `--target`, `--triggered-by` and `--since`, each failed one with its failing step and error; with a run id, its steps, peak memory, errors, tracebacks and a failed step's last output lines. |
-| `barca stats <target> [files...]` | Timing, peak memory and re-execution statistics for one asset, with each recent run's id. |
-| `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view, barca's records are `barca.runs`, `barca.materializations` and `barca.nodes`; with a server, the team's results (experimental). |
-| `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps, and a configured server: its version, store, load errors, schedules and the runs not posted to it. |
-| `barca plan [files...]` | The execution plan as JSON, with the capacity and step weights (experimental). |
-| `barca gc` | Evict cached results to keep `.barca/` under its size limit (barca also does this after every run). |
-| `barca serve [files...]` | Cron scheduler, HTTP API and web UI; `--server` on other commands runs them there. `--capacity` shares one weight budget between its runs, `--run-timeout` limits how long a run takes. |
-| `barca tokens bootstrap` | On the deployed host, print a one-use bootstrap code for opt-in project token access (`barca docs server-mode`). |
-| `barca queue [pause\|resume] --server` | A server's run queue (kept across restarts); pause or resume it before a deploy. |
-| `barca state backups` / `barca state restore` / `barca state reset` | List the metadata backups, put one back in place of the local database, or start it over (experimental; nothing is deleted). |
-| `barca docs [topic]` | The manual, compiled into the binary. |
-| `barca version` | Print the version (also `barca --version`). |
+| `barca tokens bootstrap` | Print a one-use 15-minute bootstrap code; replaces any unconsumed grant (experimental) |
+| `barca get [<ARGS>...]` | Get assets; reuse unchanged results and print their artifact paths |
+| `barca run <ARGS>...` | Run a task and its dependencies; the task runs every time |
+| `barca plan [<FILES>...]` | Parse source files and emit the execution plan as JSON (experimental) |
+| `barca doctor [<FILES>...]` | Diagnose project prerequisites without running pipeline steps (experimental) |
+| `barca logs [<RUN_ID>]` | Read a run's recorded step output (stdout and stderr), without progress messages |
+| `barca history [<RUN_ID>]` | Show recent run history, or one run's steps and errors |
+| `barca gc` | Evict cached results to keep .barca/ under its size limit (experimental) |
+| `barca stats <TARGET> [<FILES>...]` | Show execution statistics for an asset |
+| `barca serve [<FILES>...]` | Manage runs, schedules and results on a server (experimental) |
+| `barca queue [<ACTION>]` | Show a barca server's run queue, or pause or resume it (experimental) |
+| `barca list [<FILES>...]` | List all discovered definitions (assets, tasks, sensors) with their deps |
+| `barca status [<ARGS>...]` | Show every node's cache state, last materialization and artifact shape (read-only) |
+| `barca sql <QUERY> [<FILES>...]` | Query cached results with SQL (DuckDB) — each asset is a named view (experimental) |
+| `barca state backups` | List the metadata backups, local and in the store, newest first |
+| `barca state restore` | Put a metadata backup in place of the local database (the current one is kept aside) |
+| `barca state reset` | Start the metadata database over: move it aside and create an empty one (experimental) |
+| `barca docs [<TOPIC>]` | Show the built-in manual: concepts, output formats, examples, agent conventions |
+| `barca version` | Print version information |
+<!-- END GENERATED commands -->
+
+The table is generated from the CLI definition (`cargo test -p barca`); a command's row says
+`(experimental)` when it may still change before 1.0 (`barca docs contract`). `barca state`
+has `backups`, `restore` and `reset`; `barca queue` takes `pause` or `resume`.
 
 Common flags on `get` and `run`: `--refresh a,b`, `--no-cascade`, `--refresh-all`,
 `--batch all` / `--batch 1000` / `--batch scored=none` (override calls of nodes declaring `batch=`),

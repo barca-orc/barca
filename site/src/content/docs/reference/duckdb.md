@@ -42,4 +42,4 @@ Moving a pipeline to duckdb 2 can need these changes in your own code (checked w
   such a file, upgrade them together, or create it with
   `ATTACH 'file.duckdb' (STORAGE_VERSION 'v1.5.0')` so 1.x can still open it.
 
-See also: `barca docs types`, `barca docs big-inputs`, [`barca docs sql`](/reference/sql/), `barca docs examples/duckdb`.
+See also: [`barca docs types`](/reference/types/), `barca docs big-inputs`, [`barca docs sql`](/reference/sql/), `barca docs examples/duckdb`.

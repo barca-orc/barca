@@ -4,7 +4,9 @@
 #   - crates/barca-cli/snapshots/help/*.txt            concise `--help` of every command
 #   - crates/barca-cli/snapshots/examples/*.txt        full `--examples` of every command
 #   - crates/barca-cli/docs/contract.md                generated tables (commands, flags, exit
-#                                                      codes, JSON schemas, --agent lines)
+#                                                      codes, experimental list, JSON schemas,
+#                                                      --agent lines)
+#   - README.md                                        the command table
 #   - python/tests/snapshots/cli_contract/*.txt        JSON output schemas and the error envelope
 #   - site/src/content/docs/reference/*.md             the site pages generated from manual
 #                                                      topics (SITE_PAGES in contract.rs);

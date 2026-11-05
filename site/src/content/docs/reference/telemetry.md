@@ -233,7 +233,7 @@ Limits:
 
 - What a step writes to its stderr is not barca's line and stays on stderr as it is: Python's
   `logging` writes there by default, and so does a traceback from a worker that died. It is
-  recorded with the run all the same (`barca logs <run_id> --stream stderr`, `barca docs logs`).
+  recorded with the run all the same (`barca logs <run_id> --stream stderr`, [`barca docs logs`](/reference/logs/)).
 - A notice from a worker process, such as `importing <file>`, is a JSON line without a run or
   a node.
 - `level` is read from the line, so a new kind of line may be filed at `info` until barca
@@ -420,5 +420,5 @@ Limits:
 - The reminder interval is fixed at 24 hours. There is no job filter and no per-job channel.
 - Runs recorded before this version have no job and do not count as a previous run.
 
-See also: [`barca docs scheduling`](/scheduling/), [`barca docs groups`](/reference/groups/), `barca docs partitions`,
+See also: [`barca docs scheduling`](/scheduling/), [`barca docs groups`](/reference/groups/), [`barca docs partitions`](/reference/partitions/),
 [`barca docs contract`](/reference/cli-contract/).

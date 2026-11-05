@@ -41,6 +41,59 @@ outside the `GENERATED` blocks is written by hand.
 
 ### Experimental items
 
+Commands and arguments, from `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` (the
+`Stability` column of the tables below comes from the same list; an argument of an experimental
+command is experimental with it):
+
+<!-- BEGIN GENERATED experimental -->
+| Command or argument | Why it is experimental |
+|---|---|
+| `barca tokens` | new in 0.36 (RFC-0016): local bootstrap for opt-in project token access |
+| `barca tokens bootstrap` | prints a one-use bootstrap credential; token formats may evolve |
+| `barca doctor` | new prerequisite report; check names and provider-specific data may evolve |
+| `barca gc` | new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use |
+| `barca history <RUN_ID>` | new in 0.29.3: the run detail's step keys and human layout may change after field use |
+| `barca history --reconcile` | explicit operator recovery for stopped runs whose owner cannot be verified |
+| `barca history --status` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --target` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --triggered-by` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --since` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca list --groups` | Organizational group hierarchy and metadata shape are experimental |
+| `barca plan` | prints the planner's internal phase/stream layout, which changes with scheduling work |
+| `barca sql` | new in 0.13: the view naming and the JSON result shape may change after field use |
+| `barca queue` | new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use |
+| `barca serve` | the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open |
+| `barca serve --capacity` | new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use |
+| `barca state reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
+| `barca get --expires` | new with -o url (signed links to results in a cloud store); the link format is the cloud's |
+| `barca status --sample` | sample rows come from a Python helper whose output may grow |
+| `barca status --problems` | new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) |
+| `barca get --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use |
+| `barca run --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use |
+| `barca get --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca get --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca run --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca run --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca status --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca status --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca list --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca list --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca history --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca history --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca stats --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca stats --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca logs --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca logs --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca sql --server` | new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use |
+| `barca sql --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca logs --follow` | new in 0.29.2: how the end of a followed run is reported may change after field use |
+<!-- END GENERATED experimental -->
+
+What the command tables cannot express: JSON keys and shapes, HTTP routes, environment
+variables, decorator arguments and output lines that are still experimental, written by hand.
+Where a row below names a command, the generated list above is the owner of that command's
+stability; the row adds the keys and routes that go with it.
+
 | Item | Why |
 |---|---|
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |

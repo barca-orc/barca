@@ -96,7 +96,7 @@ endpoint, the credentials, and `BARCA_REMOTE=off` to run one command without the
 A warning that a storage library repeats on every operation (aiohttp's `Could not parse .netrc
 file` under adlfs, when `~/.netrc` is malformed) is printed once per run, then counted:
 `[barca] 79 more: Could not parse .netrc file`. This applies while logging is unconfigured; if
-the project configures logging, every record is printed. See `barca docs agents`, "Repeated
+the project configures logging, every record is printed. See [`barca docs agents`](/reference/agents/), "Repeated
 warnings".
 
 ## In barca.toml instead
@@ -144,7 +144,7 @@ not turn off a TOML remote root.
 <uri>/<env>/state/backups/<name>.json            what each backup holds (its sidecar)
 ```
 
-`<env>` is `default` unless you pass `--env` (`barca docs cache`). Barca reads and writes
+`<env>` is `default` unless you pass `--env` ([`barca docs cache`](/reference/cache/)). Barca reads and writes
 objects and reads their metadata. It lists the bucket before it recomputes a result whose
 artifact is missing (see "Failures") and when it lists or prunes backups, and it deletes only
 backups older than the five newest. In practice that is `s3:GetObject`, `s3:PutObject`,
@@ -382,7 +382,7 @@ that copy. A final output that is only in the store is downloaded first.
 
 stderr reports each part, so remote cost is visible. The first line names the environment
 and the store, printed once at startup by `get`, `run` and `serve` whenever a store is
-configured (`barca docs cache`, "Environments"):
+configured ([`barca docs cache`](/reference/cache/), "Environments"):
 
 ```
 [barca] env default (built-in default); artifact store s3://bucket/proj/default/artifacts
@@ -490,7 +490,7 @@ not their whole upstream cone.
 
 A result produced on this machine is already on disk, and steps read that file. For a cache hit
 whose file is only in the store, the input's annotation decides how many bytes move
-(`barca docs types`):
+([`barca docs types`](/reference/types/)):
 
 - A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
   only the byte ranges the step's query touches are fetched, and nothing is downloaded. A query
@@ -501,7 +501,7 @@ whose file is only in the store, the input's annotation decides how many bytes m
   the ranges no earlier read fetched. The directory is keyed by the result's run hash and the
   store object's version (its ETag or generation, size and modified time), so a rewritten
   object is never served from the old one's ranges. The cache size limit counts these
-  directories and evicts them first, least recently used first (`barca docs cache`, "Disk
+  directories and evicts them first, least recently used first ([`barca docs cache`](/reference/cache/), "Disk
   use"); a range that is gone is fetched again.
 - Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
   pickle) is downloaded once into `.barca/artifacts/` and read from there by this run and
@@ -654,7 +654,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Cached artifact missing from the store** (the object was deleted, and there is no copy in
   `.barca/artifacts/` either): if something needs to read it, its step is computed again and
   uploaded, with `reason: "artifact_missing"` and a warning on stderr; the run does not fail.
-  If nothing reads it, it stays cached and is not recomputed (`barca docs cache`, "A cached
+  If nothing reads it, it stays cached and is not recomputed ([`barca docs cache`](/reference/cache/), "A cached
   result whose artifact is missing"). A local copy is enough: a store that is unavailable does
   not lose a cache hit whose file is in `.barca/artifacts/`.
 - **The store itself is gone** (the bucket or container was deleted, its name is misspelled,
@@ -683,7 +683,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   legitimately take longer than 10 minutes to move.
 
 - **A directory where a local copy belongs**: not a store problem and not an error. The store's
-  copy is fetched and the directory is moved aside, never deleted (`barca docs cache`, "A
+  copy is fetched and the directory is moved aside, never deleted ([`barca docs cache`](/reference/cache/), "A
   directory at an artifact's path"). If barca may not rename it (no write permission on the
   directory that holds it), the run exits 3 and says so, naming the path.
 - **A directory at an object's path in the store** (a store that is a shared directory): barca
@@ -695,7 +695,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   the same directory.
 
 `.barca/artifacts/` doubles as a local cache of the store, bounded by the cache size limit
-(`[cache] max_size`, default 10% of the filesystem; `barca docs cache`, "Disk use"). Past the
+(`[cache] max_size`, default 10% of the filesystem; [`barca docs cache`](/reference/cache/), "Disk use"). Past the
 limit, local copies of results the store holds are evicted before any result that would have to
 be computed again, and are downloaded again when something reads them. Deleting the directory by
 hand is safe too (anything needed later is downloaded again, or computed again if it is no
@@ -718,7 +718,7 @@ barca sql "select * from total"          # downloads `total` into .barca/sql-cac
 
 `barca status` reads a parquet footer by ranged requests and downloads json or pickle results of
 up to 16 MB; a store it cannot read is a `note` on each shape, not a failed command
-(`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
+([`barca docs status`](/reference/status/)). `barca sql` downloads the artifacts of the views a query names and reuses
 the copies while the objects are unchanged ([`barca docs sql`](/reference/sql/)).
 
 ## Sharing a result: signed URLs
@@ -814,7 +814,7 @@ resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
   (see "How often the store is checked").
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
-- `.barca/artifacts/` is subject to the project cache budget (`barca docs cache`). Recognized
+- `.barca/artifacts/` is subject to the project cache budget ([`barca docs cache`](/reference/cache/)). Recognized
   local metadata backups are reported outside that budget and retained by their five-copy
   rotation. Physical totals and filesystem free space still include them.
 
@@ -823,4 +823,4 @@ resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
 Run `barca doctor --pretty` before a run to check configured stores and credential identity.
 See [`barca docs doctor`](/reference/doctor/) for check limits and a copyable local-only debugging profile.
 
-See also: `barca docs cache`, [`barca docs server-mode`](/reference/server-mode/), [`barca docs doctor`](/reference/doctor/).
+See also: [`barca docs cache`](/reference/cache/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs doctor`](/reference/doctor/).
