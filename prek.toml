@@ -11,9 +11,13 @@ hooks = [
     { id = "mixed-line-ending", args = ["--fix=lf"] },
 ]
 
+# ruff and ty are pinned here and in pyproject.toml's `dev` dependency group (so uv.lock pins
+# them too); scripts/check-version-sync.sh fails when the two disagree. ruff 0.15 reformats two
+# files and 0.16 turns on a wider default rule set and formats the code blocks in Markdown, so
+# a bump past 0.14 comes with the fixes or a [tool.ruff] decision.
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.11.13"
+rev = "v0.14.14"
 hooks = [
     { id = "ruff", args = ["--fix"] },
     { id = "ruff-format" },
@@ -26,8 +30,9 @@ hooks = [
     # ty is pinned and installed by prek, not taken from PATH: its diagnostics change between
     # releases. Optional dependencies are typed as Any ([tool.ty.analysis] in pyproject.toml),
     # so the answer does not depend on what the discovered Python environment has installed.
-    { id = "ty", name = "ty", language = "python", additional_dependencies = ["ty==0.0.92"], entry = "ty check python/barca/", pass_filenames = false, types = ["python"] },
+    { id = "ty", name = "ty", language = "python", additional_dependencies = ["ty==0.0.97"], entry = "ty check python/barca/", pass_filenames = false, types = ["python"] },
     { id = "version-sync", name = "version sync", language = "system", entry = "bash scripts/check-version-sync.sh", pass_filenames = false, types_or = ["rust", "python", "toml"] },
     { id = "uv-lock", name = "uv lock check", language = "system", entry = "uv lock --check", pass_filenames = false, types = ["toml"] },
-    { id = "perf-check", name = "perf check", language = "system", entry = "python benchmarks/perf/profile.py", pass_filenames = false, stages = ["pre-push"] },
+    # The tree's venv (`.venv`, or the active VIRTUAL_ENV): profile.py runs .venv/bin/barca.
+    { id = "perf-check", name = "perf check", language = "system", entry = "uv run --no-sync python benchmarks/perf/profile.py", pass_filenames = false, stages = ["pre-push"] },
 ]
