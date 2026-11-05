@@ -25,8 +25,8 @@ PROTOCOL_VERSION = 5
 
 _socket: socket.socket | None = None
 # Separate locks: whole frames never interleave on either direction, and a
-# thread parked in recv_message never blocks senders (heartbeats, or the
-# transfer helper's pool threads replying while its main thread reads).
+# thread parked in recv_message never blocks senders (`result_batch`'s checkpoint
+# thread, or the transfer helper's pool threads replying while its main thread reads).
 _send_lock = threading.Lock()
 _recv_lock = threading.Lock()
 
@@ -268,23 +268,6 @@ def emit_step_error(
     )
 
 
-def emit_blocked(node_id: str, reason: str) -> None:
-    """Report a step was blocked."""
-    _report_repeated_warnings()
-    _emit_result(
-        {
-            "type": "blocked",
-            "node_id": node_id,
-            "reason": reason,
-        }
-    )
-
-
-def emit_heartbeat() -> None:
-    """Send a heartbeat."""
-    send_message({"type": "heartbeat"})
-
-
 def emit_log(node_id: str, line: str, stream: str = "stdout") -> None:
     """Stream a line of user stdout or stderr captured during a step, with the time it was
     written (seconds since the epoch). Sent at once, one frame per line: a line written just
@@ -332,42 +315,12 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
     return response.get("results", [])
 
 
-# ─── Heartbeat thread ─────────────────────────────────────────────────────────
-
-_heartbeat_thread: threading.Thread | None = None
-_heartbeat_stop = threading.Event()
-
-
-def start_heartbeat(interval: float = 5.0) -> None:
-    """Start a background thread that sends heartbeats every `interval` seconds."""
-    global _heartbeat_thread
-    if _heartbeat_thread is not None:
-        return
-
-    def _loop():
-        while not _heartbeat_stop.is_set():
-            try:
-                emit_heartbeat()
-            except Exception:
-                break
-            _heartbeat_stop.wait(interval)
-
-    _heartbeat_thread = threading.Thread(target=_loop, daemon=True)
-    _heartbeat_thread.start()
-
-
-def stop_heartbeat() -> None:
-    """Stop the heartbeat thread."""
-    _heartbeat_stop.set()
-
-
 # ─── Cleanup ──────────────────────────────────────────────────────────────────
 
 
 def disconnect() -> None:
     """Close the socket connection."""
     global _socket
-    stop_heartbeat()
     if _socket is not None:
         try:
             _socket.close()
