@@ -4939,7 +4939,7 @@ async fn repair_targets(
         if pending.contains(&store) || checks.iter().any(|c| c.2 == store) {
             continue;
         }
-        let Ok(local_sha) = db::file_sha256(local) else {
+        let Ok(local_sha) = crate::hash::file_sha256(local) else {
             continue;
         };
         if oref.content_hash.as_deref().is_some_and(|h| h != local_sha) {

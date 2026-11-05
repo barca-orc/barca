@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, snapshot TEXT NOT NULL)";
 
+use crate::db::BY_NODE_RUN;
 use crate::source_observation::Source;
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Proof {
@@ -890,7 +891,7 @@ async fn latest_many(
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m INDEXED BY idx_mat_node_run ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
+            "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m {BY_NODE_RUN} ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
             crate::cache::READ_STAMP_REFRESH
         );
         let params = std::iter::once(libsql::Value::Integer(through))

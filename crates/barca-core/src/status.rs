@@ -148,14 +148,8 @@ impl ScheduleStatus {
     }
 }
 
-/// Unix seconds as RFC 3339 UTC (`2026-10-22T06:00:00Z`).
-pub fn rfc3339_secs(secs: i64) -> Option<String> {
-    use chrono::TimeZone;
-    chrono::Utc
-        .timestamp_opt(secs, 0)
-        .single()
-        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-}
+// barca-server names this path (`handlers.rs`); the helper lives in `time`.
+pub use crate::time::rfc3339_secs;
 
 /// Give every scheduled node in `nodes` its [`ScheduleStatus`] from the metadata DB at
 /// `db_path` (none yet: no failures, no pauses), with next fire times evaluated in `zone`.

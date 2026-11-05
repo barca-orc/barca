@@ -83,9 +83,12 @@ pub async fn recent_durations(
         let mut found: Vec<(i64, f64)> = Vec::new();
         let mut rows = conn
             .query(
-                "SELECT id, elapsed_seconds FROM materializations INDEXED BY idx_mat_node_run \
-                 WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
-                 ORDER BY id DESC LIMIT ?2",
+                concat!(
+                    "SELECT id, elapsed_seconds FROM materializations ",
+                    by_node_run!(),
+                    " WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
+                     ORDER BY id DESC LIMIT ?2"
+                ),
                 vec![
                     libsql::Value::Text(base.clone()),
                     libsql::Value::Integer(window as i64),
@@ -108,9 +111,12 @@ pub async fn recent_durations(
         // read the entire database once per sparse or failed-only partitioned node.
         let mut rows = conn
             .query(
-                "SELECT id, elapsed_seconds FROM materializations INDEXED BY idx_mat_node_run \
-                 WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
-                 AND elapsed_seconds IS NOT NULL ORDER BY id DESC LIMIT ?3",
+                concat!(
+                    "SELECT id, elapsed_seconds FROM materializations ",
+                    by_node_run!(),
+                    " WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                     AND elapsed_seconds IS NOT NULL ORDER BY id DESC LIMIT ?3"
+                ),
                 libsql::params![lo, hi, window as i64],
             )
             .await
@@ -479,8 +485,11 @@ pub(super) async fn partitioned_avg_elapsed_on(
         let (lo, hi) = key_range(nid);
         let mut rows = conn
             .query(
-                "SELECT AVG(elapsed_seconds) FROM materializations INDEXED BY idx_mat_node_run \
-                 WHERE node_id >= ?1 AND node_id < ?2 AND elapsed_seconds IS NOT NULL",
+                concat!(
+                    "SELECT AVG(elapsed_seconds) FROM materializations ",
+                    by_node_run!(),
+                    " WHERE node_id >= ?1 AND node_id < ?2 AND elapsed_seconds IS NOT NULL"
+                ),
                 [lo, hi],
             )
             .await

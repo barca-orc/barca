@@ -77,6 +77,7 @@ pub mod targets;
 pub mod telemetry;
 pub mod term;
 pub mod test_hooks;
+pub mod time;
 pub mod transfer;
 pub mod unrelated_modules;
 pub mod unused_inputs;

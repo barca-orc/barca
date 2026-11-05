@@ -15,8 +15,19 @@ use libsql::Builder;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{Mutex, MutexGuard};
+
+/// The index hint every lookup of a node's materializations by run hash carries: Turso
+/// otherwise intersects the node and run indexes, scanning the run for each partition. A macro
+/// so it concatenates into SQL literals (`concat!`); [`BY_NODE_RUN`] is the same text for
+/// `format!`.
+macro_rules! by_node_run {
+    () => {
+        "INDEXED BY idx_mat_node_run"
+    };
+}
+pub(crate) const BY_NODE_RUN: &str = by_node_run!();
 
 // The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
 // this directory (one file per table family) or `persist/recording.rs`.
@@ -323,12 +334,8 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
             )));
         }
         // Back off with a little jitter so waiters don't wake in lockstep.
-        let jitter = Duration::from_micros(u64::from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() % 2000)
-                .unwrap_or(0),
-        ));
+        let jitter =
+            Duration::from_micros((crate::time::unix_nanos(SystemTime::now()) % 2000) as u64);
         tokio::time::sleep(delay + jitter).await;
         delay = (delay * 2).min(Duration::from_millis(40));
     }
@@ -404,23 +411,6 @@ pub(crate) fn held_file(path: &Path) -> std::io::Result<std::sync::Arc<fs::File>
     let file = std::sync::Arc::new(file);
     held.insert(key, file.clone());
     Ok(file)
-}
-
-/// The SHA-256 of the file at `path`, as lowercase hex.
-pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 16];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Checkpoint the database at `db_path` and verify that its main file is now the whole
@@ -898,8 +888,8 @@ mod tests {
 #[cfg(test)]
 mod fold_log_tests {
     use super::{
-        acquire_file_lock, connect, copy_for_backup, create_run, file_sha256, fold_log, init_db,
-        lock_db, wal_is_clean,
+        acquire_file_lock, connect, copy_for_backup, create_run, fold_log, init_db, lock_db,
+        wal_is_clean,
     };
     use crate::db::snapshots::pin_main_file;
     use libsql::Builder;
@@ -991,7 +981,7 @@ mod fold_log_tests {
             .unwrap()
             .unwrap();
         writer.await.unwrap();
-        assert_eq!(file_sha256(&copy).unwrap(), digest);
+        assert_eq!(crate::hash::file_sha256(&copy).unwrap(), digest);
         let copied = open_and_count(&copy.display().to_string(), "runs").await;
         assert!((2000..=2200).contains(&copied), "{copied}");
         assert_eq!(open_and_count(&path, "runs").await, 2200);

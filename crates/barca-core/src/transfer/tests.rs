@@ -228,7 +228,7 @@ async fn a_deferred_client_starts_its_helper_at_the_first_request() {
     // A local copy with the recorded hash is checked here, with no helper.
     let local = fx.write_local("n/h.json", b"same");
     let store = fx.layout().store_for(&local).unwrap();
-    let sha = crate::db::file_sha256(Path::new(&local)).unwrap();
+    let sha = crate::hash::file_sha256(Path::new(&local)).unwrap();
     assert!(c.has_local_copy(&store, Some(&sha)));
     assert!(c.has_local_copy(&store, None));
     assert!(!c.has_local_copy(&store, Some("other")));

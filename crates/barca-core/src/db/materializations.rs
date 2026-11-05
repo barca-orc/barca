@@ -247,9 +247,12 @@ pub(crate) async fn confirmed_object(
     let mut rows = cache
         .conn()
         .query(
-            "SELECT artifact_path, output_hash FROM materializations INDEXED BY idx_mat_node_run \
-             WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' \
-             AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1",
+            concat!(
+                "SELECT artifact_path, output_hash FROM materializations ",
+                by_node_run!(),
+                " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' \
+                 AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1"
+            ),
             [node_id.to_string(), run_hash.to_string()],
         )
         .await
@@ -538,10 +541,13 @@ async fn latest_partition_artifacts_scoped(
     let (lo, hi) = key_range(base_id);
     let mut rows = conn
         .query(
-            "SELECT node_id, artifact_path, artifact_format, output_hash FROM materializations \
-             INDEXED BY idx_mat_node_run WHERE node_id >= ?1 AND node_id < ?2 \
-             AND status = 'success' AND artifact_path IS NOT NULL AND artifact_path != '' \
-             ORDER BY id DESC",
+            concat!(
+                "SELECT node_id, artifact_path, artifact_format, output_hash FROM materializations ",
+                by_node_run!(),
+                " WHERE node_id >= ?1 AND node_id < ?2 \
+                 AND status = 'success' AND artifact_path IS NOT NULL AND artifact_path != '' \
+                 ORDER BY id DESC"
+            ),
             [lo, hi],
         )
         .await

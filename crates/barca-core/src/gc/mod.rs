@@ -546,12 +546,7 @@ fn update_store_checks(project: &Project, check: StoreCheck, keep: bool) {
 const STUCK_FOR: Duration = Duration::from_secs(600);
 const STUCK_SLACK: u64 = 1 << 20;
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+use crate::time::now_secs;
 
 /// Record that a check found `size` under `limit` ([`State::checked_size`]).
 fn checked(project: &Project, size: u64, limit: u64) {
@@ -674,11 +669,7 @@ fn outside_kind(barca: &Path, path: &Path) -> Held {
 }
 
 fn modified_secs(meta: &std::fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    meta.modified().map_or(0, crate::time::unix_secs)
 }
 
 /// Bytes under `path` (not following symlinks) and the newest modification time in it.

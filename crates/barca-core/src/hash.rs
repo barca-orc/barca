@@ -6,6 +6,7 @@
 //! - run_hash: identity of a specific execution (definition + inputs + partition)
 
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 /// Protocol version — bump when hash computation changes.
 pub const PROTOCOL_VERSION: &str = "1.0.0";
@@ -97,6 +98,22 @@ pub fn short_digest(bytes: &[u8]) -> String {
     let mut hex = format!("{:x}", Sha256::digest(bytes));
     hex.truncate(16);
     hex
+}
+
+/// The SHA-256 of the file at `path`, as lowercase hex.
+pub fn file_sha256(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]

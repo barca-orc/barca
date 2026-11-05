@@ -82,12 +82,9 @@ impl Trigger {
     }
 }
 
-/// Unix seconds as RFC 3339 in UTC (`2026-10-20T05:00:00Z`).
-pub fn rfc3339(epoch: i64) -> String {
-    chrono::DateTime::from_timestamp(epoch, 0)
-        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-        .unwrap_or_default()
-}
+// barca-server names this path (`pause.rs`, `queue.rs`, `inspect.rs`); the helper lives in
+// `time`.
+pub use crate::time::rfc3339;
 
 /// What a run is given besides its targets: the id to record it under (allocated by the
 /// caller, so the id a server answers with is the database id) and what started it.

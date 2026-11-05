@@ -1517,7 +1517,7 @@ mod tests {
         assert_eq!(sidecar.db_format, crate::db_schema::VERSION);
         assert_eq!(
             sidecar.digest,
-            crate::db::file_sha256(&local.join(&name)).unwrap()
+            crate::hash::file_sha256(&local.join(&name)).unwrap()
         );
         // Nothing changed: nothing is written or uploaded.
         let again = take(&python, &cfg, None, Until::done()).await.unwrap();

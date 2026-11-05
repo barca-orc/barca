@@ -599,7 +599,7 @@ impl TransferClient {
     pub(crate) fn has_local_copy(&self, store: &str, sha256: Option<&str>) -> bool {
         self.layout.local_for(store).is_some_and(|local| {
             local.is_file()
-                && sha256.is_none_or(|h| crate::db::file_sha256(&local).is_ok_and(|l| l == h))
+                && sha256.is_none_or(|h| crate::hash::file_sha256(&local).is_ok_and(|l| l == h))
         })
     }
 

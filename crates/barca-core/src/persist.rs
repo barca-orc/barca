@@ -461,10 +461,7 @@ pub(crate) fn telemetry_report(
     } = run;
     let job = l.job;
     let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
-    let start_unix_ns = started
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let start_unix_ns = crate::time::unix_nanos(started) as u64;
     let duration_ns = ns(l.elapsed);
     let contexts: HashMap<String, Arc<NodeContext>> = crate::telemetry::node_contexts(dag)
         .into_iter()
