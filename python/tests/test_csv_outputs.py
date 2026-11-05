@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from barca import _inspect, _sinks, _storage
 from barca._artifacts import deserialize, serialize_hashed
-from barca._worker import _write_sinks
+from barca._sinks import write_sinks as _write_sinks
 from barca.api import _find_binary
 
 from .daemon_steps import run_steps

@@ -7,17 +7,17 @@ corruption, permission failures and concurrent eviction only cause another obser
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import hashlib
 import json
 import os
 import sys
-from pathlib import Path
-from stat import S_ISREG
 import tempfile
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
+from contextlib import contextmanager
+from pathlib import Path
+from stat import S_ISREG
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_ENTRIES = 8192
@@ -98,7 +98,7 @@ class Cache:
                 or not isinstance(entries, dict)
                 or not isinstance(invalidations, dict)
                 or len(entries) + len(invalidations) > MAX_ENTRIES
-                or any(not isinstance(at, (int, float)) for at in invalidations.values())
+                or any(not isinstance(at, int | float) for at in invalidations.values())
             ):
                 return {}
             self.invalidations = invalidations
@@ -179,7 +179,7 @@ class Cache:
             row = self.entries.get(key, {})
         checked = row.get("checked")
         started = self.clock()
-        age = started - checked if isinstance(checked, (int, float)) else -1
+        age = started - checked if isinstance(checked, int | float) else -1
         if (
             0 <= age < REMOTE_SECONDS
             and row.get("stamp") == epoch
@@ -224,7 +224,7 @@ class Cache:
         ordered = sorted(
             entries.items(),
             key=lambda item: item[1].get("checked", 0)
-            if isinstance(item[1].get("checked"), (int, float))
+            if isinstance(item[1].get("checked"), int | float)
             else 0,
         )
         keep = MAX_ENTRIES - len(self.invalidations)

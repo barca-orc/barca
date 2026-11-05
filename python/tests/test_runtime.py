@@ -5,7 +5,7 @@ Tests cover:
   - is_worker() returns False without BARCA_SOCKET env var
   - submit_and_wait with a mock executor socket server
   - parallel() standalone fallback with nested calls
-  - High-level emit helpers (step_completed, step_error, blocked, heartbeat)
+  - High-level emit helpers (step_completed, step_error)
 """
 
 import json
@@ -472,7 +472,7 @@ class TestSubmitAndWait:
 
 
 class TestEmitHelpers:
-    """Test emit_step_completed, emit_step_error, emit_blocked, emit_heartbeat."""
+    """Test emit_step_completed and emit_step_error."""
 
     def _setup_socket_pair(self):
         """Set up a socket pair and patch _runtime._socket."""
@@ -535,32 +535,6 @@ class TestEmitHelpers:
             assert msg["error_type"] == "ValueError"
             assert msg["message"] == "something broke"
             assert msg["elapsed"] == 1.5
-        finally:
-            self._teardown(s1, s2, original)
-
-    def test_emit_blocked(self):
-        from barca import _runtime
-
-        s1, s2, original = self._setup_socket_pair()
-        try:
-            _runtime.emit_blocked("downstream_node", "upstream 'data' unavailable")
-            from barca import _wire
-
-            msg = _wire.decode_results(self._read_message(s2))[0]
-            assert msg["type"] == "blocked"
-            assert msg["node_id"] == "downstream_node"
-            assert "upstream" in msg["reason"]
-        finally:
-            self._teardown(s1, s2, original)
-
-    def test_emit_heartbeat(self):
-        from barca import _runtime
-
-        s1, s2, original = self._setup_socket_pair()
-        try:
-            _runtime.emit_heartbeat()
-            msg = self._read_message(s2)
-            assert msg == {"type": "heartbeat"}
         finally:
             self._teardown(s1, s2, original)
 
@@ -691,47 +665,6 @@ class TestParallelStandalone:
                     parallel(lambda: 1)
             finally:
                 _runtime._socket = original
-
-
-# ─── Heartbeat thread ─────────────────────────────────────────────────────────
-
-
-class TestHeartbeat:
-    """Test the heartbeat background thread."""
-
-    def test_heartbeat_sends_messages(self):
-        """start_heartbeat sends periodic heartbeats until stopped."""
-        from barca import _runtime
-
-        s1, s2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        original_socket = _runtime._socket
-        original_thread = _runtime._heartbeat_thread
-        _runtime._socket = s1
-        _runtime._heartbeat_thread = None
-        _runtime._heartbeat_stop.clear()
-
-        try:
-            _runtime.start_heartbeat(interval=0.05)
-
-            # Wait for at least one heartbeat
-            s2.settimeout(2.0)
-            header = s2.recv(4)
-            length = struct.unpack(">I", header)[0]
-            payload = s2.recv(length)
-            msg = json.loads(payload)
-            assert msg == {"type": "heartbeat"}
-
-            _runtime.stop_heartbeat()
-            # Give the thread time to stop
-            import time
-
-            time.sleep(0.1)
-        finally:
-            _runtime._socket = original_socket
-            _runtime._heartbeat_thread = original_thread
-            _runtime._heartbeat_stop.clear()
-            s1.close()
-            s2.close()
 
 
 # ─── disconnect() ─────────────────────────────────────────────────────────────

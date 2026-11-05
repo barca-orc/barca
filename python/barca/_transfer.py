@@ -22,7 +22,8 @@ reply carries the request id.
        "sha256"); an "error" with "missing" when it is not there. Moves no bytes.
   → {"type": "shutdown"}                        finish in-flight work, exit
   ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
-       "sha256" identifies the exact uploaded snapshot for a put and the local copy for a get; "fetched" is false when a get left the local file as it
+       "sha256" identifies the exact uploaded snapshot for a put and the local copy for a get;
+       "fetched" is false when a get left the local file as it
        was; "mismatch" is true when the store's copy does not have the recorded hash. That
        is not an error: an artifact path is `{node}/{run_hash}`, so a refresh or a second
        machine computing the same step overwrites it, and the store's copy is still used.
@@ -387,7 +388,7 @@ def _stop(signum, frame) -> None:
 
 
 def main() -> int:
-    if not os.environ.get("BARCA_SOCKET"):
+    if _runtime.socket_path() is None:
         print("BARCA_SOCKET not set", file=sys.stderr)
         return 1
     import argparse
@@ -417,7 +418,7 @@ def main() -> int:
             return 0
         print(
             f"[barca] transfer helper: cannot reach the coordinator at "
-            f"{os.environ['BARCA_SOCKET']}: {type(exc).__name__}: {exc}",
+            f"{_runtime.socket_path()}: {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
         return 1

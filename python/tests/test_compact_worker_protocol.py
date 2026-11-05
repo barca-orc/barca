@@ -40,13 +40,13 @@ def test_long_batch_publishes_progress_before_it_ends(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_runtime, "send_message", capture)
     with _runtime.result_batch(tmp_path / "results"):
-        _runtime.emit_blocked("a", "sensor")
+        _runtime.emit_step_error("a", "RuntimeError", "sensor", "", 0.0)
         assert notified.wait(2)
         assert (
             next(frame["completed"] for frame in sent if frame["type"] == "result_checkpoint") == 1
         )
         assert not any(frame["type"] == "results" for frame in sent)
-    assert sent[-1]["statuses"] == ["blocked"]
+    assert sent[-1]["statuses"] == ["step_error"]
 
 
 @pytest.mark.parametrize("failure", ["crash", "exception"])

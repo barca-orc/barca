@@ -1,4 +1,4 @@
-"""How a `parallel()` branch's return value gets back to the step that called it.
+"""`parallel()`: run callables in other workers, and get each branch's return value back.
 
 The branch runs in another worker, which writes what it returned as an artifact exactly as it
 would write a step's output: json, pickle or parquet, chosen by type (`_artifacts.py`). The
@@ -27,12 +27,110 @@ frame stays readable for as long as that step runs), the run's directory when th
 however it ends, and the directories of runs that were killed when the next run starts.
 """
 
+from __future__ import annotations
+
 import json
 import os
+from collections.abc import Callable, Iterable
+from functools import partial
+from typing import Any
 
 # `error_type` of a branch that finished but whose return value could not be written. No
 # Python class name contains a dot, so no exception raised by user code reports this.
 UNRETURNABLE = "barca.BranchResultError"
+
+
+class ParallelError:
+    """Represents a failed branch in a parallel() call."""
+
+    def __init__(self, error: str) -> None:
+        self.error = error
+
+    def __repr__(self) -> str:
+        return f"ParallelError({self.error!r})"
+
+    def __str__(self) -> str:
+        return self.error
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"__parallel_error__": True, "error": self.error}
+
+
+class BranchResultError(RuntimeError):
+    """A `parallel()` branch returned, and its return value could not be passed to the caller.
+
+    Raised by `parallel()` in the calling step, which fails like any step that raises. A
+    branch that itself raised is different: it comes back as a `ParallelError` in the list.
+
+    The message names the branch, the type of the value and the reason: the value cannot be
+    written as json, pickle or parquet (an open file, a lambda, a generator), or what was
+    written cannot be read back in the calling worker.
+    """
+
+
+def parallel(*callables: partial[Any]) -> list[Any]:
+    """Run callables in parallel across worker processes.
+
+    Each argument should be a `functools.partial` wrapping a @task-decorated
+    function. Returns a list of results (or ParallelError objects) in argument
+    order.
+
+    When running inside a barca worker (BARCA_SOCKET set), uses the Unix socket
+    protocol to request Rust to dispatch branches as separate workers. A branch's
+    return value comes back the way a step's output reaches the next step: written
+    as an artifact (json, pickle or parquet, by type) and read from it here. A value
+    that cannot be passed raises `BranchResultError`; it is never replaced by `None`.
+    When running standalone, executes sequentially.
+    """
+    if not callables:
+        return []
+
+    # Build work items from partials
+    items = []
+    for c in callables:
+        if hasattr(c, "func") and hasattr(c, "args") and hasattr(c, "keywords"):
+            fn = c.func
+            fn_name = getattr(fn, "__name__", type(fn).__name__)
+            source_file = getattr(getattr(fn, "__code__", None), "co_filename", "") or ""
+            fn_ref = f"{source_file}:{fn_name}" if source_file else fn_name
+            items.append(
+                {
+                    "fn_ref": fn_ref,
+                    "args": list(c.args),
+                    "kwargs": dict(c.keywords) if c.keywords else {},
+                }
+            )
+        else:
+            raise TypeError(f"parallel() expects functools.partial objects, got {type(c).__name__}")
+
+    from barca import _runtime
+
+    if _runtime.is_worker() and _runtime.connect() is not None:
+        # Inside a barca worker — dispatch via Unix socket to executor
+        return collect(_runtime.submit_and_wait(items), items)
+
+    # Not inside a worker — execute sequentially (standalone/testing)
+    return _sequential(callables)
+
+
+def _sequential(callables: tuple[partial[Any], ...]) -> list[Any]:
+    """The standalone fallback: each branch in turn, in this process, a raise becoming its
+    `ParallelError`, as it would be in a worker."""
+    results: list[Any] = []
+    for c in callables:
+        try:
+            results.append(c())
+        except Exception as e:
+            results.append(ParallelError(f"{type(e).__name__}: {e}"))
+    return results
+
+
+def parallel_map(fn: Callable[..., Any], items: Iterable[Any], **kwargs: Any) -> list[Any]:
+    """Map a @task function over items in parallel.
+
+    Sugar for `parallel(*(partial(fn, item, **kwargs) for item in items))`.
+    """
+    return parallel(*(partial(fn, item, **kwargs) for item in items))
 
 
 def describe(fn_ref: str) -> str:
@@ -41,10 +139,8 @@ def describe(fn_ref: str) -> str:
     return f"{os.path.basename(source)}:{name}" if source else name
 
 
-def unwritable(step: dict, value, exc: BaseException) -> Exception:
+def unwritable(step: dict, value: Any, exc: BaseException) -> Exception:
     """The error a branch's worker reports when the branch's return value cannot be written."""
-    from barca import BranchResultError
-
     fn = describe(f"{step.get('source_file', '')}:{step.get('function_name', '?')}")
     return BranchResultError(
         f"{fn} returned a {type(value).__module__}.{type(value).__qualname__}, which cannot be "
@@ -54,19 +150,20 @@ def unwritable(step: dict, value, exc: BaseException) -> Exception:
     )
 
 
-def frame_type(value, fmt: str) -> str | None:
-    """The reader that gives back the type `value` has, when it was written as parquet."""
+def reader_name(value: Any, fmt: str) -> str | None:
+    """The name of the reader (`_artifacts.deserialize`'s `frame_type`) that gives back the type
+    `value` has, when it was written as parquet or CSV; None for another format."""
     if fmt not in ("parquet", "csv"):
         return None
-    from barca._artifacts import _frame_kind
+    from barca._artifacts import dataframe_library
 
-    kind = _frame_kind(value)
-    if kind == "polars" and type(value).__name__ == "LazyFrame":
+    library = dataframe_library(value)
+    if library == "polars" and type(value).__name__ == "LazyFrame":
         return "polars_lazy"
-    return kind
+    return library
 
 
-def _read(artifact: dict, source_file: str):
+def _read(artifact: dict, source_file: str) -> Any:
     path, fmt = artifact["path"], artifact["format"]
     if "json" in artifact or not path:
         raise ValueError("branch results require an artifact file reference; reinstall barca")
@@ -91,10 +188,20 @@ def _read(artifact: dict, source_file: str):
             raise
         # The value's class lives in the branch's module, which the branch's worker loaded
         # under barca's name for it. This worker may know the file only as an ordinary import.
-        from barca._worker import load_module
+        from barca._source_import import load_pipeline_module
 
-        load_module(source_file)
+        load_pipeline_module(source_file)
         return deserialize(path, fmt)
+
+
+def serializable(value: Any) -> Any:
+    """`value` with every `ParallelError` in it (a failed branch a step returns as part of its
+    result) replaced by its dict, so the result can be written as JSON."""
+    if isinstance(value, ParallelError):
+        return value.to_dict()
+    if isinstance(value, list):
+        return [serializable(v) for v in value]
+    return value
 
 
 def collect(results: list[dict], items: list[dict]) -> list:
@@ -103,8 +210,6 @@ def collect(results: list[dict], items: list[dict]) -> list:
     One entry per branch, in order: its return value, or a `ParallelError` if it raised.
     Raises `BranchResultError` if any branch returned a value that could not be passed.
     """
-    from barca import BranchResultError, ParallelError
-
     out: list = []
     lost: list[str] = []
     for index, result in enumerate(results):

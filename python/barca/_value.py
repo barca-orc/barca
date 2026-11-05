@@ -26,8 +26,9 @@ from typing import Any
 from barca import _artifacts
 
 
-def _frame_type(fmt: str) -> "str | None":
-    """pyarrow keeps a table's column types without pandas; fall back to the default reader."""
+def _pyarrow_reader_if_available(fmt: str) -> str | None:
+    """The reader for a tabular artifact: pyarrow, which keeps a table's column types without
+    pandas, when it is installed; None (the default reader) otherwise, or for other formats."""
     if fmt not in ("parquet", "csv"):
         return None
     try:
@@ -39,15 +40,15 @@ def _frame_type(fmt: str) -> "str | None":
 
 def _plain(value: Any) -> Any:
     """`value` as plain JSON data."""
-    if value is None or isinstance(value, (bool, int, str)):
+    if value is None or isinstance(value, bool | int | str):
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, dict):
         return {str(k): _plain(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple, set, frozenset)):
+    if isinstance(value, list | tuple | set | frozenset):
         return [_plain(v) for v in value]
-    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+    if isinstance(value, datetime.datetime | datetime.date | datetime.time):
         return value.isoformat()
     if isinstance(value, datetime.timedelta):
         return value.total_seconds()
@@ -74,7 +75,11 @@ def _plain(value: Any) -> Any:
 def value(path: str, fmt: str) -> dict:
     """One artifact as {"value": ...}, or {"error": ...}. Never raises."""
     try:
-        return {"value": _plain(_artifacts.deserialize(path, fmt, frame_type=_frame_type(fmt)))}
+        return {
+            "value": _plain(
+                _artifacts.deserialize(path, fmt, frame_type=_pyarrow_reader_if_available(fmt))
+            )
+        }
     except Exception as e:  # noqa: BLE001 — reported per artifact, never fails the command
         first = str(e).splitlines()[0] if str(e) else ""
         return {"error": f"{type(e).__name__}: {first}".rstrip(": ")}
@@ -85,19 +90,17 @@ SIGN_VERSION = 1
 
 def sign(obj: dict) -> dict:
     """One object as {"url", "expires_at"}, or {"error", "kind"}. Never raises."""
-    from barca import _storage
+    from barca import _signing, _storage
 
     try:
-        url, expires_at = _storage.sign_url(obj["uri"], obj["expires"], obj.get("filename"))
-    except _storage.SignError as e:
+        url, expires_at = _signing.sign_url(obj["uri"], obj["expires"], obj.get("filename"))
+    except _signing.SignError as e:
         return {"error": str(e), "kind": e.kind}
     except Exception as e:  # noqa: BLE001 — reported per object, as the coordinator decides
         message = _storage.safe_error(f"{type(e).__name__}: {e}")
         return {"error": message, "kind": "store"}
     answer = {"url": url, "expires_at": expires_at.isoformat().replace("+00:00", "Z")}
-    asked = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
-        seconds=obj["expires"]
-    )
+    asked = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=obj["expires"])
     if expires_at < asked - datetime.timedelta(seconds=60):
         answer["note"] = (
             f"the credentials that signed it expire at {answer['expires_at']}, so the link "

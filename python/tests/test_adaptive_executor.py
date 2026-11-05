@@ -13,7 +13,9 @@ import time
 import barca
 import pytest
 from barca._artifacts import serialize
-from barca._worker import _ArtifactLRU, _load_collected_artifacts, _peak_rss_bytes
+from barca._lru import _ArtifactLRU
+from barca._rss import peak_rss_bytes as _peak_rss_bytes
+from barca._worker import _load_collected_artifacts
 
 
 @pytest.fixture(autouse=True)

@@ -43,7 +43,7 @@ def _fits_wire(value):
             if remaining >= 0:
                 pending.extend(value.keys())
                 pending.extend(value.values())
-        elif isinstance(value, (list, tuple)):
+        elif isinstance(value, list | tuple):
             remaining -= 2 + 2 * len(value)
             if remaining >= 0:
                 pending.extend(value)

@@ -90,7 +90,15 @@ the function, checking what it returned), `split_output`, `write_output` or `sin
 `user_code` the traceback holds the user's frames only (barca's and importlib's removed);
 for the others it holds every frame. An absent or unknown `phase` is read as unknown.
 Blocked metadata requires reason. Optional metadata retains timing, digest, sinks, frame
-reader and the private upload snapshot reference. Unknown statuses, invalid identity/time types, malformed
+reader and the private upload snapshot reference.
+
+Two accepted inputs have no sender in this package: the `blocked` status and a `heartbeat`
+message. The coordinator decodes both (`protocol.rs`), fails the lease of a `blocked` item
+with `blocked: <reason>` and ignores a `heartbeat` (`io_loop.rs`), but the worker never
+decides that a step is blocked (the coordinator does, before it leases the step) and never
+needs to say it is alive (its socket says so). `_runtime` has no emitter for either; they
+stay in the decoder so the status set and the wire tests (`wire.rs`) that cover it remain
+total. Unknown statuses, invalid identity/time types, malformed
 tables, missing required metadata and inline `json` artifact data are rejected.
 Legacy per-item result message variants are not accepted after v3 negotiation.
 
@@ -154,7 +162,7 @@ dispatched steps from the coordinator's `BARCA_TRACE_TIMING` summary.
 ## Other messages and artifact data
 
 Coordinator → worker: `execute`, `execute_batch`, `parallel_response`, `cancel`, `done`.
-Worker → coordinator: `results`, `result_checkpoint`, `log`, `submit`, `heartbeat`,
+Worker → coordinator: `results`, `result_checkpoint`, `log`, `submit`,
 `repeated_warnings`. Coordinator → transfer: `put`, `get`, `probe`, `stat`, `shutdown`.
 Transfer → coordinator: `done`, `error`, correlated by request id. `stat` (`{type, id,
 remote}`, added for RFC-0009's `barca get` repair) asks whether an object is in the store and

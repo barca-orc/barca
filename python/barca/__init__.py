@@ -7,7 +7,15 @@ parses these statically from source without importing.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
+
+from barca._batch import Failed
+from barca._branches import BranchResultError, ParallelError, parallel, parallel_map
+
+if TYPE_CHECKING:
+    from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats
+    from barca.client import Client, Run
 
 __version__ = "0.39.5"
 
@@ -46,6 +54,14 @@ __all__ = [
     "Run",
 ]
 
+# A decorated step function: every decorator returns it unchanged.
+F = TypeVar("F", bound=Callable[..., Any])
+# What `serializer=` accepts, on the decorators and on `@sink`.
+Serializer = Literal["json", "pickle", "parquet", "csv"]
+# What `batch=` accepts: a size, `"all"`, `batches([...])` (the groups) or `batches_by(fn)`
+# (the function).
+Batch = int | str | Sequence[Sequence[Any]] | Callable[[Any], str | int] | None
+
 # ─── Freshness markers ───────────────────────────────────────────────────────
 
 
@@ -81,7 +97,7 @@ class Schedule:
         *,
         max_failures: int = 5,
         timeout_seconds: int | None = None,
-        batch: "int | str | None" = None,
+        batch: int | str | None = None,
     ) -> None:
         self.cron = cron
         self.max_failures = max_failures
@@ -89,29 +105,53 @@ class Schedule:
         self.batch = batch
 
 
+# `freshness=`: `Always`, `Manual` (the classes themselves) or a `Schedule(...)`.
+Freshness = type[Always] | type[Manual] | Schedule
+
 # ─── Decorators ───────────────────────────────────────────────────────────────
 
 
+@overload
+def asset(fn: F, /) -> F: ...
+@overload
 def asset(
-    fn=None,
-    /,
     *,
-    name=None,
-    inputs=None,
-    partitions=None,
-    serializer=None,
-    freshness=Always,
-    timeout_seconds=300,
-    retries=1,
-    retry_backoff=0.0,
-    description=None,
-    tags=None,
+    name: str | None = None,
+    inputs: dict[str, Any] | None = None,
+    partitions: dict[str, Any] | None = None,
+    serializer: Serializer | None = None,
+    freshness: Freshness = Always,
+    timeout_seconds: int = 300,
+    retries: int = 1,
+    retry_backoff: float = 0.0,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
     env: list[str] | None = None,
     weight: int = 1,
     deterministic: bool = True,
     cutoff: bool = False,
-    batch: "int | str | None" = None,
-):
+    batch: Batch = None,
+) -> Callable[[F], F]: ...
+def asset(
+    fn: F | None = None,
+    /,
+    *,
+    name: str | None = None,
+    inputs: dict[str, Any] | None = None,
+    partitions: dict[str, Any] | None = None,
+    serializer: Serializer | None = None,
+    freshness: Freshness = Always,
+    timeout_seconds: int = 300,
+    retries: int = 1,
+    retry_backoff: float = 0.0,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
+    env: list[str] | None = None,
+    weight: int = 1,
+    deterministic: bool = True,
+    cutoff: bool = False,
+    batch: Batch = None,
+) -> F | Callable[[F], F]:
     """Declare a cached asset node.
 
     The arguments below are the only ones: the `barca` binary rejects any other when it
@@ -163,28 +203,45 @@ def asset(
     if fn is not None:
         return fn
 
-    def decorator(f):
+    def decorator(f: F) -> F:
         return f
 
     return decorator
 
 
+@overload
+def sensor(fn: F, /) -> F: ...
+@overload
 def sensor(
-    fn=None,
-    /,
     *,
-    name=None,
-    partitions: dict | None = None,
-    serializer: str | None = None,
-    freshness=Manual,
-    timeout_seconds=300,
-    retries=1,
-    retry_backoff=0.0,
-    description=None,
-    tags=None,
+    name: str | None = None,
+    partitions: dict[str, Any] | None = None,
+    serializer: Serializer | None = None,
+    freshness: Freshness = Manual,
+    timeout_seconds: int = 300,
+    retries: int = 1,
+    retry_backoff: float = 0.0,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
     env: list[str] | None = None,
     weight: int = 1,
-):
+) -> Callable[[F], F]: ...
+def sensor(
+    fn: F | None = None,
+    /,
+    *,
+    name: str | None = None,
+    partitions: dict[str, Any] | None = None,
+    serializer: Serializer | None = None,
+    freshness: Freshness = Manual,
+    timeout_seconds: int = 300,
+    retries: int = 1,
+    retry_backoff: float = 0.0,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
+    env: list[str] | None = None,
+    weight: int = 1,
+) -> F | Callable[[F], F]:
     """Declare a sensor node (observes external state).
 
     Return `True`/`False` to report a change, or `(changed, value)` to also supply
@@ -202,30 +259,49 @@ def sensor(
     if fn is not None:
         return fn
 
-    def decorator(f):
+    def decorator(f: F) -> F:
         return f
 
     return decorator
 
 
+@overload
+def task(fn: F, /) -> F: ...
+@overload
 def task(
-    fn=None,
-    /,
     *,
-    name=None,
-    inputs=None,
-    partitions: dict | None = None,
-    serializer: str | None = None,
-    freshness=Always,
-    timeout_seconds=300,
-    retries=1,
-    retry_backoff=0.0,
-    description=None,
-    tags=None,
+    name: str | None = None,
+    inputs: dict[str, Any] | None = None,
+    partitions: dict[str, Any] | None = None,
+    serializer: Serializer | None = None,
+    freshness: Freshness = Always,
+    timeout_seconds: int = 300,
+    retries: int = 1,
+    retry_backoff: float = 0.0,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
     env: list[str] | None = None,
     weight: int = 1,
-    batch: "int | str | None" = None,
-):
+    batch: Batch = None,
+) -> Callable[[F], F]: ...
+def task(
+    fn: F | None = None,
+    /,
+    *,
+    name: str | None = None,
+    inputs: dict[str, Any] | None = None,
+    partitions: dict[str, Any] | None = None,
+    serializer: Serializer | None = None,
+    freshness: Freshness = Always,
+    timeout_seconds: int = 300,
+    retries: int = 1,
+    retry_backoff: float = 0.0,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
+    env: list[str] | None = None,
+    weight: int = 1,
+    batch: Batch = None,
+) -> F | Callable[[F], F]:
     """Declare a task node (always re-runs; never cached).
 
     Tasks model workflow-management steps — deploys, notifications, migrations,
@@ -246,7 +322,7 @@ def task(
     if fn is not None:
         return fn
 
-    def decorator(f):
+    def decorator(f: F) -> F:
         return f
 
     return decorator
@@ -256,10 +332,10 @@ def sink(
     path: str,
     /,
     *,
-    serializer: str | None = None,
-    partition_by: "list[str] | tuple[str, ...] | None" = None,
+    serializer: Serializer | None = None,
+    partition_by: list[str] | tuple[str, ...] | None = None,
     rows_per_file: int | None = None,
-):
+) -> Callable[[F], F]:
     """Declare a sink output (stacked on @asset).
 
     path may be local or a remote URI (abfss://, s3://, gs://). serializer
@@ -272,13 +348,13 @@ def sink(
     of each parquet file. See ``barca docs sinks``.
     """
 
-    def decorator(f):
+    def decorator(f: F) -> F:
         return f
 
     return decorator
 
 
-def unsafe(fn):
+def unsafe(fn: F) -> F:
     """Mark a function as unsafe (untraceable)."""
     return fn
 
@@ -286,12 +362,12 @@ def unsafe(fn):
 # ─── Marker functions ─────────────────────────────────────────────────────────
 
 
-def partitions(values, /):
+def partitions(values: Sequence[Any], /) -> Sequence[Any]:
     """Declare static partition values."""
     return values
 
 
-def partitions_from(source, /):
+def partitions_from(source: F, /) -> F:
     """Derive partitions from an upstream asset or sensor.
 
     A partitioned `source` gives its keys. An unpartitioned one gives the values of the list it
@@ -301,7 +377,7 @@ def partitions_from(source, /):
     return source
 
 
-def batches(groups, /, *, strict: bool = False):
+def batches(groups: Sequence[Sequence[Any]], /, *, strict: bool = False) -> Sequence[Sequence[Any]]:
     """``batch=batches([["r1", "r2"], ["r3"]])``: the keys of each group run in one call.
 
     A key in no group runs alone, or is an error with ``strict=True``. A literal list is read
@@ -310,7 +386,9 @@ def batches(groups, /, *, strict: bool = False):
     return groups
 
 
-def batches_by(fn, /, *, max_size: int | None = None):
+def batches_by(
+    fn: Callable[[Any], str | int], /, *, max_size: int | None = None
+) -> Callable[[Any], str | int]:
     """``batch=batches_by(region_of, max_size=20)``: keys with the same label share a call.
 
     ``fn`` receives a key (a dict of dimension to value for a node of several dimensions) and
@@ -320,7 +398,7 @@ def batches_by(fn, /, *, max_size: int | None = None):
     return fn
 
 
-def collect(asset_fn, /):
+def collect(asset_fn: F, /) -> F:
     """Aggregate all partitions of an upstream asset."""
     return asset_fn
 
@@ -330,106 +408,10 @@ def asset_ref(ref_string: str, /) -> str:
     return ref_string
 
 
-from barca._batch import Failed  # noqa: E402
-
-# ─── Parallel primitives ─────────────────────────────────────────────────────
-
-
-class ParallelError:
-    """Represents a failed branch in a parallel() call."""
-
-    def __init__(self, error: str) -> None:
-        self.error = error
-
-    def __repr__(self) -> str:
-        return f"ParallelError({self.error!r})"
-
-    def __str__(self) -> str:
-        return self.error
-
-    def to_dict(self) -> dict:
-        return {"__parallel_error__": True, "error": self.error}
-
-
-class BranchResultError(RuntimeError):
-    """A `parallel()` branch returned, and its return value could not be passed to the caller.
-
-    Raised by `parallel()` in the calling step, which fails like any step that raises. A
-    branch that itself raised is different: it comes back as a `ParallelError` in the list.
-
-    The message names the branch, the type of the value and the reason: the value cannot be
-    written as json, pickle or parquet (an open file, a lambda, a generator), or what was
-    written cannot be read back in the calling worker.
-    """
-
-
-def parallel(*callables):
-    """Run callables in parallel across worker processes.
-
-    Each argument should be a `functools.partial` wrapping a @task-decorated
-    function. Returns a list of results (or ParallelError objects) in argument
-    order.
-
-    When running inside a barca worker (BARCA_SOCKET set), uses the Unix socket
-    protocol to request Rust to dispatch branches as separate workers. A branch's
-    return value comes back the way a step's output reaches the next step: written
-    as an artifact (json, pickle or parquet, by type) and read from it here. A value
-    that cannot be passed raises `BranchResultError`; it is never replaced by `None`.
-    When running standalone, executes sequentially.
-    """
-    if not callables:
-        return []
-
-    # Build work items from partials
-    items = []
-    for c in callables:
-        if hasattr(c, "func") and hasattr(c, "args") and hasattr(c, "keywords"):
-            fn = c.func
-            fn_name = fn.__name__
-            source_file = getattr(getattr(fn, "__code__", None), "co_filename", "") or ""
-            fn_ref = f"{source_file}:{fn_name}" if source_file else fn_name
-            items.append(
-                {
-                    "fn_ref": fn_ref,
-                    "args": list(c.args),
-                    "kwargs": dict(c.keywords) if c.keywords else {},
-                }
-            )
-        else:
-            raise TypeError(f"parallel() expects functools.partial objects, got {type(c).__name__}")
-
-    from barca import _runtime
-
-    if _runtime.is_worker() and _runtime.connect() is not None:
-        # Inside a barca worker — dispatch via Unix socket to executor
-        from barca import _branches
-
-        return _branches.collect(_runtime.submit_and_wait(items), items)
-
-    # Not inside a worker — execute sequentially (standalone/testing)
-    results = []
-    for c in callables:
-        try:
-            results.append(c())
-        except Exception as e:
-            results.append(ParallelError(f"{type(e).__name__}: {e}"))
-    return results
-
-
-def parallel_map(fn, items, **kwargs):
-    """Map a @task function over items in parallel.
-
-    Sugar for `parallel(*(partial(fn, item, **kwargs) for item in items))`.
-    """
-    from functools import partial
-
-    return parallel(*(partial(fn, item, **kwargs) for item in items))
-
-
 # ─── DuckDB ───────────────────────────────────────────────────────────────────
 
 
-def duckdb_connection():
+def duckdb_connection() -> Any:
     """The duckdb connection barca binds duckdb-typed inputs to (one per worker process).
 
     Configure it once at import time of your asset module (``INSTALL``/``LOAD`` extensions,
@@ -461,10 +443,6 @@ _LAZY = {
     "Run": "barca.client",
 }
 
-if TYPE_CHECKING:
-    from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats  # noqa: E402
-    from barca.client import Client, Run  # noqa: E402
-
 
 def __getattr__(name: str) -> Any:
     module = _LAZY.get(name)
@@ -477,6 +455,9 @@ def __getattr__(name: str) -> Any:
     return value
 
 
+# ─── Groups ──────────────────────────────────────────────────────────────────
+
+
 class Group:
     """Organizational metadata. Never an executable or cacheable node."""
 
@@ -486,7 +467,7 @@ class Group:
         members: list[object] | tuple[object, ...],
         output: object,
         description: str,
-    ):
+    ) -> None:
         self.name = name
         self.members = members
         self.output = output

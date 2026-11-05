@@ -16,7 +16,9 @@ def same(left, right):
     if isinstance(left, dict):
         return left.keys() == right.keys() and all(same(v, right[k]) for k, v in left.items())
     if isinstance(left, list):
-        return len(left) == len(right) and all(same(a, b) for a, b in zip(left, right))
+        return len(left) == len(right) and all(
+            same(a, b) for a, b in zip(left, right, strict=False)
+        )
     if isinstance(left, float) and left == right == 0:
         return math.copysign(1, left) == math.copysign(1, right)
     return left == right
@@ -54,7 +56,7 @@ def decode_table(table):
     if not isinstance(missing, list) or len(missing) != len(rows):
         raise ValueError("table missing masks must match rows")
     result = []
-    for row, absent in zip(rows, missing):
+    for row, absent in zip(rows, missing, strict=False):
         if not isinstance(row, list) or len(row) != len(dims):
             raise ValueError("table row width must match dimensions")
         if (
@@ -75,7 +77,7 @@ def decode_steps(message):
         kwargs = decode_table(message["kwargs"])
         if len(kwargs) != len(steps):
             raise ValueError("kwargs rows must match steps")
-        for step, values in zip(steps, kwargs):
+        for step, values in zip(steps, kwargs, strict=False):
             if values:
                 step["direct_kwargs"] = values
     return steps
@@ -111,7 +113,7 @@ def decode_results(message):
     ):
         raise ValueError("result arrays must have equal lengths")
     result = []
-    for node_id, status, seconds, detail in zip(ids, statuses, elapsed, details):
+    for node_id, status, seconds, detail in zip(ids, statuses, elapsed, details, strict=False):
         if not isinstance(node_id, str) or (
             seconds is not None and type(seconds) not in (int, float)
         ):
