@@ -178,14 +178,20 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   update branches by hand to keep them up to date with main, the queue tests each PR against
   the main it will land on. To ship several PRs as one release, combine them on one branch, run
   CI once, and squash-merge it with a body that lists each PR and the issues it closes.
-- **What CI runs**: three tiers. A PR runs the fast set (`checks`, `clippy`, `changes`) so it
-  enters the queue within about a minute. A merge group runs the merge tier, which gates the
-  merge: the fast set plus the Rust tests, the wheel and the quick Python subset in
-  `scripts/fast-tests.txt` (the files `scripts/check-fast.sh` runs locally), about two
-  minutes. A release runs the full tier: everything, including integration, the UI checks,
-  the proxy tests, the Python shards, the object-store emulator tests, the duckdb 1.x rerun
-  and the real minute checkpoint test (`test_minute_checkpoints.py`, about 2 min), as the
-  `release/v*` PR's own run and again in its merge group (head commit `chore(release): ...`).
+- **What CI runs**: three tiers. A PR runs the fast set (`checks`: the CHANGELOG and
+  specification checks and the prek hooks of `prek.toml`, so ruff, ruff format, ty, cargo fmt,
+  the version sync and `uv lock --check` gate every PR; `clippy`; `changes`) so it enters the
+  queue within about a minute. A merge group runs the merge tier, which gates the merge: the
+  fast set plus the Rust tests (and the UI's generated types against Rust), the wheel, the
+  quick Python subset in `scripts/fast-tests.txt` and `perf` (the performance budgets,
+  `scripts/perf-gate.py`), about two minutes. `scripts/check-fast.sh` runs the same gates
+  locally except `perf` and the generated types, and fails with one line when the tree has no
+  `.venv` to run the Python tests against. A release runs the full tier: everything,
+  including integration, the UI checks, the proxy tests, the Python shards, the object-store
+  emulator tests, the duckdb 1.x rerun and the real minute checkpoint test
+  (`test_minute_checkpoints.py`, about 2 min), as the `release/v*` PR's own run and again in
+  its merge group (head commit `chore(release): ...`); its `durations` job uploads the suite's
+  per-file durations, which `scripts/release.sh` merges into `scripts/ci-test-durations.json`.
   A PR labelled `ci-full` runs the full tier too. Nothing runs on push to main: main only
   moves to a merge group's commit, which the queue has tested. A failure the full tier finds
   on a release PR is in one of the PRs merged since the previous release. Details:

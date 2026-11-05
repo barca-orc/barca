@@ -1,0 +1,38 @@
+name: Restore the Rust build directory
+description: >-
+  Restores ./target and the cargo registry from the newest cache entry for this job, branch and
+  Cargo.lock (.depot/workflows/ci.yml explains the keys). The entry is saved again by
+  rust-cache-save under the `key` output.
+
+inputs:
+  name:
+    description: The job's cache prefix (clippy, tests, wheel)
+    required: true
+  toolchain:
+    description: The rustc cache key (dtolnay/rust-toolchain's `cachekey` output)
+    required: true
+
+outputs:
+  key:
+    description: The key rust-cache-save writes this run's entry under
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore the build directory
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          target
+        # A merge group's branch is `main` (its commit becomes main's).
+        key: rust-v2-${{ inputs.name }}-${{ inputs.toolchain }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # This branch's latest, then main's, then main's with another Cargo.lock.
+        restore-keys: |
+          rust-v2-${{ inputs.name }}-${{ inputs.toolchain }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-
+          rust-v2-${{ inputs.name }}-${{ inputs.toolchain }}-${{ hashFiles('Cargo.lock') }}-main-
+          rust-v2-${{ inputs.name }}-${{ inputs.toolchain }}-
