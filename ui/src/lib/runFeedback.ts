@@ -53,7 +53,7 @@ export type RunNotice =
   | { kind: 'running'; target: string | null; runId: string; done: number; total: number | null }
   | { kind: 'finished'; target: string | null; runId: string; status: StatusKind; summary: string }
 
-export interface RunNoticeInput {
+interface RunNoticeInput {
   /** What was asked for (a node id), when known. */
   target: string | null
   /** The `POST /runs` in flight. */

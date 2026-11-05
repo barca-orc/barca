@@ -11,12 +11,12 @@
  */
 
 import type { CacheState } from './generated/CacheState'
-import type { CacheStatus, NodeState } from './types'
+import type { NodeState } from './types'
 import type { Tone } from './tone'
 
 export type { CacheState }
 
-export interface CacheStateDisplay {
+interface CacheStateDisplay {
   /** The word, as the CLI prints it. */
   word: CacheState
   tone: Tone
@@ -84,7 +84,3 @@ export function lastAttemptFailed(node: Pick<NodeState, 'last_materialization' |
   return node.last_materialization?.status === 'failed' || (node.partitions?.failed ?? 0) > 0
 }
 
-/** The reason for a state, verbatim from the API (`cache.reason`). */
-export function cacheReason(cache: Pick<CacheStatus, 'reason'>): string {
-  return cache.reason
-}

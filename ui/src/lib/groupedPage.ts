@@ -28,14 +28,14 @@ import { inPipeline, pipelineName, sourceFile } from './pipeline'
 import type { ListNode, NodeState, StatusKind } from './types'
 
 /** How many nodes a search lists beyond the open level. */
-export const SEARCH_LIMIT = 500
+const SEARCH_LIMIT = 500
 /** `x_2` before `x_10`; one collator, not one per comparison. */
 const NAME_ORDER = new Intl.Collator(undefined, { numeric: true })
 
 export const SORT_LABEL: Record<EntrySort, string> = { worst: 'worst first', name: 'name', oldest: 'oldest success' }
 
-export type GroupedShow = 'items' | 'failures'
-export type GroupedMode = 'groups' | 'flat' | 'failures'
+type GroupedShow = 'items' | 'failures'
+type GroupedMode = 'groups' | 'flat' | 'failures'
 
 /** What the URL asks the page for. */
 export interface GroupedParams {
@@ -123,7 +123,7 @@ export function nextRowIndex(rowIds: readonly (string | null)[], selected: strin
 }
 
 /** What the page has loaded, as the derivation reads it. */
-export interface GroupedInput {
+interface GroupedInput {
   params: GroupedParams
   tree: GroupTree
   /** Every node served (`GET /assets`); empty until loaded. */
@@ -137,7 +137,7 @@ export interface GroupedInput {
 }
 
 /** The level the page shows: its scope and what is drawn or listed in it. */
-export interface GroupedLevel {
+interface GroupedLevel {
   /** The nodes of the open pipeline. */
   assets: ListNode[]
   byId: Map<string, NodeState>

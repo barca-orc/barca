@@ -32,19 +32,6 @@
   color: var(--text-strong);
   letter-spacing: -0.01em;
 }
-.barca-env {
-  margin-left: auto;
-  font-family: var(--font-sans);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--signal);
-  background: var(--c-white-wash);
-  border: 1px solid var(--c-white-line);
-  padding: 2px 6px;
-  border-radius: var(--radius-pill);
-}
-.barca-navlist { padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; }
 .barca-nav {
   display: flex;
   align-items: center;
@@ -119,23 +106,6 @@
 .barca-pipe-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .barca-pipe-empty { padding: 6px 9px; font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-faint); }
 .barca-side-foot { margin-top: auto; border-top: 1px solid var(--border-subtle); padding: 10px 14px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.barca-user { display: flex; align-items: center; gap: 9px; }
-.barca-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  background: var(--c-white-wash);
-  border: 1px solid var(--c-white-line);
-  color: var(--signal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-sans);
-  font-size: var(--text-base);
-  font-weight: 600;
-}
-.barca-user-name { font-size: var(--text-sm); color: var(--text-strong); font-weight: 500; }
-.barca-user-meta { font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-faint); }
 
 /* ---------- Topbar ---------- */
 .barca-topbar {
@@ -147,10 +117,6 @@
   gap: 14px;
   padding: 0 14px;
 }
-.barca-crumbs { display: flex; align-items: center; gap: 7px; font-family: var(--font-sans); font-size: var(--text-sm); }
-.barca-crumb { color: var(--text-muted); }
-.barca-crumb.is-last { color: var(--text-strong); }
-.barca-crumb-sep { color: var(--text-faint); }
 .barca-search {
   margin-left: 6px;
   flex: 1;
@@ -211,7 +177,6 @@
   .barca-sidebar { width: 180px; }
   .barca-primary-nav { gap: 12px; }
 }
-.barca-divider-v { width: 1px; height: 22px; background: var(--border-default); margin: 0 6px; }
 
 /* ---------- View head ---------- */
 .barca-view { display: flex; flex-direction: column; height: 100%; }
@@ -271,25 +236,6 @@
 }
 @keyframes barca-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
-/* asset list (foundation placeholder for the graph) */
-.barca-asset-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 14px;
-  align-items: center;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.barca-asset-row:last-child { border-bottom: none; }
-.barca-asset-id {
-  font-family: var(--font-sans);
-  font-size: 12.5px;
-  color: var(--text-strong);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.barca-asset-deps { font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-faint); }
 
 /* ---------- Graph canvas + inspector ---------- */
 .barca-graph-wrap { flex: 1; min-height: 0; display: flex; position: relative; }

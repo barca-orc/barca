@@ -2,7 +2,7 @@ import { match } from 'ts-pattern'
 import { toneMeta, type Tone, type ToneMeta } from './tone'
 import type { StatusKind, ListNode, NodeKind } from './types'
 
-export interface StatusMeta extends ToneMeta {
+interface StatusMeta extends ToneMeta {
   tone: Tone
   /** The word, as a run's status is printed. */
   label: string

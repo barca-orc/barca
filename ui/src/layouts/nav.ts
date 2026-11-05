@@ -1,6 +1,6 @@
 import { Activity, Layers, Clock, Play, Radar, type LucideIcon } from 'lucide-react'
 
-export interface NavItem {
+interface NavItem {
   id: string
   label: string
   path: string

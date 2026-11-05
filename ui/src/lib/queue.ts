@@ -23,7 +23,7 @@ export function queueMatters(view: QueueView): boolean {
 }
 
 /** Whether new runs start. Draining wins over paused: nothing starts until the next server start. */
-export type QueueState =
+type QueueState =
   | { kind: 'open' }
   | { kind: 'paused'; since: string | null }
   | { kind: 'draining' }
@@ -60,7 +60,7 @@ export function sharedCapacityLabel(capacity: CapacitySnapshot | null | undefine
 }
 
 /** One step waiting for the shared capacity, in admission order. */
-export interface WaitingRow {
+interface WaitingRow {
   position: string
   node: string
   runId: string
@@ -89,7 +89,7 @@ export function queuedLabel(count: number): string {
  * The pause control. Hidden on a read-only server (pause and resume answer 403 there) and
  * while it is not known whether the server is read-only; disabled while the server drains.
  */
-export type QueueControl =
+type QueueControl =
   | { kind: 'hidden' }
   | { kind: 'pause'; disabled: boolean }
   | { kind: 'resume'; disabled: boolean }
@@ -100,7 +100,7 @@ export function queueControl(view: QueueView, readOnly: boolean | undefined): Qu
 }
 
 /** One waiting run, as a row of the queue list. */
-export interface QueueRow {
+interface QueueRow {
   runId: string
   /** `#1` for the next run. */
   position: string

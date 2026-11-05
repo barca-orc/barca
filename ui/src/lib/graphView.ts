@@ -67,7 +67,7 @@ export function fitTarget(nodes: ViewNode[], width: number, height: number, inse
   return fitsReadably(failed, width, height, inset) ? failed : failed.slice(0, 1)
 }
 
-export type ArrowKey = 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown'
+type ArrowKey = 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown'
 
 export function isArrowKey(key: string): key is ArrowKey {
   return key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown'
@@ -103,7 +103,7 @@ export function neighborInDirection(nodes: ViewNode[], from: string | null, key:
 }
 
 /** What a node waits on, in a line: the failed node upstream that kept it from running. */
-export interface WaitsOn { hint: string }
+interface WaitsOn { hint: string }
 
 /** How a node stands in the wait: its last attempt failed, it never ran, or neither. */
 export type WaitStatus = 'failed' | 'never_run' | 'other'

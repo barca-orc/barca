@@ -89,7 +89,7 @@ function fileOf(id: string): string {
  * What needs attention first: a failed last attempt, then the state's rank, then the name.
  * Presentation order only; the state itself is never changed by the attempt.
  */
-export function compareAttention(a: Pick<AssetRow, 'state' | 'lastFailed' | 'name'>, b: Pick<AssetRow, 'state' | 'lastFailed' | 'name'>): number {
+function compareAttention(a: Pick<AssetRow, 'state' | 'lastFailed' | 'name'>, b: Pick<AssetRow, 'state' | 'lastFailed' | 'name'>): number {
   return Number(b.lastFailed) - Number(a.lastFailed) || cacheStateRank(a.state) - cacheStateRank(b.state) || a.name.localeCompare(b.name)
 }
 
@@ -128,13 +128,13 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
 // ── Sorting ───────────────────────────────────────────────────────────────────
 
 export type SortKey = 'name' | 'state' | 'last' | 'success' | 'typical' | 'next'
-export type SortDir = 'asc' | 'desc'
+type SortDir = 'asc' | 'desc'
 export interface Sort {
   key: SortKey
   dir: SortDir
 }
 
-export const SORT_KEYS: readonly SortKey[] = ['name', 'state', 'last', 'success', 'typical', 'next']
+const SORT_KEYS: readonly SortKey[] = ['name', 'state', 'last', 'success', 'typical', 'next']
 
 /** What needs attention first. */
 export const DEFAULT_SORT: Sort = { key: 'state', dir: 'asc' }

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { isTimeZone, type TimeZone } from '@/lib/time'
 import { TimeZoneContext } from './timeZone'
 
-export const TIME_ZONE_STORAGE_KEY = 'barca-time-zone'
+const TIME_ZONE_STORAGE_KEY = 'barca-time-zone'
 
 function initialZone(): TimeZone {
   if (typeof localStorage !== 'undefined') {

@@ -13,7 +13,7 @@ import { CACHE_STATES, type CacheState } from './cacheStateDisplay'
 import type { NodeState } from './types'
 
 export type Kind = NodeState['kind']
-export const KINDS: readonly Kind[] = ['asset', 'task', 'sensor']
+const KINDS: readonly Kind[] = ['asset', 'task', 'sensor']
 
 export type LastRun = 'any' | 'hour' | 'day' | 'week_plus' | 'never'
 export const LAST_RUNS: readonly LastRun[] = ['any', 'hour', 'day', 'week_plus', 'never']
@@ -102,7 +102,7 @@ function matchesStates(r: AssetRow, f: Filters): boolean {
   return f.states.includes(r.state) || (f.failed && r.lastFailed)
 }
 
-export interface FilterOptions {
+interface FilterOptions {
   /** Rows that ran within this many ms pass the state filter whatever their state. */
   recentMs?: number
 }
@@ -125,7 +125,7 @@ export function applyFilters(rows: AssetRow[], f: Filters, nowMs: number, opts: 
   return filterExcept(rows, f, nowMs, undefined, opts)
 }
 
-export interface FacetCounts {
+interface FacetCounts {
   states: Record<CacheState, number>
   /** Rows whose last attempt failed. */
   failed: number

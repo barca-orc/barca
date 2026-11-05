@@ -8,7 +8,7 @@ import type { NodeKind, StatusKind } from './types'
 export type { LayoutDir }
 
 /** Data carried on each React Flow node (consumed by the custom AssetNode). */
-export interface GraphNodeData {
+interface GraphNodeData {
   id: string
   name: string
   kind: GraphKind
@@ -29,7 +29,7 @@ export interface GraphNodeData {
 export type GraphNode = Node<GraphNodeData>
 
 /** What a box in the graph is: a node, a group of them, or an input from outside the view. */
-export type GraphKind = NodeKind | 'group' | 'port'
+type GraphKind = NodeKind | 'group' | 'port'
 
 /** Organizational entries can be laid out alongside real pipeline nodes. */
 export interface GraphEntry {

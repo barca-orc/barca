@@ -11,7 +11,7 @@ import { recovering } from './polling'
 import type { NodeState } from '@/lib/types'
 
 /** The query key of `scope`'s state; `null` is the whole project. */
-export function stateKey(scope: StateScope | null) {
+function stateKey(scope: StateScope | null) {
   return ['state', scope] as const
 }
 

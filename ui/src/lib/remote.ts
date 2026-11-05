@@ -14,7 +14,7 @@ export type Remote<T> =
   | { kind: 'ready'; data: T; refreshError: string | null }
 
 /** The parts of a TanStack Query result `remote` reads. */
-export interface QueryLike<T> {
+interface QueryLike<T> {
   data: T | undefined
   error: Error | null
   isPlaceholderData?: boolean
@@ -38,7 +38,3 @@ export function ready<T>(data: T, refreshError: string | null = null): Remote<T>
   return { kind: 'ready', data, refreshError }
 }
 
-/** The data, when there is some. */
-export function dataOf<T>(value: Remote<T>): T | undefined {
-  return value.kind === 'ready' ? value.data : undefined
-}

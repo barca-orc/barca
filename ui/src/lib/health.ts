@@ -33,7 +33,7 @@ export interface HealthCounts {
 }
 
 /** A segment of the bar or a part of its label: a state, run work, or no state yet. */
-export type HealthPart = CacheState | 'running' | 'pending'
+type HealthPart = CacheState | 'running' | 'pending'
 
 /** Most urgent first: the order of the bar's segments. */
 export const HEALTH_PARTS: readonly HealthPart[] = ['running', ...CACHE_STATES, 'pending']
@@ -84,7 +84,7 @@ function partText(part: HealthPart, count: number): string {
   return `${count.toLocaleString()} ${part === 'pending' ? PENDING_WORD : part}`
 }
 
-export interface HealthLabelPart {
+interface HealthLabelPart {
   /** What the part counts: a state, run work, no state yet, or failed last attempts. */
   key: HealthPart | 'lastFailed'
   tone: Tone
@@ -175,7 +175,7 @@ export interface Failure {
 }
 
 /** The failed keys of a partitioned node, as the failures list shows them. */
-export interface FailedKeys {
+interface FailedKeys {
   failed: number
   total: number
   /**
@@ -208,7 +208,7 @@ export function keysLine(keys: FailedKeys): string {
 }
 
 /** How late a group is: its members' worst, so one old failure is not averaged away. */
-export interface ScopeAge {
+interface ScopeAge {
   /** The oldest member's last success; null when no member has succeeded. */
   lastSuccessAt: string | null
   failingSince: string | null

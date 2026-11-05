@@ -2,7 +2,7 @@
 import { serverFetch } from './credentials'
 
 export interface Frame { id: string; data: string }
-export class StreamProtocolError extends Error {}
+class StreamProtocolError extends Error {}
 const MAX_FRAME = 16 * 1024 * 1024 + 1024
 
 export async function consumeEvents(body: ReadableStream<Uint8Array>, onFrame: (frame: Frame) => boolean, signal: AbortSignal): Promise<boolean> {
@@ -53,7 +53,7 @@ function pause(signal: AbortSignal, ms = 1000): Promise<void> {
     signal.addEventListener('abort', done, { once: true })
   })
 }
-export interface CanonicalRun { status: string; outcome?: Record<string, unknown> }
+interface CanonicalRun { status: string; outcome?: Record<string, unknown> }
 interface FollowOptions {
   onGap?: () => void
   onRestart?: () => void

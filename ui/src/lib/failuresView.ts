@@ -42,7 +42,7 @@ export type FailureRow =
   | { kind: 'cause'; group: FailureGroup }
   | { kind: 'failure'; failure: Failure }
 
-export interface FailureTable {
+interface FailureTable {
   rows: FailureRow[]
 }
 

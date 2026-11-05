@@ -18,7 +18,7 @@ export interface SidebarModel {
 }
 
 export type SidebarMsg = { type: 'toggle_collapsed' } | { type: 'toggle_file'; file: string }
-export type SidebarEffect = { type: 'save_collapsed'; collapsed: boolean }
+type SidebarEffect = { type: 'save_collapsed'; collapsed: boolean }
 
 export function updateSidebar(model: SidebarModel, msg: SidebarMsg): Next<SidebarModel, SidebarEffect> {
   return match<SidebarMsg, Next<SidebarModel, SidebarEffect>>(msg)

@@ -302,7 +302,7 @@ export const runByStatus = {
   interrupted: runView('interrupted', { error: 'the server stopped while the run was in flight' }),
 } satisfies Record<RunViewStatus, RunView>
 
-export const runTruncated = runView('failed', {
+const runTruncated = runView('failed', {
   steps: [step('pipeline.py:orders_enriched', 'failed', "KeyError: 'currency'"), ...Array.from({ length: 4 }, (_, i) => step(`pipeline.py:sessionize[day=2026-10-2${i}]`, 'success'))],
   steps_page: { total: 1440, truncated: true },
 })
@@ -353,7 +353,7 @@ export const runDetails: Record<string, Remote<RunView>> = {
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
 
-export const tokenList: TokenMetadata[] = [
+const tokenList: TokenMetadata[] = [
   { id: 't1', name: 'ci', created_at: ago(86_400 * 30), expires_at: null },
   { id: 't2', name: 'laptop', created_at: ago(86_400 * 2), expires_at: new Date(NOW_MS + 86_400_000 * 90).toISOString() },
 ]
