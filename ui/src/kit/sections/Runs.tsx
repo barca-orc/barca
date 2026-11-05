@@ -2,6 +2,7 @@ import { LogViewer, RunningBadge } from '@/components'
 import { ResetDatabaseDialog } from '@/components/ResetDatabase'
 import { ArtifactSchema } from '@/components/assets/ArtifactSchema'
 import { NodeInspector } from '@/components/graph/NodeInspector'
+import { liveGraphState } from '@/lib/graphState'
 import type { ListNode, LogLine, StatusKind } from '@/lib/types'
 import {
   NOW_MS,
@@ -59,7 +60,8 @@ export function Runs() {
             <div className="barca-kit-panel">
               <NodeInspector
                 asset={inspected}
-                status={s.status}
+                state={liveGraphState(s.status)}
+                feedbackStatus={s.status}
                 logs={s.logs}
                 running={s.status === 'running'}
                 error={s.error}

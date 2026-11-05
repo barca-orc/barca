@@ -12,14 +12,14 @@ import { match } from 'ts-pattern'
 import { pipelineName, sourceFile } from './pipeline'
 import type { ListNode } from './types'
 
-export type RunTarget =
+type RunTarget =
   | { kind: 'node'; name: string }
   | { kind: 'pipeline'; file: string; assets: number; sensors: number }
   | { kind: 'all'; assets: number; sensors: number }
   /** A group is open, or nothing to run has loaded yet. */
   | { kind: 'none'; hint: string }
 
-export interface RunScope {
+interface RunScope {
   /** The selected node's short name. */
   node: string | null
   /** The open group, which cannot be run. */

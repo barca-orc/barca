@@ -27,7 +27,7 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
   const { data: health } = useHealth()
   const readOnly = health?.read_only ?? false
   const assetQuery = useAssets()
-  const assets = assetQuery.isPlaceholderData ? undefined : assetQuery.data
+  const assets = assetQuery.data
   const [params] = useSearchParams()
   const pipeline = params.get('pipeline')
   const { scope } = useStateScope()

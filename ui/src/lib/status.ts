@@ -1,66 +1,36 @@
 import { match } from 'ts-pattern'
+import { toneMeta, type Tone, type ToneMeta } from './tone'
 import type { StatusKind, ListNode, NodeKind } from './types'
-import type { Severity } from './assetTable'
 
-export interface StatusMeta {
-  /** CSS var for the status color */
-  color: string
-  /** CSS var for the faint tinted background */
-  bg: string
-  /** CSS var for the border line */
-  line: string
-  /** Human label */
+interface StatusMeta extends ToneMeta {
+  tone: Tone
+  /** The word, as a run's status is printed. */
   label: string
-  /** Whether the indicator should pulse (live work) */
+  /** Whether the indicator should pulse (live work). */
   live: boolean
 }
 
-/** Map a visual status to its design-system color tokens + label. */
+/**
+ * The run lifecycle's one table: each status of a run or of a step, its tone and its word. This
+ * axis is a run's, never a node's cache state (`cacheStateDisplay.ts` has that one).
+ */
 export function statusMeta(status: StatusKind): StatusMeta {
-  return match<StatusKind, StatusMeta>(status)
-    .with('success', () => ({
-      color: 'var(--status-success)',
-      bg: 'var(--status-success-bg)',
-      line: 'var(--status-success-line)',
-      label: 'Healthy',
-      live: false,
-    }))
-    .with('running', () => ({
-      color: 'var(--status-running)',
-      bg: 'var(--status-running-bg)',
-      line: 'var(--status-running-line)',
-      label: 'Running',
-      live: true,
-    }))
-    .with('failed', () => ({
-      color: 'var(--status-failed)',
-      bg: 'var(--status-failed-bg)',
-      line: 'var(--status-failed-line)',
-      label: 'Failed',
-      live: false,
-    }))
-    .with('warning', () => ({
-      color: 'var(--status-warning)',
-      bg: 'var(--status-warning-bg)',
-      line: 'var(--status-warning-line)',
-      label: 'Stale',
-      live: false,
-    }))
-    .with('queued', 'pending', () => ({
-      color: 'var(--status-queued)',
-      bg: 'var(--status-queued-bg)',
-      line: 'var(--status-queued-line)',
-      label: 'Running · queued',
-      live: false,
-    }))
-    .with('skipped', () => ({
-      color: 'var(--status-skipped)',
-      bg: 'var(--status-skipped-bg)',
-      line: 'transparent',
-      label: 'Not run',
-      live: false,
-    }))
+  const [tone, label, live] = match<StatusKind, [Tone, string, boolean]>(status)
+    .with('queued', () => ['queued', 'queued', false])
+    .with('running', () => ['running', 'running', true])
+    .with('success', () => ['success', 'success', false])
+    .with('failed', () => ['failed', 'failed', false])
+    // Stopped by the operator or a server shutdown: inert, not an error.
+    .with('cancelled', () => ['neutral', 'cancelled', false])
+    // A step the run did not reach, or served from cache.
+    .with('skipped', () => ['neutral', 'skipped', false])
     .exhaustive()
+  return { tone, label, live, ...toneMeta(tone) }
+}
+
+/** The tone of a run status. */
+export function statusTone(status: StatusKind): Tone {
+  return statusMeta(status).tone
 }
 
 /** Human-readable freshness summary: the cron expression for a scheduled node. */
@@ -86,19 +56,5 @@ export function nodeKindLabel(node: { id: string; kind: NodeKind }): string {
     .with('asset', () => 'asset')
     .with('sensor', () => 'sensor')
     .with('task', () => (isCheck(node) ? 'check' : 'task'))
-    .exhaustive()
-}
-
-/** One name per state, in lower case for counts and filters (`3 failed`, `12 not run`). */
-export function severityWord(severity: Severity): string {
-  return match(severity)
-    .with('failed', () => 'failed')
-    .with('stale', () => 'stale')
-    .with('never_run', () => 'not run')
-    .with('partial', () => 'stale (some keys)')
-    .with('unknown', () => 'unknown')
-    .with('always_runs', () => 'always runs')
-    .with('unsynced', () => 'unsynced')
-    .with('cached', () => 'healthy')
     .exhaustive()
 }

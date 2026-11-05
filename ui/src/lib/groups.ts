@@ -1,8 +1,8 @@
 /** Organizational metadata, independent of execution. */
 import type { ListNode, NodeState, StatusKind } from './types'
 import { shortName, type GraphEntry } from './graph'
-import { graphState, liveGraphState, UNKNOWN_GRAPH_STATE, type GraphState } from './graphState'
-import { runningCount, runningGraphState } from './running'
+import type { GraphState } from './graphState'
+import { healthCounts, healthLabel, healthParts } from './health'
 import { isCheck } from './status'
 import { formatSeconds } from './assetTable'
 
@@ -15,9 +15,6 @@ export interface GroupTree {
   parents: Map<string, string>
 }
 
-export const MODELING_PIPELINE = 'modeling.py'
-export const PREVIEW_FAILURE =
-  'modeling.py:validate__cv__fold_03__trained_model'
 /** Build an organizational tree from metadata returned by the parser. */
 export function groupTree(metadata: NodeGroup[]): GroupTree {
   const groups = new Map(metadata.map(g => [g.id, g]))
@@ -73,7 +70,7 @@ export function groupPath(id: string | null, tree: GroupTree): NodeGroup[] {
   return [...groupPath(parent ?? null, tree), ...(group ? [group] : [])]
 }
 
-export function memberName(id: string): string {
+function memberName(id: string): string {
   const name = shortName(id)
   const check = /^(check|validate)__/.test(name)
   const parts = name.replace(/^(check|validate)__/, '').split('__')
@@ -145,52 +142,25 @@ export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): num
   return b.failed - a.failed || b.stale - a.stale || name
 }
 
-export function memberHealth(node: NodeState | undefined): GraphState {
-  if (!node) return UNKNOWN_GRAPH_STATE
-  if (node.running) return runningGraphState(node.running)
-  return graphState(node)
-}
-
+/**
+ * A group's box: its most urgent fact, from its members' counts (`healthCounts`). Run work comes
+ * first (the group pulses while a run is inside it), then failed last attempts, then the state
+ * most in need of attention by rank; the hint names every part. A group has no state of its own:
+ * this summarizes its members in their own words.
+ */
 export function groupHealth(
   ids: string[],
   states: Map<string, NodeState>,
   live: Record<string, StatusKind> = {},
 ): GraphState {
-  const members = ids.map((id) => live[id] ? liveGraphState(live[id]) : memberHealth(states.get(id)))
-  // Work in progress comes first: the group pulses while a run is inside it.
-  const running = runningCount(ids, states, live)
-  if (running)
-    return {
-      status: 'running',
-      label: `${running} running`,
-      hint: `A run is working on ${running} member${running === 1 ? '' : 's'} of this group now.`,
-    }
-  const failed = members.filter((s) => s.status === 'failed').length
-  const warning = members.filter((s) => s.status === 'warning').length
-  const unknown = members.filter((s) => s.status === 'skipped').length
-  if (failed)
-    return {
-      status: 'failed',
-      label: `${failed} failed`,
-      hint: 'A failure anywhere inside this group makes it unhealthy, including failed checks on cached assets.',
-    }
-  if (warning)
-    return {
-      status: 'warning',
-      label: `${warning} stale`,
-      hint: 'One or more member assets need attention.',
-    }
-  if (unknown)
-    return {
-      status: 'skipped',
-      label: `${unknown} not run`,
-      hint: 'Some members have not run or their state is unavailable.',
-    }
-  return {
-    status: 'success',
-    label: 'Healthy',
-    hint: 'Every asset is up to date and every check succeeded.',
+  const counts = healthCounts(ids, states, live)
+  const hint = healthLabel(counts) || 'No members with a state.'
+  if (counts.running > 0) {
+    return { kind: 'run', tone: 'running', status: 'running', label: `${counts.running.toLocaleString()} running`, hint }
   }
+  const [first] = healthParts(counts, 1)
+  if (!first) return { kind: 'group', tone: 'neutral', label: 'empty', hint }
+  return { kind: 'group', tone: first.tone, label: first.text, hint }
 }
 
 /** Collapse only visual edges. Real inputs and the original graph stay intact. */
@@ -302,7 +272,7 @@ export function withPorts(
 }
 
 /** `850ms`, `2.3s`, `4.1m`: a run's time on a node, readable below a second too. */
-export function formatRunSeconds(s: number): string {
+function formatRunSeconds(s: number): string {
   return s < 1 ? `${Math.round(s * 1000)}ms` : formatSeconds(s)
 }
 

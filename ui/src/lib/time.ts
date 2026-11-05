@@ -9,7 +9,6 @@
 
 export type TimeZone = 'local' | 'utc'
 
-export const TIME_ZONES: readonly TimeZone[] = ['local', 'utc']
 
 export function isTimeZone(value: unknown): value is TimeZone {
   return value === 'local' || value === 'utc'

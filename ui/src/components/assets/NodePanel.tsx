@@ -11,11 +11,12 @@ import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
 import { useRunDetail } from '@/hooks/useRuns'
-import { buildRows, formatSeconds, severityStatus } from '@/lib/assetTable'
+import { buildRows, formatSeconds } from '@/lib/assetTable'
+import { LAST_ATTEMPT_FAILED, cacheStateTone } from '@/lib/cacheStateDisplay'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, runPace, shortHash, sourcePath, whatChanged } from '@/lib/nodeDetail'
-import { consumersOf, downstreamIds, failedUpstream, headline } from '@/lib/health'
-import { memberHealth } from '@/lib/groups'
+import { consumersOf, downstreamIds, failedUpstream, headline, isFailed } from '@/lib/health'
+import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
 import type { ListNode, NodeState } from '@/lib/types'
 import type { NodeRunAction } from '@/hooks/useNodeRun'
@@ -63,7 +64,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const consumers = useMemo(() => consumersOf(graph), [graph])
   const impact = useMemo(() => downstreamIds(node.id, consumers).size, [node.id, consumers])
   const inputs = useMemo(() => new Map(graph.map((n) => [n.id, n.inputs])), [graph])
-  const failed = memberHealth(node).status === 'failed'
+  const failed = isFailed(memberHealth(node))
   const failedKeys = node.partitions?.failed ?? 0
   // Why a node that did not fail is not up to date: something it reads failed.
   const blockedBy = useMemo(() => (failed ? [] : failedUpstream(node.id, inputs, byId)), [failed, node.id, inputs, byId])
@@ -73,10 +74,11 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const change = whatChanged(node.cache, failed)
   const definition = graph.find((n) => n.id === node.id)
   const root = useProject().data?.root
-  const source = definition ? `${sourcePath(root, definition.file)}:${definition.line}` : null
+  // A definition without a file (an older server's) has no source line to show.
+  const source = definition?.file ? `${sourcePath(root, definition.file)}:${definition.line}` : null
   // The server's path opens in an editor only on a machine that has it: one of the configured roots.
   const roots = editorRoots(typeof localStorage === 'undefined' ? null : localStorage.getItem(EDITOR_ROOTS_KEY))
-  const editor = definition?.line && editorOpens(root, roots) ? editorLink(root, definition.file, definition.line) : null
+  const editor = definition?.file && definition.line && editorOpens(root, roots) ? editorLink(root, definition.file, definition.line) : null
   const artifact = node.cache.artifact ?? last?.artifact ?? null
   // How fast the last run that recorded time went, per batched call (`steps_page.nodes` of the run).
   const pacedRun = node.partitioned ? stats?.recent_runs.find((r) => r.elapsed_seconds !== null)?.run_id ?? null : null
@@ -112,9 +114,14 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       }
     >
       <div className="barca-node-summary">
-        {runAction.liveState ? (
-          <StatusBadge status={runAction.liveState.status} label={runAction.liveState.label} />
-        ) : row && <StatusBadge status={severityStatus(row.severity)} label={row.stateLabel} />}
+        {/* The state as the server says it, its reason verbatim, and the last attempt as its own fact. */}
+        <div className="barca-state-line">
+          {runAction.liveState ? (
+            <StatusBadge tone={runAction.liveState.tone} label={runAction.liveState.label} live={isLive(runAction.liveState)} />
+          ) : row && <StatusBadge tone={cacheStateTone(row.state)} label={row.state} />}
+          {row && !runAction.liveState && <span className="barca-cell-sub">{row.reason}</span>}
+          {row?.lastFailed && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
+        </div>
         {runAction.error && <p className="barca-note" role="alert">Could not start run: {runAction.error.message}</p>}
         {node.running && (
           <KeyValue label="now">
@@ -166,7 +173,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           <KeyValue label="changed">{node.cache.changed.join(', ')}</KeyValue>
         )}
         {node.partitions && <PartitionBar partitions={node.partitions} />}
-        {definition && definition.line > 0 && source && (
+        {definition && definition.line > 0 && source !== null && (
           <KeyValue label="source">
             <span className="barca-source-path">
               <code title={editor ? undefined : `Relative to the project root ${root ?? ''}. To open it in VS Code, set localStorage ${EDITOR_ROOTS_KEY} to a path prefix this machine has.`}>{source}</code>

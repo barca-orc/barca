@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { outcomeResult, parseOutcome, parseRunStatus, runIsLive, runLabel, runStatus, triggeredByLabel } from './runs'
+import { outcomeResult, parseOutcome, parseRunStatus, runIsLive, runLabel, runStatus, runTone, triggeredByLabel } from './runs'
 
 describe('run status', () => {
   it('pending and running are live; every other status is terminal', () => {
@@ -13,9 +13,11 @@ describe('run status', () => {
     expect(runStatus('success')).toBe('success')
     expect(runStatus('failed')).toBe('failed')
     expect(runStatus('error')).toBe('failed')
-    expect(runStatus('cancelled')).toBe('skipped')
-    expect(runStatus('interrupted')).toBe('skipped')
-    expect(runStatus('something new')).toBe('warning')
+    expect(runStatus('cancelled')).toBe('cancelled')
+    expect(runStatus('interrupted')).toBe('cancelled')
+    expect(runStatus('something new')).toBe('skipped')
+    expect(runTone('failed')).toBe('failed')
+    expect(runTone('cancelled')).toBe('neutral')
   })
   it('reads older spellings of success', () => {
     expect(parseRunStatus('complete')).toBe('success')

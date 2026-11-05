@@ -22,6 +22,8 @@ import {
   Tag,
 } from '@/components'
 import { NOW_MS, STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
+import { CACHE_STATES, cacheStateTone } from '@/lib/cacheStateDisplay'
+import { statusMeta } from '@/lib/status'
 import { Spec, Variant } from '../Kit'
 import { SidebarView } from '@/layouts/Sidebar'
 import type { PipelineSummary } from '@/lib/pipeline'
@@ -33,13 +35,13 @@ import { runButton } from '@/lib/runTarget'
 /** Every primitive in components/, in each state it has. */
 export function Primitives() {
   const KIT_PIPELINES: PipelineSummary[] = [
-  { file: 'billing.py', name: 'billing.py', total: 639, worst: 'failed', known: true, running: 0 },
-  { file: 'catalog.py', name: 'catalog.py', total: 561, worst: 'unknown', known: false, running: 0 },
+  { file: 'billing.py', name: 'billing.py', total: 639, worst: 'stale', failed: 2, known: true, running: 0 },
+  { file: 'catalog.py', name: 'catalog.py', total: 561, worst: 'unknown', failed: 0, known: false, running: 0 },
 ]
 const KIT_GROUPS: SidebarGroup[] = [
-  { id: 'group:billing.py:raw', name: 'Raw', depth: 0, status: 'failed' },
-  { id: 'group:billing.py:raw:invoices', name: 'Invoices', depth: 1, status: 'success' },
-  { id: 'group:billing.py:marts', name: 'Marts', depth: 0, status: null },
+  { id: 'group:billing.py:raw', name: 'Raw', depth: 0, tone: 'failed' },
+  { id: 'group:billing.py:raw:invoices', name: 'Invoices', depth: 1, tone: 'success' },
+  { id: 'group:billing.py:marts', name: 'Marts', depth: 0, tone: null },
 ]
 
 const [query, setQuery] = useState('')
@@ -91,15 +93,18 @@ const [query, setQuery] = useState('')
       <Tag size="md">medium</Tag>
     </Spec>
 
-    <Spec title="StatusDot / StatusBadge">
-      {STATUS_KINDS.map((s) => (
-        <StatusDot key={s} status={s} size={8} />
+    <Spec title="StatusDot / StatusBadge" note="The cache states in the CLI's words, then the run lifecycle's statuses.">
+      {CACHE_STATES.map((s) => (
+        <StatusBadge key={s} tone={cacheStateTone(s)} label={s} />
       ))}
       {STATUS_KINDS.map((s) => (
-        <StatusBadge key={s} status={s} />
+        <StatusBadge key={s} tone={statusMeta(s).tone} label={statusMeta(s).label} live={statusMeta(s).live} />
       ))}
-      <StatusBadge status="failed" subtle />
-      <StatusBadge status="success" subtle={false} />
+      {STATUS_KINDS.map((s) => (
+        <StatusDot key={s} tone={statusMeta(s).tone} live={statusMeta(s).live} label={statusMeta(s).label} size={8} />
+      ))}
+      <StatusBadge tone="failed" label="failed" subtle />
+      <StatusBadge tone="success" label="cached" subtle={false} />
     </Spec>
 
     <Spec title="CommandPaletteView" note="⌘K: results, and nothing found.">
@@ -122,7 +127,7 @@ const [query, setQuery] = useState('')
       {Object.entries(healthStates).map(([label, c]) => (
         <Variant key={label} label={label}><HealthBar counts={c} /></Variant>
       ))}
-      <Variant label="wide, every bucket named"><HealthBar counts={healthStates['failed and stale']!} labelLimit={6} width={200} /></Variant>
+      <Variant label="wide, every part named"><HealthBar counts={healthStates['every state']!} labelLimit={10} width={200} /></Variant>
     </Spec>
 
     <Spec title="Age / LastSuccess" note="Relative, absolute in the chosen zone on hover; a failing row adds since when and how many runs.">
@@ -208,7 +213,7 @@ const [query, setQuery] = useState('')
           }
         >
           <Section title="State">
-            <StatusBadge status="success" label="cached" />
+            <StatusBadge tone="success" label="cached" />
             <p className="barca-note">cached result for this code and these inputs</p>
             <KeyValue label="cache key">
               <code>9f2c0a41be77</code>

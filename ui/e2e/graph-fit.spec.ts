@@ -45,8 +45,10 @@ test('fit-to-screen stays readable: cards at 1:1, centred on the first failure',
     expect(box).toBeGreaterThanOrEqual(208)
   }
   const failed = page.locator(node('demand_forecast'))
-  await expect(failed).toContainText('7 of 3,077 keys failed')
-  const label = failed.getByText('7 of 3,077 keys failed')
+  // Its state in the CLI's word, and its failed keys as the fact beside it.
+  await expect(failed).toContainText('partial')
+  await expect(failed).toContainText('last attempt failed')
+  const label = failed.locator('.barca-dag-state')
   expect(parseFloat(await label.evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
   // Centred on the failed node upstream, which is on screen; the one downstream is not.
   const canvas = (await page.locator('.react-flow').boundingBox())!
@@ -58,8 +60,10 @@ test('fit-to-screen stays readable: cards at 1:1, centred on the first failure',
   expect(publish.x).toBeGreaterThan(canvas.x + canvas.width)
 })
 
-test('a consumer that did not run names the failure upstream', async ({ page }) => {
-  await expect(page.locator(node('validate_publication'))).toContainText('Blocked: publish_plan failed')
+test('a consumer that never ran keeps its word and names the failure upstream in its hint', async ({ page }) => {
+  const validate = page.locator(node('validate_publication'))
+  await expect(validate).toContainText('never_run')
+  await expect(validate.locator('.barca-dag')).toHaveAttribute('title', /Waits on publish_plan, whose last attempt failed/)
 })
 
 test('arrow keys move the selection and Enter opens the panel', async ({ page }) => {

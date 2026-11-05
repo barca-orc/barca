@@ -5,7 +5,8 @@
  */
 
 import { match } from 'ts-pattern'
-import type { Health, StatusKind } from './types'
+import type { Tone } from './tone'
+import type { Health } from './types'
 
 export type Connection =
   | { kind: 'connecting' }
@@ -17,7 +18,8 @@ export function connection(health: Health | undefined, isError: boolean): Connec
   return isError ? { kind: 'offline' } : { kind: 'connecting' }
 }
 
-export function connectionStatus(c: Connection): StatusKind {
+/** The dot's colour: green once the server answered, neutral before and when it does not. */
+export function connectionTone(c: Connection): Tone {
   return match(c)
     .with({ kind: 'online' }, () => 'success' as const)
     .with({ kind: 'connecting' }, { kind: 'offline' }, () => 'queued' as const)

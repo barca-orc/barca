@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 
-export type TagTone = 'default' | 'signal' | 'bare'
+export type TagTone = 'default' | 'signal' | 'bare' | 'failed'
 export type TagSize = 'sm' | 'md'
 
 export interface TagProps {
@@ -12,51 +12,15 @@ export interface TagProps {
   children: ReactNode
 }
 
-const SIZES = {
-  sm: { height: 18, padding: '0 6px', fontSize: 'var(--text-2xs)' },
-  md: { height: 20, padding: '0 8px', fontSize: 'var(--text-xs)' },
-} as const
-
 /**
  * barca · Tag
- * A small mono label for metadata (owners, kinds, partitions).
+ * A small label for metadata (kinds, partitions, read-only) and for the fact beside a state
+ * (`failed`: the last attempt failed).
  */
 export function Tag({ tone = 'default', size = 'sm', dot = false, style, children }: TagProps) {
-  const s = SIZES[size]
-  const toneStyle: CSSProperties =
-    tone === 'signal'
-      ? { background: 'var(--c-white-wash)', border: '1px solid var(--c-white-line)', color: 'var(--signal)' }
-      : tone === 'bare'
-        ? { background: 'transparent', border: '1px solid var(--border-default)', color: 'var(--text-muted)' }
-        : { background: 'var(--bg-inset)', border: '1px solid var(--border-default)', color: 'var(--text-default)' }
   return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        height: s.height,
-        padding: s.padding,
-        borderRadius: 'var(--radius-sm)',
-        fontFamily: 'var(--font-sans)',
-        fontSize: s.fontSize,
-        fontWeight: 500,
-        whiteSpace: 'nowrap',
-        ...toneStyle,
-        ...style,
-      }}
-    >
-      {dot && (
-        <span
-          style={{
-            width: 5,
-            height: 5,
-            borderRadius: '50%',
-            background: 'var(--signal)',
-            flex: 'none',
-          }}
-        />
-      )}
+    <span className="barca-tag" data-tone={tone} data-size={size} style={style}>
+      {dot && <span className="barca-tag-dot" />}
       {children}
     </span>
   )

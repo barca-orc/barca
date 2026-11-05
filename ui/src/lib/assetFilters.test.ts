@@ -68,8 +68,10 @@ describe('applyFilters', () => {
     expect(isFiltered(EMPTY_FILTERS)).toBe(false)
   })
 
-  it('states are multi-select (any of them)', () => {
-    expect(names({ ...EMPTY_FILTERS, states: ['failed', 'stale'] })).toEqual(['check', 'today'])
+  it('states are multi-select (any of them), and a failed last attempt is its own filter', () => {
+    expect(names({ ...EMPTY_FILTERS, states: ['stale'] })).toEqual(['today'])
+    expect(names({ ...EMPTY_FILTERS, failed: true })).toEqual(['check'])
+    expect(names({ ...EMPTY_FILTERS, states: ['stale'], failed: true })).toEqual(['check', 'today'])
   })
 
   it('kinds are multi-select', () => {
@@ -99,7 +101,7 @@ describe('facetCounts', () => {
   it("counts each chip under every other active filter, ignoring its own group", () => {
     // With tasks/sensors filtered out, state counts only cover assets…
     const c = facetCounts(rows, { ...EMPTY_FILTERS, kinds: ['asset'] }, NOW)
-    expect(c.states.failed).toBe(0)
+    expect(c.failed).toBe(0)
     expect(c.states.stale).toBe(1)
     // …but the kind chips still show what picking another kind would give.
     expect(c.kinds).toEqual({ asset: 5, task: 1, sensor: 1 })
@@ -112,7 +114,8 @@ describe('URL round-trip', () => {
   it('writes only what is set and reads it back', () => {
     const f: Filters = {
       query: 'ibp',
-      states: ['failed', 'stale'],
+      states: ['blocked', 'stale'],
+      failed: true,
       kinds: ['asset'],
       lastRun: 'week_plus',
       scheduled: true,
@@ -126,8 +129,8 @@ describe('URL round-trip', () => {
   })
 
   it('ignores values it does not know', () => {
-    const p = new URLSearchParams('state=failed,bogus&kind=widget&ran=sometime')
-    expect(parseFilters(p)).toEqual({ ...EMPTY_FILTERS, states: ['failed'] })
+    const p = new URLSearchParams('state=stale,failed,bogus&kind=widget&ran=sometime')
+    expect(parseFilters(p)).toEqual({ ...EMPTY_FILTERS, states: ['stale'] })
   })
 })
 
@@ -143,7 +146,7 @@ describe('a page that defaults to what needs attention', () => {
 })
 
 describe('a page that also shows what ran recently', () => {
-  const attention = { ...EMPTY_FILTERS, states: [...NEEDS_ATTENTION] }
+  const attention = { ...EMPTY_FILTERS, ...NEEDS_ATTENTION }
   const recent = { recentMs: 24 * 3_600_000 }
 
   it('passes a row that ran within the window whatever its state, and only then', () => {

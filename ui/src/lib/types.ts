@@ -50,8 +50,10 @@ export type { QueueView } from './generated/QueueView'
 export type { QueueEntry } from './generated/QueueEntry'
 export type { CapacitySnapshot } from './generated/CapacitySnapshot'
 export type { WaitingStep } from './generated/WaitingStep'
+export type { ErrorKind } from './generated/ErrorKind'
 
 import type { LoadError } from './generated/LoadError'
+import type { ErrorKind } from './generated/ErrorKind'
 
 import type { ListNode } from './generated/ListNode'
 import type { AssetStats } from './generated/AssetStats'
@@ -98,12 +100,13 @@ export interface HealthQueue {
 
 /**
  * Every error body: the CLI's stderr error envelope (`barca docs contract`).
- * A non-success run outcome carries the same envelope.
+ * A non-success run outcome carries the same envelope. The envelope is serialized by hand in
+ * Rust (`envelope.rs`, `to_json`), so its shape is written here; its `kind` is the generated enum.
  */
 export interface ErrorEnvelope {
   error: string
   code: number
-  kind: 'step_failed' | 'usage' | 'infra' | 'cancelled'
+  kind: ErrorKind
   remediation: string | null
   node?: string | null
   traceback?: string | null
@@ -164,7 +167,7 @@ export interface RunHandle {
 }
 
 /** `barca stats --json`: the generated `AssetStats` with `id` in place of `node_id`. */
-export type NodeStats = Omit<AssetStats, 'node_id'> & { id: string }
+type NodeStats = Omit<AssetStats, 'node_id'> & { id: string }
 
 /** GET /assets/{name} — ad-hoc wrapper around the generated pieces. */
 export interface AssetDetail {
@@ -183,18 +186,16 @@ export interface LogLine {
 }
 
 /**
- * Visual run state used across status components. A frontend superset of the
- * server's run lifecycle plus the asset-level states the design system defines
- * (queued, skipped, warning, success).
+ * A run's lifecycle, and a step's within it, as the UI colours and names it (`lib/status.ts`).
+ * One axis: a node's cache state is another (`lib/cacheStateDisplay.ts`) and never maps here.
  */
 export type StatusKind =
-  | 'success'
-  | 'running'
-  | 'failed'
-  | 'warning'
   | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
   | 'skipped'
-  | 'pending'
 
 export type { TokenMetadata } from './generated/TokenMetadata'
 export type { IssuedToken } from './generated/IssuedToken'

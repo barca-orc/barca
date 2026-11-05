@@ -1,40 +1,19 @@
 /**
- * Asset table presentation logic — pure, exhaustively matched.
+ * Asset table presentation logic — pure.
  *
- * Turns `GET /state` rows (`barca status` entries plus durations and next run)
- * into what the table shows: a severity per node (what needs attention sorts
- * first), a short state label with the server's explanation, the latest
- * attempt, typical durations and the next scheduled run. Returns plain
- * descriptors; `AssetsPage` only maps them to elements.
+ * Turns `GET /state` rows (`barca status` entries plus durations and next run) into what the
+ * table shows: the node's cache state in the CLI's word with the server's reason and detail,
+ * whether its last attempt failed (a fact beside the state), the latest attempt, typical
+ * durations and the next scheduled run. Returns plain descriptors; `AssetsPage` only maps them
+ * to elements.
  */
 
 import { match } from 'ts-pattern'
+import { CACHE_STATES, cacheStateRank, lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 import { formatAgo, parseTime } from './time'
-import type { CacheStatus, NodeRunning, NodeState, StatusKind } from './types'
+import type { CacheStatus, NodeRunning, NodeState } from './types'
 
 export { formatAgo } from './time'
-
-/** How much a node needs attention, most urgent first. */
-export type Severity =
-  | 'failed'
-  | 'stale'
-  | 'never_run'
-  | 'partial'
-  | 'unknown'
-  | 'always_runs'
-  | 'unsynced'
-  | 'cached'
-
-export const SEVERITIES: readonly Severity[] = [
-  'failed',
-  'stale',
-  'never_run',
-  'partial',
-  'unknown',
-  'always_runs',
-  'unsynced',
-  'cached',
-]
 
 export interface AssetRow {
   id: string
@@ -44,10 +23,13 @@ export interface AssetRow {
   file: string
   kind: NodeState['kind']
   partitioned: boolean
-  severity: Severity
-  /** Short label for the state column, e.g. `Stale · code changed`. */
-  stateLabel: string
-  /** Why, in words — the server's own explanation (tooltip). */
+  /** `cache.state`, as the server says it. */
+  state: CacheState
+  /** `cache.reason`, verbatim. */
+  reason: CacheStatus['reason']
+  /** The latest attempt failed (or some keys did): shown beside the state, never in its place. */
+  lastFailed: boolean
+  /** Why, in words — the server's own explanation (`cache.detail`, a tooltip). */
   stateHint: string
   last: { status: string; ago: string; error: string | null } | null
   /** When the latest attempt was recorded (ms since epoch). */
@@ -68,26 +50,6 @@ export interface AssetRow {
   running: NodeRunning | null
 }
 
-/** A failed latest attempt outranks any cache state — it's the thing to look at. */
-export function severityOf(node: NodeState): Severity {
-  // A partitioned node's last materialization is one key: its failed keys are counted.
-  if (node.last_materialization?.status === 'failed' || node.partitions?.failed) return 'failed'
-  return match(node.cache.state)
-    .with('cached', (): Severity => 'cached')
-    .with('unsynced', (): Severity => 'unsynced')
-    .with('stale', (): Severity => 'stale')
-    .with('never_run', (): Severity => 'never_run')
-    .with('partial', (): Severity => 'partial')
-    // Keys waiting on failed upstream keys: as urgent as a stale node, and said in the label.
-    .with('blocked', (): Severity => 'stale')
-    .with('unknown', (): Severity => 'unknown')
-    // Tasks and sensors keep no cache: their last execution is their state, as everywhere else
-    // (group and chain health count a task that succeeded as healthy).
-    .with('always_runs', (): Severity =>
-      node.last_materialization?.status === 'success' ? 'cached' : node.last_materialization ? 'always_runs' : 'never_run')
-    .exhaustive()
-}
-
 /** `40 of 3,077 keys failed`, for a node with failed keys. */
 export function failedKeysLabel(node: NodeState): string | null {
   const p = node.partitions
@@ -98,66 +60,6 @@ export function failedKeysLabel(node: NodeState): string | null {
 export function keyBreakdown(p: NonNullable<NodeState['partitions']>): { cached: number; failed: number; stale: number; total: number } {
   const failed = p.failed ?? 0
   return { cached: p.cached, failed, stale: Math.max(p.total - p.cached - failed, 0), total: p.total }
-}
-
-/** Severity → the design system's status vocabulary (colors). */
-export function severityStatus(severity: Severity): StatusKind {
-  return match(severity)
-    .with('failed', (): StatusKind => 'failed')
-    .with('stale', 'partial', 'unsynced', (): StatusKind => 'warning')
-    // Grey for every state with nothing wrong and nothing to show: the queued color is a run's.
-    .with('never_run', 'unknown', 'always_runs', (): StatusKind => 'skipped')
-    .with('cached', (): StatusKind => 'success')
-    .exhaustive()
-}
-
-/** Why a stale node will re-run, in a word or two. */
-function staleReason(reason: CacheStatus['reason']): string {
-  return match(reason)
-    .with('changed', () => 'code changed')
-    .with('upstream_stale', () => 'upstream')
-    .with('upstream_failed', () => 'upstream failed')
-    .with('sensor_output_unknown', () => 'sensor')
-    .with('cutoff_pending', () => 'cutoff')
-    .with('failed', () => 'last run failed')
-    .with('artifact_missing', () => 'artifact missing')
-    .with('evicted', () => 'evicted')
-    .with('local_only', () => 'local only')
-    .with('store_only', () => 'store only')
-    .with('mismatch', () => 'store copy differs')
-    .with('not_in_ledger', () => 'not in ledger')
-    .with(
-      'materialized',
-      'no_record',
-      'partitions_missing',
-      'partitions_unknown',
-      'not_planned',
-      'task',
-      'sensor',
-      () => reason.replace(/_/g, ' '),
-    )
-    .exhaustive()
-}
-
-function cacheLabel(node: NodeState, severity: Severity): string {
-  if (node.cache.state === 'always_runs') return severity === 'cached' ? 'Healthy' : severity === 'never_run' ? 'Not run' : 'Always runs'
-  return match(node.cache.state)
-    .with('cached', () => 'Healthy')
-    .with('unsynced', () => `Unsynced · ${staleReason(node.cache.reason)}`)
-    .with('stale', () => `Stale · ${staleReason(node.cache.reason)}`)
-    .with('never_run', () => 'Not run')
-    .with('partial', () =>
-      node.partitions
-        ? `${node.partitions.missing.toLocaleString()} of ${node.partitions.total.toLocaleString()} keys stale`
-        : 'Stale (some keys)',
-    )
-    .with('blocked', () =>
-      node.partitions
-        ? `Blocked · ${node.partitions.missing.toLocaleString()} keys wait on upstream`
-        : 'Blocked · upstream failed',
-    )
-    .with('unknown', () => 'Unknown')
-    .exhaustive()
 }
 
 /**
@@ -183,16 +85,18 @@ function fileOf(id: string): string {
   return i < 0 ? '' : id.slice(0, i)
 }
 
-const RANK: Record<Severity, number> = Object.fromEntries(
-  SEVERITIES.map((s, i) => [s, i]),
-) as Record<Severity, number>
+/**
+ * What needs attention first: a failed last attempt, then the state's rank, then the name.
+ * Presentation order only; the state itself is never changed by the attempt.
+ */
+function compareAttention(a: Pick<AssetRow, 'state' | 'lastFailed' | 'name'>, b: Pick<AssetRow, 'state' | 'lastFailed' | 'name'>): number {
+  return Number(b.lastFailed) - Number(a.lastFailed) || cacheStateRank(a.state) - cacheStateRank(b.state) || a.name.localeCompare(b.name)
+}
 
-/** One row per node, sorted by severity, then name. */
+/** One row per node, what needs attention first. */
 export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
   return nodes
     .map((n): AssetRow => {
-      const severity = severityOf(n)
-      const label = cacheLabel(n, severity)
       const last = n.last_materialization
       return {
         id: n.id,
@@ -200,11 +104,10 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         file: fileOf(n.id),
         kind: n.kind,
         partitioned: n.partitioned,
-        severity,
-        // One word; the reason, and whether a good result remains, is in the hint and the panel.
-        stateLabel: severity === 'failed' ? failedKeysLabel(n) ?? 'Failed' : label,
-        stateHint:
-          severity === 'failed' ? `The latest attempt failed. ${n.cache.detail}` : n.cache.detail,
+        state: n.cache.state,
+        reason: n.cache.reason,
+        lastFailed: lastAttemptFailed(n),
+        stateHint: n.cache.detail,
         last: last
           ? { status: n.partitions?.failed ? 'failed' : last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
           : null,
@@ -219,19 +122,19 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         running: n.running ?? null,
       }
     })
-    .sort((a, b) => RANK[a.severity] - RANK[b.severity] || a.name.localeCompare(b.name))
+    .sort(compareAttention)
 }
 
 // ── Sorting ───────────────────────────────────────────────────────────────────
 
 export type SortKey = 'name' | 'state' | 'last' | 'success' | 'typical' | 'next'
-export type SortDir = 'asc' | 'desc'
+type SortDir = 'asc' | 'desc'
 export interface Sort {
   key: SortKey
   dir: SortDir
 }
 
-export const SORT_KEYS: readonly SortKey[] = ['name', 'state', 'last', 'success', 'typical', 'next']
+const SORT_KEYS: readonly SortKey[] = ['name', 'state', 'last', 'success', 'typical', 'next']
 
 /** What needs attention first. */
 export const DEFAULT_SORT: Sort = { key: 'state', dir: 'asc' }
@@ -260,7 +163,7 @@ export function parseSort(key: string | null, dir: string | null): Sort {
 function sortValue(row: AssetRow, key: SortKey): string | number | null {
   return match(key)
     .with('name', () => row.name)
-    .with('state', () => RANK[row.severity])
+    .with('state', () => Number(!row.lastFailed) * CACHE_STATES.length + cacheStateRank(row.state))
     .with('last', () => row.lastAtMs)
     .with('success', () => (row.lastSuccessAt === null ? null : parseTime(row.lastSuccessAt)))
     .with('typical', () => row.typicalSeconds)
@@ -270,7 +173,7 @@ function sortValue(row: AssetRow, key: SortKey): string | number | null {
 
 /**
  * Sort by one column. Rows without a value (never ran, never scheduled) go last
- * in both directions; ties fall back to severity, then name.
+ * in both directions; ties fall back to what needs attention, then name.
  */
 export function sortRows(rows: AssetRow[], sort: Sort): AssetRow[] {
   const sign = sort.dir === 'asc' ? 1 : -1
@@ -283,7 +186,7 @@ export function sortRows(rows: AssetRow[], sort: Sort): AssetRow[] {
       const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : va - (vb as number)
       return sign * cmp
     }
-    return RANK[a.severity] - RANK[b.severity] || a.name.localeCompare(b.name)
+    return compareAttention(a, b)
   })
 }
 
@@ -294,11 +197,15 @@ export function filterRows(rows: AssetRow[], query: string): AssetRow[] {
   return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
 }
 
-/** Count of rows per severity (every severity present, zero or not). */
-export function summarize(rows: AssetRow[]): Record<Severity, number> {
-  const out = Object.fromEntries(SEVERITIES.map((s) => [s, 0])) as Record<Severity, number>
-  for (const r of rows) out[r.severity] += 1
-  return out
+/** Count of rows per state (every state present, zero or not), and how many last attempts failed. */
+export function summarize(rows: AssetRow[]): { states: Record<CacheState, number>; lastFailed: number } {
+  const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
+  let lastFailed = 0
+  for (const r of rows) {
+    states[r.state] += 1
+    if (r.lastFailed) lastFailed += 1
+  }
+  return { states, lastFailed }
 }
 
 export function formatSeconds(s: number): string {

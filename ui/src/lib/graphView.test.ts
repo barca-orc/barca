@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { blockedLabels, fitTarget, fitsReadably, neighborInDirection, type ViewNode } from './graphView'
-import type { StatusKind } from '@/lib/types'
+import { fitTarget, fitsReadably, neighborInDirection, waitsOn, type ViewNode } from './graphView'
 
 const INSET = { top: 32, right: 32, bottom: 64, left: 56 }
-const node = (id: string, x: number, y: number, status: StatusKind = 'success', inert = false): ViewNode =>
-  ({ id, x, y, width: 208, height: 64, status, inert })
+const node = (id: string, x: number, y: number, failed = false, inert = false): ViewNode =>
+  ({ id, x, y, width: 208, height: 64, failed, inert })
 /** A chain of `n` cards left to right, 304px apart (card plus rank gap). */
 const chain = (n: number, failed: number[] = []) =>
-  Array.from({ length: n }, (_, i) => node(`n${i}`, i * 304, 0, failed.includes(i) ? 'failed' : 'success'))
+  Array.from({ length: n }, (_, i) => node(`n${i}`, i * 304, 0, failed.includes(i)))
 
 describe('fitTarget', () => {
   it('fits the whole graph when it is readable at 1:1', () => {
@@ -32,7 +31,7 @@ describe('fitTarget', () => {
 })
 
 describe('neighborInDirection', () => {
-  const nodes = [node('a', 0, 0), node('b', 304, -100, 'failed'), node('c', 304, 100), node('d', 608, 0), node('port', -300, 0, 'skipped', true)]
+  const nodes = [node('a', 0, 0), node('b', 304, -100, true), node('c', 304, 100), node('d', 608, 0), node('port', -300, 0, false, true)]
   it('moves to the nearest node ahead, preferring the one in line', () => {
     expect(neighborInDirection(nodes, 'a', 'ArrowRight')).toBe('b')
     expect(neighborInDirection(nodes, 'b', 'ArrowDown')).toBe('c')
@@ -49,25 +48,25 @@ describe('neighborInDirection', () => {
   })
 })
 
-describe('blockedLabels', () => {
+describe('waitsOn', () => {
   const name = (id: string) => id.split(':').pop()!
-  it('names the failed input of a skipped consumer', () => {
-    const out = blockedLabels([['p:publish', 'p:validate']], new Map([['p:publish', 'failed'], ['p:validate', 'skipped']]), name)
-    expect(out.get('p:validate')).toEqual({ label: 'Blocked: publish failed', hint: 'Not run: its input publish failed.' })
+  it('names the failed input of a never-run consumer, as a hint beside its state', () => {
+    const out = waitsOn([['p:publish', 'p:validate']], new Map([['p:publish', 'failed'], ['p:validate', 'never_run']]), name)
+    expect(out.get('p:validate')).toEqual({ hint: 'Waits on publish, whose last attempt failed.' })
   })
-  it('follows a chain of skipped nodes to the failure behind them', () => {
-    const out = blockedLabels(
+  it('follows a chain of never-run nodes to the failure behind them', () => {
+    const out = waitsOn(
       [['a', 'b'], ['b', 'c'], ['x', 'c']],
-      new Map([['a', 'failed'], ['b', 'skipped'], ['c', 'skipped'], ['x', 'success']]),
+      new Map([['a', 'failed'], ['b', 'never_run'], ['c', 'never_run'], ['x', 'other']]),
       name,
     )
-    expect(out.get('c')?.label).toBe('Blocked: a failed')
+    expect(out.get('c')?.hint).toBe('Waits on a, whose last attempt failed.')
     expect(out.size).toBe(2)
   })
-  it('leaves stale, healthy and unexplained skipped nodes alone', () => {
-    const out = blockedLabels(
+  it('leaves nodes in other states, and unexplained never-run ones, alone', () => {
+    const out = waitsOn(
       [['a', 'b'], ['a', 'c'], ['d', 'e']],
-      new Map([['a', 'failed'], ['b', 'warning'], ['c', 'success'], ['d', 'success'], ['e', 'skipped']]),
+      new Map([['a', 'failed'], ['b', 'other'], ['c', 'other'], ['d', 'other'], ['e', 'never_run']]),
       name,
     )
     expect(out.size).toBe(0)

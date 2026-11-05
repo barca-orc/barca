@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { TimeZone } from '@/lib/time'
 
-export interface TimeZoneContextValue {
+interface TimeZoneContextValue {
   zone: TimeZone
   toggleZone: () => void
 }

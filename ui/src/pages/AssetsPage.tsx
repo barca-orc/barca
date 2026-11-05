@@ -30,8 +30,9 @@ import { useTimeZone } from '@/context/timeZone'
 import { formatShort, type TimeZone } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
-import { liveGraphState } from '@/lib/graphState'
-import { nodeKindLabel, severityWord } from '@/lib/status'
+import { CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone } from '@/lib/cacheStateDisplay'
+import { isLive, liveGraphState } from '@/lib/graphState'
+import { nodeKindLabel } from '@/lib/status'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
   EMPTY_FILTERS,
@@ -40,6 +41,7 @@ import {
   facetCounts,
   isFiltered,
   NEEDS_ATTENTION,
+  NO_DEFAULTS,
   RECENT_MS,
   onDefaultStates,
   parseFilters,
@@ -49,11 +51,9 @@ import {
 } from '@/lib/assetFilters'
 import {
   DEFAULT_SORT,
-  SEVERITIES,
   buildRows,
   nextSort,
   parseSort,
-  severityStatus,
   sortRows,
   type AssetRow,
   type Sort,
@@ -113,7 +113,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const { data: health } = useHealth()
   const { zone } = useTimeZone()
   const assetQuery = useAssets()
-  const graph = useMemo(() => (assetQuery.isPlaceholderData ? [] : assetQuery.data ?? []), [assetQuery.data, assetQuery.isPlaceholderData])
+  const graph = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
   const navigate = useNavigate()
   // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
   // a reload and can be shared.
@@ -143,7 +143,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   )
   // Filters live in the URL with the sort and pipeline, so a filtered view can
   // be reloaded and shared.
-  const defaultStates = kind === 'task' ? NEEDS_ATTENTION : []
+  const defaultStates = kind === 'task' ? NEEDS_ATTENTION : NO_DEFAULTS
   const filters = { ...parseFilters(params, defaultStates), kinds: [] }
   const onDefault = onDefaultStates(filters, defaultStates)
   const setFilters = (f: Filters) => setParams(writeFilters(params, f, defaultStates), { replace: true })
@@ -218,15 +218,22 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             ) : (
               <Skeleton width={64} height={14} />
             )}
+            {/* The state words, as `barca status` prints them; a failed last attempt is a filter of its own. */}
             <ChipGroup label="State">
-              {SEVERITIES.filter((sev) => counts.states[sev] > 0 || (filters.states.includes(sev) && !onDefault)).map((sev) => (
+              {(counts.failed > 0 || (filters.failed && !onDefault)) && (
+                <Chip pressed={filters.failed} onClick={() => setFilters({ ...filters, failed: !filters.failed })}>
+                  <StatusDot tone={FAILED_TONE} size={6} />
+                  {counts.failed} {LAST_ATTEMPT_FAILED}
+                </Chip>
+              )}
+              {CACHE_STATES.filter((state) => counts.states[state] > 0 || (filters.states.includes(state) && !onDefault)).map((state) => (
                 <Chip
-                  key={sev}
-                  pressed={filters.states.includes(sev)}
-                  onClick={() => setFilters({ ...filters, states: toggle(filters.states, sev) })}
+                  key={state}
+                  pressed={filters.states.includes(state)}
+                  onClick={() => setFilters({ ...filters, states: toggle(filters.states, state) })}
                 >
-                  <StatusDot status={severityStatus(sev)} size={6} />
-                  {counts.states[sev]} {severityWord(sev)}
+                  <StatusDot tone={cacheStateTone(state)} size={6} />
+                  {counts.states[state]} {state}
                 </Chip>
               ))}
             </ChipGroup>
@@ -347,11 +354,17 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   </td>
                   <td title={r.running ? undefined : r.stateHint}>
                     {liveStatus ? (
-                      <StatusBadge status={liveStatus} label={liveGraphState(liveStatus).label} />
+                      <StatusBadge tone={liveGraphState(liveStatus).tone} label={liveGraphState(liveStatus).label} live={isLive(liveGraphState(liveStatus))} />
                     ) : r.running ? (
                       <RunningBadge running={r.running} nowMs={now} />
                     ) : (
-                      <StatusBadge status={severityStatus(r.severity)} label={r.stateLabel} size="sm" />
+                      <>
+                        <div className="barca-state-line">
+                          <StatusBadge tone={cacheStateTone(r.state)} label={r.state} size="sm" />
+                          {r.lastFailed && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
+                        </div>
+                        <div className="barca-cell-sub">{r.reason}</div>
+                      </>
                     )}
                   </td>
                   <td>

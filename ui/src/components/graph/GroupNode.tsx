@@ -1,17 +1,16 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { FolderOpen, ArrowUpRight } from 'lucide-react'
 import { StatusDot } from '@/components'
-import { statusMeta } from '@/lib/status'
 import type { GraphNode } from '@/lib/graph'
 
+/** A group of nodes in the graph: its name, what it holds, and its most urgent fact in words. */
 export function GroupNode({ data, selected }: NodeProps<GraphNode>) {
   return (
     <div
       className="barca-group-node"
-      data-status={data.status}
+      data-tone={data.tone}
       data-kind="group"
       data-selected={selected}
-      style={{ borderLeftColor: statusMeta(data.status).color }}
       title={data.stateHint}
     >
       <Handle
@@ -26,8 +25,8 @@ export function GroupNode({ data, selected }: NodeProps<GraphNode>) {
       <div className="barca-group-node-summary">{data.summary}</div>
       {data.outputName && <div className="barca-group-node-output">↳ {data.outputName}</div>}
       <div className="barca-group-node-health">
-        <StatusDot status={data.status} size={6} />
-        {data.metric}
+        <StatusDot tone={data.tone} live={data.live} size={6} />
+        {data.label}
       </div>
       <Handle
         type="source"

@@ -1,7 +1,7 @@
 import type { RefObject } from 'react'
-import { BellOff, Bell, Copy, ExternalLink, RotateCw } from 'lucide-react'
+import { Copy, ExternalLink, RotateCw } from 'lucide-react'
 import { Age, ErrorLine, IconButton, MiddleName, StatusDot, TableSpacer, Tag } from '@/components'
-import { muteKey, type FailureRow, type FailuresModel, type FailuresMsg } from '@/lib/failuresView'
+import type { FailureRow, FailuresModel, FailuresMsg } from '@/lib/failuresView'
 import { impactLabel, keysLine, type Failure } from '@/lib/health'
 import type { Dispatch } from '@/lib/program'
 import { nodeKindLabel } from '@/lib/status'
@@ -33,12 +33,12 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
         <caption className="barca-failure-notice" role={model.notice.failed ? 'alert' : 'status'}>{model.notice.text}</caption>
       )}
       <colgroup>
-        <col style={{ width: '23%' }} />
-        <col style={{ width: '29%' }} />
-        <col style={{ width: '9%' }} />
-        <col style={{ width: '14%' }} />
-        <col style={{ width: '12%' }} />
-        <col style={{ width: 118 }} />
+        <col className="barca-failure-col-node" />
+        <col className="barca-failure-col-error" />
+        <col className="barca-failure-col-when" />
+        <col className="barca-failure-col-since" />
+        <col className="barca-failure-col-impact" />
+        <col className="barca-failure-col-actions" />
       </colgroup>
       <thead>
         <tr>
@@ -72,7 +72,6 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
               key={f.id}
               ref={win.measure}
               data-index={index}
-              data-muted={row.muted || undefined}
               tabIndex={0}
               aria-selected={selected === f.id}
               onClick={(event) => {
@@ -88,7 +87,7 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
             >
               <td>
                 <div className="barca-group-row-name">
-                  <StatusDot status="failed" size={6} />
+                  <StatusDot tone="failed" size={6} />
                   <strong><MiddleName name={labels.get(f.id) ?? f.name} title={f.id} /></strong>
                   {f.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(f)}</Tag>}
                 </div>
@@ -106,7 +105,7 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
               <td>{f.failingSince ? <><Age at={f.failingSince} nowMs={nowMs} /> · {runs(f.failures)}</> : '–'}</td>
               <td className="num">{impactLabel(f.impact)}</td>
               <td onClick={(event) => event.stopPropagation()}>
-                <FailureActions failure={f} muted={row.muted} readOnly={readOnly} name={labels.get(f.id) ?? f.name} dispatch={dispatch} />
+                <FailureActions failure={f} readOnly={readOnly} name={labels.get(f.id) ?? f.name} dispatch={dispatch} />
               </td>
             </tr>
           )
@@ -117,9 +116,8 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
   )
 }
 
-function FailureActions({ failure: f, muted, readOnly, name, dispatch }: {
+function FailureActions({ failure: f, readOnly, name, dispatch }: {
   failure: Failure
-  muted: boolean
   readOnly: boolean
   name: string
   dispatch: Dispatch<FailuresMsg>
@@ -134,9 +132,6 @@ function FailureActions({ failure: f, muted, readOnly, name, dispatch }: {
       </IconButton>
       <IconButton size="sm" label={`Open run of ${name}`} title="Open run" onClick={() => dispatch({ type: 'open_run', id: f.id, name, runId: f.keys?.runId ?? null })}>
         <ExternalLink size={13} />
-      </IconButton>
-      <IconButton size="sm" label={`${muted ? 'Unmute' : 'Mute'} ${name}`} title={muted ? 'Unmute' : 'Mute until it recovers (this browser only)'} onClick={() => dispatch({ type: 'toggle_mute', key: muteKey(f) })}>
-        {muted ? <Bell size={13} /> : <BellOff size={13} />}
       </IconButton>
     </div>
   )

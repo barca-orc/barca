@@ -10,6 +10,7 @@ use serde_json::{Map, Value, json};
 /// nothing (the user cancelled). Each kind has exactly one exit code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum ErrorKind {
     /// A user step raised (traceback included). Fix the code; retrying barca will not help.
     StepFailed,

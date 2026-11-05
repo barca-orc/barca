@@ -13,7 +13,7 @@ import { parseOutcome } from './runs'
 import type { RunEvent, LineWhen, LogLine, RunOutcome, StatusKind } from './types'
 
 /** A progress line, exactly as the CLI prints it on stderr. */
-export interface ProgressLine {
+interface ProgressLine {
   line: string
   when: LineWhen
 }

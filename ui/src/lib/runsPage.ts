@@ -13,7 +13,7 @@ import { parseRunStatus, runIsLive } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
 import type { FirstFailure, RunNodeSummary, RunStep, RunSummary, RunView, StatusKind } from './types'
 
-export const RUNS_PAGE_SIZE = 100
+const RUNS_PAGE_SIZE = 100
 export const RUNS_MAX = 1000
 
 const HOUR = 3_600_000
@@ -44,7 +44,7 @@ export type RunsMsg =
   /** A bar of the activity strip: the same one again clears the filter. */
   | { type: 'hour_toggled'; at: number }
 
-export type RunsEffect =
+type RunsEffect =
   /** Set `?run=` (`null` removes it); `replace` keeps the history entry. */
   | { type: 'navigate'; run: string | null; replace: boolean }
   /** Write the filters to the URL, replacing the history entry. */
@@ -53,7 +53,7 @@ export type RunsEffect =
   | { type: 'refetch_detail' }
 
 /** The part of the model the URL owns. */
-export type RunFilters = Pick<RunsModel, 'filter' | 'query' | 'hour'>
+type RunFilters = Pick<RunsModel, 'filter' | 'query' | 'hour'>
 
 export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', query: '', hour: null }
 
@@ -274,7 +274,7 @@ export function runTargetLines(run: Pick<RunView, 'target' | 'job'>, nodes: read
 }
 
 /** One hour of the activity strip. */
-export interface ActivityHour {
+interface ActivityHour {
   /** Start of the hour, ms since epoch. */
   at: number
   ok: number

@@ -8,11 +8,11 @@ import { zoneName } from '@/lib/time'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
-import { outcomeResult, parseOutcome, runIsLive, runLabel, runStatus, triggeredByLabel } from '@/lib/runs'
+import { outcomeResult, parseOutcome, runIsLive, runLabel, runTone, triggeredByLabel } from '@/lib/runs'
+import { statusTone } from '@/lib/status'
 import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runFailed, runFailureLine, runNodeIdle, runNodeOutcome, runNodeTime, runProgress, runRowError, runTargetLines, splitRunSteps, stepsLabel, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunNodeGroup } from '@/lib/runsPage'
 import type { RunList, RunStep, RunView } from '@/lib/types'
-import './runs.css'
 
 /** How many steps a list shows before it asks to be expanded. */
 const STEP_ROWS = 50
@@ -25,7 +25,7 @@ function StepList({ steps }: { steps: readonly RunStep[] }) {
     <ul className="barca-run-steps">
       {shown.map((step, index) => <li key={`${step.node_id}:${index}`}>
         <code>{step.node_id}</code>
-        <div><StatusBadge size="sm" status={step.status === 'cached' ? 'skipped' : runStatus(step.status)} label={step.status} />
+        <div><StatusBadge size="sm" tone={step.status === 'cached' ? 'neutral' : runTone(step.status)} label={step.status} />
           {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}</div>
         {step.error && <p className="barca-run-error">{step.error}</p>}
       </li>)}
@@ -45,7 +45,7 @@ function RunNodeRow({ group: { summary, steps } }: { group: RunNodeGroup }) {
   if (runNodeIdle(summary)) {
     return <div className="barca-run-node barca-run-node-idle" data-status={summary.status}>
       <code>{shortName(summary.node_id)}</code>
-      <StatusBadge size="sm" status={outcome.kind} label={outcome.label} />
+      <StatusBadge size="sm" tone={statusTone(outcome.kind)} label={outcome.label} />
       {outcome.detail && <span className="barca-run-node-detail">{outcome.detail}</span>}
     </div>
   }
@@ -54,7 +54,7 @@ function RunNodeRow({ group: { summary, steps } }: { group: RunNodeGroup }) {
   return <details className="barca-run-node" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>
       <code>{shortName(summary.node_id)}</code>
-      <StatusBadge size="sm" status={outcome.kind} label={outcome.label} />
+      <StatusBadge size="sm" tone={statusTone(outcome.kind)} label={outcome.label} />
       {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
     </summary>
     {open && failed.length > 0 && <StepList steps={failed} />}
@@ -98,7 +98,7 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
   const targets = runTargetLines(data, nodes)
   return <>
     <Section title="Run">
-      <StatusBadge status={runStatus(data.status)} label={runLabel(data.status)} />
+      <StatusBadge tone={runTone(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} />
       {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
       <KeyValue label="id"><code className="barca-wrap">{data.run_id}</code></KeyValue>
       <KeyValue label="command">{data.command}</KeyValue>
@@ -255,7 +255,7 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
     <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
     <td><code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code></td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
-    <td><StatusBadge size="sm" status={runStatus(run.status)} label={runLabel(run.status)} /></td>
+    <td><StatusBadge size="sm" tone={runTone(run.status)} label={runLabel(run.status)} live={runIsLive(run.status)} /></td>
     <td><Age at={run.started_at} nowMs={now} /></td>
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
     <td className="num barca-run-steps-cell" title={progress.title}>{progress.steps}</td>

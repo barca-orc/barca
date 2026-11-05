@@ -16,7 +16,7 @@ export function downstreamOf<T extends { id: string; inputs: string[] }>(id: str
     .sort((a, b) => name(a).localeCompare(name(b)))
 }
 
-export interface HistoryBar {
+interface HistoryBar {
   createdAt: string
   /** Height relative to the slowest run shown (failures with no duration: full). */
   heightPct: number
@@ -40,7 +40,7 @@ export function historyBars(runs: AssetRunEntry[]): HistoryBar[] {
   })
 }
 
-export interface DurationBin {
+interface DurationBin {
   /** Lower edge, seconds (inclusive). */
   from: number
   /** Upper edge, seconds (exclusive, except the last bin). */
@@ -151,7 +151,8 @@ export function editorOpens(root: string | null | undefined, roots: readonly str
 }
 
 /** A definition's file relative to the project root (`planning.py`, not `/srv/app/planning.py`). */
-export function sourcePath(root: string | null | undefined, file: string): string {
+export function sourcePath(root: string | null | undefined, file: string | null | undefined): string {
+  if (!file) return ''
   if (root && file.startsWith(`${root.replace(/\/+$/, '')}/`)) return file.slice(root.replace(/\/+$/, '').length + 1)
   return file
 }
@@ -189,7 +190,7 @@ export function runPace(run: Pick<RunNodeSummary, 'calls' | 'keys' | 'elapsed_se
   return `${formatSeconds(run.elapsed_seconds)} / run · ${run.keys.toLocaleString()} keys`
 }
 
-export interface BarSegments {
+interface BarSegments {
   cached: number
   failed: number
   stale: number

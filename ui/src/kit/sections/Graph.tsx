@@ -5,15 +5,16 @@ import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { domainMap } from '@/lib/domainMap'
 import type { GraphEntry } from '@/lib/graph'
 import { withPorts } from '@/lib/groups'
-import { graphState, liveGraphState, type GraphState } from '@/lib/graphState'
+import { graphState, isLive, liveGraphState, type GraphState } from '@/lib/graphState'
+import { isFailed } from '@/lib/health'
 import { runningGraphState } from '@/lib/running'
-import { NODE_KINDS, STATUS_KINDS, nodeBySeverity, runningByStep, runningPartitioned, variants } from '../fixtures'
+import { NODE_KINDS, STATUS_KINDS, failedNode, failedTask, nodeByState, runningByStep, runningPartitioned, variants } from '../fixtures'
 import { Frame, Spec, Variant } from '../Kit'
 
 const KIND_ICON = { asset: <Database size={12} />, task: <Zap size={12} />, sensor: <Radio size={12} /> }
 
 function StateNode({ name, state, kind = 'asset' }: { name: string; state: GraphState; kind?: keyof typeof KIND_ICON }) {
-  return <DagNode name={name} kind={kind} status={state.status} statusLabel={state.label} stateHint={state.hint} icon={KIND_ICON[kind]} />
+  return <DagNode name={name} kind={kind} tone={state.tone} label={state.label} lastFailed={isFailed(state)} live={isLive(state)} stateHint={state.hint} icon={KIND_ICON[kind]} />
 }
 
 // A small pipeline with a node in each kind of state, a group, and a live edge (a cached
@@ -29,12 +30,12 @@ const PIPELINE: GraphEntry[] = [
 ]
 
 const PIPELINE_STATES: Record<string, GraphState> = {
-  'p:checkout_events': graphState(nodeBySeverity.unknown),
-  'p:product_catalog': graphState(nodeBySeverity.cached),
-  'p:orders_clean': graphState(nodeBySeverity.cached),
+  'p:checkout_events': graphState(nodeByState.unknown),
+  'p:product_catalog': graphState(nodeByState.cached),
+  'p:orders_clean': graphState(nodeByState.cached),
   'p:orders_enriched': runningGraphState(runningPartitioned),
-  'group:p:modeling': { status: 'failed', label: '1 failed', hint: 'fold 3 validation failed' },
-  'p:revenue_daily': graphState(nodeBySeverity.stale),
+  'group:p:modeling': { kind: 'group', tone: 'failed', label: '1 last attempt failed', hint: '1 last attempt failed · 23 cached' },
+  'p:revenue_daily': graphState(nodeByState.stale),
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
 
@@ -58,7 +59,7 @@ const DENSE_MAP = domainMap(
   ).flat(),
 )!
 const MAP_STATES: Record<string, GraphState> = Object.fromEntries(
-  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { status: 'success', label: 'Healthy', hint: '' } : { status: 'failed', label: '2 failed', hint: '' }]),
+  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', label: '4 cached', hint: '' } : { kind: 'group', tone: 'failed', label: '2 last attempt failed', hint: '' }]),
 )
 
 export function Graph() {
@@ -66,12 +67,18 @@ export function Graph() {
   const [mapSelected, setMapSelected] = useState<string | null>(DENSE_MAP.entries[5]?.id ?? null)
   return (
     <>
-      <Spec id="kit-graph" title="DagNode · resting states" note="graphState() of a node in each cache severity, most urgent first.">
-        {variants(nodeBySeverity).map((severity) => (
-          <Variant key={severity} label={severity}>
-            <StateNode name={nodeBySeverity[severity].name} kind={nodeBySeverity[severity].kind} state={graphState(nodeBySeverity[severity])} />
+      <Spec id="kit-graph" title="DagNode · resting states" note="graphState() of a node in each cache state, in the CLI's word, most urgent first; then the fact beside a state, a failed last attempt.">
+        {variants(nodeByState).map((state) => (
+          <Variant key={state} label={state}>
+            <StateNode name={nodeByState[state].name} kind={nodeByState[state].kind} state={graphState(nodeByState[state])} />
           </Variant>
         ))}
+        <Variant label="stale · last attempt failed">
+          <StateNode name={failedNode.name} state={graphState(failedNode)} />
+        </Variant>
+        <Variant label="always_runs · last attempt failed">
+          <StateNode name={failedTask.name} kind="task" state={graphState(failedTask)} />
+        </Variant>
       </Spec>
 
       <Spec title="DagNode · a run working on it" note="runningGraphState(), whoever started the run; then a run streaming to this page.">
@@ -93,14 +100,14 @@ export function Graph() {
       <Spec title="DagNode · kind and selection" note="A task's border is dashed: it runs every time.">
         {NODE_KINDS.map((kind) => (
           <Variant key={kind} label={kind}>
-            <StateNode name={`a_${kind}`} kind={kind} state={graphState(nodeBySeverity.cached)} />
+            <StateNode name={`a_${kind}`} kind={kind} state={graphState(nodeByState.cached)} />
           </Variant>
         ))}
         <Variant label="selected">
-          <DagNode name="orders_clean" kind="asset" status="success" statusLabel="Healthy" selected icon={KIND_ICON.asset} />
+          <DagNode name="orders_clean" kind="asset" tone="success" label="cached" selected icon={KIND_ICON.asset} />
         </Variant>
         <Variant label="long name">
-          <DagNode name="cv__fold_03__preprocessing__standard_scaler_fit" kind="asset" status="warning" statusLabel="Stale" icon={KIND_ICON.asset} />
+          <DagNode name="cv__fold_03__preprocessing__standard_scaler_fit" kind="asset" tone="warning" label="stale" icon={KIND_ICON.asset} />
         </Variant>
       </Spec>
 

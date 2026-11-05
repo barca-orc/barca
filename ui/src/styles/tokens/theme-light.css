@@ -77,6 +77,12 @@
   /* Signal glows — subtler on light, still mean "alive" */
   --glow-signal-sm: 0 0 0 1px var(--c-green-line), 0 0 8px -3px var(--c-green-glow);
   --glow-signal-md: 0 0 0 1px var(--c-green-line), 0 0 16px -4px var(--c-green-glow);
+  --glow-running:   0 0 0 1px var(--c-cyan-line), 0 0 12px -4px rgba(14, 150, 160, 0.4);
+  --glow-failed:    0 0 0 1px rgba(206, 53, 53, 0.30), 0 0 12px -4px rgba(206, 53, 53, 0.35);
+
+  /* ---- Graph canvas ---- */
+  --graph-grid:  rgba(11, 20, 16, 0.10);     /* the dot grid behind the DAG */
+  --graph-mask:  rgba(243, 246, 243, 0.72);  /* what the minimap dims outside the viewport */
 
   /* ---- Status: deepen fills so they read on white ---- */
   --status-success:      var(--c-green-l-500);

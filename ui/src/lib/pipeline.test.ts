@@ -56,11 +56,12 @@ describe('pipelineSummaries', () => {
     ])
   })
 
-  it('reports the most urgent state in each pipeline', () => {
-    const byFile = Object.fromEntries(pipelineSummaries(nodes).map((p) => [p.file, p.worst]))
-    expect(byFile['pipeline/p01_dims.py']).toBe('stale')
-    expect(byFile['pipeline/p02_reconcile.py']).toBe('failed')
-    expect(byFile['other/p01_dims.py']).toBe('cached')
+  it('reports the most urgent state in each pipeline, and failed last attempts beside it', () => {
+    const byFile = Object.fromEntries(pipelineSummaries(nodes).map((p) => [p.file, [p.worst, p.failed]]))
+    expect(byFile['pipeline/p01_dims.py']).toEqual(['stale', 0])
+    // A failed check keeps its state (`always_runs`); the failure is counted on its own.
+    expect(byFile['pipeline/p02_reconcile.py']).toEqual(['always_runs', 1])
+    expect(byFile['other/p01_dims.py']).toEqual(['cached', 0])
   })
 
   it('counts metadata before status arrives and keeps other pipelines when only one cone is loaded', () => {
@@ -70,7 +71,7 @@ describe('pipelineSummaries', () => {
     expect(pending.every(p => p.worst === 'unknown')).toBe(true)
     const partial = pipelineSummaries(nodes.filter(n => n.id.startsWith('pipeline/p02')), assets)
     expect(partial.map(p => p.total)).toEqual([1, 2, 2])
-    expect(partial.find(p => p.file === 'pipeline/p02_reconcile.py')?.worst).toBe('failed')
+    expect(partial.find(p => p.file === 'pipeline/p02_reconcile.py')).toMatchObject({ worst: 'always_runs', failed: 1 })
     expect(partial.find(p => p.file === 'pipeline/p01_dims.py')?.worst).toBe('unknown')
   })
 

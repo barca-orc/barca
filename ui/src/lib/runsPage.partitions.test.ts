@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { groupRunSteps, runNodeIdle, runNodeLine, runNodeOutcome, runNodeTime, runTargetLines, splitRunSteps } from './runsPage'
-import { failedKeysLabel, formatSeconds, keyBreakdown, severityOf } from './assetTable'
+import { failedKeysLabel, formatSeconds, keyBreakdown } from './assetTable'
+import { lastAttemptFailed } from './cacheStateDisplay'
 import type { NodeState, RunNodeSummary, RunStep } from './types'
 
 const step = (node_id: string, status: string) => ({ node_id, status }) as RunStep
@@ -70,13 +71,14 @@ describe('a run\'s planned nodes', () => {
 describe('a partitioned node with failed keys', () => {
   const partial = { total: 3077, cached: 3037, missing: 40, missing_keys: [], failed: 40 }
 
-  it('is failed although the key its last materialization names succeeded', () => {
-    expect(severityOf(node(partial))).toBe('failed')
+  it('failed last although the key its last materialization names succeeded; its state stays partial', () => {
+    expect(lastAttemptFailed(node(partial))).toBe(true)
+    expect(node(partial).cache.state).toBe('partial')
     expect(failedKeysLabel(node(partial))).toBe('40 of 3,077 keys failed')
   })
 
-  it('stays partial when its missing keys are only stale', () => {
-    expect(severityOf(node({ ...partial, failed: 0 }))).toBe('partial')
+  it('did not fail when its missing keys are only stale', () => {
+    expect(lastAttemptFailed(node({ ...partial, failed: 0 }))).toBe(false)
     expect(failedKeysLabel(node({ ...partial, failed: 0 }))).toBeNull()
   })
 

@@ -8,19 +8,22 @@
  */
 
 import { match } from 'ts-pattern'
-import { SEVERITIES, filterRows, type AssetRow, type Severity } from './assetTable'
+import { filterRows, type AssetRow } from './assetTable'
+import { CACHE_STATES, type CacheState } from './cacheStateDisplay'
 import type { NodeState } from './types'
 
 export type Kind = NodeState['kind']
-export const KINDS: readonly Kind[] = ['asset', 'task', 'sensor']
+const KINDS: readonly Kind[] = ['asset', 'task', 'sensor']
 
 export type LastRun = 'any' | 'hour' | 'day' | 'week_plus' | 'never'
 export const LAST_RUNS: readonly LastRun[] = ['any', 'hour', 'day', 'week_plus', 'never']
 
 export interface Filters {
   query: string
-  /** Empty = any state. */
-  states: Severity[]
+  /** Empty = any state. The CLI's words (`cache.state`). */
+  states: CacheState[]
+  /** Only nodes whose last attempt failed: a fact beside the state, so a filter of its own. */
+  failed: boolean
   /** Empty = any kind. */
   kinds: Kind[]
   lastRun: LastRun
@@ -33,14 +36,24 @@ export interface Filters {
 export const EMPTY_FILTERS: Filters = {
   query: '',
   states: [],
+  failed: false,
   kinds: [],
   lastRun: 'any',
   scheduled: false,
   partitioned: false,
 }
 
-/** What the Tasks page opens on: most tasks always run, and only these need a look. */
-export const NEEDS_ATTENTION: readonly Severity[] = ['failed', 'stale', 'partial', 'unsynced']
+/** The state filters a page opens on, before the URL says otherwise. */
+export type StateDefaults = Pick<Filters, 'states' | 'failed'>
+
+export const NO_DEFAULTS: StateDefaults = { states: [], failed: false }
+
+/**
+ * What the Tasks page opens on: a task always runs, so its state says nothing to pick it by; what
+ * needs a look is a failed last attempt, and a state other than `always_runs` (blocked, stale
+ * keys, an unsynced result).
+ */
+export const NEEDS_ATTENTION: StateDefaults = { states: ['blocked', 'stale', 'partial', 'unsynced'], failed: true }
 
 /**
  * With the default in force, a row that ran this recently is shown whatever its state: a task
@@ -48,15 +61,18 @@ export const NEEDS_ATTENTION: readonly Severity[] = ['failed', 'stale', 'partial
  */
 export const RECENT_MS = 24 * 3_600_000
 
+const hasDefaults = (d: StateDefaults) => d.states.length > 0 || d.failed
+
 /** The default's states are in force: only `state=all` in the URL lifts them. */
-export function onDefaultStates(f: Filters, defaults: readonly Severity[]): boolean {
-  return defaults.length > 0 && f.states.length === defaults.length && defaults.every((s) => f.states.includes(s))
+export function onDefaultStates(f: Filters, defaults: StateDefaults): boolean {
+  return hasDefaults(defaults) && f.failed === defaults.failed && f.states.length === defaults.states.length && defaults.states.every((s) => f.states.includes(s))
 }
 
 export function isFiltered(f: Filters): boolean {
   return (
     f.query.trim() !== '' ||
     f.states.length > 0 ||
+    f.failed ||
     f.kinds.length > 0 ||
     f.lastRun !== 'any' ||
     f.scheduled ||
@@ -80,7 +96,13 @@ function matchesLastRun(row: AssetRow, lastRun: LastRun, nowMs: number): boolean
 
 type Group = 'states' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
 
-export interface FilterOptions {
+/** The state filter, as a group: any of the picked states, or a failed last attempt when asked. */
+function matchesStates(r: AssetRow, f: Filters): boolean {
+  if (f.states.length === 0 && !f.failed) return true
+  return f.states.includes(r.state) || (f.failed && r.lastFailed)
+}
+
+interface FilterOptions {
   /** Rows that ran within this many ms pass the state filter whatever their state. */
   recentMs?: number
 }
@@ -91,7 +113,7 @@ function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group,
     opts.recentMs !== undefined && r.lastAtMs !== null && nowMs - r.lastAtMs <= opts.recentMs
   return filterRows(rows, f.query).filter(
     (r) =>
-      (skip === 'states' || f.states.length === 0 || f.states.includes(r.severity) || recent(r)) &&
+      (skip === 'states' || matchesStates(r, f) || recent(r)) &&
       (skip === 'kinds' || f.kinds.length === 0 || f.kinds.includes(r.kind)) &&
       (skip === 'lastRun' || matchesLastRun(r, f.lastRun, nowMs)) &&
       (skip === 'scheduled' || !f.scheduled || r.nextRunMs !== null) &&
@@ -103,8 +125,10 @@ export function applyFilters(rows: AssetRow[], f: Filters, nowMs: number, opts: 
   return filterExcept(rows, f, nowMs, undefined, opts)
 }
 
-export interface FacetCounts {
-  states: Record<Severity, number>
+interface FacetCounts {
+  states: Record<CacheState, number>
+  /** Rows whose last attempt failed. */
+  failed: number
   kinds: Record<Kind, number>
   lastRun: Record<LastRun, number>
   scheduled: number
@@ -112,8 +136,12 @@ export interface FacetCounts {
 }
 
 export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: FilterOptions = {}): FacetCounts {
-  const states = Object.fromEntries(SEVERITIES.map((s) => [s, 0])) as Record<Severity, number>
-  for (const r of filterExcept(rows, f, nowMs, 'states', opts)) states[r.severity] += 1
+  const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
+  let failed = 0
+  for (const r of filterExcept(rows, f, nowMs, 'states', opts)) {
+    states[r.state] += 1
+    if (r.lastFailed) failed += 1
+  }
 
   const kinds = { asset: 0, task: 0, sensor: 0 } as Record<Kind, number>
   for (const r of filterExcept(rows, f, nowMs, 'kinds', opts)) kinds[r.kind] += 1
@@ -125,6 +153,7 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
 
   return {
     states,
+    failed,
     kinds,
     lastRun,
     scheduled: filterExcept(rows, f, nowMs, 'scheduled', opts).filter((r) => r.nextRunMs !== null)
@@ -135,19 +164,24 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
 
 // ── URL ───────────────────────────────────────────────────────────────────────
 
-const PARAMS = ['q', 'state', 'kind', 'ran', 'scheduled', 'partitioned'] as const
+const PARAMS = ['q', 'state', 'failed', 'kind', 'ran', 'scheduled', 'partitioned'] as const
 
 function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] {
   if (!raw) return []
   return raw.split(',').filter((v): v is T => (allowed as readonly string[]).includes(v))
 }
 
-/** `defaults`: the states of a URL that names none (`state=all` asks for every state). */
-export function parseFilters(p: URLSearchParams, defaults: readonly Severity[] = []): Filters {
+/**
+ * `defaults`: the state filters of a URL that names none (`state=all` asks for every state).
+ * `state=` carries the CLI's words; `failed=1` asks for nodes whose last attempt failed.
+ */
+export function parseFilters(p: URLSearchParams, defaults: StateDefaults = NO_DEFAULTS): Filters {
   const ran = p.get('ran')
+  const named = p.has('state') || p.has('failed')
   return {
     query: p.get('q') ?? '',
-    states: p.has('state') ? list(p.get('state'), SEVERITIES) : [...defaults],
+    states: named ? list(p.get('state'), CACHE_STATES) : [...defaults.states],
+    failed: named ? p.get('failed') === '1' : defaults.failed,
     kinds: list(p.get('kind'), KINDS),
     lastRun: LAST_RUNS.find((l) => l === ran) ?? 'any',
     scheduled: p.get('scheduled') === '1',
@@ -156,13 +190,14 @@ export function parseFilters(p: URLSearchParams, defaults: readonly Severity[] =
 }
 
 /** `params` with the filter keys replaced by `f` (other keys are kept). */
-export function writeFilters(params: URLSearchParams, f: Filters, defaults: readonly Severity[] = []): URLSearchParams {
+export function writeFilters(params: URLSearchParams, f: Filters, defaults: StateDefaults = NO_DEFAULTS): URLSearchParams {
   const p = new URLSearchParams(params)
   for (const k of PARAMS) p.delete(k)
   if (f.query.trim()) p.set('q', f.query)
   if (!onDefaultStates(f, defaults)) {
     if (f.states.length) p.set('state', f.states.join(','))
-    else if (defaults.length) p.set('state', 'all')
+    else if (hasDefaults(defaults)) p.set('state', 'all')
+    if (f.failed) p.set('failed', '1')
   }
   if (f.kinds.length) p.set('kind', f.kinds.join(','))
   if (f.lastRun !== 'any') p.set('ran', f.lastRun)

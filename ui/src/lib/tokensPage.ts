@@ -35,7 +35,7 @@ export type TokensMsg =
   | { type: 'disconnect_clicked' }
   | { type: 'retry_list' }
 
-export type TokensEffect =
+type TokensEffect =
   | { type: 'create'; name: string; expiresAt: string | null }
   | { type: 'revoke'; id: string }
   | { type: 'refresh_list' }

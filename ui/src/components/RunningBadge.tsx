@@ -25,7 +25,7 @@ export function RunningBadge({ running, nowMs, size = 'sm' }: RunningBadgeProps)
       aria-label={`${badge.label}: open run ${running.run_id}`}
       onClick={(event) => event.stopPropagation()}
     >
-      <StatusBadge status={badge.status} label={badge.label} size={size} />
+      <StatusBadge tone={badge.tone} label={badge.label} size={size} live={running.step === 'running'} />
     </Link>
   )
 }
