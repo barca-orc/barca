@@ -24,7 +24,7 @@ export function SidePanel({ label, title, badge, subtitle, actions, width = 440,
   return (
     <aside className="barca-sidepanel" aria-label={label} style={{ width }}>
       <header className="barca-sidepanel-head">
-        <div style={{ minWidth: 0 }}>
+        <div className="barca-sidepanel-heading">
           <div className="barca-sidepanel-title">
             <h2>{title}</h2>
             {badge}

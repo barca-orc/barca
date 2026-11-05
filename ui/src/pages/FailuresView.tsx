@@ -33,12 +33,12 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
         <caption className="barca-failure-notice" role={model.notice.failed ? 'alert' : 'status'}>{model.notice.text}</caption>
       )}
       <colgroup>
-        <col style={{ width: '23%' }} />
-        <col style={{ width: '29%' }} />
-        <col style={{ width: '9%' }} />
-        <col style={{ width: '14%' }} />
-        <col style={{ width: '12%' }} />
-        <col style={{ width: 118 }} />
+        <col className="barca-failure-col-node" />
+        <col className="barca-failure-col-error" />
+        <col className="barca-failure-col-when" />
+        <col className="barca-failure-col-since" />
+        <col className="barca-failure-col-impact" />
+        <col className="barca-failure-col-actions" />
       </colgroup>
       <thead>
         <tr>

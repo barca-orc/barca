@@ -386,7 +386,10 @@
 .barca-table .barca-cell-name { display: flex; }
 .barca-table td > .barca-cell-name + .barca-cell-sub { margin-top: 1px; }
 .barca-table tbody tr { cursor: pointer; }
-.barca-table tbody tr:hover, .barca-table tbody tr:focus-visible { background: var(--bg-hover); outline: none; }
+.barca-table tbody tr:hover, .barca-table tbody tr:focus-visible { background: var(--bg-hover); }
+/* A row's ring is inside it: an outline would be cut by the table's scroll area. */
+.barca-table tbody tr:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--c-white-line); }
+.barca-table tbody tr[aria-selected="true"]:focus-visible { box-shadow: inset 2px 0 0 var(--signal), inset 0 0 0 2px var(--c-white-line); }
 /* The space of the rows a long table leaves out (components/TableWindow.tsx). */
 .barca-table tbody tr.barca-table-spacer { cursor: default; background: none; }
 .barca-table tbody tr.barca-table-spacer td { padding: 0; border: 0; height: auto; }
@@ -432,7 +435,8 @@
   padding: 0; border: 0; background: transparent; cursor: pointer;
   font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
 }
-.barca-sort:hover, .barca-sort:focus-visible { color: var(--text-strong); outline: none; }
+.barca-sort:hover, .barca-sort:focus-visible { color: var(--text-strong); }
+.barca-sort:focus-visible { outline: none; box-shadow: var(--focus-glow); border-radius: var(--radius-xs); }
 .barca-table th[aria-sort="ascending"] .barca-sort,
 .barca-table th[aria-sort="descending"] .barca-sort { color: var(--text-strong); }
 .barca-table th.num .barca-sort { flex-direction: row-reverse; }
@@ -584,7 +588,8 @@
   white-space: nowrap;
   text-decoration: none;
 }
-.barca-runs-chip:hover, .barca-runs-chip:focus-visible { border-color: var(--status-running); outline: none; }
+.barca-runs-chip:hover, .barca-runs-chip:focus-visible { border-color: var(--status-running); }
+.barca-runs-chip:focus-visible { outline: none; box-shadow: var(--focus-glow); }
 .barca-running-badge { display: inline-flex; text-decoration: none; }
 .barca-running-badge:focus-visible { outline: 1px solid var(--status-running); outline-offset: 2px; border-radius: var(--radius-pill); }
 .barca-pipe-running {
@@ -647,7 +652,8 @@
   display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; cursor: pointer;
   font: inherit; color: inherit; text-align: left; overflow-wrap: anywhere;
 }
-.barca-schema-cell-more:hover, .barca-schema-cell-more:focus-visible { color: var(--text-strong); outline: none; text-decoration: underline dotted; }
+.barca-schema-cell-more:hover, .barca-schema-cell-more:focus-visible { color: var(--text-strong); text-decoration: underline dotted; }
+.barca-schema-cell-more:focus-visible { outline: none; box-shadow: var(--focus-glow); border-radius: var(--radius-xs); }
 .barca-schema-cell-more[aria-expanded="true"] { white-space: pre-wrap; }
 
 /* ---------- Grouped pipeline page (pages/GroupedPipelinePage.tsx, GroupedView.tsx) ---------- */
@@ -1002,3 +1008,22 @@
 }
 .barca-offline > svg { color: var(--status-warning); flex: none; }
 .barca-offline-retry { margin-left: auto; }
+
+/* The panel header's text column; its actions sit beside it. */
+.barca-sidepanel-heading { min-width: 0; }
+/* The time zone toggle in the top bar: a mono label, lit when UTC is on. */
+.barca-zone { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.02em; color: var(--text-muted); }
+.barca-zone[aria-pressed="true"] { color: var(--text-strong); }
+/* Unloaded sources, across the top of every page (layouts/LoadErrors.tsx). */
+.barca-load-errors { padding: 12px 20px; border-bottom: 1px solid var(--border-default); color: var(--text-default); }
+/* The failures table's columns. */
+.barca-failure-col-node { width: 23%; }
+.barca-failure-col-error { width: 29%; }
+.barca-failure-col-when { width: 9%; }
+.barca-failure-col-since { width: 14%; }
+.barca-failure-col-impact { width: 12%; }
+.barca-failure-col-actions { width: 118px; }
+/* The grouped table's columns. */
+.barca-group-col-name { width: 30%; }
+.barca-group-col-state { width: 22%; }
+.barca-group-col-open { width: 40px; }

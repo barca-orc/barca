@@ -2,7 +2,6 @@ import type { CSSProperties, ReactNode } from 'react'
 import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
 import type { Tone } from '@/lib/tone'
 import { StatusDot } from './StatusDot'
-import { Tag } from './Tag'
 
 export interface DagNodeProps {
   name: string
@@ -67,9 +66,10 @@ export function DagNode({
           {icon && <span className="barca-dag-icon">{icon}</span>}
         </div>
         <div className="barca-dag-foot">
-          {kindLabel && <span className="barca-dag-kind">{kindLabel}</span>}
+          {/* The kind's word gives way to the failed fact: the icon above still says the kind. */}
+          {kindLabel && !lastFailed && <span className="barca-dag-kind">{kindLabel}</span>}
           {label && <span className="barca-dag-state">{label}</span>}
-          {lastFailed && <Tag tone="failed" size="sm">{LAST_ATTEMPT_FAILED}</Tag>}
+          {lastFailed && <span className="barca-tag barca-dag-failed" data-tone="failed" data-size="sm" title={LAST_ATTEMPT_FAILED}>{LAST_ATTEMPT_FAILED}</span>}
         </div>
       </div>
     </div>

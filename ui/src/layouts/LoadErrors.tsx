@@ -6,7 +6,7 @@ export function LoadErrors() {
   const errors = data?.load_errors ?? []
   if (!errors.length) return null
   return (
-    <aside role="alert" style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-default)', color: 'var(--text-default)' }}>
+    <aside role="alert" className="barca-load-errors">
       <strong>Some source files or definitions could not be loaded.</strong>
       <ul>
         {errors.map((error, index) => (

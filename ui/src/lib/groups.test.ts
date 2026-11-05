@@ -1,4 +1,4 @@
-import metadata from '../../e2e/group-metadata.json'
+import metadata from './testdata/modeling-groups.json'
 import { describe, expect, it } from 'vitest'
 import type { GraphEntry } from './graph'
 import {

@@ -68,14 +68,21 @@
   fill: var(--bg-inset);
 }
 
-/* Selection box + node focus ring (DagNode owns its own selected look) */
+/* Selection and focus: DagNode owns the selected look; a focused node gets the focus ring
+   (the keyboard walks the graph), the canvas itself a ring inside its edge. */
 .react-flow:focus,
 .react-flow__node:focus,
-.react-flow__node:focus-visible {
-  outline: none;
-}
 .react-flow__node.selected {
   outline: none;
+}
+.react-flow:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--c-white-line);
+}
+.react-flow__node:focus-visible {
+  outline: none;
+  border-radius: var(--radius-md);
+  box-shadow: var(--focus-glow);
 }
 
 /* Controls */

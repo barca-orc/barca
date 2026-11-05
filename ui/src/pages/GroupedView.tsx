@@ -66,14 +66,14 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
     <table className="barca-table barca-group-table">
       <thead>
         <tr>
-          <th style={{ width: '30%' }}>Name</th>
-          <th style={{ width: '22%' }}>State</th>
+          <th className="barca-group-col-name">Name</th>
+          <th className="barca-group-col-state">State</th>
           <th title="A group shows its oldest member's">Last success</th>
           {hasGroups && <th>Contents</th>}
           {hasGroups && <th className="num" title={`Members whose ${LAST_ATTEMPT_FAILED}`}>Failed</th>}
           {hasLeaves && <th title="Since the last attempt">Age</th>}
           {hasLeaves && <th className="num" title="The last attempt's">Duration</th>}
-          {hasGroups && <th style={{ width: 40 }} />}
+          {hasGroups && <th className="barca-group-col-open" />}
         </tr>
       </thead>
       <tbody ref={bodyRef}>
