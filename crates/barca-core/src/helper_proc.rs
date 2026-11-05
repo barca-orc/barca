@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn every_helper_launch_forwards_resolved_storage_options() {
         for (source, module) in [
-            (include_str!("io_loop.rs"), "barca._worker"),
+            (include_str!("io_loop/lifecycle.rs"), "barca._worker"),
             (include_str!("backup.rs"), "barca._state"),
             (include_str!("diagnostics.rs"), "barca._doctor"),
             (include_str!("store_inspect.rs"), "barca._inspect"),

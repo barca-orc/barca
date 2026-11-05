@@ -509,5 +509,8 @@ fn sweep_dead_sockets(dir: &std::path::Path) {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
+mod step_json;
+pub(crate) use step_json::build_step_json;
+
 #[cfg(test)]
 mod tests;
