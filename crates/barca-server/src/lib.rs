@@ -29,6 +29,7 @@ mod routes;
 mod running;
 mod runs;
 mod scheduler;
+pub mod shims;
 mod state;
 mod telemetry;
 mod ui;
@@ -73,7 +74,6 @@ pub(crate) mod test_support {
     }
 }
 
-pub use handlers::node_states;
 pub use running::{NodeRunning, PartitionProgress, RunningStep};
 pub use state::{NodeState, ServeConfig};
 

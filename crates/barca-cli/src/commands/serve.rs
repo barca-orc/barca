@@ -2,28 +2,47 @@
 
 use std::path::PathBuf;
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
+/// `barca serve`'s flags, as typed.
+pub(crate) struct ServeArgs {
+    pub(crate) env: Option<String>,
+    pub(crate) auth: Option<barca_core::serve::AuthMode>,
+    pub(crate) files: Vec<PathBuf>,
+    pub(crate) host: std::net::IpAddr,
+    pub(crate) port: u16,
+    pub(crate) watch: bool,
+    /// `!--no-schedule`.
+    pub(crate) schedule: bool,
+    pub(crate) timezone: String,
+    pub(crate) read_only: bool,
+    pub(crate) drain_timeout: Option<u64>,
+    pub(crate) max_runs: Option<usize>,
+    pub(crate) capacity: Option<usize>,
+    pub(crate) run_timeout: Option<u64>,
+}
+
 pub(crate) async fn serve_cmd(
-    env: Option<&str>,
-    auth: Option<barca_core::serve::AuthMode>,
-    files: Vec<PathBuf>,
-    host: std::net::IpAddr,
-    port: u16,
-    watch: bool,
-    schedule: bool,
-    timezone: String,
-    read_only: bool,
-    drain_timeout: Option<u64>,
-    max_runs: Option<usize>,
-    capacity: Option<usize>,
-    run_timeout: Option<u64>,
+    args: ServeArgs,
     python: &std::path::Path,
     ctx: &crate::error::Context,
 ) -> Result<(), crate::error::CliError> {
     use crate::error::{CliError, ErrorKind};
+    let ServeArgs {
+        env,
+        auth,
+        files,
+        host,
+        port,
+        watch,
+        schedule,
+        timezone,
+        read_only,
+        drain_timeout,
+        max_runs,
+        capacity,
+        run_timeout,
+    } = args;
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
-    let mut resolved = barca_core::config::resolve(env).map_err(engine)?;
+    let mut resolved = barca_core::config::resolve(env.as_deref()).map_err(engine)?;
     if let Some(mode) = auth {
         resolved.server_auth = mode;
     }

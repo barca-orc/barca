@@ -111,7 +111,6 @@ pub(crate) fn wrong_order_error(sub: &str, args: &[String], raw: &[String]) -> O
 
 /// A usage error (exit 2) with the corrected command when the positionals are in the wrong
 /// order.
-#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn check_order(sub: &str, args: &[String]) -> Result<(), CliError> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     match wrong_order_error(sub, args, &raw) {
@@ -122,7 +121,6 @@ pub(crate) fn check_order(sub: &str, args: &[String]) -> Result<(), CliError> {
 
 /// Reject file arguments that are not `.py` files, with a hint for the most common mistake:
 /// passing several assets to `--refresh` separated by spaces instead of commas.
-#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn check_py_files(
     sub: &str,
     files: &[PathBuf],
@@ -238,7 +236,6 @@ pub(crate) fn context(cli: &Cli) -> Context {
 
 /// The get/run output mode. `--fields` trims JSON, so it implies JSON; combined with an
 /// explicit human mode (`-o value`, `-o pretty`, `--pretty`) it is a usage error.
-#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn get_run_mode(
     output: Option<OutputMode>,
     format: FormatFlags,
@@ -322,7 +319,6 @@ impl GetMode {
 /// Without them, paths are returned and the shared rule (`--json` / `--pretty`, BARCA_OUTPUT,
 /// the terminal) decides between JSON and the summary. `-o json|pretty` are the older spellings
 /// of `--json|--pretty` and cannot be combined with them.
-#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn get_mode(
     output: Option<GetOutput>,
     expires: Option<&str>,
@@ -385,7 +381,6 @@ pub(crate) fn get_mode(
 
 /// Whether an inspection command prints JSON. `--fields` implies JSON; with `--pretty` it is a
 /// usage error.
-#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn fields_json(
     format: FormatFlags,
     fields: Option<&[String]>,
@@ -549,7 +544,6 @@ pub(crate) fn parse_targets(raw: &str) -> Result<Vec<String>, String> {
 
 /// The target list of `get`/`run` (empty when no target was given); a malformed list is a
 /// usage error (exit 2).
-#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn targets_arg(target: Option<&str>) -> Result<Vec<String>, CliError> {
     match target.map(parse_targets) {
         None => Ok(Vec::new()),

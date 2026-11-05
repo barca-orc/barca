@@ -3,7 +3,6 @@
 use crate::error::{CliError, ErrorKind};
 use barca_core::gc::{GcOptions, GcResult, size::human};
 
-#[allow(clippy::result_large_err)] // one error envelope on the command failure path
 pub(crate) async fn gc_cmd(
     env: Option<&str>,
     max_size: Option<&str>,

@@ -5,6 +5,7 @@
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
 #[doc(hidden)]
+pub mod artifact_format;
 pub mod backup;
 pub mod batch;
 pub mod cache;

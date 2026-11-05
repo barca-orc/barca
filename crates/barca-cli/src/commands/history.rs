@@ -5,7 +5,6 @@ use crate::error::{CliError, ErrorKind};
 use barca_core::history_filter::HistoryFilter;
 
 /// The filter flags of `barca history`, checked here (also before a server sees them).
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 pub(crate) fn history_filter(
     status: Option<&str>,
     target: Option<&str>,

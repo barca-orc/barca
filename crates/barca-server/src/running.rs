@@ -90,7 +90,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         .map(|r| InFlight {
             run_id: r.handle.clone(),
             triggered_by: Some(r.trigger.triggered_by),
-            started_at: crate::runs::timestamp(r.started_at),
+            started_at: crate::shims::timestamp(r.started_at),
             started_sql: chrono::DateTime::from_timestamp(r.started_at as i64, 0)
                 .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default(),
@@ -123,7 +123,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         runs.push(InFlight {
             run_id: alive.run_id,
             triggered_by: record.as_ref().and_then(|r| r.triggered_by),
-            started_at: crate::runs::durable_timestamp(&started_sql),
+            started_at: crate::shims::durable_timestamp(&started_sql),
             started_sql,
             command: alive.command,
             nodes,

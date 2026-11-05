@@ -107,12 +107,8 @@ async fn etag(request: axum::extract::Request, next: axum::middleware::Next) -> 
     let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let tag = {
-        use sha2::Digest;
-        let digest = sha2::Sha256::digest(&bytes);
-        let hex: String = digest[..12].iter().map(|b| format!("{b:02x}")).collect();
-        format!("\"{hex}\"")
-    };
+    // The first 12 bytes of the body's digest, as hex.
+    let tag = format!("\"{}\"", &crate::shims::sha256_hex(&bytes)[..24]);
     let value = HeaderValue::from_str(&tag).expect("hex is a valid header value");
     parts.headers.insert(header::ETAG, value.clone());
     parts
