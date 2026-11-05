@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.39.6 (2026-11-05)
+
 ### Features
 
 - The Python stubs are typed: `asset`, `sensor`, `task` and `sink` have overloads for bare and parameterized use, `parallel`, `parallel_map`, `collect` and `Group` carry parameter and return types, so an IDE completes and checks decorator arguments without importing barca's runtime.
