@@ -12,19 +12,34 @@ pnpm only if you change it.
 ```bash
 git clone https://github.com/barca-orc/barca.git
 cd barca
-uv venv
+scripts/new-worktree.sh my-change            # a worktree under .worktrees/ with its own .venv and target-local/
+cd .worktrees/my-change
 source .venv/bin/activate
-uv pip install maturin
-maturin develop --uv --release --extras test   # builds the binary, installs it and the Python package into .venv
-cargo test                                # Rust tests
+maturin develop --uv --profile fast --extras test   # after an edit: seconds; the first build about 40 s
+cargo test                                          # Rust tests
+scripts/check-fast.sh                               # CI's always-on gates, before pushing
 ```
+
+Work happens in a worktree, never in the trunk checkout: `scripts/new-worktree.sh <slug> [type]`
+creates `.worktrees/<slug>` on `<type>/<slug>` off `origin/main`, builds into the tree's own
+`target-local/` (sharing compiled dependencies through sccache when installed) and sets up
+`.venv`; `scripts/remove-worktree.sh <slug>` reaps the tree's processes and removes it when the
+work is merged. The rules, with measured build times, are in
+[AGENTS.md](https://github.com/barca-orc/barca/blob/main/AGENTS.md); this page does not repeat them.
 
 `maturin develop` is driven by `[tool.maturin]` in `pyproject.toml`: it builds the `barca-cli`
 crate and installs the binary together with `python/barca/`. The `test` extra adds pytest,
 pandas, pyarrow, polars, duckdb and the storage clients the Python tests use. Run it again
-after changing Rust code.
+after changing Rust code. The `fast` profile keeps the release `opt-level` and drops fat LTO and
+the single codegen unit, so an edit rebuilds in seconds; `--release` is what wheels ship, for
+measuring performance or reproducing a wheel.
 
-`cargo build --release` builds only the binary, at `target/release/barca`.
+`cargo build --release` builds only the binary, at `target-local/release/barca` in a worktree.
+
+`scripts/check-fast.sh` runs what CI's always-on gates run (changelog, specs, the prek hooks
+including the pinned ruff and ty, clippy with `-D warnings`, the Rust tests, a rebuild of the
+venv's barca when Rust changed, and the Python tests picked from the diff) and prints a pass/fail
+summary; `--python-all` runs the whole Python suite.
 
 ## Run an example
 
@@ -116,8 +131,13 @@ does it too). Every other page is written by hand.
 
 ## Git workflow
 
-- `main` is the integration branch. One topic branch per issue, opened as a pull request into
-  `main`.
+- `main` is the integration branch, always green. One topic branch per issue, in its own
+  worktree, opened as a pull request into `main`.
+- Pull requests land through the merge queue, squash-merged: `gh pr merge <n> --squash --auto`
+  (or "Merge when ready") on a green PR. Do not rebase or update a branch by hand to keep up with
+  main; the queue tests each PR against the main it will land on ([Testing](/contributing/testing/)
+  describes the tiers).
 - Commit messages use conventional commits (`feat:`, `fix:`, `refactor:`, `polish:`, `doc:`,
-  `test:`, `perf:`, `remove:`); release notes are grouped by these types.
+  `test:`, `perf:`, `remove:`, `chore:`). Release notes are not generated from them: a change adds
+  a bullet under `## Pending` in `CHANGELOG.md`.
 - Releases are described in [Releases](/contributing/releases/).

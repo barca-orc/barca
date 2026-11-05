@@ -36,23 +36,22 @@ For example, three ways to select the `staging` environment:
 
 Barca keeps its cache and run history in `.barca/`, in the project root. Results are always
 written there first. A remote store, when configured, holds a copy of the result files and
-backups of the metadata database.
+backups of the metadata database. The entries you may care about:
 
 | Path | What it is | Safe to delete |
 |---|---|---|
-| `.barca/metadata.db` | Run history and the record of every cached result (a SQLite file). | Only to discard local history: every asset then recomputes on the next run (with a store, `barca state restore` puts a backup back instead). Delete `metadata.db-wal` and `metadata.db-shm` with it, with no barca command running. |
-| `.barca/metadata.db-wal`, `.barca/metadata.db-shm` | SQLite's write-ahead log for `metadata.db`. | Not on their own: they belong to `metadata.db` and can hold rows not yet in it. |
-| `.barca/metadata.db.lock` | A lock file held briefly while a barca process reads or writes the database. | Yes, when no barca command is running. |
-| `.barca/artifacts/<node>/<run_hash>.<ext>` | One file per cached result: `.json`, `.pkl` or `.parquet`. A partitioned asset has one directory per key (`pipeline.py--sales_region_emea/`). | Yes. A result whose file is gone is computed again when a run needs to read it, or downloaded again if it is in a remote store. Prefer `--refresh <asset>` to force a recompute. |
-| `.barca/envs/<name>/` | The same `metadata.db` and `artifacts/` for a named environment (`--env <name>`). | As above, per environment. |
-| `.barca/backups/<name>.db`, `<name>.json`, `<name>.unsent` | With a store (`[remote] uri`): the five newest backups of `metadata.db`, each with its sidecar, and a marker on one the store has not confirmed yet. Under `.barca/envs/<name>/backups/` for a named environment. | Yes; then only the store's copies are left to restore from. |
-| `.barca/metadata.db.pre-restore` | The database `barca state restore` replaced. barca never reads it. | Yes. |
-| `.barca/serve.lock` | Held by a running `barca serve`, so `barca state restore` refuses to run under it. | Yes, when no server is running. |
-| `.barca/metadata.db.base`, `.prev`, `.pull-*`, `.push-*` | Left by barca 0.25 and earlier, which shared history through the store. Not used. | Yes. |
-| `.barca/run-owners/<token>.fifo` | From 0.20.0: a marker (a named pipe, no data) that a barca process holds open while it has a run in flight. A killed run is recognised by its marker having nobody at the other end. The process removes it when its runs have ended; one left by a killed process is removed by a later run an hour after no `running` run names it. | When `barca history` shows no `running` run. While one does, its marker is what can show that it was killed. |
-| `.barca/sql-cache/` | With remote storage: copies of remote results that `barca sql` downloaded, laid out by URI (`sql-cache/s3/<bucket>/...`), each with a `.version` file. The first thing the cache size limit evicts, least recently used first. | Yes, always. |
-| `.barca/range-cache/<run_hash>-<version>/` | With remote storage: the byte ranges lazy inputs (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`) read from a store object, one file per range, reused by later runs on this machine. Evicted with the leftovers, least recently used first. | Yes, always; the ranges are fetched again when read. |
-| `.barca/staging/<pid>/` | Temporary files of a running worker writing to a remote `@sink` (a remote dataset sink stages a directory per write) or fetching a remote input. Directories of dead workers are removed when a worker starts. | Yes, when no barca command is running. |
+| `.barca/metadata.db` | Run history and the record of every cached result (a local libSQL database; `-wal` and `-shm` belong to it). | Only to discard local history: every asset then recomputes on the next run (with a store, `barca state restore` puts a backup back instead). Delete `metadata.db-wal` and `metadata.db-shm` with it, with no barca command running. |
+| `.barca/artifacts/<node>/<run_hash>.<ext>` | One file per cached result: `.json`, `.pkl`, `.parquet` or `.csv`. A partitioned asset has one directory per key (`pipeline.py--sales_region_emea/`). | Yes. A result whose file is gone is computed again when a run needs to read it, or downloaded again if it is in a remote store. Prefer `--refresh <asset>` to force a recompute. |
+| `.barca/envs/<name>/` | The same `metadata.db`, `artifacts/`, `backups/` and `live-logs/` for a named environment (`--env <name>`). | As above, per environment. |
+| `.barca/backups/` | With a store (`[remote] uri`): the five newest backups of `metadata.db`, each with its sidecar, and a marker on one the store has not confirmed yet. | Yes; then only the store's copies are left to restore from. |
+
+Everything else barca writes under `.barca/` (lock files, `run-owners/`, `staging/`,
+`sql-cache/`, `range-cache/`, `live-logs/`, `branches/`, `inspection-cache/`, `auth/`,
+`gc-state.json`, the databases `state restore` and `state reset` move aside, a batched call's
+`.batch-*` directory, and the entries barca 0.25 and earlier left) is listed with its owner,
+when it is removed and whether `barca gc` evicts it in
+[`specs/interfaces/dot-barca-layout.md`](https://github.com/barca-orc/barca/blob/main/specs/interfaces/dot-barca-layout.md),
+the one owner of the layout. A `.gitignore` inside `.barca/` keeps all of it out of git.
 | `.barca/gc-state.json` | From 0.25: what the last full measurement of `.barca/` found, so the check after each command does not walk the artifact directories ([Cache size](#cache-size)). | Yes; the next check measures again. |
 | `.barca/.gitignore` | Written by barca, containing `*`, so git ignores everything under `.barca/`. | It is written again. |
 | `.barca/live-logs/<run_id>.jsonl` | A run's output while it runs, read by `barca logs -f` and `barca serve`. The run deletes it once its lines are in `metadata.db`; a killed run's file stays. | Yes, when no run is going. |

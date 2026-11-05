@@ -230,7 +230,7 @@ step (see above). Exit codes: [`barca docs agents`](/reference/agents/).
 Parallel branch results, including small JSON values, are always passed as file references.
 Protocol v3 batches result metadata into columnar arrays and uses transient metadata receipts
 so a crashed later item does not replay earlier completions. Old worker packages are refused
-before execution; reinstall matching Barca packages if a protocol mismatch is reported.
+before execution; reinstall matching barca packages if a protocol mismatch is reported.
 
 ## Task results and stdout
 

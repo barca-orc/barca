@@ -727,31 +727,11 @@ notify  task   always-runs  task          success 2026-10-21 02:39:25 UTC 0.00s 
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
 
-**Cache state** (`cache.state`) is the decision `--dry-run` makes, from the same code path. JSON
-spells it in snake_case, exactly like the `summary` keys; the table prints `never-run` and
-`always-runs`:
-
-| state | meaning | reasons |
-|---|---|---|
-| `cached` | a successful result matches this code and these inputs | `materialized` |
-| `unsynced` | cached and computed here, but its upload to the artifact store failed after the step succeeded; the next `get` or `run` uploads it ([remote storage](/reference/remote-storage/)) | `local_only` (table: `local only`) |
-| `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
-| `never_run` | no successful materialization recorded | `no_record`, `failed` |
-| `partial` | partitioned, some keys cached | `partitions_missing` |
-| `blocked` | partitioned; its missing keys wait on the same keys of an input, which failed | `upstream_failed` |
-| `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
-| `always_runs` | tasks and sensors | `task`, `sensor` |
-
-`changed` means the run hash differs from the last successful materialization, and
-`cache.changed` says what differs: `code`, `decorator argument NAME`, `decorator NAME`,
-`helper FILE:NAME` (a function or constant the code uses, in its own file or a project module),
-`input ID`, `sensor ID`, `env NAME` or `kind`. `detail` and the table's WHY column name the first
-and count the rest (`changed: helper pipelines/common.py:bucket_ltv (+1 more)`), and a dry run's
-step carries the same `changed` list. A result recorded before 0.29.0 has no record of the parts,
-and its node stays a plain `changed`.
-`artifact_missing` means the result is recorded but its artifact file is gone and a run would
-have to read it, so it would be computed again; a missing artifact that nothing reads leaves the
-node `cached` (`barca docs cache`, "A cached result whose artifact is missing").
+**Cache state** (`cache.state`) is the decision `--dry-run` makes, from the same code path:
+`cached`, `unsynced`, `stale`, `never_run`, `partial`, `blocked`, `unknown` or `always_runs`,
+each with a `reason` (`changed`, `upstream_stale`, `local_only`, `partitions_unknown`, ...) and
+a `detail`. The table of states, reasons and what `cache.changed` lists is owned by
+[Status](/reference/status/#cache-state) (`barca docs status`).
 
 **Last materialization** is the most recent execution recorded in the metadata DB, success or
 failure. Cache hits do not change it. For a partitioned node it is the latest run's first key in
@@ -873,13 +853,12 @@ describes the output contract for scripts and AI agents.
 
 ## Errors and exit codes
 
-| Code | `kind`        | Meaning                                                                    |
-|------|---------------|----------------------------------------------------------------------------|
-| 0    |               | success                                                                    |
-| 1    | `step_failed` | a step of yours raised; the traceback is included and the run is recorded as failed |
-| 2    | `usage`       | bad flags or arguments, unknown target, `get` on a task or `run` on an asset, unreadable or invalid `.py` file, invalid `--env` or barca.toml |
-| 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O |
-| 130  | `cancelled`   | stopped by Ctrl-C (SIGINT) or SIGTERM                                      |
+The exit codes and their `kind` are the generated table in the
+[CLI contract](/reference/cli-contract/#exit-codes): 0 success, 1 `step_failed` (a step of yours
+raised; the traceback is included and the run is recorded as failed), 2 `usage` (bad flags or
+arguments, an unknown target, `get` on a task or `run` on an asset, an unreadable or invalid
+`.py` file, an invalid `--env` or barca.toml), 3 `infra` (barca or its environment failed:
+metadata DB, worker pool, remote state, I/O), 130 `cancelled` (Ctrl-C or SIGTERM).
 
 A closed stdout or stderr never makes barca panic, never stops a run and is not an error:
 output for the closed stream is dropped, a `get` or `run` finishes and is recorded, and the

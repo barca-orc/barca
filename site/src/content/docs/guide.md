@@ -50,7 +50,7 @@ A run creates `.barca/` in the project root:
 
 ```
 .barca/metadata.db                          run history and the record of what is cached
-.barca/artifacts/<node>/<run_hash>.<ext>    one file per result: .json, .pkl or .parquet
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result: .json, .pkl, .parquet or .csv
 .barca/envs/<env>/                          the same two, for each --env other than the default
 ```
 

@@ -50,26 +50,26 @@ def rows(key):
 ```
 
 Planning reads these bindings statically and never imports your module. A name
-reassigned or imported from another library does not define a Barca node; local
+reassigned or imported from another library does not define a barca node; local
 parameters or assignments also shadow task-body helpers such as `parallel`.
-Dynamic alias assignments and conditional imports are not resolved. Explicit writes to a Barca module export
+Dynamic alias assignments and conditional imports are not resolved. Explicit writes to a barca module export
 conservatively disable recognition of that export through every module alias and
 direct import, including earlier copies; unaffected exports remain available.
 
 If a foreign decorator previously became a node merely because it was named
-`asset`, `sensor` or `task`, import the actual Barca decorator instead. To keep a
-foreign wrapper on a node, stack it with a genuine Barca decorator (qualified or
+`asset`, `sensor` or `task`, import the actual barca decorator instead. To keep a
+foreign wrapper on a node, stack it with a genuine barca decorator (qualified or
 aliased imports work). Bare names with no competing binding retain legacy
 source-snippet recognition. Namespace reflection retains conservative discovery,
 but disables provenance-based validation and uses conservative hashing.
 
-A later `from shared import *` preserves imported Barca names when the project module has
+A later `from shared import *` preserves imported barca names when the project module has
 one literal `__all__` list or tuple of strings, with no other references to `__all__`,
 that does not export those local names.
 Only colliding names lose recognition, including imported aliases and `group`. Barca uses
 the same package and sibling import paths as its workers and reads the source without
 importing it. Missing, computed, conditional or mutated export sets, installed modules and
-namespace reflection remain uncertain; put the Barca import last or use explicit imports.
+namespace reflection remain uncertain; put the barca import last or use explicit imports.
 Star-import dependency hashing remains conservative.
 
 ## Options on `@asset`
@@ -186,8 +186,8 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
 
 Not checked:
 
-- A decorator or helper that is not positively Barca's. Qualified and aliased top-level
-  Barca imports are checked. Assignments, foreign imports, `def`, `class`, loop or `with`
+- A decorator or helper that is not positively barca's. Qualified and aliased top-level
+  barca imports are checked. Assignments, foreign imports, `def`, `class`, loop or `with`
   targets and `global` writes disable recognition of the affected name. A later star import
   disables recognition only when its exports are unknown or include that local name.
   Celery's or Prefect's `@task(bind=True)` stays untouched. Namespace reflection retains

@@ -457,16 +457,11 @@ A store that fails before any step runs is still an error, exit 3: the startup c
 With a store, `barca status` calls an unpartitioned node `cached` only when this machine's copy,
 the store's object and the digest recorded with the result all agree. It asks the store about
 every such node with one `python -m barca._state stat`. Anything else is `unsynced`, with the
-reason in `cache.reason` (WHY in the table):
-
-| `cache.reason` | WHY | Meaning | What `barca get <node>` does |
-|---|---|---|---|
-| `local_only` | local only | here, not in the store (or its upload is pending) | uploads this machine's copy |
-| `store_only` | store only | in the store, not here | fetches the store's copy |
-| `mismatch` | mismatch | both are there and differ, or this machine's copy is not the recorded one | when this machine's copy is the recorded one, uploads it again; otherwise fetches the store's copy and records its digest ("Checking a local copy against the store") |
-
-A result in neither place is `stale` with reason `artifact_missing`. A store that cannot be
-asked leaves the states as they are, with a note in `cache.detail`.
+reason in `cache.reason` (WHY in the table): `local_only`, `store_only` or `mismatch`. The
+states and reasons, what each means and what `get` does about it are owned by
+[`barca docs status`](/reference/status/), "Cache state"; the repair of a `mismatch` is "Checking a local copy against
+the store" below. A result in neither place is `stale` with reason `artifact_missing`. A store
+that cannot be asked leaves the states as they are, with a note in `cache.detail`.
 
 `barca get` repairs an `unsynced` target without running a step and without changing the exit
 code (a `get` within 5 minutes of a store check that transfers nothing does not ask; see "How

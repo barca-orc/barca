@@ -111,7 +111,8 @@ def summary(all_sales: list[dict]) -> dict:
 - A fan-in (`collect`) runs in its own phase after every partition has finished, also when the
   asset has one key or barca has one worker.
 - Which keys run, and each key's run hash, do not depend on the number of workers
-  (`BARCA_POOL_SIZE`, by default the machine's core count). Up to 0.18.1 they could: with a
+  (`BARCA_POOL_SIZE`, else `[execution] pool_size`, else the machine's core count, capped at
+  the capacity; [`barca docs assets`](/reference/assets/), "Heavy steps"). Up to 0.18.1 they could: with a
   chain of `partitions_from` assets and fewer workers than keys, some keys of the second asset
   were recorded under a run hash that depended on how the keys were split across workers, and
   ran again when the split changed. Such a key, and a fan-in over it, runs once more after

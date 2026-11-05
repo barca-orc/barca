@@ -112,9 +112,9 @@ phase downloads it for all of them (`barca docs remote`).
 ## Limitations
 
 - Nothing here applies to json or pickle artifacts: they are read whole.
-- Barca does not check that a lazy step narrows its input. A step that annotates
+- barca does not check that a lazy step narrows its input. A step that annotates
   `duckdb.DuckDBPyRelation` and then calls `.df()` on it reads everything.
 - Row groups are skipped by the parquet reader (DuckDB or polars), from the file's statistics.
-  Barca does not sort or cluster what a step writes; the order is whatever the step returns.
+  barca does not sort or cluster what a step writes; the order is whatever the step returns.
 
 See also: `barca docs types`, `barca docs examples/duckdb`, `barca docs remote`.

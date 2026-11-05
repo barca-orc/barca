@@ -10,6 +10,10 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/doct
 This page is the manual topic `barca docs doctor`: the CLI prints the same text.
 :::
 
+`barca doctor` reports what a run would need (project root, Python, cache, metadata, stores,
+capacity, and a configured server) without executing a step, so a broken setup is found before
+the first `get`.
+
 ```bash
 barca doctor
 barca doctor pipeline.py --json

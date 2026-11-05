@@ -1,7 +1,8 @@
 # Scheduling and `barca serve`
 
-`barca serve` currently runs deployed code on one machine and exposes the HTTP API,
-web UI and cron scheduler. From another machine, `barca get daily_report --server <url>` (and
+Freshness says when each node is brought up to date, and `barca serve` is the process that
+acts on it: cron schedules, an HTTP API and the web UI, running the deployed code on one machine.
+From another machine, `barca get daily_report --server <url>` (and
 `run`, `status`, `list`, `history`, `stats`) runs a command there and prints it here as a local
 run would (`barca docs server-mode`); the HTTP API (`POST /runs`) is underneath. Without
 `--server`, `barca get` and `barca.get()` run locally, and with a server configured they read
@@ -573,7 +574,8 @@ of a container, under systemd (`INVOCATION_ID` is set) and under Kubernetes
 [barca] stop grace: the container runtime must allow at least 9s between SIGTERM and SIGKILL (drain timeout 5s + 4s for stopping runs and closing connections); set docker stop -t or stop_grace_period (Docker's default is 10s)
 ```
 
-With the default 30-second drain timeout, 45 seconds or more:
+With the default 30-second drain timeout, 45 seconds or more without a store (42 plus a margin),
+and 75 or more with one (73 plus a margin); the table gives the no-store numbers:
 
 | Supervisor | Setting | Default | With `drain_timeout = 30` |
 |---|---|---|---|

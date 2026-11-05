@@ -49,7 +49,7 @@ environment variable and the hash changes, so only the affected subgraph re-runs
   project's `.env`, so a value a pipeline loads from `.env` at import is the one hashed:
   editing it in `.env` re-runs the asset. Barca warns about the undeclared reads it can see
   ("Environment variables" below).
-- Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files
+- barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files
   or the project modules they import: their `__pycache__` .pyc files are checked against a hash
   of the source, not its mtime and size, so an edit that keeps both (a same-size edit within one
   second, or a tool that pins mtimes such as Nix, Bazel, `touch -t` or `rsync -t`) still runs
@@ -535,24 +535,20 @@ step read by many keys, or one whose inputs change more often than its result.
 ## Cached, stale, evicted, unsynced
 
 A result is a row in `.barca/metadata.db` (the run hash it was computed under) plus an artifact
-file. `barca status` (`barca docs status`) names the state each node is in:
-
-| State | Meaning | What the next `get` does |
-|---|---|---|
-| `cached` | a result for the current run hash is recorded and its file is usable | serves it |
-| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's or `Manual` asset's output, a declared env var; `cache.changed` says which) or the last attempt failed | runs it |
-| `stale`, reason `artifact_missing` | the result is recorded but its file is gone, and something needs to read it | computes it again under the same run hash ("A cached result whose artifact is missing") |
-| `stale`, reason `evicted` | the same, because the cache size limit deleted the file | computes it again ("Disk use"); a copy the artifact store holds is downloaded instead, and is not stale |
-| `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree; with a configured server, its ledger has not received the result yet | repairs that (an upload, a download) without running a step (`barca docs remote`, `barca docs server-mode`) |
-| `never_run`, `partial`, `unknown`, `always_runs` | no result yet; some partition keys cached; not knowable without running; a task or sensor | `barca docs status` |
-| `blocked`, reason `upstream_failed` | a partitioned node whose missing keys wait on the same keys of an input, which failed | computes its other keys and skips these (`barca docs partitions`, "Failed keys block their own keys") |
+file. `barca status` names the state each node is in; the table of states and reasons is owned
+by `barca docs status`, "Cache state". In short: `cached` is served; `stale` runs again, because
+the run hash moved (`changed`, `upstream_stale`), the last attempt failed (`failed`), or the
+recorded file is gone and something needs to read it (`artifact_missing`, or `evicted` when the
+cache size limit deleted it, "Disk use"; a copy the artifact store holds is downloaded instead
+and is not stale); `unsynced` is cached but not where it should be, and the next `get` repairs
+that without running a step (`barca docs remote`, `barca docs server-mode`); `blocked` keys wait
+on failed keys of an input (`barca docs partitions`). A missing or evicted artifact that nothing
+needs to read leaves the node `cached` ("A cached result whose artifact is missing").
 
 Store availability reported by inspection can reuse a cloud observation for five minutes.
 Local file and plain-directory-store identity changes invalidate digest evidence immediately.
 Inspection shape/digest evidence is bounded separately from the ledger; required reads and
 ledger publication still verify directly (`barca docs remote`, "Inspection cost and observation window").
-
-A missing or evicted artifact that nothing needs to read leaves the node `cached`.
 
 ## Forcing a recompute
 
@@ -1240,23 +1236,19 @@ The change is local to the selected environment's metadata database.
 ## Where things live
 
 ```
-.barca/metadata.db                          run history and materialization records (local DB)
-.barca/backups/<name>.db, <name>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
-.barca/metadata.db.pre-restore              the database `barca state restore` replaced
-.barca/metadata.db.reset-<UTC>              a database `barca state reset` moved aside (with its -wal, -shm)
-.barca/serve.lock                           held by a running `barca serve`, so `barca state restore` refuses to run under it
-.barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
+.barca/metadata.db                          run history and materialization records (a local libSQL database)
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
-.barca/staging/<pid>/                       a process's files in transit (uploads, downloads, result batches)
-.barca/sql-cache/                           copies of store artifacts `barca sql` downloaded (`barca docs sql`)
-.barca/range-cache/<run_hash>-<version>/    byte ranges lazy inputs read from a store object (`barca docs remote`)
-.barca/gc-state.json                        what the last measurement of `.barca/` found ("Disk use")
-.barca/live-logs/<run_id>.jsonl             a run's output while it runs, for `barca logs -f` (removed once recorded)
-.barca/branches/<run>-<pid>/                what a run's `parallel()` branches returned (removed when the run ends)
-.barca/inspection-cache/<env>.json          disposable evidence `barca status` reuses (at most 8 MiB)
-.barca/auth/                                `barca serve` token state (`barca docs server-mode`)
 .barca/envs/<env>/                          the same layout for a named environment ("Environments")
+.barca/backups/                             with a store: the five newest backups of the metadata DB (`barca docs remote`)
 ```
+
+Every other entry barca writes under `.barca/` (locks, `run-owners/`, `staging/`, `sql-cache/`,
+`range-cache/`, `live-logs/`, `branches/`, `inspection-cache/`, `auth/`, `gc-state.json`, the
+files `state restore` and `state reset` move aside, a batched call's `.batch-*` directory), who
+owns it, when it is removed and whether `barca gc` evicts it or the size budget counts it, is the
+table in `specs/interfaces/dot-barca-layout.md`, the one owner of the layout; the site's
+configuration page points there too. Delete nothing by hand to force a recompute: use
+`--refresh` ("Forcing a recompute").
 
 `<ext>` is `.json`, `.pkl`, `.parquet` or `.csv` (see `barca docs types`). An artifact's path
 names the computation, not the bytes: the run hash covers the step's code and inputs, so the same

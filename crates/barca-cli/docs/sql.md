@@ -1,4 +1,4 @@
-# barca sql: query cached results
+# SQL: query cached results with DuckDB
 
 `barca sql` runs a DuckDB query over the results barca already has on disk. Use it to look at
 data while debugging, for example to see which keys a validation counted as failing, without

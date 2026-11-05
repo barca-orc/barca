@@ -87,7 +87,7 @@ partitioned asset. When the asset is served from cache:
 - A sink that cannot be written this way fails the step like a sink that fails when the step
   runs: `SinkError: sink out.json: ...`, exit 1, a `step_failed` envelope. Nothing is recorded
   as published, so the next run tries again.
-- Barca does not look at what is at the path: a sink file deleted or edited by hand is not
+- barca does not look at what is at the path: a sink file deleted or edited by hand is not
   written again while its run hash stays the same. `--refresh` naming the asset runs it, which
   writes the sink.
 - The record is per machine. A sink on this machine's disk counts as published only by runs on
@@ -188,7 +188,7 @@ the same layout and file names:
   barca did not write`), or whose marker names another asset: two assets cannot share a
   prefix. Point the sink at a new prefix, or empty the old one. Files whose names start with
   `.` are not counted.
-- Barca does not use DuckDB's `OVERWRITE`, which clears the whole target first.
+- barca does not use DuckDB's `OVERWRITE`, which clears the whole target first.
 
 **Size warnings.** A write that creates more than 1,000 directories, or at least 100 files
 averaging under 1 MB, prints a warning, since many small files are slow to read:

@@ -1,4 +1,4 @@
-# barca status
+# Status: what is cached, what is stale and why
 
 One read-only view of every node: what it is, whether it is cached and why, when it last ran,
 and what its artifact looks like. It answers in one call what would otherwise take `barca list`,

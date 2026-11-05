@@ -601,7 +601,7 @@ value of its first key only.
 | `BARCA_STORAGE_OPTIONS` | JSON object keyed by protocol, merged over `[remote.storage_options.*]` | stable |
 | `BARCA_ARTIFACT_URI` | literal artifact root, bypassing the environment prefix (warns with a non-default env) | experimental |
 | `BARCA_PROGRESS_SECS` | seconds between `still running` lines (default 15, `0` turns them off) | experimental |
-| `BARCA_POOL_SIZE` | number of Python workers (default: available cores) | experimental |
+| `BARCA_POOL_SIZE` | the most Python workers a run starts (else `[execution] pool_size`, else the available cores), capped at the capacity when that is smaller (`barca docs assets`, "Heavy steps") | experimental |
 | `BARCA_COMM_COST_SECONDS` | the scheduler's per-dispatch cost estimate | experimental |
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
@@ -2465,7 +2465,7 @@ are after eviction (`barca docs cache`, "Disk use").
 
 ### Project star-import discovery
 
-A later project star import preserves imported Barca bindings absent from its single literal
+A later project star import preserves imported barca bindings absent from its single literal
 `__all__` list/tuple with no other references to `__all__`. Colliding local names lose recognition; unknown, computed, mutated and
 reflective export sets keep the conservative fallback. Source inspection does not import
 user modules. This changes discovery and argument validation, with no new flags or JSON keys.
@@ -2747,10 +2747,10 @@ the first failed step is summarized once; each target's error remains in JSON.
 
 ### Static decorator bindings
 
-Qualified and imported aliases of Barca decorators/helpers receive the same node
+Qualified and imported aliases of barca decorators/helpers receive the same node
 semantics and argument validation as direct imports. Explicit foreign or rebound
-names do not define Barca nodes. For a foreign wrapper intended to remain a node,
-stack it with a genuine Barca decorator; see `barca docs assets`.
+names do not define barca nodes. For a foreign wrapper intended to remain a node,
+stack it with a genuine barca decorator; see `barca docs assets`.
 
 `list --groups` is experimental: JSON returns `{groups: [{id, name, description, members, output}]}`. IDs and member/output references are strings; members is an array of strings. The default `list` schema is unchanged. Groups are organizational metadata and cannot be execution targets.
 

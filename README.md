@@ -124,10 +124,10 @@ Run dc8c75a5f03a | got 'summary' in 0.034s (1 step, 1 phase)
 ...
 ```
 
-For partitioned chains, a changed key also limits planning to the affected keys after
-sensor discovery. No batching setting is required.
-
-Only `summary` runs again; `raw_data` comes from the cache. To recompute by hand, name the
+Only `summary` runs again; `raw_data` comes from the cache (in a partitioned chain, only the
+keys whose inputs changed run: `barca docs partitions`). The summary line adds `unsynced` and
+`blocked` counts when they are not zero; the JSON `summary` always has all eight states.
+To recompute by hand, name the
 assets: `barca get summary --refresh raw_data` (and everything downstream of it), or
 `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
 
@@ -213,14 +213,16 @@ keys, across the whole run; also on `barca plan`).
 
 **Scripts and AI agents.** Results go to stdout: a table or summary in a terminal, JSON when
 piped or captured (`--json` and `--pretty` override). Progress and errors go to stderr; in JSON
-mode an error is one JSON line with `error`, `code`, `kind` and `remediation`. Exit codes: `0`
-ok, `1` a step failed, `2` usage error, `3` barca or infrastructure failure, `130` cancelled.
+mode an error is one JSON line with `error`, `code`, `kind` and `remediation`. The exit codes
+(0, 1, 2, 3, 130) and their meanings are the generated table in
+[the CLI contract](https://barca.sh/reference/cli-contract/#exit-codes) (`barca docs contract`).
 An agent should load [`SKILL.md`](SKILL.md), also printed by `barca docs skill`.
 
 ## More
 
 `barca docs` lists the manual's topics and `barca docs <topic>` prints one; start with
-`overview`. The site, [barca.sh](https://barca.sh), has the same material plus a guide and
+`overview`. [GLOSSARY.md](GLOSSARY.md) defines the words the CLI uses (`cached`, `stale`,
+`unsynced`, run hash, ledger, store, ...) and the specifications' vocabulary. The site, [barca.sh](https://barca.sh), has the same material plus a guide and
 patterns.
 
 | Topic | Manual | Site |
@@ -246,11 +248,13 @@ cd barca
 uv venv
 source .venv/bin/activate
 uv pip install maturin
-maturin develop --uv --release --extras test   # builds the binary and installs it into .venv
+maturin develop --uv --profile fast --extras test   # builds the binary and installs it into .venv; --release is what wheels ship
 cargo test
+scripts/check-fast.sh                               # CI's always-on gates, before pushing
 ```
 
-See [Architecture](https://barca.sh/architecture/) and
+Work in a worktree (`scripts/new-worktree.sh <slug>`), as [AGENTS.md](AGENTS.md) describes; see
+[Architecture](https://barca.sh/architecture/) and
 [Contributing](https://barca.sh/contributing/development/). `benchmarks/` holds the same
 pipelines written for barca, Dagster, Prefect and Airflow;
 [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) records measurements with their date and

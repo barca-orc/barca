@@ -413,7 +413,7 @@ Auth state lives in owner-only `.barca/auth/`, shared across project environment
 separate from metadata backups. Preserve it separately when migrating; restoring metadata
 cannot resurrect a revoked token. Unreadable/corrupt auth state fails closed. Secrets never
 belong in URLs, logs, committed configuration or shell arguments. URL Basic credentials
-and Barca bearer mode cannot share one Authorization header; a layered proxy must forward
+and barca bearer mode cannot share one Authorization header; a layered proxy must forward
 bearer credentials and use another mechanism for its own outer authentication.
 
 Missing, invalid, revoked or expired tokens return 401 with `WWW-Authenticate: Bearer` and
