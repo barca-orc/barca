@@ -2,7 +2,6 @@
 use crate::error::{CliError, ErrorKind};
 use std::path::{Path, PathBuf};
 
-#[allow(clippy::result_large_err)] // one diagnostic envelope on the command failure path
 pub(crate) async fn doctor_cmd(
     files: Vec<PathBuf>,
     env: Option<&str>,

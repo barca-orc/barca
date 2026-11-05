@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 
 /// `barca list --server`: `GET /list` (or `/groups`), with this command's files, limit, fields
 /// and output mode.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn list(
     server: &Server,
     files: &[PathBuf],

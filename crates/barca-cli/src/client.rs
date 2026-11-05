@@ -29,10 +29,6 @@
 //!    this command's own `--limit`, `--fields` and output mode.
 //! 6. **Doctor** ([`doctor`]: [`doctor_checks`]): `barca doctor`'s checks of the server.
 
-// Every call here ends the command with at most one `CliError` (the envelope), on a path that
-// is waiting on the network anyway: its size does not matter.
-#![allow(clippy::result_large_err)]
-
 use crate::args::ServerFlags;
 use crate::error::{CliError, Context, ErrorKind};
 use barca_core::BarcaError;
