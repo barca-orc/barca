@@ -12,10 +12,13 @@ describe('node kind words', () => {
   })
 })
 
-describe('one name per state', () => {
-  it('uses the words of the table', () => {
-    expect(statusMeta('success').label).toBe('Healthy')
-    expect(statusMeta('warning').label).toBe('Stale')
-    expect(statusMeta('skipped').label).toBe('Not run')
+describe('the run lifecycle table', () => {
+  it('names each status by its own word, and pulses only running work', () => {
+    for (const status of ['queued', 'running', 'success', 'failed', 'cancelled', 'skipped'] as const) {
+      expect(statusMeta(status).label).toBe(status)
+      expect(statusMeta(status).live).toBe(status === 'running')
+    }
+    expect(statusMeta('failed').tone).toBe('failed')
+    expect(statusMeta('cancelled').tone).toBe('neutral')
   })
 })

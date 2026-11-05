@@ -7,12 +7,17 @@ and corresponding tests; no user should write code against them.
 
 | Idea | Current behavior | Unresolved tradeoff |
 | --- | --- | --- |
-| Allow task-to-asset inputs with an uncacheable warning | DAG validation rejects task inputs to assets and sensors | Weakens the asset caching model; no softening is planned |
 | Optional `barca tutorial` | Core commands and manual are available without a tutorial | A possible guided walkthrough of tasks, assets, refresh/cache behavior and exploration; no command is implemented or approved for delivery |
 | A typed `SensorResult`, passed into and returned from sensors | Sensors have no DAG inputs; return a boolean, `(changed, value)`, or a value for comparison | Adds a public type and previous-observation injection; neither is implemented |
 | Omit underscore-prefixed ordering parameters from calls | Declared ordering inputs receive `None` | Changes normal Python call signatures and compatibility |
 
-Scheduling, remote sink support, and retry backoff are implemented. They are not open
+Rejected, not open: task-to-asset inputs. DAG validation rejects a task as an input of an asset
+or sensor (`dag.rs`, "cannot be an input of an asset"), the asset caching model depends on it,
+and no softening is planned; a new decision would have to reopen it.
+
+Scheduling, remote sink support, retry backoff and the missing-bytes fallback (a cached result
+whose bytes are missing is fetched from the store, and recomputed when no copy exists;
+`barca docs remote`, "Failures") are implemented. They are not open
 questions. Current rules live in [freshness](../behavior/freshness.md),
 [execution](../behavior/execution.md), [artifact formats](../interfaces/artifact-formats.md), and the
 [terminal manual](../../crates/barca-cli/docs/scheduling.md).
@@ -32,15 +37,13 @@ No supported TOML keys are introduced by this example.
 
 ## Recovery and structured outcomes — unanswered
 
-These three proposals were presented before the requirements discussion paused. None is
-approved; existing behavior and approved machine-information parity remain in effect.
+These proposals were presented before the requirements discussion paused. None is
+approved; existing behavior and approved machine-information parity remain in effect. (A third,
+the missing-bytes fallback, has shipped as described above and is no longer a proposal.)
 
-1. Missing artifact bytes: try the configured remote store before recomputation, then
-   recompute under the request freshness policy if unavailable. Retained history alone
-   does not establish result availability. The exact fallback policy remains undecided.
-2. Disk full: fail affected writes clearly, preserve existing valid artifacts and suggest
+1. Disk full: fail affected writes clearly, preserve existing valid artifacts and suggest
    cleanup; do not silently evict beyond configured retention.
-3. Structured outcomes: expose the same outcomes, causes and recovery actions as human
+2. Structured outcomes: expose the same outcomes, causes and recovery actions as human
    output through stable fields without prose parsing. Broad information parity is already
    approved; this proposal concerns its precise outcome/error contract.
 

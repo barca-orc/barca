@@ -56,8 +56,8 @@ export function Topbar({ run }: TopbarProps) {
         <Button
           variant="ghost"
           size="sm"
+          className="barca-zone"
           aria-pressed={zone === 'utc'}
-          style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', letterSpacing: '0.02em', color: zone === 'utc' ? 'var(--text-strong)' : 'var(--text-muted)' }}
           title={zone === 'utc' ? `Times are UTC; show them in local time (${zoneName('local')})` : `Times are local (${zoneName('local')}); show them in UTC`}
           onClick={toggleZone}
         >

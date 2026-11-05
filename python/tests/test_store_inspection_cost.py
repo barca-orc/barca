@@ -8,9 +8,13 @@ import sys
 import time
 
 import pytest
-from barca.api import _find_binary
 
-from .test_serve_robustness import Server, _env, wait_for
+from .helpers import QUICK, barca, clean_env, wait_until
+from .served import Serve
+
+
+def _env() -> dict[str, str]:
+    return clean_env(BARCA_POOL_SIZE="2")
 
 
 @pytest.fixture
@@ -40,14 +44,7 @@ def inspected_project(tmp_path, monkeypatch):
     env = _env() | {"PYTHONPATH": str(audit) + os.pathsep + os.environ.get("PYTHONPATH", "")}
 
     def command(*args):
-        result = subprocess.run(
-            [_find_binary(), *args, "--json"],
-            cwd=project,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=20,
-        )
+        result = barca(project, *args, "--json", env=env, timeout=QUICK)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
@@ -59,12 +56,13 @@ def inspected_project(tmp_path, monkeypatch):
         env=env,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=QUICK,
     )
     assert control.returncode == 0, control.stderr
     assert reads.read_text().splitlines(), "the payload-read audit hook must be active"
     reads.write_text("")
-    time.sleep(1.05)  # Measure settled evidence; fresh files intentionally bypass reuse.
+    # A fixed wait: a file younger than a second never reuses evidence, so the files must age.
+    time.sleep(1.05)
     monkeypatch.setenv("PYTHONPATH", env["PYTHONPATH"])
     return project, artifact, reads, command
 
@@ -96,10 +94,11 @@ def test_server_db_refresh_reuses_artifact_evidence_from_the_stable_environment(
     project, _, reads, command = inspected_project
     command("status", "pipeline.py")
     reads.write_text("")
-    server = Server(project, "--read-only", "--no-schedule")
-    try:
+    with Serve(project, "--read-only", "--no-schedule", env=_env()) as server:
         assert server.request("GET", "/state")[1][0]["cache"]["state"] == "cached"
         for elapsed in (17.25, 23.5):
+            # A write to the live DB on purpose: the server must notice another writer. The
+            # DB exists (the fixture ran `get`), so this cannot leave a 0-byte file (#537).
             with sqlite3.connect(project / ".barca/metadata.db") as database:
                 database.execute("UPDATE materializations SET elapsed_seconds = ?", (elapsed,))
 
@@ -108,12 +107,10 @@ def test_server_db_refresh_reuses_artifact_evidence_from_the_stable_environment(
                 assert status == 200
                 return rows[0]["last_materialization"]["elapsed_seconds"] == elapsed
 
-            wait_for(updated, "new metadata reflected in state")
+            wait_until(updated, "new metadata reflected in state")
         assert not reads.read_text().splitlines(), (
             "DB invalidation reread unchanged artifact payloads"
         )
-    finally:
-        server.stop()
 
 
 def test_confirmed_cloud_upload_repair_invalidates_evidence_when_local_identity_is_unchanged(
@@ -145,14 +142,7 @@ def test_confirmed_cloud_upload_repair_invalidates_evidence_when_local_identity_
     env = _env() | {"PYTHONPATH": str(hooks) + os.pathsep + os.environ.get("PYTHONPATH", "")}
 
     def command(*args):
-        result = subprocess.run(
-            [_find_binary(), *args, "--json"],
-            cwd=project,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
+        result = barca(project, *args, "--json", env=env, timeout=QUICK)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 

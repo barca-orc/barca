@@ -2,7 +2,7 @@ import { INITIAL_RUNS, RUNS_MAX } from '@/lib/runsPage'
 import { RunPanelView, RunsView } from '@/pages/RunsView'
 import { TokensOffView, TokensView } from '@/pages/TokensView'
 import { NOW_MS, failureLists, runDetails, runLists, tokenStates } from '../fixtures'
-import { INITIAL_FAILURES, failureTable, muteKey, type FailuresModel } from '@/lib/failuresView'
+import { INITIAL_FAILURES, failureTable, type FailuresModel } from '@/lib/failuresView'
 import { distinctNames } from '@/lib/groups'
 import { FailuresView } from '@/pages/FailuresView'
 import { Frame, Spec, States } from '../Kit'
@@ -55,12 +55,11 @@ export function Pages() {
           label="Failures"
           states={{
             ...Object.fromEntries(Object.entries(failureLists).map(([name, list]) => [name, { list, model: INITIAL_FAILURES }])),
-            'muted, shown': { list: failureLists['by cause'], model: { ...INITIAL_FAILURES, showMuted: true, muted: [muteKey(failureLists['by cause'][0]!)] } },
             'action failed': { list: failureLists['by cause'], model: { ...INITIAL_FAILURES, notice: { text: 'No run is recorded for invoices_00', failed: true } } },
             'read-only': { list: failureLists['by cause'], model: INITIAL_FAILURES, readOnly: true },
           } as Record<string, { list: typeof failureLists['by cause']; model: FailuresModel; readOnly?: boolean }>}
           render={({ list, model, readOnly }, dispatch) => {
-            const { rows } = failureTable(list, model)
+            const { rows } = failureTable(list)
             return (
               <Frame height={320} width="100%">
                 <FailuresView

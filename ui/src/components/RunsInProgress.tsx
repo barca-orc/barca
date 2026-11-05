@@ -19,7 +19,7 @@ export function RunsInProgress() {
   if (count === 0 && queue === null) return null
   return (
     <Link to="/runs" className="barca-runs-chip" role="status">
-      <StatusDot status={count > 0 ? 'running' : 'queued'} size={6} />
+      <StatusDot tone={count > 0 ? 'running' : 'queued'} live={count > 0} size={6} />
       {count > 0 && runsInProgressLabel(count)}
       {count > 0 && queue && ' · '}
       {queue}

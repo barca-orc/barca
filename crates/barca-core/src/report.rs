@@ -5,9 +5,20 @@
 //! format step reports and progress lines without emitting them.
 
 mod commands;
-pub use commands::*;
+pub use commands::{
+    GetShape, OutputChunk, RenderedOutput, ResultFormat, Returned, Shown, first_multi_failure,
+    history_json, history_target, render_explain, render_failed_get, render_failed_run, render_get,
+    render_get_multi, render_history, render_list, render_multi, render_plan, render_run,
+    render_run_detail, render_sql, render_stats, render_status,
+};
+pub(crate) use commands::{
+    failed_run_body, multi_json, multi_parts, render_failed_get_returned, render_get_body,
+    render_get_multi_parts, render_multi_parts, render_run_body, returned_from_pointers, run_body,
+    run_label,
+};
 
 use crate::cache_state::CacheState;
+use crate::step_status::StepStatus;
 use crate::targets::short_name;
 use crate::{
     cache::{Decision, RunReason},
@@ -19,7 +30,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 /// A JSON object of `pairs` with keys in the given order (serde_json maps sort their keys).
-pub fn ordered_object(pairs: &[(String, serde_json::Value)]) -> String {
+pub(crate) fn ordered_object(pairs: &[(String, serde_json::Value)]) -> String {
     let body: Vec<String> = pairs
         .iter()
         .map(|(k, v)| {
@@ -34,7 +45,7 @@ pub fn ordered_object(pairs: &[(String, serde_json::Value)]) -> String {
 }
 
 /// STATUS / WHY / STEP table for dry runs and (in `-o pretty`) real runs.
-pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> String {
+pub(crate) fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> String {
     use std::fmt::Write;
     let mut rendered = String::new();
     let rows: Vec<(String, String, &str)> = steps
@@ -46,7 +57,7 @@ pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> Str
                 (_, v) => v,
             };
             let why = match (&s.partitions, &s.detail) {
-                (Some(p), _) if verdict == "partial" => {
+                (Some(p), _) if StepStatus::Partial.is(Some(verdict)) => {
                     format!(
                         "{} of {} keys cached; will run: {}",
                         p.cached,
@@ -101,7 +112,7 @@ pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> Str
 }
 
 /// `freshness` as `barca list` prints it: lowercase, like `kind`.
-pub fn freshness_str(f: &crate::Freshness) -> &'static str {
+pub(crate) fn freshness_str(f: &crate::Freshness) -> &'static str {
     match f {
         crate::Freshness::Always => "always",
         crate::Freshness::Manual => "manual",
@@ -190,7 +201,7 @@ pub fn utc_cell(ts: &str) -> String {
     )
 }
 
-pub fn render_status_table(result: &crate::status::StatusResult) -> String {
+pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> String {
     use std::fmt::Write;
     let mut rendered = String::new();
     let short = |id: &str| -> String {
@@ -387,7 +398,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
 }
 
 /// Compact text for a shape object: `3 rows x 2 cols`, `dict (4 keys)`, `pandas.DataFrame`.
-pub fn shape_cell(shape: &serde_json::Value) -> String {
+pub(crate) fn shape_cell(shape: &serde_json::Value) -> String {
     let rows = shape.get("rows").and_then(|v| v.as_u64());
     let cols = shape
         .get("columns")
@@ -462,7 +473,7 @@ pub fn pointer_output(
 
 /// A task's JSON results, preserving its keys; binary formats remain artifact references.
 /// The command layer reads tabular partition values with `values::task_output`.
-pub fn read_task_output(
+pub(crate) fn read_task_output(
     single: Option<&crate::dispatch::OutputRef>,
     keys: Option<&[(String, crate::dispatch::OutputRef)]>,
     summary: Option<&crate::results::KeySummary>,
@@ -488,7 +499,7 @@ fn output_with(
 }
 
 /// The key of a summarized partitioned `final_output` (#623).
-pub const KEY_SUMMARY: &str = "_barca_partitions";
+pub(crate) const KEY_SUMMARY: &str = "_barca_partitions";
 
 /// A partitioned target's `final_output`: `entries` (key to pointer or value) as they are, or,
 /// with a summary (more than [`crate::results::LISTED_KEYS`] keys), `{"_barca_partitions":
@@ -530,7 +541,7 @@ fn key_summary_hint(s: &crate::results::KeySummary) -> String {
 }
 
 /// The stderr note under the paths of a summarized partitioned output.
-pub fn key_summary_note(s: &crate::results::KeySummary) -> String {
+pub(crate) fn key_summary_note(s: &crate::results::KeySummary) -> String {
     format!(
         "{} of {} keys not listed ({} cached{}): more than {} keys; select keys with \
          --partition to list their paths",
@@ -547,7 +558,7 @@ pub fn key_summary_note(s: &crate::results::KeySummary) -> String {
 
 /// The counts of a summarized partitioned `final_output` ([`keyed_output`]); `None` for any
 /// other value.
-pub fn parse_key_summary(output: &serde_json::Value) -> Option<crate::results::KeySummary> {
+pub(crate) fn parse_key_summary(output: &serde_json::Value) -> Option<crate::results::KeySummary> {
     let s = output.get(KEY_SUMMARY)?;
     let n = |k: &str| {
         s.get(k)
@@ -562,7 +573,7 @@ pub fn parse_key_summary(output: &serde_json::Value) -> Option<crate::results::K
 }
 
 /// Read an artifact for display: a JSON artifact's value inline, metadata for binary formats.
-pub fn read_final_output(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
+pub(crate) fn read_final_output(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
     if oref.format == "json" {
         std::fs::read_to_string(&oref.path)
             .ok()
@@ -732,15 +743,15 @@ pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepRepor
     for r in &mut out {
         let Some(p) = &r.partitions else { continue };
         let verdict = |dry: bool| match (p.cached, p.will_run) {
-            (_, 0) => "cached",
+            (_, 0) => StepStatus::Cached.as_str(),
             (0, _) => {
                 if dry {
                     "run"
                 } else {
-                    "ran"
+                    StepStatus::Ran.as_str()
                 }
             }
-            _ => "partial",
+            _ => StepStatus::Partial.as_str(),
         };
         if r.action.is_some() {
             r.action = Some(verdict(true).to_string());
@@ -824,17 +835,17 @@ pub(crate) fn computed_by_another_run(
                     r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
                     r.status = Some(
                         if p.cached == p.total {
-                            "cached"
+                            StepStatus::Cached
                         } else {
-                            "partial"
+                            StepStatus::Partial
                         }
-                        .into(),
+                        .to_string(),
                     );
                 }
                 return;
             }
-            (None, None) if r.status.as_deref() == Some("ran") => {
-                r.status = Some("cached".to_string());
+            (None, None) if StepStatus::Ran.is(r.status.as_deref()) => {
+                r.status = Some(StepStatus::Cached.to_string());
                 r.reason = None;
                 r.changed = None;
                 r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
@@ -868,11 +879,8 @@ pub(crate) fn report_for(
             .filter(|names| !names.is_empty()),
         ..Default::default()
     };
-    let (word_cached, word_run, word_partial) = if dry {
-        ("cached", "run", "partial")
-    } else {
-        ("cached", "ran", "partial")
-    };
+    let (word_cached, word_partial) = (StepStatus::Cached.as_str(), StepStatus::Partial.as_str());
+    let word_run = if dry { "run" } else { StepStatus::Ran.as_str() };
     let verdict = match decision {
         Decision::Run(reason) => {
             r.reason = Some(reason.code().to_string());

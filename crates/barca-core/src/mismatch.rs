@@ -16,6 +16,7 @@
 use crate::dag::Dag;
 use crate::recover::base_of;
 use crate::results::StepReport;
+use crate::step_status::StepStatus;
 use std::collections::HashMap;
 
 /// The finding in words, without the `[barca] warning: <step>:` prefix of the stderr line:
@@ -58,7 +59,10 @@ pub(crate) fn mark(dag: &Dag, reports: &mut [StepReport], mismatched: &HashMap<S
     }
     for r in reports {
         let base = base_of(&r.id);
-        let read_inputs = matches!(r.status.as_deref(), Some("ran" | "partial" | "failed"));
+        let read_inputs = matches!(
+            r.status.as_deref().and_then(StepStatus::parse),
+            Some(StepStatus::Ran | StepStatus::Partial | StepStatus::Failed)
+        );
         let mut notes: Vec<String> = Vec::new();
         if let Some(w) = mismatched.get(base) {
             notes.push(w.clone());

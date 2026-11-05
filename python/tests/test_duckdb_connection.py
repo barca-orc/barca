@@ -204,12 +204,6 @@ def run_get(binary: str, cwd: Path, target: str, *flags: str) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])["final_output"]
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def test_sql_by_name_works_in_helpers_and_uses_the_configured_connection(binary, project):
     # `doubled` calls a helper that queries `orders` by name and uses a macro defined at import:
     # needs both the bound view and the shared (configured) connection.

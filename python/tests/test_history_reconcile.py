@@ -4,22 +4,16 @@ import json
 import os
 import sqlite3
 import subprocess
-import time
 from contextlib import closing
 
 import pytest
 from barca.api import _find_binary
 
+from .helpers import QUICK, barca, wait_until
+
 
 def cli(project, *args):
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env={**os.environ, "BARCA_REMOTE": "off"},
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    return barca(project, *args, env={**os.environ, "BARCA_REMOTE": "off"}, timeout=QUICK)
 
 
 @pytest.fixture()
@@ -108,11 +102,9 @@ def held():
         text=True,
     )
     try:
-        deadline = time.monotonic() + 15
-        while not (tmp_path / "ready").exists():
-            assert proc.poll() is None, "run exited before the ready event"
-            assert time.monotonic() < deadline, "ready event did not arrive"
-            time.sleep(0.01)
+        wait_until(
+            (tmp_path / "ready").exists, "the ready event", timeout=15, interval=0.01, proc=proc
+        )
         history = cli(tmp_path, "history", "--json")
         assert history.returncode == 0, history.stderr
         run = json.loads(history.stdout)["runs"][0]
@@ -125,7 +117,7 @@ def held():
     finally:
         (tmp_path / "release").touch()
         try:
-            stdout, stderr = proc.communicate(timeout=30)
+            stdout, stderr = proc.communicate(timeout=QUICK)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()

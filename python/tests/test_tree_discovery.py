@@ -3,14 +3,14 @@ project root. File and directory arguments narrow the scope. Node ids are root-r
 """
 
 import json
+import os
 import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
+from . import helpers
 from .get_values import value_args
 
 SOURCES = """
@@ -52,13 +52,7 @@ def decoy() -> int:
 
 
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *value_args(args, json=False), "--json"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return helpers.barca(cwd, *value_args(args, json=False), "--json", env=dict(os.environ))
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:

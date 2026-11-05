@@ -54,7 +54,7 @@ pub fn suggestion<'a>(
 
 /// Optimal string alignment distance: insertions, deletions, substitutions and swaps of two
 /// neighbouring characters each count one.
-pub fn edit_distance(a: &str, b: &str) -> usize {
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];

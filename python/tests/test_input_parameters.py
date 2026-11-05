@@ -10,11 +10,13 @@ every command that reads the file, before any step runs. The parser cases are in
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import RUN, barca
 
 MISSPELT = """\
 from barca import asset
@@ -48,9 +50,7 @@ def amounts(
 
 
 def barca_cmd(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=cwd, check=False, capture_output=True, text=True, timeout=120
-    )
+    return barca(cwd, *args, env={**os.environ}, timeout=RUN)
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:

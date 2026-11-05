@@ -218,7 +218,7 @@ fn cache_state_enum_matches_the_rust_enum() {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-    let rust: Vec<&str> = barca_core::status::CacheState::ALL
+    let rust: Vec<&str> = barca_core::cache_state::CacheState::ALL
         .iter()
         .map(|s| s.as_str())
         .collect();

@@ -1,6 +1,7 @@
 # Direction
 
-Last updated: 2026-11-04, preparing v0.39.5 (the 0.39 cleanup, #800) after v0.39.4. The pinned
+Last updated: 2026-11-04, after v0.39.5 (the 0.39 cleanup, #800) shipped the same day; preparing
+v0.39.6, a second cleanup pass. The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -25,19 +26,38 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 An issue's milestone is the release it ships in; the items below are the order.
 
-The 0.39 cleanup ([#800](https://github.com/barca-orc/barca/issues/800), milestone `0.39 cleanup`,
-shipping as 0.39.5) sets this order. It adds no commands, flags, keys, routes, decorator arguments
-or UI features; #800 has the detail of each item.
+0.39.5 (2026-11-04) was the 0.39 cleanup ([#800](https://github.com/barca-orc/barca/issues/800)):
+no new surface, every item of its list landed (the row below). A repo-wide audit on the day it
+shipped found a second layer of the same kind of debt, so **0.39.6 is a second cleanup pass**,
+again with no commands, flags, keys, routes, decorator arguments or UI features. In order:
 
-1. **Correctness:** #799, a refresh cascade that left stale partition caches, is fixed with a test, or its workaround is documented and the issue stays open (#804).
-2. **Measure before deciding:** benchmark 0.39.4, attribute the trivial run's time, price the 0.35.3 partition sort, gate performance in the merge tier and put the measured number in the README (#810: a trivial run takes 31.7 ms on the 0.39.4 wheel, against 26.3 ms at 0.1.5 and 60.3 ms at 0.28.0).
-3. **Make the documents true:** this file, the #796 decision, one alias lifetime, `contract.md` hygiene, the experimental graduation list, an environment-variable contract test, the static-read claim, `specs/README.md` and the milestones (#803).
-4. **Structure, in dependency order:** one `CacheState` enum (#802), one metadata write boundary, serve out of the embedded hot loop, `db.rs` split by table family, one graph cache and one backup-cadence authority, the Python dedupe and `.barca/` layout spec (#805).
-5. **Tests and CI:** per-test timeouts, Playwright and type drift in CI, the simulation's `--strict-reads` failure, optional imports that skip (#806), isolated backup tests (#809), Dependabot at zero critical and high (#808).
+1. **CI:** a lint gate that fails the merge tier on every linter the hooks run (not only the
+   formatters), and a Dependabot configuration that covers every ecosystem in the repository
+   (Cargo, uv, npm for `ui/` and `site/`, GitHub Actions) at zero critical and high.
+2. **Rust hot-path shape:** `execution.rs` split along its phases; a `StepStatus` enum in place
+   of the step-status string literals (`ran`, `cached`, `skipped`, `failed`, ...), as #802 did for
+   cache states; one artifact format map (extension, reader, writer) instead of the copies in
+   core, status and the Python bridge; `barca-server`'s `runs.rs` and the CLI's `client.rs` split
+   by route family; store inspection out of `status.rs` into its own module; the `barca-core`
+   `pub` surface narrowed to what `barca-cli` and `barca-server` call.
+3. **Python:** `_worker.py` split (daemon loop, step execution, result writing), the import
+   cycles between `_runtime`, `_artifacts` and `_batch` removed, one shared `serve` test fixture
+   in place of the per-file copies, and typed public decorators (`@asset`, `@task`, `@sensor`,
+   `@sink` keep their signatures under `ty`).
+4. **UI, vocabulary-faithful:** one `CacheState` to display map generated from the enum
+   (`ts-rs`), the client-side mutes, the demo preview and the mock placeholder removed,
+   `GroupedPipelinePage` split, the Playwright e2e specs re-based on a real fixture served by
+   `barca serve` ([#807](https://github.com/barca-orc/barca/issues/807)).
+5. **Documents made true:** this file and the release table, the drain exit codes, the `.barca/`
+   and cache-state tables with one owner each, the experimental table and the README's command
+   table generated from `contract.rs`, the engineering plans closed out or deleted, the manual
+   topics mirrored on the site from one source (`SITE_PAGES`), the long topics split.
 
-0.39.5 ships when items 1 to 3 are done and the `CacheState` enum at minimum; the rest of item 4
-can roll into 0.39.6, and nothing new lands until it is done. The UI redesign comes after
-(Decided, November 2026).
+0.39.6 ships when those land. Then the UI redesign (Decided, November 2026): its prototype is
+[PR #818](https://github.com/barca-orc/barca/pull/818), branch `feat/ui-chains`, display-only
+"chains" (named, possibly overlapping sets of nodes viewed together); before it merges, `chain()`
+is parsed from Python and served by `GET /chains`, which brings the parser, CLI contract and
+manual changes with it. Nothing else new lands before 0.39.6 is done.
 
 RFC-0014 pipeline fuzzing is deferred, with no action on its working branch. It has no
 scheduled release. DuckDB 1.x and 2.x remain supported (`duckdb>=1.4,<3`), with CI on both.
@@ -84,7 +104,8 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.39.2 | 2026-11-02 | `barca.sql()` in the Python API; UI duration estimates scoped to each node's partition history | [#788](https://github.com/barca-orc/barca/pull/788), [#789](https://github.com/barca-orc/barca/pull/789) |
 | 0.39.3 | 2026-11-02 | Failed partition batches split into smaller calls, down to single partitions | [#787](https://github.com/barca-orc/barca/pull/787) |
 | 0.39.4 | 2026-11-03 | A server's runs share identical in-flight asset steps (experimental); a requeued run's re-executed steps are recorded under their new run hashes | #654 (part, [#796](https://github.com/barca-orc/barca/pull/796)), #794 |
-| 0.39 cleanup (shipping as 0.39.5) | planned | No features: #799, measured overhead and a performance gate, documents and milestones made true, structure, tests and CI | #800, #799, #807 |
+| 0.39.5 (the 0.39 cleanup) | 2026-11-04 | No features: #799 documented (a refresh recomputes only its target's cone); 0.39.4 measured (31.7 ms trivial run) with a performance gate in the merge tier; the documents made true; one `CacheState` enum, one metadata write boundary, serve out of the embedded hot loop, the `.barca/` layout spec; per-test timeouts, Playwright and type drift in CI, isolated backup tests, Dependabot at zero critical and high | #800: #804 (#799), #810, #803, #802, #819, #817, #805, #806, #809, #808 |
+| 0.39.6 (second cleanup) | planned | No features: `db.rs` split by table family and metadata backups that do not hold the DB lock (landed), then the five items under "Now, in order" | #821, #801, #807 and the issues filed from the 2026-11-04 audit |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
@@ -104,9 +125,9 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-None at 0.39.5.
+None at 0.39.6.
 
-Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s, exit 1 after a forced stop; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
+Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s; the server exits 0 when the runs in flight finish and when the timeout requeues them, and 1 only when a second SIGTERM or SIGINT cancels them, `barca docs scheduling`, "Stopping the server"; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
 
 ## Decided, November 2026
 
@@ -125,8 +146,8 @@ surface and belongs to a minor.
 (`cached`, `stale`, `unsynced`, `blocked`, `never_run`, `partial`, `always_runs`, `unknown`)
 and no others, maps each state once from the shared `CacheState` enum via generated types, and
 shows exactly what `barca status --json` shows, with client-side muting removed. The current UI
-does not meet this, so the redesign is scoped after 0.39.5; #807 tracks the stale Playwright
-specs.
+does not meet this, so the redesign is scoped after 0.39.6 (its prototype is PR #818,
+`feat/ui-chains`); #807 tracks the stale Playwright specs, fixed in 0.39.6.
 
 **Metadata durability (2026-11-04, #810).** The metadata database keeps SQLite's full
 synchronous mode. The 0.39.4 benchmark attributes 3 to 4 ms of a 32 ms trivial run to WAL

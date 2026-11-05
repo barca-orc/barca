@@ -3,16 +3,19 @@
 import base64
 import json
 import sqlite3
-import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from barca.api import _find_binary
-
-from .test_serve_robustness import _env, _free_port
+from . import helpers
+from .helpers import QUICK, clean_env, free_port
 from .test_server_ledger import Team, _kill_server_mid_run, barca, posts, toml
+
+
+def _env() -> dict[str, str]:
+    """A scrubbed shell with a pool of two workers (the ledger suite's environment)."""
+    return clean_env(BARCA_POOL_SIZE="2")
 
 
 @pytest.fixture(scope="module")
@@ -52,9 +55,7 @@ def test_404_diagnostics_redact_credentials_without_changing_auth(tmp_path, prox
         env["BARCA_SERVER"] = url
     else:
         (tmp_path / "barca.toml").write_text(f'[server]\nurl = "{url}"\n')
-    result = subprocess.run(
-        [_find_binary(), *argv], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=15
-    )
+    result = helpers.barca(tmp_path, *argv, env=env, timeout=QUICK)
     assert result.returncode == 3
     output = result.stdout + result.stderr
     assert "s3cret" not in output
@@ -72,16 +73,11 @@ def test_404_diagnostics_redact_credentials_without_changing_auth(tmp_path, prox
 
 def test_an_unreachable_server_and_invalid_url_do_not_print_userinfo(tmp_path):
     for url, expected in [
-        (f"http://alice:s%33cret@127.0.0.1:{_free_port()}/proxy", 3),
+        (f"http://alice:s%33cret@127.0.0.1:{free_port()}/proxy", 3),
         ("ftp://alice:s3cret@host/proxy", 2),
     ]:
-        result = subprocess.run(
-            [_find_binary(), "history", "--server", url, "--json"],
-            cwd=tmp_path,
-            env=_env(),
-            text=True,
-            capture_output=True,
-            timeout=15,
+        result = helpers.barca(
+            tmp_path, "history", "--server", url, "--json", env=_env(), timeout=QUICK
         )
         assert result.returncode == expected
         assert "s3cret" not in result.stderr
@@ -95,13 +91,8 @@ def test_local_ledger_announcement_and_store_error_are_redacted(tmp_path, proxy)
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset\n@asset()\ndef value(): return 1\n"
     )
-    result = subprocess.run(
-        [_find_binary(), "get", "pipeline.py", "--json"],
-        cwd=tmp_path,
-        env={**_env(), "BARCA_SERVER": url},
-        text=True,
-        capture_output=True,
-        timeout=15,
+    result = helpers.barca(
+        tmp_path, "get", "pipeline.py", "--json", env={**_env(), "BARCA_SERVER": url}, timeout=QUICK
     )
     assert result.returncode == 2
     assert "[barca] server " in result.stderr
@@ -114,13 +105,8 @@ def test_doctor_redacts_errors_recorded_by_an_older_client(tmp_path, proxy):
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset\n@asset()\ndef value(): return 1\n"
     )
-    result = subprocess.run(
-        [_find_binary(), "get", "pipeline.py", "--local", "--json"],
-        cwd=tmp_path,
-        env=_env(),
-        text=True,
-        capture_output=True,
-        timeout=15,
+    result = helpers.barca(
+        tmp_path, "get", "pipeline.py", "--local", "--json", env=_env(), timeout=QUICK
     )
     assert result.returncode == 0
     with sqlite3.connect(tmp_path / ".barca/metadata.db") as conn:
@@ -134,14 +120,7 @@ def test_doctor_redacts_errors_recorded_by_an_older_client(tmp_path, proxy):
             "INSERT INTO ledger_posts(client_run_id, server, state, error, body) VALUES (?, ?, ?, ?, ?)",
             ("older-client", url, "unsynced", f"cannot reach {url}", "{}"),
         )
-    result = subprocess.run(
-        [_find_binary(), "doctor", "--server", url, "--json"],
-        cwd=tmp_path,
-        env=_env(),
-        text=True,
-        capture_output=True,
-        timeout=15,
-    )
+    result = helpers.barca(tmp_path, "doctor", "--server", url, "--json", env=_env(), timeout=QUICK)
     assert result.returncode == 3
     assert "s3cret" not in result.stdout + result.stderr
     report = json.loads(result.stdout)

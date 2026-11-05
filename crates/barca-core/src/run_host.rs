@@ -13,11 +13,11 @@ use std::future::Future;
 use std::pin::Pin;
 
 /// What identifies shared work: the step's display id (with its partition key) and its run hash.
-pub type StepKey = (String, String);
+pub(crate) type StepKey = (String, String);
 
 /// A wait for a step another run is computing: its artifact when that run finished it, `None`
 /// when its claim ended without one.
-pub type Settled = Pin<Box<dyn Future<Output = Option<serde_json::Value>> + Send>>;
+pub(crate) type Settled = Pin<Box<dyn Future<Output = Option<serde_json::Value>> + Send>>;
 
 /// The outcome of [`RunHost::claim_step`].
 pub enum StepClaim {
@@ -78,7 +78,7 @@ pub trait RunHost: Send + Sync + std::fmt::Debug {
 /// A run on its own: no shared capacity (every step is admitted), no shared steps (every
 /// step is the run's own), and the run owns its final backup.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct LocalHost;
+pub(crate) struct LocalHost;
 
 impl LocalHost {
     /// The host of a run on its own.

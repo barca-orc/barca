@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from . import helpers
 
 PINNED = 1767225600  # 2026-01-01T00:00:00Z
 
@@ -41,9 +41,7 @@ def same_size_edit(path: Path, old: str, new: str) -> None:
 
 def barca(project: Path, *args: str) -> dict:
     env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
-    proc = subprocess.run(
-        [_find_binary(), *args], cwd=project, env=env, capture_output=True, text=True
-    )
+    proc = helpers.barca(project, *args, env=env)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 

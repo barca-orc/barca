@@ -171,7 +171,9 @@ def cache_path(cache_dir: str, uri: str) -> str:
 
 
 def _version(info: dict) -> str:
-    return _storage.object_version(info)
+    from barca import _range_cache
+
+    return _range_cache.object_version(info)
 
 
 def fetch(uri: str, cache_dir: str) -> tuple[str, int]:
@@ -242,7 +244,7 @@ def _localize(views: list[dict], query: str, cache_dir: str) -> tuple[list[dict]
             return e
 
     with ThreadPoolExecutor(max_workers=min(MAX_FETCHERS, len(uris))) as pool:
-        for uri, got in zip(uris, pool.map(one, uris)):
+        for uri, got in zip(uris, pool.map(one, uris), strict=False):
             if isinstance(got, Exception):
                 results[uri] = got
             else:
@@ -275,17 +277,17 @@ def _jsonable(v: Any) -> Any:
         return None if math.isnan(v) or math.isinf(v) else v
     if isinstance(v, decimal.Decimal):
         return float(v)
-    if isinstance(v, (_dt.date, _dt.datetime, _dt.time)):
+    if isinstance(v, _dt.date | _dt.datetime | _dt.time):
         return v.isoformat()
     if isinstance(v, _dt.timedelta):
         return v.total_seconds()
     if isinstance(v, uuid.UUID):
         return str(v)
-    if isinstance(v, (bytes, bytearray, memoryview)):
+    if isinstance(v, bytes | bytearray | memoryview):
         return bytes(v).hex()
     if isinstance(v, dict):
         return {str(k): _jsonable(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple)):
+    if isinstance(v, list | tuple):
         return [_jsonable(x) for x in v]
     return v
 
@@ -350,7 +352,7 @@ def run(request: dict) -> dict:
             "unavailable": unavailable,
             **remote,
         }
-    rows = [{c: _jsonable(v) for c, v in zip(columns, r)} for r in fetched]
+    rows = [{c: _jsonable(v) for c, v in zip(columns, r, strict=False)} for r in fetched]
     return {
         "columns": columns,
         "rows": rows,

@@ -10,15 +10,17 @@ import json
 import os
 import pty
 import signal
-import socket
 import subprocess
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pytest
 from barca.api import _find_binary
+
+from . import helpers
+from .helpers import RUN, SERVE, clean_env, wait_until
+from .served import Serve
 
 PIPELINE = """
 from barca import asset, task
@@ -37,21 +39,12 @@ def slow() -> None:
 
 
 def env() -> dict:
-    return {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    """The shell without barca's own variables only; the store settings stay."""
+    return clean_env(scrub=("BARCA_",))
 
 
 def cli(root: Path, *args: str, **kw) -> subprocess.CompletedProcess:
-    kw.setdefault("stdin", subprocess.DEVNULL)
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env(),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-        **kw,
-    )
+    return helpers.barca(root, *args, env=env(), timeout=SERVE, **kw)
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:
@@ -169,7 +162,7 @@ def test_without_yes_it_asks_in_a_terminal_and_refuses_elsewhere(project):
             )
             os.close(child)
             os.write(main, answer)
-            out, err = proc.communicate(timeout=60)
+            out, err = proc.communicate(timeout=RUN)
         finally:
             os.close(main)
         return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
@@ -196,14 +189,16 @@ def test_reset_is_refused_while_a_run_is_in_progress(project):
         start_new_session=True,
     )
     try:
-        deadline = time.monotonic() + 60
-        while True:
+
+        def recorded():
             history = cli(root, "history", "--json")
-            if history.returncode == 0 and json.loads(history.stdout)["total"] == 1:
-                break
-            assert run.poll() is None
-            assert time.monotonic() < deadline
-            time.sleep(0.1)
+            return (
+                history
+                if history.returncode == 0 and json.loads(history.stdout)["total"] == 1
+                else None
+            )
+
+        history = wait_until(recorded, "the run to be recorded", interval=0.1, proc=run)
         (running,) = json.loads(history.stdout)["runs"]
         refused = error(cli(root, "state", "reset", "--yes", "--json"), 3)
         assert refused["kind"] == "infra", refused
@@ -212,7 +207,7 @@ def test_reset_is_refused_while_a_run_is_in_progress(project):
         assert moved_aside(root) == []
     finally:
         os.killpg(run.pid, signal.SIGINT)
-        run.wait(timeout=60)
+        run.wait(timeout=RUN)
 
 
 def post(url: str) -> tuple[int, dict]:
@@ -223,31 +218,16 @@ def post(url: str) -> tuple[int, dict]:
         return e.code, json.loads(e.read())
 
 
-def serve(root: Path, *flags: str):
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    log = root.parent / f"serve-{port}.log"
-    with log.open("w") as out:
-        server = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--no-schedule", "--port", str(port), *flags],
-            cwd=root,
-            env=env(),
-            stdout=out,
-            stderr=out,
-        )
-    deadline = time.monotonic() + 30
-    while "serving on" not in log.read_text():
-        assert server.poll() is None, log.read_text()
-        assert time.monotonic() < deadline, log.read_text()
-        time.sleep(0.05)
-    return server, f"http://127.0.0.1:{port}"
+def serve(root: Path, *flags: str) -> Serve:
+    """`barca serve --no-schedule` once it has bound, with the shell's store settings."""
+    return Serve(root, "--no-schedule", *flags, env=env(), wait="bind")
 
 
 def test_under_serve_the_cli_refuses_and_the_server_resets(project):
     root = project
     ok(cli(root, "get", "numbers", "--json"))
-    server, url = serve(root)
+    server = serve(root)
+    url = server.url
     try:
         refused = error(cli(root, "state", "reset", "--yes", "--json"), 3)
         assert "barca serve" in refused["error"], refused
@@ -261,20 +241,19 @@ def test_under_serve_the_cli_refuses_and_the_server_resets(project):
         with urllib.request.urlopen(f"{url}/runs?limit=10", timeout=30) as r:
             assert json.loads(r.read())["runs"] == []
     finally:
-        server.send_signal(signal.SIGTERM)
-        server.wait(timeout=30)
+        server.stop()
     assert ok(cli(root, "history", "--json"))["total"] == 0
 
 
 def test_a_read_only_server_refuses_a_reset(project):
     root = project
     ok(cli(root, "get", "numbers", "--json"))
-    server, url = serve(root, "--read-only")
+    server = serve(root, "--read-only")
+    url = server.url
     try:
         status, body = post(f"{url}/state/reset")
         assert status == 403 and "read-only" in body["error"], body
     finally:
-        server.send_signal(signal.SIGTERM)
-        server.wait(timeout=30)
+        server.stop()
     assert moved_aside(root) == []
     assert ok(cli(root, "history", "--json"))["total"] == 1

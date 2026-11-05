@@ -1,5 +1,7 @@
 import { match } from 'ts-pattern'
+import { statusTone } from './status'
 import { formatAbsolute, type TimeZone } from './time'
+import type { Tone } from './tone'
 import type { ErrorEnvelope, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
 const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
@@ -16,18 +18,26 @@ export function parseRunStatus(status: string): RunViewStatus | null {
   return (RUN_VIEW_STATUSES as readonly string[]).includes(status) ? (status as RunViewStatus) : null
 }
 
-/** A run's status as a visual status. Unknown statuses show as a warning. */
+/**
+ * A run's status in the run lifecycle's vocabulary. A status this UI does not know is shown as
+ * given (`runLabel`) and coloured as inert.
+ */
 export function runStatus(status: string): StatusKind {
   const known = parseRunStatus(status)
-  if (known === null) return 'warning'
+  if (known === null) return 'skipped'
   return match<RunViewStatus, StatusKind>(known)
     .with('pending', () => 'queued')
     .with('running', () => 'running')
     .with('success', () => 'success')
     .with('failed', 'error', () => 'failed')
     // Stopped by the operator or a server shutdown: inert, not an error.
-    .with('cancelled', 'interrupted', () => 'skipped')
+    .with('cancelled', 'interrupted', () => 'cancelled')
     .exhaustive()
+}
+
+/** The colour of a run's status. */
+export function runTone(status: string): Tone {
+  return statusTone(runStatus(status))
 }
 
 export function runLabel(status: string): string {

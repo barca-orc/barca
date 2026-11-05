@@ -22,9 +22,10 @@ concurrency:
 # What runs where. The required checks are `CI / test` and `CI / backends`, the two aggregator
 # jobs at the end of each group below; they report on every event. Three tiers:
 #
-# - fast (a pull request): `checks`, `clippy`, `changes` only, so a PR can enter the merge
-#   queue about a minute after a push. Everything else is skipped, and the aggregators
-#   accept those skips.
+# - fast (a pull request): `checks` (the CHANGELOG and specification checks, the prek hooks:
+#   ruff, ruff format, ty, cargo fmt, version sync, uv lock), `clippy`, `changes` only, so a
+#   PR can enter the merge queue about a minute after a push. Everything else is skipped, and
+#   the aggregators accept those skips.
 # - merge (a merge group): the fast set plus `rust-tests`, the wheel `build`, one `python`
 #   job running the quick subset in scripts/fast-tests.txt and `perf`, the performance
 #   budgets (scripts/perf-gate.py). About two minutes; this is the gate every merge to main
@@ -73,13 +74,15 @@ jobs:
   # Cargo must build on local disk: builds on the shared cache volume produced corrupt
   # .rlib/.rmeta files, even with a target dir per PR. So each Rust job builds incrementally in
   # ./target, restored before the build from an immutable cache archive (actions/cache: an
-  # entry is written whole under a new key, never updated in place) and saved after it. Keys
-  # carry the job, the rustc version, the Cargo.lock hash, the branch and the run; a PR starts
-  # from its own latest entry, else main's. A merge group saves under `main`, since its commit
-  # is what main becomes: each run writes its own key, so concurrent merge groups never write
-  # the same entry, and a restore takes the newest under the prefix. Rust jobs use no
-  # sccache: it cannot cache incremental crates, and the restored target dir already holds
-  # the compiled dependencies.
+  # entry is written whole under a new key, never updated in place) and saved after it
+  # (.depot/actions/rust-cache-restore and rust-cache-save). Keys carry the job, the rustc
+  # version, the Cargo.lock hash, the branch and the run; a PR starts from its own latest
+  # entry, else main's. A merge group saves under `main`, since its commit is what main
+  # becomes: each run writes its own key, so concurrent merge groups never write the same
+  # entry, and a restore takes the newest under the prefix. Rust jobs use no sccache: it
+  # cannot cache incremental crates, and the restored target dir already holds the compiled
+  # dependencies. Jobs that test against the wheel set up Python, uv and the wheel with
+  # .depot/actions/setup-wheel.
   checks:
     runs-on: depot-ubuntu-latest
     timeout-minutes: 15
@@ -102,18 +105,51 @@ jobs:
           python3 scripts/check-specs.py
           python3 scripts/test-check-specs.py
 
+      # The prek hooks of prek.toml, the same ones `prek run --all-files` (scripts/check-fast.sh)
+      # runs locally: ruff and ruff format at their pinned release, ty (pinned) on
+      # python/barca/, cargo fmt, the version sync and `uv lock --check`, plus the whitespace,
+      # YAML, TOML and merge-marker checks. The hook environments (ruff, ty) are cached on
+      # prek.toml; rustfmt is the only toolchain component the job needs.
+      - name: Install Rust (rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Restore the hook environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/prek
+          key: prek-v1-${{ runner.os }}-${{ hashFiles('prek.toml') }}
+
+      - name: Lint hooks (prek.toml)
+        run: uvx prek run --all-files --show-diff-on-failure
+
       - name: Install Java for specification models
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Check specification models and negative controls
+      # The jar is cached on its pinned version; the checker verifies its SHA-256 before
+      # executing it, cached or downloaded.
+      - name: Restore tla2tools.jar
+        id: tla2tools
+        uses: actions/cache@v4
+        with:
+          path: .spec-check/tla2tools.jar
+          key: tla2tools-v1.7.4
+
+      - name: Download tla2tools.jar
+        if: steps.tla2tools.outputs.cache-hit != 'true'
         run: |
           mkdir -p .spec-check
           curl --retry 3 --max-time 60 -fsSL https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar -o .spec-check/tla2tools.jar
-          # The checker verifies the pinned jar's SHA-256 before executing it.
-          python3 specs/models/check.py --jar .spec-check/tla2tools.jar
+
+      - name: Check specification models and negative controls
+        run: python3 specs/models/check.py --jar .spec-check/tla2tools.jar
 
   clippy:
     runs-on: depot-ubuntu-24.04-4
@@ -135,20 +171,10 @@ jobs:
 
       - name: Restore the build directory
         id: rust-cache
-        uses: actions/cache/restore@v4
+        uses: ./.depot/actions/rust-cache-restore
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          # A merge group's branch is `main` (its commit becomes main's).
-          key: rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          # This branch's latest, then main's, then main's with another Cargo.lock.
-          restore-keys: |
-            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-
-            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
-            rust-v2-clippy-${{ steps.toolchain.outputs.cachekey }}-
+          name: clippy
+          toolchain: ${{ steps.toolchain.outputs.cachekey }}
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -156,20 +182,9 @@ jobs:
       # session dirs not used for 2 days are pruned first, which bounds the entry's size.
       - name: Save the build directory
         if: success()
-        run: |
-          find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
-            -exec rm -rf {} + 2>/dev/null || true
-          echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - if: success()
-        uses: actions/cache/save@v4
+        uses: ./.depot/actions/rust-cache-save
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+          key: ${{ steps.rust-cache.outputs.key }}
 
   rust-tests:
     # Tier merge and up.
@@ -196,20 +211,10 @@ jobs:
 
       - name: Restore the build directory
         id: rust-cache
-        uses: actions/cache/restore@v4
+        uses: ./.depot/actions/rust-cache-restore
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          # A merge group's branch is `main` (its commit becomes main's).
-          key: rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          # This branch's latest, then main's, then main's with another Cargo.lock.
-          restore-keys: |
-            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-
-            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
-            rust-v2-tests-${{ steps.toolchain.outputs.cachekey }}-
+          name: tests
+          toolchain: ${{ steps.toolchain.outputs.cachekey }}
       # nextest runs each test in its own process. The crates have no runnable doctests (their
       # code blocks are `text`/`json`), so there is no `cargo test --doc` step.
       - name: Run unit tests
@@ -231,20 +236,9 @@ jobs:
       # session dirs not used for 2 days are pruned first, which bounds the entry's size.
       - name: Save the build directory
         if: success()
-        run: |
-          find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
-            -exec rm -rf {} + 2>/dev/null || true
-          echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - if: success()
-        uses: actions/cache/save@v4
+        uses: ./.depot/actions/rust-cache-save
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+          key: ${{ steps.rust-cache.outputs.key }}
 
   integration:
     # The shell integration tests and benchmark examples, against the wheel `build` makes.
@@ -256,27 +250,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
+      - name: Install Python, uv and the wheel
+        uses: ./.depot/actions/setup-wheel
         with:
-          python-version: "3.14"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: pyproject.toml
-
-      - name: Download the wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: barca-wheel
-          path: dist-wheel
-
-      - name: Install barca
-        # scikit-learn: only benchmarks/spaceflights needs it; pandas, pyarrow: only
-        # benchmarks/etl_duckdb_dataframes.
-        run: uv pip install --system dist-wheel/*.whl scikit-learn pandas pyarrow
+          uv-cache: true
+          # scikit-learn: only benchmarks/spaceflights needs it; pandas, pyarrow: only
+          # benchmarks/etl_duckdb_dataframes.
+          packages: scikit-learn pandas pyarrow
 
       - name: Run integration tests
         run: |
@@ -309,22 +289,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Download the wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: barca-wheel
-          path: dist-wheel
-
-      - name: Install barca
-        run: uv pip install --system dist-wheel/*.whl
+      - name: Install Python, uv and the wheel
+        uses: ./.depot/actions/setup-wheel
 
       - name: Performance budgets
         timeout-minutes: 5
@@ -440,39 +406,27 @@ jobs:
           pnpm --dir ui lint
           pnpm --dir ui test
 
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
+      - name: Install Python, uv and the wheel
+        uses: ./.depot/actions/setup-wheel
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - name: Install Playwright's Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
 
-      - name: Download the wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: barca-wheel
-          path: dist-wheel
-
-      - name: Install barca and Playwright's Chromium
-        run: |
-          uv pip install --system dist-wheel/*.whl
-          pnpm --dir ui exec playwright install --with-deps chromium
-
-      # Each config starts `barca serve` on its fixture and the Vite dev server in front of it.
-      # Non-gating until #807 closes: seven ui/e2e specs fail on main (stale after the UI
-      # changes of #743-#798, two possibly real regressions). The step's result and the
-      # uploaded traces still show them; remove continue-on-error with that issue.
+      # Each config starts `barca serve` on its fixture and the Vite dev server in front of it:
+      # the flat project (ui/e2e), the project declared in groups (ui/e2e-groups) and token
+      # mode (ui/e2e-auth). Gating: a failing spec fails the job (#807).
       - name: Playwright end-to-end tests
-        continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: BARCA_BIN="$(command -v barca)" pnpm --dir ui test:e2e
 
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-results
-          path: ui/test-results
+          path: |
+            ui/test-results
+            ui/test-results-groups
+            ui/test-results-auth
           if-no-files-found: ignore
 
   build:
@@ -533,20 +487,10 @@ jobs:
 
       - name: Restore the build directory
         id: rust-cache
-        uses: actions/cache/restore@v4
+        uses: ./.depot/actions/rust-cache-restore
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          # A merge group's branch is `main` (its commit becomes main's).
-          key: rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          # This branch's latest, then main's, then main's with another Cargo.lock.
-          restore-keys: |
-            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-${{ github.event_name == 'merge_group' && 'main' || github.head_ref }}-
-            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-main-
-            rust-v2-wheel-${{ steps.toolchain.outputs.cachekey }}-
+          name: wheel
+          toolchain: ${{ steps.toolchain.outputs.cachekey }}
       - name: Build the barca wheel
         run: |
           mkdir -p dist-wheel
@@ -564,20 +508,9 @@ jobs:
       # session dirs not used for 2 days are pruned first, which bounds the entry's size.
       - name: Save the build directory
         if: success()
-        run: |
-          find target -path '*/incremental/*' -mindepth 3 -maxdepth 3 -type d -mtime +2 \
-            -exec rm -rf {} + 2>/dev/null || true
-          echo "target: $(du -sh target | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - if: success()
-        uses: actions/cache/save@v4
+        uses: ./.depot/actions/rust-cache-save
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+          key: ${{ steps.rust-cache.outputs.key }}
 
   proxy:
     # The shell tests that need the UI-embedded binary, beside the Python shards.
@@ -589,22 +522,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Download the wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: barca-wheel
-          path: dist-wheel
-
-      - name: Install barca
-        run: uv pip install --system dist-wheel/*.whl
+      - name: Install Python, uv and the wheel
+        uses: ./.depot/actions/setup-wheel
 
       - name: barca serve behind nginx (prefix, embedded UI, live events)
         run: bash tests/integration/test_reverse_proxy.sh
@@ -660,22 +579,11 @@ jobs:
             echo "BARCA_TEST_AZURITE_HOST=$BARCA_TEST_AZURITE_HOST"
           } >> "$GITHUB_ENV"
 
-      - name: Install Python
-        uses: actions/setup-python@v5
+      - name: Install Python and uv, download the wheel
+        uses: ./.depot/actions/setup-wheel
         with:
-          python-version: "3.14"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: pyproject.toml
-
-      - name: Download the wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: barca-wheel
-          path: dist-wheel
+          uv-cache: true
+          install: false
 
       - name: Mark the wheel downloaded
         run: echo "wheel $(date +%s.%N)" >> /tmp/phases
@@ -772,6 +680,51 @@ jobs:
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+
+      # The full tier's shards keep their JUnit reports for the `durations` job below.
+      - name: Upload the JUnit report
+        if: always() && matrix.duckdb == '2' && matrix.shard != 'fast'
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.shard }}
+          path: junit.xml
+          retention-days: 3
+          if-no-files-found: ignore
+
+  durations:
+    # Refreshes scripts/ci-test-durations.json (the per-file durations the shard split balances
+    # on, scripts/ci-shards.py) from this run's JUnit reports and uploads the result as the
+    # `ci-test-durations` artifact; scripts/release.sh downloads the newest one and commits
+    # it with the version bump, so the file follows the suite without anyone measuring by
+    # hand. The full tier runs with the emulators, so it refreshes the `with_emulators` map.
+    # Not gating: a shard's failure still leaves a usable report, and nothing here can fail
+    # a release.
+    needs: [changes, python]
+    if: ${{ !cancelled() && needs.changes.outputs.tier == 'full' }}
+    runs-on: depot-ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: junit-*
+          path: junit
+
+      - name: Merge the shards' durations
+        run: |
+          for report in junit/junit-*/junit.xml; do
+            python3 scripts/ci-shards.py --update-durations "$report" --emulators
+          done
+          python3 scripts/ci-shards.py --shards "$PYTHON_SHARDS" --check
+          { echo '```'; git diff --stat -- scripts/ci-test-durations.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-test-durations
+          path: scripts/ci-test-durations.json
+          retention-days: 90
+          if-no-files-found: error
 
   backends:
     # The required `CI / backends` check. It always runs, so a failed, cancelled or (in a full

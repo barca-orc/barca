@@ -20,12 +20,12 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
 
 from barca.api import _find_binary
+from .helpers import QUICK, RUN, wait_until
 
 PIPELINE = """
 import os
@@ -121,12 +121,6 @@ def sleeps():
 """
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def barca(cwd: Path, *args: str, env: dict | None = None, binary: str | None = None):
     return subprocess.run(
         [binary or _find_binary(), *args],
@@ -134,7 +128,7 @@ def barca(cwd: Path, *args: str, env: dict | None = None, binary: str | None = N
         env={**os.environ, **(env or {})},
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=RUN,
     )
 
 
@@ -364,13 +358,9 @@ def test_sigint_exits_130(project):
         stderr=subprocess.PIPE,
         text=True,
     )
-    deadline = time.time() + 30
-    while not (project / "started").exists():
-        assert time.time() < deadline, "step never started"
-        assert proc.poll() is None, proc.communicate()
-        time.sleep(0.05)
+    wait_until(lambda: (project / "started").exists(), "the step to start", timeout=30, proc=proc)
     proc.send_signal(signal.SIGINT)
-    _, err = proc.communicate(timeout=30)
+    _, err = proc.communicate(timeout=QUICK)
     assert proc.returncode == 130, err
     assert "cancelled" in err
     history = json.loads(barca(project, "history", "--json").stdout)["runs"]

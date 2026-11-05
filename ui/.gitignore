@@ -23,4 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 test-results/
+test-results-groups/
+test-results-auth/
 playwright-report/

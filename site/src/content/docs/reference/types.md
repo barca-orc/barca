@@ -1,0 +1,182 @@
+---
+title: "Output Formats and Types"
+description: "json, pickle, parquet and CSV artifacts, and how annotations pick readers (pandas, polars, pyarrow, duckdb)."
+editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/types.md
+---
+
+<!-- Generated from crates/barca-cli/docs/types.md (barca docs types). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+
+:::note
+This page is the manual topic `barca docs types`: the CLI prints the same text.
+:::
+
+How barca stores each step's output and how it hands values to downstream steps.
+
+## Output: the returned value picks the format
+
+| Step returns | Stored as |
+|---|---|
+| pandas `DataFrame`, polars `DataFrame`/`LazyFrame`, pyarrow `Table`, duckdb relation | parquet (`.parquet`) |
+| JSON-serializable value (dict, list, str, int, float, bool, None) | json (`.json`) |
+| anything else | pickle (`.pkl`, protocol 5) |
+
+- Override with `@asset(serializer="json" | "pickle" | "parquet" | "csv")`.
+- The **return annotation does not choose the format**; the value (or `serializer=`) does.
+- Asking for parquet on a value that cannot be written as parquet falls back to pickle and
+  prints a warning on stderr.
+- Lazy values are materialized when the step ends: a polars `LazyFrame` is collected and a
+  duckdb relation is executed straight into the parquet file. Nothing lazy crosses a step.
+- pandas parquet needs `pyarrow` (`pip install "barca[parquet]"`).
+
+## Input: parameter annotations pick the reader
+
+For parquet and CSV artifacts, the annotation on the *consuming* parameter selects the reader:
+
+| Annotation | Downstream receives |
+|---|---|
+| none | pandas `DataFrame` (default) |
+| `pd.DataFrame` / `pandas.DataFrame` | pandas `DataFrame` |
+| `pl.DataFrame` / `polars.DataFrame` | polars `DataFrame` |
+| `pl.LazyFrame` / `polars.LazyFrame` | polars `LazyFrame` scanning the parquet file (lazy read) |
+| `pyarrow.Table` | pyarrow `Table` |
+| `duckdb.DuckDBPyRelation` | duckdb relation over the parquet file (lazy read) |
+
+The same upstream parquet can be read differently by different consumers. Annotations are
+parsed statically, so use the conventional names above (`pd`, `pl`, `pyarrow`, `duckdb`).
+json and pickle artifacts ignore annotations.
+
+**Lazy inputs read only what the step uses.** The eager readers load the whole file. A
+`pl.LazyFrame` or duckdb relation reads nothing up front: the query the step builds decides
+which columns and row groups are read when it runs. For a large upstream that a step filters,
+projects or aggregates, annotate the input as lazy (`barca docs big-inputs`). With a remote artifact store, a lazy input
+is read in place and only the byte ranges its query touches are fetched ([`barca docs remote`](/reference/remote-storage/)).
+
+```python
+import duckdb
+import polars as pl
+from barca import asset
+
+
+@asset()
+def orders() -> duckdb.DuckDBPyRelation:      # written as parquet
+    return duckdb.sql("select 1 as id, 9.5::double as amount")
+
+
+@asset(inputs={"orders": orders})
+def total(orders: duckdb.DuckDBPyRelation) -> dict:   # read as a duckdb relation
+    return {"total": orders.sum("amount").fetchall()[0][0]}
+
+
+@asset(inputs={"orders": orders})
+def as_polars(orders: pl.DataFrame) -> pl.DataFrame:  # same file, read with polars
+    return orders.with_columns(doubled=pl.col("amount") * 2)
+
+
+@asset(inputs={"orders": orders})
+def big_ids(orders: pl.LazyFrame) -> pl.LazyFrame:    # same file, scanned lazily
+    return orders.filter(pl.col("amount") > 5).select("id")
+```
+
+## Reading results back
+
+`barca get` returns the artifact's path. In a terminal it prints a summary and the path; it
+prints one JSON object on stdout whenever stdout is not a terminal, or with `--json`, where
+`final_output` is a pointer for every format:
+
+```json
+{"final_output": {"_barca_artifact": {"path": ".barca/artifacts/...parquet", "format": "parquet", "size_bytes": 862}}}
+```
+
+To see the data:
+
+- `barca get orders pipeline.py -o value` prints the value; a table (parquet, CSV, a pickled
+  DataFrame) prints as a list of row objects. `-o value --json` puts it in `final_output`.
+- `barca sql "select * from orders"` queries it ([`barca docs sql`](/reference/sql/)).
+- The Python API deserializes for you: `import barca; barca.get("orders", "pipeline.py")`
+  returns a pandas `DataFrame` for parquet.
+- Or read the `path` yourself (`duckdb.sql("select * from '<path>'")`, or
+  `barca get orders pipeline.py -o path` for just the path).
+
+## Gotchas
+
+- DuckDB `DECIMAL` values (including literals like `9.5` and the result of `sum()` over them)
+  arrive in Python as `decimal.Decimal`, which is not JSON-serializable. A dict containing one
+  is stored as pickle, not JSON. Cast to `double` in SQL or convert with `float(...)`.
+- Pickle fails for objects that cannot be pickled (open connections, duckdb relations,
+  generators). Return data, not handles.
+- A duckdb relation is executed when the step ends, so any connection it uses must still be
+  alive when the step returns.
+- **DuckDB connections.** barca owns one DuckDB connection per worker process: duckdb's default
+  connection, the same one `duckdb.sql(...)` and `duckdb.read_parquet(...)` use. Inputs
+  annotated `duckdb.DuckDBPyRelation` are loaded on it and also bound as **views named after
+  their parameters** for the duration of the step (dropped after the result is written), so
+  `duckdb.sql("select * from orders")` works anywhere, helper modules included, with no bind
+  code of your own. Configure the connection once per worker process at import time with
+  `barca.duckdb_connection()`: extensions, credentials, `SET` options, macros:
+
+```python
+import barca
+
+barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker process
+```
+
+- **Shared state is intentional.** Steps in a worker run sequentially on that connection.
+  User-created views, tables, macros and session settings persist, including after a step
+  fails; barca cleans up only its bound input views after materialization. Use relation
+  operations, CTEs or unique object names with deliberate cleanup. Avoid catalog objects
+  named after input parameters: an existing table is skipped during binding, while an
+  existing view may be replaced and then dropped. There is no per-step namespace isolation.
+
+- Stay on that connection. If a step opens its own `duckdb.connect()`, its relations cannot be
+  combined with inputs (`Cannot combine LEFT and RIGHT relations of different connections!`),
+  and `con.register("x", input)` fails the same way. Barca recognizes these DuckDB errors
+  (including querying a bound input by name from another connection, which DuckDB reports as
+  `Table with name ... does not exist`) and appends a `barca:` note to the step failure that
+  says what happened and what to do. If you must, copy the input across with
+  `con.register("x", input.to_arrow_table())` (the data is loaded into memory). A relation does not
+  expose its file path.
+- Do not `register` on barca's connection an Arrow table that came from a query on that same
+  connection: it hangs (duckdb 1.5.6). Use the relation directly, or `create_view`.
+- Anything you create on the connection (tables, macros, `SET` options) lives as long as the
+  worker process, which runs several steps; barca only cleans up the views it binds for inputs.
+  Prefer stateless SQL and `drop` what you create.
+- Everything is materialized between steps. To cache several results from one computation,
+  define several assets or return the one you want cached.
+- duckdb 1.x and 2.x are both supported; what a pipeline must change for duckdb 2:
+  [`barca docs duckdb`](/reference/duckdb/).
+
+## CSV outputs
+
+Use `@asset(serializer="csv")`, `@sensor(serializer="csv")` or
+`@task(serializer="csv")` for a DataFrame, Arrow table or DuckDB relation.
+`@sink("exports/orders.csv")` infers CSV from the extension; `serializer="csv"`
+also works on a sink. CSV writes a header without a pandas index column. The default
+format for frames remains Parquet.
+
+A dataset sink (`@sink("exports/orders/", partition_by=["order_date"])`, a path ending in
+`/`) is written by the library that made the returned value: DuckDB writes a relation
+(streaming, nothing loaded into Python; `rows_per_file=` and json stream Arrow batches to
+pyarrow), polars writes a polars frame, and pyarrow writes a pandas frame or an Arrow table. All
+three produce the same Hive layout and file names ([`barca docs sinks`](/reference/sinks/)).
+
+Consuming parameter annotations select the CSV reader using the table above. CSV
+readers infer types: indexes, exact dtypes, null/empty-string distinctions and nested
+columns are not guaranteed to round-trip. Unsupported values fail rather than writing
+pickle under a `.csv` name. Remote CSV lazy inputs are downloaded and materialized
+before exposing a LazyFrame or relation; ranged lazy reads apply only to Parquet.
+`barca status --sample` reports CSV cells as strings; `barca sql` can query CSV results.
+
+```python
+import pandas as pd
+from barca import asset, sink
+
+
+@asset(serializer="csv")
+@sink("exports/orders.csv")
+def orders() -> pd.DataFrame:
+    return pd.DataFrame({"id": [1, 2], "amount": [9.5, 12.0]})
+```
+
+The CSV boundary is specified in `specs/interfaces/artifact-formats.md`.
+
+See also: `barca docs big-inputs`, [`barca docs duckdb`](/reference/duckdb/), [`barca docs cache`](/reference/cache/), `barca docs examples/duckdb`.

@@ -7,26 +7,17 @@ batch sizing.
 
 import contextlib
 import sqlite3
-import textwrap
 import time
 
 import barca
 import pytest
 from barca._artifacts import serialize
-from barca._worker import _ArtifactLRU, _load_collected_artifacts, _peak_rss_bytes
+from barca._lru import _ArtifactLRU
+from barca._rss import peak_rss_bytes as _peak_rss_bytes
+from barca._worker import _load_collected_artifacts
+from .helpers import write_module
 
-
-@pytest.fixture(autouse=True)
-def clean_barca_dir(tmp_path, monkeypatch):
-    # The API resolves .barca relative to cwd. Give each test its own project,
-    # so another pytest worker cannot delete its database or input artifacts.
-    monkeypatch.chdir(tmp_path)
-
-
-def write_module(tmp_path, filename, code):
-    p = tmp_path / filename
-    p.write_text(textwrap.dedent(code))
-    return str(p)
+pytestmark = pytest.mark.usefixtures("clean_barca_dir")
 
 
 def _query(sql):
@@ -200,7 +191,7 @@ class TestLoadCollectedArtifacts:
                 active += 1
                 overlapped = overlapped or active > 1
             try:
-                time.sleep(0.02)
+                time.sleep(0.02)  # fixed wait: holds each deserialize open so overlap is observable
                 return real_deserialize(path, fmt, **kwargs)
             finally:
                 with lock:

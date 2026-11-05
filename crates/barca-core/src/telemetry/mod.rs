@@ -15,6 +15,7 @@ pub mod slack;
 pub use history::JobHistory;
 pub mod dogstatsd;
 
+use crate::step_status::StepStatus;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -39,10 +40,10 @@ pub enum StepOutcome {
 impl StepOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
-            StepOutcome::Ran => "ran",
-            StepOutcome::Cached => "cached",
-            StepOutcome::Failed => "failed",
-            StepOutcome::Skipped => "skipped",
+            StepOutcome::Ran => StepStatus::Ran.as_str(),
+            StepOutcome::Cached => StepStatus::Cached.as_str(),
+            StepOutcome::Failed => StepStatus::Failed.as_str(),
+            StepOutcome::Skipped => StepStatus::Skipped.as_str(),
         }
     }
 }
@@ -93,7 +94,9 @@ pub fn short_name(base_id: &str) -> &str {
 }
 
 /// The [`NodeContext`] of every node of `dag`, by base id.
-pub fn node_contexts(dag: &crate::dag::Dag) -> std::collections::HashMap<String, NodeContext> {
+pub(crate) fn node_contexts(
+    dag: &crate::dag::Dag,
+) -> std::collections::HashMap<String, NodeContext> {
     use crate::model::{Freshness, NodeKind};
     use std::collections::HashMap;
 
@@ -273,7 +276,7 @@ pub trait Integration: Send + Sync {
 macro_rules! integrations {
     ($($name:literal => $ctor:path),+ $(,)?) => {
         /// Names accepted in `BARCA_TELEMETRY`.
-        pub const KNOWN: &[&str] = &[$($name),+];
+        pub(crate) const KNOWN: &[&str] = &[$($name),+];
 
         fn build(name: &str) -> Option<Result<Option<Box<dyn Integration>>, String>> {
             match name {

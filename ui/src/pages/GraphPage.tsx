@@ -2,29 +2,25 @@ import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { Button, IconButton, StatusDot, ViewToggle } from '@/components'
+import { Button, IconButton, ViewToggle } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
+import { GraphLegend } from '@/components/graph/GraphLegend'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useQueryClient } from '@tanstack/react-query'
 import { graphState, liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
+import { isFailed } from '@/lib/health'
 import { useHealth } from '@/hooks/useHealth'
 import { useRunStream } from '@/hooks/useRunStream'
 import { useTriggerNode } from '@/hooks/useTriggerNode'
 import { useTopbarRun } from '@/hooks/useTopbarRun'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
-import type { StatusKind } from '@/lib/types'
-
-const LEGEND: { status: StatusKind; label: string }[] = [
-  {status:'failed', label:'Failed'}, {status:'running', label:'Running'}, {status:'warning', label:'Stale'},
-  {status:'skipped', label:'Not run'}, {status:'success', label:'Healthy'},
-]
 
 export function GraphPage() {
   const assetQuery = useAssets()
-  const allAssets = useMemo(() => assetQuery.isPlaceholderData ? [] : assetQuery.data ?? [], [assetQuery.isPlaceholderData, assetQuery.data])
+  const allAssets = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
   const stateQuery = useAssetStates()
   const queryClient = useQueryClient()
   const { data: health } = useHealth()
@@ -126,21 +122,13 @@ export function GraphPage() {
             states={visualStates}
             handleRef={canvasRef}
           />
-          <div className="barca-legend">
-            {LEGEND.map((s) => (
-              <span key={s.label}>
-                <StatusDot status={s.status} size={6} />
-                {s.label}
-              </span>
-            ))}
-          </div>
+          <GraphLegend />
         </div>
         {selectedAsset && (
           <NodeInspector
             asset={selectedAsset}
-            status={selectedState.status}
-            statusLabel={selectedState.label}
-            feedbackStatus={statuses[selectedAsset.id] ?? (selectedState.status === 'failed' ? 'failed' : 'skipped')}
+            state={selectedState}
+            feedbackStatus={statuses[selectedAsset.id] ?? (isFailed(selectedState) ? 'failed' : 'skipped')}
             logs={stream.logs}
             running={stream.running}
             error={selectedError}

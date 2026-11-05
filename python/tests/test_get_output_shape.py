@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
+from .helpers import RUN, barca
+
 PIPELINE = """
 from barca import asset, partitions
 
@@ -45,9 +47,7 @@ def flaky(k: str) -> dict:
 def cli(project: Path, *args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "BARCA_REMOTE": "off"}
     env.pop("BARCA_OUTPUT", None)
-    return subprocess.run(
-        [_find_binary(), *args], check=False, cwd=project, capture_output=True, text=True, env=env
-    )
+    return barca(project, *args, env=env)
 
 
 def doc(proc: subprocess.CompletedProcess, code: int = 0) -> dict:
@@ -58,12 +58,6 @@ def doc(proc: subprocess.CompletedProcess, code: int = 0) -> dict:
 def read(project: Path, pointer: dict):
     meta = pointer["_barca_artifact"]
     return json.loads((project / meta["path"]).read_text())
-
-
-@pytest.fixture
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
 
 
 def test_json_final_output_is_the_pointer_and_o_value_the_value(project):
@@ -212,7 +206,7 @@ def test_a_terminal_previews_a_small_json_value_under_its_path(project):
         if not chunk:
             break
         chunks.append(chunk)
-    proc.wait(timeout=60)
+    proc.wait(timeout=RUN)
     out = b"".join(chunks).decode().replace("\r\n", "\n")
     assert "pipeline.py--total/" in out
     assert '  "total": 6' in out

@@ -28,7 +28,8 @@ from typing import Any
 from barca import _duckdb, _storage
 
 # The one map from an artifact file's extension to its format (the extension table in
-# specs/interfaces/artifact-formats.md; Rust's `sql::format_of` agrees with it).
+# specs/interfaces/artifact-formats.md; a test keeps Rust's `artifact_format::FORMAT_OF_EXTENSION`
+# equal to it).
 FORMAT_OF_EXTENSION = {
     ".json": "json",
     ".pkl": "pickle",
@@ -50,11 +51,12 @@ _FORMAT_EXTENSIONS = {
 _STAGING_DIR = ".barca/staging"
 
 
-def _frame_kind(value: Any) -> str | None:
-    """Classify a value as a frame-like type we can write to parquet, without imports.
+def dataframe_library(value: Any) -> str | None:
+    """Which dataframe library `value` belongs to, without importing any of them.
 
-    Returns "pandas", "polars", "pyarrow", "duckdb", or None. Matching is by
-    type/module name so none of these libraries has to be importable here.
+    Returns "pandas", "polars" (a DataFrame or LazyFrame), "pyarrow" (a Table), "duckdb" (a
+    relation), or None for anything that is not a frame. Matching is by type/module name so
+    none of these libraries has to be importable here.
     """
     type_name = type(value).__name__
     module = type(value).__module__ or ""
@@ -85,7 +87,7 @@ def detect_format(value: Any, explicit: str | None = None) -> str:
         return explicit
 
     # Check for frame types without requiring the imports at module level.
-    if _frame_kind(value) is not None:
+    if dataframe_library(value) is not None:
         return "parquet"
 
     # Try JSON — must succeed without default=str to be considered safe.
@@ -103,7 +105,7 @@ def resolve_format(value: Any, fmt: str, warn: bool = True) -> str:
     """
     if fmt != "parquet":
         return fmt
-    if _frame_kind(value) is not None or hasattr(value, "to_parquet"):
+    if dataframe_library(value) is not None or hasattr(value, "to_parquet"):
         return fmt
 
     if warn:
@@ -135,6 +137,14 @@ def _staging_dir() -> Path:
     d = Path(_STAGING_DIR) / str(os.getpid())
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def batch_staging(art_dir: str, call_id: str) -> Path:
+    """Where one batched call's keys are split to before they are installed (RFC-0013):
+    ``<artifact dir>/.batch-<pid>-<call id>/``, or under ``.barca/`` when the artifact
+    directory is a remote store. Removed when the call ends, whichever way."""
+    root = Path(art_dir) if not _storage.is_remote(art_dir) else Path(".barca")
+    return root / f".batch-{os.getpid()}-{call_id}"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -334,7 +344,7 @@ def publish_file(
 
 def _write_csv(value: Any, path: Path) -> None:
     """Write tabular CSV with a header and no pandas index column."""
-    kind = _frame_kind(value)
+    kind = dataframe_library(value)
     if kind == "pandas":
         value.to_csv(str(path), index=False)
     elif kind == "polars":
@@ -355,9 +365,10 @@ def _write_csv(value: Any, path: Path) -> None:
 
 
 def _write_parquet(value: Any, path: Path) -> None:
-    """Write a frame to parquet: pandas, polars (incl. LazyFrame), pyarrow Table, duckdb relation."""
+    """Write a frame to parquet: pandas, polars (incl. LazyFrame), pyarrow Table, duckdb
+    relation."""
     type_name = type(value).__name__
-    kind = _frame_kind(value)
+    kind = dataframe_library(value)
 
     if kind == "polars":
         if type_name == "LazyFrame":
@@ -423,7 +434,9 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
 
 def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
     """A lazy reader over a remote parquet object, reading byte ranges in place."""
-    fs = _storage.range_read_fs(uri)
+    from barca import _range_cache
+
+    fs = _range_cache.range_read_fs(uri)
     if frame_type == "duckdb":
         from barca import _duckdb
 
@@ -435,7 +448,7 @@ def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
                     con.unregister_filesystem(name)
                 con.register_filesystem(fs)
                 _duckdb_registered[name] = fs
-        return con.read_parquet(_storage.range_read_uri(uri))
+        return con.read_parquet(_range_cache.range_read_uri(uri))
 
     import polars as pl
     import pyarrow.dataset as ds
@@ -495,7 +508,8 @@ def _deserialize_csv(path: Path, *, frame_type: str = "pandas") -> Any:
 
         return pd.read_csv(str(path))
     raise ValueError(
-        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, duckdb)"
+        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, "
+        "duckdb)"
     )
 
 
@@ -532,7 +546,8 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
         return pd.read_parquet(str(path))
 
     raise ValueError(
-        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, duckdb)"
+        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, "
+        "duckdb)"
     )
 
 
@@ -560,8 +575,8 @@ def artifact_path(
     With a run_hash the path is ``{dir}/{safe_node_id}/{run_hash}{ext}``: it names the
     computation (code and inputs), so it is the same on every machine and cache hits
     transfer across machines. It does not name the bytes: computing the result again
-    (a refresh, a missing artifact) overwrites the file. Without a run_hash (older
-    coordinators, parallel() children, batch mode) the legacy node-id-keyed layout is used.
+    (a refresh, a missing artifact) overwrites the file. Without a run_hash (a step the
+    coordinator sent none for) the path is ``{dir}/{safe_node_id}{ext}``, one file per node.
 
     Returns a Path for a local artifact_dir, or a URI string when
     artifact_dir is a remote prefix (e.g. BARCA_ARTIFACT_URI).

@@ -11,17 +11,14 @@ know the bytes of a cutoff asset that would run, so what reads it is `unknown` w
 """
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
 
-from .test_server_ledger import Server, _free_port, toml
-
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from .test_server_ledger import Server, toml
+from .helpers import barca, clean_env, free_port
 
 CUSTOMERS = [f"c{i}" for i in range(6)]
 
@@ -98,16 +95,8 @@ def source(cutoff: bool = True) -> str:
     return PIPELINE.format(customers=CUSTOMERS, cutoff=", cutoff=True" if cutoff else "")
 
 
-def env() -> dict[str, str]:
-    out = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    out["BARCA_POOL_SIZE"] = "2"
-    return out
-
-
 def run(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=project, env=env(), capture_output=True, text=True
-    )
+    return barca(project, *args, env=clean_env(BARCA_POOL_SIZE="2"))
 
 
 def get(project: Path, target: str, *flags: str) -> dict:
@@ -312,7 +301,7 @@ def test_with_a_server_a_cutoff_consumer_is_a_ledger_hit(tmp_path):
     """Run hashes below a cutoff asset fold in its bytes; the ledger answers them as any other."""
     store = tmp_path / "store"
     store.mkdir()
-    port = _free_port()
+    port = free_port()
     url = f"http://127.0.0.1:{port}"
     roots = {}
     for name, server_url in (("server", None), ("a", url), ("b", url)):

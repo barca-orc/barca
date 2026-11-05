@@ -134,14 +134,16 @@ truncate user lines or redefine the promise as part of this audit.
 
 ### V2. A historical cache hit can select the wrong current partition result
 
-Known implemented correctness defect #657; reproduced; high confidence; pending PR #658.
+Known implemented correctness defect #657 at the audited commit; reproduced; high confidence.
+Fixed since 0.34.0 (the sequential fix; [behavior conformance](behavior-conformance.md)); the
+PR open at the time, #658, was closed unmerged on 2026-10-26.
 [Freshness INV-SELECT-01](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/freshness.md#L88) requires the current identity,
 not the latest historical row. [Incremental lookup](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/incremental.rs#L807)
 selects `MAX(id)` per node. Inputs `1,2,1,1` produce `2,4,2,4`, where the last result must
 remain 2. The probe records this independently of the previously cited audit.
 
-The owner explicitly discloses this defect. #658 was still open when checked. Recheck it
-before merge and refresh baseline notices if it lands; no claim that this docs branch fixes it.
+The owner disclosed this defect until the fix landed; it now states the sequential fix and the
+remaining concurrent-ordering gap. This audit entry is the record of the counterexample.
 
 ### V3. Run-start code/configuration snapshots are not established
 

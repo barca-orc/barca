@@ -7,14 +7,12 @@ upstream cascades into the partitioned asset and past it.
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca as run_barca
 
 # `multiplier`'s return value is spliced in so a test can change its code (and so its run hash)
 # without touching any other function's source.
@@ -148,13 +146,7 @@ def project(tmp_path) -> Path:
 
 
 def barca(project: Path, *args: str) -> dict:
-    proc = subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=project,
-        env=os.environ,
-        capture_output=True,
-        text=True,
-    )
+    proc = run_barca(project, *value_args(args), env=os.environ)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 

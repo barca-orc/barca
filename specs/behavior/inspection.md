@@ -119,7 +119,7 @@ topbar and node panel. Assets and sensors use cache-aware `get`; tasks use `run`
 mode disables both controls. An accepted target and its containing groups show live activity
 before the first SSE event; completed runs refresh status/history, and View run opens the
 durable run. Ungrouped node panels use the same action. Evidence:
-[`grouped-run.spec.ts`](../../ui/e2e/grouped-run.spec.ts), including real run admission,
+[`e2e-groups/groups.spec.ts`](../../ui/e2e-groups/groups.spec.ts), against a project declared in groups, including real run admission,
 completion, history/logs, read-only controls, held-first-event activity and admission errors.
 
 A database change can invalidate cached inspection even after an unchanged sensor run.

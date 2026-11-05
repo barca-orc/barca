@@ -19,15 +19,10 @@ import tracemalloc
 
 import pytest
 
-from barca import _artifacts, _runtime, _storage, _worker
+from barca import _artifacts, _lru, _runtime, _storage, _worker
 from barca._artifacts import serialize
-from barca._worker import (
-    _LRU_MAX_ARTIFACT_BYTES,
-    _ArtifactLRU,
-    _isolated_copy,
-    _load_artifact,
-    _load_collected_artifacts,
-)
+from barca._lru import _LRU_MAX_ARTIFACT_BYTES, _ArtifactLRU, _isolated_copy
+from barca._worker import _load_artifact, _load_collected_artifacts
 
 MB = 1024 * 1024
 
@@ -726,13 +721,13 @@ class TestByteBudget:
             assert lru.admit(f"/n/{i}.json", i, size_bytes=_LRU_MAX_ARTIFACT_BYTES)
         held = [i for i in range(12) if lru.get(f"/n/{i}.json") is not None]
         assert held == [4, 5, 6, 7, 8, 9, 10, 11]
-        assert lru._total_bytes == _worker._LRU_MAX_TOTAL_BYTES
+        assert lru._total_bytes == _lru._LRU_MAX_TOTAL_BYTES
 
     def test_entry_limit_still_applies_to_tiny_artifacts(self):
         lru = _ArtifactLRU()
         for i in range(40):
             lru.admit(f"/n/{i}.json", i, size_bytes=1)
-        assert len(lru._entries) == _worker._LRU_MAX_ENTRIES
+        assert len(lru._entries) == _lru._LRU_MAX_ENTRIES
 
 
 class TestSizeAccounting:

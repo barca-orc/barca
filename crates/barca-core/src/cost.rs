@@ -21,22 +21,22 @@ use std::collections::HashMap;
 
 /// Cold-start estimate for a never-run node, in seconds. Calibrated to
 /// ~30s-partition data processing; deliberately safe (see module docs).
-pub const COLD_START_SECONDS: f64 = 30.0;
+pub(crate) const COLD_START_SECONDS: f64 = 30.0;
 
 /// Fixed per-pull coordination cost, in seconds. Covers the UDS round-trip +
 /// JSON framing for one batch assignment. The queue carries artifact
 /// references (not payloads), so this is genuinely fixed — which is what makes
 /// batching able to amortize it. Overridable via `BARCA_COMM_COST_SECONDS`.
-pub const DEFAULT_COMM_COST_SECONDS: f64 = 0.005;
+pub(crate) const DEFAULT_COMM_COST_SECONDS: f64 = 0.005;
 
 /// Target ratio of comm cost to work per batch: 1%, not 0.1%. Going from
 /// 50%→5% comm is a 10× win; 5%→0.1% recovers ~5% more throughput but demands
 /// 10× bigger batches, which costs 10× worse load balance and tail latency.
-pub const TARGET_COMM_RATIO: f64 = 0.01;
+pub(crate) const TARGET_COMM_RATIO: f64 = 0.01;
 
 /// Batches each worker should see over a run — enough for balance and
 /// natural work-stealing (a fast worker just pulls again sooner).
-pub const CHUNKS_PER_WORKER: usize = 3;
+pub(crate) const CHUNKS_PER_WORKER: usize = 3;
 
 /// A workload whose *total* estimated cost is below this is trivial: comm
 /// amortization wins outright and parallelism is moot.
@@ -55,7 +55,7 @@ const FLOOR_FACTOR: f64 = 0.7;
 
 /// One node's running estimate.
 #[derive(Debug, Clone, Copy)]
-pub struct NodeEstimate {
+pub(crate) struct NodeEstimate {
     /// Current EWMA of per-task wall cost, seconds.
     pub estimate_seconds: f64,
     /// Last observed CPU seconds (informational; persisted for `barca stats`).
@@ -72,7 +72,7 @@ pub struct NodeEstimate {
 /// Wall time (not CPU time) drives `K`: batch sizing exists to keep workers
 /// *occupied*, and a worker blocked on I/O is exactly as occupied as one
 /// burning CPU. CPU time and RSS ride along as history for later policies.
-pub struct CostModel {
+pub(crate) struct CostModel {
     /// Exact node id (including partition suffix) → estimate.
     per_node: HashMap<String, NodeEstimate>,
     /// Base node id → estimate over all its partitions. Lets an unseen
@@ -143,7 +143,7 @@ impl CostModel {
 
     /// Three-tier prior: exact-node history → node-level (sibling-partition)
     /// history → cold-start default.
-    pub fn estimate(&self, node_id: &str) -> f64 {
+    pub(crate) fn estimate(&self, node_id: &str) -> f64 {
         if let Some(e) = self.per_node.get(node_id) {
             return e.estimate_seconds;
         }
@@ -201,6 +201,7 @@ impl CostModel {
             });
     }
 
+    #[cfg(test)]
     /// How many tasks a worker should lease in one pull.
     ///
     /// ```text
@@ -220,7 +221,12 @@ impl CostModel {
     /// A heavy node (≥ ~0.5s/task at the default comm cost) computes
     /// `floor = 1`, so heavy work is pulled one-at-a-time, fully parallel —
     /// the batching machinery stays dormant and only wakes for light nodes.
-    pub fn batch_size(&self, node_id: &str, remaining_tasks: usize, workers: usize) -> usize {
+    pub(crate) fn batch_size(
+        &self,
+        node_id: &str,
+        remaining_tasks: usize,
+        workers: usize,
+    ) -> usize {
         self.batch_size_with_backlog(node_id, remaining_tasks, 0, workers)
     }
 
@@ -229,7 +235,7 @@ impl CostModel {
     /// is trivial, never toward the ceiling: 16 ready heads of streams 31 steps long are not a
     /// trivial 16 steps to pack into two pulls, which left most of the pool idle while each
     /// pull ran its steps in turn (#560).
-    pub fn batch_size_with_backlog(
+    pub(crate) fn batch_size_with_backlog(
         &self,
         node_id: &str,
         remaining_tasks: usize,

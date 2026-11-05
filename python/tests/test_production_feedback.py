@@ -5,37 +5,24 @@ the nondeterminism warning and computed partition keys (`barca docs status`, `ba
 """
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
-from . import served
-from .test_server_ledger import SCRUB, WAIT
+from . import helpers, served
+from .helpers import clean_env
 
 NOT_DETERMINISTIC = "produced different bytes for the same code and inputs"
 
 
 def _env(**extra: str) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["BARCA_POOL_SIZE"] = "1"
-    env.update(extra)
-    return env
+    return clean_env(BARCA_POOL_SIZE="1", **extra)
 
 
 def barca(cwd: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=_env(**env),
-        timeout=WAIT,
-    )
+    return helpers.barca(cwd, *args, env=_env(**env))
 
 
 def ok(out: subprocess.CompletedProcess) -> dict:

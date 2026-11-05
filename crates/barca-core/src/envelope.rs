@@ -2,6 +2,7 @@
 
 use crate::BarcaError;
 use crate::dispatch::ErrorPhase;
+use crate::step_status::StepStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -9,6 +10,7 @@ use serde_json::{Map, Value, json};
 /// nothing (the user cancelled). Each kind has exactly one exit code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum ErrorKind {
     /// A user step raised (traceback included). Fix the code; retrying barca will not help.
     StepFailed,
@@ -133,7 +135,7 @@ impl Context {
 
 /// The envelope `reason` of [`BarcaError::MetadataUnusable`]: the metadata DB is there but this
 /// barca cannot use it.
-pub const METADATA_UNUSABLE: &str = "metadata_unusable";
+pub(crate) const METADATA_UNUSABLE: &str = "metadata_unusable";
 
 /// What to do about a metadata DB at `path` that barca cannot use.
 pub fn metadata_remediation(path: &str) -> String {
@@ -355,7 +357,11 @@ impl ErrorEnvelope {
     }
 
     /// Like [`ErrorEnvelope::from_prose`], with a remediation for when the prose has none.
-    pub fn from_prose_or(kind: ErrorKind, prose: impl Into<String>, fallback: String) -> Self {
+    pub(crate) fn from_prose_or(
+        kind: ErrorKind,
+        prose: impl Into<String>,
+        fallback: String,
+    ) -> Self {
         let mut e = Self::from_prose(kind, prose);
         if e.remediation.is_none() {
             e.remediation = Some(fallback);
@@ -387,7 +393,7 @@ impl ErrorEnvelope {
                     step.run.as_ref().map_or(0, |run| run
                         .steps
                         .iter()
-                        .filter(|s| s.status.as_deref() == Some("skipped"))
+                        .filter(|s| StepStatus::Skipped.is(s.status.as_deref()))
                         .count()),
                 )),
             };
@@ -546,7 +552,7 @@ impl ErrorEnvelope {
     /// For a `step_failed` envelope read back from the wire (which does not carry it): the
     /// one-line run summary a local run prints after the error, given how many downstream
     /// steps were skipped. Any other kind is returned unchanged.
-    pub fn with_failed_run_summary(mut self, skipped: usize) -> Self {
+    pub(crate) fn with_failed_run_summary(mut self, skipped: usize) -> Self {
         if self.kind == ErrorKind::StepFailed {
             let node = self.node.clone().unwrap_or_default();
             let prefix = format!("step '{node}' failed: ");
@@ -577,11 +583,6 @@ impl ErrorEnvelope {
             self.to_human()
         }
     }
-}
-
-/// The HTTP error response preserves the existing public schema.
-pub fn http_error(message: impl Into<String>) -> Value {
-    json!({"error": message.into()})
 }
 
 #[cfg(test)]

@@ -9,8 +9,9 @@ on:
     paths: [".github/workflows/release.yml", "scripts/smoke-release-package.py", "scripts/wait-pypi-wheel.py", "scripts/changelog-section.py"]
   workflow_dispatch:
 
+# Read-only by default; the jobs that write (the GitHub Release) ask for more themselves.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,6 +30,7 @@ jobs:
   # On a pull request or manual run it checks the version in pyproject.toml.
   release-notes:
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Release notes from CHANGELOG.md
@@ -74,6 +76,7 @@ jobs:
             maturin-target: aarch64
             name: macos-arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -174,6 +177,7 @@ jobs:
 
   build-sdist:
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -214,6 +218,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [release-notes, build-wheels, build-sdist]
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write   # create the GitHub Release and upload its assets
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -238,6 +245,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [release-notes, build-wheels, build-sdist]
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 30
+    # The upload uses the PYPI_API_TOKEN secret, so it needs no GitHub permission of its own
+    # (trusted publishing would need `id-token: write` here).
+    permissions:
+      contents: read
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -265,6 +277,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [release, publish-pypi]
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Check the Cloudflare secrets
         id: secrets

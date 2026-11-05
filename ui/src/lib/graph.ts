@@ -2,19 +2,26 @@ import { Position, type Node, type Edge } from '@xyflow/react'
 import { match } from 'ts-pattern'
 import { DAG_NODE_WIDTH, DAG_NODE_HEIGHT } from '@/components'
 import { layout, type LayoutDir, type LayoutInput, type LayoutPositions } from './graphLayout'
+import type { Tone } from './tone'
 import type { NodeKind, StatusKind } from './types'
 
 export type { LayoutDir }
 
 /** Data carried on each React Flow node (consumed by the custom AssetNode). */
-export interface GraphNodeData {
+interface GraphNodeData {
   id: string
   name: string
   kind: GraphKind
   summary?: string
   outputName?: string
-  status: StatusKind
-  metric?: string | null
+  /** The colour of its state; `label` is the word. */
+  tone: Tone
+  /** The state's word, or a group's summary. */
+  label?: string | null
+  /** Its last attempt failed: shown as a second fact beside the state. */
+  lastFailed?: boolean
+  /** Whether the node pulses: a run is working on it. */
+  live?: boolean
   stateHint?: string
   [key: string]: unknown
 }
@@ -22,7 +29,7 @@ export interface GraphNodeData {
 export type GraphNode = Node<GraphNodeData>
 
 /** What a box in the graph is: a node, a group of them, or an input from outside the view. */
-export type GraphKind = NodeKind | 'group' | 'port'
+type GraphKind = NodeKind | 'group' | 'port'
 
 /** Organizational entries can be laid out alongside real pipeline nodes. */
 export interface GraphEntry {
@@ -55,11 +62,11 @@ export function shortName(id: string): string {
 }
 
 /**
- * Resting node status before any run. Static analysis (`GET /assets`) carries
+ * Resting node tone before any state. Static analysis (`GET /assets`) carries
  * no state — cache state and active run status are overlaid downstream
  * (see GraphCanvas + `overlayRunStatus`), never decided here.
  */
-const RESTING_STATUS: StatusKind = 'skipped'
+const RESTING_TONE: Tone = 'neutral'
 
 const GROUP_WIDTH = 248
 const GROUP_HEIGHT = 112
@@ -127,7 +134,7 @@ export function graphAt(assets: GraphEntry[], dir: LayoutDir, positions: LayoutP
         kind: a.kind,
         summary: a.summary,
         outputName: a.outputName,
-        status: RESTING_STATUS,
+        tone: RESTING_TONE,
       },
       // dagre centers nodes; React Flow positions by top-left.
       position: { x: p.x - width / 2, y: p.y - height / 2 },
@@ -177,15 +184,15 @@ export function overlayRunStatus(
 }
 
 /**
- * Classify an edge from the *overlaid* statuses of its endpoints. `live` (cyan,
- * flowing) means a fresh upstream is feeding a running downstream; `hot` means
- * the edge touches the selected node. Pure → testable; rendered via CSS class.
+ * Classify an edge from the tones of its endpoints. `live` (cyan, flowing) means a fresh
+ * (cached, or just succeeded) upstream is feeding a running downstream; `hot` means the edge
+ * touches the selected node. Pure → testable; rendered via CSS class.
  */
 export function edgeClassName(opts: {
-  sourceStatus?: StatusKind
-  targetStatus?: StatusKind
+  sourceTone?: Tone
+  targetTone?: Tone
   hot: boolean
 }): string {
-  const live = opts.sourceStatus === 'success' && opts.targetStatus === 'running'
+  const live = opts.sourceTone === 'success' && opts.targetTone === 'running'
   return [live ? 'live' : '', opts.hot ? 'hot' : ''].filter(Boolean).join(' ')
 }

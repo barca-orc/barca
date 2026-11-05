@@ -1,23 +1,22 @@
 """Tests for the ``barca.Client`` HTTP SDK.
 
-The unit tests mock ``urllib`` so they need neither a server nor the binary. A
-final integration test drives a real ``barca serve`` subprocess when one can be
-started, and skips cleanly otherwise.
+The unit tests mock ``urllib`` so they need neither a server nor the binary. The
+integration tests drive a real ``barca serve`` (the ``serve`` fixture).
 """
 
 from __future__ import annotations
 
 import io
 import json
-import socket
-import subprocess
-import time
+import os
 import urllib.error
 
 import pytest
 
 from barca.api import BarcaError
 from barca.client import Client, Run
+
+from .helpers import barca
 
 # The deprecation is asserted once below; the other tests use the client as before.
 pytestmark = pytest.mark.filterwarnings("ignore:barca.Client is deprecated:DeprecationWarning")
@@ -164,120 +163,48 @@ def test_run_wait_times_out(monkeypatch):
         Run(c, "r1").wait(timeout=0.05, poll=0.01)
 
 
-# ─── live-server integration (skips if it can't start) ───────────────────────
+# ─── live-server integration ─────────────────────────────────────────────────
+
+HELLO = "from barca import asset\n\n@asset()\ndef hello() -> dict:\n    return {'msg': 'hi'}\n"
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _barca_binary() -> str | None:
-    try:
-        from barca.api import _find_binary
-
-        return _find_binary()
-    except Exception:
-        return None
-
-
-def test_end_to_end_run_via_server(tmp_path):
-    binary = _barca_binary()
-    if binary is None:
-        pytest.skip("barca binary not available")
-
+def test_end_to_end_run_via_server(tmp_path, serve):
     module = tmp_path / "pipe.py"
-    module.write_text(
-        "from barca import asset\n\n@asset()\ndef hello() -> dict:\n    return {'msg': 'hi'}\n"
-    )
-    port = _free_port()
-    proc = subprocess.Popen(
-        [binary, "serve", str(module), "--port", str(port), "--no-schedule"],
-        cwd=tmp_path,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        client = Client(f"http://127.0.0.1:{port}")
-        # Wait for the server to bind.
-        for _ in range(150):
-            try:
-                if client.health().get("status") == "ok":
-                    break
-            except BarcaError:
-                time.sleep(0.2)
-        else:
-            pytest.fail("barca serve did not answer /health within 30 s")
+    module.write_text(HELLO)
+    # The machine's environment is inherited on purpose, as before this test used `Serve`.
+    server = serve("--no-schedule", files=(str(module),), env={**os.environ})
+    client = Client(server.url)
+    assert client.health().get("status") == "ok"
 
-        result = client.get("hello").wait(timeout=30)
-        assert result["status"] == "complete"
+    result = client.get("hello").wait(timeout=30)
+    assert result["status"] == "complete"
 
-        names = {a["id"].split(":")[-1] for a in client.assets()}
-        assert "hello" in names
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    names = {a["id"].split(":")[-1] for a in client.assets()}
+    assert "hello" in names
 
 
-def _serve_and_capture_stderr(tmp_path, extra_args):
+def _serve_and_capture_stderr(tmp_path, serve, extra_args):
     """Start `barca serve`, wait until /health answers on 127.0.0.1, stop it; return its stderr."""
-    binary = _barca_binary()
-    if binary is None:
-        pytest.skip("barca binary not available")
-
     module = tmp_path / "pipe.py"
-    module.write_text(
-        "from barca import asset\n\n@asset()\ndef hello() -> dict:\n    return {'msg': 'hi'}\n"
-    )
-    port = _free_port()
-    proc = subprocess.Popen(
-        [binary, "serve", str(module), "--port", str(port), "--no-schedule", *extra_args],
-        cwd=tmp_path,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        client = Client(f"http://127.0.0.1:{port}")
-        for _ in range(50):
-            try:
-                if client.health().get("status") == "ok":
-                    break
-            except BarcaError:
-                time.sleep(0.2)
-        else:
-            pytest.fail("server did not come up")
-    finally:
-        proc.terminate()
-        try:
-            _, stderr = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            _, stderr = proc.communicate()
-    return stderr, port
+    module.write_text(HELLO)
+    server = serve("--no-schedule", *extra_args, files=(str(module),), env={**os.environ})
+    assert Client(server.url).health().get("status") == "ok"
+    server.stop()
+    return server.stderr, server.port
 
 
-def test_serve_host_all_interfaces_is_reachable_and_warns(tmp_path):
-    stderr, port = _serve_and_capture_stderr(tmp_path, ["--host", "0.0.0.0"])
+def test_serve_host_all_interfaces_is_reachable_and_warns(tmp_path, serve):
+    stderr, port = _serve_and_capture_stderr(tmp_path, serve, ["--host", "0.0.0.0"])
     assert f"serving on http://0.0.0.0:{port}" in stderr
     assert "warning: listening on 0.0.0.0 with no authentication" in stderr
 
 
-def test_serve_default_host_is_loopback_without_warning(tmp_path):
-    stderr, port = _serve_and_capture_stderr(tmp_path, [])
+def test_serve_default_host_is_loopback_without_warning(tmp_path, serve):
+    stderr, port = _serve_and_capture_stderr(tmp_path, serve, [])
     assert f"serving on http://127.0.0.1:{port}" in stderr
     assert "no authentication" not in stderr
 
 
 def test_serve_host_rejects_a_non_ip_as_a_usage_error(tmp_path):
-    binary = _barca_binary()
-    if binary is None:
-        pytest.skip("barca binary not available")
-    proc = subprocess.run(
-        [binary, "serve", "--host", "localhost"], cwd=tmp_path, capture_output=True, text=True
-    )
+    proc = barca(tmp_path, "serve", "--host", "localhost", env={**os.environ})
     assert proc.returncode == 2

@@ -305,7 +305,8 @@ def load_pipeline_module(source_file: str) -> ModuleType:
                 path
             ):
                 raise ImportError(
-                    f"project module '{name}' from '{path}' conflicts with an already imported module; use an explicit qualified project import"
+                    f"project module '{name}' from '{path}' conflicts with an already imported "
+                    "module; use an explicit qualified project import"
                 )
             loaded = importlib.import_module(name)
         else:
@@ -343,7 +344,8 @@ def _recover_legacy_pickle_module(name: str) -> ModuleType:
     suffix = name.removeprefix("_barca_")
     if not name.startswith("_barca_") or not suffix or "/" in suffix or "\\" in suffix:
         raise ImportError(
-            f"legacy project identity '{name}' is unavailable; use explicit refresh after resolving the source layout"
+            f"legacy project identity '{name}' is unavailable; use explicit refresh after "
+            "resolving the source layout"
         )
     registered = sys.modules.get(name)
     registered_file = getattr(registered, "__file__", None)
@@ -371,7 +373,8 @@ def _recover_legacy_pickle_module(name: str) -> ModuleType:
         probes += 1
         if probes > _LEGACY_PROBE_LIMIT:
             raise ImportError(
-                f"legacy project identity '{name}' exceeded its recovery bound; use explicit refresh after resolving the source layout"
+                f"legacy project identity '{name}' exceeded its recovery bound; use explicit "
+                "refresh after resolving the source layout"
             )
         file = directory / (remaining + ".py")
         if file.is_file():
@@ -388,7 +391,8 @@ def _recover_legacy_pickle_module(name: str) -> ModuleType:
             probes += 1
             if probes > _LEGACY_PROBE_LIMIT:
                 raise ImportError(
-                    f"legacy project identity '{name}' exceeded its recovery bound; use explicit refresh after resolving the source layout"
+                    f"legacy project identity '{name}' exceeded its recovery bound; use "
+                    "explicit refresh after resolving the source layout"
                 )
             child = directory / component
             if child.is_dir() and child.resolve().is_relative_to(_project_root):
@@ -400,6 +404,7 @@ def _recover_legacy_pickle_module(name: str) -> ModuleType:
     if len(candidates) != 1:
         state = "ambiguous" if candidates else "unavailable"
         raise ImportError(
-            f"legacy project identity '{name}' is {state}; use explicit refresh after resolving the source layout"
+            f"legacy project identity '{name}' is {state}; use explicit refresh after "
+            "resolving the source layout"
         )
     return load_pipeline_module(str(next(iter(candidates))))

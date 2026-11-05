@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from './Button'
 import { api } from '@/lib/api'
-import { injectStyles } from '@/lib/injectStyles'
 import type { ResetResult } from '@/lib/types'
 
 /**
@@ -25,20 +24,9 @@ export interface ResetDatabaseDialogProps {
   onReload: () => void
 }
 
-const STYLE_ID = 'barca-reset-styles'
-const CSS = `
-  .barca-reset-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--bg-canvas) 70%, transparent); }
-  .barca-reset-dialog { width: min(480px, 100%); background: var(--bg-raised); color: var(--text-default); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--elev-modal); padding: 20px; font-family: var(--font-sans); font-size: var(--text-sm); line-height: 1.5; }
-  .barca-reset-dialog h2 { margin: 0 0 10px; font-size: var(--text-md); color: var(--text-strong); }
-  .barca-reset-dialog p { margin: 0 0 10px; }
-  .barca-reset-dialog code { font-family: var(--font-mono); font-size: 0.95em; overflow-wrap: anywhere; }
-  .barca-reset-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-  .barca-reset-error { color: var(--status-failed); }
-`
 
 /** The dialog alone, for each phase of a reset. */
 export function ResetDatabaseDialog({ phase, onConfirm, onCancel, onReload }: ResetDatabaseDialogProps) {
-  injectStyles(STYLE_ID, CSS)
   return (
     <div className="barca-reset-backdrop">
       <div className="barca-reset-dialog" role="dialog" aria-modal="true" aria-labelledby="barca-reset-title">

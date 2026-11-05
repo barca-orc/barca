@@ -143,12 +143,17 @@ committed selection, evidence, progress and summaries.
 
 ## Acceptance and evidence
 
-Required implementation evidence, not currently passing conformance claims:
+Required implementation evidence. Only the sharing scenario passes today, for a server's
+in-flight asset steps (0.39.4, experimental, [claims.rs](../../crates/barca-core/src/serve/claims.rs),
+[shared steps](../../python/tests/test_serve_shared_steps.py): two runs of one uncached asset
+compute it once, a task runs twice, overlapping partition domains share only the keys in common,
+a run waiting on a failed or cancelled owner executes the step itself, and the shared result is
+recorded once). The other rows are obligations, not passing claims:
 
 | Obligation | Acceptance scenario |
 | --- | --- |
 | Ordered selection / snapshot | Complete revisions out of order, including a newer observation reusing old bytes and a removed key finishing late; restart between artifact publication and selection commit |
-| Sharing / identity | Identical requests execute once; differing hashes execute independently; partial key overlap shares only the intersection |
+| Sharing / identity | Identical requests execute once; differing hashes execute independently; partial key overlap shares only the intersection (passing for a server's asset steps, above; independent CLI processes stay outside the scope) |
 | Cancellation / retry | One subscriber cancels, last subscriber cancels, owner dies, retry races, server restarts; surviving requests still complete correctly |
 | Pending reconciliation | Observe 1, 2, 3 while 1 runs; verify already-started work survives and only the latest unstarted automatic version remains |
 | Inspection | Invalidate during a check; complete checks out of order; delete an artifact; show truthful checking/counts/availability |

@@ -7,7 +7,7 @@ Azurite), each skipped when its emulator is unreachable.
 
 import pytest
 
-from barca import _artifacts, _storage
+from barca import _artifacts, _range_cache, _storage
 
 from . import emulators
 from .test_state_backends import AzureBackend, GcsBackend, S3Backend
@@ -28,7 +28,7 @@ def remote(request, tmp_path, monkeypatch):
     monkeypatch.setenv("GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT", "false")
     monkeypatch.chdir(tmp_path)
     _storage._fs_cache.clear()
-    _storage._range_fs_cache.clear()
+    _range_cache._range_fs_cache.clear()
 
     base = be.make_uri(tmp_path).rsplit("/state/", 1)[0]
     uri = f"{base}/arts/orders/h1.parquet"
@@ -46,7 +46,7 @@ def remote(request, tmp_path, monkeypatch):
     monkeypatch.setattr(_storage, "get_file", no_download)
     yield uri, _storage.size(uri)
     _storage._fs_cache.clear()
-    _storage._range_fs_cache.clear()
+    _range_cache._range_fs_cache.clear()
 
 
 def _count_reads(monkeypatch, uri) -> list[int]:

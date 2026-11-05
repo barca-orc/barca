@@ -89,7 +89,7 @@ export type { TokenMetadata, IssuedToken } from './types'
 export type StateScope = { group: string } | { file: string }
 
 /** First rows asked for with an output's schema (the panel's Preview). */
-export const PREVIEW_ROWS = 5
+const PREVIEW_ROWS = 5
 
 export const api = {
   authStatus: (signal?: AbortSignal) => request<{ mode: 'off' | 'token' }>('/auth/status', { signal }, { token: null }),

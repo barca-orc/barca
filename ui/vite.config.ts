@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import { fileURLToPath, URL } from 'node:url'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
 
 // barca serve binds 127.0.0.1:8274 by default and serves the built UI at /ui/.
 // Dev mirrors that: Vite serves the app at /ui/ and proxies every other path
@@ -16,14 +15,14 @@ export default defineConfig(({ command }) => ({
   // Relative asset URLs in the build, so the UI works under any reverse-proxy
   // prefix (nginx at /barca/ → /barca/ui/). Dev serves at /ui/ like barca does.
   base: command === 'build' ? './' : '/ui/',
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
   // Playwright specs in e2e/ run with `pnpm test:e2e`, not vitest.
-  test: { exclude: ['e2e/**', 'e2e-auth/**', 'node_modules/**'] },
+  test: { exclude: ['e2e/**', 'e2e-groups/**', 'e2e-auth/**', 'node_modules/**'] },
   server: { proxy: API_PROXY },
   // `pnpm build && pnpm preview`: the production build against the same API, for measuring
   // what users get (React's development build is several times slower).

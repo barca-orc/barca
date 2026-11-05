@@ -22,8 +22,8 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 
+from .helpers import RUN, barca
 from .served import Serve
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "metadata"
@@ -50,15 +50,7 @@ def _env() -> dict[str, str]:
 
 
 def _barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        check=False,
-        cwd=cwd,
-        env=_env(),
-        text=True,
-        capture_output=True,
-        timeout=120,
-    )
+    return barca(cwd, *args, env=_env(), timeout=RUN)
 
 
 def _ok(result: subprocess.CompletedProcess) -> object:

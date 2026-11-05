@@ -96,7 +96,7 @@ To see the data:
   generators). Return data, not handles.
 - A duckdb relation is executed when the step ends, so any connection it uses must still be
   alive when the step returns.
-- **DuckDB connections.** Barca owns one DuckDB connection per worker process: duckdb's default
+- **DuckDB connections.** barca owns one DuckDB connection per worker process: duckdb's default
   connection, the same one `duckdb.sql(...)` and `duckdb.read_parquet(...)` use. Inputs
   annotated `duckdb.DuckDBPyRelation` are loaded on it and also bound as **views named after
   their parameters** for the duration of the step (dropped after the result is written), so
@@ -112,7 +112,7 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
 
 - **Shared state is intentional.** Steps in a worker run sequentially on that connection.
   User-created views, tables, macros and session settings persist, including after a step
-  fails; Barca cleans up only its bound input views after materialization. Use relation
+  fails; barca cleans up only its bound input views after materialization. Use relation
   operations, CTEs or unique object names with deliberate cleanup. Avoid catalog objects
   named after input parameters: an existing table is skipped during binding, while an
   existing view may be replaced and then dropped. There is no per-step namespace isolation.

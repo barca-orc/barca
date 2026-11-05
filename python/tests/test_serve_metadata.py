@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from .test_serve_robustness import Server, _free_port, barca
+from .helpers import QUICK, clean_env, free_port
+from .test_serve_robustness import barca
 
 PIPELINE = """
 from barca import asset, task, Schedule
@@ -55,15 +56,28 @@ def broken(project: Path, how: str, env: str | None = None) -> Path:
     return db
 
 
-def serve(project: Path, *args: str):
-    return barca(project, "serve", "pipeline.py", "--port", str(_free_port()), *args, timeout=60)
+@pytest.fixture()
+def serve(project, serve):
+    """The shared `serve` factory with this module's environment (a pool of two workers)."""
+
+    def start(*args: str, **options):
+        options.setdefault("env", clean_env(BARCA_POOL_SIZE="2"))
+        return serve(*args, **options)
+
+    return start
+
+
+def serve_once(project: Path, *args: str):
+    """`barca serve` run to completion: a server that refuses to start exits before binding."""
+    port = str(free_port())
+    return barca(project, "serve", "pipeline.py", "--port", port, *args, timeout=QUICK)
 
 
 @pytest.mark.parametrize("how", ["junk", "future"])
 def test_a_writer_serve_on_a_database_it_cannot_use_exits_3_before_binding(project, how):
     db = broken(project, how)
     before = db.read_bytes()
-    out = serve(project)
+    out = serve_once(project)
     assert out.returncode == 3, out.stderr
     assert "serving on" not in out.stderr, "nothing may bind"
     assert "scheduler disabled" not in out.stderr
@@ -87,146 +101,119 @@ NOTE_EMPTY = (
 )
 
 
-def test_a_writer_serve_initializes_an_empty_database(project):
+def test_a_writer_serve_initializes_an_empty_database(project, serve):
     # An empty file holds no history: a `touch`, a backup tool or a reader that opened the
     # path first leaves one, and the server starts on it as on a new database (#537).
     db = broken(project, "empty")
-    server = Server(project, "--no-schedule")
-    try:
-        log = server.log.read_text()
-        assert log.splitlines().count(NOTE_EMPTY) == 1, log
-        assert "metadata .barca/metadata.db (db format 1)" in log, log
-        assert server.request("GET", "/health")[1]["metadata_error"] is None
-        assert server.request("GET", "/state")[0] == 200
-    finally:
-        server.stop()
+    server = serve("--no-schedule")
+    log = server.stderr
+    assert log.splitlines().count(NOTE_EMPTY) == 1, log
+    assert "metadata .barca/metadata.db (db format 1)" in log, log
+    assert server.request("GET", "/health")[1]["metadata_error"] is None
+    assert server.request("GET", "/state")[0] == 200
     assert db.stat().st_size > 0
 
 
-def test_a_read_only_server_reads_an_empty_database_as_no_history(project):
+def test_a_read_only_server_reads_an_empty_database_as_no_history(project, serve):
     db = broken(project, "empty")
-    server = Server(project, "--read-only")
-    try:
-        log = server.log.read_text()
-        assert "metadata .barca/metadata.db (not created yet)" in log, log
-        assert (
-            "[barca] note: the metadata DB .barca/metadata.db is empty (0 bytes): no history yet"
-        ) in log, log
-        assert server.request("GET", "/health")[1]["metadata_error"] is None
-        assert server.request("GET", "/state")[0] == 200
-    finally:
-        server.stop()
+    server = serve("--read-only")
+    log = server.stderr
+    assert "metadata .barca/metadata.db (not created yet)" in log, log
+    assert (
+        "[barca] note: the metadata DB .barca/metadata.db is empty (0 bytes): no history yet"
+    ) in log, log
+    assert server.request("GET", "/health")[1]["metadata_error"] is None
+    assert server.request("GET", "/state")[0] == 200
     assert db.read_bytes() == b"", "a read-only server writes nothing"
 
 
 def test_a_future_format_says_so(project):
     broken(project, "future")
-    out = serve(project)
+    out = serve_once(project)
     assert out.returncode == 3
     assert "metadata schema version 99 is not supported" in out.stderr, out.stderr
     assert "upgrade barca" in out.stderr
 
 
-def test_the_startup_line_names_the_env_store_metadata_db_and_format(project):
+def test_the_startup_line_names_the_env_store_metadata_db_and_format(project, serve):
     assert barca(project, "get", "quick", "pipeline.py").returncode == 0
-    server = Server(project)
-    try:
-        log = server.log.read_text()
-        line = (
-            "[barca] env default (built-in default); artifact store local (.barca/artifacts); "
-            "metadata .barca/metadata.db (db format 1)"
-        )
-        assert log.splitlines().count(line) == 1, log
-        status, health = server.request("GET", "/health")
-        assert status == 200
-        assert health["scheduler_enabled"] is True
-        assert health["metadata_error"] is None
-    finally:
-        server.stop()
+    server = serve()
+    log = server.stderr
+    line = (
+        "[barca] env default (built-in default); artifact store local (.barca/artifacts); "
+        "metadata .barca/metadata.db (db format 1)"
+    )
+    assert log.splitlines().count(line) == 1, log
+    status, health = server.request("GET", "/health")
+    assert status == 200
+    assert health["scheduler_enabled"] is True
+    assert health["metadata_error"] is None
 
 
-def test_a_writer_with_no_database_yet_creates_none_at_startup(project):
-    server = Server(project, "--no-schedule")
-    try:
-        assert "metadata .barca/metadata.db (not created yet)" in server.log.read_text()
-    finally:
-        server.stop()
+def test_a_writer_with_no_database_yet_creates_none_at_startup(project, serve):
+    server = serve("--no-schedule")
+    assert "metadata .barca/metadata.db (not created yet)" in server.stderr
     assert not (project / ".barca" / "metadata.db").exists()
 
 
-def test_health_says_the_scheduler_is_off_with_no_schedule(project):
-    server = Server(project, "--no-schedule")
-    try:
-        health = server.request("GET", "/health")[1]
-        assert health["scheduler_enabled"] is False
-        assert health["metadata_error"] is None
-    finally:
-        server.stop()
+def test_health_says_the_scheduler_is_off_with_no_schedule(project, serve):
+    server = serve("--no-schedule")
+    health = server.request("GET", "/health")[1]
+    assert health["scheduler_enabled"] is False
+    assert health["metadata_error"] is None
 
 
-def test_a_read_only_server_keeps_serving_and_reports_the_error(project):
+def test_a_read_only_server_keeps_serving_and_reports_the_error(project, serve):
     db = broken(project, "junk")
     before = db.read_bytes()
-    server = Server(project, "--read-only")
-    try:
-        log = server.log.read_text()
-        assert "metadata .barca/metadata.db (unusable)" in log, log
-        assert "[barca] warning: the metadata DB .barca/metadata.db cannot be used" in log
-        status, health = server.request("GET", "/health")
-        assert status == 200
-        assert health["read_only"] is True
-        assert health["scheduler_enabled"] is False
-        assert ".barca/metadata.db cannot be used" in health["metadata_error"]
+    server = serve("--read-only")
+    log = server.stderr
+    assert "metadata .barca/metadata.db (unusable)" in log, log
+    assert "[barca] warning: the metadata DB .barca/metadata.db cannot be used" in log
+    status, health = server.request("GET", "/health")
+    assert status == 200
+    assert health["read_only"] is True
+    assert health["scheduler_enabled"] is False
+    assert ".barca/metadata.db cannot be used" in health["metadata_error"]
 
-        # A route that reads history answers with the structured error, not a SQL error.
-        status, body = server.request("GET", "/state")
-        assert status == 500
-        assert body["kind"] == "infra"
-        assert body["code"] == 3
-        assert body["reason"] == "metadata_unusable"
-        assert ".barca/metadata.db" in body["error"]
-        assert REMEDIATION in body["remediation"]
-        assert "Parse error" not in body["error"]
-    finally:
-        server.stop()
+    # A route that reads history answers with the structured error, not a SQL error.
+    status, body = server.request("GET", "/state")
+    assert status == 500
+    assert body["kind"] == "infra"
+    assert body["code"] == 3
+    assert body["reason"] == "metadata_unusable"
+    assert ".barca/metadata.db" in body["error"]
+    assert REMEDIATION in body["remediation"]
+    assert "Parse error" not in body["error"]
     assert db.read_bytes() == before
 
 
-def test_a_read_only_server_with_no_database_yet_says_so(project):
-    server = Server(project, "--read-only")
-    try:
-        assert "metadata .barca/metadata.db (not created yet)" in server.log.read_text()
-        assert server.request("GET", "/health")[1]["metadata_error"] is None
-    finally:
-        server.stop()
+def test_a_read_only_server_with_no_database_yet_says_so(project, serve):
+    server = serve("--read-only")
+    assert "metadata .barca/metadata.db (not created yet)" in server.stderr
+    assert server.request("GET", "/health")[1]["metadata_error"] is None
     assert not (project / ".barca" / "metadata.db").exists()
 
 
-def test_a_stray_empty_root_database_beside_a_named_env_is_warned_about(project):
+def test_a_stray_empty_root_database_beside_a_named_env_is_warned_about(project, serve):
     broken(project, "empty")
-    server = Server(project, "--env", "prod")
-    try:
-        log = server.log.read_text()
-        assert "metadata .barca/envs/prod/metadata.db (not created yet)" in log, log
-        warning = (
-            "[barca] warning: .barca/metadata.db is not this server's metadata DB "
-            "(env prod uses .barca/envs/prod/metadata.db) and cannot be used "
-            "(it is empty (0 bytes))"
-        )
-        assert sum(line.startswith(warning) for line in log.splitlines()) == 1, log
-        # The stray file does not stop the cache size check either.
-        assert "cache size check failed" not in log
-    finally:
-        server.stop()
+    server = serve("--env", "prod")
+    log = server.stderr
+    assert "metadata .barca/envs/prod/metadata.db (not created yet)" in log, log
+    warning = (
+        "[barca] warning: .barca/metadata.db is not this server's metadata DB "
+        "(env prod uses .barca/envs/prod/metadata.db) and cannot be used "
+        "(it is empty (0 bytes))"
+    )
+    assert sum(line.startswith(warning) for line in log.splitlines()) == 1, log
+    # The stray file does not stop the cache size check either.
+    assert "cache size check failed" not in log
 
 
-def test_a_valid_root_database_beside_a_named_env_is_not_warned_about(project):
+def test_a_valid_root_database_beside_a_named_env_is_not_warned_about(project, serve):
     assert barca(project, "get", "quick", "pipeline.py").returncode == 0
-    server = Server(project, "--env", "prod")
-    try:
-        assert "is not this server's metadata DB" not in server.log.read_text()
-    finally:
-        server.stop()
+    server = serve("--env", "prod")
+    assert "is not this server's metadata DB" not in server.stderr
 
 
 def test_get_on_a_database_it_cannot_use_names_it(project):

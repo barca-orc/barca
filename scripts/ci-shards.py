@@ -26,6 +26,12 @@ refresh a map from a run (only the files in the report are replaced):
     pytest python/tests -n 4 --dist loadscope --junitxml=/tmp/junit.xml
     python3 scripts/ci-shards.py --update-durations /tmp/junit.xml [--emulators]
 
+CI's full tier does this for `with_emulators` from its shards' reports and uploads the result
+as the `ci-test-durations` artifact (the `durations` job); `scripts/release.sh` merges the
+newest one into the committed file (entries for files that no longer exist are dropped):
+
+    python3 scripts/ci-shards.py --merge-durations ci-test-durations.json
+
 Assignment is deterministic: longest file first, onto the shard whose estimated length
 (its tests over the workers, but no less than its longest file) grows least, ties to the
 lower total, then the lower shard. Every shard job computes the same split.
@@ -179,6 +185,21 @@ def update_durations(junit: Path, emulators: bool) -> int:
     return 0
 
 
+def merge_durations(source: Path) -> int:
+    files = set(test_files())
+    incoming = json.loads(source.read_text())
+    data = load_all()
+    merged = 0
+    for name in MAPS:
+        entries = {f: float(t) for f, t in incoming.get(name, {}).items() if f in files}
+        data[name].update(entries)
+        merged += len(entries)
+    data = {m: dict(sorted((f, t) for f, t in data[m].items() if f in files)) for m in MAPS}
+    DURATIONS.write_text(json.dumps(data, indent=1) + "\n")
+    print(f"merged {merged} durations from {source}", file=sys.stderr)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--shards", type=int, help="number of shards")
@@ -198,9 +219,18 @@ def main() -> int:
         metavar="JUNIT_XML",
         help="update a duration map from a pytest --junitxml report",
     )
+    ap.add_argument(
+        "--merge-durations",
+        type=Path,
+        metavar="JSON",
+        help="merge another copy of the durations file (CI's ci-test-durations artifact) into"
+        " scripts/ci-test-durations.json, keeping only existing test files",
+    )
     args = ap.parse_args()
     if args.update_durations:
         return update_durations(args.update_durations, args.emulators)
+    if args.merge_durations:
+        return merge_durations(args.merge_durations)
     if not args.shards or args.shards < 1:
         ap.error("--shards N is required")
     if args.check:

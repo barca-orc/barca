@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Exercise an installed wheel and standalone CLI in a compiler-free runtime."""
 
 import argparse

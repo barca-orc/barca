@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// A partitioned node's keys whose latest recorded attempt failed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FailedKeys {
+pub(crate) struct FailedKeys {
     pub count: usize,
     /// The first of them in key order, at most 20.
     pub keys: Vec<String>,
@@ -15,7 +15,7 @@ pub struct FailedKeys {
 
 /// [`FailedKeys`] of every partitioned node with some. Reads `idx_mat_failed`, then one
 /// `idx_mat_node_latest` probe per failed key, so a node's healthy keys cost nothing.
-pub async fn failed_partition_keys(
+pub(crate) async fn failed_partition_keys(
     db_path: &str,
 ) -> Result<HashMap<String, FailedKeys>, BarcaError> {
     let _g = db_guard_for(db_path).await;

@@ -16,7 +16,8 @@ kind: string,
  */
 action?: string | null,
 /**
- * Real run only: `ran`, `cached`, `partial`, or `failed` (in a failed run's result).
+ * Real run only: `ran`, `cached`, `partial`, `skipped` or `failed` (in a failed run's
+ * result): a [`StepStatus`] spelling.
  */
 status?: string | null,
 /**

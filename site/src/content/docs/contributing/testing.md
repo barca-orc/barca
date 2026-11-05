@@ -221,7 +221,7 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 
 | Job | Check | Fast (pull request) | Merge (merge group) | Full (release, `ci-full`) |
 | --- | --- | --- | --- | --- |
-| **checks**: the CHANGELOG check, the specification checks and the TLA+ models | test | yes | yes | yes |
+| **checks**: the CHANGELOG check, the specification checks, the prek hooks of `prek.toml` (`uvx prek run --all-files`: ruff and ruff format, ty on `python/barca/`, `cargo fmt --check`, the version sync, `uv lock --check`, whitespace and YAML/TOML checks) and the TLA+ models (the jar is cached, its SHA-256 checked each run) | test | yes | yes | yes |
 | **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes | yes |
 | **changes**: the tier and its optional parts; every test file is in exactly one shard (`scripts/ci-shards.py --check`) and every file in `scripts/fast-tests.txt` exists | backends | yes | yes | yes |
 | **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes | yes |
@@ -233,6 +233,7 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **ui**: the web UI's typecheck, lint and unit tests, then the Playwright suites in `ui/e2e` and `ui/e2e-auth` against that wheel (not gating yet, see below) | backends | | | yes |
 | **proxy**: `test_reverse_proxy.sh` and `test_server_mode.sh` | backends | | | yes |
 | **python (1/3 .. 3/3, duckdb 1.x)**: the whole Python suite in shards, with the emulators, the duckdb 1.x rerun and the minute checkpoint test | backends | | | yes |
+| **durations**: merges the shards' JUnit reports into `scripts/ci-test-durations.json` and uploads it as the `ci-test-durations` artifact (not gating; see below) | | | | yes |
 
 The trade: a merge to `main` is checked by the Rust tests and the quick Python subset only, so
 a failure the full tier finds on a release pull request is in one of the pull requests merged
@@ -277,15 +278,28 @@ script's `--base` mode, which picks parts from the changed paths, is kept for lo
 emulators, and the shard split balances on the map that matches the run (counting the minute
 checkpoint test only when it runs). A shard's estimated length is its tests spread over its
 workers (counted as six of the eight, as measured), but no less than its longest file, which
-one worker runs. A file the map does not list is weighted by its size. To refresh a map after
-the suite changes shape, run the suite with `--junitxml` and pass the report to
+one worker runs. A file the map does not list is weighted by its size.
+
+The file is refreshed by the release process, not by hand. Each full-tier shard uploads its
+JUnit report (`junit-<shard>`), and the `durations` job merges them into the committed file
+with `scripts/ci-shards.py --update-durations <report> --emulators` (the full tier runs with
+the emulators, so it refreshes the `with_emulators` map), checks the split and uploads the
+result as the `ci-test-durations` artifact, kept 90 days. `scripts/release.sh` downloads the
+newest one (`gh api`), merges it with `scripts/ci-shards.py --merge-durations` (entries for
+files that no longer exist are dropped) and commits it with the version bump, so each release
+carries the previous release's measurements; without an artifact, or offline, it warns and
+keeps the committed file (`--durations <file>` merges a given copy, `--no-durations` skips
+it). The job is not gating: a failed shard still leaves a report, and nothing here can block a
+release. To refresh a map by hand, run the suite with `--junitxml` and pass the report to
 `scripts/ci-shards.py --update-durations` (add `--emulators` for a run with them).
 
 Cargo builds in the runner's local `target/` directory, incrementally (`CARGO_INCREMENTAL=1`).
 Each Rust job (clippy, rust-tests, build) restores that directory before the build from a
 cache entry keyed on the job, the rustc version, the `Cargo.lock` hash and the branch (a merge
 group starts from `main`'s latest), and saves a new entry after it under a key unique to the
-run. A merge group saves under `main`, since its commit becomes `main`; concurrent merge groups
+run (the composite actions `.depot/actions/rust-cache-restore` and `rust-cache-save`; the
+jobs that test against the wheel set up Python, uv and the wheel with
+`.depot/actions/setup-wheel`). A merge group saves under `main`, since its commit becomes `main`; concurrent merge groups
 write separate entries, and the next restore takes the newest.
 Building directly on Depot's shared cache disk caused truncated object files and invalid Rust
 metadata, including after target directories were separated by PR.

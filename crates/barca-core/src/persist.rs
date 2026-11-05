@@ -3,8 +3,10 @@
 //! configured integration.
 
 pub(crate) mod recording;
+use crate::db::materializations::{NewMaterialization, StepInsert};
+use crate::db::runs::advance_steps_executed;
 pub(crate) use recording::record_post;
-use recording::{StepInsert, advance_steps_executed, write_terminal_ledger};
+use recording::write_terminal_ledger;
 
 use crate::BarcaError;
 use crate::dag::Dag;
@@ -75,76 +77,6 @@ pub(crate) struct RunLedger<'a> {
     pub(crate) touched: &'a [String],
 }
 
-/// One successful step as a `materializations` row. Built when the step finishes (for the
-/// [`StepRecorder`]) and again from the ledger at the end of the run.
-#[derive(Debug, Clone)]
-pub(crate) struct StepRow {
-    node_id: String,
-    run_hash: String,
-    path: String,
-    format: String,
-    size_bytes: u64,
-    elapsed_seconds: Option<f64>,
-    attempts: u32,
-    sinks_json: Option<String>,
-    cpu_seconds: Option<f64>,
-    max_rss_bytes: Option<u64>,
-    /// Digest of the producer-owned serialized bytes.
-    output_hash: Option<String>,
-    observation_hash: Option<String>,
-    /// The run hash's components ([`crate::changes::step_components_json`]).
-    pub(crate) components: Option<String>,
-    /// The batched call that computed it (RFC-0013).
-    pub(crate) batch: Option<String>,
-}
-
-impl StepRow {
-    /// From the artifact a worker reported for a finished step. Reads the same fields the
-    /// end-of-run ledger is built from, so both writers produce the same row.
-    pub(crate) fn from_artifact(
-        node_id: &str,
-        run_hash: &str,
-        artifact: &serde_json::Value,
-        attempts: u32,
-    ) -> Self {
-        let str_of = |key: &str| artifact.get(key).and_then(|v| v.as_str());
-        Self {
-            node_id: node_id.to_string(),
-            run_hash: run_hash.to_string(),
-            path: str_of("path").unwrap_or("").to_string(),
-            format: str_of("format").unwrap_or("json").to_string(),
-            size_bytes: artifact
-                .get("size_bytes")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            elapsed_seconds: artifact.get("elapsed_seconds").and_then(|v| v.as_f64()),
-            attempts,
-            sinks_json: artifact
-                .get("sinks")
-                .and_then(|v| v.as_array())
-                .filter(|sinks| !sinks.is_empty())
-                .map(|sinks| serde_json::Value::from(sinks.clone()).to_string()),
-            cpu_seconds: artifact.get("cpu_seconds").and_then(|v| v.as_f64()),
-            max_rss_bytes: artifact.get("max_rss_bytes").and_then(|v| v.as_u64()),
-            output_hash: str_of("content_hash").map(str::to_string),
-            observation_hash: None,
-            components: None,
-            batch: str_of("batch").map(str::to_string),
-        }
-    }
-
-    pub(crate) fn with_observation(mut self, revision: Option<String>) -> Self {
-        self.observation_hash = revision;
-        self
-    }
-
-    /// With the run hash's components recorded ([`crate::changes`]).
-    pub(crate) fn with_components(mut self, components: Option<String>) -> Self {
-        self.components = components;
-        self
-    }
-}
-
 /// How often, at most, the recorder writes finished steps to the metadata DB. A finished step
 /// is recorded within about this long of finishing; a run shorter than this records everything
 /// in the one end-of-run write, exactly as before, so short runs pay nothing.
@@ -179,7 +111,7 @@ pub(crate) struct BackupCheckpoints {
 }
 
 pub(crate) struct StepRecorder {
-    tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
+    tx: tokio::sync::mpsc::UnboundedSender<NewMaterialization>,
     stop: CancellationToken,
     task: Option<tokio::task::JoinHandle<()>>,
     /// Nanoseconds spent handling finished steps and writing their rows.
@@ -218,7 +150,7 @@ impl StepRecorder {
         record_interval: std::time::Duration,
         checkpoint_interval: std::time::Duration,
     ) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StepRow>();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewMaterialization>();
         let checkpoint_interval = backups
             .as_ref()
             .and_then(|b| b.cfg.backup_interval.0)
@@ -325,7 +257,7 @@ impl StepRecorder {
     }
 
     /// Queue a finished step. Never blocks.
-    pub(crate) fn record(&self, row: StepRow) {
+    pub(crate) fn record(&self, row: NewMaterialization) {
         self.tx.send(row).ok();
     }
 
@@ -333,7 +265,7 @@ impl StepRecorder {
     /// confirming the stored bytes; an enqueued or abandoned upload records nothing.
     pub(crate) fn after_upload(
         &self,
-        mut row: StepRow,
+        mut row: NewMaterialization,
         store: String,
     ) -> impl FnOnce(Option<String>) + Send + 'static {
         let tx = self.tx.clone();
@@ -370,14 +302,18 @@ impl Drop for StepRecorder {
 /// Append `rows` for a run that is still in progress, and advance its `steps_executed` so
 /// `barca history` shows how far it has got.
 #[cfg(test)]
-async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<u64, BarcaError> {
+async fn record_steps(
+    db_path: &str,
+    run_id: &str,
+    rows: &[NewMaterialization],
+) -> Result<u64, BarcaError> {
     record_steps_with_until(db_path, run_id, rows, helper_proc::Until::done()).await
 }
 
 async fn record_steps_with_until(
     db_path: &str,
     run_id: &str,
-    rows: &[StepRow],
+    rows: &[NewMaterialization],
     until: helper_proc::Until<'_>,
 ) -> Result<u64, BarcaError> {
     let _g = until.admit(db::db_guard()).await?;
@@ -461,10 +397,7 @@ pub(crate) fn telemetry_report(
     } = run;
     let job = l.job;
     let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
-    let start_unix_ns = started
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let start_unix_ns = crate::time::unix_nanos(started) as u64;
     let duration_ns = ns(l.elapsed);
     let contexts: HashMap<String, Arc<NodeContext>> = crate::telemetry::node_contexts(dag)
         .into_iter()
@@ -777,12 +710,12 @@ mod persist_tests {
         }
 
         /// The row the recorder would write for `node` when it finishes.
-        fn row(&self, node: &str) -> StepRow {
+        fn row(&self, node: &str) -> NewMaterialization {
             let artifact = serde_json::json!({
                 "path": self.outputs[node].path, "format": "json", "size_bytes": 2,
                 "elapsed_seconds": 0.5,
             });
-            StepRow::from_artifact(node, &self.run_hashes[node], &artifact, 1)
+            NewMaterialization::from_artifact(node, &self.run_hashes[node], &artifact, 1)
         }
     }
 

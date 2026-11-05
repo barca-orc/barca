@@ -21,14 +21,15 @@ signals after fixed gaps; what it asserts holds for every interleaving.
 import json
 import os
 import signal
-import sqlite3
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
+
+from .helpers import RUN, SERVE, barca, clean_env, wait_until
+from .served import snapshot
 
 HOLD_SHIM = str(Path(__file__).resolve().parent / "hold")
 
@@ -57,14 +58,12 @@ def slow(numbers: list) -> int:
     return len(numbers)
 """
 
-DEADLINE = 60
 # `barca_core::interrupt::WRAP_UP_LIMIT`: how long a cancelled run may spend on its backup.
 WRAP_UP_LIMIT = 10
 
 
 def env(store: Path, hold: str = "", hold_dir: Path | None = None, stall: bool = False) -> dict:
-    e = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    e["BARCA_REMOTE_URI"] = str(store)
+    e = clean_env(BARCA_REMOTE_URI=str(store))
     if hold:
         e["PYTHONPATH"] = HOLD_SHIM + os.pathsep + e.get("PYTHONPATH", "")
         e["BARCA_TEST_HOLD"] = f"{hold}:{hold_dir}"
@@ -74,25 +73,7 @@ def env(store: Path, hold: str = "", hold_dir: Path | None = None, stall: bool =
 
 
 def cli(root: Path, store: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env(store),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
-
-
-def wait_until(done, what: str, proc: subprocess.Popen | None = None) -> None:
-    deadline = time.monotonic() + DEADLINE
-    while not done():
-        if proc is not None and proc.poll() is not None:
-            raise AssertionError(f"barca exited before {what}")
-        if time.monotonic() > deadline:
-            raise AssertionError(f"timed out waiting for {what}")
-        time.sleep(0.02)
+    return barca(root, *args, env=env(store), timeout=SERVE)
 
 
 def alive(pid: int) -> bool:
@@ -135,8 +116,8 @@ class Run:
     def _wait(self, done, what: str) -> None:
         """`wait_until`, and if it gives up: what barca printed and what its job looks like."""
         try:
-            wait_until(done, what, self.proc)
-        except AssertionError as failed:
+            wait_until(done, what, interval=0.02, proc=self.proc)
+        except (AssertionError, pytest.fail.Exception) as failed:
             job = subprocess.run(
                 ["ps", "-o", "pid,ppid,stat,etime,command", "-g", str(self.proc.pid)],
                 capture_output=True,
@@ -168,7 +149,7 @@ class Run:
         except (ProcessLookupError, PermissionError):
             pass  # it ended meanwhile (macOS answers EPERM for a group of exited processes)
 
-    def end(self, timeout: float = DEADLINE) -> str:
+    def end(self, timeout: float = RUN) -> str:
         """Wait for barca to exit; returns its stderr."""
         self.stdout, _ = self.proc.communicate(timeout=timeout)
         self.stderr = self.err_path.read_text()
@@ -189,16 +170,15 @@ def history(root: Path, store: Path) -> list[dict]:
 
 def recorded(root: Path) -> dict[str, str]:
     """node name -> artifact path, for every successful materialization recorded locally."""
-    db = sqlite3.connect(root / ".barca" / "metadata.db")
-    try:
+    with snapshot(root) as db:
+        if db is None:
+            return {}
         return {
             node.rsplit(":", 1)[1]: path
             for node, path in db.execute(
                 "select node_id, artifact_path from materializations where status = 'success'"
             )
         }
-    finally:
-        db.close()
 
 
 def temp_files(*roots: Path) -> list[str]:
@@ -331,7 +311,7 @@ def test_ctrl_c_during_a_step_with_an_upload_in_flight(project, whole_group):
     run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at(
         "put"
     )
-    wait_until((run.root / "slow.started").exists, "the second step to start", run.proc)
+    wait_until((run.root / "slow.started").exists, "the second step to start", proc=run.proc)
     run.sigint(whole_group)
     run.end()
 
@@ -426,7 +406,7 @@ def test_a_wrap_up_backup_that_fails_is_a_note_and_the_exit_code_stays_130(proje
     run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at(
         "put"
     )
-    wait_until((run.root / "slow.started").exists, "the second step to start", run.proc)
+    wait_until((run.root / "slow.started").exists, "the second step to start", proc=run.proc)
     # Something the backup cannot get past: a file where its directory belongs.
     (store / "default" / "state").mkdir(parents=True)
     (store / "default" / "state" / "backups").write_text("in the way")
@@ -478,7 +458,7 @@ def test_a_second_ctrl_c_while_a_worker_reports_the_first_prints_no_traceback(tm
         """
     )
     proc = subprocess.run(
-        [sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True, timeout=120
+        [sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True, timeout=RUN
     )
     assert proc.stdout.strip() == "reported False KeyboardInterrupt", proc.stderr
     assert "Traceback" not in proc.stderr, proc.stderr
@@ -512,12 +492,14 @@ def test_helpers_exit_on_their_own_when_barca_is_killed(project, phase):
     assert helpers and all(alive(pid) for pid in helpers)
 
     run.proc.kill()
-    run.proc.wait(timeout=DEADLINE)
+    run.proc.wait(timeout=RUN)
     # Well within ten seconds; in practice at once.
-    deadline = time.monotonic() + 10
-    while any(alive(pid) for pid in helpers) and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert [pid for pid in helpers if alive(pid)] == [], "a helper outlived barca"
+    wait_until(
+        lambda: not any(alive(pid) for pid in helpers),
+        "the helpers to exit (a helper outlived barca)",
+        timeout=10,
+        interval=0.02,
+    )
     err = run.err_path.read_text()
     assert "Traceback" not in err, err
     # No half-written artifact or object. (The staged copy a killed backup leaves in
@@ -576,13 +558,13 @@ def test_any_number_of_ctrl_c_at_any_gap_ends_cancelled(
     run = Run(root, store, points, "get", target, "-o", "value", "--json", "--agent", stall=stalled)
     run.held_at(points.split(",")[0])
     if phase == "step":
-        wait_until((run.root / "slow.started").exists, "the slow step to start", run.proc)
+        wait_until((run.root / "slow.started").exists, "the slow step to start", proc=run.proc)
     if phase == "upload":
         run.printed("1/1 steps | done")
 
     for n in range(count):
         if n:
-            time.sleep(gap)
+            time.sleep(gap)  # fixed wait: the matrix sends the next signal after this gap
         run.sigint(whole_group)
     # Never longer than the wrap-up limit plus the time to stop the helpers.
     run.end(timeout=WRAP_UP_LIMIT + 60)

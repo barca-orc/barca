@@ -8,7 +8,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
 /// The statuses a recorded run can have: how it ended, `running` while it is in progress, and
 /// `interrupted` for a run whose process died before recording an outcome.
-pub const STATUSES: &[&str] = &[
+pub(crate) const STATUSES: &[&str] = &[
     "success",
     "failed",
     "cancelled",
@@ -18,7 +18,7 @@ pub const STATUSES: &[&str] = &[
 ];
 
 /// The values of `--triggered-by`.
-pub const TRIGGERS: &[&str] = &["manual", "api", "schedule", "client"];
+pub(crate) const TRIGGERS: &[&str] = &["manual", "api", "schedule", "client"];
 
 /// Which runs `barca history` lists. Empty: every run.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -151,7 +151,7 @@ fn names_node(run: &RunRecord, node: &str) -> bool {
 
 /// `--since`: a duration back from `now` (`45s`, `30m`, `24h`, `7d`, `2w`), an RFC 3339 time
 /// (`2026-10-22T08:00:00Z`), or a UTC date (`2026-10-22`) or time (`2026-10-22 08:00:00`).
-pub fn parse_since(text: &str, now: DateTime<Utc>) -> Result<NaiveDateTime, String> {
+pub(crate) fn parse_since(text: &str, now: DateTime<Utc>) -> Result<NaiveDateTime, String> {
     let t = text.trim();
     if let Some((digits, unit)) = t.char_indices().last().and_then(|(i, c)| {
         (c.is_ascii_alphabetic() && i > 0 && t[..i].bytes().all(|b| b.is_ascii_digit()))
@@ -187,7 +187,7 @@ pub fn parse_since(text: &str, now: DateTime<Utc>) -> Result<NaiveDateTime, Stri
 
 /// A stored or typed time as UTC: RFC 3339 (any offset), or SQLite's `datetime('now')`
 /// (`2026-10-22 08:00:00`, UTC).
-pub fn stored_time(text: &str) -> Option<NaiveDateTime> {
+pub(crate) fn stored_time(text: &str) -> Option<NaiveDateTime> {
     let t = text.trim();
     if let Ok(at) = DateTime::parse_from_rfc3339(t) {
         return Some(at.with_timezone(&Utc).naive_utc());

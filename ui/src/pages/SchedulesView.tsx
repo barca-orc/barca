@@ -1,7 +1,7 @@
 import { match } from "ts-pattern";
 import { Absolute, Button, StatusBadge, Tag } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
-import { severityStatus } from "@/lib/assetTable";
+import { LAST_ATTEMPT_FAILED, cacheStateTone } from "@/lib/cacheStateDisplay";
 import { inPipeline } from "@/lib/pipeline";
 import type { Remote } from "@/lib/remote";
 import { scheduleRows, type ScheduleRow } from "@/lib/schedules";
@@ -177,15 +177,14 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
                       : "paused until resumed"
                   }
                 >
-                  <StatusBadge status="skipped" label="paused" size="sm" />
+                  <StatusBadge tone="neutral" label="paused" size="sm" />
                 </span>
               ) : (
-                r.severity && (
-                  <StatusBadge
-                    status={severityStatus(r.severity)}
-                    label={r.severity.replace("_", " ")}
-                    size="sm"
-                  />
+                r.state && (
+                  <span className="barca-state-line">
+                    <StatusBadge tone={cacheStateTone(r.state)} label={r.state} size="sm" />
+                    {r.lastFailed && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
+                  </span>
                 )
               )}
             </td>

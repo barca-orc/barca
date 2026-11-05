@@ -1,30 +1,33 @@
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
+// Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
+// `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
+
 #[doc(hidden)]
+pub mod artifact_format;
 pub mod backup;
 pub mod batch;
 pub mod cache;
 pub mod cache_state;
-pub mod changes;
+pub(crate) mod changes;
 pub mod commands;
-pub mod cone;
+pub(crate) mod cone;
 pub mod config;
-pub mod coordinator;
-pub mod cost;
+pub(crate) mod coordinator;
+pub(crate) mod cost;
 pub mod dag;
 mod dataset_sinks;
 pub mod db;
-mod db_schema;
-pub mod decorator_args;
-pub mod definition;
+pub(crate) mod decorator_args;
+pub(crate) mod definition;
 pub mod diagnostics;
 pub mod discover;
 pub mod dispatch;
-pub mod env_reads;
-pub mod envdeps;
+pub(crate) mod env_reads;
+pub(crate) mod envdeps;
 pub mod envelope;
-pub mod events;
+pub(crate) mod events;
 pub(crate) mod execution;
 pub mod freshness;
 pub mod gc;
@@ -36,9 +39,10 @@ pub mod http;
 mod incremental;
 mod input_params;
 pub mod interrupt;
-pub mod io_loop;
+pub(crate) mod io_loop;
 pub mod jsonlog;
-pub mod keyed;
+pub(crate) mod keyed;
+pub mod layout;
 pub mod ledger;
 pub mod lines;
 pub mod load;
@@ -49,15 +53,15 @@ pub mod outcome;
 pub mod parse;
 pub mod pending_uploads;
 mod persist;
-pub mod planner;
-pub mod project_modules;
-pub mod protocol;
+pub(crate) mod planner;
+pub(crate) mod project_modules;
+pub(crate) mod protocol;
 pub mod queries;
 mod recover;
 pub mod report;
 mod result_journal;
 pub mod results;
-pub mod run_host;
+pub(crate) mod run_host;
 pub mod run_logs;
 mod run_owner;
 pub mod schedule;
@@ -65,26 +69,30 @@ pub mod selection;
 pub mod serve;
 mod sink_args;
 mod sink_publications;
+#[cfg(test)]
+mod source_scan;
 pub mod sql;
 pub(crate) mod state_validate;
 pub mod status;
+pub mod step_status;
+pub mod store_inspect;
 mod store_sync;
 pub mod suggest;
 pub mod targets;
 pub mod telemetry;
 pub mod term;
 pub mod test_hooks;
+pub mod time;
 pub mod transfer;
-pub mod unrelated_modules;
-pub mod unused_inputs;
+pub(crate) mod unrelated_modules;
+pub(crate) mod unused_inputs;
 pub mod values;
 pub mod warnings;
 
 pub use dag::Dag;
 pub use events::{LogStream, RunEvent};
-pub use execution::{Sizing, sizing};
+pub use execution::sizing;
 pub use model::*;
-pub use planner::{ExecutionPlan, ResourceConfig, expand_partition_combos};
 /// Re-exported so callers (CLI, server) share one token type without depending
 /// on tokio-util directly.
 pub use tokio_util::sync::CancellationToken;
@@ -235,49 +243,7 @@ pub fn safe_node_id(node_id: &str) -> String {
 }
 
 #[cfg(test)]
-mod failed_step_tests {
-    use super::*;
-
-    fn step(message: &str) -> FailedStep {
-        FailedStep {
-            node: "p.py:oops".into(),
-            message: message.into(),
-            phase: None,
-            artifact_dir: None,
-            run: None,
-        }
-    }
-
-    #[test]
-    fn splits_exception_line_from_traceback_frames() {
-        let s = step(
-            "ZeroDivisionError: division by zero\n  File \"p.py\", line 5, in oops\n    return 1 / 0\n",
-        );
-        assert_eq!(s.summary(), "ZeroDivisionError: division by zero");
-        assert_eq!(
-            s.traceback(),
-            Some("  File \"p.py\", line 5, in oops\n    return 1 / 0")
-        );
-    }
-
-    #[test]
-    fn multi_line_message_without_traceback() {
-        let s = step("worker disconnected");
-        assert_eq!(s.summary(), "worker disconnected");
-        assert_eq!(s.traceback(), None);
-        let s = step("ValueError: bad\nsecond line");
-        assert_eq!(s.summary(), "ValueError: bad\nsecond line");
-    }
-
-    #[test]
-    fn safe_node_id_matches_the_python_artifact_layout() {
-        assert_eq!(safe_node_id("pipeline.py:fetch"), "pipeline.py--fetch");
-        assert_eq!(
-            safe_node_id("src/p.py:f[region=eu,day=1]"),
-            "src__p.py--f_region_eu_day_1"
-        );
-    }
-}
+mod failed_step_tests;
 
 mod wire;
 

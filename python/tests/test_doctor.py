@@ -9,17 +9,17 @@ from pathlib import Path
 
 from barca import __version__
 from barca.api import _find_binary
+from .helpers import QUICK, RUN, barca, clean_env
 
 
 def cli(root, *args, code=0, binary=None, **overrides):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     proc = subprocess.run(
         [binary or _find_binary(), "doctor", *args],
         cwd=root,
-        env={**env, **overrides},
+        env=clean_env(scrub=("BARCA_",), **overrides),
         capture_output=True,
         text=True,
-        timeout=45,
+        timeout=RUN,
     )
     assert proc.returncode == code, proc.stderr
     return proc
@@ -121,15 +121,10 @@ def test_healthy_metadata_is_checked_without_mutating_it(tmp_path):
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset\n@asset()\ndef value(): return 42\n"
     )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    subprocess.run(
-        [_find_binary(), "get", "value", "--json"],
-        cwd=tmp_path,
-        env=env,
-        check=True,
-        capture_output=True,
-        timeout=30,
+    seeded = barca(
+        tmp_path, "get", "value", "--json", env=clean_env(scrub=("BARCA_",)), timeout=QUICK
     )
+    assert seeded.returncode == 0, seeded.stderr
     metadata = tmp_path / ".barca" / "metadata.db"
     before = hashlib.sha256(metadata.read_bytes()).hexdigest()
     _, by_name = checks(cli(tmp_path, "--json"))

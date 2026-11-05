@@ -5,7 +5,7 @@ use barca_core::{
     CancellationToken,
     telemetry::{self, Integration, ServerPhase, ServerReport},
 };
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// How long a stopping server waits for its telemetry to flush.
 pub(crate) const FINISH_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
@@ -50,11 +50,7 @@ fn report(state: &AppState, phase: ServerPhase) -> ServerReport {
         .unwrap_or(0);
     ServerReport {
         phase,
-        start_unix_ns: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            .min(u64::MAX as u128) as u64,
+        start_unix_ns: barca_core::time::now_nanos_u64(),
         files: state.config.files.len(),
         nodes,
         schedules,

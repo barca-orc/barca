@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from barca import _artifacts, _duckdb, _runtime, _storage, _worker
+from barca import _artifacts, _duckdb, _range_cache, _runtime, _storage, _worker
 
 duckdb = pytest.importorskip("duckdb")
 pl = pytest.importorskip("polars")
@@ -254,7 +254,7 @@ def test_the_users_own_remote_queries_keep_their_own_filesystem(store, tmp_path,
 
 
 def _range_cache_dirs() -> list[Path]:
-    root = Path(_storage.RANGE_CACHE_DIR)
+    root = Path(_range_cache.RANGE_CACHE_DIR)
     return sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
 
 
@@ -336,8 +336,8 @@ def test_an_evicted_range_is_fetched_again(store, tmp_path, monkeypatch):
 
 def test_the_range_cache_key_needs_a_version_and_a_run_hash():
     info = {"size": 10, "ETag": '"abc"'}
-    key = _storage.range_cache_key("bucket/arts/n/abc123.parquet", info)
+    key = _range_cache.range_cache_key("bucket/arts/n/abc123.parquet", info)
     assert key is not None and key.startswith("abc123-")
-    assert _storage.range_cache_key("bucket/arts/n/abc123.parquet", {"size": 10}) is None
-    other = _storage.range_cache_key("bucket/arts/n/abc123.parquet", {**info, "ETag": '"def"'})
+    assert _range_cache.range_cache_key("bucket/arts/n/abc123.parquet", {"size": 10}) is None
+    other = _range_cache.range_cache_key("bucket/arts/n/abc123.parquet", {**info, "ETag": '"def"'})
     assert other != key

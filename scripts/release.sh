@@ -5,6 +5,8 @@
 #   scripts/release.sh 0.35.0 --dry-run   # everything local (worktree, bump, checks, commit);
 #                                         # no push, no PR; removes the worktree afterwards
 #   scripts/release.sh 0.35.0 --dry-run --keep   # keep the worktree (also kept on failure)
+#   scripts/release.sh 0.35.0 --durations ci-test-durations.json   # refresh from this file
+#   scripts/release.sh 0.35.0 --no-durations      # leave scripts/ci-test-durations.json alone
 #
 # It refuses unless: the trunk is clean, on main and equal to origin/main; X.Y.Z is greater
 # than the latest v* tag and the current version; neither the tag nor release/vX.Y.Z exists;
@@ -12,8 +14,11 @@
 # minor bump. Skipped versions and non-standard Pending headings are warnings.
 #
 # Then, in .worktrees/release-vX.Y.Z on branch release/vX.Y.Z off origin/main, it applies the
-# bump (scripts/bump-version.py), runs scripts/check-version-sync.sh, scripts/check-changelog.py,
-# scripts/changelog-section.py and the lock-file checks, commits `chore(release): vX.Y.Z`,
+# bump (scripts/bump-version.py), refreshes scripts/ci-test-durations.json from CI's newest
+# `ci-test-durations` artifact (the full tier's `durations` job measures the Python suite;
+# `gh api`, skipped with a warning when there is none or gh cannot reach GitHub), runs
+# scripts/check-version-sync.sh, scripts/check-changelog.py, scripts/changelog-section.py,
+# scripts/ci-shards.py --check and the lock-file checks, commits `chore(release): vX.Y.Z`,
 # pushes, opens the PR into main and enables `gh pr merge --squash --auto`.
 #
 # When the PR merges, .github/workflows/release-tag.yml tags the merge commit vX.Y.Z and starts
@@ -21,13 +26,15 @@
 # scripts/remove-worktree.sh release-vX.Y.Z.
 set -euo pipefail
 
-usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
-version="" dry=0 keep=0
+version="" dry=0 keep=0 durations=fetch durations_file=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) dry=1 ;;
         --keep) keep=1 ;;
+        --durations) durations=file; durations_file="${2:?--durations needs a file}"; shift ;;
+        --no-durations) durations=none ;;
         -h|--help) usage ;;
         -*) echo "error: unknown option $1" >&2; usage ;;
         *) [ -z "$version" ] || usage; version="${1#v}" ;;
@@ -36,6 +43,10 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$version" ] || usage
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must be X.Y.Z, got $version" >&2; exit 2; }
+if [ "$durations" = file ]; then
+    [ -f "$durations_file" ] || { echo "error: --durations $durations_file: no such file" >&2; exit 2; }
+    durations_file="$(cd "$(dirname "$durations_file")" && pwd)/$(basename "$durations_file")"
+fi
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { echo "==> $*" >&2; }
@@ -94,8 +105,33 @@ trap cleanup_dry EXIT
 step "bumping to $version"
 python3 "$here/bump-version.py" --root "$tree" "$version"
 
+# The per-file test durations CI's shard split balances on (scripts/ci-shards.py). The full
+# tier's `durations` job uploads a refreshed copy as the `ci-test-durations` artifact; the
+# newest one (usually the previous release's) is merged here, so the committed file follows
+# the suite. Only an attempt: no artifact or no GitHub leaves the file as it is.
+if [ "$durations" = fetch ]; then
+    step "refreshing scripts/ci-test-durations.json from CI's newest ci-test-durations artifact"
+    url="$(cd "$trunk" && gh api 'repos/{owner}/{repo}/actions/artifacts?name=ci-test-durations&per_page=1' \
+        --jq '.artifacts[0] | select(.expired == false) | .archive_download_url' 2>/dev/null)" || url=""
+    if [ -n "$url" ] && (cd "$trunk" && gh api "$url" > "$tree/.durations.zip" 2>/dev/null) &&
+        unzip -p "$tree/.durations.zip" ci-test-durations.json > "$tree/.durations.json" 2>/dev/null; then
+        durations_file="$tree/.durations.json"
+    else
+        echo "warning: no ci-test-durations artifact (none uploaded yet, expired, or gh is offline); keeping the committed durations" >&2
+    fi
+    rm -f "$tree/.durations.zip"
+fi
+if [ -n "$durations_file" ]; then
+    (cd "$tree" && python3 scripts/ci-shards.py --merge-durations "$durations_file" >&2)
+    rm -f "$tree/.durations.json"
+    [ -n "$(git -C "$tree" diff --name-only -- scripts/ci-test-durations.json)" ] ||
+        echo "scripts/ci-test-durations.json is already current" >&2
+fi
+
 step "checking the bump"
 (cd "$tree" && scripts/check-version-sync.sh >&2)
+shards="$(sed -n 's/^  PYTHON_SHARDS: *\([0-9]*\).*/\1/p' "$tree/.depot/workflows/ci.yml" | head -1)"
+(cd "$tree" && python3 scripts/ci-shards.py --shards "${shards:-3}" --check 2>&1 | tail -1 >&2)
 (cd "$tree" && python3 scripts/check-changelog.py --base origin/main >&2)
 (cd "$tree" && python3 scripts/changelog-section.py "$version" >/dev/null)
 (cd "$tree" && cargo metadata --locked --offline --format-version 1 --no-deps >/dev/null) ||
@@ -105,8 +141,11 @@ if command -v uv >/dev/null 2>&1; then
         die "uv.lock does not match the bumped pyproject.toml"
 fi
 expected="CHANGELOG.md Cargo.lock crates/barca-cli/Cargo.toml crates/barca-core/Cargo.toml crates/barca-server/Cargo.toml pyproject.toml python/barca/__init__.py uv.lock"
-changed="$(git -C "$tree" diff --name-only | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+changed="$(git -C "$tree" diff --name-only | grep -v '^scripts/ci-test-durations\.json$' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
 [ "$changed" = "$expected" ] || die "unexpected files changed: $changed"
+durations_note=""
+git -C "$tree" diff --quiet -- scripts/ci-test-durations.json ||
+    durations_note=" \`scripts/ci-test-durations.json\` is refreshed from CI's newest \`ci-test-durations\` artifact (the full tier's measured test durations)."
 git -C "$tree" diff --stat >&2
 
 # --no-verify: the hooks lint and type-check code this commit does not touch; the checks above
@@ -116,7 +155,7 @@ step "committed $(git -C "$tree" rev-parse --short HEAD) chore(release): $tag"
 
 notes="$(cd "$tree" && python3 scripts/changelog-section.py "$version")"
 body="$(cat <<EOF
-Release $tag: version bump across crates/*/Cargo.toml, Cargo.lock, pyproject.toml, uv.lock and \`barca.__version__\`; \`## Pending\` in CHANGELOG.md becomes \`## $version ($(date -u +%F))\`.
+Release $tag: version bump across crates/*/Cargo.toml, Cargo.lock, pyproject.toml, uv.lock and \`barca.__version__\`; \`## Pending\` in CHANGELOG.md becomes \`## $version ($(date -u +%F))\`.$durations_note
 
 Opened by \`scripts/release.sh\`. Squash auto-merge is on; when this merges, \`.github/workflows/release-tag.yml\` tags the merge commit \`$tag\` and starts the release workflow (wheels, GitHub Release, PyPI, barca.sh).
 

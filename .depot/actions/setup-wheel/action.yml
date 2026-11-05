@@ -1,0 +1,48 @@
+name: Set up Python and the barca wheel
+description: >-
+  Python, uv, the `barca-wheel` artifact CI's `build` job uploads (into dist-wheel/), and, by
+  default, `uv pip install --system` of that wheel. Used by the jobs that test against the wheel
+  (.depot/workflows/ci.yml).
+
+inputs:
+  python-version:
+    description: The Python to set up
+    default: "3.14"
+  uv-cache:
+    description: Cache uv's downloads, keyed on pyproject.toml (setup-uv's enable-cache)
+    default: "false"
+  install:
+    description: Install the wheel (`uv pip install --system dist-wheel/*.whl`); "false" only downloads it
+    default: "true"
+  packages:
+    description: Extra packages to install in the same `uv pip install`
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: ${{ inputs.uv-cache }}
+        cache-dependency-glob: pyproject.toml
+
+    - name: Download the wheel
+      uses: actions/download-artifact@v4
+      with:
+        name: barca-wheel
+        path: dist-wheel
+
+    - name: Install barca
+      if: inputs.install == 'true'
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        # shellcheck disable=SC2086  # PACKAGES is a space-separated list
+        uv pip install --system dist-wheel/*.whl $PACKAGES

@@ -18,16 +18,43 @@ crates/
   barca-cli/            ← CLI binary (the `barca` command)
     docs/               ← The manual: markdown topics embedded in the binary (`barca docs`)
   barca-server/         ← `barca serve`: axum HTTP API, cron scheduler, file watcher, embedded UI
-ui/                     ← The web UI (TypeScript, Vite); its build output is compiled into barca-server
+ui/                     ← The web UI (React, TypeScript, Vite); its build output is compiled into barca-server
 specs/                  ← Behavioral/interface contracts, design models and unapproved proposals (README.md is the index)
 docs/engineering/       ← Non-normative architecture plans, rationale and discussion handoff
 DIRECTION.md            ← What barca is, standing non-goals, what is being worked on now
-python/barca/
-  __init__.py           ← No-op decorator stubs (identity functions)
-  _worker.py            ← Daemon worker (invoked by Rust as `python -m barca._worker --daemon`)
-  _artifacts.py         ← Serialization: json, pickle, parquet format detection + I/O
-  _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
+python/barca/           ← `ls python/barca` is the truth; one line each:
+  __init__.py           ← No-op decorator stubs (identity functions), `__version__`, the public names
+  api.py                ← The Python API: `barca.get()`, `barca.sql()`, `barca.signed_url()`, `BarcaError`
+  client.py             ← `barca.Client`: a thin HTTP wrapper over a running `barca serve` (deprecated aliases)
   __main__.py           ← Entry point for `python -m barca` (delegates to `_worker.main()`)
+  _worker.py            ← Daemon worker (invoked by Rust as `python -m barca._worker --daemon`): runs steps
+  _capture.py           ← A step's stdout/stderr capture, line by line, for the coordinator
+  _rss.py               ← Peak memory (RSS) of a step, Linux only
+  _lru.py               ← The in-process artifact LRU a worker reads inputs from
+  _signals.py           ← Signal policy in a worker: what Ctrl-C and SIGTERM interrupt
+  _runtime.py           ← Socket communication with the coordinator; `PROTOCOL_VERSION` lives here
+  _wire.py              ← Compact wire tables: only metadata and artifact references cross the socket
+  _batch.py             ← Batched partitions (RFC-0013): one call computes several keys
+  _branches.py          ← How a `parallel()` branch's return value gets back to its caller
+  _artifacts.py         ← Serialization: json, pickle, parquet, CSV format detection + I/O, staging
+  _storage.py           ← Storage backends: local filesystem and fsspec object stores
+  _range_cache.py       ← The range-read cache filesystem over a store (bounded, evicted as leftovers)
+  _signing.py           ← Signed URLs for S3, GCS and Azure (`barca.signed_url`)
+  _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
+  _state.py             ← Metadata backups in the store, store checks for `barca status` (RFC-0009)
+  _sinks.py             ← Dataset sinks: `@sink("exports/scored/")` writes a Hive-partitioned dataset
+  _duckdb.py            ← DuckDB connections for steps that take or return relations
+  _sql.py               ← `barca sql`: invoked by Rust as `python -m barca._sql`
+  _value.py             ← `barca get -o value`: invoked by Rust as `python -m barca._value`
+  _inspect.py           ← Artifact shape for `barca status`: `python -m barca._inspect`
+  _inspection_cache.py  ← Disposable, bounded inspection evidence (never used by execution)
+  _doctor.py            ← `barca doctor`'s finite prerequisite probe (no pipeline imports)
+  _identity.py          ← Credential context and principal identity, never credential values
+  _source_import.py     ← Import user code exactly as on disk, never from a stale `.pyc`
+  _source_observation.py← Compare producer-owned JSON snapshots without copying source into Rust
+  _dedupe.py            ← Collapse repeated library warnings in a worker
+  _telemetry.py         ← Python spans for a step inside the coordinator's Datadog trace
+  _lifeline.py          ← A helper process must not outlive the coordinator that started it
   py.typed              ← PEP 561 marker
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)
 ```
@@ -90,7 +117,7 @@ BARCA_POOL_SIZE=2 scripts/check-fast.sh   # reproduce CI-only worker-pool failur
 
 # Benchmarks
 benchmarks/trivial/bench.sh 10
-benchmarks/chain_100/bench.sh 5   # (coming soon)
+benchmarks/chain_100/bench.sh 5
 ```
 
 ## Design principles
@@ -178,14 +205,20 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   update branches by hand to keep them up to date with main, the queue tests each PR against
   the main it will land on. To ship several PRs as one release, combine them on one branch, run
   CI once, and squash-merge it with a body that lists each PR and the issues it closes.
-- **What CI runs**: three tiers. A PR runs the fast set (`checks`, `clippy`, `changes`) so it
-  enters the queue within about a minute. A merge group runs the merge tier, which gates the
-  merge: the fast set plus the Rust tests, the wheel and the quick Python subset in
-  `scripts/fast-tests.txt` (the files `scripts/check-fast.sh` runs locally), about two
-  minutes. A release runs the full tier: everything, including integration, the UI checks,
-  the proxy tests, the Python shards, the object-store emulator tests, the duckdb 1.x rerun
-  and the real minute checkpoint test (`test_minute_checkpoints.py`, about 2 min), as the
-  `release/v*` PR's own run and again in its merge group (head commit `chore(release): ...`).
+- **What CI runs**: three tiers. A PR runs the fast set (`checks`: the CHANGELOG and
+  specification checks and the prek hooks of `prek.toml`, so ruff, ruff format, ty, cargo fmt,
+  the version sync and `uv lock --check` gate every PR; `clippy`; `changes`) so it enters the
+  queue within about a minute. A merge group runs the merge tier, which gates the merge: the
+  fast set plus the Rust tests (and the UI's generated types against Rust), the wheel, the
+  quick Python subset in `scripts/fast-tests.txt` and `perf` (the performance budgets,
+  `scripts/perf-gate.py`), about two minutes. `scripts/check-fast.sh` runs the same gates
+  locally except `perf` and the generated types, and fails with one line when the tree has no
+  `.venv` to run the Python tests against. A release runs the full tier: everything,
+  including integration, the UI checks, the proxy tests, the Python shards, the object-store
+  emulator tests, the duckdb 1.x rerun and the real minute checkpoint test
+  (`test_minute_checkpoints.py`, about 2 min), as the `release/v*` PR's own run and again in
+  its merge group (head commit `chore(release): ...`); its `durations` job uploads the suite's
+  per-file durations, which `scripts/release.sh` merges into `scripts/ci-test-durations.json`.
   A PR labelled `ci-full` runs the full tier too. Nothing runs on push to main: main only
   moves to a merge group's commit, which the queue has tested. A failure the full tier finds
   on a release PR is in one of the PRs merged since the previous release. Details:

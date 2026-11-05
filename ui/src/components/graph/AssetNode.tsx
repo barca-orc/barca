@@ -29,8 +29,10 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         name={data.name}
         kind={data.kind}
         kindLabel={leaf && leaf !== 'asset' ? nodeKindLabel({ id, kind: leaf }) : undefined}
-        status={data.status}
-        statusLabel={data.metric ?? undefined}
+        tone={data.tone}
+        label={data.label}
+        lastFailed={data.lastFailed}
+        live={data.live}
         stateHint={data.stateHint}
         selected={selected}
         icon={leaf ? kindIcon(leaf) : undefined}

@@ -7,7 +7,7 @@ use super::*;
 /// This machine's host name ("" when it cannot be read). Stored on a run row next to the pid:
 /// a database restored from another machine's backup holds that machine's runs, whose pids
 /// mean nothing here.
-pub fn local_host() -> String {
+pub(crate) fn local_host() -> String {
     let mut buf = [0u8; 256];
     // SAFETY: gethostname writes at most `buf.len()` bytes into `buf`.
     let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };

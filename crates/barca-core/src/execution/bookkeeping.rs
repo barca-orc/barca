@@ -208,11 +208,7 @@ impl RunResults {
                 traceback: String::new(),
                 phase,
                 attempts,
-                started_unix_ns: clock.map(|(started, _)| {
-                    started
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |duration| duration.as_nanos() as u64)
-                }),
+                started_unix_ns: clock.map(|(started, _)| crate::time::unix_nanos(started) as u64),
                 elapsed_seconds: clock.map(|(_, wall)| wall.as_secs_f64()),
             },
         });

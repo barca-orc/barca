@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { graphState } from './graphState'
-import { groupHealth, memberHealth } from './groups'
+import { graphState, memberHealth } from './graphState'
+import { groupHealth } from './groups'
 import { pipelineSummaries } from './pipeline'
 import {
   POLL_IDLE_MS,
@@ -61,35 +61,34 @@ describe('running state from /state', () => {
   it('pulses a node a run is working on, whoever started it, over its resting state', () => {
     for (const triggered_by of ['schedule', 'api', 'manual', null] as const) {
       const state = graphState(node('p.py:a', run({ triggered_by }), true))
-      expect(state.status).toBe('running')
-      expect(statusMeta(state.status).live).toBe(true)
-      expect(state.label).toBe('Running')
+      expect(state).toMatchObject({ kind: 'run', status: 'running', tone: 'running', label: 'running' })
+      expect(statusMeta('running').live).toBe(true)
     }
     expect(graphState(node('p.py:a', run())).hint).toBe('Run r1, started by the scheduler')
     expect(graphState(node('p.py:a', run({ triggered_by: 'manual' }))).hint).toContain('the CLI')
     // A step waiting for its upstream is queued: shown, but still.
     const queued = graphState(node('p.py:a', run({ step: 'queued' })))
-    expect(queued).toMatchObject({ status: 'queued', label: 'Running · queued' })
-    expect(statusMeta(queued.status).live).toBe(false)
-    // No run: the resting state.
-    expect(graphState(node('p.py:a')).status).toBe('success')
+    expect(queued).toMatchObject({ kind: 'run', status: 'queued', tone: 'queued', label: 'queued' })
+    expect(statusMeta('queued').live).toBe(false)
+    // No run: the resting state, in its own word.
+    expect(graphState(node('p.py:a'))).toMatchObject({ kind: 'cache', state: 'cached', label: 'cached', tone: 'success' })
   })
 
   it('shows a partitioned node’s keys done', () => {
     const partitioned = run({ partitions: { running: 6, done: 4, total: 10 } })
-    expect(graphState(node('p.py:k', partitioned)).label).toBe('Running · 4/10 keys')
-    expect(memberHealth(node('p.py:k', partitioned)).label).toBe('Running · 4/10 keys')
+    expect(graphState(node('p.py:k', partitioned)).label).toBe('running · 4/10 keys')
+    expect(memberHealth(node('p.py:k', partitioned)).label).toBe('running · 4/10 keys')
   })
 
   it('gives the assets list a Running badge with the elapsed time and the run link', () => {
     expect(runningBadge(run(), NOW)).toEqual({
-      status: 'running',
-      label: 'Running · 1m 15s',
+      tone: 'running',
+      label: 'running · 1m 15s',
       hint: 'Run r1, started by the scheduler',
       href: '/runs?run=r1',
     })
     const keyed = runningBadge(run({ run_id: 'a b', partitions: { running: 1, done: 2, total: 3 } }), NOW)
-    expect(keyed.label).toBe('Running · 2/3 keys · 1m 15s')
+    expect(keyed.label).toBe('running · 2/3 keys · 1m 15s')
     expect(keyed.href).toBe('/runs?run=a%20b')
   })
 
@@ -128,10 +127,10 @@ describe('running state from /state', () => {
     const byId = new Map(nodes.map((n) => [n.id, n]))
     expect(runningCount(['p.py:a', 'p.py:b', 'q.py:c'], byId)).toBe(1)
     const group = groupHealth(['p.py:a', 'p.py:b'], byId)
-    expect(group).toMatchObject({ status: 'running', label: '1 running' })
-    // Once the run ends, the failure shows again.
+    expect(group).toMatchObject({ kind: 'run', tone: 'running', label: '1 running' })
+    // Once the run ends, the failed last attempt shows again.
     byId.set('p.py:a', node('p.py:a'))
-    expect(groupHealth(['p.py:a', 'p.py:b'], byId).status).toBe('failed')
+    expect(groupHealth(['p.py:a', 'p.py:b'], byId)).toMatchObject({ tone: 'failed', label: '1 last attempt failed' })
   })
 
   it('polls /state every 2s while anything runs, every 10s otherwise', () => {

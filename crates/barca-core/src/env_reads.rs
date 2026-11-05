@@ -34,7 +34,7 @@ const OWN_PREFIX: &str = "BARCA_";
 
 /// The variables `source` (a module, or one top-level definition of one) reads, sorted. Empty
 /// when it does not parse.
-pub fn in_source(source: &str) -> BTreeSet<String> {
+pub(crate) fn in_source(source: &str) -> BTreeSet<String> {
     match parse_module(source) {
         Ok(parsed) => in_body(&parsed.syntax().body),
         Err(_) => BTreeSet::new(),
@@ -42,14 +42,14 @@ pub fn in_source(source: &str) -> BTreeSet<String> {
 }
 
 /// The variables the statements read, sorted.
-pub fn in_body(body: &[Stmt]) -> BTreeSet<String> {
+pub(crate) fn in_body(body: &[Stmt]) -> BTreeSet<String> {
     let mut reads = Reads::default();
     visitor::walk_body(&mut reads, body);
     reads.names
 }
 
 /// The variables a function definition reads (its decorators are not looked at).
-pub fn in_function(func: &ast::StmtFunctionDef) -> BTreeSet<String> {
+pub(crate) fn in_function(func: &ast::StmtFunctionDef) -> BTreeSet<String> {
     let mut reads = Reads::default();
     for param in func.parameters.iter_non_variadic_params() {
         if let Some(default) = &param.default {
@@ -62,7 +62,7 @@ pub fn in_function(func: &ast::StmtFunctionDef) -> BTreeSet<String> {
 
 /// The names of `reads` that `declared` does not cover, sorted: a literal name is covered when
 /// it is declared, a pattern (`*_CSV`) when a declared name matches it.
-pub fn undeclared(reads: &BTreeSet<String>, declared: &[String]) -> Vec<String> {
+pub(crate) fn undeclared(reads: &BTreeSet<String>, declared: &[String]) -> Vec<String> {
     reads
         .iter()
         .filter(|name| !declared.iter().any(|d| matches(name, d)))

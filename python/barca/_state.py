@@ -10,7 +10,8 @@ failure is one ``error: ...`` line on stderr and exit 1.
       Upload the backup ``<db>`` (named ``<name>.db``) and its ``<sidecar>`` (``<name>.json``)
       into the store directory ``<dir>``, then remove every backup in ``<dir>`` but the
       ``<keep>`` newest and the newest of every other writer (the ``host`` and ``project`` of
-      a sidecar) taken in the last week, at most ``<keep>`` of those, with their sidecars. The database goes first: a sidecar is never ahead of
+      a sidecar) taken in the last week, at most ``<keep>`` of those, with their sidecars. The
+      database goes first: a sidecar is never ahead of
       its database. ``others`` lists the backups another writer took after this writer's
       previous one, newest first: two machines backing up to one store.
       -> {"uploaded": name, "removed": [names], "others": [{"name", "host", "project"}]}
@@ -25,7 +26,8 @@ failure is one ``error: ...`` line on stderr and exit 1.
       checksum this can compare). -> {"objects": [{"exists", "size_bytes", "sha256"}]}
 
 Only names of the backup form (``YYYY-MM-DDTHH-MM-SS.mmmZ-<8 hex>.db``, or 0.26.0's
-``YYYY-MM-DDTHH-MM-SSZ.db``) are ever listed or removed, newest first; the shared-history object of releases before 0.26.0 (``state/metadata.db``) is ignored.
+``YYYY-MM-DDTHH-MM-SSZ.db``) are ever listed or removed, newest first; the shared-history object
+of releases before 0.26.0 (``state/metadata.db``) is ignored.
 """
 
 import json
@@ -231,9 +233,9 @@ def stat(paths: "list[str]") -> dict:
 
 def inspect_copies(paths: list[str], local_paths: list[str], cache_path: str) -> dict:
     """Advisory status evidence. Ledger publication continues to use strict `stat`."""
-    from barca._inspection_cache import Cache, fingerprint
-
     from concurrent.futures import ThreadPoolExecutor
+
+    from barca._inspection_cache import Cache, fingerprint
 
     cache = Cache(cache_path)
 

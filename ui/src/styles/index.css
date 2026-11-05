@@ -1,11 +1,9 @@
 /* ============================================================
    barca · global stylesheet
    Single entry point. Imported once from main.tsx.
-   Tailwind first, then the design-system tokens (the source of
-   truth for color/type/spacing), then base element styles.
+   The design-system tokens (the source of truth for color/type/
+   spacing), then base element styles, then the components.
    ============================================================ */
-
-@import 'tailwindcss';
 
 /* Self-hosted fonts (replaces the design system's Google Fonts @import) */
 @import '@fontsource/inter/latin-400.css';

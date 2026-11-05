@@ -8,21 +8,13 @@ metadata DB eleven times; it opens it once to start, once per phase, and once to
 
 import os
 import re
-import subprocess
 from pathlib import Path
 
-from barca.api import _find_binary
+from .helpers import barca
 
 
 def traced(project: Path, *args: str, **env: str) -> str:
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env={**os.environ, "BARCA_TRACE_TIMING": "1", **env},
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    proc = barca(project, *args, env={**os.environ, "BARCA_TRACE_TIMING": "1", **env})
     assert proc.returncode == 0, proc.stderr
     return proc.stderr
 

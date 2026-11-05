@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from barca import _runtime, _wire
 from barca.api import _find_binary
+from .helpers import QUICK, RUN
 
 
 def test_result_batch_emits_one_array_frame_and_file_metadata_only(tmp_path, monkeypatch):
@@ -40,13 +41,13 @@ def test_long_batch_publishes_progress_before_it_ends(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_runtime, "send_message", capture)
     with _runtime.result_batch(tmp_path / "results"):
-        _runtime.emit_blocked("a", "sensor")
+        _runtime.emit_step_error("a", "RuntimeError", "sensor", "", 0.0)
         assert notified.wait(2)
         assert (
             next(frame["completed"] for frame in sent if frame["type"] == "result_checkpoint") == 1
         )
         assert not any(frame["type"] == "results" for frame in sent)
-    assert sent[-1]["statuses"] == ["blocked"]
+    assert sent[-1]["statuses"] == ["step_error"]
 
 
 @pytest.mark.parametrize("failure", ["crash", "exception"])
@@ -97,7 +98,7 @@ def leaf(k):
             start_new_session=True,
         )
         try:
-            out, err = process.communicate(timeout=45)
+            out, err = process.communicate(timeout=RUN)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, 9)
             out, err = process.communicate()
@@ -137,7 +138,7 @@ def leaf(k):
         env=env,
         text=True,
         capture_output=True,
-        timeout=15,
+        timeout=QUICK,
     )
     assert recorded.returncode == 0, recorded.stderr
     lines = [row["line"] for row in json.loads(recorded.stdout)]

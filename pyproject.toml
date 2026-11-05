@@ -65,7 +65,18 @@ test = [
     "msgpack",
 ]
 
+# The linters prek.toml runs, at the versions it pins (scripts/check-version-sync.sh keeps the
+# two in step), so uv.lock pins them and `uv sync` puts them in the venv.
+[dependency-groups]
+dev = [
+    "ruff==0.14.14",
+    "ty==0.0.97",
+]
+
 [tool.pytest.ini_options]
+# `pytest` from the repository root runs the Python suite and nothing else (the shell
+# integration tests under tests/ and the UI are run by their own commands).
+testpaths = ["python/tests"]
 # pytest-timeout (the `test` extra): a test still running after this many seconds fails, with
 # every thread's stack, instead of holding a CI job until its own limit. The slowest test
 # without a mark of its own took 43 s locally with the emulators; the slower files raise it
@@ -86,6 +97,20 @@ include = ["LICENSE", { path = "ui/dist/**/*", format = "sdist" }]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import order, pyupgrade (the package targets 3.12) and bugbear.
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+# Keep `import barca` in its own block after third-party imports, as the files are written.
+known-first-party = ["barca"]
+
+[tool.ruff.lint.per-file-ignores]
+# Everything but the package (the tests, benchmarks, demos, scripts) is held to pyflakes and
+# pycodestyle minus line length: import order, pyupgrade and bugbear there would rewrite most
+# of those files for no behavior.
+"!python/barca/**" = ["E501", "I", "UP", "B"]
 
 [tool.ty.environment]
 extra-paths = ["python"]

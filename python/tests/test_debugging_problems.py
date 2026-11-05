@@ -8,17 +8,15 @@ another store than the server's.
 """
 
 import json
-import signal
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
-from .test_server_ledger import Team, _env, _free_port, _kill_server_mid_run, posts, wait_for
-
-WAIT = 60.0
+from . import helpers
+from .helpers import clean_env, free_port
+from .served import Serve
+from .test_server_ledger import Team, _kill_server_mid_run, posts
 
 PIPELINE = """
 from barca import Schedule, asset, task
@@ -47,15 +45,12 @@ def nightly_sync() -> None:
 PROBLEMS = {"pipeline.py:ratio", "pipeline.py:prices", "pipeline.py:nightly_sync"}
 
 
+def _env() -> dict[str, str]:
+    return clean_env(BARCA_POOL_SIZE="2")
+
+
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=_env(),
-        timeout=WAIT,
-    )
+    return helpers.barca(cwd, *args, env=_env())
 
 
 def http(url: str) -> tuple[int, object]:
@@ -79,7 +74,7 @@ class Deployment:
         self.other_store = tmp / "other-store"
         for d in (self.server_root, self.laptop, self.store, self.other_store):
             d.mkdir()
-        self.port = _free_port()
+        self.port = free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         (self.server_root / "pipeline.py").write_text(PIPELINE)
         (self.server_root / "barca.toml").write_text(f'[remote]\nuri = "{self.store}"\n')
@@ -93,27 +88,14 @@ class Deployment:
         source.write_text(source.read_text().replace('{"v": 1}', '{"v": 2}'))
         assert barca(self.server_root, "get", "ratio").returncode == 1
         (self.server_root / "broken.py").write_text("def broken(:\n    pass\n")
-        self.log = self.server_root / "serve.log"
-        self.proc = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "broken.py", "--port", str(self.port)],
-            cwd=self.server_root,
-            stdout=subprocess.DEVNULL,
-            stderr=self.log.open("a"),
-            env=_env(),
+        self.server = Serve(
+            self.server_root, files=("pipeline.py", "broken.py"), port=self.port, env=_env()
         )
         try:
-            wait_for(self._up, "the server to answer /health")
-            wait_for(self._failing, "nightly_sync to fail max_failures ticks")
+            self.server.wait("nightly_sync to fail max_failures ticks", self._failing)
         except BaseException:
             self.stop()
             raise
-
-    def _up(self) -> bool:
-        assert self.proc.poll() is None, f"the server exited early:\n{self.log.read_text()}"
-        try:
-            return http(f"{self.url}/health")[0] == 200
-        except OSError:
-            return False
 
     def schedule(self) -> dict | None:
         status, jobs = http(f"{self.url}/schedule")
@@ -125,13 +107,7 @@ class Deployment:
         return job is not None and job["failing"]
 
     def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.send_signal(signal.SIGTERM)
-            try:
-                self.proc.wait(timeout=WAIT)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=WAIT)
+        self.server.stop()
 
 
 @pytest.fixture(scope="module")
@@ -345,7 +321,7 @@ def test_doctor_local_and_an_explicit_url(deployment, tmp_path):
 
 def test_doctor_names_a_server_that_cannot_be_reached(tmp_path):
     (tmp_path / "pipeline.py").write_text(PIPELINE)
-    url = f"http://127.0.0.1:{_free_port()}"
+    url = f"http://127.0.0.1:{free_port()}"
     (tmp_path / "barca.toml").write_text(
         f'[remote]\nuri = "{tmp_path / "store"}"\n\n[server]\nurl = "{url}"\n'
     )

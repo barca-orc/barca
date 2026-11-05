@@ -93,13 +93,13 @@ impl LogStream {
 }
 
 /// Now, as a log line's `ts`: RFC 3339, UTC, with milliseconds.
-pub fn log_timestamp() -> String {
+pub(crate) fn log_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// A time in seconds since the epoch (as Python's `time.time()`), as a log line's `ts`.
 /// One that cannot be a time reads as now.
-pub fn epoch_timestamp(seconds: f64) -> String {
+pub(crate) fn epoch_timestamp(seconds: f64) -> String {
     match chrono::DateTime::from_timestamp_micros((seconds * 1e6) as i64) {
         Some(at) if seconds.is_finite() && seconds > 0.0 => {
             at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -109,25 +109,6 @@ pub fn epoch_timestamp(seconds: f64) -> String {
 }
 
 impl RunEvent {
-    /// About how many bytes this event holds in memory: its strings plus a fixed overhead. What
-    /// `barca serve` counts against the memory it keeps finished runs in.
-    pub fn approx_bytes(&self) -> usize {
-        const OVERHEAD: usize = 64;
-        let len = |s: &Option<String>| s.as_ref().map_or(0, String::len);
-        OVERHEAD
-            + match self {
-                RunEvent::RunStarted { run_id } => run_id.len(),
-                RunEvent::Line { line, .. } => line.len(),
-                RunEvent::Log {
-                    node_id, line, ts, ..
-                } => node_id.len() + line.len() + len(ts),
-                RunEvent::StepFinished { node_id, error, .. } => node_id.len() + len(error),
-                RunEvent::RunFinished {
-                    run_id, outcome, ..
-                } => run_id.len() + outcome.as_ref().map_or(0, |o| o.get().len()),
-            }
-    }
-
     /// A line of a step's output, stamped now.
     pub fn log(node_id: String, line: String, stream: LogStream) -> Self {
         RunEvent::Log {

@@ -6,6 +6,8 @@ JSON frames. When running standalone, operations fall back to local
 execution.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import socket
@@ -25,10 +27,16 @@ PROTOCOL_VERSION = 5
 
 _socket: socket.socket | None = None
 # Separate locks: whole frames never interleave on either direction, and a
-# thread parked in recv_message never blocks senders (heartbeats, or the
-# transfer helper's pool threads replying while its main thread reads).
+# thread parked in recv_message never blocks senders (`result_batch`'s checkpoint
+# thread, or the transfer helper's pool threads replying while its main thread reads).
 _send_lock = threading.Lock()
 _recv_lock = threading.Lock()
+
+
+def socket_path() -> str | None:
+    """The coordinator's Unix socket (`BARCA_SOCKET`), set for every helper the coordinator
+    starts; None outside one. The one place the variable is read."""
+    return os.environ.get("BARCA_SOCKET") or None
 
 
 def connect(role: str = "worker") -> socket.socket | None:
@@ -39,7 +47,7 @@ def connect(role: str = "worker") -> socket.socket | None:
     if _socket is not None:
         return _socket
 
-    path = os.environ.get("BARCA_SOCKET")
+    path = socket_path()
     if not path:
         return None
 
@@ -74,7 +82,8 @@ def connect(role: str = "worker") -> socket.socket | None:
             PROTOCOL_VERSION,
         ):
             raise RuntimeError(
-                f"coordinator did not acknowledge {role} protocol v{PROTOCOL_VERSION}; reinstall barca"
+                f"coordinator did not acknowledge {role} protocol v{PROTOCOL_VERSION}; "
+                "reinstall barca"
             )
         sock.settimeout(None)
         return _socket
@@ -86,7 +95,7 @@ def connect(role: str = "worker") -> socket.socket | None:
 
 def is_worker() -> bool:
     """Are we running inside a barca worker process?"""
-    return os.environ.get("BARCA_SOCKET") is not None
+    return socket_path() is not None
 
 
 # ─── Framing ──────────────────────────────────────────────────────────────────
@@ -152,14 +161,14 @@ _result_batch = None
 class result_batch:
     """Coalesce results; an owned metadata journal preserves completed leases on a crash."""
 
-    def __init__(self, path):
+    def __init__(self, path: str | None) -> None:
         self.path = path
         self.messages = []
         self.stop = threading.Event()
         self.thread = None
         self.journal = None
 
-    def __enter__(self):
+    def __enter__(self) -> result_batch:
         global _result_batch
         if self.path is not None:
             self.journal = open(self.path, "ab", buffering=0)
@@ -168,7 +177,7 @@ class result_batch:
             self.thread.start()
         return self
 
-    def _notify(self):
+    def _notify(self) -> None:
         notified = 0
         while not self.stop.wait(0.01):
             count = len(self.messages)
@@ -179,7 +188,7 @@ class result_batch:
                     return
                 notified = count
 
-    def record(self, message):
+    def record(self, message: dict) -> None:
         from barca import _wire
 
         # Regular file writes survive a worker process crash; no filesystem durability
@@ -193,7 +202,7 @@ class result_batch:
             view = view[written:]
         self.messages.append(message)
 
-    def __exit__(self, *_):
+    def __exit__(self, *_: object) -> None:
         global _result_batch
         if self.journal is None or self.thread is None:
             return
@@ -209,7 +218,7 @@ class result_batch:
             _result_batch = None
 
 
-def _emit_result(message):
+def _emit_result(message: dict) -> None:
     if _result_batch is not None:
         _result_batch.record(message)
     else:
@@ -262,23 +271,6 @@ def emit_step_error(
     )
 
 
-def emit_blocked(node_id: str, reason: str) -> None:
-    """Report a step was blocked."""
-    _report_repeated_warnings()
-    _emit_result(
-        {
-            "type": "blocked",
-            "node_id": node_id,
-            "reason": reason,
-        }
-    )
-
-
-def emit_heartbeat() -> None:
-    """Send a heartbeat."""
-    send_message({"type": "heartbeat"})
-
-
 def emit_log(node_id: str, line: str, stream: str = "stdout") -> None:
     """Stream a line of user stdout or stderr captured during a step, with the time it was
     written (seconds since the epoch). Sent at once, one frame per line: a line written just
@@ -326,42 +318,12 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
     return response.get("results", [])
 
 
-# ─── Heartbeat thread ─────────────────────────────────────────────────────────
-
-_heartbeat_thread: threading.Thread | None = None
-_heartbeat_stop = threading.Event()
-
-
-def start_heartbeat(interval: float = 5.0) -> None:
-    """Start a background thread that sends heartbeats every `interval` seconds."""
-    global _heartbeat_thread
-    if _heartbeat_thread is not None:
-        return
-
-    def _loop():
-        while not _heartbeat_stop.is_set():
-            try:
-                emit_heartbeat()
-            except Exception:
-                break
-            _heartbeat_stop.wait(interval)
-
-    _heartbeat_thread = threading.Thread(target=_loop, daemon=True)
-    _heartbeat_thread.start()
-
-
-def stop_heartbeat() -> None:
-    """Stop the heartbeat thread."""
-    _heartbeat_stop.set()
-
-
 # ─── Cleanup ──────────────────────────────────────────────────────────────────
 
 
 def disconnect() -> None:
     """Close the socket connection."""
     global _socket
-    stop_heartbeat()
     if _socket is not None:
         try:
             _socket.close()

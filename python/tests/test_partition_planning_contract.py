@@ -3,13 +3,12 @@
 import json
 import os
 import sqlite3
-import subprocess
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 
 from .get_values import value_args
+from .helpers import RUN, barca
 
 
 def invoke(project: Path, pool: int | None, *args: str):
@@ -17,15 +16,7 @@ def invoke(project: Path, pool: int | None, *args: str):
     env.pop("BARCA_POOL_SIZE", None)
     if pool is not None:
         env["BARCA_POOL_SIZE"] = str(pool)
-    return subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=project,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=90,
-        check=False,
-    )
+    return barca(project, *value_args(args), env=env, timeout=RUN)
 
 
 def result(project: Path, pool: int | None, *args: str):

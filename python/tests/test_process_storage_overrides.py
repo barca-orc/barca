@@ -2,16 +2,13 @@
 
 import json
 import os
-import signal
-import socket
 import sqlite3
-import subprocess
-import time
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 from barca.client import Client
+
+from .helpers import QUICK, barca, clean_env
 
 PIPELINE = """
 from barca import asset, partitions
@@ -42,20 +39,14 @@ def project(tmp_path):
 
 
 def environment(store, **overrides):
-    base = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    return {**base, "BARCA_POOL_SIZE": "2", "BARCA_REMOTE_URI": str(store), **overrides}
+    # Only BARCA_* is scrubbed here (as before): the store variables stay.
+    return clean_env(
+        scrub=("BARCA_",), BARCA_POOL_SIZE="2", BARCA_REMOTE_URI=str(store), **overrides
+    )
 
 
 def cli(root, env, *args):
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
+    return barca(root, *args, env=env, timeout=QUICK)
 
 
 def succeeded(result):
@@ -159,46 +150,21 @@ def test_empty_keeps_remote_configuration_and_invalid_switch_is_usage_error(proj
 
 
 @pytest.mark.parametrize("override", ["remote", "store"])
-def test_serve_reuses_explicit_process_overrides_and_backs_up_to_a_store(project, override):
+def test_serve_reuses_explicit_process_overrides_and_backs_up_to_a_store(project, serve, override):
     """`barca serve` with a store uses it and backs its history up there (RFC-0009);
     BARCA_REMOTE=off keeps it from the store entirely."""
     root, store = project
     env, observer = observed_environment(
         root, store, **({"BARCA_REMOTE": "off"} if override == "remote" else {})
     )
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    with (root / "serve.log").open("w") as log:
-        proc = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--no-schedule", "--port", str(port)],
-            cwd=root,
-            env=env,
-            stdout=log,
-            stderr=log,
-            text=True,
-        )
-    try:
-        client = Client(f"http://127.0.0.1:{port}")
-        deadline = time.monotonic() + 15
-        while True:
-            assert proc.poll() is None, (root / "serve.log").read_text()
-            try:
-                client.health()
-                break
-            except Exception:
-                if time.monotonic() > deadline:
-                    pytest.fail("server did not become healthy")
-                time.sleep(0.05)
-        assert client.get("total").wait(timeout=15)["status"] == "complete"
-        if override == "remote":
-            assert not list(observer.glob("*.pids")) and not store.exists()
-        else:
-            assert list(observer.glob("*.pids"))
-            assert list((store / "default/artifacts").rglob("*.json"))
-            # The run's end backed the history up to the store.
-            assert list((store / "default/state/backups").glob("*.db"))
-            assert not (store / "default/state/metadata.db").exists()
-    finally:
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=15)
+    server = serve("--no-schedule", root=root, env=env, timeout=15)
+    client = Client(server.url)
+    assert client.get("total").wait(timeout=15)["status"] == "complete"
+    if override == "remote":
+        assert not list(observer.glob("*.pids")) and not store.exists()
+    else:
+        assert list(observer.glob("*.pids"))
+        assert list((store / "default/artifacts").rglob("*.json"))
+        # The run's end backed the history up to the store.
+        assert list((store / "default/state/backups").glob("*.db"))
+        assert not (store / "default/state/metadata.db").exists()

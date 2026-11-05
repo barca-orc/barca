@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import SERVE, barca, clean_env
 
 pytestmark = pytest.mark.skipif(os.geteuid() == 0, reason="root writes into read-only directories")
 
@@ -40,17 +40,7 @@ def total(numbers: list) -> dict:
 
 
 def cli(root: Path, store: Path, *args: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["BARCA_REMOTE_URI"] = str(store)
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    return barca(root, *args, env=clean_env(BARCA_REMOTE_URI=str(store)), timeout=SERVE)
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:

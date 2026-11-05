@@ -73,7 +73,6 @@ pub(crate) mod test_support {
     }
 }
 
-pub use handlers::node_states;
 pub use running::{NodeRunning, PartitionProgress, RunningStep};
 pub use state::{NodeState, ServeConfig};
 

@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
 import { seedRuns } from './helpers/seed'
-import { STUB_PIPELINE, stubModelingGroups } from './helpers/groups'
 import { describeShifts, slowApi, takeShifts, trackLayoutShift } from './helpers/layoutShift'
 
 // Pages must not move while their data loads. Each flow is measured with the API held back
@@ -62,12 +61,13 @@ test('schedules page: loading', async ({ page }) => {
 
 // Typography and layout (#765). The panel beside a table must not make its headers wrap or
 // its rows grow; rows are the compact 44px, an error line is 13px in the failed colour, and a
-// name is one text node, so selecting it copies it whole. The grouped page's header (the
-// breadcrumb, counts, health and external inputs) fits a 1280×720 window on one line.
+// name is one text node, so selecting it copies it whole. (The grouped page's header has its
+// own check in e2e-groups/groups.spec.ts, against a project declared in groups.)
 test('tasks page: compact rows and one-line headers beside the panel', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/ui/#/tasks?state=all')
-  await page.getByRole('row', { name: /history_failure/ }).click()
+  // The row's name: a click on its error line opens the traceback instead, by design.
+  await page.getByRole('row', { name: /history_failure/ }).locator('.name').click()
   await expect(page.getByRole('complementary', { name: /details$/ })).toBeVisible()
   const table = await page.locator('.barca-table').evaluate((el) => {
     const probe = document.createElement('span')
@@ -94,27 +94,4 @@ test('tasks page: compact rows and one-line headers beside the panel', async ({ 
     return selection.toString()
   })
   expect(copied).toBe('history_failure')
-})
-
-test('grouped page: the header fits a 1280×720 window on one line', async ({ page }) => {
-  await stubModelingGroups(page)
-  await page.setViewportSize({ width: 1280, height: 720 })
-  await page.goto(`/ui/#/assets?pipeline=${STUB_PIPELINE}&group=${encodeURIComponent(`group:${STUB_PIPELINE}:fold_03`)}`)
-  await expect(page.getByRole('heading', { name: 'Fold 3', exact: true })).toBeVisible()
-  await expect(page.locator('.barca-group-external')).toHaveText('External inputs · 2')
-  const bar = await page.locator('.barca-view-bar').evaluate((el) => {
-    const boxes = [...el.children].map((child) => child.getBoundingClientRect())
-    const heading = el.querySelector('h1')!
-    return {
-      height: el.getBoundingClientRect().height,
-      tallest: Math.max(...boxes.map((box) => box.height)),
-      overlaps: boxes.slice(1).filter((box, i) => box.left < boxes[i]!.right).length,
-      headingCut: heading.scrollWidth > heading.clientWidth,
-      parts: [...el.children].map((child) => `${child.className} ${Math.round(child.getBoundingClientRect().width)}px`).join(' | '),
-    }
-  })
-  expect(bar.height, `one line: ${bar.parts}`).toBeLessThanOrEqual(36)
-  expect(bar.tallest, `no child wrapped: ${bar.parts}`).toBeLessThanOrEqual(36)
-  expect(bar.overlaps, `no overlap: ${bar.parts}`).toBe(0)
-  expect(bar.headingCut, `the heading is whole: ${bar.parts}`).toBe(false)
 })

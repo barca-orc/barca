@@ -3,6 +3,7 @@
 //! had that recorded none ([`planned_run_nodes`]) and a failed step's last output lines.
 
 use super::*;
+use crate::step_status::StepStatus;
 use serde::{Deserialize, Serialize};
 
 /// A step recorded by this run: one it executed (`success`) or one that failed. Cached
@@ -78,11 +79,11 @@ pub struct RunStep {
 }
 
 /// How many lines of a failed step's output `barca history RUN_ID` shows ([`RunStep::output_tail`]).
-pub const OUTPUT_TAIL_LINES: usize = 20;
+pub(crate) const OUTPUT_TAIL_LINES: usize = 20;
 
 /// How the worker ended, read from the error barca recorded when a worker died
 /// (`worker for <node> exited with <how>`, or `worker disconnected`).
-pub fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<String> {
+pub(crate) fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<String> {
     if error_type != Some("WorkerError") {
         return None;
     }
@@ -97,7 +98,7 @@ pub fn worker_exit(error_type: Option<&str>, message: Option<&str>) -> Option<St
     Some(how.to_string())
 }
 
-pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
+pub(crate) async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
     Ok(get_run_steps_page(db_path, run_id, None).await?.0)
 }
 
@@ -203,7 +204,7 @@ pub fn planned_run_nodes(
     let mut nodes = Vec::with_capacity(planned.len());
     for id in planned {
         if let Some(mut node) = by_id.remove(id) {
-            node.status = Some("ran".into());
+            node.status = Some(StepStatus::Ran.to_string());
             nodes.push(node);
             continue;
         }
@@ -211,7 +212,14 @@ pub fn planned_run_nodes(
         let skipped = blocked_by.is_some() || phase_of.get(id).copied().unwrap_or(0) > reached;
         nodes.push(RunNodeSummary {
             node_id: id.to_string(),
-            status: Some(if skipped { "skipped" } else { "cached" }.into()),
+            status: Some(
+                if skipped {
+                    StepStatus::Skipped
+                } else {
+                    StepStatus::Cached
+                }
+                .to_string(),
+            ),
             blocked_by: blocked_by.map(str::to_string),
             ..Default::default()
         });
@@ -334,12 +342,15 @@ pub async fn get_run_steps_page(
     };
     let failed: std::collections::HashSet<String> = steps
         .iter()
-        .filter(|s| s.status == "failed")
+        .filter(|s| StepStatus::Failed.is(Some(&s.status)))
         .map(log_id)
         .collect();
     if !failed.is_empty() {
         let lines = output_lines(&conn, run_id, &failed).await?;
-        for step in steps.iter_mut().filter(|s| s.status == "failed") {
+        for step in steps
+            .iter_mut()
+            .filter(|s| StepStatus::Failed.is(Some(&s.status)))
+        {
             step.output_tail = Some(output_tail(&lines, &log_id(step)));
         }
     }
@@ -557,7 +568,7 @@ pub async fn read_step_rows(
             node_id,
             run_id: text(1),
             run_hash: text(2),
-            status: text(3).unwrap_or_else(|| "success".to_string()),
+            status: text(3).unwrap_or_else(|| StepStatus::Success.to_string()),
             created_at: row.get::<String>(4).unwrap_or_default(),
             elapsed_seconds: row.get::<f64>(5).ok(),
             cpu_seconds: row.get::<f64>(6).ok(),

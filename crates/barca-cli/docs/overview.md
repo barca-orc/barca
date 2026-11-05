@@ -55,8 +55,8 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
 | `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`barca docs doctor`). |
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
-| `barca gc [--dry-run] [--max-size SIZE]` | Evict cached results to keep `.barca/` under `[cache] max_size` (default 10% of the filesystem; barca also does this after every `get` and `run`) (`barca docs cache`, "Disk use"). |
-| `barca state backups` / `barca state restore` | List the metadata backups, or put one back in place of the local database (`barca docs remote`). |
+| `barca gc [--dry-run] [--max-size SIZE]` | Evict cached results to keep `.barca/` under `[cache] max_size` (default 10% of the filesystem; barca also does this after every `get` and `run`) (`barca docs disk`). |
+| `barca state backups` / `barca state restore` | List the metadata backups, or put one back in place of the local database (`barca docs backup`). |
 | `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). `--server` on get/run/status/list/history/stats runs them there (`barca docs server-mode`). |
 | `barca tokens bootstrap` | On the deployed host, print a one-use bootstrap code for opt-in project token access (`barca docs server-mode`). |
 | `barca queue [pause\|resume] --server` | A server's run queue: the runs running and waiting, kept across restarts; pause it before a deploy (`barca docs scheduling`). |
@@ -78,7 +78,10 @@ Getting work done:
 - `barca docs assets` — decorators, inputs, freshness, retries
 - `barca docs tasks` — tasks and `barca run`
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
+- `barca docs batched-partitions` — `batch=`: one call of a partitioned step computes many keys
 - `barca docs cache` — what is cached, artifacts, `--refresh` / `--refresh-all`, environments
+- `barca docs disk` — the size limit for `.barca/`, what `barca gc` evicts and in which order
+- `barca docs layout` — the project root, the `.barca/` directory, concurrent and killed runs, upgrading
 - `barca docs types` — how outputs are stored and read (json, pickle, parquet, CSV; pandas, polars, pyarrow, duckdb)
 - `barca docs duckdb` — duckdb 1.x and 2.x: what a pipeline must change for duckdb 2
 - `barca docs big-inputs` — large inputs: lazy types load only the columns and rows a step needs
@@ -89,8 +92,10 @@ Getting work done:
 - `barca docs doctor` — prerequisite checks without running steps, and a copyable local-only debugging profile
 - `barca docs groups` — organizational groups and nesting in the UI and CLI
 - `barca docs scheduling` — freshness, cron schedules, `barca serve`, its run queue and restarting it without losing work, HTTP/Python client setup
+- `barca docs serve-ops` — operating `barca serve`: the run queue, stopping and restarting without losing work, the stop grace, a shared capacity, the run timeout
 - `barca docs server-mode` — one `barca serve` as the team's ledger: local runs read cache hits from it and post what they compute; `--server` runs `get`, `run`, `status`, `list`, `history`, `stats` there; `--local` leaves it out
 - `barca docs remote` — this machine's backup and read-through cache (S3, GCS, Azure), set with a few environment variables; sharing means a server (`barca docs server-mode`)
+- `barca docs backup` — metadata backups in the store, `barca state backups` / `barca state restore`, a server's backups
 - `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`), post
   to Slack when a job starts failing or recovers (`BARCA_SLACK_WEBHOOK_URL`), and JSON log lines
   from `barca serve` (`BARCA_LOG=json`)

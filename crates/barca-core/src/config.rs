@@ -46,14 +46,7 @@ pub struct ExecutionToml {
 }
 
 /// A pool size that was set (`BARCA_POOL_SIZE` > `[execution] pool_size`), and where.
-pub type PoolSetting = Option<(usize, &'static str)>;
-
-/// `BARCA_POOL_SIZE` > `[execution] pool_size` > not set (the cores, bounded by the capacity).
-/// `BARCA_POOL_SIZE` that is not a positive whole number is ignored, as it always was; the
-/// file's value must be a whole number of at least 1.
-pub fn pool_setting(file: Option<&ExecutionToml>) -> Result<PoolSetting, BarcaError> {
-    pool_setting_with(Vars::Process, file)
-}
+pub(crate) type PoolSetting = Option<(usize, &'static str)>;
 
 fn pool_setting_with(
     vars: Vars<'_>,
@@ -78,13 +71,7 @@ fn pool_setting_with(
 }
 
 /// A capacity that was set (`BARCA_CAPACITY` > `[execution] capacity`), and where.
-pub type CapacitySetting = Option<(usize, &'static str)>;
-
-/// `BARCA_CAPACITY` > `[execution] capacity` > not set (the pool size applies). Anything but a
-/// whole number of at least 1 is a usage error naming where it came from.
-pub fn capacity_setting(file: Option<&ExecutionToml>) -> Result<CapacitySetting, BarcaError> {
-    capacity_setting_with(Vars::Process, file)
-}
+pub(crate) type CapacitySetting = Option<(usize, &'static str)>;
 
 fn capacity_setting_with(
     vars: Vars<'_>,
@@ -110,7 +97,7 @@ fn capacity_setting_with(
 
 /// The capacity and pool size settings of the project at `cwd` (its barca.toml and the
 /// environment), for commands that resolve nothing else (`barca plan`).
-pub fn execution_in(cwd: &Path) -> Result<(CapacitySetting, PoolSetting), BarcaError> {
+pub(crate) fn execution_in(cwd: &Path) -> Result<(CapacitySetting, PoolSetting), BarcaError> {
     execution_with(cwd, Vars::Process)
 }
 
@@ -158,7 +145,7 @@ pub struct ServerToml {
 
 /// How long `barca serve` waits for in-flight runs on SIGTERM or SIGINT by default: the
 /// grace period Kubernetes gives a pod.
-pub const DEFAULT_DRAIN_TIMEOUT_SECS: u64 = 30;
+pub(crate) const DEFAULT_DRAIN_TIMEOUT_SECS: u64 = 30;
 
 /// `[discovery]`: which files a walk of the project finds (see `discover`).
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -195,10 +182,10 @@ pub struct RemoteToml {
 
 /// The release that removed the shared history: `optimistic` mode, `[remote] state`,
 /// `BARCA_STATE` and the settings that went with them (RFC-0009).
-pub const SHARED_HISTORY_REMOVED_IN: &str = "0.26.0";
+pub(crate) const SHARED_HISTORY_REMOVED_IN: &str = "0.26.0";
 
 /// How many metadata backups are kept, in the store and in the local backup directory each.
-pub const BACKUPS_KEPT: usize = 5;
+pub(crate) const BACKUPS_KEPT: usize = 5;
 
 /// Routine metadata backup policy. `None` disables routine work, never final backups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -615,7 +602,7 @@ fn join_uri(base: &str, segment: &str) -> String {
 }
 
 /// Resolve the effective configuration. `cli_env` is the `--env` flag.
-/// Does not create any directories — see `db::ensure_env_dirs`.
+/// Does not create any directories — see [`crate::layout::ensure_env_dirs`].
 pub fn resolve(cli_env: Option<&str>) -> Result<ResolvedConfig, BarcaError> {
     let cwd = std::env::current_dir()
         .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
@@ -750,7 +737,7 @@ pub fn resolve_with(
 
     match vars.get("BARCA_REMOTE").as_deref() {
         Some("off") => {
-            let local = crate::db::env_local_paths(&env);
+            let local = crate::layout::env_local_paths(&env);
             return Ok(ResolvedConfig {
                 project_root: cwd.to_path_buf(),
                 remote_off: true,
@@ -795,7 +782,7 @@ pub fn resolve_with(
     let remote_uri = vars.get("BARCA_REMOTE_URI").or(remote.uri);
 
     // Local layout (default env keeps the legacy paths — zero migration).
-    let local = crate::db::env_local_paths(&env);
+    let local = crate::layout::env_local_paths(&env);
 
     // artifacts: BARCA_ARTIFACT_URI (0.4.0 back-compat, literal) >
     //            [remote].artifacts_uri (literal) > {uri}/{env}/artifacts > local

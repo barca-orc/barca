@@ -4,10 +4,9 @@
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
 
-from barca.api import _find_binary
+from .helpers import barca as run_barca
 
 SPEC = Path(__file__).resolve().parents[2] / "specs" / "interfaces" / "dot-barca-layout.md"
 
@@ -54,9 +53,7 @@ def spec_entries() -> list[re.Pattern]:
 
 
 def barca(project: Path, env: dict, *args: str) -> dict:
-    proc = subprocess.run(
-        [_find_binary(), *args, "--json"], cwd=project, env=env, capture_output=True, text=True
-    )
+    proc = run_barca(project, *args, "--json", env=env)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 

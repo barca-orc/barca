@@ -5,6 +5,8 @@
  */
 
 import type { GraphState } from './graphState'
+import { statusMeta } from './status'
+import type { Tone } from './tone'
 import type { NodeRunning, NodeState, StatusKind, TriggeredBy } from './types'
 
 /** `/state` poll interval while some node is running, and otherwise. */
@@ -24,7 +26,7 @@ export function runningStatus(running: NodeRunning): StatusKind {
 }
 
 /** `3/10 keys` for a partitioned node, else null. */
-export function keysLabel(running: NodeRunning): string | null {
+function keysLabel(running: NodeRunning): string | null {
   const p = running.partitions
   return p ? `${p.done}/${p.total} keys` : null
 }
@@ -54,9 +56,12 @@ export function elapsedLabel(startedAt: string, nowMs: number): string {
 /** The graph/table state of a running node: it pulses (running) or waits (queued). */
 export function runningGraphState(running: NodeRunning): GraphState {
   const keys = keysLabel(running)
-  const word = running.step === 'running' ? 'Running' : 'Running · queued'
+  const status = runningStatus(running)
+  const word = statusMeta(status).label
   return {
-    status: runningStatus(running),
+    kind: 'run',
+    tone: statusMeta(status).tone,
+    status,
     label: keys ? `${word} · ${keys}` : word,
     hint: `Run ${running.run_id}, started by ${startedBy(running.triggered_by)}`,
   }
@@ -64,7 +69,7 @@ export function runningGraphState(running: NodeRunning): GraphState {
 
 /** The Running badge of the assets list: label with elapsed time, and the run's link. */
 export interface RunningBadge {
-  status: StatusKind
+  tone: Tone
   label: string
   hint: string
   href: string
@@ -74,7 +79,7 @@ export function runningBadge(running: NodeRunning, nowMs: number): RunningBadge 
   const state = runningGraphState(running)
   const elapsed = elapsedLabel(running.started_at, nowMs)
   return {
-    status: state.status,
+    tone: state.tone,
     label: elapsed ? `${state.label} · ${elapsed}` : state.label,
     hint: state.hint,
     href: runHref(running.run_id),

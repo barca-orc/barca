@@ -26,7 +26,7 @@ pub mod tables;
 
 /// Local copies of remote artifacts, laid out as `<scheme>/<bucket>/<path>`. Every environment
 /// shares it: the object's full URI is the key.
-pub const CACHE_DIR: &str = ".barca/sql-cache";
+pub(crate) const CACHE_DIR: &str = ".barca/sql-cache";
 
 /// One file of a view: a stored result, and for a partitioned asset its key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -159,15 +159,9 @@ struct HelperOutput {
     error: Option<HelperError>,
 }
 
+/// An artifact's format from its file name ([`crate::artifact_format::format_of`]).
 fn format_of(path: &str) -> String {
-    match Path::new(path).extension().and_then(|e| e.to_str()) {
-        Some("parquet") => "parquet",
-        Some("csv") => "csv",
-        Some("json") => "json",
-        Some("pkl") | Some("pickle") => "pickle",
-        _ => "unknown",
-    }
-    .to_string()
+    crate::artifact_format::format_of(path).to_string()
 }
 
 /// Whether `query` names the view `name`: the name as a whole word, in any case (the same rule

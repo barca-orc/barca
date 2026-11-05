@@ -13,7 +13,8 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from . import helpers
 
 COMMON = """
 def bucket_ltv(total):
@@ -75,14 +76,7 @@ def project(tmp_path) -> Path:
 
 
 def barca(project: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env={**os.environ, **ENV, **(env or {})},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return helpers.barca(project, *args, env={**os.environ, **ENV, **(env or {})})
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:

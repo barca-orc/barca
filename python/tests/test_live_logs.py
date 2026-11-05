@@ -2,7 +2,6 @@
 and logs read from a server (`barca docs logs`)."""
 
 import json
-import os
 import queue
 import re
 import subprocess
@@ -13,7 +12,8 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
-from .test_serve_robustness import Server, wait_for
+from .helpers import QUICK, RUN, barca, clean_env, wait_until
+from .served import Serve
 
 TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
 
@@ -64,14 +64,14 @@ def flood():
     return 1
 """
 
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
-
 
 def _env(**extra):
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
-    env.update(extra)
-    return env
+    return clean_env(PYTHONPATH=str(Path(__file__).resolve().parents[1]), **extra)
+
+
+def Server(root, *args):
+    """A `barca serve` with the pool size the local runs use."""
+    return Serve(root, *args, env=clean_env(BARCA_POOL_SIZE="2"))
 
 
 @pytest.fixture
@@ -82,14 +82,7 @@ def project(tmp_path):
 
 
 def cli(project, *args, code=0, **env):
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env=_env(**env),
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
+    proc = barca(project, *args, env=_env(**env), timeout=RUN)
     assert proc.returncode == code, proc.stderr
     return proc
 
@@ -120,7 +113,7 @@ class Reader:
     def next(self, timeout=30.0):
         return self.lines.get(timeout=timeout)
 
-    def finish(self, timeout=30.0):
+    def finish(self, timeout=QUICK):
         code = self.proc.wait(timeout=timeout)
         rest = []
         while not self.lines.empty():
@@ -178,7 +171,7 @@ def test_follow_prints_lines_as_they_arrive_and_exits_with_the_run(project):
         text=True,
     )
     try:
-        running = wait_for(
+        running = wait_until(
             lambda: [
                 r
                 for r in json.loads(cli(project, "history", "--json").stdout)["runs"]
@@ -204,7 +197,7 @@ def test_follow_prints_lines_as_they_arrive_and_exits_with_the_run(project):
         assert rest == []
         assert f"following the newest running run: {run_id}" in stderr
         assert f"run {run_id} ended: success" in stderr
-        assert run.wait(timeout=30) == 0
+        assert run.wait(timeout=QUICK) == 0
         assert not spool.exists()
         # A finished run: printed at once, and the run's exit code.
         done = cli(project, "logs", run_id, "-f", "--pretty")
@@ -216,7 +209,7 @@ def test_follow_prints_lines_as_they_arrive_and_exits_with_the_run(project):
         (project / "release").touch()
         if run.poll() is None:
             run.kill()
-        run.wait(timeout=30)
+        run.wait(timeout=QUICK)
 
 
 def test_a_run_records_at_most_its_cap(project):
@@ -252,7 +245,7 @@ def test_logs_of_a_server_run_and_following_it(project):
 
         # Follow a run the server is running.
         started = Reader(project, "run", "gated", "pipeline.py", "--server", url, "--json")
-        wait_for(
+        wait_until(
             lambda: any(
                 r["status"] == "running"
                 for r in json.loads(cli(project, "history", "--server", url, "--json").stdout)[
@@ -330,7 +323,7 @@ def test_a_configured_server_points_at_runs_of_this_machine(tmp_path):
         assert json.loads(plain.stdout)[0]["line"] == "hi from server"
         # Not with --server <url>, and not when the server's run is the newer one.
         assert note not in cli(laptop, "logs", "--server", url, "--json").stderr
-        time.sleep(1.1)
+        time.sleep(1.1)  # fixed wait: start times are recorded to the second
         cli(laptop, "run", "hello", "pipeline.py", "--server", url, "--json")
         assert "[barca] note" not in cli(laptop, "logs", "--json", BARCA_SERVER=url).stderr
     finally:

@@ -12,7 +12,7 @@ import { formatAgo } from './time'
 import type { ListNode, NodeGroup, PartitionKeyRow, RunSummary } from './types'
 
 /** What a result does: go somewhere, or one of the page's actions. */
-export type PaletteTarget = { type: 'go'; to: string } | { type: 'run' } | { type: 'open_graph' }
+type PaletteTarget = { type: 'go'; to: string } | { type: 'run' } | { type: 'open_graph' }
 
 export interface PaletteItem {
   key: string
@@ -22,7 +22,7 @@ export interface PaletteItem {
   target: PaletteTarget
 }
 
-export const PALETTE_LIMIT = 50
+const PALETTE_LIMIT = 50
 /** How many partitioned nodes a key query asks, and how many keys each may answer with. */
 export const KEY_SEARCH_NODES = 8
 export const KEYS_PER_NODE = 5
@@ -122,13 +122,13 @@ export function searchPalette(items: readonly PaletteItem[], query: string, keys
   return [...found, ...keys].slice(0, limit)
 }
 
-export interface PaletteModel {
+interface PaletteModel {
   query: string
   /** The highlighted result. */
   active: number
 }
 
-export type PaletteMsg = { type: 'query_changed'; value: string } | { type: 'moved'; by: number; count: number }
+type PaletteMsg = { type: 'query_changed'; value: string } | { type: 'moved'; by: number; count: number }
 
 export const INITIAL_PALETTE: PaletteModel = { query: '', active: 0 }
 

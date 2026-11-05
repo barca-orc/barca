@@ -4,7 +4,25 @@
    console look without extra setup. Kept intentionally small.
    ============================================================ */
 
-*, *::before, *::after { box-sizing: border-box; }
+/* The reset: what Tailwind's preflight gave this UI, written out. Every element starts from
+   nothing; the components give back what they need. */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; border: 0 solid; }
+h1, h2, h3, h4, h5, h6 { font-size: inherit; font-weight: inherit; }
+ol, ul, menu { list-style: none; }
+img, svg, video, canvas, audio, iframe, embed, object { display: block; vertical-align: middle; }
+img, video { max-width: 100%; height: auto; }
+button, input, select, optgroup, textarea {
+  font: inherit; letter-spacing: inherit; color: inherit;
+  border-radius: 0; background-color: transparent; opacity: 1;
+}
+button, [role="button"] { cursor: pointer; }
+button, input:where([type="button"], [type="reset"], [type="submit"]) { appearance: button; }
+textarea { resize: vertical; }
+table { text-indent: 0; border-color: inherit; border-collapse: collapse; }
+summary { display: list-item; }
+b, strong { font-weight: bolder; }
+small { font-size: 80%; }
+[hidden]:where(:not([hidden="until-found"])) { display: none !important; }
 
 html {
   -webkit-text-size-adjust: 100%;
@@ -48,7 +66,7 @@ body {
 a { color: var(--text-link); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 2px; }
 
-code, kbd, samp { font-family: var(--font-code); font-size: 0.92em; }
+code, kbd, samp, pre { font-family: var(--font-code); font-size: 0.92em; }
 
 hr {
   border: none;

@@ -19,8 +19,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write   # push the tag
-  actions: write    # dispatch release.yml
+  contents: read
 
 concurrency:
   group: release-tag
@@ -33,6 +32,10 @@ jobs:
       startsWith(github.event.pull_request.head.ref, 'release/v') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write   # push the tag
+      actions: write    # dispatch release.yml
     steps:
       - uses: actions/checkout@v4
         with:

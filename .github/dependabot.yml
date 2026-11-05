@@ -1,0 +1,70 @@
+# Dependency updates, weekly, one grouped PR per ecosystem for minor and patch bumps (a major
+# bump gets a PR of its own). CI's fast tier runs on each PR; `uv lock --check` and
+# `cargo metadata --locked` in the hooks keep the lockfiles honest.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Pinned to the ruff release the parser is tested against (Cargo.toml).
+      - dependency-name: ruff_python_parser
+      - dependency-name: ruff_python_ast
+      - dependency-name: ruff_text_size
+      # Pinned exactly (Cargo.toml).
+      - dependency-name: libsql
+
+  # pyproject.toml and uv.lock: the test extra and the dev group (ruff, ty; prek.toml pins the
+  # same versions, scripts/check-version-sync.sh checks they match).
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # The dev group pins the versions prek.toml runs; a bump here alone fails the version
+      # sync check, so both move together by hand (scripts/check-fast.sh runs the hooks).
+      - dependency-name: ruff
+      - dependency-name: ty
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      ui-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      site-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    # Covers .github/workflows; .depot/ (the CI workflow and its composite actions) is not
+    # a directory Dependabot reads, so bump those action versions by hand when these move.
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        update-types: [minor, patch]

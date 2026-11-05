@@ -40,124 +40,31 @@ barca history --pretty               # a table even when piped
 BARCA_OUTPUT=json barca get total pipeline.py
 ```
 
-## Output contract
+## Output contract and errors
 
-- **stdout** carries the result: one JSON object for `get`/`run`, the plan JSON for `plan`, and
-  JSON for `list`/`history`/`stats` (whenever the rule above picks JSON). It is safe to parse.
-- **stderr** carries progress (`[barca] 2/2 steps | done in 0.0s`), your own `print` output from
-  steps in non-JSON modes, warnings and errors. JSON mode retains captured prints in
-  `barca logs RUN_ID --json`; non-JSON modes prefix them with `[node_id]`. The progress bar draws only when stderr is a terminal; barca
-  writes no ANSI colour or cursor codes to a stream that is not one. Use `--agent` for plain
-  progress lines (`[barca] 1/2 ...`) on stderr instead of a progress bar.
-- **Exit codes:** one per kind of failure, so you can decide what to do from the code alone.
-  On failure stderr explains (see Errors below). stdout is empty, except that a failed step in
-  JSON mode still prints a result line with `"status": "failed"` (and a run with several targets
-  prints its full result; see below).
-
-| Code | `kind`        | Meaning                                                                         | What to do                    |
-|------|---------------|---------------------------------------------------------------------------------|-------------------------------|
-| 0    |               | success                                                                         |                               |
-| 1    | `step_failed` | a step of yours raised (traceback included); the run is recorded as failed      | fix the code, re-run          |
-| 2    | `usage`       | bad flags or arguments, unknown target, task/asset misuse, unreadable or invalid `.py` file, invalid `--env` or barca.toml | fix the command |
-| 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O    | not your code; retrying may help |
-| 130  | `cancelled`   | stopped by Ctrl-C (SIGINT) or SIGTERM                                           | re-run                        |
-
-A reader that stops early is not an error. `barca list | head -1` and
-`barca list | grep -q name` exit 0 (also under `set -o pipefail`), and a `get` or `run` whose
-output nobody reads still finishes and is recorded, so
-`barca run deploy pipeline.py 2>&1 | head -20` runs the whole deploy (`barca docs contract`,
-"A closed stdout or stderr").
-
-A decorator argument barca does not define (`@asset(after=other)`, `input=` for `inputs=`) is a
-`usage` error on every command that reads the file; the envelope names the node, the line, the
-argument and the accepted ones (`barca docs assets`, "Accepted arguments").
+The contract is written down once, in `barca docs contract`: stdout carries the result (one JSON
+object for `get`/`run`, the plan for `plan`, JSON for `list`/`status`/`history`/`stats` whenever
+the rule above picks JSON); stderr carries progress, warnings, your steps' prints in non-JSON
+modes and errors; the exit codes are its generated "Exit codes" table (0 success, 1
+`step_failed`, 2 `usage`, 3 `infra`, 130 `cancelled`); the one-line JSON error envelope
+(`error`, `code`, `kind`, `remediation`, and `node`, `traceback`, `artifact_dir`, `phase` for a
+failed step) is its "Error envelope"; and every JSON schema is there with a snapshot. What
+follows here is how to use that contract from a script or an agent.
 
 ```bash
 barca get total pipeline.py --agent > result.json 2> progress.log
-echo $?
+echo $?   # 0 ok, 1 a step failed, 2 usage, 3 infra, 130 cancelled
 ```
 
-## Errors
-
-In JSON output mode (whenever the output rule above picks JSON: piped or captured stdout,
-`--json`, `-o json` or `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`) an error is
-**one JSON line** on stderr (a failed run adds its summary afterwards):
-
-```
-{"code":2,"error":"Asset 'nope' not found. Available: pipeline.py:src, pipeline.py:total, pipeline.py:clean","kind":"usage","remediation":"Run `barca list pipeline.py` to see available assets and tasks."}
-```
-
-| Field          | Always | Meaning                                                              |
-|----------------|--------|----------------------------------------------------------------------|
-| `error`        | yes    | what went wrong                                                      |
-| `code`         | yes    | the exit code (table above)                                          |
-| `kind`         | yes    | `usage`, `step_failed`, `infra` or `cancelled`                       |
-| `remediation`  | yes    | what to do next, often a command to run                              |
-| `node`         | `step_failed` | the failing step's id, e.g. `pipeline.py:clean`               |
-| `traceback`    | `step_failed` | the Python traceback of your code (barca frames removed), or null; every frame when `phase` is not `user_code` |
-| `artifact_dir` | `step_failed` | where that step's artifacts are stored (a path or remote URI); it may not exist if the step never succeeded |
-| `phase`        | `step_failed` | where the step failed: `user_code` (your code), or barca's own work around it: `load_inputs`, `split_output`, `write_output`, `sink`; null when unknown (a worker that died) |
-
-A failed step looks like this (one line; wrapped here):
-
-```
-{"artifact_dir":".barca/artifacts/pipeline.py--clean","code":1,
- "error":"step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero","kind":"step_failed",
- "node":"pipeline.py:clean","phase":"user_code","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.",
- "traceback":"  File \"/abs/path/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
-```
-
-A step can also fail in barca's own code around it: reading its inputs, splitting a batched
-call's result, writing its result or its sinks. `phase` names which (`barca docs contract`,
-"Error envelope"), the traceback keeps barca's frames, and the prose says
-`Step '...' failed in barca while writing its result (phase write_output): ...`. The kind and
-exit code are those of any failed step. Read the message first: it often names what in the
-step or its inputs to change (a value pickle cannot write, a sink path that cannot be written);
-otherwise the traceback is what to report.
-
-A worker process that dies while it runs a step (killed by the kernel's out-of-memory killer,
-a segfault in a C extension, `os._exit()` in your code) fails that step with `kind`
-`step_failed` and exit 1, and the error names how the process ended, in the result JSON, the
-envelope, the `step:` line and the final `run failed:` line:
-
-```
-worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)
-worker for pipeline.py:train exited with SIGSEGV
-worker for pipeline.py:train exited with code 3
-```
-
-SIGKILL is what the out-of-memory killer sends, so check the container's or host's memory
-limit (`dmesg`, `docker inspect`, the pod's `OOMKilled` status) when you see it; several heavy
-steps running at once in separate workers add up. Give those steps a `weight=` so fewer run at
-once (`barca docs assets`, "Heavy steps"). A worker that was frozen waiting for its
-`parallel()` branches adds `while it waited for its parallel() branches`. When the exit
-status is not available within a few hundred milliseconds of the connection closing, the
-error is the plain `worker disconnected`. There is no traceback, since the process could not
-write one; retries (`retries=`) apply as for any failed step.
-
-Read the last JSON object on stderr with `kind` and `error`; other lines are progress,
-your steps' own output and the final run summary.
-In human mode (a terminal, `--pretty`, `-o pretty`, `-o path` or `-o value`) the same error is plain prose with the
-remediation before the final run summary. Errors never go to stdout. From Python, `barca.BarcaError` carries
-the envelope as attributes: `kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`,
-`phase`.
-
-When a step fails in JSON mode, `get`/`run` still print one result line on stdout, so you can
-read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..., "error": ...,
-"run_id", "steps", ...}`, where the failed step's `status` is `failed`. A successful result has
-`"status": "success"`. After the error, stderr ends with one greppable line:
-`[barca] run failed: step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero; 0 downstream steps skipped (exit 1)`.
-
-`get`/`run` JSON fields: `status` (`success`, or `failed` as above), `run_id`, `elapsed_seconds`,
-`steps_executed` (0 means everything was a cache hit), `phases`, `steps` (what happened to each
-step: `status` ran/cached/partial and why, plus `env`, the declared environment variable values
-used, for nodes with `env=[...]`, and `artifact_mismatch: true` when the artifact store's copy
-of the step's result, or of an input it read, is not the one that was recorded: `barca docs
-remote`),
-`final_output`. On `run`, `final_output` is the task's value for a json artifact and
-`{"_barca_artifact": {"path", "format", "size_bytes"}}` for parquet and pickle
-(`barca docs types`). On `get` it is always that pointer, whatever the format; see the next
-section.
+Read the last JSON object on stderr with `kind` and `error`; other lines are progress, your
+steps' own output and the final run summary. When a step fails in JSON mode, `get`/`run` still
+print one result line on stdout (`"status": "failed"`, `failed_node`, `error`, `run_id`,
+`steps`), and stderr ends with one greppable line: `[barca] run failed: step '...' failed: ...;
+0 downstream steps skipped (exit 1)`. From Python, `barca.BarcaError` carries the envelope as
+attributes. A worker that dies (the OOM killer, a segfault, `os._exit()`) fails its step with
+`kind` `step_failed` and an error naming how the process ended (`exited with SIGKILL (possibly
+the OOM killer)`); there is no traceback, and `retries=` applies (`barca docs contract`, "Error
+envelope"; `barca docs assets`, "Heavy steps" for giving heavy steps a `weight=`).
 
 ### What `barca get` returns: paths by default
 
@@ -458,20 +365,10 @@ barca status --problems --local                     # this machine's own state, 
 ```
 
 Against a server with an asset that raises, an asset whose code changed, and a scheduled task
-that failed `max_failures=2` ticks in a row:
-
-```text
-$ barca status --problems
-[barca] server http://127.0.0.1:8391 ([server] url in barca.toml)
-NAME          KIND   STATE        WHY                                                       LAST RUN                               SHAPE         SCHEDULE                    DEPS
-nightly_sync  task   always-runs  last run failed: RuntimeError: upstream API returned 503  failed 2026-10-22 22:51:16 UTC         -             */2 * * * * *; failing 2/2  -
-prices        asset  stale        changed: code                                             success 2026-10-22 22:51:12 UTC 0.00s  dict (1 key)  -                           -
-ratio         asset  never-run    failed: ZeroDivisionError: division by zero               failed 2026-10-22 22:51:12 UTC         -             -                           orders
-
-3 of 4 nodes match --problems; the counts below are for every node
-
-1 cached, 1 stale, 1 never run, 0 partial, 0 unknown, 1 always run
-```
+that failed `max_failures=2` ticks in a row, `barca status --problems` lists the three nodes with
+their WHY (`failed: ZeroDivisionError...`, `changed: code`, `last run failed: ...; failing 2/2`)
+before the summary of every node; the table is shown in `barca docs status`, "Finding problems".
+The failed runs behind them:
 
 ```text
 $ barca history --status failed
@@ -618,7 +515,7 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
 - You can run barca from any directory inside a project with a `barca.toml`: barca changes into
   that directory (the project root) first, reads file arguments relative to where you typed
   them, and uses the root's `.barca/` cache. Node ids are relative to the root. See
-  `barca docs cache` ("Where things live"). `barca list --json` and `barca status --json` carry the
+  `barca docs layout`. `barca list --json` and `barca status --json` carry the
   absolute `root`.
 - `get` is for assets and `run` is for tasks; using the wrong one exits 2 and says which to use.
 - The target comes before the files. If the first positional ends in `.py` and a later one does

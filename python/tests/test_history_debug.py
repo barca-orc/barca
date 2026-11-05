@@ -5,16 +5,15 @@ run"; `barca docs server-mode`).
 """
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from . import served
-from .test_server_ledger import SCRUB, WAIT, toml
+from .helpers import RUN, clean_env
+from .helpers import barca as run_barca
+from .test_server_ledger import toml
 
 PIPELINE = """
 import os
@@ -61,20 +60,11 @@ def ticker() -> int:
 
 
 def _env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["BARCA_POOL_SIZE"] = "2"
-    return env
+    return clean_env(BARCA_POOL_SIZE="2")
 
 
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=_env(),
-        timeout=WAIT,
-    )
+    return run_barca(cwd, *args, env=_env(), timeout=RUN)
 
 
 def history(cwd: Path, *args: str) -> dict:

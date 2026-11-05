@@ -41,9 +41,10 @@ impl UpsertEstimate {
     }
 }
 
+#[cfg(test)]
 /// Load every persisted per-node cost estimate (run start — seeds the
 /// in-memory `CostModel` so batch sizing starts pre-warmed).
-pub async fn load_cost_estimates(
+pub(crate) async fn load_cost_estimates(
     db_path: &str,
 ) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
     let _g = db_guard_for(db_path).await;
@@ -103,9 +104,10 @@ pub(super) async fn cost_estimates_on(
     Ok(out)
 }
 
+#[cfg(test)]
 /// Upsert per-node cost estimates (run end — persists the EWMA so the next
 /// run skips the cold-start probe entirely).
-pub async fn upsert_cost_estimates(
+pub(crate) async fn upsert_cost_estimates(
     db_path: &str,
     estimates: &[(String, crate::cost::NodeEstimate)],
 ) -> Result<(), BarcaError> {

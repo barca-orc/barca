@@ -4,6 +4,7 @@ every run of the server, the run timeout, and the stop grace a supervisor must g
 Every serve test runs a real `barca serve` on a free port and drives it over HTTP.
 """
 
+import contextlib
 import json
 import os
 import signal
@@ -14,13 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
-from . import test_serve_queue as queue_tests
-from .test_serve_queue import Server, _free_port, wait_for
-
-# Extra environment for the next server started (`Serve(env=...)`).
-EXTRA: dict[str, str] = {}
+from . import helpers
+from .helpers import RUN, clean_env, free_port, wait_until
+from .served import Serve
 
 HOLD = """
 import os
@@ -67,57 +64,45 @@ def release(project: Path, name: str) -> None:
     (project / f"release-{name}").write_text("")
 
 
+def environment(**extra: str) -> dict[str, str]:
+    """A scrubbed shell without a pinned pool size, so sizing is barca's own, and not under a
+    supervisor: a test session can itself run under systemd or Kubernetes."""
+    env = clean_env()
+    for name in ("INVOCATION_ID", "KUBERNETES_SERVICE_HOST"):
+        env.pop(name, None)
+    env.update(extra)
+    return env
+
+
 def barca(cwd: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    scrubbed = {k: v for k, v in os.environ.items() if not k.startswith(queue_tests.SCRUB)}
-    scrubbed.update(env)
-    return subprocess.run(
-        [_find_binary(), *args], cwd=cwd, capture_output=True, text=True, env=scrubbed, timeout=120
-    )
+    return helpers.barca(cwd, *args, env=clean_env(**env), timeout=RUN)
 
 
-class Serve(Server):
-    """`Server` with this module's environment: no `BARCA_POOL_SIZE` unless given."""
-
-    def __init__(self, cwd: Path, *args: str, env: dict[str, str] | None = None) -> None:
-        EXTRA.clear()
-        EXTRA.update(env or {})
-        try:
-            super().__init__(cwd, _free_port(), *args)
-        finally:
-            EXTRA.clear()
-
-    def __enter__(self) -> "Serve":
-        return self
-
-    def __exit__(self, exc_type, *_exc) -> None:
-        self.kill()
-        if exc_type is not None:
-            print(self.output())
+def start_server(cwd: Path, *args: str, port: int | None = None, env: dict[str, str] | None = None):
+    """A `barca serve` with this module's environment, which the caller stops."""
+    return Serve(cwd, *args, env=environment(**(env or {})), port=port)
 
 
-@pytest.fixture(autouse=True)
-def _environment(monkeypatch):
-    """`Server` starts with `_env()`; drop the pool size it pins, so sizing is barca's own."""
-
-    def env(**extra: str) -> dict[str, str]:
-        out = {k: v for k, v in os.environ.items() if not k.startswith(queue_tests.SCRUB)}
-        # A test session can itself run under systemd or Kubernetes.
-        for name in ("INVOCATION_ID", "KUBERNETES_SERVICE_HOST"):
-            out.pop(name, None)
-        out.update(EXTRA)
-        out.update(extra)
-        return out
-
-    monkeypatch.setattr(queue_tests, "_env", env)
+@contextlib.contextmanager
+def serving(cwd: Path, *args: str, env: dict[str, str] | None = None):
+    """[`start_server`], killed on exit; its output is printed when the block fails."""
+    started = start_server(cwd, *args, env=env)
+    try:
+        yield started
+    except BaseException:
+        print(started.output())
+        raise
+    finally:
+        started.kill()
 
 
-def submit(server: Server, target: str) -> str:
+def submit(server: Serve, target: str) -> str:
     status, body = server.request("POST", "/runs", {"command": "run", "targets": [target]})
     assert status == 202, body
     return body["run_id"]
 
 
-def queue(server: Server) -> dict:
+def queue(server: Serve) -> dict:
     return server.request("GET", "/queue")[1]
 
 
@@ -257,10 +242,10 @@ def heavy() -> None:
 
 def test_a_light_run_proceeds_while_a_heavy_run_holds_the_rest(tmp_path):
     project = write(tmp_path / "p", SHARED)
-    with Serve(project, "--capacity", "4", "--max-runs", "4") as server:
+    with serving(project, "--capacity", "4", "--max-runs", "4") as server:
         # The rebuild has two heavy steps ready at once; weight 3 each, so one at a time.
         rebuild = submit(server, "rebuild")
-        wait_for(
+        wait_until(
             lambda: started(project, "customer_a") + started(project, "customer_b") == 1,
             "a heavy step to start",
         )
@@ -279,29 +264,28 @@ def test_a_light_run_proceeds_while_a_heavy_run_holds_the_rest(tmp_path):
         health = server.request("GET", "/health")[1]
         assert health["queue"]["capacity"] == {"total": 4, "in_use": 3, "waiting": 0}
         release(project, first)
-        wait_for(lambda: started(project, second) == 1, "the second heavy step")
+        wait_until(lambda: started(project, second) == 1, "the second heavy step")
         release(project, second)
         assert server.finished(rebuild)["status"] == "success"
         assert queue(server)["capacity"]["in_use"] == 0
-        print(server.output())
 
 
 def test_a_heavy_step_is_not_starved_by_light_ones(tmp_path):
     project = write(tmp_path / "p", SHARED)
-    with Serve(project, "--capacity", "2", "--max-runs", "4") as server:
+    with serving(project, "--capacity", "2", "--max-runs", "4") as server:
         first = submit(server, "light")
-        wait_for(lambda: started(project, "light") == 1, "the first light step")
+        wait_until(lambda: started(project, "light") == 1, "the first light step")
         heavy = submit(server, "heavy")
-        wait_for(lambda: queue(server)["capacity"]["waiting"], "the heavy step to wait")
+        wait_until(lambda: queue(server)["capacity"]["waiting"], "the heavy step to wait")
         # One unit is free, and a light step fits it, but it asked after the heavy step.
         later = submit(server, "light_two")
-        wait_for(lambda: len(queue(server)["capacity"]["waiting"]) == 2, "the light step to wait")
-        time.sleep(1)
+        wait_until(lambda: len(queue(server)["capacity"]["waiting"]) == 2, "the light step to wait")
+        time.sleep(1)  # a fixed wait: the light step must not start while the heavy one waits
         assert started(project, "light_two") == 0, "a light step overtook the heavy one"
         waiting = [w["node"] for w in queue(server)["capacity"]["waiting"]]
         assert waiting == ["pipeline.py:heavy", "pipeline.py:light_two"]
         release(project, "light")
-        wait_for(lambda: started(project, "heavy") == 1, "the heavy step to start")
+        wait_until(lambda: started(project, "heavy") == 1, "the heavy step to start")
         assert started(project, "light_two") == 0
         release(project, "heavy")
         release(project, "light_two")
@@ -323,7 +307,7 @@ def ticking() -> None:
 """
 
 
-def assert_timed_out(server: Server, run_id: str, source: str) -> None:
+def assert_timed_out(server: Serve, run_id: str, source: str) -> None:
     run = server.finished(run_id)
     assert run["status"] == "error", run
     text = json.dumps(run)
@@ -332,10 +316,10 @@ def assert_timed_out(server: Server, run_id: str, source: str) -> None:
 
 def test_no_run_timeout_by_default(tmp_path):
     project = write(tmp_path / "p", TIMEOUT)
-    with Serve(project, "--no-schedule") as server:
+    with serving(project, "--no-schedule") as server:
         run_id = submit(server, "slow")
-        wait_for(lambda: started(project, "slow"), "the step to start")
-        time.sleep(3)
+        wait_until(lambda: started(project, "slow"), "the step to start")
+        time.sleep(3)  # a fixed wait: no timeout may end the run
         assert server.run(run_id)["status"] == "running"
         release(project, "slow")
         assert server.finished(run_id)["status"] == "success"
@@ -343,7 +327,7 @@ def test_no_run_timeout_by_default(tmp_path):
 
 def test_the_run_timeout_flag_stops_a_long_run(tmp_path):
     project = write(tmp_path / "p", TIMEOUT)
-    with Serve(project, "--no-schedule", "--run-timeout", "2") as server:
+    with serving(project, "--no-schedule", "--run-timeout", "2") as server:
         run_id = submit(server, "slow")
         assert_timed_out(server, run_id, "run timed out after 2s (--run-timeout)")
     history = barca(project, "history", "--json", "--local", BARCA_REMOTE="off")
@@ -356,13 +340,13 @@ def test_the_run_timeout_flag_stops_a_long_run(tmp_path):
 
 def test_the_server_setting_stops_a_long_run_and_the_flag_wins(tmp_path):
     project = write(tmp_path / "p", TIMEOUT, "[server]\nrun_timeout_seconds = 2\n")
-    with Serve(project, "--no-schedule") as server:
+    with serving(project, "--no-schedule") as server:
         run_id = submit(server, "slow")
         assert_timed_out(server, run_id, "run timed out after 2s ([server] run_timeout_seconds)")
-    with Serve(project, "--no-schedule", "--run-timeout", "0") as server:
+    with serving(project, "--no-schedule", "--run-timeout", "0") as server:
         run_id = submit(server, "slow")
-        wait_for(lambda: started(project, "slow") >= 2, "the step to start")
-        time.sleep(3)
+        wait_until(lambda: started(project, "slow") >= 2, "the step to start")
+        time.sleep(3)  # a fixed wait: no timeout may end the run
         assert server.run(run_id)["status"] == "running", "0 is no limit"
         release(project, "slow")
         assert server.finished(run_id)["status"] == "success"
@@ -370,8 +354,8 @@ def test_the_server_setting_stops_a_long_run_and_the_flag_wins(tmp_path):
 
 def test_a_schedule_timeout_stops_its_ticks(tmp_path):
     project = write(tmp_path / "p", TIMEOUT, "[server]\nrun_timeout_seconds = 600\n")
-    with Serve(project) as server:
-        tick = wait_for(
+    with serving(project) as server:
+        tick = wait_until(
             lambda: next(
                 (
                     r
@@ -407,46 +391,46 @@ def test_an_invalid_schedule_timeout_is_a_parse_error(tmp_path):
 
 def test_the_startup_prints_the_stop_grace_under_a_supervisor(tmp_path):
     project = write(tmp_path / "p", SIZING, "[server]\ndrain_timeout = 5\n")
-    with Serve(project, "--no-schedule", env={"INVOCATION_ID": "abc"}) as server:
+    with serving(project, "--no-schedule", env={"INVOCATION_ID": "abc"}) as server:
         pass
     assert (
         "[barca] stop grace: systemd must allow at least 9s between SIGTERM and SIGKILL "
         "(drain timeout 5s + 4s for stopping runs and closing connections); set "
         "TimeoutStopSec= (default 90s)"
-    ) in server.output()
-    with Serve(project, "--no-schedule") as server:
+    ) in server.stderr
+    with serving(project, "--no-schedule") as server:
         pass
-    assert "stop grace" not in server.output()
+    assert "stop grace" not in server.stderr
 
 
 def test_a_run_killed_during_the_drain_is_put_back_in_the_queue_once(tmp_path):
     project = write(tmp_path / "p", TIMEOUT, "[server]\ndrain_timeout = 60\n")
-    port = _free_port()
-    first = Server(project, port, "--no-schedule")
+    port = free_port()
+    first = start_server(project, "--no-schedule", port=port)
     run_id = submit(first, "slow")
-    wait_for(lambda: started(project, "slow") == 1, "the step to start")
+    wait_until(lambda: started(project, "slow") == 1, "the step to start")
     # The supervisor's SIGTERM starts the drain; its SIGKILL comes before the drain ends.
-    first.proc.send_signal(signal.SIGTERM)
-    wait_for(lambda: "draining" in first.output(), "the drain to start")
-    time.sleep(0.5)
+    first.send(signal.SIGTERM)
+    wait_until(lambda: "draining" in first.stderr, "the drain to start")
+    time.sleep(0.5)  # a fixed wait: the SIGKILL lands in the middle of the drain
     first.kill()
 
-    second = Server(project, port, "--no-schedule")
+    second = start_server(project, "--no-schedule", port=port)
     try:
         assert f"run {run_id} was in flight when the last server was killed during its drain" in (
-            second.output()
+            second.stderr
         )
-        wait_for(lambda: started(project, "slow") == 2, "the run to start again")
+        wait_until(lambda: started(project, "slow") == 2, "the run to start again")
         # Killed in a drain again: this time it is interrupted, not requeued.
-        second.proc.send_signal(signal.SIGTERM)
-        wait_for(lambda: "draining" in second.output(), "the second drain")
-        time.sleep(0.5)
+        second.send(signal.SIGTERM)
+        wait_until(lambda: "draining" in second.stderr, "the second drain")
+        time.sleep(0.5)  # a fixed wait: the SIGKILL lands in the middle of the drain
     finally:
         second.kill()
 
-    third = Server(project, port, "--no-schedule")
+    third = start_server(project, "--no-schedule", port=port)
     try:
-        assert f"run {run_id} was interrupted" in third.output(), third.output()
+        assert f"run {run_id} was interrupted" in third.stderr, third.stderr
         run = third.finished(run_id)
         assert run["status"] != "success", run
     finally:
@@ -456,15 +440,15 @@ def test_a_run_killed_during_the_drain_is_put_back_in_the_queue_once(tmp_path):
 
 def test_a_run_killed_without_a_drain_is_not_restarted(tmp_path):
     project = write(tmp_path / "p", TIMEOUT)
-    port = _free_port()
-    first = Server(project, port, "--no-schedule")
+    port = free_port()
+    first = start_server(project, "--no-schedule", port=port)
     run_id = submit(first, "slow")
-    wait_for(lambda: started(project, "slow") == 1, "the step to start")
+    wait_until(lambda: started(project, "slow") == 1, "the step to start")
     first.kill()  # SIGKILL with no SIGTERM first: the OOM killer, a crash
-    second = Server(project, port, "--no-schedule")
+    second = start_server(project, "--no-schedule", port=port)
     try:
-        assert f"run {run_id} was interrupted" in second.output(), second.output()
-        time.sleep(1)
+        assert f"run {run_id} was interrupted" in second.stderr, second.stderr
+        time.sleep(1)  # a fixed wait: the interrupted run must not start again
         assert started(project, "slow") == 1
     finally:
         second.kill()
@@ -497,7 +481,7 @@ def test_a_server_capacity_of_one_runs_one_worker_and_each_steps_peak_is_its_own
     """The pool follows the server capacity (one worker), so both steps share a worker: the
     per-step peak (#627) must still give `small` its own peak, not the 300 MB of `big`."""
     project = write(tmp_path / "p", MEMORY)
-    with Serve(project, "--capacity", "1") as server:
+    with serving(project, "--capacity", "1") as server:
         status, body = server.request("POST", "/runs", {"command": "get", "targets": ["small"]})
         assert status == 202, body
         view = server.finished(body["run_id"])
@@ -533,19 +517,19 @@ def test_a_cutoff_asset_gives_the_shared_capacity_back_between_its_phases(tmp_pa
     run holds no weight, so a step waiting in the shared capacity's line goes first, and the
     run's next phase queues behind it; nothing is left held at the end."""
     project = write(tmp_path / "p", PHASES)
-    with Serve(project, "--capacity", "2", "--max-runs", "4") as server:
+    with serving(project, "--capacity", "2", "--max-runs", "4") as server:
         status, body = server.request("POST", "/runs", {"command": "get", "targets": ["after"]})
         assert status == 202, body
         chain = body["run_id"]
-        wait_for(lambda: started(project, "gate") == 1, "the cutoff asset to start")
+        wait_until(lambda: started(project, "gate") == 1, "the cutoff asset to start")
         other = submit(server, "light")
-        wait_for(lambda: queue(server)["capacity"]["waiting"], "the light step to wait")
+        wait_until(lambda: queue(server)["capacity"]["waiting"], "the light step to wait")
         release(project, "gate")
-        wait_for(lambda: started(project, "light") == 1, "the light step to start")
-        wait_for(lambda: queue(server)["capacity"]["waiting"], "the next phase to wait")
+        wait_until(lambda: started(project, "light") == 1, "the light step to start")
+        wait_until(lambda: queue(server)["capacity"]["waiting"], "the next phase to wait")
         assert started(project, "after") == 0, "the next phase overtook a waiting step"
         release(project, "light")
-        wait_for(lambda: started(project, "after") == 1, "the next phase to start")
+        wait_until(lambda: started(project, "after") == 1, "the next phase to start")
         release(project, "after")
         assert server.finished(other)["status"] == "success"
         assert server.finished(chain)["status"] == "success"

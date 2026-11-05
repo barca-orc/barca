@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, snapshot TEXT NOT NULL)";
 
+use crate::db::BY_NODE_RUN;
 use crate::source_observation::Source;
+use crate::step_status::StepStatus;
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Proof {
     signature: String,
@@ -121,10 +123,11 @@ impl Incremental {
         }
         let mut signatures = HashMap::new();
         for id in dag.order_for(templates.keys().map(String::as_str)) {
-            if !templates.contains_key(id) {
+            // A planned node is in the DAG; a proof recorded for a node the source no longer
+            // has is never asked about (`ids` are the plan's), and would read as changed.
+            let Some(n) = dag.get_node(id).filter(|_| templates.contains_key(id)) else {
                 continue;
-            }
-            let n = dag.get_node(id).unwrap();
+            };
             let mut upstream: Vec<_> = dag
                 .upstream(id)
                 .into_iter()
@@ -192,12 +195,15 @@ impl Incremental {
     }
 
     fn count(&self, dag: &Dag, id: &str, original: &Phase) -> usize {
-        let node = dag.get_node(id).unwrap();
-        if node.extracted.partitions.is_empty() {
-            return 1;
-        }
-        if let Some((_, source)) = self.source_for(dag, id) {
-            return source.count;
+        match dag.get_node(id) {
+            Some(node) if node.extracted.partitions.is_empty() => return 1,
+            Some(_) => {
+                if let Some((_, source)) = self.source_for(dag, id) {
+                    return source.count;
+                }
+            }
+            // Not in the DAG: what the phase planned for it.
+            None => {}
         }
         original
             .streams
@@ -209,8 +215,8 @@ impl Incremental {
     }
 
     fn change(&self, dag: &Dag, id: &str) -> Change {
-        let n = dag.get_node(id).unwrap();
-        let Some(old) = self.previous.nodes.get(id) else {
+        // A node without a proof, or one the DAG no longer has, is not cached.
+        let (Some(n), Some(old)) = (dag.get_node(id), self.previous.nodes.get(id)) else {
             return Change::All;
         };
         if old.signature != self.signatures[id]
@@ -314,31 +320,31 @@ impl Incremental {
             if cached > 0 || (count == 0 && matches!(change, Change::Fresh)) {
                 self.cached.insert(id.to_owned(), cached);
                 omitted += cached;
+                let node = dag.get_node(id);
+                let partitioned = node.is_some_and(|n| !n.extracted.partitions.is_empty());
                 reports.push(StepReport {
                     id: id.to_owned(),
-                    kind: crate::report::kind_str(dag.get_node(id).map(|n| n.kind())),
-                    status: Some("cached".into()),
-                    run_hash: if dag.get_node(id).unwrap().extracted.partitions.is_empty() {
+                    kind: crate::report::kind_str(node.map(|n| n.kind())),
+                    status: Some(StepStatus::Cached.to_string()),
+                    run_hash: if partitioned {
+                        None
+                    } else {
                         self.next.nodes[id].run_hash.clone()
-                    } else {
-                        None
                     },
-                    artifact: if dag.get_node(id).unwrap().extracted.partitions.is_empty() {
-                        self.next.nodes[id].output.as_ref().map(|o| o.path.clone())
-                    } else {
+                    artifact: if partitioned {
                         None
+                    } else {
+                        self.next.nodes[id].output.as_ref().map(|o| o.path.clone())
                     },
                     env: crate::report::env_report(dag, id),
-                    undeclared_env: dag
-                        .get_node(id)
+                    undeclared_env: node
                         .map(|n| n.extracted.undeclared_env())
                         .filter(|v| !v.is_empty()),
-                    partitions: (!dag.get_node(id).unwrap().extracted.partitions.is_empty())
-                        .then_some(PartitionSummary {
-                            total: cached,
-                            cached,
-                            ..Default::default()
-                        }),
+                    partitions: partitioned.then_some(PartitionSummary {
+                        total: cached,
+                        cached,
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 });
             }
@@ -575,10 +581,9 @@ impl Incremental {
             let Some((source_id, source)) = self.source_for(dag, base) else {
                 continue;
             };
-            if !source.is_keyed() {
+            let Some(node) = dag.get_node(base).filter(|_| source.is_keyed()) else {
                 continue;
-            }
-            let node = dag.get_node(base).unwrap();
+            };
             for dim in self.templates[base].pending_partitions.keys() {
                 if !node.extracted.inherited_partitions.contains(dim)
                     && let Some(value) = key.0.get(dim)
@@ -635,8 +640,10 @@ impl Incremental {
             let template = &self.templates[&base];
             let mut step = template.with_keys(key.into_iter().collect());
             step.run_hashes.insert(display.clone(), run_hash.clone());
-            if !step.pending_partitions.is_empty() && !step.partition_keys.is_empty() {
-                let node = dag.get_node(&base).unwrap();
+            if !step.pending_partitions.is_empty()
+                && !step.partition_keys.is_empty()
+                && let Some(node) = dag.get_node(&base)
+            {
                 let mut sources = Vec::new();
                 for dim in step.pending_partitions.keys() {
                     if let Some((source_id, source)) = self.source_for(dag, &base) {
@@ -890,7 +897,7 @@ async fn latest_many(
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m INDEXED BY idx_mat_node_run ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
+            "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m {BY_NODE_RUN} ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
             crate::cache::READ_STAMP_REFRESH
         );
         let params = std::iter::once(libsql::Value::Integer(through))
@@ -930,3 +937,6 @@ async fn latest_many(
     }
     Ok(found)
 }
+
+#[cfg(test)]
+mod tests;

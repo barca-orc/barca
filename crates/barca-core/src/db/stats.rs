@@ -83,9 +83,12 @@ pub async fn recent_durations(
         let mut found: Vec<(i64, f64)> = Vec::new();
         let mut rows = conn
             .query(
-                "SELECT id, elapsed_seconds FROM materializations INDEXED BY idx_mat_node_run \
-                 WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
-                 ORDER BY id DESC LIMIT ?2",
+                concat!(
+                    "SELECT id, elapsed_seconds FROM materializations ",
+                    by_node_run!(),
+                    " WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
+                     ORDER BY id DESC LIMIT ?2"
+                ),
                 vec![
                     libsql::Value::Text(base.clone()),
                     libsql::Value::Integer(window as i64),
@@ -108,9 +111,12 @@ pub async fn recent_durations(
         // read the entire database once per sparse or failed-only partitioned node.
         let mut rows = conn
             .query(
-                "SELECT id, elapsed_seconds FROM materializations INDEXED BY idx_mat_node_run \
-                 WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
-                 AND elapsed_seconds IS NOT NULL ORDER BY id DESC LIMIT ?3",
+                concat!(
+                    "SELECT id, elapsed_seconds FROM materializations ",
+                    by_node_run!(),
+                    " WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                     AND elapsed_seconds IS NOT NULL ORDER BY id DESC LIMIT ?3"
+                ),
                 libsql::params![lo, hi, window as i64],
             )
             .await
@@ -397,20 +403,6 @@ fn percentile(sorted: &[f64], p: f64) -> Option<f64> {
     }
 }
 
-/// Look up the average elapsed_seconds for a list of node_ids.
-/// Used for progress bar ETA estimation.
-pub async fn get_avg_elapsed(
-    db_path: &str,
-    node_ids: &[String],
-) -> Result<HashMap<String, f64>, BarcaError> {
-    if node_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let _g = db_guard_for(db_path).await;
-    let (_db, conn) = open_conn(db_path).await?;
-    avg_elapsed_on(&conn, node_ids).await
-}
-
 /// How many values one `IN (...)` list binds: well under SQLite's parameter limit.
 pub(super) const IN_LIST_CHUNK: usize = 500;
 
@@ -448,21 +440,6 @@ pub(super) async fn avg_elapsed_on(
     Ok(result)
 }
 
-/// Look up the average elapsed_seconds of each partitioned node over all its keys.
-/// For base_node_ids like "file.py:fetch", matches all "file.py:fetch[%]" in the DB.
-/// Used for ETA estimation when steps carry partition_keys (late expansion).
-pub async fn get_avg_elapsed_for_partitioned(
-    db_path: &str,
-    base_node_ids: &[String],
-) -> Result<HashMap<String, f64>, BarcaError> {
-    if base_node_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let _g = db_guard_for(db_path).await;
-    let (_db, conn) = open_conn(db_path).await?;
-    partitioned_avg_elapsed_on(&conn, base_node_ids).await
-}
-
 pub(super) async fn partitioned_avg_elapsed_on(
     conn: &libsql::Connection,
     base_node_ids: &[String],
@@ -479,8 +456,11 @@ pub(super) async fn partitioned_avg_elapsed_on(
         let (lo, hi) = key_range(nid);
         let mut rows = conn
             .query(
-                "SELECT AVG(elapsed_seconds) FROM materializations INDEXED BY idx_mat_node_run \
-                 WHERE node_id >= ?1 AND node_id < ?2 AND elapsed_seconds IS NOT NULL",
+                concat!(
+                    "SELECT AVG(elapsed_seconds) FROM materializations ",
+                    by_node_run!(),
+                    " WHERE node_id >= ?1 AND node_id < ?2 AND elapsed_seconds IS NOT NULL"
+                ),
                 [lo, hi],
             )
             .await

@@ -26,6 +26,7 @@ use crate::dispatch::{OutputRef, ProvidedInput, build_provided_inputs};
 use crate::model::NodeKind;
 use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream};
 use crate::results::{ExplainSummary, PartitionSummary, StepReport};
+use crate::step_status::StepStatus;
 use crate::store_sync::StoreSync;
 use crate::transfer::ArtifactLayout;
 use std::collections::{HashMap, HashSet};
@@ -537,7 +538,7 @@ pub(crate) fn mark_recomputed(
     let key = id
         .split_once('[')
         .map(|(_, rest)| rest.strip_suffix(']').unwrap_or(rest));
-    let run = if dry { "run" } else { "ran" };
+    let run = if dry { "run" } else { StepStatus::Ran.as_str() };
     let verdict = |r: &mut StepReport, word: &str| {
         if dry {
             r.action = Some(word.to_string());
@@ -565,7 +566,11 @@ pub(crate) fn mark_recomputed(
                 .into_iter()
                 .chain([key.to_string()]),
         );
-        let word = if p.cached == 0 { run } else { "partial" };
+        let word = if p.cached == 0 {
+            run
+        } else {
+            StepStatus::Partial.as_str()
+        };
         if r.reason.is_none() {
             r.reason = Some(reason.code().to_string());
             r.detail = Some(reason.detail());
@@ -576,7 +581,7 @@ pub(crate) fn mark_recomputed(
 
     let cached_line = |r: &&mut StepReport| {
         let said = if dry { &r.action } else { &r.status };
-        r.id == base && r.partitions.is_none() && said.as_deref() == Some("cached")
+        r.id == base && r.partitions.is_none() && StepStatus::Cached.is(said.as_deref())
     };
     let Some(r) = reports.iter_mut().find(cached_line) else {
         return false;

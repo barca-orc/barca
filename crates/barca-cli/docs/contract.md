@@ -41,6 +41,59 @@ outside the `GENERATED` blocks is written by hand.
 
 ### Experimental items
 
+Commands and arguments, from `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` (the
+`Stability` column of the tables below comes from the same list; an argument of an experimental
+command is experimental with it):
+
+<!-- BEGIN GENERATED experimental -->
+| Command or argument | Why it is experimental |
+|---|---|
+| `barca tokens` | new in 0.36 (RFC-0016): local bootstrap for opt-in project token access |
+| `barca tokens bootstrap` | prints a one-use bootstrap credential; token formats may evolve |
+| `barca doctor` | new prerequisite report; check names and provider-specific data may evolve |
+| `barca gc` | new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use |
+| `barca history <RUN_ID>` | new in 0.29.3: the run detail's step keys and human layout may change after field use |
+| `barca history --reconcile` | explicit operator recovery for stopped runs whose owner cannot be verified |
+| `barca history --status` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --target` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --triggered-by` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --since` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca list --groups` | Organizational group hierarchy and metadata shape are experimental |
+| `barca plan` | prints the planner's internal phase/stream layout, which changes with scheduling work |
+| `barca sql` | new in 0.13: the view naming and the JSON result shape may change after field use |
+| `barca queue` | new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use |
+| `barca serve` | the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open |
+| `barca serve --capacity` | new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use |
+| `barca state reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
+| `barca get --expires` | new with -o url (signed links to results in a cloud store); the link format is the cloud's |
+| `barca status --sample` | sample rows come from a Python helper whose output may grow |
+| `barca status --problems` | new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) |
+| `barca get --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use |
+| `barca run --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use |
+| `barca get --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca get --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca run --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca run --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca status --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca status --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca list --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca list --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca history --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca history --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca stats --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca stats --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca logs --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
+| `barca logs --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca sql --server` | new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use |
+| `barca sql --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca logs --follow` | new in 0.29.2: how the end of a followed run is reported may change after field use |
+<!-- END GENERATED experimental -->
+
+What the command tables cannot express: JSON keys and shapes, HTTP routes, environment
+variables, decorator arguments and output lines that are still experimental, written by hand.
+Where a row below names a command, the generated list above is the owner of that command's
+stability; the row adds the keys and routes that go with it.
+
 | Item | Why |
 |---|---|
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
@@ -548,7 +601,7 @@ value of its first key only.
 | `BARCA_STORAGE_OPTIONS` | JSON object keyed by protocol, merged over `[remote.storage_options.*]` | stable |
 | `BARCA_ARTIFACT_URI` | literal artifact root, bypassing the environment prefix (warns with a non-default env) | experimental |
 | `BARCA_PROGRESS_SECS` | seconds between `still running` lines (default 15, `0` turns them off) | experimental |
-| `BARCA_POOL_SIZE` | number of Python workers (default: available cores) | experimental |
+| `BARCA_POOL_SIZE` | the most Python workers a run starts (else `[execution] pool_size`, else the available cores), capped at the capacity when that is smaller (`barca docs assets`, "Heavy steps") | experimental |
 | `BARCA_COMM_COST_SECONDS` | the scheduler's per-dispatch cost estimate | experimental |
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
@@ -644,10 +697,10 @@ drains: the queue pauses (new runs are still accepted, `202` with `status: pendi
 the next start) and it waits for the runs in flight for up to `--drain-timeout` seconds
 (`[server] drain_timeout` in `barca.toml`, default 30). It exits 0 when they all finished, and 0
 when the deadline passed and it put the runs left back in the queue, to start again from the
-beginning after the restart (at least once: `barca docs scheduling`, "At least once"). A second
+beginning after the restart (at least once: `barca docs serve-ops`, "At least once"). A second
 signal cancels the runs in flight instead (recorded as `cancelled`, reason `server shutdown`) and
 it exits 1 with a `step_failed` error naming how many were cancelled, so deploy tooling can tell
-a forced stop from a clean one (`barca docs scheduling`, "Stopping the server"). Exit 1 from
+a forced stop from a clean one (`barca docs serve-ops`, "Stopping the server"). Exit 1 from
 `serve` means a forced stop, not a failed step of yours.
 
 A writer `barca serve` (not `--read-only`) sets its metadata DB up before it binds the port. When
@@ -844,10 +897,10 @@ may grow.
   stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
   `artifact_missing` is a step that has a cached result whose artifact file is gone
   and is needed (`barca docs cache`); `evicted` is the same when the cache size limit deleted
-  the file (experimental, "Disk use").
+  the file (experimental, `barca docs disk`).
 - `cache` (experimental) appears only when the check after the run found `.barca/` over its
   size limit: `{size_bytes, limit_bytes, evicted_files, evicted_bytes}`, sizes after eviction
-  (`barca docs cache`, "Disk use"). It is on single- and multi-target results alike.
+  (`barca docs disk`). It is on single- and multi-target results alike.
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
@@ -2239,7 +2292,7 @@ progress or interrupted). `status` is `running`, `success`, `failed`, `cancelled
 for remote results. New committed shared progress is published every minute in healthy
 operation, followed by the final outcome at run end. A `running` run counts the steps
 it has recorded so far in `steps_executed`, and
-`interrupted` is a run whose process died without recording an outcome (`barca docs cache`,
+`interrupted` is a run whose process died without recording an outcome (`barca docs layout`,
 "While a run is going, and after one is killed").
 
 Terminal status/counts and successful/failed step rows commit in one transaction. A required
@@ -2407,12 +2460,12 @@ recorded before 0.31 hold the worker's peak over every step it had run, not the 
 <!-- END GENERATED schema get_cache_evicted -->
 
 `cache` appears only when the check after the run found `.barca/` over its size limit; its sizes
-are after eviction (`barca docs cache`, "Disk use").
+are after eviction (`barca docs disk`).
 
 
 ### Project star-import discovery
 
-A later project star import preserves imported Barca bindings absent from its single literal
+A later project star import preserves imported barca bindings absent from its single literal
 `__all__` list/tuple with no other references to `__all__`. Colliding local names lose recognition; unknown, computed, mutated and
 reflective export sets keep the conservative fallback. Source inspection does not import
 user modules. This changes discovery and argument validation, with no new flags or JSON keys.
@@ -2660,7 +2713,7 @@ placeholders:
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
-| `[barca] batch:<node> <n> call(s), <n> key(s) \| import <secs>s, load <secs>s, compute <secs>s, split <secs>s, write <secs>s` | before the end-of-run line, one per node whose keys ran in batched calls, with `--agent` or a progress bar; also recorded in the run's logs (`barca docs partitions`, "Seeing calls") | experimental |
+| `[barca] batch:<node> <n> call(s), <n> key(s) \| import <secs>s, load <secs>s, compute <secs>s, split <secs>s, write <secs>s` | before the end-of-run line, one per node whose keys ran in batched calls, with `--agent` or a progress bar; also recorded in the run's logs (`barca docs batched-partitions`, "Seeing calls") | experimental |
 | `[barca] metadata <secs>s recording this run's results` | after the end-of-run line of a run with such a node, with `--agent` or a progress bar; also recorded in the run's logs | experimental |
 | `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get` and `run` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>)` | once at startup of `serve`, always, after its metadata DB is set up: the line above plus the database and its format (`PRAGMA user_version`). `(unusable)` in place of `(db format <n>)` when it cannot be used (a writer then exits 3), `(not created yet)` when there is no database yet (the first run creates it) | experimental |
@@ -2676,7 +2729,7 @@ placeholders:
 | `[barca] recorded run <id> on the server (run <server id>)` | a run this machine could not post before was accepted by the server's ledger, before the command's own lookup | experimental |
 | `[barca] warning: run <id> was not recorded on the server <url>: <why>; it stays on this machine (unsynced) and ...`, `[barca] warning: run <id> is still not recorded on the server <url>: <why>` | the server refused a run's post (`409`) or could not be reached after the run; the run's result and exit code are unchanged | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
-| `[barca] cache <size> over its <limit> limit; evicted <n> files (<size>): <n> <tier>, ...` | after `get`, `run` or a `serve` run, when `.barca/` was over `[cache] max_size` and something was evicted (every mode; `barca docs cache`, "Disk use") | experimental |
+| `[barca] cache <size> over its <limit> limit; evicted <n> files (<size>): <n> <tier>, ...` | after `get`, `run` or a `serve` run, when `.barca/` was over `[cache] max_size` and something was evicted (every mode; `barca docs disk`) | experimental |
 | `[barca] <id>: its cached result was evicted to stay under the cache limit; computing it again` | a step whose cached result the size limit evicted is computed again because something reads it (every mode) | experimental |
 | `[barca] dataset sink <prefix>: deleted <n> key(s) its asset no longer has` | after a run, the directories of keys a dataset sink's asset no longer has were deleted (`barca docs sinks`) | experimental |
 | `[barca] warning: ...` | warnings (always this lowercase prefix; the text after it may change), including a dataset sink's size warning and a failed deletion of removed keys. Up to 0.29 a failed sink printed `[barca] SINK FAILED: ...`; from 0.30.0 it fails the step. A plan warning (see "Plan warnings") is printed before the first `step:` line, once per run, with or without `--agent`; read it from the JSON `warnings` array rather than from this line | experimental |
@@ -2694,10 +2747,10 @@ the first failed step is summarized once; each target's error remains in JSON.
 
 ### Static decorator bindings
 
-Qualified and imported aliases of Barca decorators/helpers receive the same node
+Qualified and imported aliases of barca decorators/helpers receive the same node
 semantics and argument validation as direct imports. Explicit foreign or rebound
-names do not define Barca nodes. For a foreign wrapper intended to remain a node,
-stack it with a genuine Barca decorator; see `barca docs assets`.
+names do not define barca nodes. For a foreign wrapper intended to remain a node,
+stack it with a genuine barca decorator; see `barca docs assets`.
 
 `list --groups` is experimental: JSON returns `{groups: [{id, name, description, members, output}]}`. IDs and member/output references are strings; members is an array of strings. The default `list` schema is unchanged. Groups are organizational metadata and cannot be execution targets.
 

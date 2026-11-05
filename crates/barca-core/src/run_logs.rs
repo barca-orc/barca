@@ -19,7 +19,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 /// The most line text one run records: 16 MiB (some 300,000 lines of 50 characters).
-pub const LOG_CAP_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const LOG_CAP_BYTES: u64 = 16 * 1024 * 1024;
 
 /// One recorded line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,7 +45,7 @@ impl RecordedLine {
 }
 
 /// The line recorded in place of everything past the cap.
-pub fn cap_marker() -> String {
+pub(crate) fn cap_marker() -> String {
     format!(
         "[barca] log cap reached: this run recorded {} MiB of output; later lines were shown live \
          but not recorded",
@@ -101,7 +101,7 @@ pub struct Recorder {
 
 impl Recorder {
     /// Spool this run's lines to `path` as they arrive (created on the first line).
-    pub fn spool_to(&mut self, path: PathBuf) {
+    pub(crate) fn spool_to(&mut self, path: PathBuf) {
         if self.spool.is_none() {
             self.spool = Some(Spool::start(path));
         }
@@ -125,7 +125,7 @@ impl Recorder {
     }
 
     /// Record a note of barca's own, cap or not.
-    pub fn push_note(&mut self, line: String) {
+    pub(crate) fn push_note(&mut self, line: String) {
         self.record(RecordedLine::barca(line));
     }
 
@@ -142,7 +142,7 @@ impl Recorder {
 
     /// Stop spooling (every line sent is written) and return the spool's path, to delete
     /// once the lines are in the database.
-    pub fn close_spool(&mut self) -> Option<PathBuf> {
+    pub(crate) fn close_spool(&mut self) -> Option<PathBuf> {
         self.spool.take().map(Spool::close)
     }
 }

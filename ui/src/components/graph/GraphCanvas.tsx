@@ -15,13 +15,13 @@ import {
 import { AssetNode } from './AssetNode'
 import { GroupNode } from './GroupNode'
 import { PortNode } from './PortNode'
-import { blockedLabels, fitTarget, isArrowKey, neighborInDirection, READABLE_ZOOM, type Inset, type ViewNode } from './graphView'
-import { PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
+import { fitTarget, isArrowKey, neighborInDirection, READABLE_ZOOM, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
+import { isLive, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
+import { isFailed } from '@/lib/health'
 import { edgeClassName, type LayoutDir, type GraphEdgeData, type GraphNode, type GraphEntry } from '@/lib/graph'
 import { domainFile } from '@/lib/domainMap'
 import { useGraphLayout } from '@/hooks/useGraphLayout'
-import { statusMeta } from '@/lib/status'
-import type { StatusKind } from '@/lib/types'
+import { toneMeta } from '@/lib/tone'
 
 // Defined once, outside the component — a fresh object each render is a perf bug.
 const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: PortNode }
@@ -66,7 +66,7 @@ function viewNodes(nodes: GraphNode[]): ViewNode[] {
     y: n.position.y,
     width: n.measured?.width ?? n.initialWidth ?? 0,
     height: n.measured?.height ?? n.initialHeight ?? 0,
-    status: n.data.status,
+    failed: n.data.lastFailed ?? false,
     inert: n.type === 'port',
   }))
 }
@@ -136,23 +136,31 @@ export function GraphCanvas({
 
   const nodes = useMemo<GraphNode[]>(() => {
     const names = new Map(base.nodes.map((n) => [n.id, n.data.name]))
-    // A consumer that did not run says which failure upstream kept it from running. A node
-    // whose state has not arrived is not one that did not run.
-    const statuses = new Map<string, StatusKind>()
+    // A never-run consumer's hint names the failure upstream that kept it from running. A node
+    // whose state has not arrived is not one that never ran.
+    const waits = new Map<string, WaitStatus>()
     for (const n of base.nodes) {
       const state = states[n.id]
-      if (state && state !== PENDING_GRAPH_STATE) statuses.set(n.id, state.status)
+      if (!state || state.kind !== 'cache') continue
+      waits.set(n.id, isFailed(state) ? 'failed' : state.state === 'never_run' ? 'never_run' : 'other')
     }
-    const blocked = blockedLabels(base.edges.map((e) => [e.source, e.target]), statuses, (id) => names.get(id) ?? id)
+    const why = waitsOn(base.edges.map((e) => [e.source, e.target]), waits, (id) => names.get(id) ?? id)
     return base.nodes.map((n) => {
       const state = states[n.id] ?? UNKNOWN_GRAPH_STATE
-      const why = blocked.get(n.id)
+      const wait = why.get(n.id)
       return { ...n, selected: n.id === selected,
-        data: { ...n.data, status: state.status, metric: why?.label ?? state.label, stateHint: why ? `${why.hint} ${state.hint}` : state.hint } }
+        data: {
+          ...n.data,
+          tone: state.tone,
+          label: state.label,
+          lastFailed: isFailed(state),
+          live: isLive(state),
+          stateHint: wait ? `${state.hint} ${wait.hint}` : state.hint,
+        } }
     })
   }, [base.nodes, base.edges, selected, states])
 
-  const nodeStates = useMemo(() => new Map(nodes.map(n => [n.id, n.data.status])), [nodes])
+  const nodeTones = useMemo(() => new Map(nodes.map(n => [n.id, n.data.tone])), [nodes])
   const edges = useMemo(
     () =>
       base.edges.map((e) => {
@@ -164,13 +172,13 @@ export function GraphCanvas({
           // A count on each of a dense map's edges would be a wall of numbers.
           label: weight && (hot || base.edges.length <= LABEL_EDGES_UP_TO) ? weight.toLocaleString() : undefined,
           className: [
-            edgeClassName({ sourceStatus: nodeStates.get(e.source), targetStatus: nodeStates.get(e.target), hot }),
+            edgeClassName({ sourceTone: nodeTones.get(e.source), targetTone: nodeTones.get(e.target), hot }),
             port ? 'port' : '',
             weight ? 'weighted' : '',
           ].filter(Boolean).join(' '),
         }
       }),
-    [base.edges, selected, nodeStates],
+    [base.edges, selected, nodeTones],
   )
 
   const onNodeClick = useCallback((_: unknown, n: Node) => {
@@ -231,7 +239,7 @@ export function GraphCanvas({
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-grid)" />
         <Controls showInteractive={false} />
-        {minimap && <MiniMap nodeColor={n => statusMeta(nodeStates.get(n.id) ?? 'skipped').color} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
+        {minimap && <MiniMap nodeColor={n => toneMeta(nodeTones.get(n.id) ?? 'neutral').color} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
         <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={handleRef} />
       </ReactFlow>
     </ReactFlowProvider>

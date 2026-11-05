@@ -450,7 +450,7 @@ def shapes(artifacts: list[dict], sample: int = 0, fields: bool = False, cache=N
                 lambda i: read(artifacts[i]),
                 remote,
             )
-            for i, s in zip(remote, done):
+            for i, s in zip(remote, done, strict=False):
                 out[i] = s
     return [s if s is not None else {"note": "shape was not read"} for s in out]
 

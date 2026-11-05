@@ -30,10 +30,12 @@ from pathlib import Path
 import pytest
 
 import barca
-from barca import _storage, _value
+from barca import _signing, _storage, _value
 from barca.api import _find_binary
 
 from . import emulators
+from .helpers import SERVE, clean_env, wait_until
+from .helpers import barca as barca_cli
 from .test_state_backends import (
     AZURITE_ACCOUNT,
     AZURITE_CONN,
@@ -50,7 +52,6 @@ from .test_telemetry_datadog import FakeAgent, datadog
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPIRY_CASES = json.loads((ROOT / "crates/barca-cli/src/expiry_cases.json").read_text())
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST", "DD_")
 BODY = b'{"total": 3}'
 
 
@@ -63,20 +64,20 @@ BODY = b'{"total": 3}'
 def test_expiry_follows_the_shared_table(case):
     for given in (case["seconds"], datetime.timedelta(seconds=case["seconds"])):
         if "error" in case:
-            with pytest.raises(_storage.SignError) as err:
-                _storage.expiry_seconds(given)
+            with pytest.raises(_signing.SignError) as err:
+                _signing.expiry_seconds(given)
             assert err.value.kind == "usage"
             assert ("7 days" if case["error"] == "too_long" else "at least 1 second") in str(
                 err.value
             )
         else:
-            assert _storage.expiry_seconds(given) == case["seconds"]
+            assert _signing.expiry_seconds(given) == case["seconds"]
 
 
 @pytest.mark.parametrize("bad", ["1h", None, True, float("nan")])
 def test_expiry_is_seconds_or_a_timedelta(bad):
-    with pytest.raises(_storage.SignError) as err:
-        _storage.expiry_seconds(bad)
+    with pytest.raises(_signing.SignError) as err:
+        _signing.expiry_seconds(bad)
     assert err.value.kind == "usage"
 
 
@@ -98,8 +99,8 @@ def test_an_expiry_over_seven_days_is_refused_before_any_store_is_touched():
 
 
 def test_the_download_name_is_quoted_and_cannot_break_the_header():
-    assert _storage._disposition("total.json") == 'attachment; filename="total.json"'
-    assert _storage._disposition('a"b/c\n.csv') == 'attachment; filename="a_b_c_.csv"'
+    assert _signing._disposition("total.json") == 'attachment; filename="total.json"'
+    assert _signing._disposition('a"b/c\n.csv') == 'attachment; filename="a_b_c_.csv"'
 
 
 # ─── GCS without an emulator: signBlob and user credentials ──────────────────
@@ -114,7 +115,7 @@ class _KeylessCredentials:
 
 
 def test_gcs_keyless_credentials_sign_through_iam_sign_blob(monkeypatch):
-    from google.cloud.storage import _signing
+    from google.cloud.storage import _signing as google_signing
 
     calls = []
 
@@ -122,13 +123,13 @@ def test_gcs_keyless_credentials_sign_through_iam_sign_blob(monkeypatch):
         calls.append((access_token, service_account_email, universe_domain))
         return base64.b64encode(b"\x01\x02signature").decode()
 
-    monkeypatch.setattr(_signing, "_sign_message", sign_blob)
-    url = _storage.gcs_signed_url(
+    monkeypatch.setattr(google_signing, "_sign_message", sign_blob)
+    url = _signing.gcs_signed_url(
         _KeylessCredentials(),
         "bucket",
         "proj/artifacts/total.json",
         600,
-        _storage._disposition("total.json"),
+        _signing._disposition("total.json"),
         "https://storage.googleapis.com",
     )
     assert calls == [("ya29.token", "runner@proj.iam.gserviceaccount.com", "googleapis.com")]
@@ -144,14 +145,14 @@ def test_gcs_keyless_credentials_sign_through_iam_sign_blob(monkeypatch):
 
 def test_gcs_sign_blob_refused_names_the_role_to_grant(monkeypatch):
     from google.auth.exceptions import TransportError
-    from google.cloud.storage import _signing
+    from google.cloud.storage import _signing as google_signing
 
     def refused(*args, **kwargs):
         raise TransportError("Error calling the IAM signBytes API: 403 PERMISSION_DENIED")
 
-    monkeypatch.setattr(_signing, "_sign_message", refused)
-    with pytest.raises(_storage.SignError) as err:
-        _storage.gcs_signed_url(
+    monkeypatch.setattr(google_signing, "_sign_message", refused)
+    with pytest.raises(_signing.SignError) as err:
+        _signing.gcs_signed_url(
             _KeylessCredentials(), "b", "k", 60, "attachment", "https://storage.googleapis.com"
         )
     assert err.value.kind == "credentials"
@@ -163,8 +164,8 @@ def test_gcs_user_credentials_are_told_to_impersonate_a_service_account():
     from google.oauth2.credentials import Credentials
 
     user = Credentials(token="ya29.user", refresh_token="r", client_id="c", client_secret="s")
-    with pytest.raises(_storage.SignError) as err:
-        _storage.gcs_signed_url(user, "b", "k", 60, "attachment", "https://storage.googleapis.com")
+    with pytest.raises(_signing.SignError) as err:
+        _signing.gcs_signed_url(user, "b", "k", 60, "attachment", "https://storage.googleapis.com")
     assert err.value.kind == "credentials"
     assert "--impersonate-service-account" in str(err.value)
 
@@ -222,7 +223,7 @@ def test_azure_without_a_key_signs_with_a_user_delegation_key():
             key.value = base64.b64encode(b"delegation-key-bytes").decode()
             return key
 
-    sas = _storage.azure_blob_sas(
+    sas = _signing.azure_blob_sas(
         Service(), "out", "proj/total.json", expires_at, 'attachment; filename="total.json"'
     )
     ((start, end),) = requests
@@ -243,8 +244,8 @@ def test_azure_delegation_refused_names_the_permission():
         def get_user_delegation_key(self, *args):
             raise PermissionError("AuthorizationPermissionMismatch")
 
-    with pytest.raises(_storage.SignError) as err:
-        _storage.azure_blob_sas(
+    with pytest.raises(_signing.SignError) as err:
+        _signing.azure_blob_sas(
             Service(), "c", "b", datetime.datetime.now(datetime.timezone.utc), "attachment"
         )
     assert err.value.kind == "credentials"
@@ -280,12 +281,12 @@ def test_a_link_that_ends_sooner_than_asked_carries_a_note(monkeypatch):
     soon = datetime.datetime.now(datetime.UTC).replace(microsecond=0) + datetime.timedelta(
         minutes=10
     )
-    monkeypatch.setattr(_storage, "sign_url", lambda uri, expires, filename: ("https://u?s", soon))
+    monkeypatch.setattr(_signing, "sign_url", lambda uri, expires, filename: ("https://u?s", soon))
     answer = _value.sign({"uri": "s3://b/k", "expires": 3600, "filename": "k"})
     assert answer["expires_at"] == soon.isoformat().replace("+00:00", "Z")
     assert "expire at" in answer["note"] and "https://u" not in answer["note"]
     monkeypatch.setattr(
-        _storage,
+        _signing,
         "sign_url",
         lambda uri, expires, filename: ("https://u?s", soon + datetime.timedelta(minutes=50)),
     )
@@ -349,7 +350,7 @@ def test_minio_link_serves_the_bytes_then_403_after_expiry(s3, tmp_path):
     assert disposition == 'attachment; filename="weekly.csv"'
 
     short = barca.signed_url(uri, expires=1)
-    time.sleep(2.5)
+    time.sleep(2.5)  # a fixed wait: the link must actually expire (1 s, plus clock skew)
     assert _fetch(short)[0] == 403
 
 
@@ -388,13 +389,13 @@ def test_azurite_account_key_sas_serves_the_bytes(azurite, monkeypatch, how):
     monkeypatch.setenv("BARCA_STORAGE_OPTIONS", json.dumps({"abfs": options}))
     if how == "account_key":
         # adlfs builds https:// from account_host; Azurite speaks http.
-        real = _storage._azure_service
+        real = _signing._azure_service
 
         def http(fs):
             fs.account_url = fs.account_url.replace("https://", "http://")
             return real(fs)
 
-        monkeypatch.setattr(_storage, "_azure_service", http)
+        monkeypatch.setattr(_signing, "_azure_service", http)
     url = barca.signed_url(f"abfs://{azurite}/proj/total.json", expires=120)
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
     assert query["sp"] == ["r"] and "skoid" not in query
@@ -463,22 +464,7 @@ def sales(region: str) -> dict:
 
 
 def _cli(cwd: Path, env: dict, *args: str) -> subprocess.CompletedProcess:
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**base, **env},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
-
-
-@pytest.fixture
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
+    return barca_cli(cwd, *args, env={**clean_env("DD_"), **env}, timeout=SERVE)
 
 
 @pytest.fixture
@@ -663,10 +649,7 @@ def test_the_url_appears_on_stdout_and_nowhere_else(project, store):
         assert logs.returncode == 0, logs.stderr
         assert "computing total" in logs.stdout  # the log is there; the link is not
         history = _cli(project, env, "history", "--json")
-        deadline = time.time() + 10
-        while not agent.requests and time.time() < deadline:
-            time.sleep(0.1)
-        assert agent.requests, "telemetry never arrived"
+        wait_until(lambda: agent.requests, "telemetry to arrive", timeout=10, interval=0.1)
         spans = json.dumps([r["body"] for r in agent.requests] + agent.python_spans)
         for text, where in [
             (proc.stderr, "stderr"),

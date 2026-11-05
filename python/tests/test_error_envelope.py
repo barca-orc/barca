@@ -12,16 +12,19 @@ import os
 
 import signal
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 import barca
 from barca.api import BarcaError, _find_binary
+from .helpers import QUICK, wait_until
+from .helpers import barca as run_barca
 
 PIPELINE = """
 import time
+from pathlib import Path
+
 from barca import asset, task
 
 
@@ -42,6 +45,7 @@ def deploy(x: int) -> int:
 
 @asset()
 def slow() -> int:
+    Path("started").write_text("1")
     time.sleep(30)
     return 1
 """
@@ -63,7 +67,7 @@ def project(tmp_path) -> Path:
 
 
 def barca_cli(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([_find_binary(), *args], cwd=cwd, capture_output=True, text=True)
+    return run_barca(cwd, *args, env=os.environ.copy())
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:
@@ -155,9 +159,9 @@ def test_ctrl_c_is_cancelled_with_exit_130(project):
         stderr=subprocess.PIPE,
         text=True,
     )
-    time.sleep(2)
+    wait_until(lambda: (project / "started").exists(), "the step to start", proc=proc)
     proc.send_signal(signal.SIGINT)
-    out, err = proc.communicate(timeout=30)
+    out, err = proc.communicate(timeout=QUICK)
     env = envelope(subprocess.CompletedProcess(proc.args, proc.returncode, out, err))
     assert env["kind"] == "cancelled"
 

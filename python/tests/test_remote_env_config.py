@@ -11,17 +11,16 @@ get to be served from the store with no step run and the history backed up there
 import json
 import os
 import socket
-import subprocess
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
-from barca.api import _find_binary
-
 from . import emulators
 from .get_values import value_args
+from .helpers import SERVE, clean_env
+from .helpers import barca as run_barca
 
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
 GCS_ENDPOINT = os.environ.get("BARCA_TEST_GCS_ENDPOINT", "http://localhost:9200")
@@ -45,9 +44,6 @@ def numbers() -> list:
 def total(rows: list) -> dict:
     return {"total": sum(r["n"] for r in rows)}
 """
-
-# Variables that could leak a developer's real cloud setup into the test.
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 
 
 def _reachable(url_or_host: str) -> bool:
@@ -127,15 +123,8 @@ CASES = {
 
 
 def barca(cwd: Path, env: dict, *args: str) -> dict:
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    proc = subprocess.run(
-        [_find_binary(), *value_args(args, json=False), "--json"],
-        cwd=cwd,
-        env={**base, **env},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
+    proc = run_barca(
+        cwd, *value_args(args, json=False), "--json", env=clean_env(**env), timeout=SERVE
     )
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout.strip()

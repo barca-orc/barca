@@ -38,7 +38,7 @@ def _libraries(monkey) -> "dict[str, bool] | None":
             return name.upper().replace("-", "_")
 
     for module in getattr(monkey, "PATCH_MODULES", {}):
-        variable = "DD_TRACE_%s_ENABLED" % _integration_env_var_id(module)
+        variable = f"DD_TRACE_{_integration_env_var_id(module)}_ENABLED"
         if variable in os.environ:
             wanted[module] = _on(variable)
     # `name:true,name:false`, separated by commas or spaces, as ddtrace reads it.

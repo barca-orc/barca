@@ -1,6 +1,9 @@
 //! Barca CLI — invisible asset orchestrator.
 
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+// Every fallible command ends with at most one `CliError` (the error envelope), built right
+// before the process exits: the size of the `Err` variant does not matter anywhere here.
+#![allow(clippy::result_large_err)]
 
 mod args;
 mod input;
@@ -231,7 +234,6 @@ fn runtime(json: bool, server: bool) -> tokio::runtime::Runtime {
 
 /// `barca status --state a,b --problems`: an unknown state is a usage error naming the valid
 /// ones.
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 fn status_filter(
     states: &[String],
     problems: bool,
@@ -263,7 +265,6 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
 
 /// File arguments of a `--server` command: `.py` files and directories, checked as a local
 /// command checks them (a directory selects the deployed files under it).
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 fn server_files(sub: &str, files: &[PathBuf], refresh: Option<&[String]>) -> Result<(), CliError> {
     let not_dirs: Vec<PathBuf> = files
         .iter()
@@ -277,7 +278,6 @@ fn server_files(sub: &str, files: &[PathBuf], refresh: Option<&[String]>) -> Res
 }
 
 /// Run a `--server` command: the same argument checks as a local run, then the server.
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Result<(), CliError> {
     match cli {
         Cli::Get {
@@ -562,7 +562,6 @@ fn queue_needs_a_server() -> CliError {
 
 /// `barca sql` with a server (configured, or `--server`): run in the project root, so the
 /// query, the store and `.barca/sql-cache/` are this machine's.
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 async fn sql_on_server(
     cli: Cli,
     server: &client::Server,
@@ -596,7 +595,6 @@ async fn sql_on_server(
     .await
 }
 
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 async fn run_cli(
     cli: Cli,
     ctx: &Context,
@@ -948,19 +946,21 @@ async fn run_cli(
             env,
         } => {
             serve_cmd(
-                env.as_deref(),
-                auth,
-                files,
-                host,
-                port,
-                watch,
-                !no_schedule,
-                timezone,
-                read_only,
-                drain_timeout,
-                max_runs,
-                capacity,
-                run_timeout,
+                ServeArgs {
+                    env,
+                    auth,
+                    files,
+                    host,
+                    port,
+                    watch,
+                    schedule: !no_schedule,
+                    timezone,
+                    read_only,
+                    drain_timeout,
+                    max_runs,
+                    capacity,
+                    run_timeout,
+                },
                 &python,
                 ctx,
             )
@@ -978,14 +978,12 @@ async fn run_cli(
 mod tests;
 
 /// `--batch`, parsed (RFC-0013); a usage error naming the accepted forms when it does not parse.
-#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 fn parse_batch(values: &[String]) -> Result<barca_core::batch::BatchOverride, CliError> {
     barca_core::batch::BatchOverride::parse(values)
         .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
 }
 
 /// `--partition`, parsed; a usage error naming the accepted forms when it does not parse.
-#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 fn parse_partition(
     raw: Option<&str>,
 ) -> Result<Option<barca_core::selection::PartitionSelection>, CliError> {

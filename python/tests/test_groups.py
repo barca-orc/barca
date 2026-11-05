@@ -62,6 +62,8 @@ def test_groups_do_not_change_steps_or_invalidate_cache(tmp_path):
 
 
 def test_modeling_demo_metadata_matches_browser_fixture():
+    """The UI's unit tests read the demo's group metadata from a checked-in copy; it must be
+    what `barca list --groups` says about ui/demo/modeling.py."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
@@ -74,7 +76,7 @@ def test_modeling_demo_metadata_matches_browser_fixture():
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["groups"] == json.loads(
-        (root / "ui" / "e2e" / "group-metadata.json").read_text()
+        (root / "ui" / "src" / "lib" / "testdata" / "modeling-groups.json").read_text()
     )
 
 

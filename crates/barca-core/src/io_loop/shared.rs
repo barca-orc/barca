@@ -82,7 +82,7 @@ pub(super) async fn share_changed(share: &mut Option<Share>) {
 impl WorkerPool {
     /// The steps another run of the server finished while this run waited for them
     /// ([`crate::serve::claims`]), by display id, since the last call: cache hits for this run.
-    pub fn take_from_other_runs(&mut self) -> Vec<String> {
+    pub(crate) fn take_from_other_runs(&mut self) -> Vec<String> {
         self.steps
             .as_mut()
             .map(|s| std::mem::take(&mut s.from_others))

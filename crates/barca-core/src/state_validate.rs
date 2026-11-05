@@ -289,18 +289,19 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
         )
         .into()));
     }
-    let version =
-        match crate::db_schema::compatible_version(crate::db_schema::read_version(&conn).await?) {
-            Ok(version) => version,
-            Err(why) => return Ok(Err(Invalid::compatibility(why))),
-        };
+    let version = match crate::db::schema::ddl::compatible_version(
+        crate::db::schema::ddl::read_version(&conn).await?,
+    ) {
+        Ok(version) => version,
+        Err(why) => return Ok(Err(Invalid::compatibility(why))),
+    };
     // Establish incompatibility independently of migration. If a compatible legacy
     // migration subsequently fails (I/O, commit, etc.), it is an operational error,
     // not a damaged object to restore or remove.
     // A format-1 database may lack what format 1 added since it first shipped; the additive
     // migration below completes it, exactly as for a legacy one.
     let compatible = match usable_schema(&conn).await? {
-        Ok(()) if version == crate::db_schema::VERSION => Ok(()),
+        Ok(()) if version == crate::db::schema::ddl::VERSION => Ok(()),
         _ => legacy_schema(&conn).await?,
     };
     if let Err(why) = compatible {
@@ -397,7 +398,7 @@ impl Schema {
             }
             // The additive migration adds these, so a database may lack them before it runs.
             let additions = if legacy {
-                crate::db_schema::added_columns(table)
+                crate::db::schema::ddl::added_columns(table)
             } else {
                 &[]
             };
@@ -530,7 +531,7 @@ mod tests {
             // carried or required of another machine's history.
             if *table == "materializations" {
                 want.extend(
-                    crate::db_schema::LOCAL_MATERIALIZATION_COLUMNS
+                    crate::db::schema::ddl::LOCAL_MATERIALIZATION_COLUMNS
                         .iter()
                         .map(|c| c.to_string()),
                 );

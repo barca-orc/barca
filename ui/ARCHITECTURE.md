@@ -38,7 +38,9 @@ The domain lives in Rust; the frontend's business logic is deliberately thin.
 - `lib/types.ts` — re-exports the **generated** wire types and adds the few
   frontend-only / ad-hoc-JSON types (`StatusKind`, `LogLine`, `Health`,
   `RunHandle`, `AssetDetail`, `NodeStats`, `ErrorEnvelope`, `RunOutcome`,
-  `RunViewStatus`, `ScheduleJob`).
+  `RunViewStatus`, `ScheduleJob`). These mirror JSON the server builds by hand
+  (`serde_json::json!`), so they cannot be generated; the enums inside them that are Rust
+  enums (`CacheState`, `ErrorKind`) are.
 - `lib/generated/` — TypeScript types **generated from Rust** via `ts-rs`. Do
   not hand-edit. Rust is the single source of truth, so the wire contract can't
   drift (it once did — `Freshness` is `{"type":"Always"}`, PascalCase, which a
@@ -62,12 +64,17 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/queue.ts` | `queueState`, `queueControl`, `queueRows`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list | `queue.test.ts` |
 | `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause | `schedules.test.ts` |
 | `lib/runFeedback.ts` | `runFeedback(status, logs, error)` — map a node's status to a feedback descriptor | `runFeedback.test.ts` |
-| `lib/status.ts` | `statusMeta`, `freshnessLabel`, `nodeKindLabel` — domain → display tokens | — |
+| `lib/cacheStateDisplay.ts` | the one table from `CacheState` to display: each of the CLI's eight words with its tone and rank; `lastAttemptFailed` — the fact shown beside a state | `cacheStateDisplay.test.ts` |
+| `lib/status.ts` | `statusMeta` — the run lifecycle's one table (`StatusKind` → tone and word); `freshnessLabel`, `nodeKindLabel` | `status.test.ts` |
+| `lib/tone.ts` | `Tone`, `toneMeta` — the status hues both tables map onto; colour is never the only carrier | — |
+| `lib/graphState.ts` | `graphState(node)` — a node's box: its cache state (word, tone, detail, failed last attempt), the run on it, or no state yet | `graphState.test.ts` |
+| `lib/graphView.ts` | `fitTarget`, `neighborInDirection`, `waitsOn` — what a fit shows, where the keyboard goes, what a never-run node waits on | `graphView.test.ts` |
+| `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation | `groupedPage.test.ts` |
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre per connected part, parts packed in rows, no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
 | `lib/domainMap.ts` | `domainMap(assets)` — All pipelines as a card per file, weighted edges between files | `domainMap.test.ts` |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `mergeStates` for the sidebar | `pipeline.test.ts` |
-| `lib/health.ts` | `healthCounts`, `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
+| `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
 | `lib/sidebar.ts` | `updateSidebar`, `fileGroups` — the sidebar's collapse and the tree of groups under a file | `sidebar.test.ts` |
 | `lib/names.ts` | `splitMiddle` — a long name's cuttable head and its kept tail (`MiddleName`) | `names.test.ts` |
@@ -105,6 +112,7 @@ folds its flags into the union at the edge.
 | Tokens | `lib/tokensPage.ts` | `pages/TokensView.tsx` | `pages/TokensPage.tsx` |
 | Runs | `lib/runsPage.ts` | `pages/RunsView.tsx` | `pages/RunsPage.tsx` |
 | Failures view | `lib/failuresView.ts` | `pages/FailuresView.tsx` | `pages/GroupedPipelinePage.tsx` |
+| Grouped pipeline | `lib/groupedPage.ts` (pure derivation; the URL is the model) | `pages/GroupedView.tsx` | `pages/GroupedPipelinePage.tsx` |
 
 Any screen of such a page is a value: construct a model and a `Remote`, render the view. The kit
 page does that for each state, and `replay(update, model, msgs)` tests a sequence of messages
@@ -123,11 +131,13 @@ at a time with chips; the messages a click sends are listed under it.
 ## Large projects: what is broken, and why
 
 `lib/health.ts` answers the questions a project of thousands of nodes raises, over `/state` rows
-and the `/assets` graph: a scope's counts by state (`healthCounts`, drawn by `HealthBar`), its
+and the `/assets` graph: a scope's counts by state word (`healthCounts`, drawn by `HealthBar`:
+one segment per cache state present, and the failed last attempts counted beside them), its
 failures with their error headline and how many nodes downstream wait on each (`failures`), and
 the failed nodes upstream of a stale one (`failedUpstream`). The grouped page shows the scope's
 health beside its breadcrumb, a health bar per group row, and a Failures view of every failure
-in scope; the node panel leads with the error, or with what a stale node waits on.
+in scope, exactly as `GET /state` reports it (nothing is muted on the client); the node panel
+leads with the error, or with what a stale node waits on.
 
 A group or pipeline asks `GET /state` for its scope by group id or file (`?targets=group:…`,
 `?files=…`), which the server expands: never a list of node ids, which a server refuses past a
@@ -160,11 +170,12 @@ The look of the UI is defined in three places, in this order:
 1. **Tokens** (`styles/tokens/`): colors, type scale, spacing, radius, elevation, motion, and
    the light theme. The only place a color or a size is written as a value.
 2. **Primitives** (`components/`): `Button`, `IconButton`, `Age`/`LastSuccess`, `Tag`, `Chip`/`ChipGroup`, `Select`,
-   `SearchInput`, `StatusDot`/`StatusBadge`, `Skeleton`, `ConnectionBadge`, `ErrorLine`, `MiddleName`, and `SidePanel` with
-   `Section` and `KeyValue`. Their CSS is inline (tokens as `var(--…)`) or, where it needs
-   pseudo-classes, in `styles/components.css`.
+   `SearchInput`, `StatusDot`/`StatusBadge`, `DagNode`, `HealthBar`, `Skeleton`, `ConnectionBadge`, `ErrorLine`,
+   `MiddleName`, and `SidePanel` with `Section` and `KeyValue`. Their CSS is in
+   `styles/components.css`, by class and `data-*` attribute (`data-tone`, `data-size`); an inline
+   `style` is only for a value computed at render (a width, a position, a bar's share).
 3. **Pages** (`pages/`, `layouts/`): compose primitives; `styles/shell.css` holds page layout
-   only.
+   only, every page's. No page imports a stylesheet of its own.
 
 Rules:
 
@@ -173,8 +184,14 @@ Rules:
 - A second use of a pattern is the cue to make the primitive; the first use stays in its page.
 - A new or changed primitive is added to the kit page (`pages/KitPage.tsx`, at `/ui/#/kit`
   under `pnpm dev`) in every state it has. The kit page is not in the built UI.
-- Colour is status: green healthy, red failed, amber stale, cyan running. `--signal` (primary
-  actions, links, selection) is neutral; `tokens.test.ts` keeps it off the status hues.
+- Colour is status, and never the only carrier: a `Tone` (`lib/tone.ts`: success, warning,
+  failed, running, queued, neutral) colours a dot, a badge or a node, and the word beside it says
+  what it is. A node's cache state is one of the CLI's eight words (`cached` green, `stale`,
+  `partial`, `unsynced`, `blocked` amber, `never_run`, `always_runs`, `unknown` neutral), mapped
+  once in `lib/cacheStateDisplay.ts`; a run's status (`queued`, `running` cyan, `success`,
+  `failed` red, `cancelled`, `skipped`) once in `lib/status.ts`; `last attempt failed`, a fact
+  beside a state, is red. `--signal` (primary actions, links, selection) is neutral;
+  `tokens.test.ts` keeps it off the status hues.
 - `styles/tokens.test.ts` fails on a raw color or an off-scale font size outside
   `styles/tokens/`. Add a token instead of an exception.
 
@@ -226,18 +243,29 @@ they arrive. The tests do not exercise that (fonts are local and fast).
 
 ## Toolchain
 
-- **pnpm**, **strict TypeScript** (latest stable), **ts-pattern** across the board.
+- **pnpm**, **strict TypeScript** (latest stable), **ts-pattern** across the board. Styling is
+  the design-system CSS alone (`styles/`): no utility framework, no CSS-in-TS.
 - **ts-rs** generates the wire types from Rust (`pnpm gen:types`) — Rust is the
   single source of truth; the frontend never hand-writes a wire type.
 - **vitest** for the pure-logic tests (`pnpm test`).
-- **tsgo** (TS 7 native preview) for fast typechecking (`pnpm typecheck`, ~6× faster than
-  `tsc`); the production `build` keeps stable `tsc -b` as the authoritative gate.
+- **tsc** is the one type checker: `pnpm typecheck` runs `tsc -b`, the same check `build`
+  runs before Vite (the project builds in a few seconds, so a second, faster checker would only
+  be a second opinion that can disagree).
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
 
-Graph state presentation lives in `src/lib/graphState.ts`. Resting node
-colors come from `/state`: healthy green, stale amber, not-run/unknown/always-run
-neutral, and the latest failed attempt red even if an older artifact exists. Active
-run events overlay that state; completion refreshes it. Selection uses a separate outline.
-The graph displays every asset and dependency in the selected pipeline. No nodes
-are grouped or collapsed automatically.
+Graph state presentation lives in `src/lib/graphState.ts`. A resting node shows its
+`cache.state` from `/state` in the CLI's word and that state's tone; a failed last attempt is a
+red `last attempt failed` tag beside the word, and the state is never rewritten by it. A run
+working on the node overlays that (cyan, pulsing); completion refreshes it. Selection uses a
+separate outline. The graph displays every asset and dependency in the selected pipeline. No
+nodes are grouped or collapsed automatically.
+
+## End-to-end suites
+
+Three Playwright configs, each starting `barca serve` on its own fixture project and the Vite
+dev server in front of it (`pnpm test:e2e` runs them in turn, as CI does): `e2e/` on the flat
+project (`e2e/fixture`), `e2e-groups/` on a project declared in groups (`e2e-groups/fixture`,
+a failing check among cached models), and `e2e-auth/` in token mode. The groups, states, runs
+and failures are the server's; a spec stubs a route only to make the server say something the
+fixture cannot (a state request that fails, a read-only health).

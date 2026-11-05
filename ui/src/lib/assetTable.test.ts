@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CacheStatus, NodeState } from './types'
+import { CACHE_STATES } from './cacheStateDisplay'
 import {
   DEFAULT_SORT,
   buildRows,
@@ -8,7 +9,6 @@ import {
   formatSeconds,
   nextSort,
   parseSort,
-  severityOf,
   sortRows,
   summarize,
   typicalLabel,
@@ -59,41 +59,32 @@ const failedAttempt = {
   error: 'AssertionError: 3 rows with negative units',
 }
 
-describe('severityOf', () => {
-  it('maps every cache state', () => {
-    expect(severityOf(node({ id: 'a', cache: cache('cached') }))).toBe('cached')
-    expect(severityOf(node({ id: 'a', cache: cache('stale', 'changed') }))).toBe('stale')
-    expect(severityOf(node({ id: 'a', cache: cache('never_run', 'no_record') }))).toBe('never_run')
-    expect(severityOf(node({ id: 'a', cache: cache('partial', 'partitions_missing') }))).toBe(
-      'partial',
-    )
-    expect(severityOf(node({ id: 'a', cache: cache('unknown', 'partitions_unknown') }))).toBe(
-      'unknown',
-    )
-    // A task or sensor is what its last execution was.
-    expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task') }))).toBe('never_run')
-    expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task'), last_materialization: { ...failedAttempt, status: 'success', error: null } }))).toBe('cached')
-    expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task'), last_materialization: { ...failedAttempt, status: 'cancelled', error: null } }))).toBe('always_runs')
-    expect(severityOf(node({ id: 'a', cache: cache('unsynced', 'local_only') }))).toBe('unsynced')
-    expect(severityOf(node({ id: 'a', cache: cache('blocked', 'upstream_failed') }))).toBe('stale')
+describe('rows carry the state as the server says it', () => {
+  it('shows every cache state in its own word, never another', () => {
+    for (const state of CACHE_STATES) {
+      const row = only(buildRows([node({ id: 'a', cache: cache(state, 'no_record') })], NOW))
+      expect(row.state).toBe(state)
+      expect(row.lastFailed).toBe(false)
+    }
+    // A task keeps `always_runs` whatever its last run did: the run is a second fact.
+    const task = (status: string) => only(buildRows([node({ id: 't', kind: 'task', cache: cache('always_runs', 'task'), last_materialization: { ...failedAttempt, status, error: null } })], NOW))
+    expect(task('success')).toMatchObject({ state: 'always_runs', lastFailed: false })
+    expect(task('cancelled')).toMatchObject({ state: 'always_runs', lastFailed: false })
+    expect(task('failed')).toMatchObject({ state: 'always_runs', lastFailed: true })
+    // Blocked is blocked, not stale.
+    expect(only(buildRows([node({ id: 'a', cache: cache('blocked', 'upstream_failed') })], NOW)).state).toBe('blocked')
   })
 
-  it('a failed latest attempt wins over any cache state', () => {
-    // A task (always runs) whose last run failed is the thing to look at…
-    const task = node({
-      id: 't',
-      kind: 'task',
-      cache: cache('always_runs', 'task'),
-      last_materialization: failedAttempt,
-    })
-    expect(severityOf(task)).toBe('failed')
-    // …and so is a cached asset whose newer attempt failed without replacing it.
-    expect(severityOf(node({ id: 'a', last_materialization: failedAttempt }))).toBe('failed')
+  it('a failed latest attempt is a fact beside the state, not in its place', () => {
+    const row = only(buildRows([node({ id: 'a', last_materialization: failedAttempt })], NOW))
+    expect(row.state).toBe('cached')
+    expect(row.lastFailed).toBe(true)
+    expect(row.reason).toBe('materialized')
   })
 })
 
 describe('buildRows', () => {
-  it('sorts by severity, then name', () => {
+  it("sorts a failed last attempt first, then the state's rank, then name", () => {
     const rows = buildRows(
       [
         node({ id: 'p.py:zeta' }),
@@ -139,8 +130,9 @@ describe('buildRows', () => {
     )
     expect(row.name).toBe('ibp_model')
     expect(row.file).toBe('utz/assets.py')
-    expect(row.stateLabel).toBe('Stale · upstream')
-    // The explanation comes from the server, not the UI.
+    expect(row.state).toBe('stale')
+    // The reason and the explanation come from the server, verbatim, not the UI.
+    expect(row.reason).toBe('upstream_stale')
     expect(row.stateHint).toBe("upstream 'dim_ppg' will re-run")
     expect(row.last).toEqual({ status: 'success', ago: '5m ago', error: null })
     expect(row.typical).toBe('3.0s')
@@ -148,29 +140,24 @@ describe('buildRows', () => {
     expect(row.nextRunMs).toBe(Date.parse('2026-10-03T06:00:00Z'))
   })
 
-  it('labels each reason a stale node can have', () => {
-    const label = (reason: CacheStatus['reason']) =>
-      only(buildRows([node({ id: 'p.py:a', cache: cache('stale', reason) })], NOW)).stateLabel
-    expect(label('changed')).toBe('Stale · code changed')
-    expect(label('upstream_stale')).toBe('Stale · upstream')
-    // Keys waiting on failed upstream keys (#764): the count is in the label, the node in the hint.
+  it('keeps each reason verbatim: the UI does not rename them', () => {
+    const reason = (r: CacheStatus['reason']) => only(buildRows([node({ id: 'p.py:a', cache: cache('stale', r) })], NOW)).reason
+    for (const r of ['changed', 'upstream_stale', 'sensor_output_unknown', 'cutoff_pending'] as const) expect(reason(r)).toBe(r)
+    // Keys waiting on failed upstream keys (#764) are `blocked`, with the server's detail as the hint.
     const blocked = only(
       buildRows(
         [
           node({
             id: 'p.py:promo_plan',
             partitioned: true,
-            cache: cache('blocked', 'upstream_failed'),
+            cache: { state: 'blocked', reason: 'upstream_failed', detail: '39 keys wait on upstream' },
             partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [] },
           }),
         ],
         NOW,
       ),
     )
-    expect(blocked.stateLabel).toBe('Blocked · 39 keys wait on upstream')
-    expect(blocked.severity).toBe('stale')
-    expect(label('sensor_output_unknown')).toBe('Stale · sensor')
-    expect(label('cutoff_pending')).toBe('Stale · cutoff')
+    expect(blocked).toMatchObject({ state: 'blocked', reason: 'upstream_failed', stateHint: '39 keys wait on upstream' })
   })
 
   it('reports partition progress and never-run nodes', () => {
@@ -188,8 +175,8 @@ describe('buildRows', () => {
     )
     const fetch = rows.find((r) => r.name === 'fetch')!
     const fresh = rows.find((r) => r.name === 'new')!
-    expect(fetch.stateLabel).toBe('2 of 5 keys stale')
-    expect(fresh.stateLabel).toBe('Not run')
+    expect(fetch.state).toBe('partial')
+    expect(fresh.state).toBe('never_run')
     expect(fresh.last).toBeNull()
     expect(fresh.typical).toBeNull()
   })
@@ -208,9 +195,8 @@ describe('buildRows', () => {
         NOW,
       ),
     )
-    expect(row.severity).toBe('failed')
-    // "always runs" says nothing for a task: it's just failed.
-    expect(row.stateLabel).toBe('Failed')
+    expect(row.state).toBe('always_runs')
+    expect(row.lastFailed).toBe(true)
     expect(row.last?.error).toBe('AssertionError: 3 rows with negative units')
     expect(row.last?.ago).toBe('35m ago')
   })
@@ -254,20 +240,14 @@ describe('filterRows', () => {
 })
 
 describe('summarize', () => {
-  it('counts every severity, including zeroes', () => {
+  it('counts every state, including zeroes, and failed last attempts beside them', () => {
     const rows = buildRows(
-      [node({ id: 'a' }), node({ id: 'b' }), node({ id: 'c', cache: cache('stale', 'changed') })],
+      [node({ id: 'a' }), node({ id: 'b', last_materialization: failedAttempt }), node({ id: 'c', cache: cache('stale', 'changed') })],
       NOW,
     )
     expect(summarize(rows)).toEqual({
-      failed: 0,
-      stale: 1,
-      never_run: 0,
-      partial: 0,
-      unknown: 0,
-      always_runs: 0,
-      unsynced: 0,
-      cached: 2,
+      states: { blocked: 0, stale: 1, partial: 0, unsynced: 0, unknown: 0, never_run: 0, always_runs: 0, cached: 2 },
+      lastFailed: 1,
     })
   })
 })
@@ -312,7 +292,7 @@ describe('sorting', () => {
   )
   const names = (sort: Sort) => sortRows(rows, sort).map((r) => r.name)
 
-  it('defaults to severity, most urgent first', () => {
+  it('defaults to what needs attention, most urgent first', () => {
     expect(DEFAULT_SORT).toEqual({ key: 'state', dir: 'asc' })
     expect(names(DEFAULT_SORT)).toEqual(['edited', 'never', 'fast', 'slow'])
   })
@@ -345,12 +325,5 @@ describe('sorting', () => {
     expect(parseSort('typical', null)).toEqual({ key: 'typical', dir: 'desc' })
     expect(parseSort('bogus', 'asc')).toEqual(DEFAULT_SORT)
     expect(parseSort(null, null)).toEqual(DEFAULT_SORT)
-  })
-})
-
-describe('failed labels', () => {
-  it('one word, with a remaining good result in the hint', () => {
-    const row = only(buildRows([node({ id: 'p.py:a', last_materialization: failedAttempt })], NOW))
-    expect(row.stateLabel).toBe('Failed')
   })
 })

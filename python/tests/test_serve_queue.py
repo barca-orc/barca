@@ -6,23 +6,18 @@ it again on the same port and project, as `systemctl restart` or `docker restart
 """
 
 import json
-import os
 import signal
-import socket
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
 
 from barca.api import _find_binary
 
-# Settings from the developer's shell that would point the server at a real store or server.
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
-
-WAIT = 60.0
+from . import helpers
+from .helpers import RUN, clean_env, free_port, wait_until
+from .served import Serve
 
 PIPELINE = """
 import time
@@ -75,99 +70,8 @@ def ticker() -> None:
 
 
 def _env(**extra: str) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["BARCA_POOL_SIZE"] = "2"
-    env.update(extra)
-    return env
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def wait_for(predicate, what: str, timeout: float = WAIT):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.05)
-    pytest.fail(f"timed out after {timeout:.0f}s waiting for {what}")
-
-
-class Server:
-    """`barca serve pipeline.py` in `cwd` on `port`; its stderr appends to `serve.log`."""
-
-    def __init__(self, cwd: Path, port: int, *args: str) -> None:
-        self.cwd = cwd
-        self.port = port
-        self.url = f"http://127.0.0.1:{port}"
-        self.log = cwd / "serve.log"
-        self.start_at = self.log.stat().st_size if self.log.exists() else 0
-        self.proc = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--port", str(port), *args],
-            cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=self.log.open("a"),
-            env=_env(),
-        )
-        wait_for(self._up, "the server to answer /health")
-
-    def _up(self) -> bool:
-        assert self.proc.poll() is None, f"the server exited early:\n{self.output()}"
-        try:
-            return self.request("GET", "/health")[0] == 200
-        except OSError:
-            return False
-
-    def output(self) -> str:
-        """What this server printed (the log holds every server of the test)."""
-        return self.log.read_text()[self.start_at :]
-
-    def request(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
-        data = None if body is None else json.dumps(body).encode()
-        req = urllib.request.Request(
-            f"{self.url}{path}",
-            data=data,
-            method=method,
-            headers={"Content-Type": "application/json"} if data else {},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status, json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            return e.code, json.loads(e.read())
-
-    def submit(self, target: str, command: str = "run") -> dict:
-        status, body = self.request("POST", "/runs", {"command": command, "targets": [target]})
-        assert status == 202, body
-        return body
-
-    def run(self, run_id: str) -> dict:
-        return self.request("GET", f"/runs/{run_id}")[1]
-
-    def finished(self, run_id: str) -> dict:
-        return wait_for(
-            lambda: (r := self.run(run_id))["status"] not in ("pending", "running") and r,
-            f"run {run_id} to finish",
-        )
-
-    def stop(self, sig=signal.SIGTERM) -> int:
-        """Send `sig` and wait for the exit code."""
-        if self.proc.poll() is None:
-            self.proc.send_signal(sig)
-        return self.proc.wait(timeout=WAIT)
-
-    def exited(self) -> int:
-        """Wait for the server to exit on its own (after a signal already sent)."""
-        return self.proc.wait(timeout=WAIT)
-
-    def kill(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.kill()
-        self.proc.wait(timeout=WAIT)
+    """This module's environment: a scrubbed shell with a pool of two workers."""
+    return clean_env(BARCA_POOL_SIZE="2", **extra)
 
 
 @pytest.fixture()
@@ -178,29 +82,18 @@ def project(tmp_path) -> Path:
 
 
 @pytest.fixture()
-def serve(project):
+def serve(project, serve):
     """Start a server; the same port each time, as a restarted service has."""
-    port = _free_port()
-    servers: list[Server] = []
+    port = free_port()
 
-    def start(*args: str) -> Server:
-        servers.append(Server(project, port, *args))
-        return servers[-1]
+    def start(*args: str) -> Serve:
+        return serve(*args, port=port, env=_env())
 
-    yield start
-    for s in servers:
-        s.kill()
+    return start
 
 
-def barca(cwd: Path, *args: str, timeout: float = WAIT, **env: str):
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=_env(**env),
-        timeout=timeout,
-    )
+def barca(cwd: Path, *args: str, timeout: float = RUN, **env: str):
+    return helpers.barca(cwd, *args, env=_env(**env), timeout=timeout)
 
 
 CLIENTS: list[subprocess.Popen] = []
@@ -248,12 +141,16 @@ def order(project: Path) -> list[str]:
     return path.read_text().split() if path.exists() else []
 
 
-def start_long(server: Server, project: Path) -> str:
+def start_long(server: Serve, project: Path) -> str:
     """Start `long` and wait until its step is executing; return its run id."""
     before = started(project, "long")
     run_id = server.submit("long")["run_id"]
-    wait_for(lambda: started(project, "long") > before, "the long step to start")
+    wait_until(lambda: started(project, "long") > before, "the long step to start")
     return run_id
+
+
+def draining(server: Serve) -> bool:
+    return server.request("GET", "/health")[1]["status"] == "draining"
 
 
 # ─── a restart resumes the queue ─────────────────────────────────────────────
@@ -274,25 +171,25 @@ def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_ord
     # Clients following a queued run: `barca logs -f` and the GET /runs/{id} poll.
     follower = client(project, "logs", ids[1], "--follow", "--server", server.url)
 
-    server.proc.send_signal(signal.SIGTERM)
-    wait_for(lambda: server.request("GET", "/health")[1]["status"] == "draining", "draining")
+    server.send(signal.SIGTERM)
+    wait_until(lambda: draining(server), "draining")
     assert server.proc.poll() is None, "the server waits for the run in flight"
     (project / "release-long").write_text("")
-    assert server.exited() == 0, server.output()
-    log = server.output()
+    assert server.exited() == 0, server.stderr
+    log = server.stderr
     assert "draining — the queue is paused and new runs are queued" in log, log
     assert "[barca] drained: every run finished; shutting down" in log, log
     assert order(project) == [], "nothing queued started during the drain"
 
     restarted = serve("--no-schedule", "--max-runs", "1")
-    assert "[barca] resuming 3 queued runs" in restarted.output(), restarted.output()
+    assert "[barca] resuming 3 queued runs" in restarted.stderr, restarted.stderr
     for run_id in ids:
         assert restarted.finished(run_id)["status"] == "success"
     assert order(project) == ["one", "two", "three"], "in the order they were accepted"
     assert restarted.run(long)["status"] == "success", "the run in flight finished"
     assert started(project, "long") == 1
 
-    assert follower.wait(timeout=WAIT) == 0
+    assert follower.wait(timeout=RUN) == 0
     out, err = client_output(project, follower)
     assert "two ran" in out, (out, err)
     assert "lost the event stream of run" in err, err
@@ -303,8 +200,8 @@ def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_ord
 def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart(project, serve):
     server = serve("--no-schedule")
     start_long(server, project)
-    server.proc.send_signal(signal.SIGTERM)
-    wait_for(lambda: server.request("GET", "/health")[1]["status"] == "draining", "draining")
+    server.send(signal.SIGTERM)
+    wait_until(lambda: draining(server), "draining")
 
     # Accepted and recorded (202, pending), not refused with 503; the older route too.
     accepted = server.submit("one")
@@ -316,17 +213,17 @@ def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart
     assert [r["run_id"] for r in queue["queued"]] == [accepted["run_id"], alias["run_id"]]
     # A `--server` client submits and rides through the restart.
     rider = client(project, "run", "three", "--server", server.url, "--json")
-    wait_for(lambda: len(server.request("GET", "/queue")[1]["queued"]) == 3, "the third run")
+    wait_until(lambda: len(server.request("GET", "/queue")[1]["queued"]) == 3, "the third run")
 
     (project / "release-long").write_text("")
-    assert server.exited() == 0, server.output()
-    assert "3 runs wait in the queue for the next start" in server.output(), server.output()
+    assert server.exited() == 0, server.stderr
+    assert "3 runs wait in the queue for the next start" in server.stderr, server.stderr
 
     restarted = serve("--no-schedule", "--max-runs", "1")
-    assert "[barca] resuming 3 queued runs" in restarted.output()
+    assert "[barca] resuming 3 queued runs" in restarted.stderr
     for run_id in (accepted["run_id"], alias["run_id"]):
         assert restarted.finished(run_id)["status"] == "success"
-    assert rider.wait(timeout=WAIT) == 0
+    assert rider.wait(timeout=RUN) == 0
     out, err = client_output(project, rider)
     assert json.loads(out)["status"] == "success", (out, err)
     assert "the server restarted; following run" in err, err
@@ -338,12 +235,14 @@ def test_the_drain_timeout_puts_the_run_in_flight_back_in_the_queue_and_exits_0(
     long = start_long(server, project)
     behind = server.submit("one")["run_id"]
     follower = client(project, "logs", long, "--follow", "--server", server.url)
+    # A fixed wait: the follower opens its event stream before the server stops, and nothing
+    # observable marks that it has.
     time.sleep(0.5)
 
     started_at = time.monotonic()
-    assert server.stop() == 0, server.output()
+    assert server.stop() == 0, server.stderr
     assert time.monotonic() - started_at < 20
-    log = server.output()
+    log = server.stderr
     assert "the drain timeout (1s) passed: stopping 1 run and putting it back in the queue" in log
     assert f"[barca] run {long} stopped and put back in the queue" in log, log
     assert "2 runs wait in the queue for the next start" in log, log
@@ -351,12 +250,12 @@ def test_the_drain_timeout_puts_the_run_in_flight_back_in_the_queue_and_exits_0(
     # Not cancelled: the next server starts it again from the beginning, first.
     (project / "release-long").write_text("")
     restarted = serve("--no-schedule", "--max-runs", "1")
-    assert "[barca] resuming 2 queued runs" in restarted.output(), restarted.output()
+    assert "[barca] resuming 2 queued runs" in restarted.stderr, restarted.stderr
     run = restarted.finished(long)
     assert run["status"] == "success", run
     assert started(project, "long") == 2, "the stopped attempt and the new one"
     assert restarted.finished(behind)["status"] == "success"
-    assert follower.wait(timeout=WAIT) == 0
+    assert follower.wait(timeout=RUN) == 0
     out, err = client_output(project, follower)
     assert "long done" in out, (out, err)
     # Its history has the attempt that finished, not a cancelled one.
@@ -369,16 +268,16 @@ def test_a_second_signal_cancels_the_runs_in_flight_and_keeps_the_queued_ones(pr
     server = serve("--no-schedule", "--max-runs", "1")
     long = start_long(server, project)
     behind = server.submit("one")["run_id"]
-    server.proc.send_signal(signal.SIGTERM)
-    wait_for(lambda: server.request("GET", "/health")[1]["status"] == "draining", "draining")
-    assert server.stop(signal.SIGINT) == 1, server.output()
-    log = server.output()
+    server.send(signal.SIGTERM)
+    wait_until(lambda: draining(server), "draining")
+    assert server.stop(signal.SIGINT) == 1, server.stderr
+    log = server.stderr
     assert "SIGINT received again: cancelling 1 run (server shutdown)" in log, log
     assert "1 run cancelled (server shutdown)" in log, log
 
     restarted = serve("--no-schedule")
     assert restarted.run(long)["status"] == "cancelled"
-    assert "[barca] resuming 1 queued run" in restarted.output(), restarted.output()
+    assert "[barca] resuming 1 queued run" in restarted.stderr, restarted.stderr
     assert restarted.finished(behind)["status"] == "success"
     assert started(project, "long") == 1, "a cancelled run is not started again"
 
@@ -395,20 +294,20 @@ def test_a_paused_queue_stays_paused_across_a_restart_until_resumed(project, ser
     assert "[barca] run queue paused on" in paused.stderr
     waiting = server.submit("one")
     assert (waiting["status"], waiting["position"]) == ("pending", 1)
-    time.sleep(1)
+    time.sleep(1)  # a fixed wait: nothing may start while the queue is paused
     assert order(project) == [], "a paused queue starts nothing"
     assert server.request("GET", "/health")[1]["queue"]["paused"] is True
 
-    assert server.stop() == 0, server.output()
+    assert server.stop() == 0, server.stderr
     restarted = serve("--no-schedule")
-    log = restarted.output()
+    log = restarted.stderr
     assert "[barca] resuming 1 queued run" in log, log
     assert "[barca] the run queue is paused (since" in log, log
     shown = barca(project, "queue", "--server", restarted.url, "--pretty")
     assert shown.returncode == 0, shown.stderr
     assert "queue: paused since" in shown.stdout, shown.stdout
     assert waiting["run_id"] in shown.stdout
-    time.sleep(1)
+    time.sleep(1)  # a fixed wait: the restarted server may start nothing either
     assert order(project) == []
 
     resumed = barca(project, "queue", "resume", "--server", restarted.url, "--json")
@@ -420,12 +319,12 @@ def test_a_paused_queue_stays_paused_across_a_restart_until_resumed(project, ser
 def test_a_scheduled_tick_while_paused_waits_in_the_queue_once(project, serve):
     (project / "pipeline.py").write_text(PIPELINE + TICKER)
     server = serve()
-    wait_for(lambda: "ticker" in order(project), "a first scheduled run")
+    wait_until(lambda: "ticker" in order(project), "a first scheduled run")
     status, _ = server.request("POST", "/queue/pause")
     assert status == 200
-    time.sleep(1)  # a tick that was starting finishes
+    time.sleep(1)  # a fixed wait: a tick that was starting finishes
     before = len(order(project))
-    time.sleep(3)  # three ticks while paused
+    time.sleep(3)  # a fixed wait: three ticks pass while paused, and none may run
     queue = server.request("GET", "/queue")[1]
     ticks = [r for r in queue["queued"] if r["triggered_by"] == "schedule"]
     # One waits; the ticks after it are skipped while a run of the node is pending.
@@ -435,7 +334,7 @@ def test_a_scheduled_tick_while_paused_waits_in_the_queue_once(project, serve):
     assert jobs["ticker"]["skip_reason"] == "in_flight", jobs["ticker"]
     assert len(order(project)) == before, "nothing ran while paused"
     server.request("POST", "/queue/resume")
-    wait_for(lambda: len(order(project)) > before, "the queued tick to run")
+    wait_until(lambda: len(order(project)) > before, "the queued tick to run")
 
 
 def test_a_read_only_server_refuses_pause_and_resume(project, serve):
@@ -469,9 +368,11 @@ def test_a_client_gives_up_when_the_server_does_not_come_back(project, serve):
     follower = client(
         project, "logs", long, "--follow", "--server", server.url, BARCA_SERVER_RECONNECT="2"
     )
+    # A fixed wait: the follower opens its event stream before the server stops, and nothing
+    # observable marks that it has.
     time.sleep(0.5)
-    assert server.stop() == 0, server.output()
-    assert follower.wait(timeout=WAIT) == 3
+    assert server.stop() == 0, server.stderr
+    assert follower.wait(timeout=RUN) == 3
     _, err = client_output(project, follower)
     assert "the server did not come back within 2s (BARCA_SERVER_RECONNECT)" in err, err
     assert f"lost the event stream of run {long}" in err, err
@@ -515,9 +416,9 @@ def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(p
     (project / "pipeline.py").write_text(CHANGING.replace("VERSION", "1"))
     server = serve("--no-schedule", "--drain-timeout", "1")
     run_id = server.submit("b", "get")["run_id"]
-    wait_for(lambda: started(project, "b") > 0, "b to start")
-    assert server.stop() == 0, server.output()
-    assert f"[barca] run {run_id} stopped and put back in the queue" in server.output()
+    wait_until(lambda: started(project, "b") > 0, "b to start")
+    assert server.stop() == 0, server.stderr
+    assert f"[barca] run {run_id} stopped and put back in the queue" in server.stderr
 
     # The deploy: `a` and `b` change while the run waits in the queue.
     (project / "pipeline.py").write_text(
@@ -525,7 +426,7 @@ def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(p
     )
     (project / "release-b").write_text("")
     restarted = serve("--no-schedule")
-    assert "[barca] resuming 1 queued run" in restarted.output(), restarted.output()
+    assert "[barca] resuming 1 queued run" in restarted.stderr, restarted.stderr
     run = restarted.finished(run_id)
     assert run["status"] == "success", run
 

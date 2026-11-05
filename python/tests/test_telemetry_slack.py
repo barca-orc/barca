@@ -7,7 +7,6 @@ A local HTTP server stands in for the Slack incoming webhook and records what it
 """
 
 import json
-import os
 import signal
 import socket
 import sqlite3
@@ -20,7 +19,9 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "DD_", "SLACK_")
+from . import helpers
+from .helpers import RUN, clean_env, wait_until
+from .served import Serve, snapshot
 
 PIPELINE = """
 import time
@@ -101,14 +102,9 @@ def hook():
     fake.close()
 
 
-@pytest.fixture
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def base_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    """A scrubbed shell without the telemetry settings either."""
+    return clean_env("DD_", "SLACK_")
 
 
 def slack(hook: FakeWebhook, **extra: str) -> dict[str, str]:
@@ -120,15 +116,7 @@ def slack(hook: FakeWebhook, **extra: str) -> dict[str, str]:
 
 
 def cli(cwd: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**base_env(), **env},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
+    return helpers.barca(cwd, *args, env={**base_env(), **env}, timeout=RUN)
 
 
 def nightly(project: Path, ok: bool, **env: str) -> subprocess.CompletedProcess:
@@ -207,9 +195,18 @@ def test_a_cancelled_run_posts_nothing(project, hook):
         stderr=subprocess.PIPE,
         text=True,
     )
-    time.sleep(3)
+
+    # The run has started once its `running` row is recorded; the row is read from a snapshot,
+    # never the live file (#537).
+    def running() -> bool:
+        with snapshot(project) as db:
+            return db is not None and bool(
+                db.execute("SELECT 1 FROM runs WHERE status = 'running'").fetchone()
+            )
+
+    wait_until(running, "the slow run to start", proc=proc)
     proc.send_signal(signal.SIGINT)
-    _, err = proc.communicate(timeout=60)
+    _, err = proc.communicate(timeout=RUN)
     assert proc.returncode == 130, err
     assert hook.headlines() == [f"🔴 {JOB} is failing"]
 
@@ -302,32 +299,18 @@ def test_under_serve_a_failing_job_posts_once_then_a_reminder(tmp_path, hook):
         "    time.sleep(1.5)\n"
         '    raise KeyError("region")\n'
     )
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
-        cwd=tmp_path,
-        env={**base_env(), **slack(hook, BARCA_TEST_SLACK_REMIND_SECS="4")},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    server = Serve(tmp_path, env={**base_env(), **slack(hook, BARCA_TEST_SLACK_REMIND_SECS="4")})
     started = time.monotonic()
     try:
-        deadline = started + 60
-        while (
-            not any("still failing" in h for h in hook.headlines()) and time.monotonic() < deadline
-        ):
-            time.sleep(0.25)
-        time.sleep(1)
+        wait_until(
+            lambda: any("still failing" in h for h in hook.headlines()),
+            "the reminder",
+            proc=server.proc,
+        )
+        time.sleep(1)  # a fixed wait: a tick in flight ends, so the count below is settled
     finally:
-        serve.send_signal(signal.SIGTERM)
-        try:
-            _, err = serve.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            serve.kill()
-            _, err = serve.communicate()
+        server.stop()
+        err = server.stderr
     elapsed = time.monotonic() - started
 
     job = "pipeline.py:heartbeat"
