@@ -32,7 +32,7 @@ jobs:
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Release notes from CHANGELOG.md
         run: |
           VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
@@ -78,7 +78,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore the web UI build
         id: ui-dist
@@ -179,7 +179,7 @@ jobs:
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore the web UI build
         id: ui-dist
@@ -294,7 +294,7 @@ jobs:
           done
           echo "present=$present" >> "$GITHUB_OUTPUT"
       - if: steps.secrets.outputs.present == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - if: steps.secrets.outputs.present == 'true'
         uses: actions/setup-node@v4
         with:
@@ -325,7 +325,7 @@ jobs:
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Wait for the published wheels on PyPI
         run: |
           VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
@@ -359,7 +359,7 @@ jobs:
             runtime: python:3.13-alpine
     runs-on: ${{ matrix.architecture.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download the exact published native archive
         env:
           GH_TOKEN: ${{ github.token }}
