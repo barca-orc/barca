@@ -83,4 +83,3 @@ export const LAST_ATTEMPT_FAILED = 'last attempt failed'
 export function lastAttemptFailed(node: Pick<NodeState, 'last_materialization' | 'partitions'>): boolean {
   return node.last_materialization?.status === 'failed' || (node.partitions?.failed ?? 0) > 0
 }
-

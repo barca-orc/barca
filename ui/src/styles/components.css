@@ -113,9 +113,9 @@
 .barca-dag-kind { font-family: var(--font-sans); font-size: var(--text-2xs); letter-spacing: var(--tracking-wide); text-transform: uppercase; color: var(--text-faint); }
 .barca-dag-state { margin-left: auto; font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-muted); white-space: nowrap; }
 .barca-dag[data-live] .barca-dag-state { color: var(--status-running); }
-.barca-dag-foot { min-width: 0; }
-/* The fact beside the state fits the card: it is cut before it spills past the edge. */
-.barca-dag-failed { display: inline-block; flex: 0 1 auto; min-width: 0; line-height: 16px; overflow: hidden; text-overflow: ellipsis; }
+.barca-dag-foot { min-width: 0; flex-wrap: wrap; row-gap: 4px; }
+/* The fact beside the state is never cut: when the two do not share a line it takes the next. */
+.barca-dag-failed { flex: none; }
 
 /* ── SearchInput ──────────────────────────────────────────── */
 /* One focus ring, on the box: the input inside would otherwise get the global

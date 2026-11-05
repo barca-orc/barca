@@ -37,4 +37,3 @@ export function failed(error: string): Remote<never> {
 export function ready<T>(data: T, refreshError: string | null = null): Remote<T> {
   return { kind: 'ready', data, refreshError }
 }
-

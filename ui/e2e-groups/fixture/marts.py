@@ -5,6 +5,7 @@ thirty nodes, so All pipelines draws a map of files, and marts.py is one group, 
 from barca import asset, group
 from grouped import summary
 
+
 @asset(inputs={"s": summary})
 def mart_00(s):
     return {"folds": s["folds"], "mart": "mart_00"}
@@ -117,6 +118,29 @@ def mart_21(s):
 
 marts = group(
     "Marts",
-    members=[mart_00, mart_01, mart_02, mart_03, mart_04, mart_05, mart_06, mart_07, mart_08, mart_09, mart_10, mart_11, mart_12, mart_13, mart_14, mart_15, mart_16, mart_17, mart_18, mart_19, mart_20, mart_21],
+    members=[
+        mart_00,
+        mart_01,
+        mart_02,
+        mart_03,
+        mart_04,
+        mart_05,
+        mart_06,
+        mart_07,
+        mart_08,
+        mart_09,
+        mart_10,
+        mart_11,
+        mart_12,
+        mart_13,
+        mart_14,
+        mart_15,
+        mart_16,
+        mart_17,
+        mart_18,
+        mart_19,
+        mart_20,
+        mart_21,
+    ],
     output=mart_00,
 )
