@@ -6,7 +6,8 @@
  * `GET /state`, and whether the scheduler has it paused from `GET /schedule`.
  */
 
-import { formatAgo, severityOf, type Severity } from './assetTable'
+import { formatAgo } from './assetTable'
+import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 import { sourceFile } from './pipeline'
 import type { ListNode, NodeState, ScheduleJob } from './types'
 
@@ -22,7 +23,10 @@ export interface ScheduleRow {
   /** "in 5m", relative to the data's fetch time. */
   nextIn: string | null
   last: { status: string; ago: string } | null
-  severity: Severity | null
+  /** `cache.state`, in the CLI's word; null until `/state` has the node. */
+  state: CacheState | null
+  /** Its last attempt failed: a fact beside the state. */
+  lastFailed: boolean
   /** The scheduler skips this node's ticks; `until` (ms) ends a timed pause. */
   paused: { until: number | null } | null
 }
@@ -101,7 +105,8 @@ export function scheduleRows(
           nextRunMs,
           nextIn: nextRunMs === null ? null : formatCountdown(nextRunMs, nowMs),
           last: last ? { status: last.status, ago: formatAgo(last.created_at, nowMs) } : null,
-          severity: st ? severityOf(st) : null,
+          state: st ? st.cache.state : null,
+          lastFailed: st ? lastAttemptFailed(st) : false,
           paused: job?.paused
             ? { until: job.paused_until !== null ? job.paused_until * 1000 : null }
             : null,

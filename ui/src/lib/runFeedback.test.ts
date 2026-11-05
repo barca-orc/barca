@@ -30,7 +30,7 @@ describe('runFeedback', () => {
     expect(runFeedback('failed', [], null)).toEqual({ kind: 'failed', error: null, logs: [] })
   })
 
-  it.each<StatusKind>(['queued', 'pending', 'skipped', 'warning'])(
+  it.each<StatusKind>(['queued', 'skipped', 'cancelled'])(
     'inert status %s → idle',
     (status) => {
       expect(runFeedback(status, [], null)).toEqual({ kind: 'idle' })
@@ -42,10 +42,9 @@ describe('runFeedback', () => {
       'success',
       'running',
       'failed',
-      'warning',
       'queued',
       'skipped',
-      'pending',
+      'cancelled',
     ]
     for (const s of all) {
       expect(() => runFeedback(s, [], null)).not.toThrow()
@@ -88,7 +87,7 @@ describe('runNotice', () => {
     expect(runNotice({ ...base, started, run: runByStatus.failed })).toMatchObject({
       kind: 'finished', status: 'failed', summary: "failed: orders_enriched: KeyError: 'currency'",
     })
-    expect(runNotice({ ...base, started, run: runByStatus.cancelled })).toMatchObject({ status: 'skipped', summary: 'cancelled' })
+    expect(runNotice({ ...base, started, run: runByStatus.cancelled })).toMatchObject({ status: 'cancelled', summary: 'cancelled' })
   })
 
   it('the request comes before the record: a new request replaces a finished run', () => {

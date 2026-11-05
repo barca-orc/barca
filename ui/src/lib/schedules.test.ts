@@ -116,7 +116,8 @@ describe('scheduleRows', () => {
       cron: '*/10 * * * *',
       human: 'every 10 minutes',
       nextIn: 'in 5m',
-      severity: 'failed',
+      state: 'always_runs',
+      lastFailed: true,
       last: { status: 'failed', ago: '10m ago' },
     })
   })

@@ -1,15 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { severityOf } from '@/lib/assetTable'
+import { lastAttemptFailed } from '@/lib/cacheStateDisplay'
 import { runFeedback } from '@/lib/runFeedback'
 import { parseOutcome, parseRunStatus } from '@/lib/runs'
 import { runningStatus } from '@/lib/running'
-import { feedbackInputs, nodeBySeverity, runByStatus, runningByStep, variants } from './fixtures'
+import { failedNode, failedTask, feedbackInputs, nodeByState, runByStatus, runningByStep, variants } from './fixtures'
 
 // The tables' keys are checked by the compiler; these check each value is the state its key
 // names, so the kit never shows one state under another's label.
 describe('kit fixtures', () => {
-  it('has a node in each severity', () => {
-    for (const severity of variants(nodeBySeverity)) expect(severityOf(nodeBySeverity[severity])).toBe(severity)
+  it('has a node in each cache state, none of which failed last', () => {
+    for (const state of variants(nodeByState)) {
+      expect(nodeByState[state].cache.state).toBe(state)
+      expect(lastAttemptFailed(nodeByState[state])).toBe(false)
+    }
+    expect(lastAttemptFailed(failedNode)).toBe(true)
+    expect(lastAttemptFailed(failedTask)).toBe(true)
   })
 
   it('has a running node at each step', () => {

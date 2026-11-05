@@ -6,9 +6,8 @@ import { useAssetStates, useWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { useGroups } from '@/hooks/useGroups'
 import { useProgram } from '@/hooks/useProgram'
-import { severityStatus } from '@/lib/assetTable'
+import { LAST_ATTEMPT_FAILED, cacheStateTone } from '@/lib/cacheStateDisplay'
 import { groupTree, leavesByGroup } from '@/lib/groups'
-import { severityWord } from '@/lib/status'
 import { mergeStates, pipelineSummaries, type PipelineSummary } from '@/lib/pipeline'
 import { SIDEBAR_KEY, fileGroups, updateSidebar, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
 import type { Dispatch } from '@/lib/program'
@@ -87,14 +86,14 @@ export function SidebarView({ model, total, pipelines, groupsOf, selected, scope
                 </button>
                 <button
                   className="barca-pipe"
-                  title={p.known ? `${p.file} · ${severityWord(p.worst)}` : p.file}
+                  title={p.known ? `${p.file} · ${p.worst}${p.failed ? ` · ${p.failed} ${LAST_ATTEMPT_FAILED}` : ''}` : p.file}
                   data-active={selected === p.file ? '' : undefined}
                   aria-pressed={selected === p.file}
                   onClick={() => onSelect(selected === p.file ? null : p.file)}
                 >
-                  {/* A dot says the whole file's state: none until all of it is known. */}
+                  {/* A dot says the whole file's most urgent fact: none until all of it is known. */}
                   {p.running || p.known
-                    ? <StatusDot status={p.running ? 'running' : severityStatus(p.worst)} size={6} />
+                    ? <StatusDot tone={p.running ? 'running' : p.failed ? 'failed' : cacheStateTone(p.worst)} live={p.running > 0} size={6} />
                     : <span className="barca-pipe-nodot" />}
                   <span className="barca-pipe-name">{p.name}</span>
                   {p.running > 0 && (
@@ -115,7 +114,7 @@ export function SidebarView({ model, total, pipelines, groupsOf, selected, scope
                   title={g.name}
                   onClick={() => onOpenGroup(p.file, g.id)}
                 >
-                  {g.status ? <StatusDot status={g.status} size={6} /> : <span className="barca-pipe-nodot" />}
+                  {g.tone ? <StatusDot tone={g.tone} live={g.tone === 'running'} size={6} /> : <span className="barca-pipe-nodot" />}
                   <span className="barca-pipe-name">{g.name}</span>
                 </button>
               ))}
@@ -132,7 +131,7 @@ export function Sidebar() {
   const { data: scoped } = useAssetStates()
   const { data: whole } = useWholeState()
   const assetQuery = useAssets()
-  const assets = assetQuery.isPlaceholderData ? undefined : assetQuery.data
+  const assets = assetQuery.data
   // The open scope is fresh; the pipelines outside it keep what the whole project last said.
   const nodes = useMemo(() => mergeStates(whole, scoped), [whole, scoped])
   const pipelines = useMemo(() => pipelineSummaries(nodes, assets ?? []), [nodes, assets])

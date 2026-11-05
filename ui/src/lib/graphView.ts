@@ -1,18 +1,17 @@
-import type { StatusKind } from '@/lib/types'
-
 /**
  * What the graph view does with the space it has, apart from React Flow: which nodes a fit
- * shows, where the keyboard goes next, and why a consumer did not run.
+ * shows, where the keyboard goes next, and what a never-run consumer waits on.
  */
 
-/** A node as the view sees it: its box in flow coordinates, and its state. */
+/** A node as the view sees it: its box in flow coordinates, and whether it needs attention. */
 export interface ViewNode {
   id: string
   x: number
   y: number
   width: number
   height: number
-  status: StatusKind
+  /** Its last attempt failed: what a fit centres on and the keyboard starts from. */
+  failed: boolean
   /** Not selectable (a port); the keyboard skips it. */
   inert?: boolean
 }
@@ -63,7 +62,7 @@ export function fitTarget(nodes: ViewNode[], width: number, height: number, inse
   if (width <= 0 || height <= 0 || fitsReadably(nodes, width, height, inset)) return nodes
   const picked = nodes.find((n) => n.id === selected)
   if (picked) return [picked]
-  const failed = nodes.filter((n) => n.status === 'failed').sort(byPosition)
+  const failed = nodes.filter((n) => n.failed).sort(byPosition)
   if (failed.length === 0) return nodes
   return fitsReadably(failed, width, height, inset) ? failed : failed.slice(0, 1)
 }
@@ -83,7 +82,7 @@ export function neighborInDirection(nodes: ViewNode[], from: string | null, key:
   const live = nodes.filter((n) => !n.inert)
   const origin = live.find((n) => n.id === from)
   if (!origin) {
-    const start = live.filter((n) => n.status === 'failed').sort(byPosition)[0] ?? [...live].sort(byPosition)[0]
+    const start = live.filter((n) => n.failed).sort(byPosition)[0] ?? [...live].sort(byPosition)[0]
     return start?.id ?? null
   }
   const center = (n: ViewNode) => ({ x: n.x + n.width / 2, y: n.y + n.height / 2 })
@@ -103,19 +102,22 @@ export function neighborInDirection(nodes: ViewNode[], from: string | null, key:
   return best?.id ?? null
 }
 
-/** A consumer that did not run, and the failed node upstream that explains it. */
-export interface Blocked { label: string; hint: string }
+/** What a node waits on, in a line: the failed node upstream that kept it from running. */
+export interface WaitsOn { hint: string }
+
+/** How a node stands in the wait: its last attempt failed, it never ran, or neither. */
+export type WaitStatus = 'failed' | 'never_run' | 'other'
 
 /**
- * Why each skipped node did not run, when a failed node upstream says so: a direct input that
- * failed, or the failure behind an input that is blocked itself. Nodes in other states (stale,
- * healthy, running) keep their own labels; the server knows those better.
+ * For each never-run node, the failed node upstream that explains it: a direct input whose last
+ * attempt failed, or the failure behind an input that never ran itself. A hint beside the
+ * node's own state word, never in place of it; nodes in other states keep their own hints.
  */
-export function blockedLabels(
+export function waitsOn(
   edges: [source: string, target: string][],
-  status: Map<string, StatusKind>,
+  status: Map<string, WaitStatus>,
   name: (id: string) => string,
-): Map<string, Blocked> {
+): Map<string, WaitsOn> {
   const inputs = new Map<string, string[]>()
   for (const [source, target] of edges) inputs.set(target, [...(inputs.get(target) ?? []), source])
   const cause = new Map<string, string | null>()
@@ -127,17 +129,17 @@ export function blockedLabels(
     for (const input of inputs.get(id) ?? []) {
       const s = status.get(input)
       if (s === 'failed') found = input
-      else if (s === 'skipped') found = causeOf(input, seen)
+      else if (s === 'never_run') found = causeOf(input, seen)
       if (found) break
     }
     cause.set(id, found)
     return found
   }
-  const out = new Map<string, Blocked>()
+  const out = new Map<string, WaitsOn>()
   for (const [id, s] of status) {
-    if (s !== 'skipped') continue
+    if (s !== 'never_run') continue
     const failed = causeOf(id, new Set())
-    if (failed) out.set(id, { label: `Blocked: ${name(failed)} failed`, hint: `Not run: its input ${name(failed)} failed.` })
+    if (failed) out.set(id, { hint: `Waits on ${name(failed)}, whose last attempt failed.` })
   }
   return out
 }

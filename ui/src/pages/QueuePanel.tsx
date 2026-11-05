@@ -33,7 +33,7 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
         {!data && isError && <span className="barca-note" role="alert">Queue unavailable: {error.message} <Button size="sm" onClick={() => void refetch()}>Retry</Button></span>}
         {data && <>
           <span className="barca-queue-count">
-            <StatusDot status={data.running.length > 0 ? 'running' : 'pending'} size={6} />
+            <StatusDot tone={data.running.length > 0 ? 'running' : 'queued'} live={data.running.length > 0} size={6} />
             {capacityLabel(data.running.length, data.max_runs)}
           </span>
           <span className="barca-queue-count">{queuedLabel(data.queued.length)}</span>

@@ -4,10 +4,10 @@
  * panel's "Why" section, only render these.
  */
 
-import { match } from 'ts-pattern'
-import { memberHealth } from './groups'
-import type { GraphState } from './graphState'
+import { CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone, type CacheState } from './cacheStateDisplay'
+import { memberHealth, type GraphState } from './graphState'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
+import type { Tone } from './tone'
 import type { NodeState, PartitionKeys, StatusKind } from './types'
 
 /** A node's place in the graph: what `GET /assets` says, all a lineage needs. */
@@ -16,71 +16,114 @@ export interface GraphLink {
   inputs: string[]
 }
 
-/** How many nodes of a scope are in each state, as the health bar shows them. */
+/**
+ * How many nodes of a scope are in each state, as the health bar shows them: one count per cache
+ * state word, plus the nodes a run is working on and those whose state is not loaded. A failed
+ * last attempt is counted beside the states, not among them: a node is in one state and may also
+ * have failed last.
+ */
 export interface HealthCounts {
-  failed: number
+  states: Record<CacheState, number>
   running: number
-  /** Stale, partial or not in the store yet: computed, but not for this code and these inputs. */
-  stale: number
-  /** Never run, always runs, or state unknown: nothing to say is wrong. */
-  idle: number
-  healthy: number
   /** No state loaded for them yet. */
   pending: number
+  /** Whose last attempt failed (`lastAttemptFailed`), whatever their state. */
+  lastFailed: number
   total: number
 }
 
-export type HealthBucket = Exclude<keyof HealthCounts, 'total'>
+/** A segment of the bar or a part of its label: a state, run work, or no state yet. */
+export type HealthPart = CacheState | 'running' | 'pending'
 
-/** Most urgent first: the order of the bar's segments and of its label. */
-export const HEALTH_BUCKETS: readonly HealthBucket[] = ['failed', 'running', 'stale', 'idle', 'healthy', 'pending']
+/** Most urgent first: the order of the bar's segments. */
+export const HEALTH_PARTS: readonly HealthPart[] = ['running', ...CACHE_STATES, 'pending']
 
-export function bucketOf(state: GraphState | undefined): HealthBucket {
-  if (!state) return 'pending'
-  return match<StatusKind, HealthBucket>(state.status)
-    .with('failed', () => 'failed')
-    .with('running', 'queued', () => 'running')
-    .with('warning', () => 'stale')
-    .with('success', () => 'healthy')
-    .with('skipped', 'pending', () => 'idle')
-    .exhaustive()
+export function emptyHealth(total = 0): HealthCounts {
+  return {
+    states: Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>,
+    running: 0,
+    pending: 0,
+    lastFailed: 0,
+    total,
+  }
 }
 
-/** Counts of `ids` by bucket; a live run's status (`live`) outranks the polled state. */
+/** The tone of a part of the bar. */
+export function healthPartTone(part: HealthPart): Tone {
+  if (part === 'running') return 'running'
+  if (part === 'pending') return 'neutral'
+  return cacheStateTone(part)
+}
+
+/** Counts of `ids`; a live run's status (`live`) outranks the polled state. */
 export function healthCounts(
   ids: readonly string[],
   byId: ReadonlyMap<string, NodeState>,
   live: Readonly<Record<string, StatusKind>> = {},
 ): HealthCounts {
-  const counts: HealthCounts = { failed: 0, running: 0, stale: 0, idle: 0, healthy: 0, pending: 0, total: ids.length }
+  const counts = emptyHealth(ids.length)
   for (const id of ids) {
     const status = live[id]
-    const node = byId.get(id)
-    const bucket = status ? bucketOf({ status, label: '', hint: '' }) : node ? bucketOf(memberHealth(node)) : 'pending'
-    counts[bucket] += 1
+    const box = memberHealth(byId.get(id))
+    if (status === 'running' || status === 'queued' || box.kind === 'run') counts.running += 1
+    else if (box.kind === 'cache') {
+      counts.states[box.state] += 1
+      if (box.lastFailed || status === 'failed') counts.lastFailed += 1
+    } else {
+      counts.pending += 1
+      if (status === 'failed') counts.lastFailed += 1
+    }
   }
   return counts
 }
 
-const BUCKET_WORDS: Record<HealthBucket, [string, string]> = {
-  failed: ['failed', 'failed'],
-  running: ['running', 'running'],
-  stale: ['stale', 'stale'],
-  idle: ['not run', 'not run'],
-  healthy: ['healthy', 'healthy'],
-  pending: ['checking', 'checking'],
+const PENDING_WORD = 'checking'
+
+/** One part of the label: `3 stale`, `2 running`, `640 checking`. */
+function partText(part: HealthPart, count: number): string {
+  return `${count.toLocaleString()} ${part === 'pending' ? PENDING_WORD : part}`
 }
 
-/** Every non-empty bucket, most urgent first, as the words a label shows for it. */
-export function healthParts(counts: HealthCounts, limit = HEALTH_BUCKETS.length): { bucket: HealthBucket; text: string }[] {
-  return HEALTH_BUCKETS.filter((b) => counts[b] > 0)
-    .slice(0, limit)
-    .map((bucket) => ({ bucket, text: `${counts[bucket].toLocaleString()} ${BUCKET_WORDS[bucket][counts[bucket] === 1 ? 0 : 1]}` }))
+export interface HealthLabelPart {
+  /** What the part counts: a state, run work, no state yet, or failed last attempts. */
+  key: HealthPart | 'lastFailed'
+  tone: Tone
+  text: string
 }
 
-/** `3 failed · 121 stale · 380 healthy`. */
-export function healthLabel(counts: HealthCounts, limit = HEALTH_BUCKETS.length): string {
+/**
+ * Every non-empty part, most urgent first, as the words a label shows: failed last attempts
+ * first (`2 failed last attempt`), then run work, then each state present by rank, then what
+ * is not loaded. The state words are the CLI's.
+ */
+export function healthParts(counts: HealthCounts, limit = HEALTH_PARTS.length + 1): HealthLabelPart[] {
+  const parts: HealthLabelPart[] = []
+  if (counts.lastFailed > 0) parts.push({ key: 'lastFailed', tone: FAILED_TONE, text: `${counts.lastFailed.toLocaleString()} ${LAST_ATTEMPT_FAILED}` })
+  for (const part of HEALTH_PARTS) {
+    const count = part === 'running' || part === 'pending' ? counts[part] : counts.states[part]
+    if (count > 0) parts.push({ key: part, tone: healthPartTone(part), text: partText(part, count) })
+  }
+  return parts.slice(0, limit)
+}
+
+/** `2 last attempt failed · 121 stale · 380 cached`. */
+export function healthLabel(counts: HealthCounts, limit?: number): string {
   return healthParts(counts, limit).map((p) => p.text).join(' · ')
+}
+
+/** How many nodes are in a state that needs attention (a warning tone: blocked, stale, partial, unsynced). */
+export function needsAttention(counts: HealthCounts): number {
+  return CACHE_STATES.filter((s) => cacheStateTone(s) === 'warning').reduce((n, s) => n + counts.states[s], 0)
+}
+
+/** The tone of a scope's most urgent part; neutral for an empty scope. */
+export function healthTone(counts: HealthCounts): Tone {
+  return healthParts(counts, 1)[0]?.tone ?? 'neutral'
+}
+
+/** Whether `state` is the box of a node whose last attempt failed. */
+export function isFailed(state: GraphState): boolean {
+  return (state.kind === 'cache' && state.lastFailed) || (state.kind === 'run' && state.status === 'failed')
 }
 
 /** Each node's direct consumers. */
@@ -154,7 +197,7 @@ function failedKeys(node: NodeState, page: PartitionKeys | undefined): FailedKey
 
 /** The failed nodes among `nodes` whose keys failed: those whose key errors are worth loading. */
 export function failedKeyNodes(nodes: readonly NodeState[]): string[] {
-  return nodes.filter((n) => memberHealth(n).status === 'failed' && failedKeys(n, undefined)).map((n) => n.id)
+  return nodes.filter((n) => isFailed(memberHealth(n)) && failedKeys(n, undefined)).map((n) => n.id)
 }
 
 /** `7 of 3,077 keys · +2 more errors`: the line under a partitioned failure's headline. */
@@ -210,7 +253,7 @@ export function failures(
   keyErrors?: ReadonlyMap<string, PartitionKeys>,
 ): Failure[] {
   return nodes
-    .filter((n) => memberHealth(n).status === 'failed')
+    .filter((n) => isFailed(memberHealth(n)))
     .map((n) => {
       const nodeError = n.last_materialization?.error ?? ''
       const page = keyErrors?.get(n.id)
@@ -289,7 +332,7 @@ export function failedUpstream(
       if (seen.has(up)) continue
       seen.add(up)
       const node = byId.get(up)
-      if (node && memberHealth(node).status === 'failed') out.push(up)
+      if (node && isFailed(memberHealth(node))) out.push(up)
       next.push(...(inputs.get(up) ?? []))
     }
     frontier = next

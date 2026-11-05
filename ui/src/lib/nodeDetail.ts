@@ -151,7 +151,8 @@ export function editorOpens(root: string | null | undefined, roots: readonly str
 }
 
 /** A definition's file relative to the project root (`planning.py`, not `/srv/app/planning.py`). */
-export function sourcePath(root: string | null | undefined, file: string): string {
+export function sourcePath(root: string | null | undefined, file: string | null | undefined): string {
+  if (!file) return ''
   if (root && file.startsWith(`${root.replace(/\/+$/, '')}/`)) return file.slice(root.replace(/\/+$/, '').length + 1)
   return file
 }

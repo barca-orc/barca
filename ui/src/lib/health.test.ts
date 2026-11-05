@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { causeOf, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, scopeAge } from './health'
+import { causeOf, emptyHealth, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, healthTone, scopeAge } from './health'
 import type { NodeState, PartitionKeys } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
@@ -26,13 +26,21 @@ const byId = new Map(nodes.map((n) => [n.id, n]))
 const consumers = consumersOf(nodes)
 
 describe('health', () => {
-  it('counts a scope by bucket, a live run first', () => {
+  it('counts a scope by state word, failed last attempts beside them, a live run first', () => {
     const ids = nodes.map((n) => n.id)
-    expect(healthCounts(ids, byId)).toEqual({ failed: 2, running: 0, stale: 1, idle: 0, healthy: 2, pending: 0, total: 5 })
-    expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, healthy: 1, pending: 1 })
-    expect(healthLabel(healthCounts(ids, byId))).toBe('2 failed · 1 stale · 2 healthy')
-    expect(healthParts(healthCounts(ids, byId), 2)).toEqual([{ bucket: 'failed', text: '2 failed' }, { bucket: 'stale', text: '1 stale' }])
-    expect(healthLabel(healthCounts(ids, byId), 1)).toBe('2 failed')
+    const counts = healthCounts(ids, byId)
+    // `raw` and `orphan` are cached assets whose last attempt failed: in the cached count, and in lastFailed.
+    expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, cached: 4, stale: 1 }, lastFailed: 2 })
+    expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ cached: 3 }) })
+    expect(healthLabel(counts)).toBe('2 last attempt failed · 1 stale · 4 cached')
+    expect(healthParts(counts, 2)).toEqual([
+      { key: 'lastFailed', tone: 'failed', text: '2 last attempt failed' },
+      { key: 'stale', tone: 'warning', text: '1 stale' },
+    ])
+    expect(healthLabel(counts, 1)).toBe('2 last attempt failed')
+    expect(healthTone(counts)).toBe('failed')
+    expect(healthTone(emptyHealth())).toBe('neutral')
+    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 cached')
   })
 
   it('lists failures by downstream impact, with their headline', () => {

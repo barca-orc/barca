@@ -11,15 +11,16 @@ import {
   withPorts,
   parseEntrySort,
   groupTree,
-  PREVIEW_FAILURE,
   groupHealth,
   groupLeaves,
   groupOutput,
   groupPath,
   projectGroups,
-  memberHealth,
 } from './groups'
+import { memberHealth } from './graphState'
+import { isFailed } from './health'
 const tree = groupTree(metadata)
+const FAILING_CHECK = 'modeling.py:validate__cv__fold_03__trained_model'
 
 import type { ListNode, NodeState } from './types'
 
@@ -65,40 +66,42 @@ describe('organizational groups', () => {
     )
   })
 
-  it('propagates a failed check through all ancestors while its model output stays cached', () => {
+  it("a failed check shows in every ancestor's summary while its model output stays cached", () => {
     const leaves = tree.roots.flatMap((id) => groupLeaves(id, tree))
     const states = new Map(leaves.map((id) => [id, state(id)]))
-    const failure = states.get(PREVIEW_FAILURE)!
+    const failure = states.get(FAILING_CHECK)!
     failure.last_materialization!.status = 'failed'
     for (const id of [
       'group:modeling.py:fold_03__fitting',
       'group:modeling.py:fold_03',
       'group:modeling.py:cross_validation',
     ]) {
-      expect(groupHealth(groupLeaves(id, tree), states).status).toBe('failed')
-      expect(memberHealth(states.get(groupOutput(id, tree))).status).toBe(
-        'success',
-      )
+      expect(groupHealth(groupLeaves(id, tree), states)).toMatchObject({ tone: 'failed', label: '1 last attempt failed' })
+      const output = memberHealth(states.get(groupOutput(id, tree)))
+      expect(output).toMatchObject({ label: 'cached', tone: 'success' })
+      expect(isFailed(output)).toBe(false)
     }
-    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states).status).toBe(
-      'success',
-    )
+    // A fold with no failure: its checks (always_runs) head the summary, its assets are cached.
+    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states)).toMatchObject({ tone: 'neutral', label: expect.stringMatching(/always_runs$/) })
     expect(groupPath('group:modeling.py:fold_03__fitting', tree).map((g) => g.name)).toEqual(
       ['Cross-validation', 'Fold 3', 'Model fitting'],
     )
   })
 
-  it('treats successful always-run checks as healthy, and missing state as unknown', () => {
+  it('summarizes members in their own words: always_runs checks are not cached, and a missing state is checking', () => {
     const ids = groupLeaves('group:modeling.py:final_training', tree)
     const states = new Map(ids.map((id) => [id, state(id)]))
-    expect(groupHealth(ids, states).status).toBe('success')
+    const summary = groupHealth(ids, states)
+    expect(summary.tone).toBe('neutral')
+    expect(summary.label).toMatch(/^\d+ always_runs$/)
+    expect(summary.hint).toMatch(/always_runs · \d+ cached$/)
     states.delete(ids[0]!)
-    expect(groupHealth(ids, states).status).toBe('skipped')
+    expect(groupHealth(ids, states).hint).toContain('1 checking')
     states.set(ids[0]!, {
       ...state(ids[0]!),
       cache: { state: 'stale', reason: 'changed', detail: 'Changed' },
     })
-    expect(groupHealth(ids, states).status).toBe('warning')
+    expect(groupHealth(ids, states)).toMatchObject({ tone: 'warning', label: '1 stale' })
   })
 
   it('preserves dependencies crossing a collapsed boundary even through a non-output member', () => {

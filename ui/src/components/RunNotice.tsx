@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { shortName } from '@/lib/graph'
 import type { RunNotice as Notice } from '@/lib/runFeedback'
+import { statusMeta } from '@/lib/status'
 import { IconButton } from './IconButton'
 import { StatusDot } from './StatusDot'
 
@@ -28,12 +29,8 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
     .exhaustive()
   const failed = notice.kind === 'rejected' || (notice.kind === 'finished' && notice.status === 'failed')
   return (
-    <p
-      role={failed ? 'alert' : 'status'}
-      className="barca-note barca-run-notice"
-      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 24px', margin: 0 }}
-    >
-      <StatusDot status={status} size={6} />
+    <p role={failed ? 'alert' : 'status'} className="barca-note barca-run-notice">
+      <StatusDot tone={statusMeta(status).tone} live={status === 'running'} size={6} />
       {name && <strong title={notice.target ?? undefined}>{name}</strong>}
       {'runId' in notice && (
         <>

@@ -26,27 +26,13 @@ export function OfflineBanner() {
   }, [offline, back, client])
   if (!offline) return null
   return (
-    <div
-      role="alert"
-      className="barca-offline"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '8px 20px',
-        borderBottom: '1px solid var(--status-warning-line)',
-        background: 'var(--status-warning-bg)',
-        color: 'var(--text-strong)',
-        fontFamily: 'var(--font-sans)',
-        fontSize: 'var(--text-sm)',
-      }}
-    >
-      <WifiOff size={14} style={{ color: 'var(--status-warning)', flex: 'none' }} aria-hidden />
+    <div role="alert" className="barca-offline">
+      <WifiOff size={14} aria-hidden />
       <span>
         <strong>barca serve is not reachable.</strong> What is shown was loaded before the connection was lost and
         may be out of date; retrying every few seconds.
       </span>
-      <Button size="sm" style={{ marginLeft: 'auto' }} onClick={() => void client.invalidateQueries()}>
+      <Button size="sm" className="barca-offline-retry" onClick={() => void client.invalidateQueries()}>
         Retry now
       </Button>
     </div>

@@ -1,6 +1,9 @@
 import { X, Play, Terminal, CircleAlert } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Button, IconButton, KeyValue, SidePanel, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
+import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
+import { isLive, type GraphState } from '@/lib/graphState'
+import { isFailed } from '@/lib/health'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
 import { runFeedback } from '@/lib/runFeedback'
@@ -8,11 +11,10 @@ import type { ListNode, StatusKind, LogLine } from '@/lib/types'
 
 interface NodeInspectorProps {
   asset: ListNode
-  /** Live visual status for this node. */
-  status: StatusKind
-  statusLabel?: string
-  /** Run feedback stays separate from the resting cache badge. */
-  feedbackStatus?: StatusKind
+  /** The node's box: its cache state in the CLI's word, or the run working on it. */
+  state: GraphState
+  /** The streamed run's status for this node: what feedback to show. */
+  feedbackStatus: StatusKind
   /** Captured log lines for the active run (run-wide). */
   logs: LogLine[]
   /** Whether a run is currently streaming. */
@@ -57,8 +59,7 @@ function ErrorPanel({ title, message }: { title: string; message: string }) {
 
 export function NodeInspector({
   asset,
-  status,
-  statusLabel,
+  state,
   feedbackStatus,
   logs,
   running,
@@ -74,7 +75,7 @@ export function NodeInspector({
   // Presentation logic (pure, tested) decides the feedback descriptor; this
   // component only maps each descriptor variant to elements. Exhaustive on both
   // sides — no run state can render nothing by accident.
-  const feedback = match(runFeedback(feedbackStatus ?? status, logs, error))
+  const feedback = match(runFeedback(feedbackStatus, logs, error))
     .with({ kind: 'idle' }, () => null)
     .with({ kind: 'streaming' }, (f) => <OutputPanel logs={f.logs} live />)
     .with({ kind: 'output' }, (f) => <OutputPanel logs={f.logs} live={false} />)
@@ -92,7 +93,7 @@ export function NodeInspector({
       label={`${name} inspector`}
       width={316}
       title={name}
-      badge={<StatusDot status={status} size={8} />}
+      badge={<StatusDot tone={state.tone} live={isLive(state)} label={state.label} size={8} />}
       actions={
         <IconButton label="Close" size="sm" onClick={onClose}>
           <X size={14} />
@@ -102,7 +103,8 @@ export function NodeInspector({
       <div className="barca-insp-body">
         <div className="barca-tagrow">
           <Tag>{nodeKindLabel(asset)}</Tag>
-          <StatusBadge status={status} label={statusLabel} size="sm" />
+          <StatusBadge tone={state.tone} label={state.label} live={isLive(state)} size="sm" />
+          {isFailed(state) && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
         </div>
 
         <div>

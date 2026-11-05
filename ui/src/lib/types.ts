@@ -183,18 +183,16 @@ export interface LogLine {
 }
 
 /**
- * Visual run state used across status components. A frontend superset of the
- * server's run lifecycle plus the asset-level states the design system defines
- * (queued, skipped, warning, success).
+ * A run's lifecycle, and a step's within it, as the UI colours and names it (`lib/status.ts`).
+ * One axis: a node's cache state is another (`lib/cacheStateDisplay.ts`) and never maps here.
  */
 export type StatusKind =
-  | 'success'
-  | 'running'
-  | 'failed'
-  | 'warning'
   | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
   | 'skipped'
-  | 'pending'
 
 export type { TokenMetadata } from './generated/TokenMetadata'
 export type { IssuedToken } from './generated/IssuedToken'

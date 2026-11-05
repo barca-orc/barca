@@ -44,7 +44,7 @@ export function useAssetStates() {
   const { scope, waiting } = useStateScope()
   const assets = useAssets()
   // A pipeline with no nodes is an empty result, not a request the server would refuse.
-  const listed = assets.isPlaceholderData ? undefined : assets.data
+  const listed = assets.data
   const file = scope && 'file' in scope ? scope.file : null
   const empty = file !== null && listed !== undefined && !listed.some((a) => inPipeline(a.id, file))
   return useQuery({

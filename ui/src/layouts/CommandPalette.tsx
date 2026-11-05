@@ -37,7 +37,7 @@ export function CommandPalette({ run, onRun, onClose }: CommandPaletteProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const assetQuery = useAssets()
-  const assets = assetQuery.isPlaceholderData ? undefined : assetQuery.data
+  const assets = assetQuery.data
   const groups = useGroups().data
   const runs = useRuns(RECENT_RUNS).data?.runs
   const index = useMemo(() => paletteIndex(assets ?? [], groups ?? [], runs ?? []), [assets, groups, runs])

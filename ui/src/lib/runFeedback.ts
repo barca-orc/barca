@@ -39,7 +39,7 @@ export function runFeedback(
     )
     .with('failed', (): RunFeedback => ({ kind: 'failed', error, logs }))
     // Pre-run / inert states show no feedback panel — just the trigger button.
-    .with('queued', 'pending', 'skipped', 'warning', (): RunFeedback => ({ kind: 'idle' }))
+    .with('queued', 'skipped', 'cancelled', (): RunFeedback => ({ kind: 'idle' }))
     .exhaustive()
 }
 

@@ -7,9 +7,9 @@
  */
 
 import type { Connection } from '@/lib/connection'
-import type { Failure, HealthCounts } from '@/lib/health'
+import type { CacheState } from '@/lib/cacheStateDisplay'
+import { emptyHealth, type Failure, type HealthCounts } from '@/lib/health'
 import type { RunFeedback } from '@/lib/runFeedback'
-import type { Severity } from '@/lib/assetTable'
 import type { Remote } from '@/lib/remote'
 import { ready, failed, loading } from '@/lib/remote'
 import type { ResetPhase } from '@/components/ResetDatabase'
@@ -43,7 +43,7 @@ const ago = (seconds: number) => new Date(NOW_MS - seconds * 1000).toISOString()
 const sqlTime = (seconds: number) => ago(seconds).replace('T', ' ').slice(0, 19)
 
 export const STATUS_KINDS = variants({
-  success: 1, running: 1, failed: 1, warning: 1, queued: 1, skipped: 1, pending: 1,
+  queued: 1, running: 1, success: 1, failed: 1, cancelled: 1, skipped: 1,
 } satisfies Record<StatusKind, 1>)
 
 export const NODE_KINDS = variants({ asset: 1, task: 1, sensor: 1 } satisfies Record<NodeKind, 1>)
@@ -88,13 +88,12 @@ function node(name: string, overrides: Partial<NodeState>): NodeState {
   }
 }
 
-/** A node in each resting state, most urgent first (`severityOf` reads each back). */
-export const nodeBySeverity = {
-  failed: node('orders_enriched', {
-    last_materialization: materialized({ status: 'failed', artifact: null, format: null, error: "KeyError: 'currency'" }),
-    last_success_at: ago(86_400 * 2),
-    failing_since: ago(50_400),
-    consecutive_failures: 3,
+/** A node in each cache state, in the CLI's words (`graphState` reads each back as its key). */
+export const nodeByState = {
+  blocked: node('promo_plan', {
+    partitioned: true,
+    cache: { state: 'blocked', reason: 'upstream_failed', detail: '39 keys wait on failed upstream keys' },
+    partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [] },
   }),
   stale: node('revenue_daily', {
     cache: { state: 'stale', reason: 'changed', detail: 'code changed since the last run', changed: ['code'] },
@@ -116,14 +115,35 @@ export const nodeBySeverity = {
   always_runs: node('daily_report', {
     kind: 'task',
     cache: { state: 'always_runs', reason: 'task', detail: 'a task runs every time' },
-    // A task's state is its last execution: only one that neither succeeded nor failed stays "always runs".
-    last_materialization: materialized({ status: 'cancelled', artifact: null, format: null }),
+    last_materialization: materialized({ artifact: null, format: null }),
   }),
   unsynced: node('product_catalog', {
     cache: { state: 'unsynced', reason: 'local_only', detail: 'cached here, not uploaded to the store yet' },
   }),
   cached: node('orders_clean', {}),
-} satisfies Record<Severity, NodeState>
+} satisfies Record<CacheState, NodeState>
+
+/**
+ * A node whose last attempt failed: the fact shown beside its state. `stale` with reason `failed`
+ * is what the server says of an asset whose newer attempt failed without replacing its result.
+ */
+export const failedNode: NodeState = node('orders_enriched', {
+  cache: { state: 'stale', reason: 'failed', detail: 'the last attempt failed; a cached result from before remains' },
+  last_materialization: materialized({ status: 'failed', artifact: null, format: null, error: "KeyError: 'currency'" }),
+  last_success_at: ago(86_400 * 2),
+  failing_since: ago(50_400),
+  consecutive_failures: 3,
+})
+
+/** A task whose last run failed: `always_runs`, and the fact beside it. */
+export const failedTask: NodeState = node('check__orders', {
+  kind: 'task',
+  cache: { state: 'always_runs', reason: 'task', detail: 'a task runs every time' },
+  last_materialization: materialized({ status: 'failed', artifact: null, format: null, error: 'AssertionError: 3 rows with negative units' }),
+  last_success_at: ago(86_400),
+  failing_since: ago(3_600),
+  consecutive_failures: 1,
+})
 
 export const runningByStep = {
   queued: { run_id: '128', triggered_by: 'schedule', started_at: ago(8), step: 'queued', partitions: null },
@@ -156,12 +176,12 @@ export const feedbackInputs = {
 
 // ── Artifact schemas ──────────────────────────────────────────────────────────
 
-const schemaNode = (overrides: Partial<NodeStatus>): NodeStatus => ({ ...nodeBySeverity.cached, ...overrides })
+const schemaNode = (overrides: Partial<NodeStatus>): NodeStatus => ({ ...nodeByState.cached, ...overrides })
 
 /** Each thing the node panel's schema section can say. */
 export const schemaNodes: Record<string, NodeStatus> = {
   'never materialized': schemaNode({ last_materialization: null }),
-  'latest attempt failed': nodeBySeverity.failed,
+  'latest attempt failed': failedNode,
   'no artifact recorded': schemaNode({ last_materialization: materialized({ artifact: null, format: null }) }),
   'parquet table': schemaNode({
     shape: { type: 'DataFrame', rows: 12_371, columns: [
@@ -357,19 +377,23 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-const counts = (c: Partial<HealthCounts>): HealthCounts => {
-  const all = { failed: 0, running: 0, stale: 0, idle: 0, healthy: 0, pending: 0, ...c }
-  return { ...all, total: all.failed + all.running + all.stale + all.idle + all.healthy + all.pending }
+const counts = (states: Partial<Record<CacheState, number>>, extra: Partial<Pick<HealthCounts, 'running' | 'pending' | 'lastFailed'>> = {}): HealthCounts => {
+  const all = emptyHealth()
+  Object.assign(all.states, states)
+  Object.assign(all, extra)
+  all.total = Object.values(all.states).reduce((n, c) => n + c, 0) + all.running + all.pending
+  return all
 }
 
 /** A scope in each state the health bar distinguishes, and the mixes that matter. */
 export const healthStates: Record<string, HealthCounts> = {
-  healthy: counts({ healthy: 504 }),
-  'one failure in thousands': counts({ failed: 1, stale: 12, healthy: 2400 }),
-  'failed and stale': counts({ failed: 3, stale: 121, healthy: 380 }),
-  running: counts({ running: 40, healthy: 460, stale: 4 }),
-  'not run yet': counts({ idle: 120, healthy: 8 }),
-  checking: counts({ pending: 640 }),
+  cached: counts({ cached: 504 }),
+  'one failure in thousands': counts({ stale: 12, cached: 2400 }, { lastFailed: 1 }),
+  'failed and stale': counts({ stale: 121, cached: 380 }, { lastFailed: 3 }),
+  running: counts({ cached: 460, stale: 4 }, { running: 40 }),
+  'every state': counts({ blocked: 2, stale: 3, partial: 1, unsynced: 4, unknown: 1, never_run: 7, always_runs: 20, cached: 60 }, { lastFailed: 2 }),
+  'not run yet': counts({ never_run: 120, cached: 8 }),
+  checking: counts({}, { pending: 640 }),
   empty: counts({}),
 }
 

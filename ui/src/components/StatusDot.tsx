@@ -1,37 +1,31 @@
 import type { CSSProperties } from 'react'
-import type { StatusKind } from '@/lib/types'
-import { statusMeta } from '@/lib/status'
+import type { Tone } from '@/lib/tone'
 
 export interface StatusDotProps {
-  status: StatusKind
+  tone: Tone
   size?: number
-  /** Override the auto pulse (running pulses by default). */
-  pulse?: boolean
+  /** Pulse (live work). */
+  live?: boolean
+  /** What the dot stands for, for a screen reader; without one the dot is decoration. */
+  label?: string
   style?: CSSProperties
 }
 
 /**
  * barca · StatusDot
- * A small state indicator. `running` pulses; everything else is still.
+ * A small indicator in a tone. Colour is never the only carrier: give it a `label`, or put the
+ * word beside it. `live` pulses.
  */
-export function StatusDot({ status, size = 8, pulse, style }: StatusDotProps) {
-  const meta = statusMeta(status)
-  const live = pulse ?? meta.live
+export function StatusDot({ tone, size = 8, live = false, label, style }: StatusDotProps) {
   return (
     <span
-      style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        background: meta.color,
-        flex: 'none',
-        display: 'inline-block',
-        boxShadow: live ? `0 0 8px -1px ${meta.color}` : 'none',
-        animation: live
-          ? 'barca-pulse var(--dur-pulse) var(--ease-in-out) infinite'
-          : 'none',
-        ...style,
-      }}
+      className="barca-dot"
+      data-tone={tone}
+      data-live={live || undefined}
+      role={label ? 'img' : undefined}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+      style={{ width: size, height: size, ...style }}
     />
   )
 }

@@ -1,5 +1,5 @@
 import type { ListNode, NodeState } from './types'
-import { SEVERITIES, severityOf, type Severity } from './assetTable'
+import { cacheStateRank, lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 
 /**
  * Asset ids are "<source-file>:<name>" (e.g. "iris_project/assets.py:raw_data").
@@ -26,22 +26,14 @@ export interface Pipeline {
   file: string
 }
 
-/** Distinct pipelines actually being served, derived from the asset graph. */
-export function pipelinesFromAssets(assets: ListNode[]): Pipeline[] {
-  const seen = new Map<string, Pipeline>()
-  for (const a of assets) {
-    const file = sourceFile(a.id)
-    if (!seen.has(file)) seen.set(file, { name: pipelineName(file), file })
-  }
-  return [...seen.values()]
-}
-
 /** A pipeline (source file) as the sidebar shows it. */
 export interface PipelineSummary extends Pipeline {
   /** Nodes defined in this file. */
   total: number
-  /** The most urgent state among them (what its status dot shows). */
-  worst: Severity
+  /** The most urgent `cache.state` among them, in the CLI's word; `unknown` until one is loaded. */
+  worst: CacheState
+  /** How many of them failed their last attempt: a fact beside the state. */
+  failed: number
   /** Every one of them has a loaded state: `worst` is the file's, not just a part's. */
   known: boolean
   /** How many of them a run is working on now. */
@@ -58,16 +50,18 @@ export function pipelineSummaries(
   for (const asset of assets) {
     const file = sourceFile(asset.id)
     const n = states.get(asset.id)
-    const severity = n ? severityOf(n) : 'unknown'
+    const state: CacheState = n ? n.cache.state : 'unknown'
+    const failed = n && lastAttemptFailed(n) ? 1 : 0
     const p = byFile.get(file)
     const running = n?.running ? 1 : 0
     if (!p) {
-      byFile.set(file, { file, name: pipelineName(file), total: 1, worst: severity, known: n !== undefined, running })
+      byFile.set(file, { file, name: pipelineName(file), total: 1, worst: state, failed, known: n !== undefined, running })
     } else {
       p.total += 1
       p.running += running
+      p.failed += failed
       p.known &&= n !== undefined
-      if (SEVERITIES.indexOf(severity) < SEVERITIES.indexOf(p.worst)) p.worst = severity
+      if (cacheStateRank(state) < cacheStateRank(p.worst)) p.worst = state
     }
   }
   return [...byFile.values()].sort((a, b) => a.file.localeCompare(b.file))
