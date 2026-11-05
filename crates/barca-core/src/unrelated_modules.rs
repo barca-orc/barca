@@ -230,7 +230,7 @@ pub(crate) const STDLIB: &[&str] = &[
 
 /// Widely used third-party packages that do not resolve names from text against the caller's
 /// frame. The manual (`assets.md`, "Unused inputs") repeats this list; a test keeps them equal.
-pub(crate) const THIRD_PARTY: &[&str] = &[
+pub const THIRD_PARTY: &[&str] = &[
     "pyarrow",
     "numpy",
     "matplotlib",
