@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import io
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 
 
 class _LineEmitter(io.TextIOBase):
@@ -132,7 +132,7 @@ def stderr_for_step(node_id: str) -> _StderrTee:
 
 
 @contextlib.contextmanager
-def captured(out: _LineEmitter, err: _StderrTee) -> Iterator[None]:
+def captured(out: _LineEmitter, err: _StderrTee) -> Generator[None, None, None]:
     """Run a block with `sys.stdout` and `sys.stderr` recorded; trailing partial lines are
     emitted when it ends, even if it raised."""
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

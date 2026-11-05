@@ -1252,9 +1252,19 @@ mod tests {
             .unwrap()
             .into_syntax();
 
+        // `@overload` signatures type a decorator used bare and with arguments; the
+        // implementation that follows them is the one stub.
+        let is_overload = |f: &ast::StmtFunctionDef| {
+            f.decorator_list.iter().any(|d| match &d.expression {
+                Expr::Name(n) => n.id.as_str() == "overload",
+                Expr::Attribute(a) => a.attr.as_str() == "overload",
+                _ => false,
+            })
+        };
         let mut seen = Vec::new();
         for stmt in &module.body {
             let (name, params) = match stmt {
+                Stmt::FunctionDef(f) if is_overload(f) => continue,
                 Stmt::FunctionDef(f) => (f.name.as_str(), &*f.parameters),
                 Stmt::ClassDef(c) => {
                     let init = c.body.iter().find_map(|s| match s {
