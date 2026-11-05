@@ -230,8 +230,9 @@ they arrive. The tests do not exercise that (fonts are local and fast).
 - **ts-rs** generates the wire types from Rust (`pnpm gen:types`) — Rust is the
   single source of truth; the frontend never hand-writes a wire type.
 - **vitest** for the pure-logic tests (`pnpm test`).
-- **tsgo** (TS 7 native preview) for fast typechecking (`pnpm typecheck`, ~6× faster than
-  `tsc`); the production `build` keeps stable `tsc -b` as the authoritative gate.
+- **tsc** is the one type checker: `pnpm typecheck` runs `tsc -b`, the same check `build`
+  runs before Vite (the project builds in a few seconds, so a second, faster checker would only
+  be a second opinion that can disagree).
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
 
