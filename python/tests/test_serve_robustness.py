@@ -1,15 +1,11 @@
 """`barca serve` started and stopped the way a supervisor or a container does it (#289)."""
 
 import json
-import os
 import re
 import signal
-import socket
 import subprocess
 import time
-import urllib.error
 import urllib.request
-from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -17,10 +13,9 @@ import pytest
 from barca.api import BarcaError, _find_binary
 from barca.client import Client
 
-# Settings from the developer's shell that would point the server at a real store.
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
-
-WAIT = 30.0
+from . import helpers
+from .helpers import QUICK, clean_env, wait_until
+from .served import Serve
 
 PIPELINE = """
 import time
@@ -50,16 +45,9 @@ def nightly() -> None:
 """
 
 
-def _env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["BARCA_POOL_SIZE"] = "2"
-    return env
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def _pool_env() -> dict[str, str]:
+    """This module's environment: a scrubbed shell with a pool of two workers."""
+    return clean_env(BARCA_POOL_SIZE="2")
 
 
 @pytest.fixture()
@@ -69,15 +57,8 @@ def project(tmp_path) -> Path:
     return tmp_path
 
 
-def barca(cwd: Path, *args: str, timeout: float = WAIT) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=_env(),
-        timeout=timeout,
-    )
+def barca(cwd: Path, *args: str, timeout: float = QUICK) -> subprocess.CompletedProcess:
+    return helpers.barca(cwd, *args, env=_pool_env(), timeout=timeout)
 
 
 def process_state(pid: int) -> str | None:
@@ -88,70 +69,30 @@ def process_state(pid: int) -> str | None:
     return None if out.returncode != 0 or not state or state.startswith("Z") else state
 
 
-def wait_for(predicate, what: str, timeout: float = WAIT):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.05)
-    pytest.fail(f"timed out after {timeout:.0f}s waiting for {what}")
-
-
-class Server:
-    """A `barca serve` child on a free port; its stderr goes to `serve.log` in the project."""
+class Server(Serve):
+    """`barca serve pipeline.py` on a free port with this module's environment, for the modules
+    that still import it from here; `stop()` kills it, as the old wrapper did."""
 
     def __init__(self, cwd: Path, *args: str) -> None:
-        self.cwd = cwd
-        self.port = _free_port()
-        self.log = cwd / "serve.log"
-        self.proc = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--port", str(self.port), *args],
-            cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=self.log.open("w"),
-            env=_env(),
-        )
-        wait_for(self._up, "the server to answer /health")
+        super().__init__(cwd, *args, env=_pool_env())
 
-    def _up(self) -> bool:
-        assert self.proc.poll() is None, f"the server exited early:\n{self.log.read_text()}"
-        try:
-            return self.request("GET", "/health")[0] == 200
-        except OSError:
-            return False
+    @property
+    def log(self) -> Path:
+        return self.err_path
 
-    def request(self, method: str, path: str) -> tuple[int, object]:
-        """One request: the HTTP status and the decoded JSON body, error responses included."""
-        status, _, body = self.exchange(method, path)
-        return status, body
-
-    def exchange(self, method: str, path: str) -> tuple[int, Message, object]:
-        """[`request`], with the response headers."""
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status, resp.headers, json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            return e.code, e.headers, json.loads(e.read())
-
-    def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.kill()
-        self.proc.wait(timeout=WAIT)
+    def stop(self, sig: int = signal.SIGKILL, timeout: float = 30) -> int:
+        return super().stop(sig, timeout)
 
 
 @pytest.fixture()
-def serve(project):
-    servers: list[Server] = []
+def serve(project, serve):
+    """The shared `serve` factory with this module's environment."""
 
-    def start(*args: str) -> Server:
-        servers.append(Server(project, *args))
-        return servers[-1]
+    def start(*args: str, **options) -> Serve:
+        options.setdefault("env", _pool_env())
+        return serve(*args, **options)
 
-    yield start
-    for s in servers:
-        s.stop()
+    return start
 
 
 # ─── --timezone ──────────────────────────────────────────────────────────────
@@ -161,7 +102,8 @@ def serve(project):
 def test_an_unknown_timezone_is_a_usage_error(project, value):
     # It used to start the server on local time with one line on stderr. `timeout` ends the
     # test if it starts one again.
-    out = barca(project, "serve", "pipeline.py", "--port", str(_free_port()), "--timezone", value)
+    port = str(helpers.free_port())
+    out = barca(project, "serve", "pipeline.py", "--port", port, "--timezone", value)
     assert out.returncode == 2, out.stderr
     assert f"unknown timezone '{value}'" in out.stderr
     assert "`local`, `utc`, or an IANA name such as `America/New_York`" in out.stderr
@@ -182,7 +124,7 @@ def test_the_server_reports_next_fire_in_its_own_timezone(serve):
     # `nightly` is `0 5 * * *`. Kolkata is UTC+5:30 all year, so 05:00 there is 23:30 UTC,
     # whatever zone this machine is in. /schedule and /state used to use the machine's zone.
     server = serve("--timezone", "Asia/Kolkata")
-    jobs = wait_for(lambda: server.request("GET", "/schedule")[1], "the scheduler to publish")
+    jobs = wait_until(lambda: server.request("GET", "/schedule")[1], "the scheduler to publish")
     assert [j["id"] for j in jobs] == ["pipeline.py:nightly"]
     assert jobs[0]["next_fire"] % 86400 == 23 * 3600 + 1800
     status, nodes = server.request("GET", "/state")
@@ -212,55 +154,52 @@ def history(cwd: Path) -> list[dict]:
     return json.loads(out.stdout)["runs"]
 
 
-def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
+def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project, serve):
     # Each of these used to be 200 with a run id, and the run then failed.
     (project / "other.py").write_text(
         "from barca import asset\n\n@asset()\ndef quick():\n    return 2\n"
     )
-    server = Server(project, "other.py", "--no-schedule")
-    try:
-        cases = [
-            ("POST", "/get/nope", 404, "Asset 'nope' not found. Available: "),
-            ("POST", "/run/nope", 404, "Asset 'nope' not found. Available: "),
-            ("POST", "/get/quick", 409, "'quick' matches more than one node: other.py:quick, "),
-            ("POST", "/get/nightly", 400, "'nightly' is a task: use POST /run/nightly"),
-            ("POST", "/run/slow", 400, "'slow' is an asset: use POST /get/slow"),
-        ]
-        for method, path, want, says in cases:
-            status, body = server.request(method, path)
-            assert status == want, (path, body)
-            # The CLI's error envelope.
-            assert {"error", "code", "kind", "remediation"} <= set(body), (path, body)
-            assert (body["kind"], body["code"]) == ("usage", 2), (path, body)
-            assert body["error"].startswith(says), (path, body)
+    server = serve("--no-schedule", files=("pipeline.py", "other.py"))
+    cases = [
+        ("POST", "/get/nope", 404, "Asset 'nope' not found. Available: "),
+        ("POST", "/run/nope", 404, "Asset 'nope' not found. Available: "),
+        ("POST", "/get/quick", 409, "'quick' matches more than one node: other.py:quick, "),
+        ("POST", "/get/nightly", 400, "'nightly' is a task: use POST /run/nightly"),
+        ("POST", "/run/slow", 400, "'slow' is an asset: use POST /get/slow"),
+    ]
+    for method, path, want, says in cases:
+        status, body = server.request(method, path)
+        assert status == want, (path, body)
+        # The CLI's error envelope.
+        assert {"error", "code", "kind", "remediation"} <= set(body), (path, body)
+        assert (body["kind"], body["code"]) == ("usage", 2), (path, body)
+        assert body["error"].startswith(says), (path, body)
 
-        # The Python client raises with the server's message.
-        client = Client(f"http://127.0.0.1:{server.port}")
-        with pytest.raises(BarcaError, match=r"\(404\): Asset 'nope' not found"):
-            client.get("nope")
-        with pytest.raises(BarcaError, match=r"\(400\): 'slow' is an asset"):
-            client.run("slow")
+    # The Python client raises with the server's message.
+    client = Client(server.url)
+    with pytest.raises(BarcaError, match=r"\(404\): Asset 'nope' not found"):
+        client.get("nope")
+    with pytest.raises(BarcaError, match=r"\(400\): 'slow' is an asset"):
+        client.run("slow")
 
-        # A full id picks one of two nodes with the same name, and that run happens.
-        result = client.get("other.py:quick").wait(timeout=WAIT)
-        assert result["status"] == "complete", result
-        # It is the only run there has been: the refused requests started none.
-        assert [r["status"] for r in history(project)] == ["success"]
-    finally:
-        server.stop()
+    # A full id picks one of two nodes with the same name, and that run happens.
+    result = client.get("other.py:quick").wait(timeout=30)
+    assert result["status"] == "complete", result
+    # It is the only run there has been: the refused requests started none.
+    assert [r["status"] for r in history(project)] == ["success"]
 
 
 # ─── stopping the server ─────────────────────────────────────────────────────
 
 
-def start_slow_run(server: Server, project: Path) -> str:
+def start_slow_run(server: Serve, project: Path) -> str:
     """Start the run of `slow` and wait until its step is executing; return its handle."""
     going = server.request("POST", "/get/slow")[1]["run_id"]
-    wait_for(lambda: (project / "slow.started").exists(), "the slow step to start")
+    wait_until(lambda: (project / "slow.started").exists(), "the slow step to start")
     return going
 
 
-def draining(server: Server) -> bool:
+def draining(server: Serve) -> bool:
     return server.request("GET", "/health")[1]["status"] == "draining"
 
 
@@ -276,26 +215,25 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     to be discarded when barca was process 1 of a container (#289), and an open /events
     stream kept a stopped server alive for ever."""
     server = serve("--no-schedule")
-    base = f"http://127.0.0.1:{server.port}"
 
     # A run that has finished and one that is in the middle of a step, each with a client
     # that keeps its event stream open the way a browser tab on a run page does.
     done = server.request("POST", "/get/quick")[1]["run_id"]
-    wait_for(
+    wait_until(
         lambda: server.request("GET", f"/status/{done}")[1]["status"] == "complete",
         "the quick run to complete",
     )
     going = start_slow_run(server, project)
     streams = [
-        urllib.request.urlopen(f"{base}/events/{run}", timeout=WAIT) for run in (done, going)
+        urllib.request.urlopen(f"{server.url}/events/{run}", timeout=30) for run in (done, going)
     ]
     for stream in streams:
         # The first event carries a random attempt epoch and one-based sequence.
         assert re.fullmatch(rb"id: [0-9a-f]{32}:1\n", stream.readline()), "the stream has started"
         assert stream.readline().startswith(b"data:")
 
-    server.proc.send_signal(sig)
-    wait_for(lambda: draining(server), "/health to report draining")
+    server.send(sig)
+    wait_until(lambda: draining(server), "/health to report draining")
 
     # New runs are accepted into the queue for the next start, whatever the route, and none
     # starts; reads and the run in flight go on.
@@ -307,8 +245,8 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     assert server.proc.poll() is None, "the server waits for the run"
 
     (project / "release").write_text("")
-    assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
-    log = server.log.read_text()
+    assert server.exited() == 0, server.stderr
+    log = server.stderr
     assert f"[barca] {sig.name} received: draining" in log, log
     assert "[barca] drained: every run finished; shutting down" in log, log
 
@@ -332,10 +270,10 @@ def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, se
     going = start_slow_run(server, project)
 
     started = time.monotonic()
-    server.proc.send_signal(signal.SIGTERM)
-    assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
+    server.send(signal.SIGTERM)
+    assert server.exited() == 0, server.stderr
     assert time.monotonic() - started < 15
-    log = server.log.read_text()
+    log = server.stderr
     assert "the drain timeout (1s) passed: stopping 1 run and putting it back in the queue" in log
     assert f"[barca] run {going} stopped and put back in the queue" in log, log
 
@@ -344,8 +282,8 @@ def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, se
     assert history(project) == []
     (project / "release").write_text("")
     restarted = serve("--no-schedule")
-    assert "[barca] resuming 1 queued run" in restarted.log.read_text()
-    run = wait_for(
+    assert "[barca] resuming 1 queued run" in restarted.stderr
+    run = wait_until(
         lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["status"] == "success" and r,
         "the requeued run to finish",
     )
@@ -355,14 +293,14 @@ def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, se
 def test_a_second_signal_stops_the_drain_at_once(project, serve):
     server = serve("--no-schedule")  # the default drain timeout: 30 s
     start_slow_run(server, project)
-    server.proc.send_signal(signal.SIGTERM)
-    wait_for(lambda: draining(server), "/health to report draining")
+    server.send(signal.SIGTERM)
+    wait_until(lambda: draining(server), "/health to report draining")
 
     started = time.monotonic()
-    server.proc.send_signal(signal.SIGINT)
-    assert server.proc.wait(timeout=WAIT) == 1, server.log.read_text()
+    server.send(signal.SIGINT)
+    assert server.exited() == 1, server.stderr
     assert time.monotonic() - started < 15, "the second signal did not wait out the drain"
-    assert "SIGINT received again: cancelling 1 run (server shutdown)" in server.log.read_text()
+    assert "SIGINT received again: cancelling 1 run (server shutdown)" in server.stderr
     assert [r["status"] for r in history(project)] == ["cancelled"]
 
 
@@ -379,18 +317,18 @@ def ticker() -> int:
 """
     )
     server = serve()
-    wait_for(lambda: (project / "ticks").exists(), "a first scheduled run")
+    wait_until(lambda: (project / "ticks").exists(), "a first scheduled run")
     start_slow_run(server, project)
-    server.proc.send_signal(signal.SIGTERM)
-    wait_for(lambda: draining(server), "/health to report draining")
-    time.sleep(3)  # three ticks fall in the drain
+    server.send(signal.SIGTERM)
+    wait_until(lambda: draining(server), "/health to report draining")
+    time.sleep(3)  # a fixed wait: three ticks fall in the drain, and none may start a run
 
-    log = server.log.read_text()
+    log = server.stderr
     assert "[barca] scheduler stopped: the server is draining" in log, log
     after = log.split("received: draining", 1)[1]
     assert "scheduled run" not in after, log
     (project / "release").write_text("")
-    assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
+    assert server.exited() == 0, server.stderr
 
 
 @pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT])
@@ -418,20 +356,20 @@ def work():
     proc = subprocess.Popen(
         [_find_binary(), "get", "work", "pipeline.py", "--json"],
         cwd=project,
-        env=_env(),
+        env=_pool_env(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     try:
-        wait_for(lambda: (project / "child2.pid").exists(), "parallel children")
+        wait_until(lambda: (project / "child2.pid").exists(), "parallel children")
         pids = [int(p.read_text()) for p in project.glob("*.pid")]
         assert len(pids) == 3
         # Observe the actual frozen parent rather than infer it from parallel's API.
         parent = int((project / "parent.pid").read_text())
-        wait_for(lambda: (process_state(parent) or "").startswith("T"), "frozen parent")
+        wait_until(lambda: (process_state(parent) or "").startswith("T"), "frozen parent")
         proc.send_signal(stop_signal)
-        _, stderr = proc.communicate(timeout=WAIT)
+        _, stderr = proc.communicate(timeout=QUICK)
         assert proc.returncode == 130, stderr
         for pid in pids:
             assert process_state(pid) is None, f"worker {pid} survived cancellation"
@@ -440,4 +378,4 @@ def work():
     finally:
         if proc.poll() is None:
             proc.kill()
-            proc.communicate(timeout=WAIT)
+            proc.communicate(timeout=QUICK)

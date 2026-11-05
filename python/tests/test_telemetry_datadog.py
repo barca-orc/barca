@@ -5,21 +5,25 @@ A local HTTP server stands in for the Agent's trace intake and records what it i
 
 import json
 import os
+import signal
+import socket
 import subprocess
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from . import helpers
+from .helpers import QUICK, RUN, clean_env, wait_until
+from .served import Serve
 
 try:
     import msgpack
 except ImportError:  # only the tests of Python spans need it; they skip without it
     msgpack = None
-
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "DD_")
 
 PIPELINE = """
 import time
@@ -116,23 +120,18 @@ def agent():
     fake.close()
 
 
-@pytest.fixture
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
+def base_env() -> dict[str, str]:
+    """A scrubbed shell without the Datadog settings either."""
+    return clean_env("DD_")
 
 
 def cli(cwd: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**base, **env},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
+    return helpers.barca(cwd, *args, env={**base_env(), **env}, timeout=RUN)
+
+
+def serve(root: Path, *args: str, **env: str) -> Serve:
+    """`barca serve pipeline.py` with this module's environment plus `env`."""
+    return Serve(root, *args, env={**base_env(), **env})
 
 
 def datadog(agent: FakeAgent, **extra: str) -> dict[str, str]:
@@ -325,46 +324,23 @@ def test_an_unknown_integration_name_warns(project, agent):
 
 
 def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
-    import signal
-    import socket
-
     (tmp_path / "pipeline.py").write_text(
         "from barca import task, Schedule\n\n\n"
         '@task(freshness=Schedule("* * * * * *"))\n'
         "def heartbeat() -> None:\n"
         '    print("tick")\n'
     )
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
-        cwd=tmp_path,
-        env={**base, **datadog(agent, DD_SERVICE="scheduler")},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+
+    def runs() -> int:
+        return sum(
+            span["name"] == "barca.run" for request in agent.requests for span in request["body"][0]
+        )
+
+    server = serve(tmp_path, **datadog(agent, DD_SERVICE="scheduler"))
     try:
-        deadline = time.monotonic() + 60
-        while (
-            sum(
-                span["name"] == "barca.run"
-                for request in agent.requests
-                for span in request["body"][0]
-            )
-            < 2
-            and time.monotonic() < deadline
-        ):
-            time.sleep(0.25)
+        wait_until(lambda: runs() >= 2, "two ticks' traces", interval=0.25, proc=server.proc)
     finally:
-        serve.send_signal(signal.SIGTERM)
-        try:
-            serve.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            serve.kill()
-            serve.communicate()
+        server.stop()
 
     roots = [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
     assert len(roots) >= 2, "each tick's run should send its own trace"
@@ -374,9 +350,6 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
 
 def test_a_tick_run_names_every_target_and_is_triggered_by_the_schedule(tmp_path, agent):
     """A tick is one run with the scheduled node and the `Always` nodes below it (RFC-0008)."""
-    import signal
-    import socket
-
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset, sensor, task, Schedule\n\n\n"
         '@sensor(freshness=Schedule("* * * * * *"))\n'
@@ -389,33 +362,15 @@ def test_a_tick_run_names_every_target_and_is_triggered_by_the_schedule(tmp_path
         "def send(orders: dict) -> None:\n"
         "    pass\n"
     )
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
-        cwd=tmp_path,
-        env={**base, **datadog(agent)},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
 
     def roots():
         return [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
 
+    server = serve(tmp_path, **datadog(agent))
     try:
-        deadline = time.monotonic() + 60
-        while not roots() and time.monotonic() < deadline:
-            time.sleep(0.25)
+        wait_until(roots, "a tick's trace", interval=0.25, proc=server.proc)
     finally:
-        serve.send_signal(signal.SIGTERM)
-        try:
-            serve.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            serve.kill()
-            serve.communicate()
+        server.stop()
 
     root = roots()[0]
     assert root["resource"] == "get inbox,orders,send", root
@@ -435,10 +390,6 @@ def test_a_tick_run_names_every_target_and_is_triggered_by_the_schedule(tmp_path
 )
 def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent, stop, exit_code, reason):
     """#190, #434 item 3: a run the drain did not finish is `cancelled` with a reason."""
-    import signal
-    import socket
-    import urllib.request
-
     (tmp_path / "pipeline.py").write_text(
         "import time\nfrom pathlib import Path\nfrom barca import task\n\n\n"
         "@task()\n"
@@ -446,40 +397,23 @@ def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent, stop, ex
         '    Path("started").write_text("")\n'
         "    time.sleep(60)\n"
     )
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     drain = ["--drain-timeout", "0"] if stop == "timeout" else []
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule", *drain],
-        cwd=tmp_path,
-        env={**base, **datadog(agent)},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    server = serve(tmp_path, "--no-schedule", *drain, **datadog(agent))
     try:
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            try:
-                req = urllib.request.Request(f"http://127.0.0.1:{port}/run/slow", method="POST")
-                urllib.request.urlopen(req, timeout=5).read()
-                break
-            except OSError:
-                time.sleep(0.1)
-        while not (tmp_path / "started").exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        serve.send_signal(signal.SIGTERM)
+        assert server.request("POST", "/run/slow")[0] == 200
+        wait_until(lambda: (tmp_path / "started").exists(), "the step to start", proc=server.proc)
+        server.send(signal.SIGTERM)
         if stop == "second signal":
-            time.sleep(1)
-            serve.send_signal(signal.SIGINT)
-        _, err = serve.communicate(timeout=30)
+            server.wait(
+                "the drain to start",
+                lambda: server.request("GET", "/health")[1]["status"] == "draining",
+            )
+            server.send(signal.SIGINT)
+        code = server.exited(QUICK)
     finally:
-        if serve.poll() is None:
-            serve.kill()
-            serve.communicate()
-    assert serve.returncode == exit_code, err
+        server.kill()
+    err = server.stderr
+    assert code == exit_code, err
 
     roots = [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
     assert len(roots) == 1, roots
@@ -489,33 +423,15 @@ def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent, stop, ex
 
 def serve_for(tmp_path: Path, seconds: float, env: dict[str, str], until=None):
     """Run `barca serve` on a scheduled pipeline; stop it after `seconds` or once `until()`."""
-    import signal
-    import socket
-
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
-        cwd=tmp_path,
-        env={**base, **env},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    server = serve(tmp_path, **env)
     try:
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline and not (until and until()):
-            time.sleep(0.25)
+        if until is None:
+            time.sleep(seconds)  # a fixed wait: the ticks of these seconds are the scenario
+        else:
+            wait_until(until, "the server's traces", timeout=seconds, interval=0.25)
     finally:
-        serve.send_signal(signal.SIGTERM)
-        try:
-            out, err = serve.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            serve.kill()
-            out, err = serve.communicate()
-    return serve.returncode, out, err
+        server.stop()
+    return server.proc.returncode, server.stdout, server.stderr
 
 
 SCHEDULED = (
@@ -641,43 +557,23 @@ def test_dd_trace_enabled_true_sends(project, agent):
 
 
 def test_under_serve_a_delivery_failure_is_reported_once_until_it_recovers(tmp_path):
-    import signal
-    import socket
-
     (tmp_path / "pipeline.py").write_text(
         "from barca import task, Schedule\n\n\n"
         '@task(freshness=Schedule("* * * * * *"))\n'
         "def heartbeat() -> None:\n"
         "    pass\n"
     )
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        agent_port = s.getsockname()[1]
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
-        cwd=tmp_path,
-        env={
-            **base,
-            "BARCA_TELEMETRY": "datadog",
-            "DD_TRACE_AGENT_URL": f"http://127.0.0.1:{agent_port}",
-        },
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    agent_port = helpers.free_port()
+    server = serve(
+        tmp_path, BARCA_TELEMETRY="datadog", DD_TRACE_AGENT_URL=f"http://127.0.0.1:{agent_port}"
     )
     try:
-        time.sleep(5)
+        wait_until(
+            lambda: server.stderr.count("scheduled run") >= 3, "three ticks", proc=server.proc
+        )
     finally:
-        serve.send_signal(signal.SIGTERM)
-        try:
-            _, err = serve.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            serve.kill()
-            _, err = serve.communicate()
+        server.stop()
+    err = server.stderr
 
     assert err.count("scheduled run") >= 3, err
     assert err.count("telemetry 'datadog' did not receive run") == 1, err
@@ -857,8 +753,6 @@ class DogStatsD:
     """A UDP listener standing in for the Agent's DogStatsD port."""
 
     def __init__(self):
-        import socket
-
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
         self.sock.settimeout(0.1)
@@ -894,17 +788,9 @@ def dogstatsd():
 
 @pytest.mark.parametrize("mode", ["enabled", "unconfigured", "disabled"])
 def test_idle_serve_lifecycle_is_metrics_not_traces(tmp_path, agent, dogstatsd, mode):
-    import signal
-    import socket
-    import urllib.request
-
     (tmp_path / "pipeline.py").write_text(
         'raise RuntimeError("idle telemetry must not import this module")\n'
     )
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    base = {key: value for key, value in os.environ.items() if not key.startswith(SCRUB)}
     enabled = mode == "enabled"
     statsd = {"DD_DOGSTATSD_URL": dogstatsd.url, "DD_ENV": "prod", "DD_SERVICE": "jobs"}
     options = (
@@ -912,37 +798,16 @@ def test_idle_serve_lifecycle_is_metrics_not_traces(tmp_path, agent, dogstatsd, 
         if mode != "unconfigured"
         else {"DD_TRACE_AGENT_URL": agent.url, **statsd}
     )
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--no-schedule", "--port", str(port)],
-        cwd=tmp_path,
-        env={**base, **options},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    server = serve(tmp_path, "--no-schedule", **options)
     try:
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            try:
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/health", timeout=1
-                ) as response:
-                    assert response.status == 200
-                break
-            except OSError:
-                time.sleep(0.05)
-        else:
-            pytest.fail("idle server did not become ready")
         if enabled:
-            while not dogstatsd.drain() and time.monotonic() < deadline:
-                time.sleep(0.05)
-            assert dogstatsd.packets, "idle start should be visible without a run"
+            wait_until(dogstatsd.drain, "idle start should be visible without a run", timeout=20)
         else:
-            time.sleep(0.2)
+            time.sleep(0.2)  # a fixed wait: nothing may arrive from an idle server
     finally:
-        serve.send_signal(signal.SIGTERM)
-        _, stderr = serve.communicate(timeout=10)
-    assert serve.returncode == 0, stderr
+        code = server.stop(timeout=QUICK)
+    stderr = server.stderr
+    assert code == 0, stderr
     assert not (tmp_path / ".barca" / "metadata.db").exists()
     # No lifecycle traces, whatever the mode.
     assert agent.requests == []
@@ -967,8 +832,6 @@ def test_idle_serve_lifecycle_is_metrics_not_traces(tmp_path, agent, dogstatsd, 
 
 
 def test_failed_listener_bind_does_not_export_start(tmp_path, agent, dogstatsd):
-    import socket
-
     (tmp_path / "pipeline.py").write_text("raise RuntimeError('not imported')\n")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -988,56 +851,32 @@ def test_failed_listener_bind_does_not_export_start(tmp_path, agent, dogstatsd):
 
 
 def test_stalled_idle_export_does_not_delay_readiness_or_shutdown(tmp_path):
-    import signal
-    import socket
-    import urllib.request
-
     (tmp_path / "pipeline.py").write_text("raise RuntimeError('not imported')\n")
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
     # The intake accepts TCP connections but never answers HTTP. A second
     # connection for stop can enter the backlog without a serving thread.
     with socket.socket() as intake:
         intake.bind(("127.0.0.1", 0))
         intake.listen(8)
-        base = {key: value for key, value in os.environ.items() if not key.startswith(SCRUB)}
-        serve = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--no-schedule", "--port", str(port)],
-            cwd=tmp_path,
+        # Readiness within two seconds, or the Agent delivery delayed it.
+        server = Serve(
+            tmp_path,
+            "--no-schedule",
             env={
-                **base,
+                **base_env(),
                 "BARCA_TELEMETRY": "datadog",
                 "DD_TRACE_AGENT_URL": f"http://127.0.0.1:{intake.getsockname()[1]}",
             },
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            timeout=2,
         )
+        started = time.monotonic()
+        server.send(signal.SIGTERM)
         try:
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                try:
-                    with urllib.request.urlopen(
-                        f"http://127.0.0.1:{port}/health", timeout=0.2
-                    ) as response:
-                        assert response.status == 200
-                    break
-                except OSError:
-                    time.sleep(0.05)
-            else:
-                pytest.fail("Agent delivery delayed server readiness")
-        finally:
-            started = time.monotonic()
-            serve.send_signal(signal.SIGTERM)
-            try:
-                _, stderr = serve.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                serve.kill()
-                serve.communicate()
-                pytest.fail("stalled Agent prevented bounded shutdown")
+            code = server.exited(5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            pytest.fail("stalled Agent prevented bounded shutdown")
         assert time.monotonic() - started < 5
-        assert serve.returncode == 0, stderr
+        assert code == 0, server.stderr
         assert not (tmp_path / ".barca" / "metadata.db").exists()
 
 
@@ -1169,19 +1008,11 @@ def test_a_pipeline_trace_passes_the_datadog_test_agent(tmp_path):
 
     Set BARCA_UPDATE_SNAPSHOTS=1 to rewrite the snapshot after a deliberate change.
     """
-    import socket
-    import urllib.request
-
     pytest.importorskip("ddtrace")
     executable = find_test_agent()
     if executable is None:
         pytest.skip("ddapm-test-agent is not installed (pip install ddapm-test-agent)")
-    ports = []
-    for _ in range(3):
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            ports.append(s.getsockname()[1])
-    port, otlp_http, otlp_grpc = ports
+    port, otlp_http, otlp_grpc = (helpers.free_port() for _ in range(3))
     test_agent = subprocess.Popen(
         [
             executable,
@@ -1205,16 +1036,15 @@ def test_a_pipeline_trace_passes_the_datadog_test_agent(tmp_path):
         with urllib.request.urlopen(url + path, timeout=5) as response:
             return response.status, response.read().decode()
 
+    def up() -> bool:
+        try:
+            get("/info")
+        except OSError:
+            return False
+        return True
+
     try:
-        deadline = time.monotonic() + 30
-        while True:
-            try:
-                get("/info")
-                break
-            except OSError:
-                if time.monotonic() > deadline:
-                    pytest.fail("the test agent did not start")
-                time.sleep(0.1)
+        wait_until(up, "the test agent to start", timeout=30, interval=0.1, proc=test_agent)
         (tmp_path / "pipeline.py").write_text(SHOP)
         proc = cli(
             tmp_path,
@@ -1229,14 +1059,14 @@ def test_a_pipeline_trace_passes_the_datadog_test_agent(tmp_path):
             DD_REMOTE_CONFIGURATION_ENABLED="false",
         )
         assert proc.returncode == 1, proc.stderr
+
         # Python spans are flushed before each step reports; give the agent a moment.
-        traces: list = []
-        while time.monotonic() < deadline:
+        def flushed():
             _, body = get("/test/traces")
-            traces = json.loads(body)
-            if sum(len(t) for t in traces) >= 17:
-                break
-            time.sleep(0.2)
+            spans = json.loads(body)
+            return spans if sum(len(t) for t in spans) >= 17 else None
+
+        traces = wait_until(flushed, "the spans to reach the agent", timeout=30, interval=0.2)
         # The agent answers a payload that fails a check with 400, which barca would report.
         assert "telemetry" not in proc.stderr, proc.stderr
         # Pooled check failures make this answer 400, which urlopen raises.
@@ -1244,7 +1074,7 @@ def test_a_pipeline_trace_passes_the_datadog_test_agent(tmp_path):
         assert status == 200, failures
     finally:
         test_agent.terminate()
-        test_agent.communicate(timeout=10)
+        test_agent.communicate(timeout=QUICK)
 
     assert len(traces) == 1, "one run is one trace, Python spans included"
     lines = tree(traces[0])

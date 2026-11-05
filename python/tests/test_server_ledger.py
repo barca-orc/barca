@@ -12,13 +12,9 @@ and `barca status` marks what is here (`local`) and a result whose post is pendi
 import json
 import os
 import signal
-import socket
 import sqlite3
 import stat
 import subprocess
-import time
-import urllib.error
-import urllib.request
 from contextlib import closing
 from pathlib import Path
 
@@ -26,8 +22,9 @@ import pytest
 
 from barca.api import _find_binary
 
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
-WAIT = 60.0
+from . import helpers
+from .helpers import RUN, clean_env, free_port, wait_until
+from .served import Serve
 
 PIPELINE = """
 import random
@@ -89,37 +86,13 @@ def slow() -> int:
 NODES = ["pipeline.py:base", "pipeline.py:middle", "pipeline.py:report"]
 
 
-def _env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["BARCA_POOL_SIZE"] = "2"
-    return env
+def _pool_env() -> dict[str, str]:
+    """This module's environment: a scrubbed shell with a pool of two workers."""
+    return clean_env(BARCA_POOL_SIZE="2")
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def wait_for(predicate, what: str, timeout: float = WAIT):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.05)
-    pytest.fail(f"timed out after {timeout:.0f}s waiting for {what}")
-
-
-def barca(cwd: Path, *args: str, timeout: float = WAIT) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=_env(),
-        timeout=timeout,
-    )
+def barca(cwd: Path, *args: str, timeout: float = RUN) -> subprocess.CompletedProcess:
+    return helpers.barca(cwd, *args, env=_pool_env(), timeout=timeout)
 
 
 def toml(store: Path, url: str | None) -> str:
@@ -129,46 +102,24 @@ def toml(store: Path, url: str | None) -> str:
     return text
 
 
-class Server:
-    """A `barca serve` of its own copy of the project, on `port`."""
+class Server(Serve):
+    """A `barca serve --no-schedule` of its own copy of the project, on `port`."""
 
     def __init__(self, root: Path, port: int) -> None:
-        self.root = root
-        self.port = port
-        self.log = root / "serve.log"
-        self.proc = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule"],
-            cwd=root,
-            stdout=subprocess.DEVNULL,
-            stderr=self.log.open("a"),
-            env=_env(),
-        )
-        wait_for(self._up, "the server to answer /health")
-
-    def _up(self) -> bool:
-        assert self.proc.poll() is None, f"the server exited early:\n{self.log.read_text()}"
-        try:
-            return self.get("/health")[0] == 200
-        except OSError:
-            return False
+        super().__init__(root, "--no-schedule", env=_pool_env(), port=port)
 
     def get(self, path: str) -> tuple[int, object]:
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status, json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            return e.code, json.loads(e.read())
+        """The HTTP status and the decoded body, error responses included."""
+        return self.request("GET", path)
 
     def history(self) -> list[dict]:
         status, body = self.get("/history?limit=50")
         assert status == 200, body
         return body["runs"]
 
-    def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.send_signal(signal.SIGKILL)
-        self.proc.wait(timeout=WAIT)
+    def stop(self, sig: int = signal.SIGKILL, timeout: float = 30) -> int:
+        """Kill the server, as a crash or the supervisor's SIGKILL does; the exit code."""
+        return super().stop(sig, timeout)
 
 
 class Team:
@@ -177,7 +128,7 @@ class Team:
     def __init__(self, tmp: Path) -> None:
         self.store = tmp / "store"
         self.store.mkdir()
-        self.port = _free_port()
+        self.port = free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         self.server_root = tmp / "server"
         self.a = tmp / "a"
@@ -337,12 +288,12 @@ def _kill_server_mid_run(team: Team, root: Path) -> subprocess.CompletedProcess:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=_env(),
+        env=_pool_env(),
     )
-    wait_for(lambda: (root / "slow.started").exists(), "the slow step to start")
+    wait_until(lambda: (root / "slow.started").exists(), "the slow step to start")
     team.server.stop()
     (root / "release").write_text("")
-    stdout, stderr = proc.communicate(timeout=WAIT)
+    stdout, stderr = proc.communicate(timeout=RUN)
     return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
 
 
