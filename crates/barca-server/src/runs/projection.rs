@@ -3,6 +3,7 @@
 
 use crate::error::ApiError;
 use crate::handlers::snapshot_db;
+use crate::shims::{durable_timestamp, step_status, timestamp};
 use crate::state::{AppState, RunState, RunStatus};
 use barca_core::RunEvent;
 use barca_core::db;
@@ -147,12 +148,7 @@ pub(crate) async fn view_page(
                     }
                     view.steps.push(db::RunStep {
                         node_id,
-                        status: match (cached, ok) {
-                            (true, _) => "cached",
-                            (_, true) => "success",
-                            _ => "failed",
-                        }
-                        .into(),
+                        status: step_status::of_event(cached, ok).into(),
                         elapsed_seconds,
                         error,
                         ..Default::default()
@@ -283,19 +279,6 @@ pub enum RunsFilter {
     Running,
 }
 
-pub(crate) fn timestamp(at: f64) -> String {
-    chrono::DateTime::from_timestamp_millis((at * 1000.0) as i64)
-        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-        .unwrap_or_default()
-}
-pub(crate) fn durable_timestamp(at: &str) -> String {
-    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
-        .map(|t| {
-            t.and_utc()
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-        })
-        .unwrap_or_else(|_| at.to_string())
-}
 pub(super) fn summary(record: db::RunRecord, live: Option<&RunState>) -> RunSummary {
     RunSummary {
         id: record.run_id.clone(),
@@ -343,7 +326,7 @@ pub(super) fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
         steps_cached: run.result.as_ref().map_or(0, |r| {
             r.steps
                 .iter()
-                .filter(|s| s.status.as_deref() == Some("cached"))
+                .filter(|s| s.status.as_deref() == Some(step_status::CACHED))
                 .count() as i64
         }),
         steps_failed: None,

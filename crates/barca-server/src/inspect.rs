@@ -293,7 +293,7 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
                 .unwrap_or_else(|_| file.clone()),
             None => file.clone(),
         };
-        files.push(json!({"path": path, "sha256": sha256_hex(&bytes)}));
+        files.push(json!({"path": path, "sha256": crate::shims::sha256_hex(&bytes)}));
     }
     Ok(Json(json!({
         "api_version": barca_core::outcome::API_VERSION,
@@ -303,14 +303,6 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
         "commit": root.as_deref().and_then(git_commit),
         "files": files,
     })))
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 /// The commit checked out at `root`, read from `.git` without running git: `HEAD`, the ref it

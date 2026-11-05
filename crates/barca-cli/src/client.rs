@@ -508,14 +508,8 @@ fn relative_to_root(path: &Path, root: Option<&Path>) -> PathBuf {
 
 /// The sha256 of a root-relative file on this machine; `None` when it is not here.
 fn local_sha256(path: &str, root: Option<&Path>) -> Option<String> {
-    use sha2::Digest;
     let bytes = std::fs::read(root?.join(path)).ok()?;
-    Some(
-        sha2::Sha256::digest(&bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-    )
+    Some(barca_server::shims::sha256_hex(&bytes))
 }
 
 // ─── 5. inspection ──────────────────────────────────────────────────────────

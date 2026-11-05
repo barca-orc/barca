@@ -1,8 +1,9 @@
 use super::lifecycle::evict_over_budget;
 use super::projection::{RunsQuery, view};
 use super::*;
+use crate::ServeConfig;
+use crate::shims::now_ts;
 use crate::state::{RunChannel, RunState, RunStatus};
-use crate::{ServeConfig, state::now_ts};
 use axum::Json;
 use axum::extract::{Query, State};
 use barca_core::outcome::Trigger;
@@ -41,20 +42,6 @@ fn live(handle: &str) -> RunState {
         cancel: barca_core::CancellationToken::new(),
         cancel_requested: false,
     }
-}
-#[test]
-fn durable_and_live_timestamps_sort_in_the_same_utc_format() {
-    let old = durable_timestamp("2026-10-09 12:00:00");
-    let newer = timestamp(
-        chrono::NaiveDateTime::parse_from_str("2026-10-09 12:00:00", "%Y-%m-%d %H:%M:%S")
-            .unwrap()
-            .and_utc()
-            .timestamp() as f64
-            + 0.9,
-    );
-    assert!(newer > old);
-    assert_eq!(old, "2026-10-09T12:00:00.000Z");
-    assert_eq!(newer, "2026-10-09T12:00:00.900Z");
 }
 #[tokio::test]
 async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {

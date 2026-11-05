@@ -32,7 +32,6 @@ pub(crate) use handlers::{
     cancel, create, detail, events, get_target, list, logs, output, run_all, run_target, status,
 };
 pub(crate) use lifecycle::{evict_finished_runs, launch, start};
-pub(crate) use projection::{durable_timestamp, timestamp};
 
 /// How long a run may take, and which setting said so: `Schedule(..., timeout_seconds=N)` for
 /// a scheduled tick > `--run-timeout` > `[server] run_timeout_seconds` > no limit (#628). 0 at

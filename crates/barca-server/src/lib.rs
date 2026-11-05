@@ -29,6 +29,7 @@ mod routes;
 mod running;
 mod runs;
 mod scheduler;
+pub mod shims;
 mod state;
 mod telemetry;
 mod ui;

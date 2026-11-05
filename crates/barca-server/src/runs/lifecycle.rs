@@ -4,7 +4,8 @@
 
 use super::{RunSpec, context, run_files, run_timeout};
 use crate::error::ApiError;
-use crate::state::{AppState, RunChannel, RunState, RunStatus, now_ts};
+use crate::shims::now_ts;
+use crate::state::{AppState, RunChannel, RunState, RunStatus};
 use barca_core::commands::{RunResult, ServedRun, serve_run};
 use barca_core::envelope::{Context, ErrorEnvelope, ErrorKind};
 use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunOptions};

@@ -16,7 +16,8 @@
 use crate::error::ApiError;
 use crate::handlers::snapshot_db;
 use crate::runs::RunSpec;
-use crate::state::{AppState, RunChannel, RunState, RunStatus, now_ts};
+use crate::shims::{now_ts, timestamp};
+use crate::state::{AppState, RunChannel, RunState, RunStatus};
 use axum::Json;
 use axum::extract::State;
 use barca_core::cache::CachePolicy;
@@ -227,7 +228,7 @@ pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError
             &state.config.resolved.db_path,
             &run_id,
             &store(&spec, accepted_at),
-            &crate::runs::timestamp(accepted_at),
+            &timestamp(accepted_at),
         )
         .await
         .map_err(|e| {
@@ -516,7 +517,7 @@ fn entry(run: &RunState, position: Option<usize>) -> QueueEntry {
         target: run.target.clone(),
         triggered_by: run.trigger.triggered_by,
         schedule_id: run.trigger.schedule_id.clone(),
-        queued_at: crate::runs::timestamp(run.started_at),
+        queued_at: timestamp(run.started_at),
     }
 }
 
@@ -568,7 +569,7 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             target: (!spec.targets.is_empty()).then(|| spec.targets.join(",")),
             triggered_by: spec.trigger.triggered_by,
             schedule_id: spec.trigger.schedule_id.clone(),
-            queued_at: crate::runs::timestamp(accepted_at),
+            queued_at: timestamp(accepted_at),
         };
         if started {
             running.push(item);

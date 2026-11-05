@@ -210,7 +210,7 @@ pub(crate) async fn run_detail(
     // lists the cached steps it streamed, until the server restarts.
     let listed = steps.len();
     if !matches!(run.status.as_str(), "pending" | "running") {
-        steps.retain(|step| step.status != "cached");
+        steps.retain(|step| step.status != crate::output::step_status::CACHED);
     }
     // A server older than 0.30.2 lists every step and sends no page. The cached steps left
     // out above are not counted either.

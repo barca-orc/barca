@@ -16,6 +16,12 @@ use std::io::IsTerminal;
 /// Environment variable that overrides TTY detection (a flag still wins).
 pub const ENV_VAR: &str = "BARCA_OUTPUT";
 
+/// The words a recorded step's status is spelled with (`barca history RUN_ID`'s steps), as the
+/// metadata DB and a run's outcome spell them.
+pub(crate) mod step_status {
+    pub(crate) const CACHED: &str = "cached";
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Json,
