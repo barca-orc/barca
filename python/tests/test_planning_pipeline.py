@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
+from .helpers import SERVE
+from .helpers import barca as run_barca
 from .planning_pipeline import GENERATOR, generator, write_planning_pipeline
 
 # The table in #250.
@@ -37,15 +39,7 @@ def barca(cwd: Path, *args: str, pool: int = 4, env: dict | None = None) -> dict
         "BARCA_POOL_SIZE": str(pool),
         **(env or {}),
     }
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-    )
+    proc = run_barca(cwd, *args, env=env, timeout=SERVE)
     assert proc.returncode == 0, f"barca {' '.join(args[:1])} exit {proc.returncode}\n{proc.stderr}"
     return json.loads(proc.stdout)
 
@@ -282,7 +276,7 @@ def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
         env={**os.environ, "ACCOUNT_EXIT_REGISTRY_CSV": V2_CSV},
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=SERVE,
         check=True,
     )
     warnings = json.loads(proc.stdout)["warnings"]

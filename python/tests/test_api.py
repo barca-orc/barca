@@ -4,26 +4,14 @@ Every scenario tested via bash integration tests is also tested here
 via the Python API to ensure barca.get/plan return correct values.
 """
 
-import textwrap
-
 import barca
 import pytest
 from barca.api import BarcaError
+from .helpers import write_module
 
 pd = pytest.importorskip("pandas")
 
-
-@pytest.fixture(autouse=True)
-def clean_barca_dir(tmp_path, monkeypatch):
-    # The API resolves .barca relative to cwd. Give each test its own project,
-    # so another pytest worker cannot delete its database or input artifacts.
-    monkeypatch.chdir(tmp_path)
-
-
-def write_module(tmp_path, filename, code):
-    p = tmp_path / filename
-    p.write_text(textwrap.dedent(code))
-    return str(p)
+pytestmark = pytest.mark.usefixtures("clean_barca_dir")
 
 
 # ─── Basic execution (mirrors test_cli.sh) ───────────────────────────────────
@@ -481,14 +469,8 @@ class TestFormats:
 class TestSubdirectoryPaths:
     """Files in a/b/c.py style paths should work correctly."""
 
-    def _write_nested(self, tmp_path, relpath, code):
-        p = tmp_path / relpath
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(textwrap.dedent(code))
-        return str(p)
-
     def test_get_all_from_subdirectory(self, tmp_path):
-        f = self._write_nested(
+        f = write_module(
             tmp_path,
             "proj/pipelines/etl.py",
             """
@@ -507,7 +489,7 @@ class TestSubdirectoryPaths:
         assert result == {"rows": 20}
 
     def test_get_target_from_subdirectory(self, tmp_path):
-        f = self._write_nested(
+        f = write_module(
             tmp_path,
             "proj/pipelines/etl.py",
             """
@@ -526,7 +508,7 @@ class TestSubdirectoryPaths:
         assert result == {"rows": 10}
 
     def test_deeply_nested_file(self, tmp_path):
-        f = self._write_nested(
+        f = write_module(
             tmp_path,
             "a/b/c/d/pipeline.py",
             """
@@ -541,7 +523,7 @@ class TestSubdirectoryPaths:
         assert result == {"depth": 4}
 
     def test_get_with_cross_subdir_import(self, tmp_path):
-        self._write_nested(
+        write_module(
             tmp_path,
             "proj/utils/math.py",
             """
@@ -549,7 +531,7 @@ class TestSubdirectoryPaths:
                 return x * 2
         """,
         )
-        f = self._write_nested(
+        f = write_module(
             tmp_path,
             "proj/pipeline.py",
             """

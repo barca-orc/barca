@@ -9,9 +9,10 @@ from pathlib import Path
 
 import barca
 import pytest
-from barca.api import _find_binary
 
-from .test_serve_robustness import Server
+from .helpers import RUN, clean_env
+from .helpers import barca as run_barca
+from .served import Serve
 
 PIPELINE = """
 from barca import asset, collect, partitions, partitions_from, task
@@ -87,16 +88,13 @@ def _env() -> dict[str, str]:
     return env
 
 
+def Server(root: Path, *args: str) -> Serve:
+    """A `barca serve` with the pool size the local runs use."""
+    return Serve(root, *args, env=clean_env(BARCA_POOL_SIZE="2"))
+
+
 def cli(project: Path, *args: str, code: int = 0) -> subprocess.CompletedProcess:
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        check=False,
-        cwd=project,
-        capture_output=True,
-        text=True,
-        env=_env(),
-        timeout=120,
-    )
+    proc = run_barca(project, *args, env=_env(), timeout=RUN)
     assert proc.returncode == code, proc.stderr
     return proc
 

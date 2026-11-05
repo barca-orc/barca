@@ -2,11 +2,10 @@
 
 import json
 import os
-import subprocess
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import QUICK, barca
 
 PIPELINE = """
 from barca import asset, sensor, partitions_from, collect
@@ -37,13 +36,14 @@ def independent():
 )
 def test_final_summary_and_complete_blocked_fanout(tmp_path, target, count, mode):
     (tmp_path / "pipeline.py").write_text(PIPELINE)
-    proc = subprocess.run(
-        [_find_binary(), "get", target, "pipeline.py", *mode],
-        cwd=tmp_path,
+    proc = barca(
+        tmp_path,
+        "get",
+        target,
+        "pipeline.py",
+        *mode,
         env={**os.environ, "BARCA_REMOTE": "off"},
-        text=True,
-        capture_output=True,
-        timeout=30,
+        timeout=QUICK,
     )
     assert proc.returncode == 1, proc.stderr
     lines = proc.stderr.splitlines()

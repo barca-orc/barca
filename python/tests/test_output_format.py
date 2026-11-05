@@ -14,8 +14,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
+
+from .helpers import RUN, barca
 
 PIPELINE = """
 from barca import asset, task
@@ -32,12 +33,6 @@ def report(t: int) -> dict:
 """
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def _env(extra: dict | None) -> dict:
     env = {k: v for k, v in os.environ.items() if k != "BARCA_OUTPUT"}
     env.update(extra or {})
@@ -45,9 +40,7 @@ def _env(extra: dict | None) -> dict:
 
 
 def piped(project: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=project, capture_output=True, text=True, env=_env(env)
-    )
+    return barca(project, *args, env=_env(env))
 
 
 def on_tty(project: Path, *args: str, env: dict | None = None) -> tuple[int, str, str]:
@@ -76,7 +69,7 @@ def on_tty(project: Path, *args: str, env: dict | None = None) -> tuple[int, str
     os.close(master)
     assert proc.stderr is not None
     stderr = proc.stderr.read().decode()
-    code = proc.wait(timeout=60)
+    code = proc.wait(timeout=RUN)
     out = b"".join(chunks).decode().replace("\r\n", "\n")
     return code, out, stderr
 

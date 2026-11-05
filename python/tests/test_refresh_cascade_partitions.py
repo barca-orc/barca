@@ -14,7 +14,8 @@ import shutil
 
 import pytest
 
-from .test_asset_cutoff import calls, env, get, run, step
+from .helpers import clean_env
+from .test_asset_cutoff import calls, get, run, step
 
 PIPELINE = """
 from pathlib import Path
@@ -116,7 +117,7 @@ def test_server_refresh_cascades_to_consumer_keys(project, tmp_path_factory, evi
 
     store = tmp_path_factory.mktemp("store")
     (project / "barca.toml").write_text(f'[remote]\nuri = "{store}"\n')
-    with served.Serve(project, "--max-runs", "1", env=env()) as serve:
+    with served.Serve(project, "--max-runs", "1", env=clean_env(BARCA_POOL_SIZE="2")) as serve:
         serve.ready()
         stage = serve.post(
             "/runs", {"command": "get", "targets": ["drivers", "cutoffs"], "refresh_all": True}

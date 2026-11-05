@@ -12,14 +12,13 @@ import os
 import signal
 import sqlite3
 import subprocess
-import time
 from pathlib import Path
-
-import pytest
 
 from barca.api import _find_binary
 
 from . import served
+from .helpers import QUICK, wait_until
+from .helpers import barca as run_barca
 
 # Two quick steps, then one that holds the run open until the test lets it go (or kills it).
 PIPELINE = """
@@ -69,18 +68,9 @@ def after(_p) -> int:
     return 1
 """
 
-WAIT = 30.0
-
-
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
 
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    env = {**os.environ, "BARCA_POOL_SIZE": "2"}
-    return subprocess.run([_find_binary(), *args], cwd=cwd, capture_output=True, text=True, env=env)
+    return run_barca(cwd, *args, env={**os.environ, "BARCA_POOL_SIZE": "2"})
 
 
 def start_get(cwd: Path, *args: str) -> subprocess.Popen:
@@ -107,23 +97,13 @@ def latest_run(cwd: Path) -> dict:
     return json.loads(out.stdout)["runs"][0]
 
 
-def wait_for(predicate, what: str):
-    deadline = time.time() + WAIT
-    while time.time() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.1)
-    pytest.fail(f"timed out after {WAIT:.0f}s waiting for {what}")
-
-
 def wait_until_slow_is_running(cwd: Path) -> None:
-    wait_for(lambda: (cwd / "slow.started").exists(), "the slow step to start")
+    wait_until(lambda: (cwd / "slow.started").exists(), "the slow step to start")
 
 
 def finish(proc: subprocess.Popen, cwd: Path) -> None:
     (cwd / "release").write_text("")
-    _, stderr = proc.communicate(timeout=WAIT)
+    _, stderr = proc.communicate(timeout=QUICK)
     assert proc.returncode == 0, stderr
 
 
@@ -131,7 +111,7 @@ def test_status_from_a_second_process_shows_steps_a_running_get_has_finished(pro
     proc = start_get(project)
     try:
         wait_until_slow_is_running(project)
-        seen = wait_for(
+        seen = wait_until(
             lambda: (s := states(project))["second"] == "cached" and s,
             "status to show the finished steps",
         )
@@ -162,7 +142,7 @@ def remote_progress(project, monkeypatch):
     proc = start_get(project)
     try:
         wait_until_slow_is_running(project)
-        wait_for(
+        wait_until(
             lambda: states(project)["second"] == "cached", "confirmed remote results to be saved"
         )
         assert proc.poll() is None
@@ -186,7 +166,7 @@ def remote_progress(project, monkeypatch):
         (project / "release").touch()
         if proc.poll() is None:
             proc.kill()
-        proc.communicate(timeout=WAIT)
+        proc.communicate(timeout=QUICK)
         raise
 
 
@@ -219,14 +199,14 @@ def test_sigkill_reuses_confirmed_remote_results_before_final_publication(projec
     try:
         proc, _ = remote_progress(project, monkeypatch)
         os.kill(proc.pid, signal.SIGKILL)
-        assert proc.wait(timeout=WAIT) == -signal.SIGKILL
+        assert proc.wait(timeout=QUICK) == -signal.SIGKILL
         for pipe in (proc.stdout, proc.stderr):
             pipe.close()
     finally:
         (project / "release").touch()
         if proc is not None and proc.poll() is None:
             proc.kill()
-            proc.wait(timeout=WAIT)
+            proc.wait(timeout=QUICK)
     resumed = barca(project, "get", "pipeline.py", "-o", "value", "--json")
     assert resumed.returncode == 0, resumed.stderr
     result = json.loads(resumed.stdout)
@@ -240,10 +220,10 @@ def test_sigkill_reuses_confirmed_remote_results_before_final_publication(projec
 def test_a_run_killed_with_sigkill_keeps_the_steps_it_finished(project):
     proc = start_get(project)
     wait_until_slow_is_running(project)
-    wait_for(lambda: states(project)["second"] == "cached", "the finished steps to be recorded")
+    wait_until(lambda: states(project)["second"] == "cached", "the finished steps to be recorded")
     os.kill(proc.pid, signal.SIGKILL)
     # wait(), not communicate(): the orphaned worker still holds the pipes until it notices.
-    assert proc.wait(timeout=WAIT) == -signal.SIGKILL
+    assert proc.wait(timeout=QUICK) == -signal.SIGKILL
     for pipe in (proc.stdout, proc.stderr):
         pipe.close()
 
@@ -280,7 +260,7 @@ def test_a_step_recorded_mid_run_is_not_recorded_again_at_the_end(project):
     proc = start_get(project)
     try:
         wait_until_slow_is_running(project)
-        wait_for(lambda: states(project)["second"] == "cached", "the finished steps")
+        wait_until(lambda: states(project)["second"] == "cached", "the finished steps")
     finally:
         finish(proc, project)
 
@@ -302,13 +282,13 @@ def test_status_counts_the_partitions_a_running_get_has_finished(tmp_path):
     proc = start_get(tmp_path)
     try:
         # Some partitions recorded, and the run is still going (it has `after` left at least).
-        mid = wait_for(
+        mid = wait_until(
             lambda: (p := partitions_of_part())["cached"] > 0 and proc.poll() is None and p,
             "status to count finished partitions mid-run",
         )
         assert mid["total"] == 10
     finally:
-        _, stderr = proc.communicate(timeout=WAIT)
+        _, stderr = proc.communicate(timeout=QUICK)
     assert proc.returncode == 0, stderr
 
     assert partitions_of_part()["cached"] == 10
@@ -321,9 +301,9 @@ def test_status_counts_the_partitions_a_running_get_has_finished(tmp_path):
 def test_a_cancelled_run_is_recorded_as_cancelled_not_interrupted(project):
     proc = start_get(project)
     wait_until_slow_is_running(project)
-    wait_for(lambda: states(project)["second"] == "cached", "the finished steps")
+    wait_until(lambda: states(project)["second"] == "cached", "the finished steps")
     proc.send_signal(signal.SIGINT)
-    proc.communicate(timeout=WAIT)
+    proc.communicate(timeout=QUICK)
     assert proc.returncode == 130
 
     run = latest_run(project)
@@ -357,9 +337,9 @@ def kill_a_run_in_its_slow_step(project: Path) -> str:
     """Start a run, SIGKILL it in its third step, and return its run id."""
     proc = start_get(project)
     wait_until_slow_is_running(project)
-    wait_for(lambda: states(project)["second"] == "cached", "the finished steps to be recorded")
+    wait_until(lambda: states(project)["second"] == "cached", "the finished steps to be recorded")
     os.kill(proc.pid, signal.SIGKILL)
-    assert proc.wait(timeout=WAIT) == -signal.SIGKILL
+    assert proc.wait(timeout=QUICK) == -signal.SIGKILL
     for pipe in (proc.stdout, proc.stderr):
         pipe.close()
     return next(iter(run_rows(project)))
@@ -461,9 +441,9 @@ def test_sigterm_cancels_a_run_the_way_ctrl_c_does(project):
     a later command reported it `interrupted` (#289)."""
     proc = start_get(project)
     wait_until_slow_is_running(project)
-    wait_for(lambda: states(project)["second"] == "cached", "the finished steps")
+    wait_until(lambda: states(project)["second"] == "cached", "the finished steps")
     proc.send_signal(signal.SIGTERM)
-    _, stderr = proc.communicate(timeout=WAIT)
+    _, stderr = proc.communicate(timeout=QUICK)
     # 130, the exit code of `cancelled`: not -15 (killed by the signal) and not 143.
     assert proc.returncode == 130, stderr
     envelope = json.loads(stderr.strip().splitlines()[-1])

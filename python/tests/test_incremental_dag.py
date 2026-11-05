@@ -7,11 +7,11 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 from contextlib import closing
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import RUN, barca
 
 SOURCE = """import json
 import os
@@ -47,15 +47,7 @@ def run(root, *args, factor="2", expected=0):
     env.update(BARCA_TRACE_TIMING="1", INCREMENTAL_FACTOR=factor)
     for name in ["BARCA_SERVER", "BARCA_REMOTE_URI", "BARCA_ENV", "BARCA_OUTPUT"]:
         env.pop(name, None)
-    result = subprocess.run(
-        [_find_binary(), *args, "--json"],
-        cwd=root,
-        check=False,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
+    result = barca(root, *args, "--json", env=env, timeout=RUN)
     assert result.returncode == expected, result.stdout + result.stderr
     return json.loads(result.stdout), result.stderr
 

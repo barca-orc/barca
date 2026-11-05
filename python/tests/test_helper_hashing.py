@@ -9,14 +9,12 @@ spelling of the path. Node ids are relative to the project root, whatever the sp
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca as run_barca
 
 PIPELINES = {
     "from_import": """
@@ -68,13 +66,7 @@ def set_helper(sub: Path, v: int) -> None:
 
 
 def barca(cwd: Path, *args: str) -> dict:
-    proc = subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=cwd,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        capture_output=True,
-        text=True,
-    )
+    proc = run_barca(cwd, *value_args(args), env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout.strip()
     try:

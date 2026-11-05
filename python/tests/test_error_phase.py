@@ -8,12 +8,12 @@ its full traceback, and the text says it failed in barca.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
-import pytest
 
-from barca.api import _find_binary
+from .helpers import barca as run_barca
 
 PIPELINE = """
 from barca import asset, partitions, sink
@@ -51,16 +51,8 @@ def batched(k: list[str]) -> dict:
 """
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=cwd, capture_output=True, text=True, timeout=120
-    )
+    return run_barca(cwd, *args, env=os.environ.copy())
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:

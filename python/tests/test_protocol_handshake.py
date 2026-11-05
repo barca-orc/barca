@@ -11,6 +11,8 @@ import pytest
 
 from barca import _runtime
 
+from .helpers import QUICK
+
 
 @pytest.fixture
 def sock_path():
@@ -176,7 +178,7 @@ time.sleep(60)
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=QUICK,
     )
     assert result.returncode == 3, result.stderr
     assert (

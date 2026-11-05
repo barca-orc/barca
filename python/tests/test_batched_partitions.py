@@ -16,9 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from .helpers import barca, clean_env, free_port
 
 HEADER = """
 import json
@@ -49,15 +47,11 @@ def cleaned(retailer: str, versions: str) -> dict:
 def env() -> dict[str, str]:
     # Five keys over three workers make unequal chunks; grouping must not follow the
     # bin-packer's stream order (the production CI pool exposed this).
-    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)} | {
-        "BARCA_POOL_SIZE": "3"
-    }
+    return clean_env(BARCA_POOL_SIZE="3")
 
 
 def run(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=project, env=env(), capture_output=True, text=True
-    )
+    return barca(project, *args, env=env())
 
 
 def get(project: Path, target: str, *flags: str) -> dict:
@@ -946,11 +940,11 @@ def scored(retailer: list[str]) -> dict:
 def test_with_a_server_the_ledger_stays_per_key(tmp_path):
     """A laptop computes in one call; another laptop, one key per call, hits every key in the
     server's ledger: lookups and posts are per key."""
-    from .test_server_ledger import Server, _free_port, toml
+    from .test_server_ledger import Server, toml
 
     store = tmp_path / "store"
     store.mkdir()
-    port = _free_port()
+    port = free_port()
     url = f"http://127.0.0.1:{port}"
     roots = {name: tmp_path / name for name in ("server", "a", "b")}
     for name, root in roots.items():

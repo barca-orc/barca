@@ -1,23 +1,10 @@
 """Tests for cross-file cone analysis: subdirectory imports and __init__.py re-exports."""
 
-import textwrap
-
 import barca
 import pytest
+from .helpers import write_module
 
-
-@pytest.fixture(autouse=True)
-def clean_barca_dir(tmp_path, monkeypatch):
-    # The API resolves .barca relative to cwd. Give each test its own project,
-    # so another pytest worker cannot delete its database or input artifacts.
-    monkeypatch.chdir(tmp_path)
-
-
-def write_file(base, relpath, code):
-    p = base / relpath
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(textwrap.dedent(code))
-    return str(p)
+pytestmark = pytest.mark.usefixtures("clean_barca_dir")
 
 
 class TestSubdirectoryImports:
@@ -25,7 +12,7 @@ class TestSubdirectoryImports:
 
     def test_subdir_import_detected(self, tmp_path):
         """Changing a helper in a subdirectory should invalidate the asset."""
-        write_file(
+        write_module(
             tmp_path,
             "utils/math.py",
             """
@@ -33,7 +20,7 @@ class TestSubdirectoryImports:
                 return x * 2
         """,
         )
-        asset_file = write_file(
+        asset_file = write_module(
             tmp_path,
             "pipeline.py",
             """
@@ -55,7 +42,7 @@ class TestSubdirectoryImports:
         assert r2["steps_executed"] == 0
 
         # Change the helper in the subdirectory
-        write_file(
+        write_module(
             tmp_path,
             "utils/math.py",
             """
@@ -70,7 +57,7 @@ class TestSubdirectoryImports:
 
     def test_nested_subdir_import(self, tmp_path):
         """from pkg.sub.module import func should work."""
-        write_file(
+        write_module(
             tmp_path,
             "pkg/sub/helpers.py",
             """
@@ -78,7 +65,7 @@ class TestSubdirectoryImports:
                 return x + 1
         """,
         )
-        asset_file = write_file(
+        asset_file = write_module(
             tmp_path,
             "pipeline.py",
             """
@@ -98,7 +85,7 @@ class TestSubdirectoryImports:
         assert r2["steps_executed"] == 0
 
         # Change nested helper
-        write_file(
+        write_module(
             tmp_path,
             "pkg/sub/helpers.py",
             """
@@ -116,14 +103,14 @@ class TestRelativeImports:
 
     def test_relative_import_in_init(self, tmp_path):
         """__init__.py using `from .core import transform` should track core.py changes."""
-        write_file(
+        write_module(
             tmp_path,
             "mylib/__init__.py",
             """
             from .core import transform
         """,
         )
-        write_file(
+        write_module(
             tmp_path,
             "mylib/core.py",
             """
@@ -131,7 +118,7 @@ class TestRelativeImports:
                 return x * 2
         """,
         )
-        asset_file = write_file(
+        asset_file = write_module(
             tmp_path,
             "pipeline.py",
             """
@@ -151,7 +138,7 @@ class TestRelativeImports:
         assert r2["steps_executed"] == 0
 
         # Change the implementation behind the relative import
-        write_file(
+        write_module(
             tmp_path,
             "mylib/core.py",
             """
@@ -168,8 +155,8 @@ class TestRelativeImports:
         the sibling `mylib.util`, not `mylib.core.util` (parent_module used
         to be the submodule's own dotted name instead of its parent
         package)."""
-        write_file(tmp_path, "mylib/__init__.py", "")
-        write_file(
+        write_module(tmp_path, "mylib/__init__.py", "")
+        write_module(
             tmp_path,
             "mylib/util.py",
             """
@@ -177,14 +164,14 @@ class TestRelativeImports:
                 return 1
         """,
         )
-        write_file(
+        write_module(
             tmp_path,
             "mylib/core.py",
             """
             from .util import h
         """,
         )
-        asset_file = write_file(
+        asset_file = write_module(
             tmp_path,
             "pipeline.py",
             """
@@ -204,7 +191,7 @@ class TestRelativeImports:
         assert r2["steps_executed"] == 0
 
         # Change the sibling module the relative import actually points at.
-        write_file(
+        write_module(
             tmp_path,
             "mylib/util.py",
             """
@@ -220,9 +207,9 @@ class TestRelativeImports:
         """mylib/sub/core.py re-exporting `from ..util import h` (level=2)
         must walk two package levels up to `mylib.util`, distinct from
         level=1."""
-        write_file(tmp_path, "mylib/__init__.py", "")
-        write_file(tmp_path, "mylib/sub/__init__.py", "")
-        write_file(
+        write_module(tmp_path, "mylib/__init__.py", "")
+        write_module(tmp_path, "mylib/sub/__init__.py", "")
+        write_module(
             tmp_path,
             "mylib/util.py",
             """
@@ -230,14 +217,14 @@ class TestRelativeImports:
                 return 1
         """,
         )
-        write_file(
+        write_module(
             tmp_path,
             "mylib/sub/core.py",
             """
             from ..util import h
         """,
         )
-        asset_file = write_file(
+        asset_file = write_module(
             tmp_path,
             "pipeline.py",
             """
@@ -256,7 +243,7 @@ class TestRelativeImports:
         r2 = barca.api._exec(["get", "result", asset_file])
         assert r2["steps_executed"] == 0
 
-        write_file(
+        write_module(
             tmp_path,
             "mylib/util.py",
             """
@@ -274,14 +261,14 @@ class TestInitReExports:
 
     def test_init_reexport_detected(self, tmp_path):
         """Changing a function re-exported through __init__.py should invalidate."""
-        write_file(
+        write_module(
             tmp_path,
             "mylib/__init__.py",
             """
             from mylib.core import transform
         """,
         )
-        write_file(
+        write_module(
             tmp_path,
             "mylib/core.py",
             """
@@ -289,7 +276,7 @@ class TestInitReExports:
                 return x * 2
         """,
         )
-        asset_file = write_file(
+        asset_file = write_module(
             tmp_path,
             "pipeline.py",
             """
@@ -309,7 +296,7 @@ class TestInitReExports:
         assert r2["steps_executed"] == 0
 
         # Change the underlying implementation
-        write_file(
+        write_module(
             tmp_path,
             "mylib/core.py",
             """
@@ -330,7 +317,7 @@ class TestTransitiveCrossFileImports:
         """mylib/core.py's `helper()` calls `h()`, which core.py imports from
         mylib/util.py. Changing util.py must invalidate `result`, even though
         util.py is two hops away from the entry file's own import."""
-        write_file(
+        write_module(
             tmp_path,
             "mylib/util.py",
             """
@@ -338,7 +325,7 @@ class TestTransitiveCrossFileImports:
                 return 1
         """,
         )
-        write_file(
+        write_module(
             tmp_path,
             "mylib/core.py",
             """
@@ -348,7 +335,7 @@ class TestTransitiveCrossFileImports:
                 return h()
         """,
         )
-        asset_file = write_file(
+        asset_file = write_module(
             tmp_path,
             "pipeline.py",
             """
@@ -368,7 +355,7 @@ class TestTransitiveCrossFileImports:
         assert r2["steps_executed"] == 0
 
         # Change the transitively-imported function two hops away.
-        write_file(
+        write_module(
             tmp_path,
             "mylib/util.py",
             """

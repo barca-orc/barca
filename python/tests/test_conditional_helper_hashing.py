@@ -2,25 +2,16 @@
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 
 from .get_values import value_args
+from .helpers import barca
 
 
 def invoke(project: Path, *args: str):
-    proc = subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        env=os.environ.copy(),
-        timeout=60,
-        check=False,
-    )
+    proc = barca(project, *value_args(args), env=os.environ.copy())
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 

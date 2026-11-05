@@ -25,11 +25,11 @@ import json
 import os
 import signal
 import subprocess
-import time
 
 import pytest
 from barca.api import _find_binary
 
+from .helpers import RUN, SERVE, wait_until
 from .planning_pipeline_store import Bucket, Machine, new_machine
 
 pytest.importorskip("pandas")
@@ -169,7 +169,7 @@ def test_overlapping_refreshes_leave_one_consistent_result(machine):
     before = assert_consistent(machine, REGISTRY)
     runs = [refresh(machine, 2), refresh(machine, 3)]
     for run in runs:
-        _, err = run.communicate(timeout=300)
+        _, err = run.communicate(timeout=SERVE)
         assert run.returncode == 0, err
         # Each run's bytes differ from what was recorded before it, for the same run hash.
         assert f"assets.py:{REGISTRY} produced different bytes for the same code and inputs" in err
@@ -202,14 +202,16 @@ def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):
     hold.touch()
     try:
         run = refresh(machine, 4, target=DRIVER)
-        deadline = time.monotonic() + 120
-        while machine.bucket.cat(artifact) == before:
-            assert run.poll() is None, "the refresh ended before its upload was seen"
-            assert time.monotonic() < deadline, "the refreshed registry never reached the store"
-            time.sleep(0.02)
+        wait_until(
+            lambda: machine.bucket.cat(artifact) != before,
+            "the refreshed registry to reach the store",
+            timeout=120,
+            interval=0.02,
+            proc=run,
+        )
         assert run.poll() is None, "the refresh ended while its driver step was held"
         os.killpg(run.pid, signal.SIGKILL)
-        run.communicate(timeout=60)
+        run.communicate(timeout=RUN)
     finally:
         hold.unlink(missing_ok=True)
 

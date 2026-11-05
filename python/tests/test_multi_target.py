@@ -10,11 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
-
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca as run_barca
 
 PIPELINE = """
 from barca import asset, task
@@ -84,20 +81,8 @@ SINGLE_KEYS = {
 }
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def barca(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=project,
-        env=dict(os.environ),
-        capture_output=True,
-        text=True,
-    )
+    return run_barca(project, *value_args(args), env=dict(os.environ))
 
 
 def last_json(proc: subprocess.CompletedProcess) -> dict:

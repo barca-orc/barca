@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import barca as run_barca
 
 PIPELINE = """
 import time
@@ -59,13 +59,7 @@ def project(tmp_path) -> Path:
 
 
 def barca(project: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env={**os.environ, **(env or {})},
-        capture_output=True,
-        text=True,
-    )
+    return run_barca(project, *args, env={**os.environ, **(env or {})})
 
 
 def final(proc: subprocess.CompletedProcess) -> dict:

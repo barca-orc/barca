@@ -13,13 +13,9 @@ import subprocess
 import time
 from pathlib import Path
 
-from barca.api import _find_binary
-
 from . import served
+from .helpers import barca
 from .served import rows as _rows
-
-# Settings from the developer's shell that would point the service at a real store.
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 
 SHARED = """
 from pathlib import Path
@@ -93,10 +89,6 @@ def flaky(value: str) -> None:
 """
 
 
-def _env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-
-
 def _write(root: Path, name: str, value: str) -> None:
     """Replace the file in one step, so a sensor poll never reads it half-written."""
     tmp = root / f"{name}.tmp"
@@ -111,13 +103,11 @@ def _lines(path: Path) -> list[str]:
 def Serve(root: Path, *args: str) -> served.Serve:
     """`barca serve` on a free port in `root`. While it runs, a test reads what it recorded
     through its HTTP API, never from the database file (#537)."""
-    return served.Serve(root, *args, env=_env())
+    return served.Serve(root, *args)
 
 
 def _barca(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=root, env=_env(), capture_output=True, text=True
-    )
+    return barca(root, *args)
 
 
 def test_a_tick_brings_the_always_nodes_below_a_sensor_up_to_date_in_one_run(tmp_path):
@@ -224,7 +214,7 @@ def test_a_failing_node_retries_each_tick_up_to_max_failures(tmp_path):
         serve.settle()
         assert serve.count("failed").get("flaky") == 2, serve.count("failed")
         polls = serve.count().get("signal")
-        time.sleep(2)
+        time.sleep(2)  # fixed wait: two ticks must pass with no further poll of the capped job
         assert serve.count().get("signal") == polls, "a failing job was still polled"
 
         # An explicit request that succeeds resets the count; the next tick runs again.
@@ -247,7 +237,7 @@ def test_a_restart_does_not_refire_a_task_that_is_up_to_date(tmp_path):
         assert _lines(sent) == ["a"]
     with Serve(tmp_path) as serve:
         serve.wait("ticks after restart", lambda: serve.count().get("inbox", 0) >= 4)
-        time.sleep(1)
+        time.sleep(1)  # fixed wait: a tick must pass without refiring the task
     assert _lines(sent) == ["a"]
 
 

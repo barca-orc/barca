@@ -3,16 +3,15 @@
 import hashlib
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 from barca import _inspect, _sinks, _storage
 from barca._artifacts import deserialize, serialize_hashed
 from barca._worker import _write_sinks
-from barca.api import _find_binary
 
 from .daemon_steps import run_steps
+from .helpers import barca
 
 duckdb = pytest.importorskip("duckdb")
 pd = pytest.importorskip("pandas")
@@ -107,14 +106,7 @@ def total(orders: pl.LazyFrame):
     }
 
     def cli(*args):
-        run = subprocess.run(
-            [_find_binary(), *args],
-            cwd=tmp_path,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=60,
-        )
+        run = barca(tmp_path, *args, env=env)
         assert run.returncode == 0, run.stderr
         return json.loads(run.stdout)
 

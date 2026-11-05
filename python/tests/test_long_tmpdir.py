@@ -10,11 +10,11 @@ must be shorter than SUN_LEN". Barca now falls back to `/tmp/barca-<uid>/` (0700
 import json
 import os
 import stat
-import subprocess
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import RUN, barca
 
 PIPELINE = """
 from functools import partial
@@ -61,15 +61,7 @@ def test_a_run_with_a_150_character_tmpdir_succeeds(tmp_path, long_tmpdir, remot
         env.pop("BARCA_REMOTE")
         env["BARCA_ARTIFACT_URI"] = f"file://{store}"
     before = _our_sockets()
-    proc = subprocess.run(
-        [_find_binary(), "get", "total", "pipeline.py", "--json"],
-        check=False,
-        cwd=project,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=120,
-    )
+    proc = barca(project, "get", "total", "pipeline.py", "--json", env=env, timeout=RUN)
     assert proc.returncode == 0, proc.stderr
     assert "SUN_LEN" not in proc.stderr
     out = json.loads(proc.stdout)

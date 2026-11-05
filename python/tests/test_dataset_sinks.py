@@ -20,7 +20,6 @@ What `barca docs sinks` promises, end to end through the real CLI:
 import json
 import os
 import socket
-import subprocess
 import textwrap
 import uuid
 from pathlib import Path
@@ -28,9 +27,9 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from barca.api import _find_binary
 
 from . import emulators
+from .helpers import SERVE, barca
 
 duckdb = pytest.importorskip("duckdb")
 
@@ -38,14 +37,7 @@ WRITERS = ("pandas", "arrow", "polars", "polars_lazy", "duckdb")
 
 
 def run(cwd: Path, *args: str, env: dict | None = None, check: bool = True):
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**os.environ, **(env or {})},
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    proc = barca(cwd, *args, env={**os.environ, **(env or {})}, timeout=SERVE)
     if check:
         assert proc.returncode == 0, proc.stdout + proc.stderr
     return proc
@@ -711,7 +703,7 @@ def test_dataset_sinks_on_object_stores(tmp_path, store):
     write(["r1", "r2", "r3"], {"r1": 1, "r2": 7, "r3": 1})
     import time
 
-    time.sleep(1.1)
+    time.sleep(1.1)  # fixed wait: the stores' modification times have one-second resolution
     get(tmp_path, "scored", env=env)
     for p, when in before.items():
         assert (modified(p) == when) == ("retailer=r2" not in p), p

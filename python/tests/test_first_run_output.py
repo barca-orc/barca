@@ -3,13 +3,13 @@ timestamps marked UTC in the human tables, `barca docs --pretty` accepted, and `
 naming what its rate measures."""
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import RUN
+from .helpers import barca as run_barca
 
 PIPELINE = """
 from barca import asset
@@ -21,17 +21,8 @@ def src() -> dict:
 """
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def barca(project: Path, *args: str, code: int = 0) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    proc = subprocess.run(
-        [_find_binary(), *args], cwd=project, env=env, capture_output=True, text=True, timeout=120
-    )
+    proc = run_barca(project, *args, timeout=RUN)
     assert proc.returncode == code, (proc.returncode, proc.stdout, proc.stderr)
     return proc
 

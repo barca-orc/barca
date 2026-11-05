@@ -1,7 +1,6 @@
 """INV-SELECT-01 / INV-MEMBER-01: selected history survives reversion and domain changes."""
 
 import json
-import os
 import random
 import sqlite3
 import subprocess
@@ -10,11 +9,11 @@ from collections import Counter
 import pytest
 from barca.api import _find_binary
 
+from .helpers import QUICK, RUN, clean_env
+
 
 def environment():
-    return {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")} | {
-        "BARCA_POOL_SIZE": "2"
-    }
+    return clean_env(BARCA_POOL_SIZE="2")
 
 
 @pytest.mark.parametrize("batch", ["None", "3", '"all"'])
@@ -75,7 +74,7 @@ def second(key, first):
             env=environment(),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         actual = json.loads(result.stdout)["final_output"]
@@ -127,7 +126,7 @@ def second(key, first):
             env=environment(),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=QUICK,
         )
 
     result = run()
@@ -178,7 +177,7 @@ def report(source):
             env=environment() | {"AUDIT_SOURCE_VERSION": str(value)},
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert json.loads(result.stdout)["final_output"] == (
@@ -218,7 +217,7 @@ def total(reports):
             env=environment() | {"AUDIT_SOURCE_VERSION": str(value)},
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=RUN,
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr

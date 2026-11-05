@@ -250,7 +250,7 @@ def test_busy_invalidation_uses_a_nonblocking_remote_epoch_without_losing_local_
     path = str(tmp_path / "cache.json")
     local = tmp_path / "value"
     local.write_text("42")
-    time.sleep(1.05)
+    time.sleep(1.05)  # fixed wait: unchanged-file reuse begins after the mtime second settles
     cache = memo.Cache(path)
     cache.remote("store", "one", None, lambda: {"size": 1})
     cache.local("shape", local, None, lambda: {"type": "int"})

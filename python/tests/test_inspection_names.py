@@ -1,17 +1,15 @@
 """Declared identities agree across materialization and read-only inspection (#288)."""
 
 import json
-import subprocess
+import os
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import QUICK, barca
 
 
 def call(root, *args):
-    result = subprocess.run(
-        [_find_binary(), *args, "--json"], cwd=root, text=True, capture_output=True, timeout=30
-    )
+    result = barca(root, *args, "--json", env={**os.environ}, timeout=QUICK)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 

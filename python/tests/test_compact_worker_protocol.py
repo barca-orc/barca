@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from barca import _runtime, _wire
 from barca.api import _find_binary
+from .helpers import QUICK, RUN
 
 
 def test_result_batch_emits_one_array_frame_and_file_metadata_only(tmp_path, monkeypatch):
@@ -97,7 +98,7 @@ def leaf(k):
             start_new_session=True,
         )
         try:
-            out, err = process.communicate(timeout=45)
+            out, err = process.communicate(timeout=RUN)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, 9)
             out, err = process.communicate()
@@ -137,7 +138,7 @@ def leaf(k):
         env=env,
         text=True,
         capture_output=True,
-        timeout=15,
+        timeout=QUICK,
     )
     assert recorded.returncode == 0, recorded.stderr
     lines = [row["line"] for row in json.loads(recorded.stdout)]

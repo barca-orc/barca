@@ -9,12 +9,9 @@ Contract: specs/behavior/freshness.md (INV-MEMBER-01).
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
-import pytest
-
-from barca.api import _find_binary
+from .helpers import barca
 
 # Keys come from an env var here, so these tests change the key set without changing any
 # source. That is one way to write keys; it hid #283, where editing a list written inside the
@@ -38,19 +35,17 @@ def summary(parts: list) -> dict:
 """
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def get(project: Path, *flags: str, keys: str = "a,b,c") -> dict:
-    proc = subprocess.run(
-        [_find_binary(), "get", "summary", "pipeline.py", *flags, "-o", "value", "--json"],
-        cwd=project,
+    proc = barca(
+        project,
+        "get",
+        "summary",
+        "pipeline.py",
+        *flags,
+        "-o",
+        "value",
+        "--json",
         env={**os.environ, "BARCA_TEST_KEYS": keys},
-        capture_output=True,
-        text=True,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])

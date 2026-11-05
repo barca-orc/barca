@@ -31,7 +31,8 @@ import pytest
 
 from barca.api import _find_binary
 
-from .test_remote_cancel import HOLD_SHIM, alive, wait_until
+from .helpers import RUN, wait_until
+from .test_remote_cancel import HOLD_SHIM, alive
 
 # The coordinator used to wait this long for a worker that an interrupt had ended.
 OLD_CONNECT_WAIT = 10
@@ -123,8 +124,8 @@ class Job:
 
     def wait(self, done, what: str) -> None:
         try:
-            wait_until(done, what, self.proc)
-        except AssertionError as failed:
+            wait_until(done, what, proc=self.proc)
+        except (AssertionError, pytest.fail.Exception) as failed:
             raise AssertionError(f"{failed}\n--- stderr:\n{self.err_path.read_text()}") from None
 
     def ctrl_c(self) -> None:
@@ -147,7 +148,7 @@ class Job:
         return [int(pid) for pid in out.split()]
 
     def end(self) -> str:
-        self.stdout, _ = self.proc.communicate(timeout=60)
+        self.stdout, _ = self.proc.communicate(timeout=RUN)
         self.took = time.monotonic() - self.sent
         self.stderr = self.err_path.read_text()
         return self.stderr
@@ -272,7 +273,7 @@ def test_a_worker_acts_on_ctrl_c_only_while_a_step_runs(tmp_path):
         [sys.executable, "-c", STAGES, str(tmp_path)],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=RUN,
         preexec_fn=sigint_disposition(ignored=False),
     )
     assert proc.returncode == 0, proc.stderr
@@ -299,7 +300,7 @@ def test_a_worker_started_with_sigint_ignored_keeps_ignoring_it_in_a_step(tmp_pa
         [sys.executable, "-c", STAGES, str(tmp_path)],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=RUN,
         preexec_fn=sigint_disposition(ignored=True),
     )
     assert proc.returncode == 0, proc.stderr
