@@ -51,8 +51,12 @@ def finish_open_result() -> None:
         abort = getattr(con, "abort", None)
         if abort is not None:
             abort()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Deliberate: this runs between a step and the write of its result, and must not fail
+        # either. What can raise here is duckdb's own error for a connection that is closed or
+        # busy in another thread, whose class differs across 1.x and 2; the next statement on
+        # the connection reports the real problem. Said on stderr, so it is not silent.
+        print(f"[barca] duckdb: could not discard an open result: {exc}", file=sys.stderr)
 
 
 def arrow_reader(relation: Any) -> Any:
@@ -105,9 +109,13 @@ def bind_inputs(kwargs: dict[str, Any], param_types: dict[str, str | None]) -> l
         relation = kwargs.get(name)
         if relation is None or not hasattr(relation, "create_view"):
             continue
+        import duckdb
+
         try:
             relation.create_view(name, replace=True)
-        except Exception:
+        except duckdb.Error:
+            # The name is taken by a table of the user's, or the relation's own connection
+            # is not the shared one: the relation is still passed to the function by name.
             continue
         bound.append(name)
     return bound
@@ -122,14 +130,18 @@ def unbind_inputs(names: list[str]) -> None:
     finish_open_result()
     if not names:
         return
+    import duckdb  # imported: a name was bound on a relation
+
     try:
         con = connection()
-    except Exception:
-        return
+    except duckdb.Error:
+        return  # the connection is closed: its views went with it
     for name in names:
         try:
             con.execute(f"drop view if exists {_quote(name)}")
-        except Exception:
+        except duckdb.Error:
+            # Already dropped by the step, or the connection closed under us: either way the
+            # view is gone, which is what this asks for.
             pass
 
 
