@@ -17,7 +17,7 @@ details make that cheap and safe:
   The directory is keyed by the artifact's run hash and a digest of the object's version as the
   store reports it (ETag, generation, size, modified time), so a rewritten object gets a new
   directory and a cached range is never stale. The cache size limit counts the directories
-  and evicts them as leftovers (`barca docs cache`, "Disk use").
+  and evicts them as leftovers (`barca docs disk`).
 """
 
 from __future__ import annotations

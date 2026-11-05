@@ -5,7 +5,7 @@ version 3: sinks republished by cache hits, #662; version 2: dataset sinks and f
 0.30.0).
 Scope: choosing CSV artifacts and sinks, dataset sinks, reading them and inspecting cached
 results.
-Conformance: `python/tests/test_artifact_extensions.py`, `crates/barca-core/src/sql.rs`
+Conformance: `python/tests/test_artifact_extensions.py`, `crates/barca-core/src/artifact_format.rs`
 (`format_of_agrees_with_the_spec_table`), `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
 `python/tests/test_sink_republish.py`, `crates/barca-core/src/sink_publications.rs`,
 `crates/barca-core/src/sink_args.rs`, `crates/barca-core/tests/grammar_spec.rs`.
@@ -39,7 +39,7 @@ and downstream steps use the corresponding CSV reader.
 
 An artifact file's extension names its format. Barca reads a format from an extension with this
 table, in the worker (`barca._artifacts.FORMAT_OF_EXTENSION`) and in `barca sql`
-(`sql::format_of`), and writes each format with the extension marked *written*. Any other
+(`artifact_format::format_of`), and writes each format with the extension marked *written*. Any other
 extension is not an artifact format: the worker reads it as JSON, `barca sql` reports it as
 `unknown`.
 

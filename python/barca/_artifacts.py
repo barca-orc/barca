@@ -28,7 +28,8 @@ from typing import Any
 from barca import _duckdb, _storage
 
 # The one map from an artifact file's extension to its format (the extension table in
-# specs/interfaces/artifact-formats.md; Rust's `sql::format_of` agrees with it).
+# specs/interfaces/artifact-formats.md; a test keeps Rust's `artifact_format::FORMAT_OF_EXTENSION`
+# equal to it).
 FORMAT_OF_EXTENSION = {
     ".json": "json",
     ".pkl": "pickle",

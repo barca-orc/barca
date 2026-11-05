@@ -31,6 +31,11 @@ updates:
     groups:
       python-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # The dev group pins the versions prek.toml runs; a bump here alone fails the version
+      # sync check, so both move together by hand (scripts/check-fast.sh runs the hooks).
+      - dependency-name: ruff
+      - dependency-name: ty
 
   - package-ecosystem: npm
     directory: /ui

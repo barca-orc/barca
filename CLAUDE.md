@@ -28,12 +28,18 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
   client.py             ← `barca.Client`: a thin HTTP wrapper over a running `barca serve` (deprecated aliases)
   __main__.py           ← Entry point for `python -m barca` (delegates to `_worker.main()`)
   _worker.py            ← Daemon worker (invoked by Rust as `python -m barca._worker --daemon`): runs steps
+  _capture.py           ← A step's stdout/stderr capture, line by line, for the coordinator
+  _rss.py               ← Peak memory (RSS) of a step, Linux only
+  _lru.py               ← The in-process artifact LRU a worker reads inputs from
+  _signals.py           ← Signal policy in a worker: what Ctrl-C and SIGTERM interrupt
   _runtime.py           ← Socket communication with the coordinator; `PROTOCOL_VERSION` lives here
   _wire.py              ← Compact wire tables: only metadata and artifact references cross the socket
   _batch.py             ← Batched partitions (RFC-0013): one call computes several keys
   _branches.py          ← How a `parallel()` branch's return value gets back to its caller
   _artifacts.py         ← Serialization: json, pickle, parquet, CSV format detection + I/O, staging
-  _storage.py           ← Storage backends: local filesystem and fsspec object stores, range cache
+  _storage.py           ← Storage backends: local filesystem and fsspec object stores
+  _range_cache.py       ← The range-read cache filesystem over a store (bounded, evicted as leftovers)
+  _signing.py           ← Signed URLs for S3, GCS and Azure (`barca.signed_url`)
   _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
   _state.py             ← Metadata backups in the store, store checks for `barca status` (RFC-0009)
   _sinks.py             ← Dataset sinks: `@sink("exports/scored/")` writes a Hive-partitioned dataset

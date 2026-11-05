@@ -112,7 +112,7 @@ Freshness = type[Always] | type[Manual] | Schedule
 
 
 @overload
-def asset(fn: F, /) -> F: ...
+def asset[F: Callable[..., Any]](fn: F, /) -> F: ...
 @overload
 def asset(
     *,
@@ -132,7 +132,7 @@ def asset(
     cutoff: bool = False,
     batch: Batch = None,
 ) -> Callable[[F], F]: ...
-def asset(
+def asset[F: Callable[..., Any]](
     fn: F | None = None,
     /,
     *,
@@ -210,7 +210,7 @@ def asset(
 
 
 @overload
-def sensor(fn: F, /) -> F: ...
+def sensor[F: Callable[..., Any]](fn: F, /) -> F: ...
 @overload
 def sensor(
     *,
@@ -226,7 +226,7 @@ def sensor(
     env: list[str] | None = None,
     weight: int = 1,
 ) -> Callable[[F], F]: ...
-def sensor(
+def sensor[F: Callable[..., Any]](
     fn: F | None = None,
     /,
     *,
@@ -266,7 +266,7 @@ def sensor(
 
 
 @overload
-def task(fn: F, /) -> F: ...
+def task[F: Callable[..., Any]](fn: F, /) -> F: ...
 @overload
 def task(
     *,
@@ -284,7 +284,7 @@ def task(
     weight: int = 1,
     batch: Batch = None,
 ) -> Callable[[F], F]: ...
-def task(
+def task[F: Callable[..., Any]](
     fn: F | None = None,
     /,
     *,
@@ -354,7 +354,7 @@ def sink(
     return decorator
 
 
-def unsafe(fn: F) -> F:
+def unsafe[F: Callable[..., Any]](fn: F) -> F:
     """Mark a function as unsafe (untraceable)."""
     return fn
 
@@ -367,7 +367,7 @@ def partitions(values: Sequence[Any], /) -> Sequence[Any]:
     return values
 
 
-def partitions_from(source: F, /) -> F:
+def partitions_from[F: Callable[..., Any]](source: F, /) -> F:
     """Derive partitions from an upstream asset or sensor.
 
     A partitioned `source` gives its keys. An unpartitioned one gives the values of the list it
@@ -398,7 +398,7 @@ def batches_by(
     return fn
 
 
-def collect(asset_fn: F, /) -> F:
+def collect[F: Callable[..., Any]](asset_fn: F, /) -> F:
     """Aggregate all partitions of an upstream asset."""
     return asset_fn
 
