@@ -74,6 +74,7 @@ pub mod sql;
 pub(crate) mod state_validate;
 pub mod status;
 pub mod step_status;
+pub mod store_inspect;
 mod store_sync;
 pub mod suggest;
 pub mod targets;

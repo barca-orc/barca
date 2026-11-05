@@ -1116,10 +1116,10 @@ impl From<BarcaError> for Rejection {
     }
 }
 
-pub use crate::status::StoreObject;
+use crate::store_inspect::StoreObject;
 
 /// How the server asks its store about the objects a post names. `barca serve` uses
-/// [`crate::status::stat_objects`]; tests use a closure.
+/// [`crate::store_inspect::stat_objects`]; tests use a closure.
 pub trait ObjectStat: Send + Sync {
     fn stat<'a>(&'a self, paths: &'a [String]) -> BoxFuture<'a, Result<Vec<StoreObject>, String>>;
 }
@@ -1134,7 +1134,7 @@ impl ObjectStat for HelperStat<'_> {
     fn stat<'a>(&'a self, paths: &'a [String]) -> BoxFuture<'a, Result<Vec<StoreObject>, String>> {
         Box::pin(async move {
             let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-            crate::status::stat_objects(self.python, self.cfg, &paths).await
+            crate::store_inspect::stat_objects(self.python, self.cfg, &paths).await
         })
     }
 }
