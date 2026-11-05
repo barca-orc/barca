@@ -21,6 +21,7 @@ use crate::dag::Dag;
 use crate::dispatch::OutputRef;
 use crate::model::PartitionKey;
 use crate::planner::{ExecutionPlan, Phase};
+use crate::step_status::StepStatus;
 use crate::targets::short_name;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -544,8 +545,8 @@ impl Narrowing {
             .map(|s| crate::results::StepReport {
                 id: s.id.clone(),
                 kind: crate::report::kind_str(dag.get_node(&s.id).map(|n| n.kind())),
-                status: (!dry_run).then(|| "skipped".to_string()),
-                action: dry_run.then(|| "skipped".to_string()),
+                status: (!dry_run).then(|| StepStatus::Skipped.to_string()),
+                action: dry_run.then(|| StepStatus::Skipped.to_string()),
                 reason: Some("partition_selection".to_string()),
                 detail: Some(s.detail.clone()),
                 ..Default::default()

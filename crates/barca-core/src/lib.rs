@@ -68,9 +68,12 @@ pub mod selection;
 pub mod serve;
 mod sink_args;
 mod sink_publications;
+#[cfg(test)]
+mod source_scan;
 pub mod sql;
 pub(crate) mod state_validate;
 pub mod status;
+pub mod step_status;
 mod store_sync;
 pub mod suggest;
 pub mod targets;

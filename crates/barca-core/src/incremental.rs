@@ -22,6 +22,7 @@ pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id
 
 use crate::db::BY_NODE_RUN;
 use crate::source_observation::Source;
+use crate::step_status::StepStatus;
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Proof {
     signature: String,
@@ -318,7 +319,7 @@ impl Incremental {
                 reports.push(StepReport {
                     id: id.to_owned(),
                     kind: crate::report::kind_str(dag.get_node(id).map(|n| n.kind())),
-                    status: Some("cached".into()),
+                    status: Some(StepStatus::Cached.to_string()),
                     run_hash: if dag.get_node(id).unwrap().extracted.partitions.is_empty() {
                         self.next.nodes[id].run_hash.clone()
                     } else {

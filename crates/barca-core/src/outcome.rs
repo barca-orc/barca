@@ -8,6 +8,7 @@ use crate::cache::CachePolicy;
 use crate::envelope::{Context, ErrorEnvelope, ErrorKind};
 use crate::report::{self, RenderedOutput, ResultFormat};
 use crate::results::{GetResult, MultiResult};
+use crate::step_status::StepStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -465,7 +466,7 @@ impl Outcome {
         let skipped = value["steps"].as_array().map_or(0, |steps| {
             steps
                 .iter()
-                .filter(|s| s["status"].as_str() == Some("skipped"))
+                .filter(|s| StepStatus::Skipped.is(s["status"].as_str()))
                 .count()
         });
         let envelope = match value.as_object_mut().and_then(|o| o.remove("envelope")) {

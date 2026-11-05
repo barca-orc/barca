@@ -2,6 +2,7 @@
 
 use crate::BarcaError;
 use crate::dispatch::ErrorPhase;
+use crate::step_status::StepStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -387,7 +388,7 @@ impl ErrorEnvelope {
                     step.run.as_ref().map_or(0, |run| run
                         .steps
                         .iter()
-                        .filter(|s| s.status.as_deref() == Some("skipped"))
+                        .filter(|s| StepStatus::Skipped.is(s.status.as_deref()))
                         .count()),
                 )),
             };

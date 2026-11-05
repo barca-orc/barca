@@ -11,6 +11,7 @@ use crate::cache::CachePolicy;
 pub use crate::cache_state::CacheState;
 use crate::db;
 use crate::results::StepReport;
+use crate::step_status::StepStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1126,7 +1127,7 @@ fn cache_status(
             r.reason.as_deref().unwrap_or("unknown"),
             r.detail.clone().unwrap_or_default(),
         ),
-        ("cached", _) => cache(
+        (a, _) if StepStatus::Cached.is(Some(a)) => cache(
             CacheState::Cached,
             "materialized",
             "a successful materialization matches this code and these inputs",
@@ -1143,7 +1144,7 @@ fn cache_status(
             "evicted",
             r.detail.clone().unwrap_or_default(),
         ),
-        ("partial", _) => {
+        (a, _) if StepStatus::Partial.is(Some(a)) => {
             let (cached, total) = r
                 .partitions
                 .as_ref()

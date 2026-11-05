@@ -4,6 +4,7 @@
 //! same shape; how a result is printed is the caller's job.
 
 use crate::dispatch::OutputRef;
+use crate::step_status::StepStatus;
 use crate::warnings::PlanWarning;
 use serde::{Deserialize, Serialize};
 
@@ -278,7 +279,7 @@ pub struct TargetOutcome {
 impl TargetOutcome {
     /// Whether this target failed: neither `success` nor `blocked`.
     pub fn failed(&self) -> bool {
-        self.status != "success" && self.status != "blocked"
+        !StepStatus::Success.is(Some(&self.status)) && !StepStatus::Blocked.is(Some(&self.status))
     }
 }
 
@@ -292,7 +293,8 @@ pub struct StepReport {
     /// Dry run only: `cached`, `run`, `partial` (some partition keys cached) or `unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
-    /// Real run only: `ran`, `cached`, `partial`, or `failed` (in a failed run's result).
+    /// Real run only: `ran`, `cached`, `partial`, `skipped` or `failed` (in a failed run's
+    /// result): a [`StepStatus`] spelling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     /// Why the step runs: `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`,
@@ -537,7 +539,7 @@ impl ExplainSummary {
                 self.cached += p.cached;
                 self.will_run += p.will_run;
             }
-            (Some("cached"), None) => self.cached += 1,
+            (action, None) if StepStatus::Cached.is(action) => self.cached += 1,
             _ => self.will_run += 1,
         }
     }

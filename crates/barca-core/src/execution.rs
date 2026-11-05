@@ -15,6 +15,7 @@ use crate::report::{
     RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
     fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning,
 };
+use crate::step_status::StepStatus;
 use crate::targets::{
     blocking_failure, final_output_of, plan_for_targets, resolve_targets, short_name,
     skipped_tasks_note, target_outcomes, validate_refresh_names,
@@ -1503,7 +1504,7 @@ async fn expand_and_decide<'p>(
                 session.state.results.reports.push(StepReport {
                     id: base.to_string(),
                     kind: kind_str(session.prepared.dag.get_node(base).map(|n| n.kind())),
-                    status: Some("skipped".to_string()),
+                    status: Some(StepStatus::Skipped.to_string()),
                     reason: Some("upstream_failed".to_string()),
                     detail: Some(format!("depends on '{}', which failed", short_name(up))),
                     ..Default::default()
@@ -2548,7 +2549,7 @@ async fn return_outputs(
                 &session.state.cached_node_ids,
             ) {
                 if outcome.error.as_deref() == Some("did not run") {
-                    outcome.status = "success".into();
+                    outcome.status = StepStatus::Success.to_string();
                     outcome.error = None;
                 }
                 outcome.key_summary = Some(summary);
@@ -2676,8 +2677,8 @@ fn blocked_steps(dag: &Dag, blocked: &[(String, TargetOutcome)]) -> Vec<StepRepo
         .map(|(id, outcome)| StepReport {
             id: id.clone(),
             kind: kind_str(dag.get_node(id).map(|n| n.kind())),
-            status: Some("skipped".to_string()),
-            reason: Some("blocked".to_string()),
+            status: Some(StepStatus::Skipped.to_string()),
+            reason: Some(StepStatus::Blocked.to_string()),
             detail: outcome.error.clone(),
             ..Default::default()
         })
@@ -2739,7 +2740,7 @@ async fn pin_manual<'a>(
                     planned.blocked.push((
                         name.clone(),
                         TargetOutcome {
-                            status: "blocked".to_string(),
+                            status: StepStatus::Blocked.to_string(),
                             final_output: None,
                             error: Some(format!(
                                 "blocked on '{}', a Manual node that has never been computed",
@@ -2953,14 +2954,17 @@ async fn finalize_outputs(
     // upstream failed, say so.
     let mut step_reports = merge_partition_reports(step_reports);
     for report in &mut step_reports {
-        if !matches!(report.status.as_deref(), Some("ran" | "partial")) {
+        if !matches!(
+            report.status.as_deref().and_then(StepStatus::parse),
+            Some(StepStatus::Ran | StepStatus::Partial)
+        ) {
             continue;
         }
         let base = report.id.split('[').next().unwrap_or(&report.id);
         if failed_bases.contains(base) {
-            report.status = Some("failed".to_string());
+            report.status = Some(StepStatus::Failed.to_string());
         } else if skipped_bases.contains(base) {
-            report.status = Some("skipped".to_string());
+            report.status = Some(StepStatus::Skipped.to_string());
             report.reason = Some("upstream_failed".to_string());
             report.detail = Some("a step it depends on failed".to_string());
         }
@@ -2985,7 +2989,7 @@ async fn finalize_outputs(
             step_reports.push(StepReport {
                 id: base.to_string(),
                 kind: kind_str(dag.get_node(base).map(|n| n.kind())),
-                status: Some("skipped".to_string()),
+                status: Some(StepStatus::Skipped.to_string()),
                 reason: Some("upstream_failed".to_string()),
                 detail: Some(format!("depends on '{}', which failed", short_name(up))),
                 ..Default::default()

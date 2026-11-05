@@ -8,6 +8,7 @@ mod commands;
 pub use commands::*;
 
 use crate::cache_state::CacheState;
+use crate::step_status::StepStatus;
 use crate::targets::short_name;
 use crate::{
     cache::{Decision, RunReason},
@@ -46,7 +47,7 @@ pub fn render_step_table(steps: &[crate::results::StepReport], dry: bool) -> Str
                 (_, v) => v,
             };
             let why = match (&s.partitions, &s.detail) {
-                (Some(p), _) if verdict == "partial" => {
+                (Some(p), _) if StepStatus::Partial.is(Some(verdict)) => {
                     format!(
                         "{} of {} keys cached; will run: {}",
                         p.cached,
@@ -732,15 +733,15 @@ pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepRepor
     for r in &mut out {
         let Some(p) = &r.partitions else { continue };
         let verdict = |dry: bool| match (p.cached, p.will_run) {
-            (_, 0) => "cached",
+            (_, 0) => StepStatus::Cached.as_str(),
             (0, _) => {
                 if dry {
                     "run"
                 } else {
-                    "ran"
+                    StepStatus::Ran.as_str()
                 }
             }
-            _ => "partial",
+            _ => StepStatus::Partial.as_str(),
         };
         if r.action.is_some() {
             r.action = Some(verdict(true).to_string());
@@ -824,17 +825,17 @@ pub(crate) fn computed_by_another_run(
                     r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
                     r.status = Some(
                         if p.cached == p.total {
-                            "cached"
+                            StepStatus::Cached
                         } else {
-                            "partial"
+                            StepStatus::Partial
                         }
-                        .into(),
+                        .to_string(),
                     );
                 }
                 return;
             }
-            (None, None) if r.status.as_deref() == Some("ran") => {
-                r.status = Some("cached".to_string());
+            (None, None) if StepStatus::Ran.is(r.status.as_deref()) => {
+                r.status = Some(StepStatus::Cached.to_string());
                 r.reason = None;
                 r.changed = None;
                 r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
@@ -868,11 +869,8 @@ pub(crate) fn report_for(
             .filter(|names| !names.is_empty()),
         ..Default::default()
     };
-    let (word_cached, word_run, word_partial) = if dry {
-        ("cached", "run", "partial")
-    } else {
-        ("cached", "ran", "partial")
-    };
+    let (word_cached, word_partial) = (StepStatus::Cached.as_str(), StepStatus::Partial.as_str());
+    let word_run = if dry { "run" } else { StepStatus::Ran.as_str() };
     let verdict = match decision {
         Decision::Run(reason) => {
             r.reason = Some(reason.code().to_string());

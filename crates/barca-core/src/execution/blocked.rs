@@ -16,6 +16,7 @@ use crate::dag::Dag;
 use crate::planner::Phase;
 use crate::report::kind_str;
 use crate::results::StepReport;
+use crate::step_status::StepStatus;
 use crate::targets::{blocking_failure, short_name};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -166,7 +167,7 @@ pub(super) fn report(dag: &Dag, base: &str, b: &BlockedKey) -> StepReport {
     StepReport {
         id: format!("{base}[{}]", b.key),
         kind: kind_str(dag.get_node(base).map(|n| n.kind())),
-        status: Some("skipped".to_string()),
+        status: Some(StepStatus::Skipped.to_string()),
         reason: Some("upstream_key_failed".to_string()),
         detail: Some(format!(
             "depends on '{}', which {}",
