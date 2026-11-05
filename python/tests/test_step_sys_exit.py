@@ -6,12 +6,13 @@ result, the run exited 0, and for an asset the None was cached.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import barca
 
 PIPELINE = """
 import sys
@@ -40,13 +41,7 @@ def exit_asset() -> dict:
 
 
 def _barca(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    return barca(tmp_path, *args, env=dict(os.environ))
 
 
 @pytest.fixture

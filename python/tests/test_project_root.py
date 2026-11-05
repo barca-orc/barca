@@ -7,13 +7,13 @@ pre-0.13 behavior).
 """
 
 import json
+import os
 import subprocess
 import textwrap
 from pathlib import Path
 
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca as run_barca
 
 PIPELINE = """
 from pathlib import Path
@@ -32,13 +32,7 @@ def out(s: dict) -> dict:
 
 
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *value_args(args, json=False), "--json"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return run_barca(cwd, *value_args(args, json=False), "--json", env={**os.environ})
 
 
 def result(proc: subprocess.CompletedProcess) -> dict:

@@ -1,35 +1,21 @@
 """Actual import history, source identity and durable pickle contracts (#295)."""
 
 import json
-import os
 import subprocess
 import sys
 
 import pytest
-from barca.api import _find_binary
 
 from .get_values import value_args
-
-SCRUB = ("BARCA_", "AWS_", "AZURE_", "GOOGLE_", "FSSPEC_")
+from .helpers import QUICK, RUN, barca, clean_env, wait_until
 
 
 def env(pool=None):
-    values = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    if pool is not None:
-        values["BARCA_POOL_SIZE"] = str(pool)
-    return values
+    return clean_env() if pool is None else clean_env(BARCA_POOL_SIZE=str(pool))
 
 
 def cli(root, *args, pool=None):
-    return subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=root,
-        env=env(pool),
-        capture_output=True,
-        text=True,
-        timeout=45,
-        check=False,
-    )
+    return barca(root, *value_args(args), env=env(pool), timeout=RUN)
 
 
 def write(root, name, source):
@@ -469,7 +455,7 @@ assert deserialize('outputs/result.json','json')==48
         env=env(),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=QUICK,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -498,7 +484,7 @@ assert deserialize('external.pkl','pickle').value==37
         env=env(),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=QUICK,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -517,7 +503,7 @@ def test_legacy_producer_missing_dependency_preserves_original_error(tmp_path):
         env=env(),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=QUICK,
         check=False,
     )
     assert result.returncode != 0
@@ -550,7 +536,7 @@ with open('old.pkl','wb') as f: pickle.dump(p.Outer.Record(),f,protocol=int(sys.
         env=env(),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=QUICK,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -569,7 +555,7 @@ assert type(x).__module__=='p' and type(x).__qualname__=='Outer.Record'
         env=env(),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=QUICK,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -635,7 +621,7 @@ assert all(value.Record.value==17 and value is values[0] for value in values)
         env=env(),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=QUICK,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -644,7 +630,7 @@ assert all(value.Record.value==17 and value is values[0] for value in values)
 
 def test_partial_loading_isolates_conflicts_and_watch_repairs_qualified_imports(tmp_path):
     from .test_serve_load_isolation import errors, finished, loaded
-    from .test_serve_robustness import Server, wait_for
+    from .test_serve_robustness import Server
 
     write(
         tmp_path,
@@ -668,7 +654,7 @@ def test_partial_loading_isolates_conflicts_and_watch_repairs_qualified_imports(
             for error in errors(server)
             if error["file"] in {"a/p.py", "b/p.py"}
         ), errors(server)
-        wait_for(lambda: (tmp_path / "ticks").exists(), "healthy schedule beside import errors")
+        wait_until((tmp_path / "ticks").exists, "healthy schedule beside import errors")
         code, handle = server.request("POST", "/get/healthy")
         assert code == 200
         assert finished(server, handle["run_id"])["status"] == "complete"
@@ -679,7 +665,7 @@ def test_partial_loading_isolates_conflicts_and_watch_repairs_qualified_imports(
                     "from helpers import value", f"from {directory}.helpers import value"
                 )
             )
-        wait_for(lambda: not errors(server), "qualified import repair")
+        wait_until(lambda: not errors(server), "qualified import repair")
         assert loaded(server) == {
             "pipeline.py:healthy",
             "pipeline.py:tick",

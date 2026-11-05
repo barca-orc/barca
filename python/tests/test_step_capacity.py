@@ -7,10 +7,9 @@ running at once from those spans, not from wall time.
 import json
 import os
 import re
-import subprocess
 import textwrap
 
-from barca.api import _find_binary
+from .helpers import barca
 
 # Every step appends `name start end` to spans.txt in the project directory.
 SPAN = """
@@ -26,13 +25,8 @@ def span(name, seconds):
 
 
 def cli(root, *args, code=0, **env):
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env={**os.environ, "BARCA_REMOTE": "off", "BARCA_POOL_SIZE": "4", **env},
-        capture_output=True,
-        text=True,
-        timeout=120,
+    proc = barca(
+        root, *args, env={**os.environ, "BARCA_REMOTE": "off", "BARCA_POOL_SIZE": "4", **env}
     )
     assert proc.returncode == code, proc.stderr
     return proc

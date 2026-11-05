@@ -2,10 +2,9 @@
 
 import json
 import os
-import subprocess
 
 import pytest
-from barca.api import _find_binary
+from .helpers import barca
 
 CASES = [
     """@asset()
@@ -39,13 +38,8 @@ def value():
 
 
 def cli(root, *args):
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env={**os.environ, "BARCA_REMOTE": "off", "PYTHONDONTWRITEBYTECODE": "1"},
-        capture_output=True,
-        text=True,
-        timeout=60,
+    proc = barca(
+        root, *args, env={**os.environ, "BARCA_REMOTE": "off", "PYTHONDONTWRITEBYTECODE": "1"}
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)

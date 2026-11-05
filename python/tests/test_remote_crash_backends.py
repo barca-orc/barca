@@ -6,7 +6,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -16,7 +15,8 @@ from barca.api import _find_binary
 
 from . import emulators
 from .get_values import value_args
-from .test_remote_env_config import CASES, SCRUB, _reachable, barca
+from .helpers import QUICK, RUN, SCRUB, clean_env, wait_until
+from .test_remote_env_config import CASES, _reachable, barca
 
 HOLD = str(Path(__file__).parent / "hold")
 PIPELINE = """import os
@@ -31,14 +31,6 @@ def observe(blob: dict) -> dict:
 def unrelated() -> int:
     return 17
 """
-
-
-def wait_for(check, message, proc=None, seconds=30):
-    deadline = time.monotonic() + seconds
-    while not check():
-        assert proc is None or proc.poll() is None, f"process exited before {message}"
-        assert time.monotonic() < deadline, f"timed out waiting for {message}"
-        time.sleep(0.02)
 
 
 def running(pid):
@@ -101,7 +93,7 @@ def bytes_at(remote, tmp_path):
         ],
         check=True,
         capture_output=True,
-        timeout=60,
+        timeout=RUN,
     )
     return local.read_bytes()
 
@@ -110,7 +102,7 @@ def bytes_at(remote, tmp_path):
 def held_run(root, options, point, *args):
     gate = root / "gate"
     gate.mkdir()
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    base = clean_env()
     env = {
         **base,
         **options,
@@ -127,23 +119,23 @@ def held_run(root, options, point, *args):
             start_new_session=True,
         )
         try:
-            wait_for(lambda: (gate / f"{point}.started").exists(), point, proc)
+            wait_until((gate / f"{point}.started").exists, point, interval=0.02, proc=proc)
             yield proc, gate
         finally:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            proc.wait(timeout=10)
+            proc.wait(timeout=QUICK)
 
 
 def kill_coordinator(proc, gate, point):
     helper = int((gate / f"{point}.started").read_text())
     assert running(helper), "marker must identify a live held helper"
     proc.kill()
-    assert proc.wait(timeout=10) == -signal.SIGKILL
+    assert proc.wait(timeout=QUICK) == -signal.SIGKILL
     # No synthetic exception or signal to the helper: the real lifeline owns cleanup.
-    wait_for(lambda: not running(helper), "helper lifeline exit", seconds=10)
+    wait_until(lambda: not running(helper), "helper lifeline exit", timeout=10, interval=0.02)
 
 
 def baseline(root, options):
@@ -257,14 +249,16 @@ assert (root / "selected.tmp").read_bytes() == body
     }
     proc = subprocess.Popen([sys.executable, "-c", script, str(tmp_path)], env=env)
     try:
-        wait_for(lambda: (gate / "partial-get.started").exists(), "partial write", proc)
+        wait_until((gate / "partial-get.started").exists, "partial write", interval=0.02, proc=proc)
         assert (tmp_path / "selected.tmp").read_bytes() == b"x" * 65536
-        wait_for(lambda: (tmp_path / "unrelated.done").exists(), "unrelated writes", proc)
+        wait_until(
+            (tmp_path / "unrelated.done").exists, "unrelated writes", interval=0.02, proc=proc
+        )
         assert (tmp_path / "other.tmp").read_bytes() == b"x" * 200000
         assert (tmp_path / "metadata.tmp").read_bytes() == b"x" * 200000
         (gate / "release").touch()
-        assert proc.wait(timeout=10) == 0
+        assert proc.wait(timeout=QUICK) == 0
     finally:
         if proc.poll() is None:
             proc.kill()
-        proc.wait(timeout=10)
+        proc.wait(timeout=QUICK)

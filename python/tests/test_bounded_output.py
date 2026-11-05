@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import barca as run_barca
 
 SMALL = """
 from barca import asset, task
@@ -50,13 +50,7 @@ def project(tmp_path) -> Path:
 
 
 def barca(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env=os.environ.copy(),
-        capture_output=True,
-        text=True,
-    )
+    return run_barca(project, *args, env=os.environ.copy())
 
 
 def ok(proc: subprocess.CompletedProcess):

@@ -1,11 +1,10 @@
 """#295: helpers used only in match patterns must invalidate cached assets."""
 
 import json
-import os
-import subprocess
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import QUICK, barca, clean_env
 
 
 @pytest.mark.parametrize(
@@ -38,17 +37,19 @@ def unrelated():
     return 7
 """)
     helper = tmp_path / "helpers.py"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env = clean_env(PYTHONDONTWRITEBYTECODE="1")
 
     def run():
-        proc = subprocess.run(
-            [_find_binary(), "get", "value,unrelated", "pipeline.py", "-o", "value", "--json"],
-            cwd=tmp_path,
+        proc = barca(
+            tmp_path,
+            "get",
+            "value,unrelated",
+            "pipeline.py",
+            "-o",
+            "value",
+            "--json",
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert proc.returncode == 0, proc.stderr
         return json.loads(proc.stdout)

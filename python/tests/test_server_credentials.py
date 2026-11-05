@@ -13,7 +13,9 @@ import pytest
 from barca.api import BarcaError, _find_binary
 from barca.client import Client
 
-from .test_serve_robustness import Server, _env, wait_for
+from . import helpers
+from .helpers import QUICK, clean_env, wait_until
+from .served import Serve
 
 pytestmark = pytest.mark.filterwarnings("ignore:barca.Client is deprecated:DeprecationWarning")
 
@@ -42,6 +44,11 @@ def slow():
 TOKEN = "server-test-private-token"
 
 
+def _env() -> dict[str, str]:
+    """A scrubbed shell with a pool of two workers."""
+    return clean_env(BARCA_POOL_SIZE="2")
+
+
 @pytest.fixture(params=["basic", "bearer"])
 def proxy(tmp_path, request):
     store = tmp_path / "store"
@@ -51,7 +58,7 @@ def proxy(tmp_path, request):
         root.mkdir()
         (root / "pipeline.py").write_text(PIPELINE)
         (root / "barca.toml").write_text(f"[remote]\nuri = {json.dumps(str(store))}\n")
-    backend = Server(deployed, "--no-schedule")
+    backend = Serve(deployed, "--no-schedule", env=_env())
     expected = (
         "Bearer " + TOKEN
         if request.param == "bearer"
@@ -162,7 +169,7 @@ def proxy(tmp_path, request):
         yield client, deployed, url, env, expected, state
     finally:
         (deployed / "release").touch()
-        backend.stop()
+        backend.kill()
         gateway.shutdown()
         gateway.server_close()
         thread.join(timeout=3)
@@ -170,15 +177,7 @@ def proxy(tmp_path, request):
 
 
 def cli(root, env, *args):
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
+    return helpers.barca(root, *args, env=env, timeout=QUICK)
 
 
 def test_credentials_cover_execution_stream_ledger_and_cancel(proxy, monkeypatch):
@@ -204,18 +203,18 @@ def test_credentials_cover_execution_stream_ledger_and_cancel(proxy, monkeypatch
         stderr=subprocess.PIPE,
     )
     try:
-        wait_for(lambda: (deployed / "slow.started").exists(), "remote slow task")
-        wait_for(
+        wait_until(lambda: (deployed / "slow.started").exists(), "remote slow task")
+        wait_until(
             lambda: any(path.endswith("/events") for _, path, _ in state["calls"]), "event stream"
         )
         following.send_signal(signal.SIGINT)
-        stdout, stderr = following.communicate(timeout=20)
+        stdout, stderr = following.communicate(timeout=QUICK)
         assert following.returncode == 130, (stdout, stderr)
     finally:
         if following.poll() is None:
             following.send_signal(signal.SIGCONT)
             following.kill()
-            following.wait(timeout=5)
+            following.wait(timeout=QUICK)
     calls = state["calls"]
     assert any(path == "/project/ledger/lookup" for _, path, _ in calls)
     assert any(path == "/project/ledger/runs" for _, path, _ in calls)
@@ -322,8 +321,8 @@ def test_expired_replay_keeps_healthy_run_following_and_authenticated_cancellati
         stderr=subprocess.PIPE,
     )
     try:
-        wait_for(lambda: (deployed / "slow.started").exists(), "remote slow task")
-        wait_for(
+        wait_until(lambda: (deployed / "slow.started").exists(), "remote slow task")
+        wait_until(
             lambda: sum(
                 method == "GET" and "/runs/" in path and not path.endswith("/events")
                 for method, path, _ in state["calls"]
@@ -333,7 +332,7 @@ def test_expired_replay_keeps_healthy_run_following_and_authenticated_cancellati
         )
         assert following.poll() is None
         following.send_signal(signal.SIGINT)
-        stdout, stderr = following.communicate(timeout=20)
+        stdout, stderr = following.communicate(timeout=QUICK)
         assert following.returncode == 130, (stdout, stderr)
         assert "event replay is incomplete" in stderr
         assert any(method == "DELETE" for method, _, _ in state["calls"])
@@ -346,4 +345,4 @@ def test_expired_replay_keeps_healthy_run_following_and_authenticated_cancellati
         if following.poll() is None:
             following.send_signal(signal.SIGCONT)
             following.kill()
-            following.wait(timeout=5)
+            following.wait(timeout=QUICK)

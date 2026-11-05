@@ -12,19 +12,24 @@ copy taken the way barca's own readers take one (`snapshot`).
 import contextlib
 import fcntl
 import json
+import os
 import shutil
 import signal
-import socket
 import sqlite3
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from email.message import Message
 from pathlib import Path
+from typing import Any
 
 from barca.api import _find_binary
+
+from .helpers import clean_env, free_port
 
 LIVE = ("pending", "running")
 
@@ -64,35 +69,68 @@ class Materializations:
 
 
 def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    return free_port()
 
 
 class Serve:
-    """`barca serve pipeline.py` on a free port in `root`, stopped on exit.
+    """`barca serve <files> --port <port> <args>` in `root`, stopped on exit (or by `stop`).
 
+    The one way a test starts a server (the `serve` fixture in `conftest.py` builds on it).
     Its output goes to files beside the project, not to pipes nobody reads until the end (a
     full pipe would block the server), and is printed when the block fails or the server
     exits early, so a failure says what the server was doing.
+
+    `env=None` is `helpers.clean_env()`; pass `{**os.environ, ...}` to inherit the machine's
+    configuration on purpose. `port=None` picks a free one; a test that restarts a server on
+    the same port passes the old `.port`. `files` are the pipeline arguments (`"."` for the
+    whole project). `new_session=True` gives the server its own process group, for a test
+    that signals the group as a terminal would (`os.killpg`). `wait="health"` (the default)
+    returns once `GET /health` answers; `wait="bind"` once stderr says `serving on` (a
+    server that must not bind yet is checked with `wait=None` and `bound()`); `wait=None`
+    returns at once.
     """
 
-    def __init__(self, root: Path, *args: str, env: dict[str, str]):
+    def __init__(
+        self,
+        root: Path,
+        *args: str,
+        env: dict[str, str] | None = None,
+        files: Sequence[str] = ("pipeline.py",),
+        port: int | None = None,
+        new_session: bool = False,
+        wait: str | None = "health",
+        timeout: float = 60,
+    ):
         self.root = root
-        self.port = _free_port()
+        self.new_session = new_session
+        self.port = free_port() if port is None else port
+        self.url = f"http://127.0.0.1:{self.port}"
         self.out_path = root.parent / f"{root.name}.serve-{self.port}.out"
         self.err_path = root.parent / f"{root.name}.serve-{self.port}.err"
-        with self.out_path.open("w") as out, self.err_path.open("w") as err:
+        # Append: a server restarted on the same port keeps the previous one's lines.
+        self.start_at = self.err_path.stat().st_size if self.err_path.exists() else 0
+        with self.out_path.open("a") as out, self.err_path.open("a") as err:
             self.proc = subprocess.Popen(
-                [_find_binary(), "serve", "pipeline.py", "--port", str(self.port), *args],
+                [_find_binary(), "serve", *files, "--port", str(self.port), *args],
                 cwd=root,
-                env=env,
+                env=clean_env() if env is None else env,
                 stdout=out,
                 stderr=err,
                 text=True,
+                start_new_session=new_session,
             )
         self.err = ""
         self.rows = Materializations(self.port)
+        try:
+            if wait == "health":
+                self.ready(timeout)
+            elif wait == "bind":
+                self.wait("the server to bind", self.bound, timeout)
+            elif wait is not None:
+                raise ValueError(f"wait={wait!r}: 'health', 'bind' or None")
+        except BaseException:
+            self.stop()
+            raise
 
     def __enter__(self) -> "Serve":
         return self
@@ -102,34 +140,102 @@ class Serve:
         if exc_type is not None:
             print(self.output())
 
-    def stop(self) -> None:
+    def stop(self, sig: int = signal.SIGTERM, timeout: float = 30) -> int:
+        """Send `sig` (SIGTERM by default) unless the server has exited, wait up to
+        `timeout` seconds and then kill it; the exit code."""
         if self.proc.poll() is None:
-            self.proc.send_signal(signal.SIGTERM)
+            self.proc.send_signal(sig)
         try:
-            self.proc.wait(timeout=30)
+            self.proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
-        self.err = self.err_path.read_text()
+        self.err = self.stderr
+        return self.proc.returncode
+
+    def kill(self) -> int:
+        """SIGKILL and reap; the exit code."""
+        return self.stop(signal.SIGKILL)
+
+    def send(self, sig: int) -> None:
+        """Send `sig` to the server (`new_session=True`: to its whole process group)."""
+        if self.proc.poll() is not None:
+            return
+        if self.new_session:
+            os.killpg(self.proc.pid, sig)
+        else:
+            self.proc.send_signal(sig)
+
+    def exited(self, timeout: float = 60) -> int:
+        """Wait for the server to exit on its own (after a signal already sent); the code."""
+        code = self.proc.wait(timeout=timeout)
+        self.err = self.stderr
+        return code
+
+    @property
+    def stderr(self) -> str:
+        """What this server printed on stderr so far."""
+        return self.err_path.read_text()[self.start_at :]
+
+    @property
+    def stdout(self) -> str:
+        return self.out_path.read_text()
 
     def output(self) -> str:
         return (
-            f"--- barca serve (exit {self.proc.poll()}) stderr ---\n{self.err_path.read_text()}"
-            f"--- stdout ---\n{self.out_path.read_text()}"
+            f"--- barca serve (exit {self.proc.poll()}) stderr ---\n{self.stderr}"
+            f"--- stdout ---\n{self.stdout}"
         )
+
+    def bound(self) -> bool:
+        """Whether the server has reported `serving on` (it binds after DB admission)."""
+        return "serving on" in self.stderr
 
     def get(self, path: str):
         return get(self.port, path)
 
     def post(self, path: str, body: dict):
         request = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}",
+            f"{self.url}{path}",
             data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=10) as r:
             return json.loads(r.read())
+
+    def request(
+        self, method: str, path: str, body: dict | None = None, headers: dict | None = None
+    ) -> tuple[int, Any]:
+        """One request: the HTTP status and the decoded JSON body, error responses included.
+        A server that is not listening raises `OSError`."""
+        status, _, decoded = self.exchange(method, path, body, headers)
+        return status, decoded
+
+    def exchange(
+        self, method: str, path: str, body: dict | None = None, headers: dict | None = None
+    ) -> tuple[int, Message, Any]:
+        """[`request`], with the response headers."""
+        data = None if body is None else json.dumps(body).encode()
+        sent = {"Content-Type": "application/json"} if data else {}
+        sent.update(headers or {})
+        req = urllib.request.Request(f"{self.url}{path}", data=data, method=method, headers=sent)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read()
+                return resp.status, resp.headers, json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            return e.code, e.headers, json.loads(raw) if raw else None
+
+    def submit(self, target: str, command: str = "run") -> dict:
+        """`POST /runs` for one target; the accepted body."""
+        status, body = self.request("POST", "/runs", {"command": command, "targets": [target]})
+        assert status == 202, body
+        return body
+
+    def run(self, run_id: str) -> dict:
+        return self.request("GET", f"/runs/{run_id}")[1]
 
     def wait(self, what: str, check, timeout: float = 60):
         """Poll `check` until it returns something truthy. A server that is not answering
@@ -147,7 +253,7 @@ class Serve:
                 return value
             if time.monotonic() > deadline:
                 raise AssertionError(f"timed out waiting for {what} (last error: {last})")
-            time.sleep(0.2)
+            time.sleep(0.05)
 
     def count(self, status: str = "success") -> dict[str, int]:
         """Materializations per node with `status`, waiting for the server to answer."""
@@ -158,8 +264,8 @@ class Serve:
         time.sleep(seconds)
         return self.count()
 
-    def ready(self) -> None:
-        self.wait("GET /health", lambda: self.get("/health"))
+    def ready(self, timeout: float = 60) -> None:
+        self.wait("GET /health", lambda: self.get("/health"), timeout)
 
     def schedule(self) -> dict:
         """The published jobs by node name."""

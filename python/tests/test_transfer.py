@@ -23,6 +23,8 @@ import pytest
 
 from barca import _runtime, _storage, _transfer
 
+from .helpers import QUICK, RUN, wait_until
+
 # Test-only shim that pauses a helper process at a named point (see its docstring).
 HOLD_SHIM = str(Path(__file__).resolve().parent / "hold")
 
@@ -417,7 +419,7 @@ class TestMakeWay:
             for _ in range(6)
         ]
         procs.append(subprocess.Popen([sys.executable, "-c", spoil, str(dest)]))
-        errors = [p.communicate(timeout=120)[1] for p in procs]
+        errors = [p.communicate(timeout=RUN)[1] for p in procs]
         assert [p.returncode for p in procs] == [0] * 7, errors
         aside = [p for p in dest.parent.iterdir() if ".moved-aside" in p.name]
         assert all(p.is_dir() for p in aside), [p.name for p in aside if not p.is_dir()]
@@ -480,11 +482,13 @@ class ProcessHelper:
 
     def wait_until_held(self) -> None:
         marker = self.hold_dir / f"{self.hold}.started"
-        deadline = time.monotonic() + 30
-        while not marker.exists():
-            assert self.proc.poll() is None, "the helper exited before reaching the hold"
-            assert time.monotonic() < deadline, f"the helper never reached {self.hold}"
-            time.sleep(0.02)
+        wait_until(
+            marker.exists,
+            f"the helper to reach {self.hold}",
+            timeout=30,
+            interval=0.02,
+            proc=self.proc,
+        )
 
     def release(self) -> None:
         (self.hold_dir / "release").write_text("")
@@ -496,10 +500,10 @@ class ProcessHelper:
         if self.proc.stdin is not None and self.proc.stdin.closed:
             self.proc.stdin = None
         try:
-            _, err = self.proc.communicate(timeout=30)
+            _, err = self.proc.communicate(timeout=QUICK)
         finally:
             self.proc.kill()
-            self.proc.wait(timeout=30)
+            self.proc.wait(timeout=QUICK)
             for stream in (self.proc.stdin, self.proc.stderr):
                 if stream is not None:
                     stream.close()
@@ -631,7 +635,7 @@ with _storage.staged_beside(Path(sys.argv[1])) as temporary:
                 handler,
             ],
             capture_output=True,
-            timeout=30,
+            timeout=QUICK,
         )
         expected = {"transfer": 143, "state": 143, "default": -15, "ignored": 0}
         assert child.returncode == expected[handler], child.stderr.decode()
@@ -687,7 +691,7 @@ assert signal.getsignal(signal.SIGTERM) == original_handler
                 handler,
             ],
             capture_output=True,
-            timeout=30,
+            timeout=QUICK,
         )
         expected = {"transfer": 143, "state": 143, "default": -15, "ignored": 0}
         assert child.returncode == expected[handler], child.stderr.decode()
@@ -764,7 +768,7 @@ with _storage.staged_beside(Path(sys.argv[1])):
                 handler,
             ],
             capture_output=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert child.returncode == (-15 if handler == "default" else 143), child.stderr.decode()
         assert destination.read_bytes() == b"previous artifact"
@@ -833,7 +837,7 @@ class TestCoordinatorGone:
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=RUN,
         )
 
     def test_no_socket_and_no_coordinator_is_a_silent_exit(self, tmp_path):
@@ -927,13 +931,16 @@ class TestCoordinatorGone:
             text=True,
         )
         try:
-            deadline = time.monotonic() + 30
-            while not (hold_dir / "backup.started").exists():
-                assert proc.poll() is None and time.monotonic() < deadline
-                time.sleep(0.02)
+            wait_until(
+                (hold_dir / "backup.started").exists,
+                "the backup to reach its hold",
+                timeout=30,
+                interval=0.02,
+                proc=proc,
+            )
             proc.stdin.close()
             out, err = proc.stdout.read(), proc.stderr.read()
-            assert proc.wait(timeout=30) == 0
+            assert proc.wait(timeout=QUICK) == 0
         finally:
             proc.kill()
         assert (out, err) == ("", "")
@@ -1006,7 +1013,7 @@ class TestConcurrency:
         real_put = _storage.put_file
 
         def slow_put(local, dest):
-            time.sleep(0.3)
+            time.sleep(0.3)  # a fixed wait: a slow transfer, so four of them overlap
             real_put(local, dest)
 
         monkeypatch.setattr(_storage, "put_file", slow_put)
@@ -1156,7 +1163,7 @@ class TestLifecycle:
         real_put = _storage.put_file
 
         def slow_put(local, dest):
-            time.sleep(0.2)
+            time.sleep(0.2)  # a fixed wait: a transfer still in flight when shutdown arrives
             real_put(local, dest)
 
         monkeypatch.setattr(_storage, "put_file", slow_put)
@@ -1328,7 +1335,7 @@ class TestTimeout:
             h.request({"type": "put", "id": 1, "local": str(src), "remote": "memory://t/a"})
             assert h.reply()["type"] == "error"
             release.set()
-            time.sleep(0.3)
+            time.sleep(0.3)  # a fixed wait: no retry must happen in this window
             assert len(calls) == 1
         finally:
             release.set()
@@ -1342,7 +1349,7 @@ class TestTimeout:
         real_put = _storage.put_file
 
         def slowish(local, dest):
-            time.sleep(0.25)
+            time.sleep(0.25)  # a fixed wait: a transfer slower than half the timeout
             real_put(local, dest)
 
         monkeypatch.setattr(_storage, "put_file", slowish)

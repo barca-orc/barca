@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from . import emulators
+from .helpers import QUICK, RUN, barca, wait_until
 from .store_window import forget_store_checks
 
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
@@ -342,14 +343,18 @@ class Project:
             f"{extra}\n" + backend.storage_options(endpoint, bad_auth)
         )
 
-    def get(self, *args: str, timeout: float = 120) -> tuple[subprocess.CompletedProcess, float]:
+    def get(self, *args: str, timeout: float = RUN) -> tuple[subprocess.CompletedProcess, float]:
         t0 = time.monotonic()
-        proc = subprocess.run(
-            [BARCA, "get", *args, "pipeline.py", "--agent", "-o", "value", "--json"],
-            cwd=self.dir,
+        proc = barca(
+            self.dir,
+            "get",
+            *args,
+            "pipeline.py",
+            "--agent",
+            "-o",
+            "value",
+            "--json",
             env=self.env,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
         return proc, time.monotonic() - t0
@@ -384,20 +389,22 @@ class Project:
             text=True,
         ) as proc:
             try:
-                deadline = time.monotonic() + 15
-                while not marker.exists():
-                    assert proc.poll() is None, "run exited before its healthy preflight completed"
-                    assert time.monotonic() < deadline, "healthy preflight never completed"
-                    time.sleep(0.01)
+                wait_until(
+                    marker.exists,
+                    "the healthy preflight to complete",
+                    timeout=15,
+                    interval=0.01,
+                    proc=proc,
+                )
                 proxy.resets_left = 4
                 proxy.disconnect()
                 marker.with_suffix(".release").touch()
-                out, err = proc.communicate(timeout=120)
+                out, err = proc.communicate(timeout=RUN)
                 return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
             finally:
                 if proc.poll() is None:
                     proc.kill()
-                    proc.wait(timeout=10)
+                    proc.wait(timeout=QUICK)
 
     def rows(self, like: str) -> list[dict]:
         conn = sqlite3.connect(self.dir / ".barca" / "metadata.db")
@@ -468,7 +475,7 @@ def test_stalled_store_times_out_instead_of_hanging(tmp_path, backend, container
         proxy.endpoint,
         transfer_timeout=3,
     )
-    proc, took = a.get(timeout=90)
+    proc, took = a.get(timeout=RUN)
     _assert_store_failure(proc, a)
     assert "timed out" in proc.stderr or "TimeoutError" in proc.stderr, _explain(proc)
     assert took < 15, f"stalled store held the run for {took:.1f}s"
@@ -511,7 +518,7 @@ def test_ctrl_c_mid_upload_leaves_no_object_and_no_record(tmp_path, backend, con
     try:
         assert proxy.cut.wait(120), "the upload never got under way"
         os.killpg(proc.pid, signal.SIGINT)
-        out, err = proc.communicate(timeout=60)
+        out, err = proc.communicate(timeout=RUN)
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -646,7 +653,7 @@ def test_an_unreachable_store_fails_a_fetch_in_bounded_time(tmp_path, backend, c
     forget_store_checks(a.dir)  # a new container has not checked the store (#593)
     (a.dir / "user.imported").unlink(missing_ok=True)
     b = Project(tmp_path / "a", backend, container, dead, transfer_timeout=5)
-    proc, took = b.get(timeout=110)
+    proc, took = b.get(timeout=RUN)
     _assert_store_failure(proc, b)
     # One attempt may run for transfer_timeout; it is then abandoned, not retried.
     assert took < 45, f"an unreachable store held the run for {took:.1f}s"
@@ -664,7 +671,7 @@ def test_a_stalled_store_fails_a_fetch_instead_of_hanging(tmp_path, backend, con
     forget_store_checks(a.dir)  # a new container has not checked the store (#593)
     (a.dir / "user.imported").unlink(missing_ok=True)
     b = Project(tmp_path / "a", backend, container, proxy.endpoint, transfer_timeout=3)
-    proc, took = b.get(timeout=90)
+    proc, took = b.get(timeout=RUN)
     _assert_store_failure(proc, b)
     assert "timed out" in proc.stderr or "TimeoutError" in proc.stderr, _explain(proc)
     assert took < 15, f"a stalled store held the run for {took:.1f}s"

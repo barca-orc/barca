@@ -74,6 +74,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# `pytest` from the repository root runs the Python suite and nothing else (the shell
+# integration tests under tests/ and the UI are run by their own commands).
+testpaths = ["python/tests"]
 # pytest-timeout (the `test` extra): a test still running after this many seconds fails, with
 # every thread's stack, instead of holding a CI job until its own limit. The slowest test
 # without a mark of its own took 43 s locally with the emulators; the slower files raise it

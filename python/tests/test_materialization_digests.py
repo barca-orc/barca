@@ -11,19 +11,19 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
+from .helpers import QUICK, RUN, barca, wait_until
+
 
 def _cli(tmp_path, *args):
-    result = subprocess.run(
-        [_find_binary(), *args],
-        cwd=tmp_path,
+    result = barca(
+        tmp_path,
+        *args,
         env={
             **os.environ,
             "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
             "BARCA_OUTPUT": "human",
         },
-        text=True,
-        capture_output=True,
-        timeout=60,
+        timeout=RUN,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout), result.stderr
@@ -172,8 +172,6 @@ def result(tick): return {"tick": tick, "value": Path("external.txt").read_text(
 
 
 def test_checkpoint_and_terminal_keep_one_byte_change(tmp_path):
-    import time
-
     (tmp_path / "pipeline.py").write_text("""
 from pathlib import Path
 import time
@@ -200,19 +198,19 @@ def later(value):
         stderr=subprocess.PIPE,
     )
     try:
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                out, err = proc.communicate()
-                pytest.fail(f"held run ended before checkpoint: {err}")
+
+        def checkpointed() -> bool:
             status, _ = _cli(tmp_path, "status", "value", "pipeline.py", "--json")
-            if any(node.get("last_bytes_change") for node in status["nodes"]):
-                break
-            time.sleep(0.05)
-        else:
-            pytest.fail("changed upstream materialization was not checkpointed")
+            return any(node.get("last_bytes_change") for node in status["nodes"])
+
+        wait_until(
+            checkpointed,
+            "the changed upstream materialization to be checkpointed",
+            timeout=15,
+            proc=proc,
+        )
         hold.unlink()
-        out, err = proc.communicate(timeout=30)
+        out, err = proc.communicate(timeout=QUICK)
         assert proc.returncode == 0, err
         assert err.count("value produced different bytes") == 1
         run_id = json.loads(out)["run_id"]
@@ -222,7 +220,7 @@ def later(value):
         hold.unlink(missing_ok=True)
         if proc.poll() is None:
             proc.terminate()
-            proc.communicate(timeout=10)
+            proc.communicate(timeout=QUICK)
 
 
 def test_a_manual_asset_refreshed_by_hand_with_new_bytes_does_not_warn(tmp_path):

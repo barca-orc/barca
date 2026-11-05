@@ -34,6 +34,8 @@ from barca import _signing, _storage, _value
 from barca.api import _find_binary
 
 from . import emulators
+from .helpers import SERVE, clean_env, wait_until
+from .helpers import barca as barca_cli
 from .test_state_backends import (
     AZURITE_ACCOUNT,
     AZURITE_CONN,
@@ -50,7 +52,6 @@ from .test_telemetry_datadog import FakeAgent, datadog
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPIRY_CASES = json.loads((ROOT / "crates/barca-cli/src/expiry_cases.json").read_text())
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST", "DD_")
 BODY = b'{"total": 3}'
 
 
@@ -349,7 +350,7 @@ def test_minio_link_serves_the_bytes_then_403_after_expiry(s3, tmp_path):
     assert disposition == 'attachment; filename="weekly.csv"'
 
     short = barca.signed_url(uri, expires=1)
-    time.sleep(2.5)
+    time.sleep(2.5)  # a fixed wait: the link must actually expire (1 s, plus clock skew)
     assert _fetch(short)[0] == 403
 
 
@@ -463,22 +464,7 @@ def sales(region: str) -> dict:
 
 
 def _cli(cwd: Path, env: dict, *args: str) -> subprocess.CompletedProcess:
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**base, **env},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
-
-
-@pytest.fixture
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
+    return barca_cli(cwd, *args, env={**clean_env("DD_"), **env}, timeout=SERVE)
 
 
 @pytest.fixture
@@ -663,10 +649,7 @@ def test_the_url_appears_on_stdout_and_nowhere_else(project, store):
         assert logs.returncode == 0, logs.stderr
         assert "computing total" in logs.stdout  # the log is there; the link is not
         history = _cli(project, env, "history", "--json")
-        deadline = time.time() + 10
-        while not agent.requests and time.time() < deadline:
-            time.sleep(0.1)
-        assert agent.requests, "telemetry never arrived"
+        wait_until(lambda: agent.requests, "telemetry to arrive", timeout=10, interval=0.1)
         spans = json.dumps([r["body"] for r in agent.requests] + agent.python_spans)
         for text, where in [
             (proc.stderr, "stderr"),

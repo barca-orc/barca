@@ -5,13 +5,13 @@ overlap used to fail with "Failed locking file '.barca/metadata.db'. File is loc
 process". Barca now holds a short cross-process lock around each DB operation instead.
 """
 
+import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pytest
 
-from barca.api import _find_binary
+from .helpers import barca
 
 PIPELINE = """
 from barca import asset
@@ -30,14 +30,8 @@ def b(a: dict) -> dict:
 PROCESSES = 12
 
 
-@pytest.fixture()
-def project(tmp_path) -> Path:
-    (tmp_path / "pipeline.py").write_text(PIPELINE)
-    return tmp_path
-
-
 def run(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([_find_binary(), *args], cwd=cwd, capture_output=True, text=True)
+    return barca(cwd, *args, env=os.environ.copy())
 
 
 def failures(results: list[subprocess.CompletedProcess]) -> list[str]:

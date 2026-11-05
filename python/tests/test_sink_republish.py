@@ -11,25 +11,18 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
 from contextlib import closing
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import SERVE, barca
 
 duckdb = pytest.importorskip("duckdb")
 
 
 def get(cwd: Path, target: str, check: bool = True):
-    proc = subprocess.run(
-        [_find_binary(), "get", target, "pipeline.py", "--json"],
-        cwd=cwd,
-        env=os.environ.copy(),
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    proc = barca(cwd, "get", target, "pipeline.py", "--json", env=os.environ.copy(), timeout=SERVE)
     if check:
         assert proc.returncode == 0, proc.stdout + proc.stderr
     return proc

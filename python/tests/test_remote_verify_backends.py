@@ -21,7 +21,8 @@ import pytest
 from barca import _storage, _transfer
 
 from . import emulators
-from .test_remote_env_config import CASES, SCRUB, _reachable, barca, machines
+from .helpers import RUN, clean_env
+from .test_remote_env_config import CASES, _reachable, barca, machines
 from .test_state_backends import AzureBackend, GcsBackend, S3Backend
 
 if not any(emulators.provided(b) for b in ("s3", "gcs", "abfs")):
@@ -116,14 +117,14 @@ def test_a_download_that_dies_midway_leaves_the_local_copy_and_no_temp_file(
 def _overwrite(uri: str, body: bytes, env: dict, tmp: Path) -> None:
     """Replace the object at `uri` with `body` through barca's own upload path, in a process
     configured like a barca machine (fsspec reads its settings from the environment)."""
-    import os
-
     src = tmp / "overwrite.json"
     src.write_bytes(body)
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     code = "import sys; from barca import _storage; _storage.put_file(sys.argv[1], sys.argv[2])"
     subprocess.run(
-        [sys.executable, "-c", code, str(src), uri], env={**base, **env}, check=True, timeout=120
+        [sys.executable, "-c", code, str(src), uri],
+        env={**clean_env(), **env},
+        check=True,
+        timeout=RUN,
     )
 
 

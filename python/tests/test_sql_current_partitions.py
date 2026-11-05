@@ -3,33 +3,21 @@
 import json
 import os
 import sqlite3
-import subprocess
 from contextlib import closing
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import barca, clean_env
 
 pytest.importorskip("duckdb")
 
 
 def cli(root, *args, pool=None, extra_env=None):
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(("BARCA_", "AWS_", "AZURE_", "GOOGLE_", "FSSPEC_"))
-    }
+    env = clean_env(scrub=("BARCA_", "AWS_", "AZURE_", "GOOGLE_", "FSSPEC_"))
     if pool is not None:
         env["BARCA_POOL_SIZE"] = str(pool)
     env.update(extra_env or {})
-    return subprocess.run(
-        [_find_binary(), *args, "--json"],
-        cwd=root,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=45,
-        check=False,
-    )
+    return barca(root, *args, "--json", env=env)
 
 
 def ok(result):

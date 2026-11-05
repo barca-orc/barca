@@ -4,25 +4,18 @@ Tests the full stack: Python parallel() → stderr protocol → Rust sub-worker
 dispatch → result collection → response to parent.
 """
 
-import textwrap
-
 import barca
 import pytest
 from barca.api import BarcaError
 
+from .helpers import RUN, clean_env
+from .helpers import write_module as _write_module
 
-@pytest.fixture(autouse=True)
-def clean_barca_dir(tmp_path, monkeypatch):
-    # The API resolves .barca relative to cwd. Give each test its own project,
-    # so another pytest worker cannot delete its database or input artifacts.
-    monkeypatch.chdir(tmp_path)
+pytestmark = pytest.mark.usefixtures("clean_barca_dir")
 
 
 def write_module(tmp_path, filename, body):
-    code = textwrap.dedent(body).lstrip("\n")
-    p = tmp_path / filename
-    p.write_text(code)
-    return str(p)
+    return _write_module(tmp_path, filename, body, strip=True)
 
 
 # ─── Happy paths ─────────────────────────────────────────────────────────────
@@ -474,7 +467,7 @@ class TestParallelInvariants:
 # ─── A branch that calls parallel() itself ───────────────────────────────────
 
 
-def run_cli(tmp_path, target, *, pool, timeout=120):
+def run_cli(tmp_path, target, *, pool, timeout=RUN):
     """`barca run <target> pipeline.py` through the binary, with a fixed pool size and a time
     limit: these tests are about runs that used to never end."""
     import json
@@ -484,8 +477,7 @@ def run_cli(tmp_path, target, *, pool, timeout=120):
 
     from barca.api import _find_binary
 
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["BARCA_POOL_SIZE"] = str(pool)
+    env = clean_env(BARCA_POOL_SIZE=str(pool))
     proc = subprocess.Popen(
         [_find_binary(), "run", target, "pipeline.py"],
         cwd=tmp_path,

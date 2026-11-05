@@ -21,6 +21,7 @@ import pytest
 from barca.api import _error_envelope, _find_binary
 
 from .get_values import value_args
+from .helpers import RUN, SERVE, clean_env
 
 pytest.importorskip("duckdb")
 pytest.importorskip("numpy")
@@ -216,8 +217,7 @@ def run(
 ):
     """`barca <command> <target> <file>` as a job of its own, stopped as a whole if it hangs.
     The pool is `pool`, else `BARCA_POOL_SIZE` of the test run's environment, else 4."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["BARCA_POOL_SIZE"] = str(pool or os.environ.get("BARCA_POOL_SIZE", 4))
+    env = clean_env(BARCA_POOL_SIZE=str(pool or os.environ.get("BARCA_POOL_SIZE", 4)))
     if store:
         (root / "store").mkdir(exist_ok=True)
         env["BARCA_REMOTE_URI"] = str(root / "store")
@@ -232,7 +232,7 @@ def run(
         start_new_session=True,
     )
     try:
-        out, err = proc.communicate(timeout=180)
+        out, err = proc.communicate(timeout=SERVE)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         out, err = proc.communicate()
@@ -682,7 +682,7 @@ def test_a_span_is_finished_however_a_step_ends(tmp_path):
         [sys.executable, "-c", SPANS, str(tmp_path)],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=RUN,
         preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
     )
     assert proc.returncode == 0, proc.stderr

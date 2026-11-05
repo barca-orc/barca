@@ -9,18 +9,14 @@ bytes, so their metadata must still be backed up.
 """
 
 import json
-import os
 import sqlite3
-import subprocess
 from contextlib import closing
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 
+from .helpers import barca, clean_env
 from .store_window import age_store_checks
-
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 
 PIPELINE = """
 from pathlib import Path
@@ -58,16 +54,7 @@ def project(tmp_path: Path) -> Path:
 
 
 def get(root: Path, *args: str, target="report") -> tuple[dict, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["BARCA_TRACE_TIMING"] = "1"
-    out = subprocess.run(
-        [_find_binary(), "get", target, *args, "--json"],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    out = barca(root, "get", target, *args, "--json", env=clean_env(BARCA_TRACE_TIMING="1"))
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout), out.stderr
 

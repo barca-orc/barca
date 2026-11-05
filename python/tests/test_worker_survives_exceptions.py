@@ -9,12 +9,10 @@ their worker M".
 import json
 import os
 import re
-import subprocess
-import textwrap
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import barca, write_module
 
 TRACE = re.compile(
     r"workers started (\d+), failed steps that kept their worker (\d+), steps dispatched (\d+)"
@@ -22,19 +20,19 @@ TRACE = re.compile(
 
 
 def run(tmp_path, source, target, pool=2):
-    (tmp_path / "pipeline.py").write_text(textwrap.dedent(source).lstrip("\n"))
-    proc = subprocess.run(
-        [_find_binary(), "get", target, "pipeline.py", "--json"],
-        cwd=tmp_path,
+    write_module(tmp_path, "pipeline.py", source, strip=True)
+    proc = barca(
+        tmp_path,
+        "get",
+        target,
+        "pipeline.py",
+        "--json",
         env={
             **os.environ,
             "BARCA_REMOTE": "off",
             "BARCA_POOL_SIZE": str(pool),
             "BARCA_TRACE_TIMING": "1",
         },
-        text=True,
-        capture_output=True,
-        timeout=120,
     )
     found = TRACE.findall(proc.stderr)
     assert found, proc.stderr

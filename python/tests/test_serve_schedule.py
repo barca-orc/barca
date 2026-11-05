@@ -9,16 +9,13 @@ import json
 import os
 import signal
 import subprocess
-import time
 import urllib.request
 from pathlib import Path
 
 from barca.api import _find_binary
 
 from . import served
-
-# Settings from the developer's shell that would point the service at a real store.
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from .helpers import QUICK, RUN, clean_env, wait_until
 
 PIPELINE = """
 import time
@@ -67,10 +64,9 @@ def _set_version(root: Path, value: str) -> None:
 def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     (tmp_path / "pipeline.py").write_text(PIPELINE)
     _set_version(tmp_path, "v1")
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     # While it runs, what it recorded is read through its HTTP API, never from the
     # database file (#537).
-    with served.Serve(tmp_path, env=env) as serve:
+    with served.Serve(tmp_path, env=clean_env()) as serve:
         # Several ticks on the first value, then several on the second.
         first = serve.wait(
             "ticks on v1",
@@ -125,23 +121,6 @@ def ticking() -> dict:
 """
 
 
-def _env(**extra: str) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env.update(extra)
-    return env
-
-
-def _until(predicate, what: str, timeout: float = 60):
-    deadline = time.monotonic() + timeout
-    while True:
-        value = predicate()
-        if value:
-            return value
-        if time.monotonic() > deadline:
-            raise AssertionError(f"timed out waiting for {what}")
-        time.sleep(0.1)
-
-
 def _running(root: Path) -> list[tuple[str, str]]:
     """The `running` rows of the project's history: (run_id, job), read from a snapshot: the
     CLI run is live, and a test never opens a database barca can write (#537)."""
@@ -165,32 +144,24 @@ def _start_slow_get(root: Path) -> subprocess.Popen:
     cli = subprocess.Popen(
         [_find_binary(), "get", "ticking"],
         cwd=root,
-        env=_env(TICK_TEST_SLOW="1"),
+        env=clean_env(TICK_TEST_SLOW="1"),
         stdout=subprocess.DEVNULL,
         stderr=(root / "cli.log").open("w"),
         start_new_session=True,
     )
-    _until(lambda: (root / "cli.started").exists() or cli.poll() is not None, "the CLI run")
+    wait_until(lambda: (root / "cli.started").exists() or cli.poll() is not None, "the CLI run")
     assert cli.poll() is None, (root / "cli.log").read_text()
     return cli
 
 
-def _serve(root: Path) -> tuple[subprocess.Popen, int]:
-    port = served._free_port()
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
-        cwd=root,
-        env=_env(),
-        stdout=subprocess.DEVNULL,
-        stderr=(root / "serve.log").open("w"),
-    )
-    return serve, port
+def _serve(root: Path) -> served.Serve:
+    return served.Serve(root, env=clean_env())
 
 
 def _stop(proc: subprocess.Popen) -> None:
     if proc.poll() is None:
         proc.kill()
-    proc.wait(timeout=30)
+    proc.wait(timeout=QUICK)
 
 
 def test_a_tick_is_skipped_while_a_cli_run_of_the_node_is_going(tmp_path):
@@ -202,26 +173,27 @@ def test_a_tick_is_skipped_while_a_cli_run_of_the_node_is_going(tmp_path):
         # The run records its job when it starts, which is how the server sees what it covers.
         [(run_id, job)] = _running(tmp_path)
         assert job.endswith(":ticking"), job
-        serve, port = _serve(tmp_path)
-        entry = _until(
+        serve = _serve(tmp_path)
+        port = serve.port
+        entry = wait_until(
             lambda: (e := _schedule(port)) and e["last_skipped"] is not None and e,
             "a skipped tick",
         )
         assert entry["skipped_for"] == run_id, entry
         assert entry["skip_reason"] == "in_flight", entry
         assert entry["last_run"] is None, f"the server started a second run: {entry}"
-        log = (tmp_path / "serve.log").read_text()
+        log = serve.stderr
         assert f"run {run_id} of the same node still in flight" in log, log
 
         # Once the CLI run has ended, the next tick fires.
         (tmp_path / "release").write_text("")
-        assert cli.wait(timeout=60) == 0, (tmp_path / "cli.log").read_text()
-        _until(lambda: (e := _schedule(port)) and e["last_run"] is not None, "a tick after it")
+        assert cli.wait(timeout=RUN) == 0, (tmp_path / "cli.log").read_text()
+        wait_until(lambda: (e := _schedule(port)) and e["last_run"] is not None, "a tick after it")
     finally:
         (tmp_path / "release").write_text("")
         _stop(cli)
         if serve is not None:
-            _stop(serve)
+            serve.kill()
 
 
 def test_a_running_row_whose_cli_run_was_killed_does_not_hold_a_tick_back(tmp_path):
@@ -229,11 +201,12 @@ def test_a_running_row_whose_cli_run_was_killed_does_not_hold_a_tick_back(tmp_pa
     (tmp_path / "barca.toml").write_text("")
     cli = _start_slow_get(tmp_path)
     os.killpg(cli.pid, signal.SIGKILL)
-    cli.wait(timeout=30)
+    cli.wait(timeout=QUICK)
     [(stale, _)] = _running(tmp_path)
-    serve, port = _serve(tmp_path)
+    serve = _serve(tmp_path)
+    port = serve.port
     try:
-        entry = _until(
+        entry = wait_until(
             lambda: (e := _schedule(port)) and e["last_run"] is not None and e,
             "a tick to fire",
         )
@@ -241,4 +214,4 @@ def test_a_running_row_whose_cli_run_was_killed_does_not_hold_a_tick_back(tmp_pa
         assert entry["skipped_for"] is None, f"a dead run held the tick back: {entry}"
     finally:
         (tmp_path / "release").write_text("")
-        _stop(serve)
+        serve.kill()

@@ -11,11 +11,13 @@ cannot see, such as `importlib.import_module`), the traceback shows where it is.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import RUN, barca
 
 HELPERS = """\
 def parse_amount(s):
@@ -56,9 +58,7 @@ def fine() -> int:
 
 
 def barca_cmd(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=cwd, check=False, capture_output=True, text=True, timeout=120
-    )
+    return barca(cwd, *args, env={**os.environ}, timeout=RUN)
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:

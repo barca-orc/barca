@@ -13,7 +13,8 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import barca
 
 PIPELINE = """
 from barca import asset
@@ -25,13 +26,8 @@ def one() -> int:
 
 
 def _barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
-        text=True,
-        capture_output=True,
-        timeout=120,
+    return barca(
+        cwd, *args, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
     )
 
 

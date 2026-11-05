@@ -14,26 +14,18 @@ Every test here runs at several pool sizes, including 1 and one larger than any 
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca as run_barca
 
 POOLS = [1, 2, 3, 5, 16]
 
 
 def barca(project: Path, pool: int, *args: str) -> dict:
-    proc = subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=project,
-        env={**os.environ, "BARCA_POOL_SIZE": str(pool)},
-        capture_output=True,
-        text=True,
-    )
+    proc = run_barca(project, *value_args(args), env={**os.environ, "BARCA_POOL_SIZE": str(pool)})
     assert proc.returncode == 0, f"pool {pool}: {' '.join(args)}\n{proc.stderr}"
     return json.loads(proc.stdout.strip().splitlines()[-1])
 

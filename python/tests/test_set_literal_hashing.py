@@ -2,10 +2,10 @@
 
 import json
 import os
-import subprocess
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import barca
 
 
 @pytest.mark.parametrize(
@@ -24,13 +24,10 @@ def test_set_helper_edit_invalidates_only_its_consumer(tmp_path, body):
     )
 
     def cli(*args):
-        proc = subprocess.run(
-            [_find_binary(), *args],
-            cwd=tmp_path,
+        proc = barca(
+            tmp_path,
+            *args,
             env={**os.environ, "BARCA_REMOTE": "off", "PYTHONDONTWRITEBYTECODE": "1"},
-            capture_output=True,
-            text=True,
-            timeout=60,
         )
         assert proc.returncode == 0, proc.stderr
         return json.loads(proc.stdout)

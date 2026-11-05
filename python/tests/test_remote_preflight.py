@@ -9,7 +9,9 @@ import time
 import pytest
 from barca.api import _find_binary
 
-from . import test_serve_robustness as serving
+from . import helpers
+from .helpers import QUICK, clean_env, wait_until
+from .served import Serve
 
 
 @pytest.fixture()
@@ -49,21 +51,13 @@ def put(local, remote):
 _storage.check_store = check
 _storage.put_file = put
 """)
-    env = serving._env()
+    env = clean_env(BARCA_POOL_SIZE="2")
     env["PYTHONPATH"] = str(shim) + os.pathsep + os.environ.get("PYTHONPATH", "")
     return tmp_path, env
 
 
 def run(root, env):
-    return subprocess.run(
-        [_find_binary(), "get", "quick", "pipeline.py", "--agent"],
-        cwd=root,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=15,
-    )
+    return helpers.barca(root, "get", "quick", "pipeline.py", "--agent", env=env, timeout=QUICK)
 
 
 @pytest.mark.parametrize(
@@ -104,11 +98,10 @@ def test_a_bad_store_is_rejected_before_importing_user_code(project, mode, detai
         assert db.execute("SELECT status, steps_executed FROM runs").fetchall() == [("failed", 0)]
 
 
-def test_serve_records_preflight_failure_without_running_user_code(project, monkeypatch):
+def test_serve_records_preflight_failure_without_running_user_code(project):
     root, env = project
     env["PREFLIGHT_MODE"] = "denied"
-    monkeypatch.setattr(serving, "_env", lambda: env)
-    server = serving.Server(root, "--no-schedule")
+    server = Serve(root, "--no-schedule", env=env)
     try:
         status, accepted = server.request("POST", "/get/quick")
         assert status == 200, accepted
@@ -119,13 +112,13 @@ def test_serve_records_preflight_failure_without_running_user_code(project, monk
             # with an infra envelope.
             return body if status == 200 and body.get("status") == "error" else None
 
-        body = serving.wait_for(failed, "a failed preflight run")
+        body = wait_until(failed, "a failed preflight run")
         assert body["outcome"]["envelope"]["kind"] == "infra", body
         assert "bad credentials" in json.dumps(body)
         assert not (root / "user.started").exists()
         assert not (root / "user.imported").exists()
     finally:
-        server.stop()
+        server.kill()
 
 
 def test_upload_wait_and_failure_attempts_are_reported(project):
@@ -197,7 +190,7 @@ def test_upload_progress_is_visible_while_the_drain_is_still_running(project):
             if "still waiting for artifact uploads" in line:
                 assert proc.poll() is None
                 break
-        stdout, stderr = proc.communicate(timeout=10)
+        stdout, stderr = proc.communicate(timeout=QUICK)
         assert proc.returncode == 0, "".join(lines) + stderr
         assert "[barca] uploading 1 artifacts" in "".join(lines)
         assert "still waiting for artifact uploads" in "".join(lines)

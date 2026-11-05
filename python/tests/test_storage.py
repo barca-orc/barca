@@ -269,7 +269,7 @@ class TestGetFsConcurrency:
             calls.append(protocol)
             import time
 
-            time.sleep(0.05)
+            time.sleep(0.05)  # a fixed wait: simulated latency, so the callers overlap
             return real(protocol, **kw)
 
         monkeypatch.setattr(fsspec, "filesystem", slow_filesystem)

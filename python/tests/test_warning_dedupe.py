@@ -13,7 +13,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from barca.api import _find_binary
+from .helpers import barca
 
 NETRC = "Could not parse .netrc file"
 
@@ -120,10 +120,7 @@ def noisy() -> dict:
 
 
 def _barca(tmp: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    full_env = {**os.environ, "BARCA_PROGRESS_SECS": "0", **env}
-    return subprocess.run(
-        [_find_binary(), *args], cwd=tmp, capture_output=True, text=True, timeout=120, env=full_env
-    )
+    return barca(tmp, *args, env={**os.environ, "BARCA_PROGRESS_SECS": "0", **env})
 
 
 def _single(count: int, text: str = '"Could not parse .netrc file"') -> str:

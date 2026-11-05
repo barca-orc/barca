@@ -8,12 +8,13 @@ Bare names without competing bindings retain the legacy source-snippet behavior.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import barca
 
 RAW = "@asset()\ndef raw():\n    return 1\n\n\n"
 
@@ -156,13 +157,7 @@ CASES: dict[str, tuple[str, list[tuple[str, str]]]] = {
 
 def listed(tmp_path: Path, source: str) -> subprocess.CompletedProcess:
     (tmp_path / "pipeline.py").write_text(source)
-    return subprocess.run(
-        [_find_binary(), "list", "pipeline.py", "--json"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    return barca(tmp_path, "list", "pipeline.py", "--json", env=os.environ.copy())
 
 
 @pytest.mark.parametrize(

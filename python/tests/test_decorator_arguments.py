@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import barca
 import pytest
-from barca.api import _find_binary
+from .helpers import barca as run_barca
 
 ASSET_ACCEPTS = (
     "@asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, "
@@ -50,9 +51,7 @@ def pipeline(decorator: str) -> str:
 
 
 def barca_cmd(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=cwd, capture_output=True, text=True, timeout=120
-    )
+    return run_barca(cwd, *args, env=os.environ.copy())
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:

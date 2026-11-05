@@ -24,9 +24,9 @@ from urllib.parse import urlsplit
 import pytest
 
 from barca import _inspect, _sql, _storage
-from barca.api import _find_binary
 
 from . import emulators
+from .helpers import SERVE, barca, clean_env
 
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
@@ -258,7 +258,7 @@ def test_shapes_keep_order_and_read_remote_artifacts_concurrently(tmp_path, monk
             with lock:
                 state["now"] += 1
                 state["peak"] = max(state["peak"], state["now"])
-            time.sleep(0.05)
+            time.sleep(0.05)  # a fixed wait: simulated store latency, so the calls overlap
             with lock:
                 state["now"] -= 1
             return real.size(path)
@@ -413,7 +413,6 @@ def test_cache_path_mirrors_the_uri_and_refuses_to_leave_the_cache():
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
 S3_KEY = os.environ.get("BARCA_TEST_S3_KEY", "minioadmin")
 S3_SECRET = os.environ.get("BARCA_TEST_S3_SECRET", "minioadmin")
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 
 PIPELINE = """
 import pandas as pd
@@ -451,17 +450,8 @@ def _reachable(url: str) -> bool:
 
 
 def cli(cwd: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     creds = {"AWS_ACCESS_KEY_ID": S3_KEY, "AWS_SECRET_ACCESS_KEY": S3_SECRET}
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env={**base, **creds, **(env or {})},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    return barca(cwd, *args, env={**clean_env(), **creds, **(env or {})}, timeout=SERVE)
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:

@@ -11,13 +11,12 @@ and the store is a plain directory, so the tests run without an emulator.
 """
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from .helpers import SERVE, barca, clean_env
 
 pytest.importorskip("pandas")
 pytest.importorskip("pyarrow")
@@ -72,16 +71,7 @@ ALL = sum(EACH)
 
 
 def cli(root: Path, store: Path, *args: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env={**env, "BARCA_REMOTE_URI": str(store)},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    return barca(root, *args, env=clean_env(BARCA_REMOTE_URI=str(store)), timeout=SERVE)
 
 
 @pytest.fixture
@@ -162,22 +152,14 @@ def test_the_same_readers_agree_without_a_store(tmp_path):
     root = tmp_path / "local"
     root.mkdir()
     (root / "pipeline.py").write_text(PIPELINE)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    proc = subprocess.run(
-        [
-            _find_binary(),
-            "get",
-            "lazy_report,eager_report,eager_all,lazy_all",
-            "-o",
-            "value",
-            "--json",
-        ],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
+    proc = barca(
+        root,
+        "get",
+        "lazy_report,eager_report,eager_all,lazy_all",
+        "-o",
+        "value",
+        "--json",
+        timeout=SERVE,
     )
     assert targets(proc) == {
         "lazy_report": EACH,

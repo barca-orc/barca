@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from .helpers import clean_env
 from .test_asset_cutoff import calls, get, run, step
 
 PIPELINE = """
@@ -114,9 +115,13 @@ def test_no_cascade(project):
     assert calls(project) == ["source A"]
 
 
+def env() -> dict[str, str]:
+    """The environment of this module's runs: a scrubbed shell with a pool of two workers."""
+    return clean_env(BARCA_POOL_SIZE="2")
+
+
 def test_server_refresh_set(project):
     from . import served
-    from .test_asset_cutoff import env
 
     with served.Serve(project, env=env()) as serve:
         serve.ready()
@@ -191,7 +196,6 @@ def test_python_api_refresh_set_on_server(project, monkeypatch):
     import barca
 
     from . import served
-    from .test_asset_cutoff import env
 
     monkeypatch.chdir(project)
     with served.Serve(project, env=env()) as serve:

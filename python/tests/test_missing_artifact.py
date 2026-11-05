@@ -14,15 +14,12 @@ The rule (`barca docs cache`, "A cached result whose artifact is missing"):
 `--dry-run` and `barca status` predict the same thing.
 """
 
-import fcntl
 import json
 import os
 import shutil
 import signal
-import socket
 import sqlite3
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -30,7 +27,9 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from . import helpers
+from .helpers import RUN, clean_env, wait_until
+from .served import snapshot
 
 PIPELINE = """
 from barca import asset, task
@@ -141,21 +140,8 @@ def publish(model: dict) -> None:
 """
 
 
-def clean_env(**env: str) -> dict[str, str]:
-    """This process's environment without anything that would point barca at a real store."""
-    return {**{k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}, **env}
-
-
 def cli(cwd: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=cwd,
-        env=clean_env(**env),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
+    return helpers.barca(cwd, *args, env=clean_env(**env))
 
 
 def result(proc: subprocess.CompletedProcess) -> dict:
@@ -334,14 +320,13 @@ def agent_steps(stderr: str, name: str) -> list[str]:
 
 def rows(root: Path, name: str) -> list[tuple[str, int]]:
     """(status, attempts) of every materialization of `name`, oldest first."""
-    db = sqlite3.connect(root / ".barca" / "metadata.db")
-    try:
+    with snapshot(root) as db:
+        if db is None:
+            return []
         return db.execute(
             "select status, attempts from materializations where node_id = ? order by id",
             (f"pipeline.py:{name}",),
         ).fetchall()
-    finally:
-        db.close()
 
 
 def history(root: Path) -> list[dict]:
@@ -434,11 +419,7 @@ def start(root: Path, *args: str) -> subprocess.Popen:
 
 
 def wait_for_file(path: Path, timeout: float = 60) -> None:
-    deadline = time.monotonic() + timeout
-    while not path.exists():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"timed out waiting for {path.name}")
-        time.sleep(0.05)
+    wait_until(path.exists, path.name, timeout=timeout)
 
 
 def cancelled_cleanly(root: Path, proc: subprocess.Popen, err: str) -> None:
@@ -469,7 +450,7 @@ def test_ctrl_c_during_a_recompute_cancels_the_run_and_the_next_one_recovers(tmp
     )
     wait_for_file(root / "b.started")
     os.killpg(proc.pid, signal.SIGINT)
-    _, err = proc.communicate(timeout=60)
+    _, err = proc.communicate(timeout=RUN)
     cancelled_cleanly(root, proc, err)
 
     (root / "hold-b").unlink()
@@ -527,10 +508,12 @@ def test_a_step_interrupted_before_the_cancellation_is_seen_is_not_recorded_as_f
     wait_for_file(root / "b.pid")
     wait_for_file(root / "c.started")
     os.kill(int((root / "b.pid").read_text()), signal.SIGINT)
-    time.sleep(1.0)  # the worker's report is in; the run goes on with `c`
+    # A fixed wait: the worker's report must be in and the run must still be going (with
+    # `c`) when barca itself is interrupted; nothing observable marks that moment.
+    time.sleep(1.0)
     assert proc.poll() is None
     proc.send_signal(signal.SIGINT)
-    _, err = proc.communicate(timeout=60)
+    _, err = proc.communicate(timeout=RUN)
     cancelled_cleanly(root, proc, err)
 
 
@@ -542,7 +525,7 @@ def test_a_run_killed_during_a_recompute_is_interrupted_and_the_next_one_recover
     wait_for_file(root / "b.started")
     os.kill(proc.pid, signal.SIGKILL)
     # wait(), not communicate(): the orphaned worker still holds the pipes.
-    assert proc.wait(timeout=60) == -signal.SIGKILL
+    assert proc.wait(timeout=RUN) == -signal.SIGKILL
     for pipe in (proc.stdout, proc.stderr):
         pipe.close()
 
@@ -555,6 +538,8 @@ def test_a_run_killed_during_a_recompute_is_interrupted_and_the_next_one_recover
     # The orphaned worker may or may not finish writing `b` once released. Either way the
     # next run ends with `b`'s artifact in place and `publish` run on it.
     (root / "hold-b").unlink()
+    # A fixed wait: the orphaned worker gets a moment to finish (or not); either outcome is
+    # asserted below, so there is no condition to wait for.
     time.sleep(0.5)
     proc = cli(root, "run", "publish", "--json")
     doc = result(proc)
@@ -845,56 +830,32 @@ def test_a_store_that_cannot_be_read_still_fails_the_run(tmp_path):
 # ─── Under `barca serve` ─────────────────────────────────────────────────────
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _rows(root: Path) -> dict[tuple[str, str], int]:
-    """Read a private DB/WAL snapshot, respecting Barca's single-owner lock."""
-    source = root / ".barca" / "metadata.db"
-    if not source.exists():
-        return {}
+    """Materializations per (node, status), from a private snapshot of the DB (`served`)."""
     try:
-        with tempfile.TemporaryDirectory(prefix="barca-history-reader-") as directory:
-            snapshot = Path(directory) / "metadata.db"
-            # sqlite3 must never open the live Turso DB while a server operation owns it.
-            # Match DbSnapshot::take: copy the main file and WAL under its advisory lock,
-            # then release the lock before querying the disposable copy.
-            with Path(f"{source}.lock").open("rb") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                shutil.copyfile(source, snapshot)
-                wal = Path(f"{source}-wal")
-                if wal.exists():
-                    shutil.copyfile(wal, Path(f"{snapshot}-wal"))
-            db = sqlite3.connect(snapshot)
-            try:
-                return {
-                    (node.rsplit(":", 1)[1], status): count
-                    for node, status, count in db.execute(
-                        "select node_id, status, count(*) from materializations group by 1, 2"
-                    )
-                }
-            finally:
-                db.close()
+        with snapshot(root) as db:
+            if db is None:
+                return {}
+            return {
+                (node.rsplit(":", 1)[1], status): count
+                for node, status, count in db.execute(
+                    "select node_id, status, count(*) from materializations group by 1, 2"
+                )
+            }
     except sqlite3.Error:
         return {}
 
 
 def _wait_for(root: Path, done, what: str, timeout: float = 60) -> dict[tuple[str, str], int]:
-    deadline = time.monotonic() + timeout
-    while True:
-        rows = _rows(root)
-        if done(rows):
-            return rows
-        if time.monotonic() > deadline:
-            raise AssertionError(f"timed out waiting for {what}: {rows}")
-        time.sleep(0.25)
+    return wait_until(
+        lambda: (r,) if done(r := _rows(root)) else None, what, timeout=timeout, interval=0.25
+    )[0]
 
 
 @pytest.mark.parametrize("concurrent_readers", [0, 4])
-def test_a_scheduled_task_recovers_once_when_its_input_is_deleted(tmp_path, concurrent_readers):
+def test_a_scheduled_task_recovers_once_when_its_input_is_deleted(
+    tmp_path, serve, concurrent_readers
+):
     """The reproduction in #252: before the fix every tick after the delete failed."""
     root = project(tmp_path, SCHEDULED)
     stop_readers = threading.Event()
@@ -906,14 +867,7 @@ def test_a_scheduled_task_recovers_once_when_its_input_is_deleted(tmp_path, conc
     readers = [threading.Thread(target=read_history) for _ in range(concurrent_readers)]
     for reader in readers:
         reader.start()
-    serve = subprocess.Popen(
-        [_find_binary(), "serve", "pipeline.py", "--port", str(_free_port())],
-        cwd=root,
-        env=clean_env(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    server = serve(root=root)
     try:
         before = _wait_for(root, lambda r: r.get(("publish", "success"), 0) >= 2, "first ticks")
         drop(root, "model")
@@ -928,12 +882,8 @@ def test_a_scheduled_task_recovers_once_when_its_input_is_deleted(tmp_path, conc
         )
     finally:
         stop_readers.set()
-        serve.send_signal(signal.SIGTERM)
-        try:
-            _, err = serve.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            serve.kill()
-            _, err = serve.communicate()
+        server.stop()
+        err = server.stderr
         for reader in readers:
             reader.join(timeout=60)
             assert not reader.is_alive(), "history reader did not release the DB lock"

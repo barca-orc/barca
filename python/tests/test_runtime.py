@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
+
 # ─── Framing round-trip ──────────────────────────────────────────────────────
 
 

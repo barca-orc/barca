@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 from barca.api import _find_binary
+from .helpers import RUN, wait_until
 
 PIPELINE = """
 import sys
@@ -91,7 +92,7 @@ def run_barca(
             stdout=stream(stdout_closed),
             stderr=stream(stderr_closed),
             text=True,
-            timeout=120,
+            timeout=RUN,
         )
     finally:
         for fd in fds:
@@ -191,7 +192,7 @@ def test_a_reader_that_leaves_after_part_of_the_output(project: Path) -> None:
     proc.stdout.close()
     stderr = proc.stderr.read().decode()
     proc.stderr.close()
-    assert proc.wait(timeout=60) == 0
+    assert proc.wait(timeout=RUN) == 0
     assert b"".join(head) == "".join(whole.stdout.splitlines(keepends=True)[:5]).encode()
     assert stderr == ""
 
@@ -311,7 +312,7 @@ def test_a_write_that_fails_for_another_reason_is_an_error(materialized: Path) -
                 stdout=terminal,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=120,
+                timeout=RUN,
             )
         finally:
             os.close(terminal)
@@ -503,7 +504,7 @@ def test_with_a_reader_a_steps_output_is_what_it_always_was(children: Path) -> N
             stdout=subprocess.PIPE,
             stderr=to_file,
             text=True,
-            timeout=120,
+            timeout=RUN,
         )
     assert direct.returncode == 0
     assert step_output((children / "stderr.txt").read_text()) == step_output(piped.stderr)
@@ -522,13 +523,10 @@ def test_a_reader_that_falls_behind_loses_nothing(children: Path) -> None:
         text=True,
     )
     assert proc.stderr is not None
-    deadline = time.monotonic() + 60
-    while not (children / "started").exists():
-        assert proc.poll() is None and time.monotonic() < deadline
-        time.sleep(0.01)
+    wait_until(lambda: (children / "started").exists(), "the step to start", proc=proc)
     # 20,000 lines of 18 bytes: 360 kB against two 64 kB pipes.
     received = [line for line in proc.stderr if line.startswith("flood line")]
-    stdout, _ = proc.communicate(timeout=60)
+    stdout, _ = proc.communicate(timeout=RUN)
     assert proc.returncode == 0
     assert received == [f"flood line {i:06d}\n" for i in range(20000)]
     assert json.loads(stdout)["final_output"] == 20000
@@ -553,7 +551,7 @@ def wait_until_full(fd: int) -> int:
             last, since = now, time.monotonic()
         elif now > 0 and time.monotonic() - since > 0.5:
             return now
-        time.sleep(0.01)
+        time.sleep(0.01)  # fixed wait: sampling the pipe's fill level until it has stayed put
 
 
 def test_a_non_blocking_stderr_whose_reader_stalls_loses_nothing(children: Path) -> None:
@@ -574,7 +572,7 @@ def test_a_non_blocking_stderr_whose_reader_stalls_loses_nothing(children: Path)
     assert proc.poll() is None
     with os.fdopen(read_end, "rb") as stderr:
         received = [line for line in stderr if line.startswith(b"flood line")]
-    stdout, _ = proc.communicate(timeout=60)
+    stdout, _ = proc.communicate(timeout=RUN)
     assert proc.returncode == 0
     assert received == [b"flood line %06d\n" % i for i in range(20000)]
     assert json.loads(stdout)["final_output"] == 20000
@@ -595,7 +593,7 @@ def test_a_non_blocking_stdout_whose_reader_stalls_loses_nothing(project: Path) 
     assert proc.poll() is None
     with os.fdopen(read_end, "rb") as stdout:
         received = stdout.read()
-    _, stderr = proc.communicate(timeout=60)
+    _, stderr = proc.communicate(timeout=RUN)
     assert (proc.returncode, stderr) == (0, b"")
     assert received == whole.stdout.encode()
 
@@ -632,15 +630,12 @@ def test_a_process_a_step_leaves_running_loses_its_output_pipe_when_barca_exits(
             cwd=children,
             stdout=subprocess.PIPE,
             stderr=stderr,
-            timeout=120,
+            timeout=RUN,
         )
         assert proc.returncode == 0
         assert is_running(children)  # barca has exited; the process it left has not
         (children / "go").touch()
-        deadline = time.monotonic() + 60
-        while is_running(children):
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
+        wait_until(lambda: not is_running(children), "the left process to end")
         return (children / "survived").exists()
 
     # barca's stderr is a pipe: the write after barca's exit ends the process.

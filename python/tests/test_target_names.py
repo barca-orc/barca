@@ -6,26 +6,19 @@ and exited 0, and `barca get margin_all` could run `dyn_margin_all`.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca
 
 
 def _barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *value_args(args, json=False), "--json"]
-        if args[0] != "list"
-        else [_find_binary(), *value_args(args)],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    argv = [*value_args(args, json=False), "--json"] if args[0] != "list" else value_args(args)
+    return barca(cwd, *argv, env=dict(os.environ))
 
 
 def _result(r: subprocess.CompletedProcess) -> dict:

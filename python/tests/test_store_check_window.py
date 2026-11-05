@@ -8,7 +8,6 @@ helper starts and store requests rather than time them.
 """
 
 import json
-import os
 import socket
 import sqlite3
 import stat
@@ -17,11 +16,11 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 
+from .helpers import barca as run_barca
+from .helpers import clean_env
 from .store_window import age_store_checks, store_checks
 
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 CHECKING = "[barca] checking artifact store "
 STARTED = "[trace]  transfer helper started"
 
@@ -61,17 +60,7 @@ def project(tmp_path: Path) -> Path:
 
 
 def barca(root: Path, *args: str, code: int = 0, **env_extra: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    env["BARCA_TRACE_TIMING"] = "1"
-    env.update(env_extra)
-    out = subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    out = run_barca(root, *args, env=clean_env(BARCA_TRACE_TIMING="1", **env_extra))
     assert out.returncode == code, out.stderr
     return out
 

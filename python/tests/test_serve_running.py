@@ -7,16 +7,14 @@ owner, is what `GET /state` and `GET /runs?status=running` report. A killed CLI 
 import json
 import os
 import signal
-import socket
 import subprocess
-import time
 import urllib.request
 from pathlib import Path
 
 from barca.api import _find_binary
 
-# Settings from the developer's shell that would point the service at a real store.
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from .helpers import QUICK, RUN, clean_env, wait_until
+from .served import Serve
 
 PIPELINE = """
 import os
@@ -41,27 +39,6 @@ def slow(upstream: int) -> dict:
 """
 
 
-def _env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _until(predicate, what: str, timeout: float = 60):
-    deadline = time.monotonic() + timeout
-    while True:
-        value = predicate()
-        if value:
-            return value
-        if time.monotonic() > deadline:
-            raise AssertionError(f"timed out waiting for {what}")
-        time.sleep(0.1)
-
-
 def _get(port: int, path: str):
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as resp:
@@ -78,42 +55,54 @@ def _running_of(port: int, name: str):
 
 
 def _start(root: Path, *args: str, log: str) -> subprocess.Popen:
+    """A `barca` CLI command in a session of its own, its stderr in `log`."""
     return subprocess.Popen(
         [_find_binary(), *args],
         cwd=root,
-        env=_env(),
+        env=clean_env(),
         stdout=subprocess.DEVNULL,
         stderr=(root / log).open("w"),
         start_new_session=True,
     )
 
 
+def _serve(root: Path) -> Serve:
+    """`barca serve --no-schedule` in a session of its own, as `_start` starts the CLI."""
+    return Serve(root, "--no-schedule", env=clean_env(), new_session=True)
+
+
 def _stop(proc: subprocess.Popen) -> None:
     if proc.poll() is None:
         os.killpg(proc.pid, signal.SIGKILL)
-    proc.wait(timeout=30)
+    proc.wait(timeout=QUICK)
 
 
-def _project(root: Path) -> int:
+def _stop_server(server: Serve) -> None:
+    server.send(signal.SIGKILL)
+    server.exited()
+
+
+def _project(root: Path) -> None:
     (root / "pipeline.py").write_text(PIPELINE)
     (root / "barca.toml").write_text("")
-    return _free_port()
 
 
 def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
-    port = _project(tmp_path)
-    serve = _start(
-        tmp_path, "serve", "pipeline.py", "--no-schedule", "--port", str(port), log="serve.log"
-    )
+    _project(tmp_path)
+    serve = _serve(tmp_path)
+    port = serve.port
     cli = None
     try:
-        _until(lambda: _get(port, "/health"), "the server")
         cli = _start(tmp_path, "get", "slow", log="cli.log")
-        _until(lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run")
+        wait_until(
+            lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run"
+        )
         assert cli.poll() is None, (tmp_path / "cli.log").read_text()
 
         # Within one poll: the CLI run's target is running; what it already finished is not.
-        running = _until(lambda: _running_of(port, "slow"), "slow to show as running", timeout=10)
+        running = wait_until(
+            lambda: _running_of(port, "slow"), "slow to show as running", timeout=10
+        )
         assert running["triggered_by"] == "manual", running
         assert running["step"] == "running", running
         assert running["partitions"] is None, running
@@ -126,8 +115,8 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
         assert [s["node_id"].split(":")[-1] for s in run["active_steps"]] == ["slow"], run
 
         (tmp_path / "release").write_text("")
-        assert cli.wait(timeout=60) == 0, (tmp_path / "cli.log").read_text()
-        _until(
+        assert cli.wait(timeout=RUN) == 0, (tmp_path / "cli.log").read_text()
+        wait_until(
             lambda: _get(port, "/state") and _running_of(port, "slow") is None,
             "slow to clear",
             timeout=10,
@@ -137,21 +126,19 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
         (tmp_path / "release").write_text("")
         if cli is not None:
             _stop(cli)
-        _stop(serve)
+        _stop_server(serve)
 
 
 def test_a_killed_cli_run_is_not_shown_as_running(tmp_path):
-    port = _project(tmp_path)
+    _project(tmp_path)
     cli = _start(tmp_path, "get", "slow", log="cli.log")
-    _until(lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run")
+    wait_until(lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run")
     os.killpg(cli.pid, signal.SIGKILL)
-    cli.wait(timeout=30)
-    serve = _start(
-        tmp_path, "serve", "pipeline.py", "--no-schedule", "--port", str(port), log="serve.log"
-    )
+    cli.wait(timeout=QUICK)
+    serve = _serve(tmp_path)
+    port = serve.port
     try:
-        _until(lambda: _get(port, "/health"), "the server")
         assert _running_of(port, "slow") is None
         assert _get(port, "/runs?status=running")["runs"] == []
     finally:
-        _stop(serve)
+        _stop_server(serve)

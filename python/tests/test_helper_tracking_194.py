@@ -9,24 +9,18 @@ must agree, or the hash tracks code that never runs.
 
 import json
 import os
-import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca as run_barca
 
 
 def barca(cwd: Path, *args: str, env: dict | None = None) -> dict:
-    proc = subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=cwd,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})},
-        capture_output=True,
-        text=True,
+    proc = run_barca(
+        cwd, *value_args(args), env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})}
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -313,12 +307,7 @@ def test_off_path_pipeline_requires_qualified_import_over_namespace_directory(tm
     }
     write(tmp_path, {"barca.toml": "", **files})
 
-    refused = subprocess.run(
-        [_find_binary(), "get", "val", "-o", "value", "--json"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-    )
+    refused = run_barca(tmp_path, "get", "val", "-o", "value", "--json", env={**os.environ})
     assert refused.returncode == 2, refused.stderr
     assert "off-path" in refused.stderr and "from b.shared import upstream" in refused.stderr
     assert not (tmp_path / ".barca/default/metadata.db").exists()

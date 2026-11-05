@@ -4,23 +4,12 @@ Verifies that elapsed times are recorded correctly and stats (mean, median, max,
 are computed accurately.
 """
 
-import textwrap
-
 import barca
 import pytest
 
+from .helpers import write_module
 
-@pytest.fixture(autouse=True)
-def clean_barca_dir(tmp_path, monkeypatch):
-    # The API resolves .barca relative to cwd. Give each test its own project,
-    # so another pytest worker cannot delete its database or input artifacts.
-    monkeypatch.chdir(tmp_path)
-
-
-def write_module(tmp_path, filename, code):
-    p = tmp_path / filename
-    p.write_text(textwrap.dedent(code))
-    return str(p)
+pytestmark = pytest.mark.usefixtures("clean_barca_dir")
 
 
 class TestTimingRecorded:

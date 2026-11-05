@@ -11,17 +11,13 @@ arguments`.
 """
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from . import served
-
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from .helpers import barca, clean_env
 
 PIPELINE = """
 import json
@@ -75,13 +71,11 @@ def keys_only(retailer: str) -> str:
 
 
 def env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    return clean_env()
 
 
 def run(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *args], cwd=project, env=env(), capture_output=True, text=True
-    )
+    return barca(project, *args)
 
 
 def get(project: Path, target: str, *flags: str) -> dict:
@@ -383,12 +377,8 @@ def test_datadog_reports_one_span_per_node_and_a_child_per_key_that_ran(project)
         set_versions(project, {f"r{i}": "a" for i in range(20)})
         get(project, "scored")
         set_versions(project, {**{f"r{i}": "a" for i in range(20)}, "r7": "b"})
-        proc = subprocess.run(
-            [_find_binary(), "get", "scored", "pipeline.py", "--json"],
-            cwd=project,
-            env={**env(), **datadog(agent)},
-            capture_output=True,
-            text=True,
+        proc = barca(
+            project, "get", "scored", "pipeline.py", "--json", env={**env(), **datadog(agent)}
         )
         assert proc.returncode == 0, proc.stderr
         spans = agent.spans()

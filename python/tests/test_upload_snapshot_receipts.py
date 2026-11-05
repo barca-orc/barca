@@ -7,6 +7,7 @@ import pytest
 from barca import _artifacts, _storage, _transfer
 
 from . import served
+from .helpers import QUICK, clean_env, wait_until
 
 
 @pytest.mark.parametrize("destination", ["directory", "memory"])
@@ -66,7 +67,6 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
     import signal
     import sqlite3
     import subprocess
-    import time
     from pathlib import Path
 
     from barca.api import _find_binary
@@ -84,7 +84,7 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
     hold_a.mkdir()
     hold_b.mkdir()
     shim = str(Path(__file__).parent / "hold")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    env = clean_env(scrub=("BARCA_",))
     env.update(
         BARCA_REMOTE_URI=str(store),
         BARCA_POOL_SIZE="1",
@@ -106,14 +106,14 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
         return proc
 
     def wait_for(path):
-        deadline = time.monotonic() + 15
-        while not path.exists():
-            for process in processes:
-                if process.poll() is not None:
-                    output, error = process.communicate(timeout=5)
-                    pytest.fail(f"run stopped before {path}: {output}\n{error}")
-            assert time.monotonic() < deadline, f"missing event {path}"
-            time.sleep(0.01)
+        def arrived_or_a_run_stopped():
+            return path.exists() or any(p.poll() is not None for p in processes)
+
+        wait_until(arrived_or_a_run_stopped, f"event {path}", timeout=15, interval=0.01)
+        for process in processes:
+            if process.poll() is not None and not path.exists():
+                output, error = process.communicate(timeout=QUICK)
+                pytest.fail(f"run stopped before {path}: {output}\n{error}")
 
     a = start(hold_a, point)
     try:
@@ -124,7 +124,7 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
         local = list((tmp_path / ".barca/artifacts").rglob("*.json"))
         assert len(local) == 1 and local[0].read_bytes() == b"222"
         (hold_a / "release").touch()
-        a_out, a_err = a.communicate(timeout=20)
+        a_out, a_err = a.communicate(timeout=QUICK)
         assert a.returncode == 0, a_err
         a_result = json.loads(a_out)
         # B has serialized, but its upload remains held: observe A's store object
@@ -139,7 +139,7 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
             ).fetchall()
         assert rows_a and all(row[1:] == (hashlib.sha256(b"11").hexdigest(), 2) for row in rows_a)
         (hold_b / "release").touch()
-        b_out, b_err = b.communicate(timeout=20)
+        b_out, b_err = b.communicate(timeout=QUICK)
         assert b.returncode == 0, b_err
         b_result = json.loads(b_out)
         with contextlib.closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
@@ -160,10 +160,10 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
             if proc.poll() is None:
                 proc.send_signal(signal.SIGINT)
                 try:
-                    proc.communicate(timeout=10)
+                    proc.communicate(timeout=QUICK)
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    proc.communicate(timeout=5)
+                    proc.communicate(timeout=QUICK)
 
 
 def test_serialization_snapshot_survives_replacement_with_copy_fallback(tmp_path, monkeypatch):
@@ -197,7 +197,6 @@ def test_cancelled_real_upload_cleans_run_owned_snapshots(tmp_path):
     import signal
     import sqlite3
     import subprocess
-    import time
     from pathlib import Path
 
     from barca.api import _find_binary
@@ -209,7 +208,7 @@ def test_cancelled_real_upload_cleans_run_owned_snapshots(tmp_path):
     store, hold = tmp_path / "store", tmp_path / "hold"
     store.mkdir()
     hold.mkdir()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    env = clean_env(scrub=("BARCA_",))
     env.update(
         BARCA_REMOTE_URI=str(store),
         BARCA_POOL_SIZE="1",
@@ -225,14 +224,16 @@ def test_cancelled_real_upload_cleans_run_owned_snapshots(tmp_path):
         text=True,
     )
     try:
-        deadline = time.monotonic() + 15
-        while not (hold / "upload-open.started").exists():
-            assert proc.poll() is None
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
+        wait_until(
+            (hold / "upload-open.started").exists,
+            "the upload to open",
+            timeout=15,
+            interval=0.01,
+            proc=proc,
+        )
         assert list((tmp_path / ".barca/staging").rglob("upload-*.tmp"))
         proc.send_signal(signal.SIGINT)
-        out, err = proc.communicate(timeout=15)
+        out, err = proc.communicate(timeout=QUICK)
         assert proc.returncode == 130, (out, err)
         with contextlib.closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
             assert (
@@ -249,16 +250,13 @@ def test_cancelled_real_upload_cleans_run_owned_snapshots(tmp_path):
         (hold / "release").touch()
         if proc.poll() is None:
             proc.kill()
-            proc.communicate(timeout=5)
+            proc.communicate(timeout=QUICK)
 
 
 def test_confirmed_receipt_is_checkpointed_while_later_step_is_running(tmp_path):
-    import contextlib
     import os
     import signal
-    import sqlite3
     import subprocess
-    import time
     from pathlib import Path
 
     from barca.api import _find_binary
@@ -278,7 +276,7 @@ def test_confirmed_receipt_is_checkpointed_while_later_step_is_running(tmp_path)
     store, hold = tmp_path / "store", tmp_path / "hold"
     store.mkdir()
     hold.mkdir()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    env = clean_env(scrub=("BARCA_",))
     env.update(
         BARCA_REMOTE_URI=str(store),
         BARCA_POOL_SIZE="1",
@@ -295,7 +293,10 @@ def test_confirmed_receipt_is_checkpointed_while_later_step_is_running(tmp_path)
     )
 
     def row():
-        with contextlib.closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
+        # The run is still going: read a snapshot, never the database it can write (#537).
+        with served.snapshot(tmp_path) as db:
+            if db is None:
+                return None
             return db.execute(
                 "SELECT m.output_hash,m.artifact_size_bytes,m.artifact_path,r.status "
                 "FROM materializations m JOIN runs r ON m.run_id=r.run_id "
@@ -303,21 +304,23 @@ def test_confirmed_receipt_is_checkpointed_while_later_step_is_running(tmp_path)
             ).fetchone()
 
     try:
-        until = time.monotonic() + 15
-        while not (
-            (hold / "uploaded.started").exists() and (tmp_path / "consumer-started").exists()
-        ):
-            assert proc.poll() is None and time.monotonic() < until
-            time.sleep(0.01)
+        wait_until(
+            lambda: (hold / "uploaded.started").exists()
+            and (tmp_path / "consumer-started").exists(),
+            "the upload to be held and the consumer to start",
+            timeout=15,
+            interval=0.01,
+            proc=proc,
+        )
         assert row() is None, "no success row before upload confirmation"
         (hold / "release").touch()
-        while (checkpoint := row()) is None:
-            assert proc.poll() is None and time.monotonic() < until
-            time.sleep(0.01)
+        checkpoint = wait_until(
+            row, "the confirmed receipt to be checkpointed", timeout=15, interval=0.01, proc=proc
+        )
         assert checkpoint[:2] == (hashlib.sha256(b"11").hexdigest(), 2)
         assert checkpoint[2].startswith(str(store)) and checkpoint[3] == "running"
         (tmp_path / "finish-release").touch()
-        out, err = proc.communicate(timeout=15)
+        out, err = proc.communicate(timeout=QUICK)
         assert proc.returncode == 0, (out, err)
         assert row()[:3] == checkpoint[:3], "terminal persistence retains the confirmed row"
         assert not list((tmp_path / ".barca/staging").rglob("*.tmp"))
@@ -327,10 +330,10 @@ def test_confirmed_receipt_is_checkpointed_while_later_step_is_running(tmp_path)
         if proc.poll() is None:
             proc.send_signal(signal.SIGINT)
             try:
-                proc.communicate(timeout=10)
+                proc.communicate(timeout=QUICK)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate(timeout=5)
+                proc.communicate(timeout=QUICK)
 
 
 def test_failure_after_pinning_keeps_previous_artifact_and_removes_stages(tmp_path, monkeypatch):

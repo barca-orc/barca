@@ -1,27 +1,16 @@
 """Qualified/aliased static recognition and real execution share Barca semantics."""
 
 import json
-import os
-import subprocess
 
 import pytest
-from barca.api import _find_binary
 
 from .get_values import value_args
+from .helpers import QUICK, barca, clean_env
 
 
 def invoke(root, *args):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["BARCA_POOL_SIZE"] = "2"
-    return subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    env = clean_env(scrub=("BARCA_",), BARCA_POOL_SIZE="2")
+    return barca(root, *value_args(args), env=env, timeout=QUICK)
 
 
 @pytest.mark.parametrize(

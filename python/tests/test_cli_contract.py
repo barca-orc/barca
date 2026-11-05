@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 from barca.api import _find_binary
+from .helpers import QUICK, RUN, SERVE
 
 REPO = Path(__file__).resolve().parents[2]
 SNAPSHOTS = Path(__file__).resolve().parent / "snapshots" / "cli_contract"
@@ -435,7 +436,7 @@ def runs(tmp_path_factory) -> dict:
 
     def barca(argv: list[str]) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=300
+            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=SERVE
         )
 
     out: dict = {}
@@ -491,13 +492,13 @@ def runs(tmp_path_factory) -> dict:
         env=env,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=RUN,
     )
     assert baseline.returncode == 0, baseline.stderr
     (digest_case / "external.txt").write_text("after")
     for case, argv, stream, code in SETUP_CASES[3:]:
         proc = subprocess.run(
-            [binary, *argv], cwd=digest_case, env=env, capture_output=True, text=True, timeout=60
+            [binary, *argv], cwd=digest_case, env=env, capture_output=True, text=True, timeout=RUN
         )
         assert proc.returncode == code, proc.stderr
         s = command_schema(json.loads(proc.stdout))
@@ -523,7 +524,7 @@ def runs(tmp_path_factory) -> dict:
     )
     _, argv, stream, code = TIMING_CASE
     timing = subprocess.run(
-        [binary, *argv], cwd=timing_case, env=env, capture_output=True, text=True, timeout=60
+        [binary, *argv], cwd=timing_case, env=env, capture_output=True, text=True, timeout=RUN
     )
     assert timing.returncode == code, timing.stderr
     timing_doc = json.loads(timing.stdout)
@@ -574,7 +575,7 @@ def runs(tmp_path_factory) -> dict:
     )
     case, argv, stream, code = PARTITION_RUN_CASE
     task_proc = subprocess.run(
-        [binary, *argv], cwd=task_case, env=env, capture_output=True, text=True, timeout=60
+        [binary, *argv], cwd=task_case, env=env, capture_output=True, text=True, timeout=RUN
     )
     assert task_proc.returncode == code, task_proc.stderr
     task_doc = json.loads(task_proc.stdout)
@@ -596,7 +597,7 @@ def _changed_runs(
             env=env,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=RUN,
             check=False,
         )
 
@@ -623,7 +624,7 @@ def _cache_limit_run(binary: str, cwd: Path, env: dict) -> subprocess.CompletedP
             env={**env, **extra},
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=RUN,
         )
         assert proc.returncode == 0, f"barca {' '.join(argv)}\n{proc.stderr}"
         return proc
@@ -658,7 +659,7 @@ def _artifact_mismatch_run(binary: str, tmp: Path, env: dict) -> subprocess.Comp
         cwd.mkdir(exist_ok=True)
         (cwd / "pipeline.py").write_text(STORE_PIPELINE)
         proc = subprocess.run(
-            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=300
+            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=SERVE
         )
         assert proc.returncode == 0, f"{machine}: barca {' '.join(argv)}\n{proc.stderr}"
         return proc
@@ -684,7 +685,7 @@ def _pending_upload_runs(
 
     def barca(argv: list[str]) -> subprocess.CompletedProcess:
         proc = subprocess.run(
-            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=300
+            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=SERVE
         )
         assert proc.returncode == 0, f"barca {' '.join(argv)}\n{proc.stderr}"
         return proc
@@ -866,7 +867,7 @@ def test_inspection_contract_over_one_hundred_nodes(tmp_path, command):
             env=_env(),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=QUICK,
         )
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
@@ -901,7 +902,7 @@ def test_only_a_target_error_carries_the_barca_list_remediation(tmp_path, case):
     else:
         env["BARCA_STATE"] = "optimistic"
     proc = subprocess.run(
-        [_find_binary(), *argv], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+        [_find_binary(), *argv], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=RUN
     )
     assert proc.returncode == 2, proc.stderr
     envelope = json.loads(

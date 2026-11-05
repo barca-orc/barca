@@ -10,15 +10,15 @@
 
 import json
 import os
-import signal
 import socket
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 
+from .helpers import SERVE, barca, clean_env
+from .served import Serve
 from .store_window import age_store_checks
 
 PIPELINE = """
@@ -36,19 +36,16 @@ def total(numbers: list) -> dict:
 """
 
 
-def cli(root: Path, store: Path | None, *args: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+def env(store: Path | None) -> dict[str, str]:
+    """The shell without barca's own variables, pointed at `store` when there is one."""
+    env = clean_env(scrub=("BARCA_",))
     if store is not None:
         env["BARCA_REMOTE_URI"] = str(store)
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    return env
+
+
+def cli(root: Path, store: Path | None, *args: str) -> subprocess.CompletedProcess:
+    return barca(root, *args, env=env(store), timeout=SERVE)
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:
@@ -140,10 +137,7 @@ def test_neither_copy_is_stale_and_status_without_a_store_is_unchanged(project):
     artifact(store / "default" / "artifacts", "total").unlink()
     assert cache(root, store)["total"] == ("stale", "artifact_missing")
     # BARCA_REMOTE=off: no store is asked; the local rule applies as before.
-    env_off = {**os.environ, "BARCA_REMOTE": "off"}
-    proc = subprocess.run(
-        [_find_binary(), "status", "--json"], cwd=root, env=env_off, capture_output=True, text=True
-    )
+    proc = barca(root, "status", "--json", env={**os.environ, "BARCA_REMOTE": "off"})
     assert proc.returncode == 0, proc.stderr
     assert all(n["cache"]["state"] != "unsynced" for n in json.loads(proc.stdout)["nodes"])
 
@@ -151,7 +145,7 @@ def test_neither_copy_is_stale_and_status_without_a_store_is_unchanged(project):
 def test_backups_are_listed_and_restored_only_when_asked(project):
     root, store = project
     ok(cli(root, store, "get", "numbers", "--json"))
-    time.sleep(1.1)  # backups are named by the second
+    time.sleep(1.1)  # a fixed wait: backups are named by the second, so the next needs a new one
     second = cli(root, store, "get", "total", "--json")
     ok(second)
     assert "backed up the metadata DB" in second.stderr, second.stderr
@@ -210,32 +204,13 @@ def test_with_no_backup_restore_is_a_usage_error(project):
 def test_restore_is_refused_while_serve_runs(project):
     root, store = project
     ok(cli(root, store, "get", "total", "--json"))
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["BARCA_REMOTE_URI"] = str(store)
-    log = root.parent / "serve.log"
-    with log.open("w") as out:
-        server = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--no-schedule", "--port", str(port)],
-            cwd=root,
-            env=env,
-            stdout=out,
-            stderr=out,
-        )
+    server = Serve(root, "--no-schedule", env=env(store), wait="bind")
     try:
-        deadline = time.monotonic() + 30
-        while "serving on" not in log.read_text():
-            assert server.poll() is None, log.read_text()
-            assert time.monotonic() < deadline, log.read_text()
-            time.sleep(0.05)
         refused = error(cli(root, store, "state", "restore", "--json"), 3)
         assert refused["kind"] == "infra" and "barca serve" in refused["error"], refused
         assert not (root / ".barca" / "metadata.db.pre-restore").exists()
     finally:
-        server.send_signal(signal.SIGTERM)
-        server.wait(timeout=30)
+        server.stop()
     # Once it has stopped, the restore goes ahead.
     assert ok(cli(root, store, "state", "restore", "--json"))["from"] == "local"
 

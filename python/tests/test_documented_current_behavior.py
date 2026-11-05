@@ -2,27 +2,21 @@
 
 import json
 import os
-import signal
-import socket
-import subprocess
-import time
 from pathlib import Path
 
-from barca.api import _find_binary
+from barca.client import Client
 
 from .get_values import value_args
-from barca.client import Client
+from .helpers import QUICK, barca, wait_until
 
 
 def run(root: Path, *args: str, env=None):
-    proc = subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=root,
-        capture_output=True,
-        text=True,
+    # The machine's environment is inherited on purpose (plus a small pool).
+    proc = barca(
+        root,
+        *value_args(args),
         env={**os.environ, "BARCA_POOL_SIZE": "2", **(env or {})},
-        check=False,
-        timeout=30,
+        timeout=QUICK,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -43,12 +37,7 @@ def observed(): return True, "version"
 """
     (tmp_path / "pipeline.py").write_text(source)
     # A Manual upstream that was never computed cannot be read (RFC-0008).
-    never = subprocess.run(
-        [_find_binary(), "get", "downstream", "--json"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-    )
+    never = barca(tmp_path, "get", "downstream", "--json", env={**os.environ})
     assert never.returncode == 2, never.stderr
     assert run(tmp_path, "get", "source", "--refresh", "source")["steps_executed"] == 1
     assert run(tmp_path, "get", "downstream")["steps_executed"] == 1
@@ -124,14 +113,15 @@ def test_invalid_transfer_settings_are_infrastructure_errors(tmp_path):
     (tmp_path / "barca.toml").write_text("")
     (tmp_path / "pipeline.py").write_text("from barca import asset\n@asset()\ndef x(): return 1\n")
     for variable in ("BARCA_TRANSFER_CONCURRENCY", "BARCA_TRANSFER_TIMEOUT"):
-        proc = subprocess.run(
-            [_find_binary(), "get", "x", "-o", "value", "--json"],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
+        proc = barca(
+            tmp_path,
+            "get",
+            "x",
+            "-o",
+            "value",
+            "--json",
             env={**os.environ, variable: "0"},
-            check=False,
-            timeout=10,
+            timeout=QUICK,
         )
         assert proc.returncode == 3
         envelope = json.loads(
@@ -141,7 +131,7 @@ def test_invalid_transfer_settings_are_infrastructure_errors(tmp_path):
         assert not (tmp_path / ".barca").exists()
 
 
-def test_a_scheduled_sensor_tick_updates_its_always_consumer(tmp_path):
+def test_a_scheduled_sensor_tick_updates_its_always_consumer(tmp_path, serve):
     (tmp_path / "barca.toml").write_text("")
     (tmp_path / "pipeline.py").write_text("""from pathlib import Path
 from barca import asset, sensor, Schedule
@@ -156,32 +146,19 @@ def consumer(value):
     Path("consumer-ran").touch()
     return value
 """)
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    with (tmp_path / "server.log").open("w") as log:
-        proc = subprocess.Popen(
-            [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
-            cwd=tmp_path,
-            env={**os.environ, "BARCA_POOL_SIZE": "1"},
-            stdout=log,
-            stderr=log,
-        )
-    try:
-        deadline = time.monotonic() + 15
-        while not (tmp_path / "tick").exists():
-            assert proc.poll() is None, (tmp_path / "server.log").read_text()
-            assert time.monotonic() < deadline, (tmp_path / "server.log").read_text()
-            time.sleep(0.05)
-        client = Client(f"http://127.0.0.1:{port}")
-        assert client.health()["status"] == "ok"
-        # RFC-0008: the tick's run also brings the Always consumer up to date.
-        while not (tmp_path / "consumer-ran").exists():
-            assert time.monotonic() < deadline, (tmp_path / "server.log").read_text()
-            time.sleep(0.05)
-    finally:
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=15)
+    server = serve(env={**os.environ, "BARCA_POOL_SIZE": "1"})
+    wait_until(
+        lambda: (tmp_path / "tick").exists(), "the sensor to tick", timeout=15, proc=server.proc
+    )
+    client = Client(server.url)
+    assert client.health()["status"] == "ok"
+    # RFC-0008: the tick's run also brings the Always consumer up to date.
+    wait_until(
+        lambda: (tmp_path / "consumer-ran").exists(),
+        "the consumer to run",
+        timeout=15,
+        proc=server.proc,
+    )
 
 
 def test_parallel_from_an_asset_runs_once_then_is_cached(tmp_path):

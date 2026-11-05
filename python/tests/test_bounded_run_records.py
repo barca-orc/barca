@@ -15,12 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import BarcaError, _find_binary
+from barca.api import BarcaError
 from barca.api import get as barca_get
 
 from . import served
-
-SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
+from .helpers import SCRUB, clean_env
+from .helpers import barca as run_barca
 
 KEYED = """
 import json
@@ -48,9 +48,7 @@ def scored(retailer: str, cleaned: dict) -> dict:
 
 
 def env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)} | {
-        "BARCA_REMOTE": "off"
-    }
+    return clean_env(BARCA_REMOTE="off")
 
 
 def keyed(root: Path, n: int, cron: str | None = None) -> Path:
@@ -70,9 +68,7 @@ def bump(root: Path, key: str) -> None:
 
 
 def barca(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        [_find_binary(), *args], cwd=root, env=env(), capture_output=True, text=True
-    )
+    result = run_barca(root, *args, env=env())
     if check:
         assert result.returncode == 0, result.stderr
     return result

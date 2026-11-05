@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from barca.api import _find_binary
+from .helpers import SERVE, barca, clean_env
 
 PIPELINE = """
 from barca import asset
@@ -36,18 +37,10 @@ def total(numbers: list) -> dict:
 
 
 def cli(root: Path, *args: str, store: Path | None = None) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    env = clean_env(scrub=("BARCA_",))
     if store is not None:
         env["BARCA_REMOTE_URI"] = str(store)
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    return barca(root, *args, env=env, timeout=SERVE)
 
 
 def ok(proc: subprocess.CompletedProcess) -> dict:
@@ -235,7 +228,7 @@ def test_concurrent_runs_meeting_the_same_directory_all_succeed(project):
     moves a file another has just written; the directory's contents are kept once."""
     path = artifact(project, "numbers")
     put_directory(path)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    env = clean_env(scrub=("BARCA_",))
     procs = [
         subprocess.Popen(
             [_find_binary(), "get", "numbers", "-o", "value", "--json"],
@@ -247,7 +240,7 @@ def test_concurrent_runs_meeting_the_same_directory_all_succeed(project):
         )
         for _ in range(4)
     ]
-    results = [p.communicate(timeout=300) for p in procs]
+    results = [p.communicate(timeout=SERVE) for p in procs]
     assert [p.returncode for p in procs] == [0] * 4, [err for _, err in results]
     assert all(json.loads(out)["final_output"] == [3, 4] for out, _ in results)
     assert path.is_file() and json.loads(path.read_text()) == [3, 4]

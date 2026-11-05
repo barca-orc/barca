@@ -34,17 +34,19 @@ from __future__ import annotations
 
 import json
 import re
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 from barca.api import _find_binary
 
+from . import helpers
+from .helpers import QUICK, SERVE, clean_env, free_port, wait_until
 from .planning_pipeline import write_planning_pipeline
+from .served import Serve
 from .test_cli_contract import AGENT_RUNS, CASES, PIPELINE
-from .test_serve_robustness import _env, _free_port, wait_for
-
-TIMEOUT = 300
 
 # The commands that take `--server` and print what the server prints. `sql` takes it too, but
 # only resolves its views there and reads the results from the store the two machines share,
@@ -185,7 +187,7 @@ def _normalize(text: str, roots: list[str]):
 
 
 def _parity_env() -> dict[str, str]:
-    return {**_env(), "BARCA_POOL_SIZE": "1"}
+    return clean_env(BARCA_POOL_SIZE="1")
 
 
 def _first_diff(a, b, path: str = "") -> str | None:
@@ -208,46 +210,12 @@ def _first_diff(a, b, path: str = "") -> str | None:
 
 
 def _run(cwd: Path, argv: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [_find_binary(), *argv],
-        check=False,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=_parity_env(),
-        timeout=TIMEOUT,
-    )
+    return helpers.barca(cwd, *argv, env=_parity_env(), timeout=SERVE)
 
 
-class Served:
+def Served(root: Path, *files: str) -> Serve:
     """`barca serve` on a project copy, on a free port, with no scheduler."""
-
-    def __init__(self, root: Path, *files: str) -> None:
-        self.port = _free_port()
-        self.url = f"http://127.0.0.1:{self.port}"
-        self.log = root / "serve.log"
-        self.proc = subprocess.Popen(
-            [_find_binary(), "serve", *files, "--port", str(self.port), "--no-schedule"],
-            cwd=root,
-            stdout=subprocess.DEVNULL,
-            stderr=self.log.open("w"),
-            env=_parity_env(),
-        )
-        wait_for(self._up, "the server to answer /health")
-
-    def _up(self) -> bool:
-        assert self.proc.poll() is None, f"the server exited early:\n{self.log.read_text()}"
-        out = _run(self.log.parent, ["history", "--server", self.url, "--json", "-l", "1"])
-        return out.returncode == 0
-
-    def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-        try:
-            self.proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait()
+    return Serve(root, "--no-schedule", files=files, env=_parity_env())
 
 
 def _resolve(cwd: Path, argv: list[str], server: list[str]) -> list[str]:
@@ -320,13 +288,11 @@ def test_the_planning_pipeline_prints_the_same_locally_and_through_a_server(tmp_
 
 
 @pytest.fixture()
-def served(tmp_path):
+def served(tmp_path, serve):
     root = tmp_path / "served"
     root.mkdir()
     (root / "pipeline.py").write_text(PIPELINE)
-    server = Served(root, "pipeline.py")
-    yield server
-    server.stop()
+    return serve("--no-schedule", root=root, env=_parity_env())
 
 
 def test_a_configured_server_is_announced_once_and_bare_server_uses_it(tmp_path, served):
@@ -388,7 +354,7 @@ def test_bare_server_with_nothing_configured_and_server_on_local_commands_are_us
 
 
 def test_an_unreachable_server_is_an_infra_error_naming_it(tmp_path):
-    url = f"http://127.0.0.1:{_free_port()}"
+    url = f"http://127.0.0.1:{free_port()}"
     out = _run(tmp_path, ["get", "total", "--json", "--server", url])
     assert out.returncode == 3, out.stderr
     envelope = json.loads(out.stderr.splitlines()[-1])
@@ -443,9 +409,6 @@ def _server_runs(url: str) -> list[dict]:
 
 @pytest.mark.parametrize("presses", [1, 2])
 def test_ctrl_c_cancels_the_run_on_the_server(tmp_path, presses):
-    import signal
-    import time
-
     root = tmp_path / "served"
     root.mkdir()
     (root / "pipeline.py").write_text(SLOW)
@@ -459,21 +422,21 @@ def test_ctrl_c_cancels_the_run_on_the_server(tmp_path, presses):
             text=True,
             env=_parity_env(),
         )
-        wait_for(
+        wait_until(
             lambda: any(r.get("status") == "running" for r in _server_runs(server.url)),
             "the run to start on the server",
         )
         started = time.monotonic()
         for _ in range(presses):
             client.send_signal(signal.SIGINT)
-            time.sleep(0.2)
-        _, stderr = client.communicate(timeout=30)
+            time.sleep(0.2)  # a fixed wait: two presses are two signals, not one burst
+        _, stderr = client.communicate(timeout=QUICK)
         assert client.returncode == 130, stderr
         assert time.monotonic() - started < 30, "the run was cancelled, not waited for"
         envelope = json.loads(stderr.splitlines()[-1])
         assert envelope["kind"] == "cancelled"
         # Either way the server stops the run.
-        wait_for(
+        wait_until(
             lambda: all(r.get("status") == "cancelled" for r in _server_runs(server.url)),
             "the server to record the run as cancelled",
         )

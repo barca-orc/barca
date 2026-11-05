@@ -1,30 +1,39 @@
 """Local bootstrap and real server token lifecycle, without a user-account system."""
 
-from concurrent.futures import ThreadPoolExecutor
 import json
 import re
-import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
-from barca.api import _find_binary
 from barca.client import Client
 
-from .test_serve_robustness import Server, _env, wait_for
+from . import helpers
+from .helpers import QUICK, clean_env, wait_until
+from .served import Serve
 
 pytestmark = pytest.mark.filterwarnings("ignore:barca.Client is deprecated:DeprecationWarning")
 
 
-class TokenServer(Server):
-    def _up(self):
-        assert self.proc.poll() is None, "token server exited during startup"
-        try:
-            return self.request("GET", "/auth/status")[0] == 200
-        except OSError:
-            return False
+def _env() -> dict[str, str]:
+    """This module's environment: a scrubbed shell with a pool of two workers."""
+    return clean_env(BARCA_POOL_SIZE="2")
+
+
+def TokenServer(project: Path, *args: str) -> Serve:
+    """A server under `--auth token`: `/health` is 401 until a token is presented, so its
+    readiness is `GET /auth/status` answering 200. Stopped by the test (`kill()`)."""
+    server = Serve(project, *args, env=_env(), wait=None)
+    try:
+        server.wait("GET /auth/status", lambda: server.request("GET", "/auth/status")[0] == 200)
+    except BaseException:
+        server.kill()
+        raise
+    return server
 
 
 def exchange(server, method, path, token=None, body=None):
@@ -52,15 +61,7 @@ def cli(project, *args, token=None):
     env = _env()
     if token is not None:
         env["BARCA_SERVER_TOKEN"] = token
-    return subprocess.run(
-        [_find_binary(), *args],
-        cwd=project,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+    return helpers.barca(project, *args, env=env, timeout=QUICK)
 
 
 @pytest.fixture
@@ -124,9 +125,9 @@ def test_local_bootstrap_connects_a_real_server_and_cli_and_python_use_issued_to
         assert json.loads(denied.stderr)["reason"] == "invalid_token"
         for secret in [code, bearer, token]:
             assert secret not in result.stdout + result.stderr + denied.stdout + denied.stderr
-            assert secret not in server.log.read_text()
+            assert secret not in server.stderr
     finally:
-        server.stop()
+        server.kill()
 
 
 def test_flag_auth_off_overrides_toml_token_mode(project):
@@ -138,7 +139,7 @@ def test_flag_auth_off_overrides_toml_token_mode(project):
         assert exchange(server, "POST", "/auth/tokens", body={"name": "blocked"})[0] == 403
         assert not (project / ".barca/auth").exists()
     finally:
-        server.stop()
+        server.kill()
 
 
 def test_invalid_auth_mode_is_usage_without_creating_credentials(project):
@@ -158,7 +159,7 @@ def test_metadata_backup_restore_and_restart_do_not_resurrect_revoked_tokens(pro
         status, old = exchange(server, "POST", "/auth/tokens", admin, {"name": "before restore"})
         assert status == 201
     finally:
-        server.stop()
+        server.kill()
     seeded = cli(project, "get", "value", "pipeline.py", "--local", "--json")
     assert seeded.returncode == 0, seeded.stderr
     backups = list((project / ".barca/backups").glob("*.db"))
@@ -172,7 +173,7 @@ def test_metadata_backup_restore_and_restart_do_not_resurrect_revoked_tokens(pro
         assert exchange(server, "DELETE", f"/auth/tokens/{old['id']}", admin)[0] == 204
         _, fresh = exchange(server, "POST", "/auth/tokens", admin, {"name": "after rotation"})
     finally:
-        server.stop()
+        server.kill()
     auth_path = project / ".barca/auth/state.json"
     auth_before = auth_path.read_bytes()
     restored = cli(project, "state", "restore", "--from", str(archived), "--json")
@@ -184,7 +185,7 @@ def test_metadata_backup_restore_and_restart_do_not_resurrect_revoked_tokens(pro
         assert exchange(server, "GET", "/health", fresh["token"])[0] == 200
         assert exchange(server, "POST", "/auth/bootstrap", body={"code": code})[0] == 401
     finally:
-        server.stop()
+        server.kill()
     # A fresh host restoring only the same ledger gains no API credentials.
     other = tmp_path / "fresh_host"
     other.mkdir()
@@ -198,7 +199,7 @@ def test_metadata_backup_restore_and_restart_do_not_resurrect_revoked_tokens(pro
         assert exchange(server, "GET", "/health", old["token"])[0] == 401
         assert exchange(server, "GET", "/health", fresh["token"])[0] == 401
     finally:
-        server.stop()
+        server.kill()
 
 
 @pytest.mark.parametrize("change", ["revoke", "bootstrap_rotation"])
@@ -234,7 +235,7 @@ def test_idle_stream_observes_auth_changes_from_another_server_process(project, 
         )
         assert status == 202
         run_id = accepted["run_id"]
-        wait_for(lambda: (project / "started").exists(), "idle remote task")
+        wait_until(lambda: (project / "started").exists(), "idle remote task")
         request = urllib.request.Request(
             f"http://127.0.0.1:{first.port}/runs/{run_id}/events",
             headers={"Authorization": f"Bearer {stream_token}"},
@@ -270,8 +271,8 @@ def test_idle_stream_observes_auth_changes_from_another_server_process(project, 
         if run_id and admin:
             exchange(first, "DELETE", f"/runs/{run_id}", admin)
         if second:
-            second.stop()
-        first.stop()
+            second.kill()
+        first.kill()
         if response:
             response.close()
         if reader:
@@ -300,5 +301,5 @@ def test_bootstrap_is_consumed_once_across_two_server_processes(project):
         assert len(exchange(first, "GET", "/auth/tokens", token)[1]) == 1
     finally:
         if second:
-            second.stop()
-        first.stop()
+            second.kill()
+        first.kill()

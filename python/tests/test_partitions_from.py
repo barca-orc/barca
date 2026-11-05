@@ -10,14 +10,12 @@ by test_partitions.sh, test_reliability.py and test_partition_unpartitioned_inpu
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
-
 from .get_values import value_args
+from .helpers import barca
 
 PIPELINE = """
 import os
@@ -131,13 +129,7 @@ def project(tmp_path) -> Path:
 
 
 def run(project: Path, *args: str, regions: str = "emea,amer,apac"):
-    return subprocess.run(
-        [_find_binary(), *value_args(args)],
-        cwd=project,
-        env={**os.environ, "BARCA_TEST_REGIONS": regions},
-        capture_output=True,
-        text=True,
-    )
+    return barca(project, *value_args(args), env={**os.environ, "BARCA_TEST_REGIONS": regions})
 
 
 def get(project: Path, target: str, *flags: str, regions: str = "emea,amer,apac") -> dict:

@@ -2,10 +2,10 @@
 
 import json
 import os
-import subprocess
 
 import pytest
-from barca.api import _find_binary
+
+from .helpers import RUN, barca
 
 # Each case: the extra project modules, and the asset body that reaches `helpers.compute`.
 REEXPORTS = {
@@ -81,13 +81,11 @@ CASES = {
 
 
 def cli(root, *args):
-    proc = subprocess.run(
-        [_find_binary(), *args],
-        cwd=root,
+    proc = barca(
+        root,
+        *args,
         env={**os.environ, "BARCA_REMOTE": "off", "PYTHONDONTWRITEBYTECODE": "1"},
-        capture_output=True,
-        text=True,
-        timeout=60,
+        timeout=RUN,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
