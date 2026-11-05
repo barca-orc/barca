@@ -16,7 +16,6 @@
 use crate::error::ApiError;
 use crate::handlers::snapshot_db;
 use crate::runs::RunSpec;
-use crate::shims::{now_ts, timestamp};
 use crate::state::{AppState, RunChannel, RunState, RunStatus};
 use axum::Json;
 use axum::extract::State;
@@ -24,6 +23,7 @@ use barca_core::cache::CachePolicy;
 use barca_core::db;
 use barca_core::outcome::{RunCommand, Trigger, TriggeredBy};
 use barca_core::serve::run_queue::{self, QueueState};
+use barca_core::time::{now_secs_f64 as now_ts, rfc3339_millis as timestamp};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;

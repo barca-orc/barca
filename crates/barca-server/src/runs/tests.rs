@@ -2,11 +2,11 @@ use super::lifecycle::evict_over_budget;
 use super::projection::{RunsQuery, view};
 use super::*;
 use crate::ServeConfig;
-use crate::shims::now_ts;
 use crate::state::{RunChannel, RunState, RunStatus};
 use axum::Json;
 use axum::extract::{Query, State};
 use barca_core::outcome::Trigger;
+use barca_core::time::now_secs_f64 as now_ts;
 use barca_core::{RunEvent, db};
 use futures::StreamExt;
 fn state(dir: &std::path::Path) -> AppState {

@@ -2,10 +2,10 @@
 //! rule (RFC-0008 rule 9): consecutive failed ticks are counted, a job at its `max_failures`
 //! is skipped until something it failed on succeeds again.
 
-use crate::shims::step_status;
 use crate::state::{AppState, RunStatus};
 use barca_core::db;
 use barca_core::schedule::ScheduledJob;
+use barca_core::step_status::StepStatus;
 use chrono::{DateTime, TimeZone};
 use std::collections::{HashMap, HashSet};
 
@@ -67,7 +67,7 @@ pub(super) fn failed_steps(run: &crate::state::RunState) -> Vec<String> {
         .and_then(|o| o["steps"].as_array().cloned())
         .unwrap_or_default();
     for step in &steps {
-        if step["status"] == step_status::FAILED
+        if step["status"] == StepStatus::Failed.as_str()
             && let Some(id) = step["id"].as_str()
         {
             nodes.push(id.to_string());
@@ -75,7 +75,7 @@ pub(super) fn failed_steps(run: &crate::state::RunState) -> Vec<String> {
     }
     if let Some(targets) = outcome.as_ref().and_then(|o| o["targets"].as_object()) {
         for target in targets.values() {
-            if target["status"] == step_status::FAILED
+            if target["status"] == StepStatus::Failed.as_str()
                 && let Some(node) = target["failed_node"].as_str()
                 && !nodes.iter().any(|n| n == node)
             {
@@ -88,7 +88,7 @@ pub(super) fn failed_steps(run: &crate::state::RunState) -> Vec<String> {
             .result
             .iter()
             .flat_map(|r| &r.steps)
-            .filter(|s| s.status.as_deref() == Some(step_status::FAILED))
+            .filter(|s| StepStatus::Failed.is(s.status.as_deref()))
             .map(|s| s.id.clone())
             .collect();
     }

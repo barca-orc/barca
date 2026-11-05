@@ -4,11 +4,11 @@
 
 use super::{RunSpec, context, run_files, run_timeout};
 use crate::error::ApiError;
-use crate::shims::now_ts;
 use crate::state::{AppState, RunChannel, RunState, RunStatus};
 use barca_core::commands::{RunResult, ServedRun, serve_run};
 use barca_core::envelope::{Context, ErrorEnvelope, ErrorKind};
 use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunOptions};
+use barca_core::time::now_secs_f64 as now_ts;
 use barca_core::{BarcaError, RunEvent, db, results::GetResult};
 use std::time::Duration;
 

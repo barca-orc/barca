@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// How a step or target ended (`barca docs contract`, the result bodies).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StepStatus {
+pub enum StepStatus {
     /// Served from cache; the function did not run.
     Cached,
     /// The function ran (every partition key, for a partitioned step).
@@ -70,7 +70,7 @@ impl std::fmt::Display for StepStatus {
 
 /// The text is not one of the statuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UnknownStepStatus(pub String);
+pub struct UnknownStepStatus(pub String);
 
 impl std::fmt::Display for UnknownStepStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

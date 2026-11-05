@@ -293,7 +293,7 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
                 .unwrap_or_else(|_| file.clone()),
             None => file.clone(),
         };
-        files.push(json!({"path": path, "sha256": crate::shims::sha256_hex(&bytes)}));
+        files.push(json!({"path": path, "sha256": barca_core::hash::sha256_hex(&bytes)}));
     }
     Ok(Json(json!({
         "api_version": barca_core::outcome::API_VERSION,

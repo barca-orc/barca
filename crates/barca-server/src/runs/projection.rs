@@ -3,11 +3,12 @@
 
 use crate::error::ApiError;
 use crate::handlers::snapshot_db;
-use crate::shims::{durable_timestamp, step_status, timestamp};
 use crate::state::{AppState, RunState, RunStatus};
 use barca_core::RunEvent;
 use barca_core::db;
 use barca_core::outcome::{Outcome, RunView};
+use barca_core::step_status::StepStatus;
+use barca_core::time::{rfc3339_millis as timestamp, sql_datetime_rfc3339 as durable_timestamp};
 use serde::{Deserialize, Serialize};
 
 pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError> {
@@ -148,7 +149,13 @@ pub(crate) async fn view_page(
                     }
                     view.steps.push(db::RunStep {
                         node_id,
-                        status: step_status::of_event(cached, ok).into(),
+                        status: match (cached, ok) {
+                            (true, _) => StepStatus::Cached,
+                            (_, true) => StepStatus::Success,
+                            _ => StepStatus::Failed,
+                        }
+                        .as_str()
+                        .into(),
                         elapsed_seconds,
                         error,
                         ..Default::default()
@@ -326,7 +333,7 @@ pub(super) fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
         steps_cached: run.result.as_ref().map_or(0, |r| {
             r.steps
                 .iter()
-                .filter(|s| s.status.as_deref() == Some(step_status::CACHED))
+                .filter(|s| StepStatus::Cached.is(s.status.as_deref()))
                 .count() as i64
         }),
         steps_failed: None,

@@ -5,7 +5,7 @@
 use super::{Server, encode, in_files};
 use crate::error::{CliError, Context, ErrorKind};
 use barca_core::BarcaError;
-use barca_core::status::CacheState;
+use barca_core::cache_state::CacheState;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -210,7 +210,9 @@ pub(crate) async fn run_detail(
     // lists the cached steps it streamed, until the server restarts.
     let listed = steps.len();
     if !matches!(run.status.as_str(), "pending" | "running") {
-        steps.retain(|step| step.status != crate::output::step_status::CACHED);
+        steps.retain(|step| {
+            !barca_core::step_status::StepStatus::Cached.is(Some(step.status.as_str()))
+        });
     }
     // A server older than 0.30.2 lists every step and sends no page. The cached steps left
     // out above are not counted either.

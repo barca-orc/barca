@@ -509,7 +509,7 @@ fn relative_to_root(path: &Path, root: Option<&Path>) -> PathBuf {
 /// The sha256 of a root-relative file on this machine; `None` when it is not here.
 fn local_sha256(path: &str, root: Option<&Path>) -> Option<String> {
     let bytes = std::fs::read(root?.join(path)).ok()?;
-    Some(barca_server::shims::sha256_hex(&bytes))
+    Some(barca_core::hash::sha256_hex(&bytes))
 }
 
 // ─── 5. inspection ──────────────────────────────────────────────────────────

@@ -50,7 +50,7 @@ fn report(state: &AppState, phase: ServerPhase) -> ServerReport {
         .unwrap_or(0);
     ServerReport {
         phase,
-        start_unix_ns: crate::shims::unix_nanos(),
+        start_unix_ns: barca_core::time::now_nanos_u64(),
         files: state.config.files.len(),
         nodes,
         schedules,

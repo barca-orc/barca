@@ -32,7 +32,7 @@ pub(crate) mod execution;
 pub mod freshness;
 pub mod gc;
 pub mod groups;
-pub(crate) mod hash;
+pub mod hash;
 pub mod helper_proc;
 pub mod history_filter;
 pub mod http;

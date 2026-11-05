@@ -104,6 +104,12 @@ pub(crate) fn short_digest(bytes: &[u8]) -> String {
     hex
 }
 
+/// The SHA-256 of `bytes` as lowercase hex (a deployed file's digest in `GET /project`, and
+/// what the CLI compares its copy against).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 /// The SHA-256 of the file at `path`, as lowercase hex.
 pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
     use std::io::Read;
