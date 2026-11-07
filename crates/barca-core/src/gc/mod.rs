@@ -28,7 +28,7 @@
 //! under `.barca/` that a row or a leftover names are deleted); this
 //! command's outputs and inputs; results a run in flight in this process holds ([`Pin`]); with
 //! another live run on this `.barca/`, anything but tiers 1 and 2; the current result of a
-//! `Manual` node with no store copy.
+//! `Manual` node with no store copy; the materialization an asset is pinned at (`barca pin`).
 //!
 //! **Deleting** a file comes first, recording `evicted_at` second: a crash between the two
 //! leaves a row whose file is missing, which a run handles as before (#252).
@@ -1387,6 +1387,14 @@ async fn protections(
             }
         }
     }
+    // An asset pinned with `barca pin` is read as its pinned materialization until unpinned,
+    // and nothing recomputes it: that result is never evicted.
+    let mut user_pins = HashSet::new();
+    for env in envs {
+        if let Ok(pins) = crate::db::get_pins(&env.db_path).await {
+            user_pins.extend(pins.into_iter().map(|p| p.run_hash));
+        }
+    }
     let protect = Protections {
         paths,
         recorded,
@@ -1394,6 +1402,7 @@ async fn protections(
             .run_hashes
             .iter()
             .chain(&pinned.run_hashes)
+            .chain(&user_pins)
             .cloned()
             .collect(),
         nodes: pinned.nodes.iter().chain(&own.nodes).cloned().collect(),

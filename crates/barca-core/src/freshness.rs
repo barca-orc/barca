@@ -3,7 +3,7 @@
 //! - A scheduled tick brings its node up to date and then, in the same run, every `Always` node
 //!   reachable from it going downstream through `Always` nodes only ([`followers`]).
 //! - `Manual` pins itself: a `Manual` asset or task that a run reads but was not asked for is
-//!   served from its latest successful result, not recomputed ([`walk`], [`load_pins`]). One
+//!   served from its latest successful result, not recomputed ([`walk_with`], [`load_pins`]). One
 //!   that has never been computed blocks what reads it.
 //! - Under a tick, a task other than the scheduled one fires only when it is out of date: when
 //!   its last successful run used other versions of its inputs, or a task it reads has run
@@ -117,7 +117,21 @@ pub(crate) struct Walk<'a> {
     pub(crate) stops: Vec<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn walk<'a>(dag: &'a Dag, targets: &[&str], policy: &CachePolicy) -> Walk<'a> {
+    walk_with(dag, targets, policy, &HashSet::new(), true)
+}
+
+/// The walk of `targets`, stopping also at every node in `user` (pinned with `barca pin`), whatever the
+/// policy and even as a target: a pinned asset is never computed. `manual`: stop at `Manual`
+/// nodes too ([`RunRules::pin_manual`]).
+pub(crate) fn walk_with<'a>(
+    dag: &'a Dag,
+    targets: &[&str],
+    policy: &CachePolicy,
+    user: &HashSet<String>,
+    manual: bool,
+) -> Walk<'a> {
     let mut visited: HashSet<&str> = HashSet::new();
     let mut stops: HashSet<&str> = HashSet::new();
     let mut queue: VecDeque<&str> = VecDeque::new();
@@ -131,7 +145,9 @@ pub(crate) fn walk<'a>(dag: &'a Dag, targets: &[&str], policy: &CachePolicy) -> 
     while let Some(id) = queue.pop_front() {
         let task_target =
             targets.contains(&id) && dag.get_node(id).is_some_and(|n| n.kind() == NodeKind::Task);
-        if !task_target && pins_itself(dag, id) && !refreshed(policy, id) {
+        if user.contains(id)
+            || (manual && !task_target && pins_itself(dag, id) && !refreshed(policy, id))
+        {
             stops.insert(id);
             continue;
         }
@@ -166,6 +182,8 @@ pub(crate) struct Pin {
     pub(crate) output: OutputRef,
     /// Its inputs' latest results or its code differ from the ones it was computed with.
     pub(crate) stale: bool,
+    /// Set for an asset pinned with `barca pin` (not a `Manual` node): the pin it is read by.
+    pub(crate) user: Option<db::AssetPin>,
 }
 
 /// The `Manual` nodes of a [`Walk`], with what each is read as.
@@ -174,6 +192,9 @@ pub(crate) struct Pins {
     pub(crate) pinned: HashMap<String, Pin>,
     /// `Manual` nodes that have never been computed: nothing below them can run.
     pub(crate) never: Vec<String>,
+    /// Pinned assets whose pinned materialization can no longer be read: nothing below them
+    /// can run until they are unpinned or pinned again.
+    pub(crate) lost: Vec<String>,
 }
 
 /// Look up each stop's latest successful result. `cache` is `None` when there is no metadata
@@ -182,9 +203,31 @@ pub(crate) async fn load_pins(
     cache: Option<&db::CacheReader>,
     dag: &Dag,
     stops: &[String],
+    user: &std::collections::BTreeMap<String, db::AssetPin>,
 ) -> Pins {
     let mut pins = Pins::default();
     for id in stops {
+        if let Some(pin) = user.get(id) {
+            let found = match cache {
+                Some(cache) => db::success_at(cache, id, &pin.run_hash).await,
+                None => None,
+            };
+            match found {
+                Some(output) => {
+                    pins.pinned.insert(
+                        id.clone(),
+                        Pin {
+                            run_hash: pin.run_hash.clone(),
+                            output,
+                            stale: false,
+                            user: Some(pin.clone()),
+                        },
+                    );
+                }
+                None => pins.lost.push(id.clone()),
+            }
+            continue;
+        }
         let latest = match cache {
             Some(cache) => db::latest_success(cache, id).await,
             None => None,
@@ -199,6 +242,7 @@ pub(crate) async fn load_pins(
                         run_hash: row.run_hash,
                         output: row.output,
                         stale,
+                        user: None,
                     },
                 );
             }
@@ -273,6 +317,7 @@ pub(crate) async fn is_stale(
     current != run_hash
 }
 
+#[cfg(test)]
 /// The `Manual` node that blocks `target`: one in its walk that has never been computed.
 pub(crate) fn blocked_on(
     dag: &Dag,
@@ -287,6 +332,16 @@ pub(crate) fn blocked_on(
         .stops
         .into_iter()
         .find(|stop| never.contains(stop))
+}
+
+/// The error for a pinned asset whose pinned materialization is gone.
+pub(crate) fn pin_lost(id: &str) -> String {
+    let name = short_name(id);
+    format!(
+        "'{name}' is pinned, but its pinned materialization is no longer recorded with a \
+         readable artifact\nRun `barca unpin {name}`, or pin another version \
+         (`barca pin {name} --versions`)."
+    )
 }
 
 /// The command that recomputes the `Manual` node `id`.
@@ -459,6 +514,39 @@ mod tests {
         // from an unscheduled node.
         assert_eq!(names(&followers(&d, &id(&d, "tick"))), Vec::<&str>::new());
         assert_eq!(names(&all), ["clean"]);
+    }
+
+    #[test]
+    fn the_walk_stops_at_a_pinned_asset_whatever_the_policy() {
+        let d = dag(&[
+            node("raw", 'a', "always", &[]),
+            node("model", 'a', "manual", &["raw"]),
+            node("scored", 'a', "always", &["model"]),
+        ]);
+        let (raw, scored) = (id(&d, "raw"), id(&d, "scored"));
+        let user: HashSet<String> = [raw.clone()].into();
+        for policy in [CachePolicy::CacheAware, CachePolicy::RefreshAll] {
+            // Without `pin_manual`, only the pin stops the walk.
+            let w = walk_with(&d, &[&scored], &policy, &user, false);
+            assert_eq!(names(&w.stops), ["raw"]);
+            assert_eq!(w.cone.len(), 3);
+            // A pinned target is read as it is too, even when refreshed.
+            let w = walk_with(&d, &[&raw], &policy, &user, true);
+            assert_eq!(names(&w.stops), ["raw"]);
+        }
+        let named = CachePolicy::RefreshSelective {
+            names: vec!["raw".into()],
+            cascade: true,
+        };
+        let w = walk_with(&d, &[&raw], &named, &user, true);
+        assert_eq!(
+            names(&w.stops),
+            ["raw"],
+            "--refresh does not recompute a pinned asset"
+        );
+        // With `pin_manual`, the Manual node stops the walk before the pin is reached.
+        let w = walk_with(&d, &[&scored], &CachePolicy::CacheAware, &user, true);
+        assert_eq!(names(&w.stops), ["model"]);
     }
 
     #[test]

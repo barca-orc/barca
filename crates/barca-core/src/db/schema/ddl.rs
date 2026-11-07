@@ -176,6 +176,8 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     // The run hash each `@sink` of a step last published (#662, 0.34.0), so a cache hit
     // under another run hash republishes its sinks from the cached artifact.
     ("sink_publications", crate::sink_publications::CREATE),
+    // Assets held at an earlier materialization (`barca pin`, 0.41.0).
+    ("asset_pins", crate::db::pins::CREATE),
     // The component digests of a definition, once: the rows of its keys name it (`crate::changes`).
     (
         "definition_components",

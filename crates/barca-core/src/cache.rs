@@ -184,6 +184,9 @@ impl RunReason {
     }
 }
 
+/// The `reason` of a step served from its pin (`barca pin`).
+pub(crate) const PINNED_REASON: &str = "pinned";
+
 /// Why a step that is not cached for its run hash is served from an earlier result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Held {
@@ -194,6 +197,8 @@ pub(crate) enum Held {
     UpToDate,
     /// A matching cache hit after a refreshed cutoff wrote unchanged bytes.
     CutoffUnchanged,
+    /// Pinned with `barca pin`: its pinned materialization, until `barca unpin`.
+    Pinned,
 }
 
 impl Held {
@@ -206,6 +211,10 @@ impl Held {
             }
             Held::CutoffUnchanged => "unchanged cutoff bytes: refresh propagation stopped",
             Held::UpToDate => "up to date: its last successful run used these inputs",
+            Held::Pinned => {
+                "pinned: its pinned materialization is read as it is and never recomputed; \
+                 `barca unpin` it to compute it again"
+            }
         }
     }
 }
@@ -762,7 +771,10 @@ pub(crate) async fn decide_step(
         let decision = Decision::Cached {
             oref: pin.output.clone(),
             stale_root: None,
-            held: Some(Held::Manual { stale: pin.stale }),
+            held: Some(match pin.user {
+                Some(_) => Held::Pinned,
+                None => Held::Manual { stale: pin.stale },
+            }),
         };
         return Ok((step, decision));
     }

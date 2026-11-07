@@ -54,6 +54,8 @@ barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]  A run's recorded s
 barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
                                                Show recent runs, or one run's steps and errors
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
+barca pin [target] [--previous|--run-hash H|--versions]  Hold an asset at an earlier result (experimental)
+barca unpin <target>                         Release a pinned asset (experimental)
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
 barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
                                                Run the HTTP API server
@@ -509,6 +511,18 @@ whenever barca cannot establish that its process is gone. Earlier runs retain th
 process-id and host-name checks. See
 `barca docs layout`, "While a run is going, and after one is killed", and the shared-state
 [limitations](/reference/remote-storage/#limitations).
+
+## pin and unpin
+
+Roll an asset back to an earlier materialization: every run (downstream steps, `barca get`,
+`barca.get()`, schedules) reads the pinned result and nothing recomputes the asset until
+`barca unpin`. Experimental; the full semantics are in [Pinning and Rollback](/reference/pins/).
+
+```bash
+barca pin orders --versions          # recent successful materializations to choose from
+barca pin orders --previous          # roll back one version
+barca unpin orders                   # back to normal
+```
 
 ## gc
 

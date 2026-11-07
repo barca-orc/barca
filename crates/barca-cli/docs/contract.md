@@ -50,6 +50,8 @@ command is experimental with it):
 |---|---|
 | `barca tokens` | new in 0.36 (RFC-0016): local bootstrap for opt-in project token access |
 | `barca tokens bootstrap` | prints a one-use bootstrap credential; token formats may evolve |
+| `barca pin` | new in 0.41 (barca docs pins): the JSON shapes, the version list and what a pin covers may change after field use |
+| `barca unpin` | new in 0.41 (barca docs pins): the JSON shape may change after field use |
 | `barca doctor` | new prerequisite report; check names and provider-specific data may evolve |
 | `barca gc` | new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use |
 | `barca history <RUN_ID>` | new in 0.29.3: the run detail's step keys and human layout may change after field use |
@@ -124,6 +126,7 @@ stability; the row adds the keys and routes that go with it.
 | `partitions.failed` and `partitions.failed_keys` in `status --json`, `steps_page.nodes` in `history RUN_ID --json`, `recent_runs[].keys` and `recent_runs[].failed_keys` in `stats --json` | new in 0.38.0: what counts as a failed key (its latest attempt failed, with no later success) may change after field use |
 | `steps[].batch_execution` and `metadata_seconds` in `get`/`run` JSON, the `[barca] batch:<node> ...` and `[barca] metadata ...` lines | new in 0.38.0 (RFC-0013): which phases are reported and what each one covers may change after field use |
 | `steps_page.nodes[].status` (`ran`, `cached`, `skipped`) and `steps_page.nodes[].blocked_by` in `history RUN_ID --json` with a server | the server lists every planned node of a finished run whose plan it can rebuild; the local `history RUN_ID` lists only nodes with recorded steps and never has these keys (`barca docs server-mode`) |
+| `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin` | new in 0.41 (`barca docs pins`): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 HTTP-only keys: `failing_since` and `consecutive_failures` (rows of `GET /state`), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
@@ -176,6 +179,7 @@ own row above.
   are unmet (#655, #656).
 - `barca queue`: stays experimental. It reads `serve`'s run queue, which stays experimental,
   and its JSON has no schema snapshot.
+- `barca pin` and `barca unpin`: stay experimental. New in 0.41.
 - `barca tokens` and `barca tokens bootstrap`: stay experimental. New in 0.36.0 (RFC-0016); the
   token format may evolve, and the cost of token access in a cloud deployment is not
   established.
@@ -201,6 +205,8 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca history` | `[<RUN_ID>]` | stable | Show recent run history, or one run's steps and errors |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
+| `barca pin` | `[<TARGET>] [<FILES>...]` | experimental: new in 0.41 (barca docs pins): the JSON shapes, the version list and what a pin covers may change after field use | Pin an asset to an earlier materialization, or list pins and versions |
+| `barca unpin` | `<TARGET> [<FILES>...]` | experimental: new in 0.41 (barca docs pins): the JSON shape may change after field use | Remove an asset's pin; the next run decides it as before |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open | Manage runs, schedules and results on a server |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
@@ -392,6 +398,37 @@ default, and any aliases.
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
 | `--examples` | - | - | stable | Show all command examples without running anything |
+
+#### barca pin
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<TARGET>` | - | - | experimental (with the command) | The asset (a function name or node id); omit to list every pin |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
+| `--run-hash` | `HASH` | - | experimental (with the command) | Pin the successful materialization with this run hash (or a unique prefix of at least 6 characters), from `--versions` |
+| `--previous` | - | default `false` | experimental (with the command) | Pin the newest successful materialization before the latest one (roll back one version) |
+| `--versions` | - | default `false` | experimental (with the command) | List the asset's recent successful materializations (one per run hash) instead of pinning |
+| `-l, --limit` | `LIMIT` | - | experimental (with the command) | With --versions, the most listed (default 20) |
+| `--reason` | `TEXT` | - | experimental (with the command) | Why it is pinned, recorded with the pin and shown in the UI |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
+
+#### barca unpin
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<TARGET>` | - | required | experimental (with the command) | The pinned asset (a function name or node id) |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca serve
 
@@ -886,7 +923,7 @@ may grow.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
+  words. A `cached` step served from a pin (`barca docs pins`) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
   or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
   `partition_selection`, and the result has `partition_selection` (see "Partitioned targets").
   After a partition key fails, a key of a node that reads it key for key is a step with `status`

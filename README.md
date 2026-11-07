@@ -190,6 +190,8 @@ runnable example collection, and `barca docs <topic>` for detailed behavior.
 | `barca history [<RUN_ID>]` | Show recent run history, or one run's steps and errors |
 | `barca gc` | Evict cached results to keep .barca/ under its size limit (experimental) |
 | `barca stats <TARGET> [<FILES>...]` | Show execution statistics for an asset |
+| `barca pin [<TARGET>] [<FILES>...]` | Pin an asset to an earlier materialization, or list pins and versions (experimental) |
+| `barca unpin <TARGET> [<FILES>...]` | Remove an asset's pin; the next run decides it as before (experimental) |
 | `barca serve [<FILES>...]` | Manage runs, schedules and results on a server (experimental) |
 | `barca queue [<ACTION>]` | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca list [<FILES>...]` | List all discovered definitions (assets, tasks, sensors) with their deps |

@@ -2,6 +2,7 @@
 //! existing cache and the pins the run holds.
 
 use super::*;
+use std::collections::HashSet;
 
 pub(super) struct Prepared {
     pub(super) dag: std::sync::Arc<Dag>,
@@ -72,52 +73,86 @@ pub(super) async fn pin_manual<'a>(
         pinned: HashMap::new(),
         blocked: Vec::new(),
     };
-    if !rules.pin_manual || targets.is_empty() {
-        return Ok(planned);
-    }
-    let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let walk = crate::freshness::walk(dag, &ids, policy);
-    if walk.stops.is_empty() {
+    if targets.is_empty() {
         return Ok(planned);
     }
     let cache = existing_cache(cfg).await?;
-    let pins = crate::freshness::load_pins(cache.as_ref(), dag, &walk.stops).await;
+    // Assets pinned with `barca pin`: read as their pinned materialization by every run.
+    let user = match &cache {
+        Some(cache) => db::pins_on(cache.conn()).await?,
+        None => Default::default(),
+    };
+    let user_ids: HashSet<String> = user.keys().cloned().collect();
+    if !rules.pin_manual && user.is_empty() {
+        return Ok(planned);
+    }
+    let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
+    let walk = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual);
+    if walk.stops.is_empty() {
+        return Ok(planned);
+    }
+    let pins = crate::freshness::load_pins(cache.as_ref(), dag, &walk.stops, &user).await;
     drop(cache);
-    if let Some(first) = pins.never.first() {
-        if rules.tick.is_none() {
-            return Err(crate::freshness::never_computed(dag, first, file_args));
-        }
+    if let Some(first) = pins.lost.first()
+        && rules.tick.is_none()
+    {
+        return Err(BarcaError::Usage(crate::freshness::pin_lost(first)));
+    }
+    if let Some(first) = pins.never.first()
+        && rules.tick.is_none()
+    {
+        return Err(crate::freshness::never_computed(dag, first, file_args));
+    }
+    if !pins.never.is_empty() || !pins.lost.is_empty() {
         targets.retain(|(name, id)| {
-            match crate::freshness::blocked_on(dag, id, policy, &pins.never) {
-                Some(manual) => {
-                    planned.blocked.push((
-                        name.clone(),
-                        TargetOutcome {
-                            status: StepStatus::Blocked.to_string(),
-                            final_output: None,
-                            error: Some(format!(
-                                "blocked on '{}', a Manual node that has never been computed",
-                                short_name(&manual)
-                            )),
-                            failed_node: Some(manual),
-                            failed_phase: None,
-                            partitions: None,
-                            key_summary: None,
-                        },
-                    ));
-                    false
-                }
-                None => true,
-            }
+            let stops =
+                crate::freshness::walk_with(dag, &[id], policy, &user_ids, rules.pin_manual).stops;
+            let (node, error) = if let Some(lost) = stops.iter().find(|s| pins.lost.contains(s)) {
+                (
+                    lost.clone(),
+                    format!(
+                        "blocked on '{}', pinned to a materialization that can no longer be read",
+                        short_name(lost)
+                    ),
+                )
+            } else if let Some(manual) = stops.iter().find(|s| pins.never.contains(s)) {
+                (
+                    manual.clone(),
+                    format!(
+                        "blocked on '{}', a Manual node that has never been computed",
+                        short_name(manual)
+                    ),
+                )
+            } else {
+                return true;
+            };
+            planned.blocked.push((
+                name.clone(),
+                TargetOutcome {
+                    status: StepStatus::Blocked.to_string(),
+                    final_output: None,
+                    error: Some(error),
+                    failed_node: Some(node),
+                    failed_phase: None,
+                    partitions: None,
+                    key_summary: None,
+                },
+            ));
+            false
         });
     }
     let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let mut cone = crate::freshness::walk(dag, &ids, policy).cone;
+    let mut cone = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual).cone;
     // Outside a tick, the sensors a pinned node reads directly are polled too, so the stale note
     // compares against what they return now, not what they returned last time.
     if rules.tick.is_none() {
         let mut planned_ids: std::collections::HashSet<&str> = cone.iter().copied().collect();
-        for id in pins.pinned.keys() {
+        for id in pins
+            .pinned
+            .iter()
+            .filter(|(_, pin)| pin.user.is_none())
+            .map(|(id, _)| id)
+        {
             for up in dag.upstream(id) {
                 if dag
                     .get_node(up)

@@ -44,6 +44,7 @@ mod follow;
 mod inspect;
 mod ledger;
 mod logs;
+pub(crate) mod pins;
 mod runs;
 mod sse;
 #[cfg(test)]

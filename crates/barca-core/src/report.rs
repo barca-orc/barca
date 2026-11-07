@@ -909,6 +909,9 @@ pub(crate) fn report_for(
             r.artifact = Some(oref.path.clone());
             if let Some(held) = held {
                 r.detail = Some(held.detail().to_string());
+                if *held == crate::cache::Held::Pinned {
+                    r.reason = Some(crate::cache::PINNED_REASON.to_string());
+                }
             }
             if let Some(root) = stale_root {
                 r.warning = Some(stale_warning(&display_id, root, dry));

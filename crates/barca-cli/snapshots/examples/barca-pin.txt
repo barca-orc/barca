@@ -1,0 +1,59 @@
+Pin an asset to an earlier materialization, or list pins and versions
+
+Usage: barca pin [OPTIONS] [TARGET] [FILES]...
+
+Arguments:
+  [TARGET]
+          The asset (a function name or node id); omit to list every pin
+
+  [FILES]...
+          Python files or directories; default: discover the project
+
+Options:
+      --run-hash <HASH>
+          Pin the successful materialization with this run hash (or a unique prefix of at least 6 characters), from `--versions`
+
+      --previous
+          Pin the newest successful materialization before the latest one (roll back one version)
+
+      --versions
+          List the asset's recent successful materializations (one per run hash) instead of pinning
+
+  -l, --limit <LIMIT>
+          With --versions, the most listed (default 20)
+
+      --reason <TEXT>
+          Why it is pinned, recorded with the pin and shown in the UI
+
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --env <ENV>
+          Use a separate cache and history for this environment
+
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Use independent local state; ignore the configured server
+
+  -h, --help
+          Show concise command help
+
+      --examples
+          Show all command examples without running anything
+
+Examples:
+  barca pin orders --versions                  # recent successful materializations to choose from
+  barca pin orders --previous                  # roll back to the version before the latest
+  barca pin orders --run-hash 3f9a1c --reason "bad feed on 11-07"   # pin one version (a hash prefix)
+  barca pin orders pipeline.py --previous --json   # {node_id, pin, version, replaced}
+  barca pin                                    # every pinned asset
+  barca pin --json                             # {pins: [...]}
+  barca pin orders --versions --limit 5 --json # {node_id, pinnable, pin, versions}
+  barca pin orders --previous --server         # pin on the configured barca server
+
+More: barca docs pins

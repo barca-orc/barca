@@ -273,3 +273,13 @@
 .barca-reset-dialog code { font-family: var(--font-mono); font-size: 0.95em; overflow-wrap: anywhere; }
 .barca-reset-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .barca-reset-error { color: var(--status-failed); }
+
+/* barca · Versions (components/assets/AssetVersions.tsx): an asset's materializations and its pin. */
+.barca-pin-banner { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin: 0 0 8px; border: 1px solid var(--border-default); border-left: 3px solid var(--signal, currentColor); border-radius: 6px; }
+.barca-pin-banner > div { flex: 1; min-width: 0; }
+.barca-pin-banner .barca-note { margin: 2px 0 0; }
+.barca-versions { list-style: none; margin: 0; padding: 0; }
+.barca-version { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border-default); }
+.barca-version:first-child { border-top: 0; }
+.barca-version-what { display: flex; flex-direction: column; min-width: 0; }
+.barca-version-pinned code { font-weight: 600; }

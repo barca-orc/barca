@@ -25,6 +25,9 @@ import type {
   QueueView,
   TokenMetadata,
   IssuedToken,
+  AssetVersions,
+  PinResult,
+  UnpinResult,
 } from './types'
 
 
@@ -148,6 +151,13 @@ export const api = {
   /** Pause the queue: runs keep being accepted, none starts until resumed. 403 on a read-only server. */
   pauseQueue: () => request<QueueView>('/queue/pause', { method: 'POST' }),
   resumeQueue: () => request<QueueView>('/queue/resume', { method: 'POST' }),
+  /** An asset's recent successful materializations and its pin (`barca pin <name> --versions`). */
+  assetVersions: (name: string) => request<AssetVersions>(`/assets/${encodeURIComponent(name)}/versions`),
+  /** Pin an asset to one of its versions (`barca pin`). 403 on a read-only server. */
+  pinAsset: (name: string, runHash: string, reason?: string) =>
+    request<PinResult>(`/assets/${encodeURIComponent(name)}/pin`, { method: 'POST', body: JSON.stringify({ run_hash: runHash, reason: reason ?? null }) }),
+  /** Remove an asset's pin (`barca unpin`). */
+  unpinAsset: (name: string) => request<UnpinResult>(`/assets/${encodeURIComponent(name)}/pin`, { method: 'DELETE' }),
   /** `barca state reset`: move the metadata database aside and start an empty one. */
   resetState: () => request<ResetResult>('/state/reset', { method: 'POST' }),
 }

@@ -198,6 +198,8 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
         Cli::Sql { format, .. }
         | Cli::Logs { format, .. }
         | Cli::Queue { format, .. }
+        | Cli::Pin { format, .. }
+        | Cli::Unpin { format, .. }
         | Cli::Doctor { format, .. }
         | Cli::Gc { format, .. } => is_json(*format),
         Cli::State { command } => match command {
@@ -218,6 +220,8 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::Plan { files, .. } => ("plan", paths(files)),
         Cli::Doctor { files, .. } => ("doctor", paths(files)),
         Cli::Stats { files, .. } => ("stats", paths(files)),
+        Cli::Pin { files, .. } => ("pin", paths(files)),
+        Cli::Unpin { files, .. } => ("unpin", paths(files)),
         Cli::Serve { files, .. } => ("serve", paths(files)),
         Cli::List { files, .. } => ("list", paths(files)),
         Cli::Sql { files, .. } => ("sql", paths(files)),
@@ -474,6 +478,8 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         }
         Cli::Plan { files, .. }
         | Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
         | Cli::Serve { files, .. }
         | Cli::Sql { files, .. }
         | Cli::List { files, .. } => {

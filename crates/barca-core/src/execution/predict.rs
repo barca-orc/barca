@@ -545,7 +545,10 @@ pub(super) async fn predict_steps(
             Decision::Cached { oref, held, .. } => {
                 ctx.summary.cached += 1;
                 ctx.all_outputs.insert(step.step_id.display(), oref);
-                if !matches!(held, Some(crate::cache::Held::Manual { .. })) {
+                if !matches!(
+                    held,
+                    Some(crate::cache::Held::Manual { .. } | crate::cache::Held::Pinned)
+                ) {
                     ctx.cached_steps.remember(step);
                 }
             }

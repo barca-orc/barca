@@ -53,6 +53,7 @@ pub mod outcome;
 pub mod parse;
 pub mod pending_uploads;
 mod persist;
+pub mod pins;
 pub(crate) mod planner;
 pub(crate) mod project_modules;
 pub(crate) mod protocol;
