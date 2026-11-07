@@ -23,7 +23,12 @@ def beat(source: dict) -> None:
 
 def _cli(root, *args):
     return subprocess.run(
-        [_find_binary(), *args], cwd=root, env=clean_env(), capture_output=True, text=True, timeout=60
+        [_find_binary(), *args],
+        cwd=root,
+        env=clean_env(),
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 
