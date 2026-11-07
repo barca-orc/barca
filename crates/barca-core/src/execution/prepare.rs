@@ -57,7 +57,8 @@ pub(super) fn blocked_steps(
         .collect()
 }
 
-/// The metadata DB for a read, or `None` when there is none yet (nothing was computed).
+/// The metadata DB for a read, or `None` when there is none yet, or it is an empty file
+/// (nothing was computed).
 pub(super) async fn existing_cache(
     cfg: &crate::config::ResolvedConfig,
 ) -> Result<Option<db::CacheReader>, BarcaError> {
@@ -143,7 +144,14 @@ pub(super) async fn pin_manual<'a>(
         return Ok(planned);
     }
     let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let walk = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual, &planned.paused);
+    let walk = crate::freshness::walk_with(
+        dag,
+        &ids,
+        policy,
+        &user_ids,
+        rules.pin_manual,
+        &planned.paused,
+    );
     if walk.stops.is_empty() {
         return Ok(planned);
     }
@@ -161,8 +169,15 @@ pub(super) async fn pin_manual<'a>(
     }
     if !pins.never.is_empty() || !pins.lost.is_empty() {
         targets.retain(|(name, id)| {
-            let stops =
-                crate::freshness::walk_with(dag, &[id], policy, &user_ids, rules.pin_manual, &planned.paused).stops;
+            let stops = crate::freshness::walk_with(
+                dag,
+                &[id],
+                policy,
+                &user_ids,
+                rules.pin_manual,
+                &planned.paused,
+            )
+            .stops;
             let (node, error) = if let Some(lost) = stops.iter().find(|s| pins.lost.contains(s)) {
                 (
                     lost.clone(),
@@ -209,7 +224,15 @@ pub(super) async fn pin_manual<'a>(
         });
     }
     let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let mut cone = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual, &planned.paused).cone;
+    let mut cone = crate::freshness::walk_with(
+        dag,
+        &ids,
+        policy,
+        &user_ids,
+        rules.pin_manual,
+        &planned.paused,
+    )
+    .cone;
     // Outside a tick, the sensors a pinned node reads directly are polled too, so the stale note
     // compares against what they return now, not what they returned last time.
     if rules.tick.is_none() {

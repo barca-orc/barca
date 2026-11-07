@@ -36,10 +36,10 @@ async fn has_table(conn: &libsql::Connection) -> Result<bool, BarcaError> {
     Ok(found)
 }
 
-/// Every paused node, by id order. A database without the table (one older than it, or none
-/// at all) has none.
+/// Every paused node, by id order. A database without the table (one older than it, an empty
+/// file a run is about to initialize, or none at all) has none.
 pub async fn get_asset_pauses(db_path: &str) -> Result<Vec<AssetPause>, BarcaError> {
-    if !Path::new(db_path).exists() {
+    if fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
         return Ok(Vec::new());
     }
     let _g = db_guard_for(db_path).await;

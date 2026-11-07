@@ -440,12 +440,26 @@ mod tests {
         let report = id(&d, "report");
         let none = HashSet::new();
         let paused: HashSet<String> = [id(&d, "clean")].into_iter().collect();
-        let w = walk_with(&d, &[&report], &CachePolicy::CacheAware, &none, true, &paused);
+        let w = walk_with(
+            &d,
+            &[&report],
+            &CachePolicy::CacheAware,
+            &none,
+            true,
+            &paused,
+        );
         assert_eq!(w.stops, [id(&d, "clean")]);
         assert!(!w.cone.contains(&id(&d, "raw").as_str()));
         // A paused target is not a stop: the tick removes it before walking.
         let clean = id(&d, "clean");
-        let w = walk_with(&d, &[&clean], &CachePolicy::CacheAware, &none, true, &paused);
+        let w = walk_with(
+            &d,
+            &[&clean],
+            &CachePolicy::CacheAware,
+            &none,
+            true,
+            &paused,
+        );
         assert!(w.stops.is_empty());
     }
 
@@ -568,7 +582,14 @@ mod tests {
             "--refresh does not recompute a pinned asset"
         );
         // With `pin_manual`, the Manual node stops the walk before the pin is reached.
-        let w = walk_with(&d, &[&scored], &CachePolicy::CacheAware, &user, true, &HashSet::new());
+        let w = walk_with(
+            &d,
+            &[&scored],
+            &CachePolicy::CacheAware,
+            &user,
+            true,
+            &HashSet::new(),
+        );
         assert_eq!(names(&w.stops), ["model"]);
     }
 
