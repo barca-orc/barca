@@ -43,7 +43,8 @@ pub(super) fn blocked_steps(dag: &Dag, blocked: &[(String, TargetOutcome)]) -> V
 pub(super) async fn existing_cache(
     cfg: &crate::config::ResolvedConfig,
 ) -> Result<Option<db::CacheReader>, BarcaError> {
-    if std::path::Path::new(&cfg.db_path).exists() {
+    // An empty file is a database the run is about to initialize: nothing was computed.
+    if std::fs::metadata(&cfg.db_path).is_ok_and(|m| m.len() > 0) {
         Ok(Some(db::CacheReader::for_config(cfg).await?))
     } else {
         Ok(None)
