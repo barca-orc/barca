@@ -96,10 +96,13 @@ function matchesLastRun(row: AssetRow, lastRun: LastRun, nowMs: number): boolean
 
 type Group = 'states' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
 
-/** The state filter, as a group: any of the picked states, or a failed last attempt when asked. */
+/**
+ * The state filter, as a group, by the one state each row shows: `failing` (a failed last
+ * attempt) or else its cache state, so a chip's count is the rows it shows.
+ */
 function matchesStates(r: AssetRow, f: Filters): boolean {
   if (f.states.length === 0 && !f.failed) return true
-  return f.states.includes(r.state) || (f.failed && r.lastFailed)
+  return r.lastFailed ? f.failed : f.states.includes(r.state)
 }
 
 interface FilterOptions {
@@ -139,8 +142,8 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
   const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
   let failed = 0
   for (const r of filterExcept(rows, f, nowMs, 'states', opts)) {
-    states[r.state] += 1
     if (r.lastFailed) failed += 1
+    else states[r.state] += 1
   }
 
   const kinds = { asset: 0, task: 0, sensor: 0 } as Record<Kind, number>

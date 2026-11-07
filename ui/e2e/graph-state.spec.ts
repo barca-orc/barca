@@ -5,14 +5,14 @@ test('linear intermediates remain visible with persistent status and deep links'
   await page.route(/\/state(?:\?.*)?$/,route=>route.fulfill({json:assets.map((a,i)=>({...a,name:a.id.split(':')[1],partitioned:false,cache:{state:i===4?'never_run':'cached',reason:'materialized',detail:'demo'},last_materialization:i===2?{status:'failed',error:'validation failed',created_at:'today',elapsed_seconds:null,run_hash:null,artifact:null,format:null,size_bytes:null}:null,shape:null,env:[],durations:null,next_run:null}))}))
   await page.goto('/ui/#/graph')
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
-  // The state word as the server says it; a failed last attempt is a fact beside a cached state.
+  // One state per node, in plain words: a failed last attempt shows as failing instead of the cache word.
   const report = page.locator('.react-flow__node').filter({hasText:'report'}).locator('.barca-dag')
   await expect(report).toHaveAttribute('data-tone','neutral')
-  await expect(report).toContainText('never_run')
+  await expect(report).toContainText('never run')
   const validate = page.locator('.react-flow__node').filter({hasText:'validate'}).locator('.barca-dag')
   await expect(validate).toHaveAttribute('data-failed','true')
-  await expect(validate).toContainText('cached')
-  await expect(validate).toContainText('last attempt failed')
+  await expect(validate).toContainText('failing')
+  await expect(validate).not.toContainText('fresh')
   await page.getByRole('button',{name:'Top-down layout'}).click()
   await page.locator('.react-flow__node').filter({hasText:'validate'}).click()
   await expect(page.getByText('validation failed',{exact:true})).toBeVisible()

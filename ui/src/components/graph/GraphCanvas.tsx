@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, type KeyboardEvent, type Ref } from 'react'
+import { plural } from '@/lib/plural'
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -213,7 +214,7 @@ export function GraphCanvas({
   if (!laidOut) {
     return (
       <div className="barca-graph-pending" role="status">
-        Laying out {assets.length} nodes…
+        Laying out {plural(assets.length, 'node')}…
       </div>
     )
   }

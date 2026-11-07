@@ -5,6 +5,7 @@
  */
 
 import { formatSeconds } from './assetTable'
+import { plural } from './plural'
 import type { AssetRunEntry, CacheStatus } from './types'
 import type { RunNodeSummary } from './generated/RunNodeSummary'
 
@@ -187,7 +188,7 @@ export function partitionSelection(key: string): string {
 export function runPace(run: Pick<RunNodeSummary, 'calls' | 'keys' | 'elapsed_seconds'> | null | undefined): string | null {
   if (!run || run.keys === 0 || (run.elapsed_seconds === 0 && run.calls === 0)) return null
   if (run.calls > 0) return `${formatSeconds(run.elapsed_seconds / run.calls)} / call · ${run.calls.toLocaleString()} ${run.calls === 1 ? 'call' : 'calls'}`
-  return `${formatSeconds(run.elapsed_seconds)} / run · ${run.keys.toLocaleString()} keys`
+  return `${formatSeconds(run.elapsed_seconds)} / run · ${plural(run.keys, 'key')}`
 }
 
 interface BarSegments {

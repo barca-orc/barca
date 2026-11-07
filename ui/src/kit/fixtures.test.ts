@@ -3,7 +3,7 @@ import { lastAttemptFailed } from '@/lib/cacheStateDisplay'
 import { runFeedback } from '@/lib/runFeedback'
 import { parseOutcome, parseRunStatus } from '@/lib/runs'
 import { runningStatus } from '@/lib/running'
-import { failedNode, failedTask, feedbackInputs, nodeByState, runByStatus, runningByStep, variants } from './fixtures'
+import { failedNode, failedTask, feedbackInputs, neverSucceededNode, nodeByState, runByStatus, runningByStep, variants } from './fixtures'
 
 // The tables' keys are checked by the compiler; these check each value is the state its key
 // names, so the kit never shows one state under another's label.
@@ -15,6 +15,8 @@ describe('kit fixtures', () => {
     }
     expect(lastAttemptFailed(failedNode)).toBe(true)
     expect(lastAttemptFailed(failedTask)).toBe(true)
+    expect(lastAttemptFailed(neverSucceededNode)).toBe(true)
+    expect(neverSucceededNode.last_success_at).toBeNull()
   })
 
   it('has a running node at each step', () => {

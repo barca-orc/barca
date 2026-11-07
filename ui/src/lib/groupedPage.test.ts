@@ -103,7 +103,7 @@ describe('grouped level', () => {
       states: [state('p.py:x'), state('p.py:y'), state('p.py:check__y', { last_materialization: failed })],
     })
     expect(level.visibleEntries.map((e) => e.id)).toEqual(['group:p.py:inner', 'p.py:x'])
-    expect(level.visualStates['group:p.py:inner']).toMatchObject({ tone: 'failed', label: '1 last attempt failed' })
+    expect(level.visualStates['group:p.py:inner']).toMatchObject({ tone: 'failed', label: '1 failing' })
   })
 
   it('a search lists matches below this level with what needs attention first', () => {

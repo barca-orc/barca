@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { match } from 'ts-pattern'
 import { useHealth } from '@/hooks/useHealth'
+import { useProject } from '@/hooks/useProject'
+import { usePageTopbarRun } from '@/hooks/useTopbarRun'
 import { useProgram } from '@/hooks/useProgram'
 import { useRunDetail, useRuns } from '@/hooks/useRuns'
 import { remote } from '@/lib/remote'
@@ -15,6 +17,7 @@ export function RunsPage() {
   const [params, setParams] = useSearchParams()
   const selected = params.get('run')
   const health = useHealth()
+  const root = useProject().data?.root
   const client = useQueryClient()
   // The URL owns the filters: read at each message, so back, forward and a link all apply.
   const filters = parseRunFilters(params)
@@ -40,6 +43,8 @@ export function RunsPage() {
   const runs = useRuns(model.limit)
   const detail = useRunDetail(selected)
 
+  usePageTopbarRun((handle) => dispatch({ type: 'run_selected', id: handle }))
+
   const durableId = detail.data?.run_id
   useEffect(() => {
     if (selected && durableId && durableId !== selected) dispatch({ type: 'run_resolved', id: durableId })
@@ -52,6 +57,7 @@ export function RunsPage() {
       selected={selected ? { id: selected, run: remote(detail), eventGap: params.get('event_gap') === '1' } : null}
       queue={<QueuePanel readOnly={health.data?.read_only} />}
       now={runs.dataUpdatedAt}
+      root={root}
       dispatch={dispatch}
     />
   )

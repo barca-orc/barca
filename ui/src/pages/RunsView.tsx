@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { Fragment, createContext, useContext, useState, type ReactNode } from 'react'
+import { pathBreaks, relativeTraceback } from '@/lib/health'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Absolute, Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
@@ -8,6 +9,7 @@ import { useTimeZone } from '@/context/timeZone'
 import { failedSteps, raisedAt } from '@/lib/runRecovery'
 import { formatSeconds } from '@/lib/assetTable'
 import { zoneName } from '@/lib/time'
+import { plural } from '@/lib/plural'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
@@ -16,6 +18,18 @@ import { statusTone } from '@/lib/status'
 import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runFailed, runFailureLine, runNodeIdle, runNodeOutcome, runNodeTime, runProgress, runRowError, runTargetLines, splitRunSteps, stepsLabel, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunNodeGroup } from '@/lib/runsPage'
 import type { RunList, RunStep, RunView } from '@/lib/types'
+
+/** A step's recorded error: its headline in words, the frames below it in mono, paths short and wrapping at `/`. */
+function Traceback({ error, root }: { error: string; root?: string | null }) {
+  const text = relativeTraceback(error.trim(), root)
+  const [head, ...rest] = text.split('\n')
+  return <div className="barca-run-error">
+    <div className="barca-run-error-head">{head}</div>
+    {rest.length > 0 && <pre className="barca-error barca-traceback">
+      {pathBreaks(rest.join('\n')).map((piece, i) => <Fragment key={i}>{piece}<wbr /></Fragment>)}
+    </pre>}
+  </div>
+}
 
 /** How many steps a list shows before it asks to be expanded. */
 const STEP_ROWS = 50
@@ -42,7 +56,7 @@ function StepButtons({ stepId, failed }: { stepId: string; failed: boolean }) {
 }
 
 /** A run's steps, at most `STEP_ROWS` until expanded. */
-function StepList({ steps }: { steps: readonly RunStep[] }) {
+function StepList({ steps, root }: { steps: readonly RunStep[]; root?: string | null }) {
   const [all, setAll] = useState(false)
   const shown = all ? steps : steps.slice(0, STEP_ROWS)
   return <>
@@ -52,7 +66,7 @@ function StepList({ steps }: { steps: readonly RunStep[] }) {
         <div><StatusBadge size="sm" tone={step.status === 'cached' ? 'neutral' : runTone(step.status)} label={step.status} />
           {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}
           <StepButtons stepId={step.node_id} failed={step.status === 'failed'} /></div>
-        {step.error && <p className="barca-run-error">{step.error}</p>}
+        {step.error && <Traceback error={step.error} root={root} />}
       </li>)}
     </ul>
     {shown.length < steps.length && <Button size="sm" onClick={() => setAll(true)}>Show all {steps.length.toLocaleString()}</Button>}
@@ -63,7 +77,7 @@ function StepList({ steps }: { steps: readonly RunStep[] }) {
  * One planned node of a run: what became of it, and, for one that ran, its keys once opened:
  * failed keys listed at once, successful ones behind their count.
  */
-function RunNodeRow({ group: { summary, steps } }: { group: RunNodeGroup }) {
+function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; root?: string | null }) {
   const [open, setOpen] = useState(summary.failed > 0)
   const outcome = runNodeOutcome(summary)
   const time = runNodeTime(summary, formatSeconds)
@@ -83,15 +97,15 @@ function RunNodeRow({ group: { summary, steps } }: { group: RunNodeGroup }) {
       {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
       <StepButtons stepId={summary.node_id} failed={summary.failed > 0} />
     </summary>
-    {open && failed.length > 0 && <StepList steps={failed} />}
+    {open && failed.length > 0 && <StepList steps={failed} root={root} />}
     {open && ok.length > 0 && (failed.length > 0 || summary.keys > 1
-      ? <details className="barca-run-node-ok"><summary>{ok.length.toLocaleString()} successful key{ok.length === 1 ? '' : 's'}</summary><StepList steps={ok} /></details>
-      : <StepList steps={ok} />)}
+      ? <details className="barca-run-node-ok"><summary>{ok.length.toLocaleString()} successful key{ok.length === 1 ? '' : 's'}</summary><StepList steps={ok} root={root} /></details>
+      : <StepList steps={ok} root={root} />)}
     {open && hidden > 0 && <p className="barca-note">{hidden.toLocaleString()} more keys not listed here.</p>}
   </details>
 }
 
-export function RunPanelView({ id, run, eventGap = false, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; dispatch: Dispatch<RunsMsg> }) {
+export function RunPanelView({ id, run, eventGap = false, root, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; root?: string | null; dispatch: Dispatch<RunsMsg> }) {
   const retry = <Button size="sm" onClick={() => dispatch({ type: 'retry_detail' })}>Retry</Button>
   return (
     <SidePanel label="Run details" title="Run details" subtitle={run.kind === 'ready' ? run.data.run_id : id}
@@ -109,7 +123,7 @@ export function RunPanelView({ id, run, eventGap = false, dispatch }: { id: stri
             <p role="alert">Showing the last loaded run information: {refreshError}</p>
             {retry}
           </Section>}
-          <RunDetails data={data} eventGap={eventGap} onStarted={(runId) => dispatch({ type: 'run_selected', id: runId })} />
+          <RunDetails data={data} eventGap={eventGap} root={root} onStarted={(runId) => dispatch({ type: 'run_selected', id: runId })} />
         </>)
         .exhaustive()}
     </SidePanel>
@@ -146,7 +160,7 @@ function RunSummary({ data, onStarted, onFilter }: { data: RunView; onStarted: (
   </div>
 }
 
-function RunDetails({ data, eventGap, onStarted }: { data: RunView; eventGap: boolean; onStarted: (runId: string) => void }) {
+function RunDetails({ data, eventGap, root, onStarted }: { data: RunView; eventGap: boolean; root?: string | null; onStarted: (runId: string) => void }) {
   const [logStep, setLogStep] = useState<string | null>(null)
   const outcome = parseOutcome(data.outcome)
   const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
@@ -160,21 +174,21 @@ function RunDetails({ data, eventGap, onStarted }: { data: RunView; eventGap: bo
       {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
       <KeyValue label="id"><code className="barca-wrap">{data.run_id}</code></KeyValue>
       <KeyValue label="command">{data.command}</KeyValue>
-      <KeyValue label="target"><code className="barca-wrap">{data.target ?? 'all assets'}</code></KeyValue>
+      <KeyValue label="target">{data.target ? <code className="barca-wrap">{data.target}</code> : 'all assets'}</KeyValue>
       <KeyValue label="triggered by">{triggeredByLabel(data.triggered_by)}</KeyValue>
       <KeyValue label="started"><Absolute at={data.started_at} /></KeyValue>
       <KeyValue label="finished"><Absolute at={data.finished_at} /></KeyValue>
       <KeyValue label="duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</KeyValue>
-      <KeyValue label="steps">{stepsLabel(data.steps_executed, data.steps_cached)}{data.steps_total !== null && <span className="barca-cell-sub"> · {data.steps_total.toLocaleString()} node{data.steps_total === 1 ? '' : 's'} planned</span>}</KeyValue>
-      {(data.error ?? envelope?.error) && <p className="barca-run-error" role="alert"><ErrorLine error={data.error ?? envelope?.error} /></p>}
+      <KeyValue label="steps">{stepsLabel(data.steps_executed, data.steps_cached)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</KeyValue>
+      {(data.error ?? envelope?.error) && <div className="barca-run-error" role="alert"><ErrorLine error={data.error ?? envelope?.error} /></div>}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
     <Section title="Steps">
       {nodes.length > 0
-        ? <div className="barca-run-nodes">{groupRunSteps(data.steps, nodes).map((group) => <RunNodeRow key={group.summary.node_id} group={group} />)}</div>
+        ? <div className="barca-run-nodes">{groupRunSteps(data.steps, nodes).map((group) => <RunNodeRow key={group.summary.node_id} group={group} root={root} />)}</div>
         : data.steps.length === 0
           ? <p className="barca-note">{runIsLive(data.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p>
-          : <StepList steps={data.steps} />}
+          : <StepList steps={data.steps} root={root} />}
       {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length} of {data.steps_page.total} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
     </Section>
     <Section title="Logs">
@@ -197,6 +211,8 @@ export interface RunsViewProps {
   queue?: ReactNode
   /** When the list was loaded (ms since epoch): the activity strip's last hour. */
   now: number
+  /** The project root: traceback paths are shown relative to it. */
+  root?: string | null
   dispatch: Dispatch<RunsMsg>
 }
 
@@ -238,7 +254,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
         </div>
       </div>
       <div className="barca-activity-summary">
-        <strong>{activity.total.toLocaleString()}</strong> runs in the last 24 h
+        <strong>{plural(activity.total, 'run')}</strong> in the last 24 h
         {activity.failed > 0 && <> · <span className="barca-cell-failed">{activity.failed} not successful ({Math.round((activity.failed / activity.total) * 100)}%)</span></>}
         {activity.medianSeconds !== null && <> · median {formatSeconds(activity.medianSeconds)}</>}
         {activity.partial && <> · of the runs loaded</>}
@@ -247,13 +263,13 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
   )
 }
 
-export function RunsView({ model, runs, selected, queue, now, dispatch }: RunsViewProps) {
+export function RunsView({ model, runs, selected, queue, now, root, dispatch }: RunsViewProps) {
   const { zone } = useTimeZone()
   const list = runs.kind === 'ready' ? runs.data : null
   return (
     <div className="barca-view">
       <div className="barca-view-head"><div className="barca-view-bar">
-        <div className="barca-view-title"><h1>Runs</h1>{list && <span className="barca-count">{list.total} runs</span>}</div>
+        <div className="barca-view-title"><h1>Runs</h1>{list && <span className="barca-count">{plural(list.total, 'run')}</span>}</div>
       </div></div>
       {queue}
       <div className="barca-assets-split">
@@ -287,14 +303,14 @@ export function RunsView({ model, runs, selected, queue, now, dispatch }: RunsVi
                   ? <p className="barca-table-empty">No loaded run matches.</p>
                   : <RunTable runs={shown} selected={selected?.id ?? null} now={now} dispatch={dispatch} />}
               {data.truncated && <div className="barca-run-more">
-                <p className="barca-note">Showing the latest {data.runs.length} runs.</p>
+                <p className="barca-note">Showing the latest {plural(data.runs.length, 'run')}.</p>
                 {canLoadMore(model) && <Button size="sm" onClick={() => dispatch({ type: 'load_more' })}>Load more</Button>}
               </div>}
             </>
             })
             .exhaustive()}
         </div>
-        {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} eventGap={selected.eventGap} dispatch={dispatch} />}
+        {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} eventGap={selected.eventGap} root={root} dispatch={dispatch} />}
       </div>
     </div>
   )
@@ -310,15 +326,18 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
   </tr></thead><tbody>{runs.map(run => {
     const error = runRowError(run)
     const progress = runProgress(run)
-    return <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}>
+    // The whole row opens the run's panel (its error in full there): the row's height never changes.
+    return <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}
+      data-failing={error ? true : undefined}
+      onClick={(event) => { if (!(event.target instanceof Element && event.target.closest('button'))) dispatch({ type: 'run_selected', id: run.id }) }}>
     <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
-    <td><code className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</code></td>
+    <td>{run.target ? <code className="barca-run-target" title={run.target}>{run.target}</code> : <span className="barca-run-target">all assets</span>}</td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
     <td><StatusBadge size="sm" tone={runTone(run.status)} label={runLabel(run.status)} live={runIsLive(run.status)} /></td>
     <td><Age at={run.started_at} nowMs={now} /></td>
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
     <td className="num barca-run-steps-cell" title={progress.title}>{progress.steps}</td>
-    <td className="barca-run-failure">{error && <ErrorLine error={error.title} text={runFailureLine(run) ?? error.text} />}</td>
+    <td className="barca-run-failure">{error && <ErrorLine error={error.title} text={runFailureLine(run) ?? error.text} inline />}</td>
   </tr>
   })}</tbody></table>
 }

@@ -8,7 +8,7 @@ import { withPorts } from '@/lib/groups'
 import { graphState, isLive, liveGraphState, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
 import { runningGraphState } from '@/lib/running'
-import { NODE_KINDS, STATUS_KINDS, failedNode, failedTask, nodeByState, runningByStep, runningPartitioned, variants } from '../fixtures'
+import { NODE_KINDS, STATUS_KINDS, failedNode, failedTask, neverSucceededNode, nodeByState, runningByStep, runningPartitioned, variants } from '../fixtures'
 import { Frame, Spec, Variant } from '../Kit'
 
 const KIND_ICON = { asset: <Database size={12} />, task: <Zap size={12} />, sensor: <Radio size={12} /> }
@@ -34,7 +34,7 @@ const PIPELINE_STATES: Record<string, GraphState> = {
   'p:product_catalog': graphState(nodeByState.cached),
   'p:orders_clean': graphState(nodeByState.cached),
   'p:orders_enriched': runningGraphState(runningPartitioned),
-  'group:p:modeling': { kind: 'group', tone: 'failed', label: '1 last attempt failed', hint: '1 last attempt failed · 23 cached' },
+  'group:p:modeling': { kind: 'group', tone: 'failed', label: '1 failing', hint: '1 failing · 23 fresh' },
   'p:revenue_daily': graphState(nodeByState.stale),
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
@@ -59,7 +59,7 @@ const DENSE_MAP = domainMap(
   ).flat(),
 )!
 const MAP_STATES: Record<string, GraphState> = Object.fromEntries(
-  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', label: '4 cached', hint: '' } : { kind: 'group', tone: 'failed', label: '2 last attempt failed', hint: '' }]),
+  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', label: '4 fresh', hint: '' } : { kind: 'group', tone: 'failed', label: '2 failing', hint: '' }]),
 )
 
 export function Graph() {
@@ -67,7 +67,7 @@ export function Graph() {
   const [mapSelected, setMapSelected] = useState<string | null>(DENSE_MAP.entries[5]?.id ?? null)
   return (
     <>
-      <Spec id="kit-graph" title="DagNode · resting states" note="graphState() of a node in each cache state, in the CLI's word, most urgent first; then the fact beside a state, a failed last attempt.">
+      <Spec id="kit-graph" title="DagNode · resting states" note="graphState() of a node in each cache state, in plain words, most urgent first; then failing, which replaces the state word when the last attempt failed.">
         {variants(nodeByState).map((state) => (
           <Variant key={state} label={state}>
             <StateNode name={nodeByState[state].name} kind={nodeByState[state].kind} state={graphState(nodeByState[state])} />
@@ -78,6 +78,9 @@ export function Graph() {
         </Variant>
         <Variant label="always_runs · last attempt failed">
           <StateNode name={failedTask.name} kind="task" state={graphState(failedTask)} />
+        </Variant>
+        <Variant label="never_run · every attempt failed">
+          <StateNode name={neverSucceededNode.name} state={graphState(neverSucceededNode)} />
         </Variant>
       </Spec>
 

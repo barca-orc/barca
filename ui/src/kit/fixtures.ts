@@ -135,7 +135,16 @@ export const failedNode: NodeState = node('orders_enriched', {
   consecutive_failures: 3,
 })
 
-/** A task whose last run failed: `always_runs`, and the fact beside it. */
+/** An asset that has failed every time it ran: `failing`, `never succeeded`. */
+export const neverSucceededNode: NodeState = node('fx_rates_live', {
+  cache: { state: 'never_run', reason: 'no_record', detail: 'never materialized' },
+  last_materialization: materialized({ status: 'failed', artifact: null, format: null, error: 'ConnectionError: rates API unreachable' }),
+  last_success_at: null,
+  failing_since: ago(7_200),
+  consecutive_failures: 2,
+})
+
+/** A task whose last run failed: `always_runs`, shown as `failing`. */
 export const failedTask: NodeState = node('check__orders', {
   kind: 'task',
   cache: { state: 'always_runs', reason: 'task', detail: 'a task runs every time' },

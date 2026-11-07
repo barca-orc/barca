@@ -17,7 +17,6 @@ import {
   Tag,
   TableSpacer,
 } from '@/components'
-import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
 import { shortName, type GraphEntry } from '@/lib/graph'
 import { cacheGraphState, isLive, memberHealth, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { lastRunDuration, groupOutput, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
@@ -70,7 +69,7 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
           <th className="barca-group-col-state">State</th>
           <th title="A group shows its oldest member's">Last success</th>
           {hasGroups && <th>Contents</th>}
-          {hasGroups && <th className="num" title={`Members whose ${LAST_ATTEMPT_FAILED}`}>Failed</th>}
+          {hasGroups && <th className="num" title="Members whose last attempt failed">Failed</th>}
           {hasLeaves && <th title="Since the last attempt">Age</th>}
           {hasLeaves && <th className="num" title="The last attempt's">Duration</th>}
           {hasGroups && <th className="barca-group-col-open" />}
@@ -133,7 +132,6 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
                 ) : (
                   <div className="barca-state-line">
                     <StatusBadge tone={state.tone} label={state.label} live={isLive(state)} size="sm" />
-                    {isFailed(state) && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
                   </div>
                 )}
               </td>
@@ -266,7 +264,6 @@ function OutputState({ node, nowMs }: { node: NodeState; nowMs: number }) {
   return (
     <div className="barca-state-line" title={box.hint}>
       <StatusBadge tone={box.tone} label={box.label} size="sm" />
-      {isFailed(box) && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
     </div>
   )
 }

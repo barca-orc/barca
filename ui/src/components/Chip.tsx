@@ -4,16 +4,19 @@ export interface ChipProps {
   /** Whether the filter is on. */
   pressed: boolean
   onClick: () => void
+  /** `failed` makes the chip stand out (a count of failures); others recede. */
+  tone?: 'failed'
   children: ReactNode
 }
 
 /** barca · Chip — a toggle filter. Render inside a `ChipGroup`. */
-export function Chip({ pressed, onClick, children }: ChipProps) {
+export function Chip({ pressed, onClick, tone, children }: ChipProps) {
   return (
     <button
       type="button"
       className={'barca-chip' + (pressed ? ' is-on' : '')}
       aria-pressed={pressed}
+      data-tone={tone}
       onClick={onClick}
     >
       {children}

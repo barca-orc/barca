@@ -53,7 +53,7 @@ test('a sidebar dot waits for its whole file: no dot says "fine" from part of it
   await page.goto('/ui/#/assets?pipeline=forecast.py')
   const sidebar = page.locator('.barca-sidebar')
   // The file's most urgent state, in the CLI's word.
-  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toHaveAttribute('title', 'forecast.py · cached')
+  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toHaveAttribute('title', 'forecast.py · fresh')
   await expect(sidebar.getByRole('button', { name: 'other.py 1' }).locator('.barca-pipe-nodot')).toHaveCount(1)
 })
 

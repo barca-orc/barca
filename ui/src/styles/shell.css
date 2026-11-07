@@ -173,6 +173,13 @@
 }
 .barca-view-toggle button[aria-pressed='true'] { background: var(--bg-raised); color: var(--text-strong); box-shadow: var(--shadow-sm); }
 .barca-view-toggle button:hover { color: var(--text-strong); }
+/* A narrower bar keeps every control: the search button keeps its icon (its name stays in
+   aria-label and the tooltip), the Run label truncates, the nav tightens. */
+@media (max-width: 1240px) {
+  .barca-top-search .barca-top-search-text, .barca-top-search kbd { display: none; }
+  .barca-top-run { max-width: 180px; }
+  .barca-primary-nav { gap: 14px; }
+}
 @media (max-width: 900px) {
   .barca-sidebar { width: 180px; }
   .barca-primary-nav { gap: 12px; }
@@ -214,15 +221,8 @@
   white-space: nowrap;
   cursor: default;
 }
-.barca-conn[data-state='online'] .barca-conn-label {
-  position: absolute; top: 100%; right: 0; z-index: 20;
-  margin-top: 2px; padding: 4px 8px;
-  background: var(--bg-overlay); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm); color: var(--text-default);
-  opacity: 0; pointer-events: none;
-}
-.barca-conn[data-state='online']:hover .barca-conn-label,
-.barca-conn[data-state='online']:focus-visible .barca-conn-label { opacity: 1; }
+.barca-conn-word { font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
+.barca-conn[data-state='offline'] .barca-conn-word { color: inherit; }
 
 /* Layout stability. Anything that arrives after the first paint reserves its space:
    a Skeleton sized like the content, or a fixed-size slot that is always rendered.
@@ -414,15 +414,19 @@
 .barca-cell-error { max-width: 420px; }
 /* ErrorLine: one line of headline, the most important text on a failed row, so never the
    smallest; a traceback, when there is one, opens under it. */
-.barca-error-line { display: block; min-width: 0; max-width: 420px; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--status-failed); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-error-line { display: block; min-width: 0; max-width: 420px; font-family: var(--font-sans); font-size: var(--text-sm); color: var(--status-failed); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-table .barca-error-line { display: inline-block; vertical-align: middle; max-width: 360px; }
 .barca-error-line > summary { overflow: hidden; text-overflow: ellipsis; cursor: pointer; list-style: none; }
 .barca-error-line > summary::-webkit-details-marker { display: none; }
 .barca-error-line > summary:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
 .barca-error-line[open] { white-space: normal; }
-.barca-error-line[data-large] { max-width: none; font-size: var(--text-xl); line-height: var(--leading-snug); color: var(--text-strong); white-space: normal; overflow-wrap: anywhere; }
+.barca-error-line[data-large] { max-width: none; font-size: var(--text-md); font-weight: 500; line-height: var(--leading-snug); color: var(--text-strong); white-space: normal; overflow-wrap: break-word; }
+/* The traceback under a headline: code, so mono; long paths break after a `/` (the <wbr>s), not mid-name. */
+.barca-traceback { font-weight: 400; overflow-wrap: normal; word-break: normal; }
 .barca-error-line[data-large] > summary { white-space: normal; }
-.barca-run-failure .barca-error-line { max-width: 280px; }
+.barca-run-failure .barca-error-line { max-width: 100%; }
+/* The failure column takes what is left and truncates (the row opens the run, its error in full). */
+.barca-run-table .barca-run-failure { max-width: 0; width: 40%; }
 .barca-why-list .barca-error-line { max-width: none; }
 .barca-failure-error .barca-error-line { max-width: 100%; }
 /* The message carries its own top spacing: the scroll area has none (see
@@ -461,13 +465,39 @@
 /* assets: table + node panel */
 .barca-assets-split { display: flex; flex: 1; min-height: 0; }
 .barca-assets-split > .barca-view-body { flex: 1; min-width: 0; container-type: inline-size; }
-/* Beside the node panel the table keeps name, state and last run at full width and leaves
-   out the rest (the panel says them), instead of squeezing every column. */
-@container (max-width: 860px) {
-  .barca-asset-table th:nth-child(n+4), .barca-asset-table td:nth-child(n+4) { display: none; }
-  .barca-asset-table .barca-cell-error { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+/* The asset table never scrolls sideways: fixed columns, each cell truncates (its title has
+   the rest), and the low-priority columns leave first as the table narrows (beside the node
+   panel too, which says them): next run, then typical duration, then last success. */
+.barca-asset-table { table-layout: fixed; }
+.barca-asset-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-asset-table td > div { overflow: hidden; text-overflow: ellipsis; }
+.barca-asset-table .barca-cell-error { max-width: 100%; }
+.barca-asset-table .barca-error-line { max-width: 100%; }
+.barca-asset-table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-asset-table th:nth-child(2) { width: 130px; }
+.barca-asset-table th:nth-child(4) { width: 130px; }
+.barca-asset-table th:nth-child(5) { width: 156px; }
+.barca-asset-table th:nth-child(6) { width: 110px; }
+@container (max-width: 940px) {
+  .barca-asset-table th:nth-child(6), .barca-asset-table td:nth-child(6) { display: none; }
 }
-.barca-table tbody tr[aria-selected="true"] { background: var(--bg-hover); box-shadow: inset 2px 0 0 var(--signal); }
+@container (max-width: 860px) {
+  .barca-asset-table th:nth-child(5), .barca-asset-table td:nth-child(5) { display: none; }
+}
+@container (max-width: 740px) {
+  .barca-asset-table th:nth-child(4), .barca-asset-table td:nth-child(4) { display: none; }
+}
+/* A failing row: a red accent bar and a faint tint, so it reads before its badge does. */
+.barca-table tbody tr[data-failing] { background: color-mix(in srgb, var(--status-failed-bg) 55%, transparent); box-shadow: inset 3px 0 0 var(--status-failed); }
+.barca-table tbody tr[data-failing]:hover { background: var(--status-failed-bg); }
+/* The page's one-line summary of what fails. */
+.barca-attention {
+  display: flex; align-items: center; gap: 10px; margin: 0 24px 8px; padding: 6px 10px;
+  border: 1px solid var(--status-failed-line); border-left: 3px solid var(--status-failed); border-radius: var(--radius-sm);
+  background: var(--status-failed-bg); font-family: var(--font-sans); font-size: var(--text-sm); color: var(--text-default);
+}
+.barca-attention .barca-clear { margin-left: auto; height: 22px; }
+.barca-table tbody tr[aria-selected="true"] { background: var(--bg-hover); box-shadow: inset 3px 0 0 var(--signal); }
 .barca-error {
   margin: 6px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto;
   background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
@@ -933,7 +963,7 @@
 }
 
 /* ---------- Runs page (pages/RunsView.tsx, QueuePanel.tsx) ---------- */
-.barca-run-table { min-width: 860px; }
+/* No min-width: columns leave by priority under the container queries below, so the table never scrolls sideways. */
 .barca-run-table td { white-space: nowrap; }
 .barca-run-target { display: block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .barca-run-link { border: 0; padding: 0; background: transparent; color: var(--signal); font: inherit; font-family: var(--font-mono); cursor: pointer; text-align: left; white-space: nowrap; }
@@ -941,8 +971,25 @@
 .barca-run-steps { list-style: none; margin: 0; padding: 0; }
 .barca-run-steps li { padding: 10px 0; border-bottom: 1px solid var(--border-default); }
 .barca-run-steps code { display: block; overflow-wrap: anywhere; margin-bottom: 6px; }
-.barca-run-steps li > div { display: flex; align-items: center; gap: 10px; }
-.barca-run-error { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-default); }
+.barca-run-steps li > div:not(.barca-run-error) { display: flex; align-items: center; gap: 10px; }
+.barca-run-error { color: var(--text-default); font-family: var(--font-sans); }
+.barca-run-error-head { white-space: pre-wrap; overflow-wrap: break-word; }
+/* Run table beside the run panel: the panel says the rest, so the low-priority columns leave
+   first (trigger, duration, then steps) instead of the table scrolling sideways. */
+.barca-assets-split > .barca-view-body .barca-run-table td { overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 960px) {
+  .barca-run-table th:nth-child(3), .barca-run-table td:nth-child(3) { display: none; }
+}
+@container (max-width: 780px) {
+  .barca-run-table th:nth-child(6), .barca-run-table td:nth-child(6),
+  .barca-run-table th:nth-child(7), .barca-run-table td:nth-child(7) { display: none; }
+}
+@container (max-width: 600px) {
+  .barca-run-table th:nth-child(5), .barca-run-table td:nth-child(5) { display: none; }
+}
+@container (max-width: 480px) {
+  .barca-run-table th:nth-child(2), .barca-run-table td:nth-child(2) { display: none; }
+}
 .barca-run-result { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
 .barca-run-more { padding: 16px; }
 .barca-queue { padding: 0 24px 12px; flex: none; }
@@ -1027,3 +1074,7 @@
 .barca-group-col-name { width: 30%; }
 .barca-group-col-state { width: 22%; }
 .barca-group-col-open { width: 40px; }
+.barca-top-search kbd {
+  margin-left: 4px; padding: 0 4px; border: 1px solid var(--border-default); border-radius: var(--radius-xs, 3px);
+  font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-muted);
+}

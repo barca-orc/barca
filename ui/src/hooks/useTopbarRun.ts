@@ -66,3 +66,13 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
 
   return { readOnly, title, error: start.error }
 }
+
+const noop = () => {}
+
+/**
+ * The topbar's Run button on a page with nothing to select (Runs, Schedules, Tokens): the open
+ * pipeline or the whole project, as on Assets, so the bar is the same on every tab.
+ */
+export function usePageTopbarRun(onStarted: (handle: string) => void) {
+  return useTopbarRun({ node: null, show: true, scopes: true, fireNode: noop, busy: false, onStarted })
+}

@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { match } from 'ts-pattern'
 import { useProgram } from '@/hooks/useProgram'
+import { usePageTopbarRun } from '@/hooks/useTopbarRun'
+import { useNavigate } from 'react-router'
 import { api } from '@/lib/api'
 import { authMode, connect } from '@/lib/credentials'
 import { remote } from '@/lib/remote'
@@ -12,6 +14,8 @@ const message = (error: unknown) => (error instanceof Error ? error.message : nu
 /** Runs the Tokens program: the token list from the server, and each effect's I/O. */
 export function TokensPage() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  usePageTopbarRun((handle) => navigate(`/runs?run=${encodeURIComponent(handle)}`))
   const auth = authMode() === 'token'
   const tokens = useQuery({ queryKey: ['tokens'], queryFn: api.tokens, enabled: auth, retry: false, select: d => d.tokens })
   const [model, dispatch] = useProgram(INITIAL_TOKENS, updateTokens, (effect, dispatch) =>

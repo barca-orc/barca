@@ -1,4 +1,5 @@
 import type { RefObject } from 'react'
+import { plural } from '@/lib/plural'
 import { Copy, ExternalLink, RotateCw } from 'lucide-react'
 import { Age, ErrorLine, IconButton, MiddleName, StatusDot, TableSpacer, Tag } from '@/components'
 import type { FailureRow, FailuresModel, FailuresMsg } from '@/lib/failuresView'
@@ -98,7 +99,7 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
                 {f.keys ? (
                   <div className="barca-cell-sub">{keysLine(f.keys)}</div>
                 ) : f.missingKeys !== null && f.missingKeys > 0 && (
-                  <div className="barca-cell-sub">{f.missingKeys.toLocaleString()} keys without a result</div>
+                  <div className="barca-cell-sub">{plural(f.missingKeys, 'key')} without a result</div>
                 )}
               </td>
               <td>{f.at ? <Age at={f.at} nowMs={nowMs} /> : '–'}</td>

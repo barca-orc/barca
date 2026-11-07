@@ -47,8 +47,8 @@
   /* ---- Text ---- */
   --text-strong:    #0B1410;
   --text-default:   #243029;
-  --text-muted:     #586860;
-  --text-faint:     #8A968E;
+  --text-muted:     #586860;  /* 5.2:1 on the inset ground, 5.9:1 on white */
+  --text-faint:     #606F67;  /* 4.6:1 on the inset ground, 5.3:1 on white (WCAG AA); was #8A968E, 2.7:1 */
   --text-disabled:  #AEB8B1;
   --text-on-signal: #FFFFFF;
   --text-link:      #0B1410;
