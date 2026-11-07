@@ -33,6 +33,7 @@ pub(crate) const BY_NODE_RUN: &str = by_node_run!();
 // this directory (one file per table family); `persist/recording.rs` drives the recording ones.
 mod cache_reader;
 pub(crate) mod cost_estimates;
+mod failure;
 pub(crate) mod freshness_proofs;
 mod history;
 pub(crate) mod ledger_posts;
@@ -58,6 +59,7 @@ mod write_boundary_tests;
 pub(crate) use cache_reader::CacheReader;
 pub(crate) use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;
+pub use failure::{FailureFacts, LastSuccess, SourceLine, failure_facts, raised_at};
 #[cfg(test)]
 pub(crate) use history::MaterializationRecord;
 pub(crate) use history::changed_bytes_in_run;

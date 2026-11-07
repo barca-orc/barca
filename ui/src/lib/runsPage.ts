@@ -159,9 +159,25 @@ export function runFailureLine(run: RunSummary): string | null {
   return `${shortName(run.first_failure.node_id.slice(0, key))}: ${failed.toLocaleString()} key${failed === 1 ? '' : 's'} failed · ${why}`
 }
 
-/** `3,077 ran · 3 cached`: a run's steps (keys) in one unit; `0 ran · 9,236 cached` when all cached. */
-export function stepsLabel(executed: number, cached: number): string {
-  return `${executed.toLocaleString()} ran · ${cached.toLocaleString()} cached`
+/**
+ * `7 ok · 1 failed · 0 cached`: a run's steps (keys) by outcome. `executed` counts every step
+ * that ran, failed ones included, so `ok` is `executed - failed`. `skipped` (steps a failure kept
+ * from running) is shown only when known and non-zero; `0 ok · 9,236 cached` when all cached.
+ */
+export function stepsLabel(executed: number, cached: number, failed = 0, skipped = 0): string {
+  const f = Math.min(Math.max(failed, 0), executed)
+  const parts = [`${(executed - f).toLocaleString()} ok`]
+  if (f > 0) parts.push(`${f.toLocaleString()} failed`)
+  if (skipped > 0) parts.push(`${skipped.toLocaleString()} skipped`)
+  parts.push(`${cached.toLocaleString()} cached`)
+  return parts.join(' · ')
+}
+
+/** `stepsLabel` for a run's detail: failed keys and skipped nodes from its per-node summary. */
+export function runViewSteps(run: { steps_executed: number; steps_cached: number }, nodes: readonly RunNodeSummary[]): string {
+  const failed = nodes.reduce((sum, n) => sum + n.failed, 0)
+  const skipped = nodes.filter((n) => n.status === 'skipped').length
+  return stepsLabel(run.steps_executed, run.steps_cached, failed, skipped)
 }
 
 /** How far a run got, in steps, and the step it stopped at when it did not finish. */
@@ -170,7 +186,7 @@ export function runProgress(run: RunSummary): { steps: string; stoppedAt: string
   const planned = total === null ? [] : [`${total.toLocaleString()} node${total === 1 ? '' : 's'} planned`]
   const stopped = run.first_failure ? [`stopped at ${run.first_failure.node_id}`] : []
   return {
-    steps: stepsLabel(run.steps_executed, run.steps_cached),
+    steps: stepsLabel(run.steps_executed, run.steps_cached, run.steps_failed ?? 0),
     stoppedAt: run.first_failure && runFailed(run.status) ? stepName(run.first_failure.node_id) : null,
     title: ['Steps are keys: a partitioned node counts one per key', ...planned, ...stopped].join(' · '),
   }

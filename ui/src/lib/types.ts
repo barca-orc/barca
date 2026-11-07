@@ -21,6 +21,8 @@ export type { OutputRef } from './generated/OutputRef'
 export type { RunEvent } from './generated/RunEvent'
 export type { LineWhen } from './generated/LineWhen'
 export type { FirstFailure } from './generated/FirstFailure'
+export type { FailureFacts } from './generated/FailureFacts'
+import type { FailureFacts } from './generated/FailureFacts'
 export type { RunSummary } from './generated/RunSummary'
 export type { RunList } from './generated/RunList'
 export type { RunView } from './generated/RunView'
@@ -173,6 +175,8 @@ type NodeStats = Omit<AssetStats, 'node_id'> & { id: string }
 export interface AssetDetail {
   asset: ListNode
   stats: NodeStats
+  /** Present when the node's latest execution failed (absent from an older server). */
+  failure?: FailureFacts | null
 }
 
 /** A single captured log line, as rendered by the LogViewer (UI concept). */

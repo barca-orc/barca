@@ -6,7 +6,7 @@
 
 import { formatSeconds } from './assetTable'
 import { plural } from './plural'
-import type { AssetRunEntry, CacheStatus } from './types'
+import type { AssetRunEntry, CacheStatus, FailureFacts } from './types'
 import type { RunNodeSummary } from './generated/RunNodeSummary'
 
 /** Nodes that take `id` as an input, sorted by name. */
@@ -236,4 +236,44 @@ export function previewRows(sample: unknown): { columns: string[]; rows: string[
   if (!sample.every(isRow)) return { columns: ['value'], rows: sample.map((v) => [cell(v)]) }
   const columns = [...new Set(sample.flatMap((r) => Object.keys(r)))]
   return { columns, rows: sample.map((r) => columns.map((c) => cell(r[c]))) }
+}
+
+/** Whether every recorded run failed: the History has no successful run to summarize. */
+export function onlyFailures(runs: readonly AssetRunEntry[]): boolean {
+  return runs.length > 0 && runs.every((r) => r.status !== 'success')
+}
+
+/** `assets.py:136` (`in broken_report` in the title): where the project's own code raised. */
+export function raisedAtLabel(failure: FailureFacts | null | undefined): { text: string; full: string } | null {
+  const at = failure?.raised_at
+  if (!at) return null
+  const base = at.file.split('/').pop() ?? at.file
+  return { text: `${base}:${at.line}`, full: `${at.file}:${at.line}${at.function ? ` in ${at.function}` : ''}` }
+}
+
+/**
+ * What differs between the failed attempt and the node's last success, from the run hashes
+ * (barca is run-hash addressed): never a guess. `at` is the last success's time, when there is one.
+ */
+export function sinceLastSuccess(
+  failure: FailureFacts | null | undefined,
+  cache: Pick<CacheStatus, 'run_hash' | 'changed'>,
+): { text: string; at: string | null } | null {
+  if (!failure) return null
+  const last = failure.last_success
+  if (!last) return { text: 'Never succeeded: there is no earlier result to compare with', at: null }
+  if (failure.run_hash && last.run_hash === failure.run_hash) {
+    return { text: 'Same code and inputs as the last success (same run hash): the cause is outside the definition', at: last.created_at }
+  }
+  // `cache.changed` compares the current definition with the last success: it describes the
+  // failed attempt only while the current run hash is still the one that failed.
+  if (!failure.run_hash || cache.run_hash !== failure.run_hash) {
+    return { text: 'Code or inputs changed after this attempt; run it again to compare with the last success', at: last.created_at }
+  }
+  if (cache.changed && cache.changed.length > 0) {
+    const shown = cache.changed.slice(0, 3).join(', ')
+    const more = cache.changed.length > 3 ? ` and ${cache.changed.length - 3} more` : ''
+    return { text: `Changed since the last success: ${shown}${more}`, at: last.created_at }
+  }
+  return { text: 'Run hash differs from the last success; which part changed was not recorded', at: last.created_at }
 }

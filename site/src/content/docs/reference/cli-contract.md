@@ -889,7 +889,8 @@ may grow.
 <!-- END GENERATED schema get -->
 
 - `status` is `success` (see the failed result line below for `failed`).
-- `steps_executed` is 0 when everything came from cache. On `get`, `final_output` is the
+- `steps_executed` counts the steps that executed, failed ones included (a failed result's
+  `steps[]` says which, by `status`); it is 0 when everything came from cache. On `get`, `final_output` is the
   pointer to the target's artifact (with no target, the last asset's); on `run` it is the
   task's value, or `null` for a task that returned nothing.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of

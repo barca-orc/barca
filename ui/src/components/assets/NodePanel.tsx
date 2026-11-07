@@ -15,11 +15,11 @@ import { useRunDetail } from '@/hooks/useRuns'
 import { buildRows, formatSeconds } from '@/lib/assetTable'
 import { nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
-import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, runPace, shortHash, sourcePath, whatChanged } from '@/lib/nodeDetail'
+import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, raisedAtLabel, runPace, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline, isFailed } from '@/lib/health'
 import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
-import type { ListNode, NodeState } from '@/lib/types'
+import type { AssetRunEntry, ListNode, NodeState } from '@/lib/types'
 import type { NodeRunAction } from '@/hooks/useNodeRun'
 
 interface NodePanelProps {
@@ -73,6 +73,9 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
   const change = whatChanged(node.cache, failed)
+  const raised = raisedAtLabel(detail?.failure)
+  const since = sinceLastSuccess(detail?.failure, node.cache)
+  const failuresOnly = stats ? onlyFailures(stats.recent_runs) : false
   const definition = graph.find((n) => n.id === node.id)
   const root = useProject().data?.root
   // A definition without a file (an older server's) has no source line to show.
@@ -149,6 +152,21 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               {node.last_success_at ? <> · last success <Age at={node.last_success_at} nowMs={nowMs} /></> : <> · never succeeded</>}
               {failedRun && <> · <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>open the run</Link></>}
             </p>
+            {raised && (
+              <KeyValue label="raised at">
+                <span className="barca-source-path">
+                  <code title={raised.full}>{raised.text}</code>
+                  <CopyButton label="Copy raising line" text={raised.full.split(' in ')[0]!} />
+                </span>
+              </KeyValue>
+            )}
+            {/* "never succeeded" is already said on the line above. */}
+            {since && detail?.failure?.last_success && (
+              <KeyValue label="since success">
+                <span className="barca-what-changed barca-wrap">{since.text}</span>
+                {since.at && <span className="barca-cell-sub"> · last success <Age at={since.at} nowMs={nowMs} /></span>}
+              </KeyValue>
+            )}
           </div>
         )}
         {blockedBy.length > 0 && (
@@ -173,7 +191,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
         {node.partitions && <PartitionBar partitions={node.partitions} />}
         {definition && definition.line > 0 && source !== null && (
-          <KeyValue label="source">
+          <KeyValue label="defined at">
             <span className="barca-source-path">
               <code title={editor ? undefined : `Relative to the project root ${root ?? ''}. To open it in VS Code, set localStorage ${EDITOR_ROOTS_KEY} to a path prefix this machine has.`}>{source}</code>
               <CopyButton label="Copy path" text={source} />
@@ -255,7 +273,13 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
         {isError && <p className="barca-note">Couldn't load run history.</p>}
         {stats && stats.total_runs === 0 && <p className="barca-note">No runs recorded.</p>}
-        {stats && stats.total_runs > 0 && (
+        {stats && failuresOnly && (
+          <p className="barca-note">
+            No successful run yet: {stats.total_runs === 1 ? 'its only attempt' : `all ${stats.total_runs.toLocaleString()} attempts`} failed, so there are no durations to show.
+          </p>
+        )}
+        {stats && failuresOnly && <RunList runs={stats.recent_runs} nowMs={nowMs} />}
+        {stats && stats.total_runs > 0 && !failuresOnly && (
           <>
             <div className="barca-stats">
               <div>
@@ -303,27 +327,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                 />
               ))}
             </div>
-            <ul className="barca-runs">
-              {stats.recent_runs.map((r, i) => (
-                <li key={i}>
-                  <div className="barca-run-line">
-                    <span className={r.status === 'failed' ? 'barca-cell-failed' : undefined}>
-                      {r.status}
-                    </span>
-                    <Age at={r.created_at} nowMs={nowMs} />
-                    <span>{r.elapsed_seconds !== null ? formatSeconds(r.elapsed_seconds) : '–'}</span>
-                    {r.keys != null && <span>{plural(r.keys, 'key')}{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}
-                    {r.attempts > 1 && <span>{r.attempts} attempts</span>}
-                  </div>
-                  {r.error_message && (
-                    <details>
-                      <summary>{r.error_message.split('\n')[0]}</summary>
-                      <pre className="barca-error">{r.error_message}</pre>
-                    </details>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <RunList runs={stats.recent_runs} nowMs={nowMs} />
           </>
         )}
       </Section>
@@ -409,5 +413,32 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         </KeyValue>
       </details>
     </SidePanel>
+  )
+}
+
+/** A node's recent executions, newest first, each failure's error behind a disclosure. */
+function RunList({ runs, nowMs }: { runs: AssetRunEntry[]; nowMs: number }) {
+  return (
+    <ul className="barca-runs">
+      {runs.map((r, i) => (
+        <li key={i}>
+          <div className="barca-run-line">
+            <span className={r.status === 'failed' ? 'barca-cell-failed' : undefined}>
+              {r.status}
+            </span>
+            <Age at={r.created_at} nowMs={nowMs} />
+            <span>{r.elapsed_seconds !== null ? formatSeconds(r.elapsed_seconds) : '–'}</span>
+            {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}
+            {r.attempts > 1 && <span>{r.attempts} attempts</span>}
+          </div>
+          {r.error_message && (
+            <details>
+              <summary>{r.error_message.split('\n')[0]}</summary>
+              <pre className="barca-error">{r.error_message}</pre>
+            </details>
+          )}
+        </li>
+      ))}
+    </ul>
   )
 }
