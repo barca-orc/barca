@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- **The Runs page is a debugging and recovery surface.** A run's panel opens with what failed (each failed step, its error and where it raised) and its actions: "Re-run failed steps + downstream" (the same target cache-aware: steps that succeeded are cached), "Re-run whole run" (`refresh_all`), "Retry" on each failed step or partition key, and "Copy incident summary" (markdown with the run's link, target, trigger, timing and failed steps). The new run is selected at once. The logs filter by step (a step's "Logs" button or its name on a line), by text with matches highlighted, and to errors only; "First error" jumps to it, and the lines shown copy or download. All through the existing `POST /runs` and `GET /runs/{run_id}`; no API change.
+
 ## 0.40.0 (2026-11-05)
 
 ### Breaking

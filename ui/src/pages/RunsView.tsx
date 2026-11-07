@@ -1,8 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { createContext, useContext, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Absolute, Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { IncidentSummaryButton } from '@/components/IncidentSummary'
+import { RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
+import { failedSteps, raisedAt } from '@/lib/runRecovery'
 import { formatSeconds } from '@/lib/assetTable'
 import { zoneName } from '@/lib/time'
 import type { Dispatch } from '@/lib/program'
@@ -17,6 +20,27 @@ import type { RunList, RunStep, RunView } from '@/lib/types'
 /** How many steps a list shows before it asks to be expanded. */
 const STEP_ROWS = 50
 
+/** What a step row can do in the run panel: retry it, and filter the logs to it. */
+interface StepTools {
+  run: RunView
+  logStep: string | null
+  setLogStep: (step: string | null) => void
+  onStarted: (runId: string) => void
+}
+const StepToolsContext = createContext<StepTools | null>(null)
+
+/** A step's "Retry" (failed steps of a finished run) and "Logs" (filters the logs to it). */
+function StepButtons({ stepId, failed }: { stepId: string; failed: boolean }) {
+  const tools = useContext(StepToolsContext)
+  if (!tools) return null
+  const on = tools.logStep === stepId
+  return <span className="barca-run-step-actions">
+    <Button size="sm" variant="ghost" aria-pressed={on} title={on ? 'Show every step\'s logs' : `Show only ${stepId}'s logs`}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); tools.setLogStep(on ? null : stepId) }}>{on ? 'All logs' : 'Logs'}</Button>
+    {failed && !runIsLive(tools.run.status) && <RetryStep run={tools.run} stepId={stepId} onStarted={tools.onStarted} />}
+  </span>
+}
+
 /** A run's steps, at most `STEP_ROWS` until expanded. */
 function StepList({ steps }: { steps: readonly RunStep[] }) {
   const [all, setAll] = useState(false)
@@ -26,7 +50,8 @@ function StepList({ steps }: { steps: readonly RunStep[] }) {
       {shown.map((step, index) => <li key={`${step.node_id}:${index}`}>
         <code>{step.node_id}</code>
         <div><StatusBadge size="sm" tone={step.status === 'cached' ? 'neutral' : runTone(step.status)} label={step.status} />
-          {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}</div>
+          {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}
+          <StepButtons stepId={step.node_id} failed={step.status === 'failed'} /></div>
         {step.error && <p className="barca-run-error">{step.error}</p>}
       </li>)}
     </ul>
@@ -56,6 +81,7 @@ function RunNodeRow({ group: { summary, steps } }: { group: RunNodeGroup }) {
       <code>{shortName(summary.node_id)}</code>
       <StatusBadge size="sm" tone={statusTone(outcome.kind)} label={outcome.label} />
       {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
+      <StepButtons stepId={summary.node_id} failed={summary.failed > 0} />
     </summary>
     {open && failed.length > 0 && <StepList steps={failed} />}
     {open && ok.length > 0 && (failed.length > 0 || summary.keys > 1
@@ -83,20 +109,52 @@ export function RunPanelView({ id, run, eventGap = false, dispatch }: { id: stri
             <p role="alert">Showing the last loaded run information: {refreshError}</p>
             {retry}
           </Section>}
-          <RunDetails data={data} eventGap={eventGap} />
+          <RunDetails data={data} eventGap={eventGap} onStarted={(runId) => dispatch({ type: 'run_selected', id: runId })} />
         </>)
         .exhaustive()}
     </SidePanel>
   )
 }
 
-function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
+/**
+ * The top of a run's panel: for a failed run, what failed and where, then the recovery and
+ * hand-off actions, so neither needs a scroll.
+ */
+function RunSummary({ data, onStarted, onFilter }: { data: RunView; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
+  const live = runIsLive(data.status)
+  const failed = failedSteps(data)
+  const shown = failed.slice(0, 5)
+  return <div className="barca-run-summary">
+    {failed.length > 0 && <>
+      <strong>{failed.length.toLocaleString()} failed step{failed.length === 1 ? '' : 's'}</strong>
+      <ul className="barca-run-summary-failed">
+        {shown.map((step) => {
+          const where = raisedAt(step.error_traceback ?? step.error)
+          return <li key={step.node_id}>
+            <button type="button" className="barca-run-link" title="Show this step's logs" onClick={() => onFilter(step.node_id)}><code>{shortName(step.node_id)}</code></button>
+            {' '}<ErrorLine error={step.error_type && step.error_message ? `${step.error_type}: ${step.error_message}` : step.error} />
+            {where && <span className="barca-cell-sub"> · raised at <code className="barca-wrap" title={where}>{where.replace(/^.*\/([^/]+\/[^/]+:\d)/, '…/$1')}</code></span>}
+          </li>
+        })}
+        {failed.length > shown.length && <li className="barca-note">and {(failed.length - shown.length).toLocaleString()} more below</li>}
+      </ul>
+    </>}
+    <div className="barca-run-actions">
+      {!live && <RunActions run={data} failed={runFailed(data.status)} onStarted={onStarted} />}
+      <IncidentSummaryButton run={data} />
+    </div>
+  </div>
+}
+
+function RunDetails({ data, eventGap, onStarted }: { data: RunView; eventGap: boolean; onStarted: (runId: string) => void }) {
+  const [logStep, setLogStep] = useState<string | null>(null)
   const outcome = parseOutcome(data.outcome)
   const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
   const result = outcomeResult(outcome)
   const nodes = data.steps_page?.nodes ?? []
   const targets = runTargetLines(data, nodes)
-  return <>
+  return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted }}>
+    <RunSummary data={data} onStarted={onStarted} onFilter={setLogStep} />
     <Section title="Run">
       <StatusBadge tone={runTone(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} />
       {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
@@ -121,12 +179,13 @@ function RunDetails({ data, eventGap }: { data: RunView; eventGap: boolean }) {
     </Section>
     <Section title="Logs">
       {eventGap && runIsLive(data.status) && <p role="status" className="barca-note">Live event replay was incomplete. These logs may show only a retained tail until the run finishes.</p>}
-      <LogViewer lines={data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts }))} live={runIsLive(data.status)} height={280} />
+      <LogViewer lines={data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts }))} live={runIsLive(data.status)} height={280}
+        tools step={logStep} onStepChange={setLogStep} downloadName={`barca-${data.run_id}.log`} />
     </Section>
     {result !== null && result !== undefined && (
       <Section title="Result"><pre className="barca-run-result">{JSON.stringify(result, null, 2)}</pre></Section>
     )}
-  </>
+  </StepToolsContext.Provider>
 }
 
 export interface RunsViewProps {
