@@ -1573,3 +1573,144 @@ fn cache_reason_enum_matches_the_code() {
     };
     assert_eq!(listed("reason"), CACHE_REASONS, "Cache.reason");
 }
+
+/// `request_json`, with the status and body checked against the contract's operation.
+async fn checked_json(
+    router: &Router,
+    method: &str,
+    url: &str,
+    path: &str,
+    body: Value,
+) -> (u16, Value) {
+    let (status, answer) = request_json(router, method, url, body).await;
+    let spec = &contract()["paths"][path][method.to_lowercase()]["responses"][status.to_string()];
+    assert!(
+        !spec.is_null(),
+        "undocumented {method} {path} {status}: {answer}"
+    );
+    validate(&spec["content"]["application/json"]["schema"], &answer);
+    (status, answer)
+}
+
+#[tokio::test]
+async fn pin_versions_and_unpin_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    let pins = checked(&router, "GET", "/pins", "/pins", 200).await;
+    assert_eq!(pins["pins"], json!([]));
+    checked(&router, "HEAD", "/pins", "/pins", 200).await;
+    let (status, body) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["second"]}),
+    )
+    .await;
+    assert_eq!(status, 202, "{body}");
+    let done = wait(&router, body["run_id"].as_str().unwrap()).await;
+    assert_eq!(done["status"], "complete", "{done}");
+    let url = "/assets/first/versions";
+    let versions = checked(&router, "GET", url, "/assets/{name}/versions", 200).await;
+    assert_eq!(versions["pinnable"], true);
+    assert_eq!(versions["pin"], Value::Null);
+    let list = versions["versions"].as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["current"], true);
+    let hash = list[0]["run_hash"].as_str().unwrap().to_string();
+    checked(&router, "HEAD", url, "/assets/{name}/versions", 200).await;
+    checked(
+        &router,
+        "GET",
+        "/assets/nope/versions",
+        "/assets/{name}/versions",
+        404,
+    )
+    .await;
+    // One version: there is no previous one.
+    let pin = "/assets/{name}/pin";
+    let (status, _) = checked_json(
+        &router,
+        "POST",
+        "/assets/first/pin",
+        pin,
+        json!({"previous": true}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    let (status, _) = checked_json(&router, "POST", "/assets/first/pin", pin, json!({})).await;
+    assert_eq!(status, 400);
+    let (status, _) = checked_json(
+        &router,
+        "POST",
+        "/assets/publish/pin",
+        pin,
+        json!({"previous": true}),
+    )
+    .await;
+    assert_eq!(status, 400, "a task cannot be pinned");
+    let (status, pinned) = checked_json(
+        &router,
+        "POST",
+        "/assets/first/pin",
+        pin,
+        json!({"run_hash": &hash[..8], "reason": "freeze"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{pinned}");
+    assert_eq!(pinned["pin"]["run_hash"], hash.as_str());
+    assert_eq!(pinned["pin"]["reason"], "freeze");
+    assert_eq!(pinned["pin"]["pinned_by"], Value::Null);
+    let versions = checked(&router, "GET", url, "/assets/{name}/versions", 200).await;
+    assert_eq!(versions["pin"]["run_hash"], hash.as_str());
+    assert_eq!(versions["versions"][0]["pinned"], true);
+    let pins = checked(&router, "GET", "/pins", "/pins", 200).await;
+    assert_eq!(pins["pins"].as_array().unwrap().len(), 1);
+    // A refresh of the pinned asset does not compute it.
+    let (_, body) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["first"], "refresh": ["first"]}),
+    )
+    .await;
+    let done = wait(&router, body["run_id"].as_str().unwrap()).await;
+    assert_eq!(done["status"], "complete", "{done}");
+    let detail = checked(
+        &router,
+        "GET",
+        &format!("/runs/{}", body["run_id"].as_str().unwrap()),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(detail["steps_executed"], 0, "{detail}");
+    assert_eq!(
+        detail["outcome"]["steps"][0]["reason"], "pinned",
+        "{detail}"
+    );
+    // A read-only server refuses both writes.
+    let read_only = app(config(dir.path(), true));
+    let (status, _) = checked_json(
+        &read_only,
+        "POST",
+        "/assets/first/pin",
+        pin,
+        json!({"previous": true}),
+    )
+    .await;
+    assert_eq!(status, 403);
+    let resp = request(&read_only, "DELETE", "/assets/first/pin").await;
+    assert_eq!(resp.status().as_u16(), 403);
+    let resp = request(&router, "DELETE", "/assets/first/pin").await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let removed: Value = serde_json::from_slice(&bytes).unwrap();
+    validate(
+        &contract()["paths"][pin]["delete"]["responses"]["200"]["content"]["application/json"]["schema"],
+        &removed,
+    );
+    assert_eq!(removed["removed"]["run_hash"], hash.as_str());
+    let again = checked(&router, "DELETE", "/assets/first/pin", pin, 200).await;
+    assert_eq!(again["removed"], Value::Null);
+    checked(&router, "GET", "/assets/first/pin", pin, 405).await;
+}

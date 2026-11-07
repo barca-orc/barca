@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '18'
+  version: '19'
   description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -1221,6 +1221,259 @@ paths:
           description: Registered path with unsupported method; Allow header identifies supported methods
           headers: *id016_keys
       parameters: *id017_keys
+  /assets/{name}/versions:
+    get:
+      summary: An asset's recent successful materializations and its pin
+      operationId: get_assets_name_versions
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetVersions'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'One per run hash, newest first, each with its artifact; as barca pin <name> --versions --json. Experimental.'
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The asset's full id (percent-encode a /) or its name.
+      - name: limit
+        in: query
+        required: false
+        description: Versions to return. Default 20, at most 500.
+        schema:
+          type: integer
+          minimum: 0
+    head:
+      summary: An asset's recent successful materializations and its pin (headers only)
+      operationId: head_assets_name_versions
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '404':
+          description: Resource not found
+        '500':
+          description: Metadata DB error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The asset's full id (percent-encode a /) or its name.
+      - name: limit
+        in: query
+        required: false
+        description: Versions to return. Default 20, at most 500.
+        schema:
+          type: integer
+          minimum: 0
+  /assets/{name}/pin:
+    post:
+      summary: Pin an asset to an earlier materialization
+      operationId: post_assets_name_pin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PinRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: The pin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PinResult'
+        '400':
+          description: No such version, an evicted one, an ambiguous run hash prefix, or a node that cannot be pinned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'Every run of this server reads the pinned materialization and never computes the asset until it is unpinned; as barca pin. pinned_by is token:<name> for a request with a project token. Experimental.'
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The asset's full id (percent-encode a /) or its name.
+    delete:
+      summary: Remove an asset's pin
+      operationId: delete_assets_name_pin
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: What was removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnpinResult'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'As barca unpin. Unpinning an asset that is not pinned changes nothing (removed is null). Experimental.'
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The asset's full id (percent-encode a /) or its name.
+  /pins:
+    get:
+      summary: Every pinned asset
+      operationId: get_pins
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PinList'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'As barca pin --json. Experimental.'
+    head:
+      summary: Every pinned asset (headers only)
+      operationId: head_pins
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '500':
+          description: Metadata DB error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
   /state:
     get:
       summary: Node cache state, durations, next scheduled execution and the run working on each node now
@@ -3105,6 +3358,125 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    AssetPin:
+      type: object
+      additionalProperties: false
+      required: [node_id, run_hash, pinned_at, pinned_by, reason]
+      properties:
+        node_id:
+          type: string
+        run_hash:
+          type: string
+        pinned_at:
+          type: string
+          description: RFC 3339 UTC
+        pinned_by:
+          type:
+          - string
+          - 'null'
+        reason:
+          type:
+          - string
+          - 'null'
+    AssetVersion:
+      type: object
+      additionalProperties: false
+      required: [run_hash, run_id, materialized_at, elapsed_seconds, size_bytes, format, artifact, available, current, pinned]
+      properties:
+        run_hash:
+          type: string
+        run_id:
+          type:
+          - string
+          - 'null'
+        materialized_at:
+          type: string
+        elapsed_seconds:
+          type:
+          - number
+          - 'null'
+        size_bytes:
+          type:
+          - integer
+          - 'null'
+        format:
+          type:
+          - string
+          - 'null'
+        artifact:
+          type: string
+        available:
+          type: boolean
+        current:
+          type: boolean
+        pinned:
+          type: boolean
+    AssetVersions:
+      type: object
+      additionalProperties: false
+      required: [node_id, pinnable, pin, versions]
+      properties:
+        node_id:
+          type: string
+        pinnable:
+          type: boolean
+        pin:
+          oneOf:
+          - $ref: '#/components/schemas/AssetPin'
+          - type: 'null'
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetVersion'
+    PinList:
+      type: object
+      additionalProperties: false
+      required: [pins]
+      properties:
+        pins:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetPin'
+    PinRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        run_hash:
+          type: string
+          description: A run hash, or a unique prefix of at least 6 characters
+        previous:
+          type: boolean
+          description: Pin the newest version before the latest one
+        reason:
+          type:
+          - string
+          - 'null'
+    PinResult:
+      type: object
+      additionalProperties: false
+      required: [node_id, pin, version, replaced]
+      properties:
+        node_id:
+          type: string
+        pin:
+          $ref: '#/components/schemas/AssetPin'
+        version:
+          $ref: '#/components/schemas/AssetVersion'
+        replaced:
+          oneOf:
+          - $ref: '#/components/schemas/AssetPin'
+          - type: 'null'
+    UnpinResult:
+      type: object
+      additionalProperties: false
+      required: [node_id, removed]
+      properties:
+        node_id:
+          type: string
+        removed:
+          oneOf:
+          - $ref: '#/components/schemas/AssetPin'
+          - type: 'null'
     TokenMetadata:
       type: object
       required: [id, name, created_at, expires_at]

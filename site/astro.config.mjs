@@ -68,6 +68,7 @@ export default defineConfig({
             { label: 'DuckDB Versions', slug: 'reference/duckdb' },
             { label: 'Groups', slug: 'reference/groups' },
             { label: 'Logs', slug: 'reference/logs' },
+            { label: 'Pinning and Rollback', slug: 'reference/pins' },
             { label: 'Metadata Backups', slug: 'reference/backup' },
             { label: 'Output Formats and Types', slug: 'reference/types' },
             { label: 'Partitions', slug: 'reference/partitions' },

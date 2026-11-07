@@ -21,6 +21,7 @@ mod handlers;
 mod inspect;
 mod ledger;
 mod pause;
+mod pins;
 mod queue;
 mod read_cache;
 mod replay;

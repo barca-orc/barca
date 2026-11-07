@@ -76,6 +76,10 @@ async fn blocking<T: Send + 'static>(
             auth::Error::State => ApiError::Barca(barca_core::BarcaError::Other(error.to_string())),
         })
 }
+/// The project token a request was authorized with, by name (`token:<name>`).
+#[derive(Clone, Debug)]
+pub(crate) struct Principal(pub(crate) String);
+
 pub(crate) async fn authorize(
     State(state): State<AppState>,
     request: Request,
@@ -115,14 +119,18 @@ pub(crate) async fn authorize(
     };
     let check = token.clone();
     let validator = store.clone();
-    if tokio::task::spawn_blocking(move || validator.validate(&check))
+    let Some(metadata) = tokio::task::spawn_blocking(move || validator.validate(&check))
         .await
         .ok()
         .and_then(Result::ok)
-        .is_none()
-    {
+    else {
         return unauthorized("invalid_token");
-    }
+    };
+    // Who made the request, for what records an actor (`pinned_by` of a pin).
+    let mut request = request;
+    request
+        .extensions_mut()
+        .insert(Principal(format!("token:{}", metadata.name)));
     // Subscribe before entering the handler so a concurrent revocation cannot be missed.
     let changes = access.changed.subscribe();
     let response = next.run(request).await;

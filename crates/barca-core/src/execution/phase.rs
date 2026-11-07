@@ -118,7 +118,10 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                 cached_node_ids.insert(display_id);
                 // A `Manual` node read as it is cannot be computed again in this run: its inputs
                 // are not planned.
-                if !matches!(held, Some(crate::cache::Held::Manual { .. })) {
+                if !matches!(
+                    held,
+                    Some(crate::cache::Held::Manual { .. } | crate::cache::Held::Pinned)
+                ) {
                     cached_steps.remember(step);
                 }
             }

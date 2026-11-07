@@ -7,6 +7,7 @@ import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
 import { formatAbsolute } from '@/lib/time'
 import { ArtifactSchema } from './ArtifactSchema'
+import { AssetVersions } from './AssetVersions'
 import { CopyButton, NodeKeys, PartitionBar } from './NodeKeys'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
@@ -338,6 +339,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             onRunKey={runAction.fireKey} runDisabled={runAction.readOnly || runAction.triggering} startingKey={runAction.startingKey} />
         </Section>
       )}
+
+      <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />
 
       <Section title="Inputs & output">
         <p className="barca-schema-context">Latest materialized data. Input schemas describe their own latest outputs.</p>

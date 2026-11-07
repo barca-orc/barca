@@ -168,7 +168,12 @@ fn main() {
         }
         (
             Some(server),
-            Cli::Status { .. } | Cli::Stats { .. } | Cli::Logs { .. } | Cli::Queue { .. },
+            Cli::Status { .. }
+            | Cli::Stats { .. }
+            | Cli::Logs { .. }
+            | Cli::Queue { .. }
+            | Cli::Pin { .. }
+            | Cli::Unpin { .. },
         )
         | (
             Some(server),
@@ -256,6 +261,8 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
         | Cli::List { server, .. }
         | Cli::History { server, .. }
         | Cli::Stats { server, .. }
+        | Cli::Pin { server, .. }
+        | Cli::Unpin { server, .. }
         | Cli::Logs { server, .. }
         | Cli::Queue { server, .. }
         | Cli::Sql { server, .. } => Some(server),
@@ -546,6 +553,33 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             }
             client::queue(server, action, is_json(format), env.as_deref()).await
         }
+        Cli::Pin {
+            target,
+            files,
+            run_hash,
+            previous,
+            versions,
+            limit,
+            reason,
+            format,
+            env,
+            ..
+        } => {
+            server_files("pin", &files, None)?;
+            let action =
+                commands::pin::action(target, run_hash, previous, versions, limit, reason)?;
+            client::pins::pin(server, &action, &files, is_json(format), env.as_deref()).await
+        }
+        Cli::Unpin {
+            target,
+            files,
+            format,
+            env,
+            ..
+        } => {
+            server_files("unpin", &files, None)?;
+            client::pins::unpin(server, &target, &files, is_json(format), env.as_deref()).await
+        }
         _ => unreachable!("only the commands that take --server reach here"),
     }
 }
@@ -832,6 +866,31 @@ async fn run_cli(
                 is_json(format),
             )
             .await
+        }
+        Cli::Pin {
+            target,
+            files,
+            run_hash,
+            previous,
+            versions,
+            limit,
+            reason,
+            format,
+            env,
+            ..
+        } => {
+            let action =
+                commands::pin::action(target, run_hash, previous, versions, limit, reason)?;
+            commands::pin::pin_cmd(env.as_deref(), &action, files, is_json(format), &python).await
+        }
+        Cli::Unpin {
+            target,
+            files,
+            format,
+            env,
+            ..
+        } => {
+            commands::pin::unpin_cmd(env.as_deref(), &target, files, is_json(format), &python).await
         }
         Cli::Stats {
             target,

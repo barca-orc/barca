@@ -66,6 +66,7 @@ ordering or concurrent-version publication from the approved ownership design.
 | Explicit `get` / `run` | Resolve the requested dependency cone; reuse matching asset results; run requested tasks and required sensors |
 | Scheduled tick | Reconcile its node and reachable `Always` nodes; stop propagation at a separate schedule |
 | `Manual` asset/task | Pin its existing successful result unless explicitly refreshed; a never-produced pin blocks readers |
+| Asset pinned with `barca pin` (0.41.0) | Read as its pinned materialization by every run and route, deprecated triggers included, even when targeted or refreshed; never computed until unpinned; consumers hash its pinned run hash; a pin whose result is gone blocks readers (exit 2, `blocked` under a tick). Unpartitioned assets only. Conformance: `python/tests/test_pins.py`, `freshness.rs` walk tests, `crates/barca-server/tests/openapi.rs` |
 | Sensor | Poll whenever required by a run, regardless of its declared freshness |
 | Partitioned `Manual` | Current limitation: follows ordinary computation rather than pinning |
 

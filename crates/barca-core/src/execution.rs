@@ -723,6 +723,9 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
         let Some(pin) = session.prepared.pinned.get(id) else {
             continue;
         };
+        if pin.user.is_some() {
+            continue;
+        }
         let stale = crate::freshness::is_stale(
             &cache,
             dag,

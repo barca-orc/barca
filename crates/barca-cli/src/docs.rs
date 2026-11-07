@@ -68,6 +68,11 @@ pub const TOPICS: &[Topic] = &[
         "disk.md"
     ),
     topic!(
+        "pins",
+        "barca pin / unpin: roll an asset back to an earlier result, held until unpinned",
+        "pins.md"
+    ),
+    topic!(
         "layout",
         "The project root, the .barca/ directory, concurrent and killed runs, upgrading",
         "layout.md"

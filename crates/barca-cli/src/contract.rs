@@ -49,6 +49,14 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "prints a one-use bootstrap credential; token formats may evolve",
     ),
     (
+        "pin",
+        "new in 0.41 (barca docs pins): the JSON shapes, the version list and what a pin covers may change after field use",
+    ),
+    (
+        "unpin",
+        "new in 0.41 (barca docs pins): the JSON shape may change after field use",
+    ),
+    (
         "doctor",
         "new prerequisite report; check names and provider-specific data may evolve",
     ),
@@ -932,6 +940,14 @@ const SITE_PAGES: &[SitePage] = &[
         title: "Status",
         description: "barca status: every node's cache state and why, its last run, its \
                       artifact's shape, --problems and --state.",
+    },
+    SitePage {
+        topic: "pins",
+        file: "pins.md",
+        slug: "reference/pins",
+        title: "Pinning and Rollback",
+        description: "barca pin and unpin: roll an asset back to an earlier materialization, \
+                      held for every run until unpinned.",
     },
     SitePage {
         topic: "logs",

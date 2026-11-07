@@ -17,6 +17,8 @@ Tools:
   plan      Inspect the execution plan as JSON
   doctor    Check project prerequisites
   stats     Inspect asset execution statistics
+  pin       Hold an asset at an earlier result
+  unpin     Release a pinned asset
   sql       Query cached results with SQL
   queue     Inspect or control the server queue
   gc        Free cache space

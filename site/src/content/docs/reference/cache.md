@@ -722,7 +722,8 @@ differs from that success and `detail` reads `changed: code (+1 more)`, with the
 [`barca docs status`](/reference/status/) describes; for a partitioned step, those of its first key that runs),
 `artifact_missing` (the result is cached, but its
 artifact is gone and something needs to read it) or `evicted` (the same, because the cache size
-limit deleted it). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
+limit deleted it). A `cached` step of an asset pinned with `barca pin` has `reason` `pinned`
+([`barca docs pins`](/reference/pins/)). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
 `warning`. A step that reads a sensor is predicted from the sensor's last recorded output, and
 its `detail` says so. `summary` counts steps, one per partition key.
 

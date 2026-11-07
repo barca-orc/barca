@@ -3,7 +3,7 @@
 //! routes rather than in front of them, so API paths stay what the contract says.
 
 use crate::state::AppState;
-use crate::{handlers, inspect, ledger, pause, queue, reset, runs, ui};
+use crate::{handlers, inspect, ledger, pause, pins, queue, reset, runs, ui};
 use axum::Router;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -28,6 +28,8 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/{name}", get(handlers::asset_detail))
         .route("/assets/{name}/schema", get(handlers::asset_schema))
         .route("/assets/{name}/partitions", get(inspect::partitions))
+        .route("/assets/{name}/versions", get(pins::versions))
+        .route("/pins", get(pins::list))
         // The run contract's reads; the middleware leaves the other methods alone.
         .route("/runs", get(runs::list).post(runs::create))
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
@@ -58,6 +60,8 @@ pub fn router(state: AppState) -> Router {
         // The rest of the run contract.
         .route("/runs/{run_id}/events", get(runs::events))
         .route("/runs/{run_id}/output", get(runs::output))
+        // Pin an asset to an earlier materialization, or remove its pin.
+        .route("/assets/{name}/pin", post(pins::pin).delete(pins::unpin))
         // Start the metadata database over (the old one is moved aside, never deleted).
         .route("/state/reset", post(reset::reset))
         // A schedule id is a node id: percent-encode a `/` in it.

@@ -53,6 +53,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca logs [RUN_ID]` | A run's recorded step stdout and stderr, without progress messages; the most recent run without an id, `-f` to follow one (`barca docs logs`). |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
+| `barca pin [target] [--previous \| --run-hash H \| --versions]` / `barca unpin target` | Hold an asset at an earlier materialization: every run reads it and none recomputes it until unpinned (`barca docs pins`). |
 | `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`barca docs doctor`). |
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
 | `barca gc [--dry-run] [--max-size SIZE]` | Evict cached results to keep `.barca/` under `[cache] max_size` (default 10% of the filesystem; barca also does this after every `get` and `run`) (`barca docs disk`). |

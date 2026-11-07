@@ -147,6 +147,8 @@ Tools:
   plan      Inspect the execution plan as JSON
   doctor    Check project prerequisites
   stats     Inspect asset execution statistics
+  pin       Hold an asset at an earlier result
+  unpin     Release a pinned asset
   sql       Query cached results with SQL
   queue     Inspect or control the server queue
   gc        Free cache space
@@ -352,6 +354,27 @@ Examples:
   barca stats total --local                 # timings recorded on this machine, even with a server configured
 
 More: barca docs cache";
+
+const PIN_HELP: &str = "\
+Examples:
+  barca pin orders --versions                  # recent successful materializations to choose from
+  barca pin orders --previous                  # roll back to the version before the latest
+  barca pin orders --run-hash 3f9a1c --reason \"bad feed on 11-07\"   # pin one version (a hash prefix)
+  barca pin orders pipeline.py --previous --json   # {node_id, pin, version, replaced}
+  barca pin                                    # every pinned asset
+  barca pin --json                             # {pins: [...]}
+  barca pin orders --versions --limit 5 --json # {node_id, pinnable, pin, versions}
+  barca pin orders --previous --server         # pin on the configured barca server
+
+More: barca docs pins";
+
+const UNPIN_HELP: &str = "\
+Examples:
+  barca unpin orders                  # the next run decides orders as before
+  barca unpin orders pipeline.py --json   # {node_id, removed}
+  barca unpin orders --server         # unpin on the configured barca server
+
+More: barca docs pins";
 
 const SERVE_HELP: &str = "\
 Examples:
@@ -828,6 +851,60 @@ pub(crate) enum Cli {
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::STATS_FIELDS))]
         #[arg(help = "Select JSON fields as a comma-separated list; implies --json", long_help = None)]
         fields: Option<Vec<String>>,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
+        env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
+    },
+    /// Pin an asset to an earlier materialization, or list pins and versions
+    ///
+    /// A pinned asset is read by every run (downstream steps, `barca get`, schedules) as the
+    /// materialization it is pinned at and is never computed until `barca unpin`. With no
+    /// target, lists every pin.
+    #[command(after_help = quick_help("pin", PIN_HELP), after_long_help = PIN_HELP, long_about = None)]
+    Pin {
+        /// The asset (a function name or node id); omit to list every pin
+        target: Option<String>,
+        /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
+        files: Vec<PathBuf>,
+        /// Pin the successful materialization with this run hash (or a unique prefix of at
+        /// least 6 characters), from `--versions`
+        #[arg(long, value_name = "HASH", conflicts_with_all = ["previous", "versions"])]
+        run_hash: Option<String>,
+        /// Pin the newest successful materialization before the latest one (roll back one version)
+        #[arg(long, conflicts_with = "versions")]
+        previous: bool,
+        /// List the asset's recent successful materializations (one per run hash) instead of pinning
+        #[arg(long)]
+        versions: bool,
+        /// With --versions, the most listed (default 20)
+        #[arg(short, long, requires = "versions")]
+        limit: Option<usize>,
+        /// Why it is pinned, recorded with the pin and shown in the UI
+        #[arg(long, value_name = "TEXT", conflicts_with = "versions")]
+        reason: Option<String>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
+        env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
+    },
+    /// Remove an asset's pin; the next run decides it as before
+    #[command(after_help = quick_help("unpin", UNPIN_HELP), after_long_help = UNPIN_HELP, long_about = None)]
+    Unpin {
+        /// The pinned asset (a function name or node id)
+        target: String,
+        /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
+        #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
+        files: Vec<PathBuf>,
+        #[command(flatten)]
+        format: FormatFlags,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]

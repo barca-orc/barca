@@ -237,6 +237,12 @@ every database from before 0.29.2 (#629):
   ([artifact-formats.md](artifact-formats.md), "Sink publication"). A database without it reads
   as having no rows, and the step's latest successful row with `sinks_json` stands in. Older
   binaries ignore the table.
+- `asset_pins (node_id, run_hash, pinned_at, pinned_by, reason)` (0.41.0, `barca docs pins`),
+  primary key `node_id`: an asset held at the successful materialization with `run_hash`.
+  `pinned_at` is RFC 3339 UTC; `pinned_by` (`user@host` or `token:<name>`) and `reason` are
+  nullable. Every run reads a pinned asset as that materialization and never computes it; the
+  cache size limit never evicts it. Writing or removing a row clears `freshness_proofs`. A
+  database without the table has no pins; older binaries ignore it (and so do not honor pins).
 - `logs.stream` (`stdout` / `stderr`) and `logs.ts` (RFC 3339 UTC, milliseconds), both TEXT,
   nullable (0.29.2): which stream a recorded line came from and when it arrived. Lines recorded
   before keep `NULL` in both and read as stdout with no time (`barca logs --stream stdout`
