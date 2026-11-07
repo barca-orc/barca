@@ -165,3 +165,17 @@ describe('a page that also shows what ran recently', () => {
     expect(facetCounts(rows, attention, NOW, recent).states.cached).toBe(2)
   })
 })
+
+describe('one state per row', () => {
+  it('counts and filters a failing row as failing, never also under its cache state', () => {
+    const rows = buildRows([
+      node('p.py:a', { state: 'never_run', lastAt: '2026-10-06T11:00:00Z', failed: true }),
+      node('p.py:b', { state: 'never_run' }),
+    ], NOW)
+    const counts = facetCounts(rows, EMPTY_FILTERS, NOW)
+    expect(counts.failed).toBe(1)
+    expect(counts.states.never_run).toBe(1)
+    expect(applyFilters(rows, { ...EMPTY_FILTERS, states: ['never_run'] }, NOW).map((r) => r.name)).toEqual(['b'])
+    expect(applyFilters(rows, { ...EMPTY_FILTERS, failed: true }, NOW).map((r) => r.name)).toEqual(['a'])
+  })
+})

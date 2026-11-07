@@ -5,7 +5,7 @@
  * itself and whether the last attempt failed, which are shown as two facts.
  */
 
-import { cacheStateTone, lastAttemptFailed, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, nodeStateDisplay, type CacheState } from './cacheStateDisplay'
 import { statusMeta } from './status'
 import { runningGraphState } from './running'
 import type { Tone } from './tone'
@@ -13,7 +13,7 @@ import type { NodeState, StatusKind } from './types'
 
 export type GraphState =
   /** The node's cache state, as `GET /state` reports it. */
-  | { kind: 'cache'; tone: Tone; label: CacheState; hint: string; state: CacheState; lastFailed: boolean }
+  | { kind: 'cache'; tone: Tone; label: string; hint: string; state: CacheState; lastFailed: boolean }
   /** A run working on the node now, or the run this page streams. */
   | { kind: 'run'; tone: Tone; label: string; hint: string; status: StatusKind }
   /** A group of nodes: its most urgent fact. */
@@ -27,7 +27,9 @@ export const PENDING_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', 
 /** A node's resting state: `cache.state` as the server says it, with the server's `detail`. */
 export function cacheGraphState(node: NodeState): GraphState {
   const state = node.cache.state
-  return { kind: 'cache', tone: cacheStateTone(state), label: state, hint: node.cache.detail, state, lastFailed: lastAttemptFailed(node) }
+  const lastFailed = lastAttemptFailed(node)
+  const shown = nodeStateDisplay({ state, lastFailed })
+  return { kind: 'cache', tone: shown.tone, label: shown.label, hint: node.cache.detail, state, lastFailed }
 }
 
 /** A run working on the node now (whoever started it) outranks its resting state. */

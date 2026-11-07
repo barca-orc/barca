@@ -71,7 +71,7 @@ describe('running state from /state', () => {
     expect(queued).toMatchObject({ kind: 'run', status: 'queued', tone: 'queued', label: 'queued' })
     expect(statusMeta('queued').live).toBe(false)
     // No run: the resting state, in its own word.
-    expect(graphState(node('p.py:a'))).toMatchObject({ kind: 'cache', state: 'cached', label: 'cached', tone: 'success' })
+    expect(graphState(node('p.py:a'))).toMatchObject({ kind: 'cache', state: 'cached', label: 'fresh', tone: 'success' })
   })
 
   it('shows a partitioned node’s keys done', () => {
@@ -130,7 +130,7 @@ describe('running state from /state', () => {
     expect(group).toMatchObject({ kind: 'run', tone: 'running', label: '1 running' })
     // Once the run ends, the failed last attempt shows again.
     byId.set('p.py:a', node('p.py:a'))
-    expect(groupHealth(['p.py:a', 'p.py:b'], byId)).toMatchObject({ tone: 'failed', label: '1 last attempt failed' })
+    expect(groupHealth(['p.py:a', 'p.py:b'], byId)).toMatchObject({ tone: 'failed', label: '1 failing' })
   })
 
   it('polls /state every 2s while anything runs, every 10s otherwise', () => {

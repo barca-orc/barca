@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
+import { CircleX } from 'lucide-react'
 import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
 import type { Tone } from '@/lib/tone'
 import { StatusDot } from './StatusDot'
@@ -68,8 +69,13 @@ export function DagNode({
         <div className="barca-dag-foot">
           {/* The kind's word gives way to the failed fact: the icon above still says the kind. */}
           {kindLabel && !lastFailed && <span className="barca-dag-kind">{kindLabel}</span>}
-          {label && <span className="barca-dag-state">{label}</span>}
-          {lastFailed && <span className="barca-tag barca-dag-failed" data-tone="failed" data-size="sm" title={LAST_ATTEMPT_FAILED}>{LAST_ATTEMPT_FAILED}</span>}
+          {/* One state per node: a failed last attempt is `failing`, in red with its icon, instead of the cache word. */}
+          {(label || lastFailed) && (
+            <span className="barca-dag-state" data-failed={lastFailed || undefined}>
+              {lastFailed && <CircleX size={11} aria-hidden />}
+              {lastFailed ? LAST_ATTEMPT_FAILED : label}
+            </span>
+          )}
         </div>
       </div>
     </div>

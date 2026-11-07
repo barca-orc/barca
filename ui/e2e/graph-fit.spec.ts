@@ -45,9 +45,8 @@ test('fit-to-screen stays readable: cards at 1:1, centred on the first failure',
     expect(box).toBeGreaterThanOrEqual(208)
   }
   const failed = page.locator(node('demand_forecast'))
-  // Its state in the CLI's word, and its failed keys as the fact beside it.
-  await expect(failed).toContainText('partial')
-  await expect(failed).toContainText('last attempt failed')
+  // Its failed keys make it failing: the one state shown, instead of `partial`.
+  await expect(failed).toContainText('failing')
   const label = failed.locator('.barca-dag-state')
   expect(parseFloat(await label.evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
   // Centred on the failed node upstream, which is on screen; the one downstream is not.
@@ -62,7 +61,7 @@ test('fit-to-screen stays readable: cards at 1:1, centred on the first failure',
 
 test('a consumer that never ran keeps its word and names the failure upstream in its hint', async ({ page }) => {
   const validate = page.locator(node('validate_publication'))
-  await expect(validate).toContainText('never_run')
+  await expect(validate).toContainText('never run')
   await expect(validate.locator('.barca-dag')).toHaveAttribute('title', /Waits on publish_plan, whose last attempt failed/)
 })
 

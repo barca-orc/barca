@@ -1,4 +1,5 @@
 import type { GraphEntry } from './graph'
+import { plural } from './plural'
 import { sourceFile } from './pipeline'
 import type { ListNode } from './types'
 
@@ -56,7 +57,7 @@ export function domainMap(assets: ListNode[]): DomainMap | null {
       kind: 'group',
       inputs: Object.keys(inputWeights),
       name: id.slice(PREFIX.length),
-      summary: `${leaves.length.toLocaleString()} nodes · ${upstream} in · ${feeds.get(id) ?? 0} out`,
+      summary: `${plural(leaves.length, 'node')} · ${upstream} in · ${feeds.get(id) ?? 0} out`,
       inputWeights,
       loose: edges > EDGES_UP_TO,
     }

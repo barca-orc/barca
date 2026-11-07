@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo } from 'react'
+import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
 import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
@@ -12,7 +13,7 @@ import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
 import { useRunDetail } from '@/hooks/useRuns'
 import { buildRows, formatSeconds } from '@/lib/assetTable'
-import { LAST_ATTEMPT_FAILED, cacheStateTone } from '@/lib/cacheStateDisplay'
+import { nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, runPace, shortHash, sourcePath, whatChanged } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline, isFailed } from '@/lib/health'
@@ -118,9 +119,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         <div className="barca-state-line">
           {runAction.liveState ? (
             <StatusBadge tone={runAction.liveState.tone} label={runAction.liveState.label} live={isLive(runAction.liveState)} />
-          ) : row && <StatusBadge tone={cacheStateTone(row.state)} label={row.state} />}
-          {row && !runAction.liveState && <span className="barca-cell-sub">{row.reason}</span>}
-          {row?.lastFailed && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
+          ) : row && <StatusBadge {...nodeStateDisplay(row)} />}
         </div>
         {runAction.error && <p className="barca-note" role="alert">Could not start run: {runAction.error.message}</p>}
         {node.running && (
@@ -141,7 +140,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           <div className="barca-why" role="group" aria-label="Why it failed">
             <div className="barca-why-head">
               <CircleAlert size={14} />
-              <ErrorLine error={last.error} large />
+              <ErrorLine error={last.error} large root={root} />
               {last.error && <CopyButton label="Copy error" text={last.error} />}
             </div>
             <p className="barca-note">
@@ -194,7 +193,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               <span className={(lastRun ?? last).status === 'failed' ? 'barca-cell-failed' : undefined}>{(lastRun ?? last).status}</span>
               {' · '}<Age at={(lastRun ?? last).created_at} nowMs={nowMs} />
               {' · '}{lastElapsed !== null ? formatSeconds(lastElapsed) : '–'}
-              {lastRun?.keys != null && <> · {lastRun.keys.toLocaleString()} keys{lastRun.failed_keys ? `, ${lastRun.failed_keys.toLocaleString()} failed` : ''}</>}
+              {lastRun?.keys != null && <> · {plural(lastRun.keys, 'key')}{lastRun.failed_keys ? `, ${lastRun.failed_keys.toLocaleString()} failed` : ''}</>}
               {stats && <> · {stats.total_runs.toLocaleString()} {stats.total_runs === 1 ? 'run' : 'runs'}</>}
             </p>
             {lastElapsed !== null && (
@@ -313,7 +312,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                     </span>
                     <Age at={r.created_at} nowMs={nowMs} />
                     <span>{r.elapsed_seconds !== null ? formatSeconds(r.elapsed_seconds) : '–'}</span>
-                    {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}
+                    {r.keys != null && <span>{plural(r.keys, 'key')}{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}
                     {r.attempts > 1 && <span>{r.attempts} attempts</span>}
                   </div>
                   {r.error_message && (

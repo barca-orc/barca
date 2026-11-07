@@ -6,7 +6,7 @@ import { useAssetStates, useWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { useGroups } from '@/hooks/useGroups'
 import { useProgram } from '@/hooks/useProgram'
-import { LAST_ATTEMPT_FAILED, cacheStateTone } from '@/lib/cacheStateDisplay'
+import { LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone } from '@/lib/cacheStateDisplay'
 import { groupTree, leavesByGroup } from '@/lib/groups'
 import { mergeStates, pipelineSummaries, type PipelineSummary } from '@/lib/pipeline'
 import { SIDEBAR_KEY, fileGroups, updateSidebar, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
@@ -86,7 +86,7 @@ export function SidebarView({ model, total, pipelines, groupsOf, selected, scope
                 </button>
                 <button
                   className="barca-pipe"
-                  title={p.known ? `${p.file} · ${p.worst}${p.failed ? ` · ${p.failed} ${LAST_ATTEMPT_FAILED}` : ''}` : p.file}
+                  title={p.known ? `${p.file} · ${cacheStateLabel(p.worst)}${p.failed ? ` · ${p.failed} ${LAST_ATTEMPT_FAILED}` : ''}` : p.file}
                   data-active={selected === p.file ? '' : undefined}
                   aria-pressed={selected === p.file}
                   onClick={() => onSelect(selected === p.file ? null : p.file)}

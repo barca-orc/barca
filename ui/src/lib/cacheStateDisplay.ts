@@ -17,8 +17,10 @@ import type { Tone } from './tone'
 export type { CacheState }
 
 interface CacheStateDisplay {
-  /** The word, as the CLI prints it. */
+  /** The state, as the CLI prints it (`barca status --json`). */
   word: CacheState
+  /** What the UI says for it: plain words, never the snake_case enum. */
+  label: string
   tone: Tone
 }
 
@@ -38,18 +40,23 @@ export const CACHE_STATES: readonly CacheState[] = [
 ]
 
 const DISPLAY = {
-  blocked: { word: 'blocked', tone: 'warning' },
-  stale: { word: 'stale', tone: 'warning' },
-  partial: { word: 'partial', tone: 'warning' },
-  unsynced: { word: 'unsynced', tone: 'warning' },
-  unknown: { word: 'unknown', tone: 'neutral' },
-  never_run: { word: 'never_run', tone: 'neutral' },
-  always_runs: { word: 'always_runs', tone: 'neutral' },
-  cached: { word: 'cached', tone: 'success' },
+  blocked: { word: 'blocked', label: 'blocked', tone: 'warning' },
+  stale: { word: 'stale', label: 'stale', tone: 'warning' },
+  partial: { word: 'partial', label: 'partial', tone: 'warning' },
+  unsynced: { word: 'unsynced', label: 'unsynced', tone: 'warning' },
+  unknown: { word: 'unknown', label: 'unknown', tone: 'neutral' },
+  never_run: { word: 'never_run', label: 'never run', tone: 'neutral' },
+  always_runs: { word: 'always_runs', label: 'always runs', tone: 'neutral' },
+  cached: { word: 'cached', label: 'fresh', tone: 'success' },
 } satisfies Record<CacheState, CacheStateDisplay>
 
 export function cacheStateDisplay(state: CacheState): CacheStateDisplay {
   return DISPLAY[state]
+}
+
+/** The words the UI shows for a state: `never run`, `fresh`. */
+export function cacheStateLabel(state: CacheState): string {
+  return DISPLAY[state].label
 }
 
 /** The tone of a state's word, dot, bar segment or node. */
@@ -72,8 +79,16 @@ export function worstCacheState(states: Iterable<CacheState>): CacheState | null
 /** The tone of the fact "its last attempt failed", wherever that fact is shown. */
 export const FAILED_TONE: Tone = 'failed'
 
-/** The words of that fact: `1 failed last attempt`, `last attempt failed`. */
-export const LAST_ATTEMPT_FAILED = 'last attempt failed'
+/** The word of that fact: `1 failing`. It replaces the state's word wherever a node is shown. */
+export const LAST_ATTEMPT_FAILED = 'failing'
+
+/**
+ * The one state a node shows: `failing` when its latest attempt failed (it outranks the cache
+ * state, which stays in the tooltip and the panel), else its cache state's words.
+ */
+export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean }): { label: string; tone: Tone } {
+  return node.lastFailed ? { label: LAST_ATTEMPT_FAILED, tone: FAILED_TONE } : { label: cacheStateLabel(node.state), tone: cacheStateTone(node.state) }
+}
 
 /**
  * Whether the node's latest attempt failed, as `barca status --json` records it: its last

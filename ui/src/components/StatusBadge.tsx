@@ -1,29 +1,47 @@
 import type { CSSProperties } from 'react'
+import { CircleAlert, CircleX, Clock, LoaderCircle, Pause } from 'lucide-react'
 import type { Tone } from '@/lib/tone'
 import { StatusDot } from './StatusDot'
 
 export interface StatusBadgeProps {
   tone: Tone
-  /** The word: a cache state as the CLI prints it, or a run's status. */
+  /** The words: a node's state (`failing`, `never run`) or a run's status. */
   label: string
   size?: 'sm' | 'md'
   /** Pulse (live work). */
   live?: boolean
   /** Dot + plain text, no pill. By default only the failed and running tones, the exceptions, get a pill. */
   subtle?: boolean
+  /** A shape for a state the tone does not name (`paused` is neutral in colour). */
+  icon?: 'paused'
   style?: CSSProperties
 }
 
 /**
- * barca · StatusBadge
- * A dot and its word. Pills are for exceptions: a failed or running state sits on a tinted
- * ground, any other is dot + plain text, so a column of cached rows stays quiet.
+ * The shape beside the word, so a state is never colour alone: failed is a crossed circle,
+ * a warning (stale, blocked) an exclamation, running a spinner, queued a clock, paused bars.
+ * The quiet tones (fresh, never run) keep a dot.
  */
-export function StatusBadge({ tone, label, size = 'md', live = false, subtle, style }: StatusBadgeProps) {
+function StateIcon({ tone, live, size, icon }: { tone: Tone; live: boolean; size: number; icon?: 'paused' }) {
+  const props = { size, 'aria-hidden': true, strokeWidth: 2.25, className: 'barca-badge-icon' } as const
+  if (icon === 'paused') return <Pause {...props} />
+  if (tone === 'failed') return <CircleX {...props} />
+  if (tone === 'warning') return <CircleAlert {...props} />
+  if (tone === 'running') return <LoaderCircle {...props} data-spin={live || undefined} />
+  if (tone === 'queued') return <Clock {...props} />
+  return <StatusDot tone={tone} live={live} size={size === 11 ? 6 : 7} />
+}
+
+/**
+ * barca · StatusBadge
+ * An icon and its word. Pills are for exceptions: a failed or running state sits on a tinted
+ * ground, any other is icon + plain text, so a column of fresh rows stays quiet.
+ */
+export function StatusBadge({ tone, label, size = 'md', live = false, subtle, icon, style }: StatusBadgeProps) {
   const plain = subtle ?? !(tone === 'failed' || tone === 'running')
   return (
     <span className="barca-badge" data-tone={tone} data-size={size} data-plain={plain || undefined} style={style}>
-      <StatusDot tone={tone} live={live} size={size === 'sm' ? 6 : 7} />
+      <StateIcon tone={tone} live={live} size={size === 'sm' ? 11 : 13} icon={icon} />
       {label}
     </span>
   )

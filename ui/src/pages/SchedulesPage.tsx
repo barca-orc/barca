@@ -2,6 +2,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { useAssets } from "@/hooks/useAssets";
 import { useAssetStates } from "@/hooks/useAssetStates";
 import { useHealth } from "@/hooks/useHealth";
+import { usePageTopbarRun } from "@/hooks/useTopbarRun";
 import { useSchedule, useToggleSchedulePause } from "@/hooks/useSchedule";
 import { pipelineName } from "@/lib/pipeline";
 import { remote } from "@/lib/remote";
@@ -17,6 +18,7 @@ export function SchedulesPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const pipeline = params.get("pipeline");
+  usePageTopbarRun((handle) => navigate(`/runs?run=${encodeURIComponent(handle)}`));
 
   const open = (id: string) => {
     const p = new URLSearchParams();

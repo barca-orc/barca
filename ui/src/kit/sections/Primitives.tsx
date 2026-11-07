@@ -22,7 +22,7 @@ import {
   Tag,
 } from '@/components'
 import { NOW_MS, STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
-import { CACHE_STATES, cacheStateTone } from '@/lib/cacheStateDisplay'
+import { CACHE_STATES, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { statusMeta } from '@/lib/status'
 import { Spec, Variant } from '../Kit'
 import { SidebarView } from '@/layouts/Sidebar'
@@ -93,10 +93,12 @@ const [query, setQuery] = useState('')
       <Tag size="md">medium</Tag>
     </Spec>
 
-    <Spec title="StatusDot / StatusBadge" note="The cache states in the CLI's words, then the run lifecycle's statuses.">
+    <Spec title="StatusDot / StatusBadge" note="One state per node in plain words (failing outranks the cache state), each with a shape beside its colour; then the run lifecycle's statuses.">
+      <StatusBadge {...nodeStateDisplay({ state: 'stale', lastFailed: true })} />
       {CACHE_STATES.map((s) => (
-        <StatusBadge key={s} tone={cacheStateTone(s)} label={s} />
+        <StatusBadge key={s} tone={cacheStateTone(s)} label={cacheStateLabel(s)} />
       ))}
+      <StatusBadge tone="neutral" label="paused" icon="paused" />
       {STATUS_KINDS.map((s) => (
         <StatusBadge key={s} tone={statusMeta(s).tone} label={statusMeta(s).label} live={statusMeta(s).live} />
       ))}
@@ -104,7 +106,7 @@ const [query, setQuery] = useState('')
         <StatusDot key={s} tone={statusMeta(s).tone} live={statusMeta(s).live} label={statusMeta(s).label} size={8} />
       ))}
       <StatusBadge tone="failed" label="failed" subtle />
-      <StatusBadge tone="success" label="cached" subtle={false} />
+      <StatusBadge tone="success" label="fresh" subtle={false} />
     </Spec>
 
     <Spec title="CommandPaletteView" note="⌘K: results, and nothing found.">
@@ -147,6 +149,8 @@ const [query, setQuery] = useState('')
       <Variant label="traceback"><ErrorLine error={'ValueError: bad shape\nTraceback (most recent call last):\n  File "a.py", line 3, in f'} /></Variant>
       <Variant label="bare traceback"><ErrorLine error={'Traceback (most recent call last):\n  File "a.py", line 3, in f\nKeyError: \'x\''} /></Variant>
       <Variant label="no error"><ErrorLine error={null} /></Variant>
+      <Variant label="inline (a table cell: never expands)"><ErrorLine error={'ValueError: bad shape\nTraceback (most recent call last):\n  File "a.py", line 3, in f'} inline /></Variant>
+      <Variant label="traceback, root taken off its paths"><div style={{ width: 300 }}><ErrorLine error={'KeyError: \'currency\'\nTraceback (most recent call last):\n  File "/home/me/project/pipelines/orders/enrich_with_exchange_rates.py", line 41, in orders_enriched'} root="/home/me/project" large /></div></Variant>
       <Variant label="panel size"><div style={{ width: 300 }}><ErrorLine error="row count fell 64% day over day" large /></div></Variant>
     </Spec>
     <Spec title="MiddleName" note="Cut in the middle when it does not fit; the full id on hover.">

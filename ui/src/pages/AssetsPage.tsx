@@ -1,7 +1,7 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
-import { ArrowDown, ArrowUp, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, CircleX, X } from 'lucide-react'
 import {
   Button,
   Chip,
@@ -30,7 +30,10 @@ import { useTimeZone } from '@/context/timeZone'
 import { formatShort, type TimeZone } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
-import { CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone } from '@/lib/cacheStateDisplay'
+import { CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { consumersOf, downstreamIds } from '@/lib/health'
+import { formatAgo } from '@/lib/time'
+import { plural } from '@/lib/plural'
 import { isLive, liveGraphState } from '@/lib/graphState'
 import { nodeKindLabel } from '@/lib/status'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
@@ -156,6 +159,18 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const nameCount = new Map<string, number>()
   for (const r of visible) nameCount.set(r.name, (nameCount.get(r.name) ?? 0) + 1)
   const labels = new Map(visible.filter((r) => nameCount.get(r.name)! > 1).map((r) => [r.id, r.id]))
+  // What fails, and how much of the graph waits on it: the page's one-line summary.
+  const failing = rows.filter((r) => r.lastFailed)
+  const blocked = useMemo(() => {
+    if (failing.length === 0 || graph.length === 0) return 0
+    const consumers = consumersOf(graph)
+    const ids = new Set(failing.map((r) => r.id))
+    const down = new Set<string>()
+    for (const id of ids) for (const d of downstreamIds(id, consumers)) if (!ids.has(d)) down.add(d)
+    return down.size
+    // `failing` is derived from `rows`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, graph])
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const win = useTableWindow(visible.length, scroller)
@@ -164,7 +179,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   // The node shown in the side panel (?node=<id>).
   const selectedId = params.get('node')
   const selectedNode = data?.find((n) => n.id === selectedId) ?? null
-  const nodeRun = useNodeRun(selectedNode, { showTopbar: kind === 'asset' || selectedNode !== null, scopes: kind === 'asset' })
+  const nodeRun = useNodeRun(selectedNode, { showTopbar: true, scopes: true })
   const setSelected = (id: string | null) => {
     const p = new URLSearchParams(params)
     if (id === null) p.delete('node')
@@ -213,7 +228,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             <h1>{PAGE_LABEL[kind]}{pipeline ? ` · ${pipelineName(pipeline)}` : ''}</h1>
             {data ? (
               <span className="barca-count" title={pipeline ?? undefined}>
-                {rows.length} {kind === 'asset' ? 'assets' : kind === 'task' ? 'tasks' : 'sensors'}
+                {plural(rows.length, kind)}
               </span>
             ) : (
               <Skeleton width={64} height={14} />
@@ -221,8 +236,8 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             {/* The state words, as `barca status` prints them; a failed last attempt is a filter of its own. */}
             <ChipGroup label="State">
               {(counts.failed > 0 || (filters.failed && !onDefault)) && (
-                <Chip pressed={filters.failed} onClick={() => setFilters({ ...filters, failed: !filters.failed })}>
-                  <StatusDot tone={FAILED_TONE} size={6} />
+                <Chip pressed={filters.failed} tone="failed" onClick={() => setFilters({ ...filters, failed: !filters.failed })}>
+                  <CircleX size={12} aria-hidden />
                   {counts.failed} {LAST_ATTEMPT_FAILED}
                 </Chip>
               )}
@@ -233,7 +248,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   onClick={() => setFilters({ ...filters, states: toggle(filters.states, state) })}
                 >
                   <StatusDot tone={cacheStateTone(state)} size={6} />
-                  {counts.states[state]} {state}
+                  {counts.states[state]} {cacheStateLabel(state)}
                 </Chip>
               ))}
             </ChipGroup>
@@ -294,6 +309,15 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
         </div>
       </div>
 
+      {failing.length > 0 && (
+        <div className="barca-attention" role="status">
+          <StatusBadge tone={FAILED_TONE} label={plural(failing.length, 'failing', 'failing')} />
+          {blocked > 0 && <span>blocks {plural(blocked, 'downstream node')}</span>}
+          {!filters.failed && (
+            <button type="button" className="barca-clear" onClick={() => setFilters({ ...filters, failed: true })}>Show only failing</button>
+          )}
+        </div>
+      )}
       <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       <div className="barca-assets-split">
       <div className="barca-view-body barca-table-scroll" ref={scroller}>
@@ -322,7 +346,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 <SortHeader label="State" column="state" sort={sort} onSort={onSort} />
                 <SortHeader label="Last run" column="last" sort={sort} onSort={onSort} />
                 <SortHeader label="Last success" column="success" sort={sort} onSort={onSort} />
-                <SortHeader label="Typical" column="typical" sort={sort} onSort={onSort} numeric />
+                <SortHeader label="Typical duration" column="typical" sort={sort} onSort={onSort} numeric />
                 <SortHeader label="Next run" column="next" sort={sort} onSort={onSort} />
               </tr>
             </thead>
@@ -339,6 +363,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   data-index={index}
                   tabIndex={0}
                   aria-selected={r.id === selectedId}
+                  data-failing={r.lastFailed || undefined}
                   onClick={(event) => {
                     event.currentTarget.focus({ preventScroll: true })
                     open(r)
@@ -360,10 +385,13 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                     ) : (
                       <>
                         <div className="barca-state-line">
-                          <StatusBadge tone={cacheStateTone(r.state)} label={r.state} size="sm" />
-                          {r.lastFailed && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
+                          <StatusBadge {...nodeStateDisplay(r)} size="sm" />
                         </div>
-                        <div className="barca-cell-sub">{r.reason}</div>
+                        {r.lastFailed && (
+                          <div className="barca-cell-sub">
+                            {r.lastSuccessAt ? `last good ${formatAgo(r.lastSuccessAt, now)}` : 'never succeeded'}
+                          </div>
+                        )}
                       </>
                     )}
                   </td>
@@ -371,7 +399,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                     {r.last ? (
                       <>
                         <div>{r.last.status} · {r.last.ago}</div>
-                        {r.last.error && <div className="barca-cell-error"><ErrorLine error={r.last.error} /></div>}
+                        {r.last.error && <div className="barca-cell-error"><ErrorLine error={r.last.error} inline /></div>}
                       </>
                     ) : (
                       <span className="barca-cell-sub">not run</span>

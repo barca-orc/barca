@@ -193,7 +193,7 @@ export function GroupedPipelinePage() {
             ))}
           </nav>
           <span className="barca-count">
-            {scopeIds.length.toLocaleString()} nodes
+            {plural(scopeIds.length, 'node')}
             {!flat && show === 'items' && ` · ${map ? plural(map.entries.length, 'pipeline') : plural(entries.length, scope ? 'item' : 'group')}`}
           </span>
           {runningHere > 0 && (

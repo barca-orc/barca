@@ -1,5 +1,6 @@
 /** Organizational metadata, independent of execution. */
 import type { ListNode, NodeState, StatusKind } from './types'
+import { plural } from './plural'
 import { shortName, type GraphEntry } from './graph'
 import type { GraphState } from './graphState'
 import { healthCounts, healthLabel, healthParts } from './health'
@@ -222,9 +223,7 @@ export function contentsSummary(nodes: readonly Pick<ListNode, 'id' | 'kind'>[])
 }
 
 /** `1 group`, `3 groups`. */
-export function plural(count: number, noun: string): string {
-  return `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`
-}
+export { plural }
 
 /** The group that is all of `assets`, if there is one: nothing above it is worth a level. */
 export function soleGroup(assets: ListNode[], tree: GroupTree): string | null {

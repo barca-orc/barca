@@ -1,4 +1,5 @@
 import { Link } from 'react-router'
+import { plural } from '@/lib/plural'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { shortName } from '@/lib/graph'
@@ -24,7 +25,7 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
     .with({ kind: 'starting' }, () => 'starting…')
     .with({ kind: 'rejected' }, (n) => `could not start: ${n.error}`)
     .with({ kind: 'queued' }, () => 'queued')
-    .with({ kind: 'running' }, (n) => `running · ${n.done.toLocaleString()}${n.total === null ? '' : ` of ${n.total.toLocaleString()}`} steps`)
+    .with({ kind: 'running' }, (n) => `running · ${n.total === null ? plural(n.done, 'step') : `${n.done.toLocaleString()} of ${plural(n.total, 'step')}`}`)
     .with({ kind: 'finished' }, (n) => n.summary)
     .exhaustive()
   const failed = notice.kind === 'rejected' || (notice.kind === 'finished' && notice.status === 'failed')

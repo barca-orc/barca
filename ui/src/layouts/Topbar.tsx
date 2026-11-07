@@ -48,9 +48,9 @@ export function Topbar({ run }: TopbarProps) {
       </nav>
 
       <div className="barca-top-actions">
-        <IconButton label="Search (⌘K)" onClick={() => setPalette(true)}>
-          <Search size={15} />
-        </IconButton>
+        <Button variant="ghost" size="sm" className="barca-top-search" iconLeft={<Search size={14} />} aria-label="Search (⌘K)" title="Search assets, runs and actions (⌘K)" onClick={() => setPalette(true)}>
+          <span className="barca-top-search-text">Search</span> <kbd>⌘K</kbd>
+        </Button>
         <ConnectionBadge connection={connection(health.data, health.isError)} />
         <RunsInProgress />
         <Button

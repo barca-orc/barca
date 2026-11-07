@@ -76,6 +76,9 @@
 }
 .barca-badge[data-size="sm"] { height: 18px; padding: 0 7px 0 6px; gap: 5px; font-size: var(--text-2xs); }
 .barca-badge[data-plain] { background: transparent; border-color: transparent; color: var(--text-default); }
+.barca-badge-icon { flex: none; color: var(--tone); }
+.barca-badge-icon[data-spin] { animation: barca-spin 1.2s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .barca-badge-icon[data-spin] { animation: none; } }
 
 /* ── Tag ──────────────────────────────────────────────────── */
 .barca-tag {
@@ -115,7 +118,7 @@
 .barca-dag[data-live] .barca-dag-state { color: var(--status-running); }
 .barca-dag-foot { min-width: 0; flex-wrap: wrap; row-gap: 4px; }
 /* The fact beside the state is never cut: when the two do not share a line it takes the next. */
-.barca-dag-failed { flex: none; }
+.barca-dag-state[data-failed] { display: inline-flex; align-items: center; gap: 3px; color: var(--status-failed); font-weight: 600; }
 
 /* ── SearchInput ──────────────────────────────────────────── */
 /* One focus ring, on the box: the input inside would otherwise get the global
@@ -144,6 +147,9 @@
 }
 .barca-chip:hover { background: var(--bg-hover); }
 .barca-chip.is-on { border-color: var(--signal); color: var(--text-strong); }
+/* A failure count is the one chip that asks to be looked at; healthy counts stay muted. */
+.barca-chip[data-tone="failed"] { border-color: var(--status-failed-line); background: var(--status-failed-bg); color: var(--status-failed); font-weight: 600; }
+.barca-chip[data-tone="failed"].is-on { border-color: var(--status-failed); }
 
 /* ── Select ───────────────────────────────────────────────── */
 .barca-select {

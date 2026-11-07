@@ -1,9 +1,7 @@
 import { X, Play, Terminal, CircleAlert } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Button, IconButton, KeyValue, SidePanel, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
-import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
 import { isLive, type GraphState } from '@/lib/graphState'
-import { isFailed } from '@/lib/health'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
 import { runFeedback } from '@/lib/runFeedback'
@@ -104,7 +102,6 @@ export function NodeInspector({
         <div className="barca-tagrow">
           <Tag>{nodeKindLabel(asset)}</Tag>
           <StatusBadge tone={state.tone} label={state.label} live={isLive(state)} size="sm" />
-          {isFailed(state) && <Tag tone="failed">{LAST_ATTEMPT_FAILED}</Tag>}
         </div>
 
         <div>

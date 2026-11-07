@@ -4,7 +4,7 @@
  * panel's "Why" section, only render these.
  */
 
-import { CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone, type CacheState } from './cacheStateDisplay'
+import { CACHE_STATES, cacheStateLabel, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone, type CacheState } from './cacheStateDisplay'
 import { memberHealth, type GraphState } from './graphState'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
 import type { Tone } from './tone'
@@ -81,7 +81,7 @@ const PENDING_WORD = 'checking'
 
 /** One part of the label: `3 stale`, `2 running`, `640 checking`. */
 function partText(part: HealthPart, count: number): string {
-  return `${count.toLocaleString()} ${part === 'pending' ? PENDING_WORD : part}`
+  return `${count.toLocaleString()} ${part === 'pending' ? PENDING_WORD : part === 'running' ? part : cacheStateLabel(part)}`
 }
 
 interface HealthLabelPart {
@@ -338,4 +338,19 @@ export function failedUpstream(
     frontier = next
   }
   return out
+}
+
+/**
+ * A traceback with the project root taken off its paths (`File "/home/me/proj/a.py"` reads
+ * `File "a.py"`), so the frames that matter are short. Without a root it is unchanged.
+ */
+export function relativeTraceback(error: string, root: string | null | undefined): string {
+  if (!root) return error
+  const prefix = root.endsWith('/') ? root : `${root}/`
+  return error.split(prefix).join('')
+}
+
+/** Text split into pieces after each `/`, so a long path can wrap at a separator, not mid-name. */
+export function pathBreaks(text: string): string[] {
+  return text.split(/(?<=\/)/)
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { causeOf, emptyHealth, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, healthTone, scopeAge } from './health'
+import { causeOf, emptyHealth, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, healthTone, scopeAge, relativeTraceback, pathBreaks } from './health'
 import type { NodeState, PartitionKeys } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
@@ -32,15 +32,15 @@ describe('health', () => {
     // `raw` and `orphan` are cached assets whose last attempt failed: in the cached count, and in lastFailed.
     expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, cached: 4, stale: 1 }, lastFailed: 2 })
     expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ cached: 3 }) })
-    expect(healthLabel(counts)).toBe('2 last attempt failed · 1 stale · 4 cached')
+    expect(healthLabel(counts)).toBe('2 failing · 1 stale · 4 fresh')
     expect(healthParts(counts, 2)).toEqual([
-      { key: 'lastFailed', tone: 'failed', text: '2 last attempt failed' },
+      { key: 'lastFailed', tone: 'failed', text: '2 failing' },
       { key: 'stale', tone: 'warning', text: '1 stale' },
     ])
-    expect(healthLabel(counts, 1)).toBe('2 last attempt failed')
+    expect(healthLabel(counts, 1)).toBe('2 failing')
     expect(healthTone(counts)).toBe('failed')
     expect(healthTone(emptyHealth())).toBe('neutral')
-    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 cached')
+    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 fresh')
   })
 
   it('lists failures by downstream impact, with their headline', () => {
@@ -144,5 +144,15 @@ describe('partitioned failures', () => {
     const whole = forecast({ ...failedAt('2026-10-31 15:30:12', 'ImportError: no module named prophet'), partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [] } })
     expect(failures([whole], consumers)[0]).toMatchObject({ headline: 'ImportError: no module named prophet', keys: null, missingKeys: 7 })
     expect(failedKeyNodes([forecast(), whole, ...nodes])).toEqual(['p.py:forecast'])
+  })
+})
+
+describe('relativeTraceback', () => {
+  it('takes the project root off paths', () => {
+    expect(relativeTraceback('File "/srv/p/a/b.py", line 3', '/srv/p')).toBe('File "a/b.py", line 3')
+    expect(relativeTraceback('File "/x/b.py"', null)).toBe('File "/x/b.py"')
+  })
+  it('splits after separators', () => {
+    expect(pathBreaks('/a/b.py')).toEqual(['/', 'a/', 'b.py'])
   })
 })
