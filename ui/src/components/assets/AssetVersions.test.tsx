@@ -34,7 +34,7 @@ const render = (d: AssetVersions, opts: { readOnly?: boolean; confirm?: Versions
       error={opts.error ?? null} confirm={opts.confirm ?? null} onAsk={noop} onConfirm={noop} onCancel={noop} />,
   )
 const text = (html: string) => html.replace(/<[^>]+>/g, '')
-const buttons = (html: string) => [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => ({ disabled: /disabled=""/.test(m[0]), label: text(m[1]) }))
+const buttons = (html: string) => [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => ({ disabled: /disabled=""/.test(m[0]), label: text(m[1] ?? '') }))
 
 describe('AssetVersionsView', () => {
   it('lists every version with its run, duration and size, and offers a rollback on each but the pinned one', () => {
