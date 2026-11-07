@@ -19,6 +19,7 @@ import { useProject } from '@/hooks/useProject'
 import { useRunDetail } from '@/hooks/useRuns'
 import { buildRows, formatSeconds } from '@/lib/assetTable'
 import { nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { blockedBy as blockedByMap } from '@/lib/graphView'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, raisedAtLabel, runPace, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline, isFailed } from '@/lib/health'
@@ -74,6 +75,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const failedKeys = node.partitions?.failed ?? 0
   // Why a node that did not fail is not up to date: something it reads failed.
   const blockedBy = useMemo(() => (failed ? [] : failedUpstream(node.id, inputs, byId)), [failed, node.id, inputs, byId])
+  // The one state it shows: `blocked` when a failed node upstream keeps it from running.
+  const blocker = useMemo(() => (failed ? null : blockedByMap(nodes, graph).get(node.id) ?? null), [failed, nodes, graph, node.id])
   const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
@@ -130,7 +133,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         <div className="barca-state-line">
           {runAction.liveState ? (
             <StatusBadge tone={runAction.liveState.tone} label={runAction.liveState.label} live={isLive(runAction.liveState)} />
-          ) : row && <StatusBadge {...nodeStateDisplay(row)} />}
+          ) : row && (
+            <>
+              <StatusBadge {...nodeStateDisplay({ ...row, blockedBy: blocker })} />
+              {!row.lastFailed && blocker && (
+                <span className="barca-cell-sub">
+                  by <button type="button" className="barca-link" title={`Open ${blocker}`} onClick={() => onSelect(blocker)}>{shortName(blocker)}</button>
+                </span>
+              )}
+            </>
+          )}
         </div>
         {runAction.error && <p className="barca-note" role="alert">Could not start run: {runAction.error.message}</p>}
         {node.running && (

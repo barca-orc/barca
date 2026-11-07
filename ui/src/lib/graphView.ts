@@ -3,6 +3,10 @@
  * shows, where the keyboard goes next, and what a never-run consumer waits on.
  */
 
+import { isFailed } from './health'
+import { memberHealth, type GraphState } from './graphState'
+import type { NodeState } from './types'
+
 /** A node as the view sees it: its box in flow coordinates, and whether it needs attention. */
 export interface ViewNode {
   id: string
@@ -102,20 +106,29 @@ export function neighborInDirection(nodes: ViewNode[], from: string | null, key:
   return best?.id ?? null
 }
 
-/** What a node waits on, in a line: the failed node upstream that kept it from running. */
-interface WaitsOn { hint: string }
-
-/** How a node stands in the wait: its last attempt failed, it never ran, or neither. */
-export type WaitStatus = 'failed' | 'never_run' | 'other'
+/** What a node waits on: the failed node upstream that kept it from running, and that in a line. */
+export interface WaitsOn { by: string; hint: string }
 
 /**
- * For each never-run node, the failed node upstream that explains it: a direct input whose last
- * attempt failed, or the failure behind an input that never ran itself. A hint beside the
- * node's own state word, never in place of it; nodes in other states keep their own hints.
+ * How a node stands in the wait: its last attempt failed, it is waiting to be brought up to
+ * date (never run or stale), or neither.
+ */
+export type WaitStatus = 'failed' | 'waiting' | 'other'
+
+/** A node's wait status from its box: running and unloaded nodes are neither failed nor waiting. */
+export function waitStatus(state: GraphState): WaitStatus {
+  if (isFailed(state)) return 'failed'
+  return state.kind === 'cache' && (state.state === 'never_run' || state.state === 'stale') ? 'waiting' : 'other'
+}
+
+/**
+ * For each waiting node, the failed node upstream that explains it: a direct input whose last
+ * attempt failed, or the failure behind an input that is waiting itself. Such a node is
+ * `blocked`: it cannot be brought up to date until that failure is fixed.
  */
 export function waitsOn(
   edges: [source: string, target: string][],
-  status: Map<string, WaitStatus>,
+  status: ReadonlyMap<string, WaitStatus>,
   name: (id: string) => string,
 ): Map<string, WaitsOn> {
   const inputs = new Map<string, string[]>()
@@ -129,7 +142,7 @@ export function waitsOn(
     for (const input of inputs.get(id) ?? []) {
       const s = status.get(input)
       if (s === 'failed') found = input
-      else if (s === 'never_run') found = causeOf(input, seen)
+      else if (s === 'waiting') found = causeOf(input, seen)
       if (found) break
     }
     cause.set(id, found)
@@ -137,9 +150,16 @@ export function waitsOn(
   }
   const out = new Map<string, WaitsOn>()
   for (const [id, s] of status) {
-    if (s !== 'never_run') continue
+    if (s !== 'waiting') continue
     const failed = causeOf(id, new Set())
-    if (failed) out.set(id, { hint: `Waits on ${name(failed)}, whose last attempt failed.` })
+    if (failed) out.set(id, { by: failed, hint: `Blocked: waits on ${name(failed)}, whose last attempt failed.` })
   }
   return out
+}
+
+/** Each blocked node of `nodes` and the failed node upstream it waits on (by id). */
+export function blockedBy(nodes: readonly NodeState[], graph: readonly { id: string; inputs: readonly string[] }[]): Map<string, string> {
+  const status = new Map(nodes.map((n) => [n.id, waitStatus(memberHealth(n))]))
+  const edges = graph.flatMap((g): [string, string][] => g.inputs.map((i) => [i, g.id]))
+  return new Map([...waitsOn(edges, status, (id) => id)].map(([id, w]) => [id, w.by]))
 }

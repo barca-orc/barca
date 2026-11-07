@@ -59,10 +59,11 @@ test('fit-to-screen stays readable: cards at 1:1, centred on the first failure',
   expect(publish.x).toBeGreaterThan(canvas.x + canvas.width)
 })
 
-test('a consumer that never ran keeps its word and names the failure upstream in its hint', async ({ page }) => {
+test('a consumer a failure upstream kept from running reads blocked and names the failure in its hint', async ({ page }) => {
   const validate = page.locator(node('validate_publication'))
-  await expect(validate).toContainText('never run')
-  await expect(validate.locator('.barca-dag')).toHaveAttribute('title', /Waits on publish_plan, whose last attempt failed/)
+  await expect(validate).toContainText('blocked')
+  await expect(validate.locator('.barca-dag')).toHaveAttribute('data-tone', 'warning')
+  await expect(validate.locator('.barca-dag')).toHaveAttribute('title', /Blocked: waits on publish_plan, whose last attempt failed/)
 })
 
 test('arrow keys move the selection and Enter opens the panel', async ({ page }) => {

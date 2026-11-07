@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { CacheStatus, NodeState } from './types'
 import { buildRows } from './assetTable'
+import { nodeStateDisplay } from './cacheStateDisplay'
+import { blockedBy } from './graphView'
 import {
   EMPTY_FILTERS,
   NEEDS_ATTENTION,
@@ -116,6 +118,7 @@ describe('URL round-trip', () => {
       query: 'ibp',
       states: ['blocked', 'stale'],
       failed: true,
+      blocked: true,
       kinds: ['asset'],
       lastRun: 'week_plus',
       scheduled: true,
@@ -177,5 +180,38 @@ describe('one state per row', () => {
     expect(counts.states.never_run).toBe(1)
     expect(applyFilters(rows, { ...EMPTY_FILTERS, states: ['never_run'] }, NOW).map((r) => r.name)).toEqual(['b'])
     expect(applyFilters(rows, { ...EMPTY_FILTERS, failed: true }, NOW).map((r) => r.name)).toEqual(['a'])
+  })
+})
+
+describe('blocked rows', () => {
+  // broken fails; report never ran because of it; summary waits on report; other just never ran.
+  const nodes = [
+    node('p:broken', { lastAt: '2026-10-06 11:00:00', failed: true }),
+    node('p:report', { state: 'never_run', inputs: ['p:broken'] }),
+    node('p:summary', { state: 'stale', inputs: ['p:report'] }),
+    node('p:other', { state: 'never_run' }),
+  ]
+  const rows = buildRows(nodes, NOW, blockedBy(nodes, nodes))
+
+  it('reads blocked, by the failure upstream, and a failing node stays failing', () => {
+    const by = Object.fromEntries(rows.map((r) => [r.name, r.blockedBy]))
+    expect(by).toEqual({ broken: null, report: 'p:broken', summary: 'p:broken', other: null })
+    const shown = Object.fromEntries(rows.map((r) => [r.name, nodeStateDisplay(r).label]))
+    expect(shown).toEqual({ broken: 'failing', report: 'blocked', summary: 'blocked', other: 'never run' })
+    expect(nodeStateDisplay(rows.find((r) => r.name === 'report')!)).toEqual({ label: 'blocked', tone: 'warning', icon: 'blocked' })
+  })
+
+  it('has a chip of its own: a blocked row counts as blocked, not as its cache state', () => {
+    const c = facetCounts(rows, EMPTY_FILTERS, NOW)
+    expect(c.failed).toBe(1)
+    expect(c.blocked).toBe(2)
+    expect(c.states.never_run).toBe(1)
+    expect(c.states.stale).toBe(0)
+    expect(applyFilters(rows, { ...EMPTY_FILTERS, blocked: true }, NOW).map((r) => r.name).sort()).toEqual(['report', 'summary'])
+    expect(parseFilters(writeFilters(new URLSearchParams(), { ...EMPTY_FILTERS, blocked: true })).blocked).toBe(true)
+  })
+
+  it('sorts after failing and before the cache states', () => {
+    expect(rows.map((r) => r.name)).toEqual(['broken', 'summary', 'report', 'other'])
   })
 })

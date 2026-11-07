@@ -16,7 +16,8 @@ import {
 import { AssetNode } from './AssetNode'
 import { GroupNode } from './GroupNode'
 import { PortNode } from './PortNode'
-import { fitTarget, isArrowKey, neighborInDirection, READABLE_ZOOM, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
+import { BLOCKED_UPSTREAM } from '@/lib/cacheStateDisplay'
+import { fitTarget, isArrowKey, neighborInDirection, READABLE_ZOOM, waitStatus, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
 import { isLive, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
 import { edgeClassName, type LayoutDir, type GraphEdgeData, type GraphNode, type GraphEntry } from '@/lib/graph'
@@ -137,13 +138,13 @@ export function GraphCanvas({
 
   const nodes = useMemo<GraphNode[]>(() => {
     const names = new Map(base.nodes.map((n) => [n.id, n.data.name]))
-    // A never-run consumer's hint names the failure upstream that kept it from running. A node
+    // A blocked consumer (never run or stale behind a failure) reads `blocked`; its hint names the failure upstream that kept it from running. A node
     // whose state has not arrived is not one that never ran.
     const waits = new Map<string, WaitStatus>()
     for (const n of base.nodes) {
       const state = states[n.id]
       if (!state || state.kind !== 'cache') continue
-      waits.set(n.id, isFailed(state) ? 'failed' : state.state === 'never_run' ? 'never_run' : 'other')
+      waits.set(n.id, waitStatus(state))
     }
     const why = waitsOn(base.edges.map((e) => [e.source, e.target]), waits, (id) => names.get(id) ?? id)
     return base.nodes.map((n) => {
@@ -152,8 +153,9 @@ export function GraphCanvas({
       return { ...n, selected: n.id === selected,
         data: {
           ...n.data,
-          tone: state.tone,
-          label: state.label,
+          tone: wait ? 'warning' : state.tone,
+          label: wait ? BLOCKED_UPSTREAM : state.label,
+          blockedBy: wait ? names.get(wait.by) ?? wait.by : undefined,
           lastFailed: isFailed(state),
           live: isLive(state),
           stateHint: wait ? `${state.hint} ${wait.hint}` : state.hint,

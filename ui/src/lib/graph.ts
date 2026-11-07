@@ -20,6 +20,8 @@ interface GraphNodeData {
   label?: string | null
   /** Its last attempt failed: shown as a second fact beside the state. */
   lastFailed?: boolean
+  /** The failed node upstream (its name) that keeps it from running: it reads `blocked`. */
+  blockedBy?: string
   /** Whether the node pulses: a run is working on it. */
   live?: boolean
   stateHint?: string
