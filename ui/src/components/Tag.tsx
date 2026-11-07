@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 
-export type TagTone = 'default' | 'signal' | 'bare' | 'failed'
+export type TagTone = 'default' | 'signal' | 'bare' | 'failed' | 'warning'
 export type TagSize = 'sm' | 'md'
 
 export interface TagProps {

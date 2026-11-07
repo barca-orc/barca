@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '19'
+  version: '20'
   description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -1763,6 +1763,125 @@ paths:
               description: Methods accepted by this route
       description: Queued runs start again, in order, as there is room. Resuming a queue that is not paused
         changes nothing.
+  /pauses:
+    get:
+      summary: Paused assets
+      operationId: get_pauses
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Every paused node, by id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pauses'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      description: 'The nodes an operator paused (barca pause). A scheduled tick does not compute a paused
+        node: a paused target is a skipped step with reason paused, and a paused node upstream of a target
+        is read as it is. Kept in the metadata DB (asset_pauses): a restart keeps them paused. Experimental.'
+    head:
+      summary: Paused assets, headers only
+      operationId: head_pauses
+      responses:
+        '200': {description: Headers only}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      summary: Pause assets
+      operationId: post_pauses
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PauseRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: The ids this request paused (added) and every paused node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pauses'
+        '400':
+          description: No target, an ambiguous target, a file that defines no node, or all on a pause
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: The target names no node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      description: 'Pause target (a node named as a run target is, or a deployed file.py: every node of
+        it), and with downstream every node below it. A node already paused keeps its first pause. A POST
+        /runs that names a paused node is refused (400, exit 2) unless it sends allow_paused. Experimental.'
+  /pauses/resume:
+    post:
+      summary: Resume paused assets
+      operationId: post_pauses_resume
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PauseRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: The ids this request resumed (removed) and every node still paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pauses'
+        '400':
+          description: Neither target nor all, or an ambiguous target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: The target names no node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      description: Resume target (with downstream, every node below it too) or, with all, every paused
+        node. The next scheduled tick computes them again; the ticks they skipped are not caught up.
+        Resuming a node that is not paused changes nothing. Experimental.
   /schedule:
     get:
       summary: Scheduler job registry
@@ -3739,6 +3858,49 @@ components:
         queued_at:
           type: string
           description: When the server accepted it, RFC 3339 UTC.
+    PauseRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        target:
+          type: string
+          description: A node, named as a run target is, or a source file (pipeline.py)
+        downstream:
+          type: boolean
+          description: Every node downstream of the target too
+        all:
+          type: boolean
+          description: Resume only; every paused node
+    Pauses:
+      type: object
+      additionalProperties: false
+      required: [total, paused]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        added:
+          type: array
+          items: {type: string}
+          description: POST /pauses only; the ids it paused (including ones already paused)
+        removed:
+          type: array
+          items: {type: string}
+          description: POST /pauses/resume only; the ids it resumed
+        paused:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, paused_at, via]
+            properties:
+              id: {type: string}
+              paused_at:
+                type: integer
+                description: Unix seconds
+              via:
+                type: string
+                description: The target the pause named (the node, the node a downstream pause started from, or a file)
     Queue:
       type: object
       additionalProperties: false
@@ -4067,8 +4229,9 @@ components:
         reason:
           description: Why the step ran or was skipped (barca docs contract, steps[]). A skipped
             step has reason upstream_failed (a node it reads in full failed), upstream_key_failed
-            (the same key of a node it reads key for key failed; detail names the key) or
-            partition_selection.
+            (the same key of a node it reads key for key failed; detail names the key),
+            partition_selection, or under a scheduled tick blocked (it reads a Manual node that has
+            never been computed) or paused (it, or a never-computed node it reads, is paused).
           type: string
         detail: *id003
         changed:
@@ -5496,6 +5659,10 @@ components:
           description: --partition of get or run, as the flag takes it (region=emea,amer, or a JSON object
             for compound keys). It narrows every partitioned node of the run with a named dimension;
             400 when it does not parse.
+        allow_paused:
+          type: boolean
+          description: --allow-paused. Run a target that is paused (POST /pauses); without it a request
+            naming a paused node is 400. Experimental.
     Explain:
       type: object
       required:

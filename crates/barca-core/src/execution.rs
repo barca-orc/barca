@@ -464,7 +464,7 @@ async fn execute_started(
                 steps_executed: 0,
                 phases: 0,
                 final_output: None,
-                steps: blocked_steps(&prepared.dag, &prepared.blocked),
+                steps: blocked_steps(&prepared.dag, &prepared.blocked, &prepared.paused),
                 warnings: Vec::new(),
                 partitions: None,
                 key_summary: None,
@@ -1645,6 +1645,7 @@ async fn return_outputs(
     step_reports.extend(blocked_steps(
         &session.prepared.dag,
         &session.prepared.blocked,
+        &session.prepared.paused,
     ));
     // Under --partition, a fan-in over a narrowed node (and what is below it) is not run.
     if let Some(n) = &session.state.narrowing {

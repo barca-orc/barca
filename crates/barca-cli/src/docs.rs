@@ -129,6 +129,11 @@ pub const TOPICS: &[Topic] = &[
         "serve-ops.md"
     ),
     topic!(
+        "incidents",
+        "Containing an incident: barca pause and resume, what a paused asset does",
+        "incidents.md"
+    ),
+    topic!(
         "server-mode",
         "One server as the team's ledger; --server runs a command there; [server] url, BARCA_SERVER, --local",
         "server-mode.md"

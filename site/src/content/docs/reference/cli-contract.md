@@ -74,6 +74,10 @@ command is experimental with it):
 | `barca plan` | prints the planner's internal phase/stream layout, which changes with scheduling work |
 | `barca sql` | new in 0.13: the view naming and the JSON result shape may change after field use |
 | `barca queue` | new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use |
+| `barca pause` | new in 0.41: pausing assets for scheduled runs; the JSON shape, the table and what a pause covers may change after field use |
+| `barca resume` | new in 0.41: resuming paused assets; the JSON shape and the table may change after field use |
+| `barca get --allow-paused` | new in 0.41: runs a paused target by hand; which requests need it may change after field use |
+| `barca run --allow-paused` | new in 0.41: runs a paused target by hand; which requests need it may change after field use |
 | `barca serve` | the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open |
 | `barca serve --capacity` | new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use |
 | `barca state reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
@@ -219,6 +223,8 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca unpin` | `<TARGET> [<FILES>...]` | experimental: new in 0.41 (barca docs pins): the JSON shape may change after field use | Remove an asset's pin; the next run decides it as before |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open | Manage runs, schedules and results on a server |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
+| `barca pause` | `[<TARGET>]` | experimental: new in 0.41: pausing assets for scheduled runs; the JSON shape, the table and what a pause covers may change after field use | Pause assets on a barca server: scheduled runs skip them until resumed (experimental) |
+| `barca resume` | `[<TARGET>]` | experimental: new in 0.41: resuming paused assets; the JSON shape and the table may change after field use | Resume paused assets on a barca server (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
 | `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a named view |
@@ -301,6 +307,7 @@ default, and any aliases.
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
 | `--examples` | - | - | stable | Show all command examples without running anything |
@@ -322,6 +329,7 @@ default, and any aliases.
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
+| `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
 | `--examples` | - | - | stable | Show all command examples without running anything |
@@ -464,6 +472,33 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<ACTION>` | - | - | experimental (with the command) | pause: queued runs wait until resumed (runs in flight go on); resume: they start again. Omit to show the queue |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
+
+#### barca pause
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<TARGET>` | - | - | experimental (with the command) | Node or file.py to pause; omit to list paused nodes |
+| `--downstream` | - | default `false` | experimental (with the command) | Also pause every node downstream of the target |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
+
+#### barca resume
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<TARGET>` | - | - | experimental (with the command) | Node or file.py to resume |
+| `--downstream` | - | default `false` | experimental (with the command) | Also resume every node downstream of the target |
+| `--all` | - | default `false` | experimental (with the command) | Resume every paused node |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
@@ -940,7 +975,9 @@ may grow.
   `skipped`, `reason` `upstream_key_failed` and a `detail` naming the failed key
   ([`barca docs partitions`](/reference/partitions/), "Failed keys block their own keys"); a node that reads every key
   (a `collect()` fan-in, an unpartitioned node) is `skipped` with reason `upstream_failed`,
-  as before. `barca status` reports such a node `blocked`. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
+  as before. `barca status` reports such a node `blocked`. In a scheduled tick of `barca serve`,
+  a paused target (`barca pause`, [`barca docs incidents`](/reference/incidents/)) is `skipped` with reason `paused` and a
+  `detail` naming `barca resume`. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
   stale; [`barca docs cache`](/reference/cache/)) carries a `detail` starting `Manual`. Breaking in this release: a
   stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
   `artifact_missing` is a step that has a cached result whose artifact file is gone

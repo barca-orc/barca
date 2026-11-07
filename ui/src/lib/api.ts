@@ -6,6 +6,7 @@
    ============================================================ */
 
 import { connectionToken, redactCredential, serverFetch } from './credentials'
+import type { PauseRequest, Pauses } from './pauses'
 
 import type {
   NodeGroup,
@@ -130,11 +131,13 @@ export const api = {
   getAll: () => startRun({ command: 'get', targets: [] }),
   /** `barca get` for every asset and sensor of one deployed file. */
   getFile: (file: string) => startRun({ command: 'get', targets: [], files: [file] }),
-  /** `barca get <target>`: a cache-aware materialization of one asset or sensor. */
-  getTarget: (target: string) => startRun({ command: 'get', targets: [target] }),
+  /** `barca get <target>`: a cache-aware materialization of one asset or sensor. `allowPaused`
+   * is `--allow-paused`: without it the server refuses a paused target. */
+  getTarget: (target: string, allowPaused = false) =>
+    startRun({ command: 'get', targets: [target], ...(allowPaused ? { allow_paused: true } : {}) }),
   /** `barca run <task> --refresh-all`: the task re-executes along with its upstream assets. */
-  runTarget: (target: string) =>
-    startRun({ command: 'run', targets: [target], refresh_all: true }),
+  runTarget: (target: string, allowPaused = false) =>
+    startRun({ command: 'run', targets: [target], refresh_all: true, ...(allowPaused ? { allow_paused: true } : {}) }),
   cancelRun: (runId: string) =>
     request<{ run_id: string; status: 'cancelling' }>(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
   schedule: () => request<ScheduleJob[]>('/schedule'),
@@ -146,6 +149,12 @@ export const api = {
     ),
   resumeSchedule: (id: string) =>
     request<unknown>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+  /** The paused assets (`barca pause`): scheduled runs skip them until resumed. */
+  pauses: () => request<Pauses>('/pauses'),
+  /** Pause a node (with `downstream`, everything below it) or a file. 403 on a read-only server. */
+  pauseAssets: (body: PauseRequest) => request<Pauses>('/pauses', { method: 'POST', body: JSON.stringify(body) }),
+  /** Resume a node, a file, or (`all`) every paused node. */
+  resumeAssets: (body: PauseRequest) => request<Pauses>('/pauses/resume', { method: 'POST', body: JSON.stringify(body) }),
   /** The run queue: what runs, what waits (in order), and whether it is paused. */
   queue: () => request<QueueView>('/queue'),
   /** Pause the queue: runs keep being accepted, none starts until resumed. 403 on a read-only server. */

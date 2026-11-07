@@ -52,7 +52,7 @@ mod tests;
 mod transport;
 
 pub(crate) use doctor::doctor_checks;
-pub(crate) use inspect::{history, list, queue, run_detail, sql, stats, status};
+pub(crate) use inspect::{history, list, pause, queue, resume, run_detail, sql, stats, status};
 pub(crate) use logs::logs;
 pub(crate) use runs::{RunArgs, run};
 
@@ -109,7 +109,8 @@ const RECONNECT_PAUSE: Duration = Duration::from_millis(500);
 
 /// The commands that take `--server` and `--local`.
 pub(crate) const SERVER_COMMANDS: &[&str] = &[
-    "get", "run", "status", "list", "history", "stats", "logs", "sql", "doctor", "queue",
+    "get", "run", "status", "list", "history", "stats", "logs", "sql", "doctor", "queue", "pause",
+    "resume",
 ];
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the

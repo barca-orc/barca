@@ -9,6 +9,10 @@ import { formatAbsolute } from '@/lib/time'
 import { ArtifactSchema } from './ArtifactSchema'
 import { AssetVersions } from './AssetVersions'
 import { CopyButton, NodeKeys, PartitionBar } from './NodeKeys'
+import { BlastRadius } from './BlastRadius'
+import { IncidentControls } from './IncidentControls'
+import { usePausedSet } from '@/hooks/usePauses'
+import { usePausedRunGuard } from '@/hooks/usePausedRunGuard'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
@@ -90,6 +94,9 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const paced = useRunDetail(pacedRun)
   const pace = runPace(paced.data?.steps_page.nodes?.find((n) => n.node_id === node.id))
 
+  const pausedSet = usePausedSet()
+  const runGuard = usePausedRunGuard(node.id, runAction.fire)
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -106,7 +113,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         <>
           <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
             disabled={runAction.readOnly} loading={runAction.triggering}
-            title={runAction.title} onClick={runAction.fire}>
+            title={runAction.title} onClick={runGuard.onRun}>
             Run
           </Button>
           <IconButton label="Open in graph" size="sm" onClick={() => onOpenGraph(node.id)}>
@@ -378,6 +385,10 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           )}
         </div>
       </Section>
+
+      <BlastRadius id={node.id} graph={graph} states={byId} paused={pausedSet} onSelect={onSelect} />
+      <IncidentControls node={node} graph={graph} readOnly={runAction.readOnly} />
+      {runGuard.dialog}
 
       <Section title="Consumers">
         <KeyValue label="downstream">

@@ -243,6 +243,10 @@ every database from before 0.29.2 (#629):
   nullable. Every run reads a pinned asset as that materialization and never computes it; the
   cache size limit never evicts it. Writing or removing a row clears `freshness_proofs`. A
   database without the table has no pins; older binaries ignore it (and so do not honor pins).
+- `asset_pauses (node_id, paused_at, via)` (0.41.0, `barca docs incidents`), primary key
+  `node_id`: a node an operator paused. `paused_at` is unix seconds; `via` is the target the pause
+  named (the node, the node a `--downstream` pause started from, or a file). A scheduled tick does
+  not compute a paused node. A database without the table has no pauses; older binaries ignore it.
 - `logs.stream` (`stdout` / `stderr`) and `logs.ts` (RFC 3339 UTC, milliseconds), both TEXT,
   nullable (0.29.2): which stream a recorded line came from and when it arrived. Lines recorded
   before keep `NULL` in both and read as stdout with no time (`barca logs --stream stdout`

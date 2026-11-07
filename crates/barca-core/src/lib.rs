@@ -51,6 +51,7 @@ mod mismatch;
 pub mod model;
 pub mod outcome;
 pub mod parse;
+pub mod pauses;
 pub mod pending_uploads;
 mod persist;
 pub mod pins;

@@ -19,20 +19,38 @@ pub(super) struct Prepared {
     pub(super) pinned: HashMap<String, crate::freshness::Pin>,
     /// Under a tick: the targets that read a `Manual` node that has never been computed.
     pub(super) blocked: Vec<(String, TargetOutcome)>,
+    /// Under a tick: the paused nodes (`crate::pauses`); a blocked target whose `failed_node`
+    /// is one of them was skipped because it is paused.
+    pub(super) paused: HashSet<String>,
     /// `--partition`: what the selection narrowed and skipped.
     pub(super) narrowing: Option<crate::selection::Narrowing>,
 }
 
 /// The step reports of a tick's targets blocked on a `Manual` node that has never been
 /// computed: `skipped`, reason `blocked`, the detail naming the `Manual` node.
-pub(super) fn blocked_steps(dag: &Dag, blocked: &[(String, TargetOutcome)]) -> Vec<StepReport> {
+/// A target skipped because it (or a never-computed node it reads) is paused has reason `paused`.
+pub(super) fn blocked_steps(
+    dag: &Dag,
+    blocked: &[(String, TargetOutcome)],
+    paused: &HashSet<String>,
+) -> Vec<StepReport> {
     blocked
         .iter()
         .map(|(id, outcome)| StepReport {
             id: id.clone(),
             kind: kind_str(dag.get_node(id).map(|n| n.kind())),
             status: Some(StepStatus::Skipped.to_string()),
-            reason: Some(StepStatus::Blocked.to_string()),
+            reason: Some(
+                if outcome
+                    .failed_node
+                    .as_ref()
+                    .is_some_and(|n| paused.contains(n))
+                {
+                    "paused".to_string()
+                } else {
+                    StepStatus::Blocked.to_string()
+                },
+            ),
             detail: outcome.error.clone(),
             ..Default::default()
         })
@@ -59,6 +77,20 @@ pub(super) struct Planned<'a> {
     pub(super) cone: Option<Vec<&'a str>>,
     pub(super) pinned: HashMap<String, crate::freshness::Pin>,
     pub(super) blocked: Vec<(String, TargetOutcome)>,
+    pub(super) paused: HashSet<String>,
+}
+
+/// The outcome of a tick's target that is not run because `node` is paused.
+fn paused_outcome(node: &str, error: String) -> TargetOutcome {
+    TargetOutcome {
+        status: StepStatus::Blocked.to_string(),
+        final_output: None,
+        error: Some(error),
+        failed_node: Some(node.to_string()),
+        failed_phase: None,
+        partitions: None,
+        key_summary: None,
+    }
 }
 
 pub(super) async fn pin_manual<'a>(
@@ -73,9 +105,32 @@ pub(super) async fn pin_manual<'a>(
         cone: None,
         pinned: HashMap::new(),
         blocked: Vec::new(),
+        paused: HashSet::new(),
     };
     if targets.is_empty() {
         return Ok(planned);
+    }
+    // A tick does not compute a paused node (`crate::pauses`): a paused target is skipped.
+    if rules.tick.is_some() {
+        planned.paused = db::get_asset_pauses(&cfg.db_path)
+            .await?
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        let paused = &planned.paused;
+        targets.retain(|(name, id)| {
+            if paused.contains(id) {
+                planned
+                    .blocked
+                    .push((name.clone(), paused_outcome(id, crate::pauses::detail(id))));
+                false
+            } else {
+                true
+            }
+        });
+        if targets.is_empty() {
+            return Ok(planned);
+        }
     }
     let cache = existing_cache(cfg).await?;
     // Assets pinned with `barca pin`: read as their pinned materialization by every run.
@@ -88,7 +143,7 @@ pub(super) async fn pin_manual<'a>(
         return Ok(planned);
     }
     let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let walk = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual);
+    let walk = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual, &planned.paused);
     if walk.stops.is_empty() {
         return Ok(planned);
     }
@@ -107,13 +162,24 @@ pub(super) async fn pin_manual<'a>(
     if !pins.never.is_empty() || !pins.lost.is_empty() {
         targets.retain(|(name, id)| {
             let stops =
-                crate::freshness::walk_with(dag, &[id], policy, &user_ids, rules.pin_manual).stops;
+                crate::freshness::walk_with(dag, &[id], policy, &user_ids, rules.pin_manual, &planned.paused).stops;
             let (node, error) = if let Some(lost) = stops.iter().find(|s| pins.lost.contains(s)) {
                 (
                     lost.clone(),
                     format!(
                         "blocked on '{}', pinned to a materialization that can no longer be read",
                         short_name(lost)
+                    ),
+                )
+            } else if let Some(held) = stops
+                .iter()
+                .find(|s| pins.never.contains(s) && planned.paused.contains(*s))
+            {
+                (
+                    held.clone(),
+                    format!(
+                        "blocked on '{}', a paused node that has never been computed",
+                        short_name(held)
                     ),
                 )
             } else if let Some(manual) = stops.iter().find(|s| pins.never.contains(s)) {
@@ -143,7 +209,7 @@ pub(super) async fn pin_manual<'a>(
         });
     }
     let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let mut cone = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual).cone;
+    let mut cone = crate::freshness::walk_with(dag, &ids, policy, &user_ids, rules.pin_manual, &planned.paused).cone;
     // Outside a tick, the sensors a pinned node reads directly are polled too, so the stale note
     // compares against what they return now, not what they returned last time.
     if rules.tick.is_none() {
@@ -205,6 +271,7 @@ pub(super) async fn prepare_run(
         cone,
         pinned,
         blocked,
+        paused,
     } = pin_manual(
         &dag,
         &mut targets,
@@ -308,6 +375,7 @@ pub(super) async fn prepare_run(
         plan_warnings,
         pinned,
         blocked,
+        paused,
         narrowing,
     })
 }

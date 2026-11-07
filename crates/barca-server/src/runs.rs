@@ -204,7 +204,7 @@ async fn check_target_as(
     }
 }
 
-fn verb_command(verb: &str) -> &'static str {
+pub(crate) fn verb_command(verb: &str) -> &'static str {
     match verb {
         "run" => "run",
         _ => "get",

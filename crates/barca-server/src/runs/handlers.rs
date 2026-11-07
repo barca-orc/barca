@@ -63,6 +63,19 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
     if request.targets.is_empty() {
         check_any_asset(&state).await?;
     }
+    // A request naming a paused node says it means it (`--allow-paused`).
+    if !request.allow_paused {
+        let paused = db::get_asset_pauses(&state.config.resolved.db_path).await?;
+        if let Some(id) = nodes.iter().find(|id| paused.iter().any(|p| &p.id == *id)) {
+            return Err(ApiError::run(
+                barca_core::pauses::refused(id),
+                Context {
+                    command: crate::runs::verb_command(verb),
+                    files: Vec::new(),
+                },
+            ));
+        }
+    }
     let admitted = crate::queue::admit(
         &state,
         RunSpec {

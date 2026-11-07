@@ -187,6 +187,11 @@ pub struct RunRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
     pub batch: Vec<String>,
+    /// `--allow-paused`: run a target that is paused (`barca pause`). Without it, a request
+    /// naming a paused node is refused. Experimental.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
+    pub allow_paused: bool,
 }
 
 impl RunRequest {
@@ -211,6 +216,7 @@ impl RunRequest {
             values: false,
             partition: None,
             batch: Vec::new(),
+            allow_paused: false,
         }
     }
 

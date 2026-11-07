@@ -34,6 +34,8 @@ pub(crate) struct RunArgs {
     pub(crate) batch: Vec<String>,
     pub(crate) fields: Option<Vec<String>>,
     pub(crate) env: Option<String>,
+    /// `--allow-paused`.
+    pub(crate) allow_paused: bool,
 }
 
 /// `barca get|run ... --server`: start the run on the server, print its lines as they come,
@@ -54,6 +56,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         values: args.values,
         partition: args.partition.clone(),
         batch: args.batch.clone(),
+        allow_paused: args.allow_paused,
     };
     let body = serde_json::to_value(&request).expect("a run request is JSON");
     let answer = server

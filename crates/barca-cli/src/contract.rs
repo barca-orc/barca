@@ -105,6 +105,22 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use",
     ),
     (
+        "pause",
+        "new in 0.41: pausing assets for scheduled runs; the JSON shape, the table and what a pause covers may change after field use",
+    ),
+    (
+        "resume",
+        "new in 0.41: resuming paused assets; the JSON shape and the table may change after field use",
+    ),
+    (
+        "get --allow-paused",
+        "new in 0.41: runs a paused target by hand; which requests need it may change after field use",
+    ),
+    (
+        "run --allow-paused",
+        "new in 0.41: runs a paused target by hand; which requests need it may change after field use",
+    ),
+    (
         "serve",
         "the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open",
     ),
@@ -916,6 +932,14 @@ const SITE_PAGES: &[SitePage] = &[
         description: "Operating barca serve: the run queue, stopping and restarting without \
                       losing work, the stop grace a supervisor needs, a shared capacity and the \
                       run timeout.",
+    },
+    SitePage {
+        topic: "incidents",
+        file: "incidents.md",
+        slug: "reference/incidents",
+        title: "Pausing Assets",
+        description: "Containing an incident: barca pause and barca resume, and what scheduled \
+                      runs and requests do with a paused asset.",
     },
     SitePage {
         topic: "types",

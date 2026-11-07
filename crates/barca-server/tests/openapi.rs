@@ -1714,3 +1714,74 @@ async fn pin_versions_and_unpin_match_contract() {
     assert_eq!(again["removed"], Value::Null);
     checked(&router, "GET", "/assets/first/pin", pin, 405).await;
 }
+
+#[tokio::test]
+async fn asset_pauses_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    let schema = json!({"$ref": "#/components/schemas/Pauses"});
+    let none = checked(&router, "GET", "/pauses", "/pauses", 200).await;
+    assert_eq!(none["total"], 0);
+    checked(&router, "HEAD", "/pauses", "/pauses", 200).await;
+    let (status, paused) = request_json(
+        &router,
+        "POST",
+        "/pauses",
+        json!({"target": "first", "downstream": true}),
+    )
+    .await;
+    assert_eq!(status, 200, "{paused}");
+    validate(&schema, &paused);
+    let added: Vec<&str> = paused["added"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().rsplit(':').next().unwrap())
+        .collect();
+    assert_eq!(added.len(), 3);
+    for name in ["first", "second", "publish"] {
+        assert!(added.contains(&name), "{added:?}");
+    }
+    // A request naming a paused node is refused unless it says it means it.
+    let (status, refused) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["second"]}),
+    )
+    .await;
+    assert_eq!(status, 400, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("is paused"),
+        "{refused}"
+    );
+    let (status, _) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["second"], "allow_paused": true}),
+    )
+    .await;
+    assert_eq!(status, 202);
+    let (status, bad) = request_json(&router, "POST", "/pauses", json!({"target": "nope"})).await;
+    assert_eq!(status, 404, "{bad}");
+    let (status, file) =
+        request_json(&router, "POST", "/pauses", json!({"target": "pipeline.py"})).await;
+    assert_eq!((status, file["total"].as_u64()), (200, Some(5)), "{file}");
+    let (status, resumed) = request_json(
+        &router,
+        "POST",
+        "/pauses/resume",
+        json!({"target": "second"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    validate(&schema, &resumed);
+    assert_eq!(resumed["removed"].as_array().unwrap().len(), 1);
+    assert_eq!(resumed["total"], 4);
+    let (_, all) = request_json(&router, "POST", "/pauses/resume", json!({"all": true})).await;
+    assert_eq!(all["total"], 0);
+    let read_only = app(config(dir.path(), true));
+    let (status, _) = request_json(&read_only, "POST", "/pauses", json!({"target": "first"})).await;
+    assert_eq!(status, 403);
+}

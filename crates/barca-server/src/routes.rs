@@ -3,7 +3,7 @@
 //! routes rather than in front of them, so API paths stay what the contract says.
 
 use crate::state::AppState;
-use crate::{handlers, inspect, ledger, pause, pins, queue, reset, runs, ui};
+use crate::{asset_pauses, handlers, inspect, ledger, pause, pins, queue, reset, runs, ui};
 use axum::Router;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -67,6 +67,9 @@ pub fn router(state: AppState) -> Router {
         // A schedule id is a node id: percent-encode a `/` in it.
         .route("/schedule/{id}/pause", post(pause::pause))
         .route("/schedule/{id}/resume", post(pause::resume))
+        // Paused assets: scheduled ticks skip them until resumed (`barca pause`).
+        .route("/pauses", get(asset_pauses::list).post(asset_pauses::pause))
+        .route("/pauses/resume", post(asset_pauses::resume))
         // Deprecated aliases of the run routes, with no scheduled removal: the Python `Client`
         // still uses them. A removal migrates `Client` first and lands in a minor release.
         .route("/run", post(runs::run_all))

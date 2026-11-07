@@ -526,3 +526,93 @@ async fn pending_posts(
         })
         .collect())
 }
+
+/// `barca pause [TARGET] [--downstream]`: `POST /pauses`, or without a target `GET /pauses`,
+/// and the paused nodes as JSON or a table.
+pub(crate) async fn pause(
+    server: &Server,
+    target: Option<&str>,
+    downstream: bool,
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let (path, text) = match target {
+        None => ("GET /pauses", server.get_text("/pauses").await?),
+        Some(target) => (
+            "POST /pauses",
+            server
+                .post_json(
+                    "/pauses",
+                    &json!({"target": target, "downstream": downstream}),
+                )
+                .await?,
+        ),
+    };
+    let body: Value = serde_json::from_str(&text)
+        .map_err(|e| server.unexpected(path, &format!("not JSON: {e}")))?;
+    if let Some(target) = target {
+        let n = body["added"].as_array().map_or(0, Vec::len);
+        barca_core::errln!(
+            "[barca] paused {n} node(s) on {} via {target}: scheduled runs skip them until `barca resume {target}{}`",
+            server.shown_url,
+            if downstream { " --downstream" } else { "" }
+        );
+    }
+    print_pauses(&body, json);
+    Ok(())
+}
+
+/// `barca resume TARGET [--downstream]` or `barca resume --all`: `POST /pauses/resume`.
+pub(crate) async fn resume(
+    server: &Server,
+    target: Option<&str>,
+    downstream: bool,
+    all: bool,
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let text = server
+        .post_json(
+            "/pauses/resume",
+            &json!({"target": target, "downstream": downstream, "all": all}),
+        )
+        .await?;
+    let body: Value = serde_json::from_str(&text)
+        .map_err(|e| server.unexpected("POST /pauses/resume", &format!("not JSON: {e}")))?;
+    barca_core::errln!(
+        "[barca] resumed {} node(s) on {}",
+        body["removed"].as_array().map_or(0, Vec::len),
+        server.shown_url
+    );
+    print_pauses(&body, json);
+    Ok(())
+}
+
+fn print_pauses(body: &Value, json: bool) {
+    if json {
+        barca_core::outln!(
+            "{}",
+            serde_json::to_string_pretty(body).expect("a JSON value prints")
+        );
+        return;
+    }
+    let paused = body["paused"].as_array().cloned().unwrap_or_default();
+    let mut out = format!("{} node(s) paused\n", paused.len());
+    if !paused.is_empty() {
+        out.push_str(&format!("\n{:<40} {:<22} {}\n", "NODE", "PAUSED_AT", "VIA"));
+        for p in &paused {
+            out.push_str(&format!(
+                "{:<40} {:<22} {}\n",
+                p["id"].as_str().unwrap_or("?"),
+                p["paused_at"]
+                    .as_i64()
+                    .map(barca_core::outcome::rfc3339)
+                    .unwrap_or_default(),
+                p["via"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    barca_core::term::stdout_str(&out);
+}
