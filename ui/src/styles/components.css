@@ -220,6 +220,19 @@
   background: var(--signal); vertical-align: text-bottom;
   animation: barca-blink 1.1s steps(1) infinite;
 }
+.barca-log-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.barca-log-step {
+  flex: none; max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: var(--text-2xs); color: var(--text-faint);
+}
+.barca-log-step:hover { color: var(--text-default); text-decoration: underline; }
+.barca-log-text mark { background: color-mix(in srgb, var(--signal) 35%, transparent); color: inherit; border-radius: 2px; }
+.barca-run-summary { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-inset); }
+.barca-run-summary-failed { margin: 0; padding-left: 18px; font-size: var(--text-sm); }
+.barca-run-summary-failed li { margin: 2px 0; }
+.barca-run-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.barca-run-step-actions { display: inline-flex; gap: 4px; margin-left: 6px; }
 .barca-log-empty {
   display: flex; align-items: center; justify-content: center; height: 100%;
   font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-faint);
