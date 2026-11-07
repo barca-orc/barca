@@ -4466,6 +4466,57 @@ components:
         stats:
           $ref: '#/components/schemas/Stats'
         running: *id_running
+        failure:
+          description: Present (not null) when the node's latest execution failed. raised_at is the
+            last traceback frame inside the project; run_hash is the failed attempt's; last_success
+            is null when the node never succeeded. Unpartitioned nodes only (a key's row is not the
+            node's).
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/FailureFacts'
+    FailureFacts:
+      type: object
+      additionalProperties: false
+      required:
+      - raised_at
+      - run_hash
+      - run_id
+      - created_at
+      - last_success
+      properties:
+        raised_at:
+          oneOf:
+          - type: 'null'
+          - type: object
+            additionalProperties: false
+            required: [file, line, function]
+            properties:
+              file:
+                type: string
+                description: Relative to the project root
+              line:
+                type: integer
+              function:
+                type: [string, 'null']
+        run_hash:
+          type: [string, 'null']
+        run_id:
+          type: [string, 'null']
+        created_at:
+          type: string
+        last_success:
+          oneOf:
+          - type: 'null'
+          - type: object
+            additionalProperties: false
+            required: [run_hash, created_at, run_id]
+            properties:
+              run_hash:
+                type: [string, 'null']
+              created_at:
+                type: string
+              run_id:
+                type: [string, 'null']
     Job:
       type: object
       additionalProperties: false

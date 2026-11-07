@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
 import type { RunSummary } from './types'
-import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, stepsLabel, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, stepsLabel, runViewSteps, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
@@ -86,11 +86,16 @@ describe('run list telemetry', () => {
 
   it('counts steps in one unit, keys, and names the planned nodes apart', () => {
     const stopped = { ...run('f', 'failed', 1), steps_total: 8, steps_executed: 3077, steps_cached: 3, first_failure: failure }
-    expect(runProgress(stopped)).toMatchObject({ steps: `${(3077).toLocaleString()} ran · 3 cached`, stoppedAt: 'orders[day=1]' })
+    expect(runProgress(stopped)).toMatchObject({ steps: `${(3077).toLocaleString()} ok · 3 cached`, stoppedAt: 'orders[day=1]' })
+    expect(runProgress({ ...stopped, steps_executed: 8, steps_cached: 0, steps_failed: 1 }).steps).toBe('7 ok · 1 failed · 0 cached')
     expect(runProgress(stopped).title).toContain('8 nodes planned')
     expect(runProgress({ ...run('s', 'success', 1), steps_total: 8, steps_executed: 0, steps_cached: 9236 }))
-      .toMatchObject({ steps: `0 ran · ${(9236).toLocaleString()} cached`, stoppedAt: null })
-    expect(stepsLabel(2, 1)).toBe('2 ran · 1 cached')
+      .toMatchObject({ steps: `0 ok · ${(9236).toLocaleString()} cached`, stoppedAt: null })
+    expect(stepsLabel(2, 1)).toBe('2 ok · 1 cached')
+    expect(stepsLabel(8, 0, 1, 2)).toBe('7 ok · 1 failed · 2 skipped · 0 cached')
+    const node = (status: string, failed: number) => ({ node_id: 'a', keys: 1, failed, elapsed_seconds: 0, calls: 0, status })
+    expect(runViewSteps({ steps_executed: 3, steps_cached: 1 }, [node('ran', 1), node('ran', 0), node('skipped', 0)]))
+      .toBe('2 ok · 1 failed · 1 skipped · 1 cached')
   })
 
   it('labels a bar with what failed first, and ticks the axis', () => {

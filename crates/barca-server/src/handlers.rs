@@ -472,6 +472,8 @@ pub async fn asset_detail(
     let db_state = state.db_state();
     let snap = snapshot_db(&state).await?;
     let stats = db::get_asset_stats(&snap.path, &summary.id).await?;
+    let root = std::env::current_dir().unwrap_or_default();
+    let failure = db::failure_facts(&snap.path, &summary.id, &root).await?;
 
     let next_fire = next_fires(&dag).remove(&summary.id);
     let running = running_node(&state, &db_state, &snap, &summary.id).await?;
@@ -479,6 +481,7 @@ pub async fn asset_detail(
         "asset": barca_core::report::list_node_json(&summary, next_fire.as_ref()),
         "stats": barca_core::report::stats_json(&stats),
         "running": running,
+        "failure": failure,
     })))
 }
 

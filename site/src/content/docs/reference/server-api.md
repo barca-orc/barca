@@ -107,7 +107,7 @@ client prints it as it would print the local command's.
 | `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | Every node as `barca list --json` shows it. |
-| `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body and the run working on it now. |
+| `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body, the run working on it now, and `failure` when its latest execution failed: the project line that raised (`raised_at`), the failed run hash and the last success to compare it with. |
 | `GET`  | `/assets/{name}/schema` | Selected node and direct inputs as `NodeStatus[]`, with artifact shapes inspected on demand. `?sample=N` adds up to 20 first rows of json/csv/parquet artifacts as `shape.sample`. |
 | `GET`  | `/assets/{name}/partitions` | A partitioned node's keys with a recorded attempt, each with its latest (`?status=failed`, `?q=`, `?limit=`, `?offset=`), and its failed keys' errors grouped. Experimental. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
@@ -596,7 +596,7 @@ changes while a client polls.
 
 ```
 GET /assets            → [ListNode, ...]
-GET /assets/{name}     → { "asset": ListNode, "stats": Stats, "running": NodeRunning | null }
+GET /assets/{name}     → { "asset": ListNode, "stats": Stats, "running": NodeRunning | null, "failure": FailureFacts | null }
 ```
 
 `ListNode` is a `barca list --json` node: `{ id, kind, freshness, inputs, env }`, with

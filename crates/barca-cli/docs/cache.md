@@ -724,7 +724,8 @@ checks that `will_run` equals the real run's `steps_executed` across cold, warm,
 
 A real `barca get` / `barca run` returns the same per-step information in a `steps` array, with a
 `status` of `ran`, `cached` or `partial` (and the same `reason` / `warning`). `steps_executed` is
-the number of steps that actually ran; a fully cached second run reports 0 for assets. In
+the number of steps that actually ran, a step that failed included (count `steps[]` by `status`
+for how many succeeded and failed); a fully cached second run reports 0 for assets. In
 `--agent` mode a cached step also prints `[barca] step:<id> cached` on stderr, so a log shows
 what was served from cache as well as what ran. A step whose node declares `env=[...]` also
 carries `env`, the values it was hashed with (`null` when unset, `<redacted>` for secret-looking

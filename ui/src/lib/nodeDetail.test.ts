@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AssetRunEntry, NodeState } from './types'
-import { barSegments, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, partitionSelection, previewRows, runPace, shortHash, sourcePath, truncateCell, whatChanged } from './nodeDetail'
+import { barSegments, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, partitionSelection, raisedAtLabel, sinceLastSuccess, previewRows, runPace, shortHash, sourcePath, truncateCell, whatChanged } from './nodeDetail'
 
 function node(id: string, inputs: string[] = []): NodeState {
   return {
@@ -222,5 +222,40 @@ describe('truncateCell', () => {
     expect(cut.truncated).toBe(true)
     expect(cut.short).toHaveLength(80)
     expect(cut.short.endsWith('…')).toBe(true)
+  })
+})
+
+describe('failure facts', () => {
+  const failure = (run_hash: string | null, last: string | null) => ({
+    raised_at: { file: 'pathological_project/assets.py', line: 136, function: 'broken_report' },
+    run_hash,
+    run_id: 'r2',
+    created_at: '2026-11-07 10:00:00',
+    last_success: last === null ? null : { run_hash: last, created_at: '2026-11-06 10:00:00', run_id: 'r1' },
+  })
+
+  it('names the raising line by file name, the full path in the title', () => {
+    expect(raisedAtLabel(failure('h2', null))).toEqual({ text: 'assets.py:136', full: 'pathological_project/assets.py:136 in broken_report' })
+    expect(raisedAtLabel({ ...failure('h2', null), raised_at: null })).toBeNull()
+    expect(raisedAtLabel(undefined)).toBeNull()
+  })
+
+  it('compares the failed attempt with the last success by run hash', () => {
+    expect(sinceLastSuccess(failure('h2', null), {})?.text).toMatch(/^Never succeeded/)
+    expect(sinceLastSuccess(failure('h1', 'h1'), {})?.text).toMatch(/^Same code and inputs/)
+    expect(sinceLastSuccess(failure('h2', 'h1'), { run_hash: 'h2', changed: ['code', 'input a.py:x'] }))
+      .toEqual({ text: 'Changed since the last success: code, input a.py:x', at: '2026-11-06 10:00:00' })
+    expect(sinceLastSuccess(failure('h2', 'h1'), { run_hash: 'h2', changed: ['code', 'a', 'b', 'c', 'd'] })?.text)
+      .toBe('Changed since the last success: code, a, b and 2 more')
+    // The current definition moved on since the attempt: its `changed` would describe something else.
+    expect(sinceLastSuccess(failure('h2', 'h1'), { run_hash: 'h3', changed: ['code'] })?.text).toMatch(/^Code or inputs changed after this attempt/)
+    expect(sinceLastSuccess(null, {})).toBeNull()
+  })
+
+  it('a history of only failures has nothing to summarize', () => {
+    const r = (status: string): AssetRunEntry => ({ status, elapsed_seconds: null, created_at: '', error_message: null, attempts: 1, run_id: null, cpu_seconds: null, max_rss_bytes: null })
+    expect(onlyFailures([r('failed')])).toBe(true)
+    expect(onlyFailures([r('failed'), r('success')])).toBe(false)
+    expect(onlyFailures([])).toBe(false)
   })
 })

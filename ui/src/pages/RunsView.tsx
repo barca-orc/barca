@@ -15,7 +15,7 @@ import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
 import { outcomeResult, parseOutcome, runIsLive, runLabel, runTone, triggeredByLabel } from '@/lib/runs'
 import { statusTone } from '@/lib/status'
-import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runFailed, runFailureLine, runNodeIdle, runNodeOutcome, runNodeTime, runProgress, runRowError, runTargetLines, splitRunSteps, stepsLabel, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runFailed, runFailureLine, runNodeIdle, runNodeOutcome, runNodeTime, runProgress, runRowError, runTargetLines, splitRunSteps, runViewSteps, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunNodeGroup } from '@/lib/runsPage'
 import type { RunList, RunStep, RunView } from '@/lib/types'
 
@@ -179,7 +179,7 @@ function RunDetails({ data, eventGap, root, onStarted }: { data: RunView; eventG
       <KeyValue label="started"><Absolute at={data.started_at} /></KeyValue>
       <KeyValue label="finished"><Absolute at={data.finished_at} /></KeyValue>
       <KeyValue label="duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</KeyValue>
-      <KeyValue label="steps">{stepsLabel(data.steps_executed, data.steps_cached)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</KeyValue>
+      <KeyValue label="steps">{runViewSteps(data, nodes)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</KeyValue>
       {(data.error ?? envelope?.error) && <div className="barca-run-error" role="alert"><ErrorLine error={data.error ?? envelope?.error} /></div>}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
