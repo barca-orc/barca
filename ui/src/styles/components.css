@@ -287,3 +287,4 @@
 .barca-version:first-child { border-top: 0; }
 .barca-version-what { display: flex; flex-direction: column; min-width: 0; }
 .barca-version-pinned code { font-weight: 600; }
+.barca-version-upload { margin: 0 0 6px; }

@@ -198,8 +198,13 @@ value`) is `{"artifacts": [{"path", "format"}]}`, answered with `{"value"}` or
 `{"url", "expires_at"}` (RFC 3339 UTC, `Z`) with an optional `note`, or
 `{"error", "kind"}` with `kind` one of `usage`, `missing`, `credentials`, `store`. The
 helper refuses any other sign `version` before signing anything. A signed URL appears
-only in a successful answer on stdout; errors and notes never contain one.
-Conformance: [signed URL tests](../../python/tests/test_signed_urls.py) and the answer
+only in a successful answer on stdout; errors and notes never contain one. A check request
+(`barca pin --from-file`, `POST /assets/{name}/pin/upload`) is
+`{"op": "check", "artifacts": [{"path", "format"}]}`: each artifact is loaded with the reader
+runs use, and answered with `{"ok": true, "type"}` (the loaded value's Python type name) or
+`{"error"}`.
+Conformance: [signed URL tests](../../python/tests/test_signed_urls.py), the
+[upload tests](../../python/tests/test_pin_upload.py) and the answer
 parser tests in [values.rs](../../crates/barca-core/src/values.rs).
 
 ## Version policy and conformance

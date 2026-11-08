@@ -566,6 +566,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             files,
             run_hash,
             previous,
+            from_file,
             versions,
             limit,
             reason,
@@ -574,8 +575,9 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             ..
         } => {
             server_files("pin", &files, None)?;
-            let action =
-                commands::pin::action(target, run_hash, previous, versions, limit, reason)?;
+            let action = commands::pin::action(
+                target, run_hash, previous, from_file, versions, limit, reason,
+            )?;
             client::pins::pin(server, &action, &files, is_json(format), env.as_deref()).await
         }
         Cli::Unpin {
@@ -938,6 +940,7 @@ async fn run_cli(
             files,
             run_hash,
             previous,
+            from_file,
             versions,
             limit,
             reason,
@@ -945,8 +948,9 @@ async fn run_cli(
             env,
             ..
         } => {
-            let action =
-                commands::pin::action(target, run_hash, previous, versions, limit, reason)?;
+            let action = commands::pin::action(
+                target, run_hash, previous, from_file, versions, limit, reason,
+            )?;
             commands::pin::pin_cmd(env.as_deref(), &action, files, is_json(format), &python).await
         }
         Cli::Unpin {

@@ -62,6 +62,13 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{run_id}/output", get(runs::output))
         // Pin an asset to an earlier materialization, or remove its pin.
         .route("/assets/{name}/pin", post(pins::pin).delete(pins::unpin))
+        // Pin an asset to data the request body supplies (an override).
+        .route(
+            "/assets/{name}/pin/upload",
+            post(pins::upload).layer(axum::extract::DefaultBodyLimit::max(
+                barca_core::pins::MAX_UPLOAD_BYTES,
+            )),
+        )
         // Start the metadata database over (the old one is moved aside, never deleted).
         .route("/state/reset", post(reset::reset))
         // A schedule id is a node id: percent-encode a `/` in it.

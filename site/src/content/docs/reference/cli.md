@@ -54,7 +54,7 @@ barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]  A run's recorded s
 barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
                                                Show recent runs, or one run's steps and errors
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
-barca pin [target] [--previous|--run-hash H|--versions]  Hold an asset at an earlier result (experimental)
+barca pin [target] [--previous|--run-hash H|--from-file F|--versions]  Hold an asset at an earlier result or supplied data (experimental)
 barca unpin <target>                         Release a pinned asset (experimental)
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
 barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
@@ -521,6 +521,7 @@ Roll an asset back to an earlier materialization: every run (downstream steps, `
 ```bash
 barca pin orders --versions          # recent successful materializations to choose from
 barca pin orders --previous          # roll back one version
+barca pin orders --from-file fix.json   # or override it with data you supply
 barca unpin orders                   # back to normal
 ```
 

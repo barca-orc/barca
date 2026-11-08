@@ -112,6 +112,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/assets/{name}/partitions` | A partitioned node's keys with a recorded attempt, each with its latest (`?status=failed`, `?q=`, `?limit=`, `?offset=`), and its failed keys' errors grouped. Experimental. |
 | `GET`  | `/assets/{name}/versions` | The asset's recent successful materializations (one per run hash, newest first, `?limit=N`, default 20) and its pin, as `barca pin <name> --versions --json`. Experimental. |
 | `POST` | `/assets/{name}/pin` | Pin the asset to `{"run_hash": "..."}` (or a unique prefix) or `{"previous": true}`, with an optional `"reason"`, as `barca pin`; `pinned_by` is the request's token name. `403` read-only. Experimental ([Pinning and Rollback](/reference/pins/)). |
+| `POST` | `/assets/{name}/pin/upload` | Pin the asset to the request body (a file's bytes), as `barca pin --from-file`: `?file_name=` (its extension gives the format) or `?format=json\|parquet\|csv\|pickle`, and `?reason=`. At most 256 MiB (`413`); a body that does not load is `400`; `403` read-only. Experimental ([Pinning and Rollback](/reference/pins/)). |
 | `DELETE` | `/assets/{name}/pin` | Remove the asset's pin, as `barca unpin`. `403` read-only. Experimental. |
 | `GET`  | `/pins` | Every pinned asset: `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason}]}`. Experimental. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |

@@ -18,6 +18,7 @@ hash (`.barca/artifacts/<node>/<run_hash><ext>`), so earlier results are usually
 barca pin orders --versions                  # recent successful materializations, newest first
 barca pin orders --previous                  # roll back to the one before the latest
 barca pin orders --run-hash 3f9a1c --reason "bad feed on 11-07"   # or pick one (a hash prefix)
+barca pin orders --from-file fixed.parquet --reason "hand-corrected"   # or override with your data
 barca pin                                    # every pinned asset, who pinned it and why
 barca unpin orders                           # back to normal
 ```
@@ -61,13 +62,37 @@ Pinning a pinned asset replaces its pin. A version whose artifact is no longer o
 pinned. The pin records when, and who: `user@host` for the CLI, `token:<name>` for a server
 request made with a project token ([`barca docs server-mode`](/reference/server-mode/)), nothing otherwise.
 
+## Pinning to data you supply
+
+When no earlier result is good, `barca pin TARGET --from-file PATH` pins the asset to a file you
+provide, with the same semantics as any pin:
+
+- The format comes from the extension: `.json`, `.parquet`, `.csv`, `.pkl` or `.pickle`
+  (another extension exits 2). The file is checked by loading it with the reader runs use
+  (parquet and CSV need pyarrow or pandas, as for a computed result); one that does not load
+  exits 2 and nothing is pinned.
+- Its bytes are stored as a new artifact of the asset,
+  `.barca/artifacts/<node>/<run_hash><ext>`, whose run hash is the SHA-256 of `barca-upload\0`
+  followed by the bytes: the same file uploaded again is the same version, and what reads it is
+  computed (or served from cache) against it.
+- It is recorded as a successful materialization without a run (`run_id` null, duration 0),
+  marked as an upload in `asset_uploads` with when, who, the file name and `--reason`.
+  `--versions` notes it `uploaded`; the version's `upload` key is
+  `{uploaded_at, uploaded_by, file_name, reason}` (null for a computed version).
+- `barca unpin TARGET` returns the asset to normal. The uploaded version stays in the list and
+  can be pinned again with `--run-hash`, until the cache size limit evicts it.
+
+The file may be at most 256 MiB. The value is not checked against the asset's return type or
+what reads it: a consumer that expects other columns fails when it runs, as with any input.
+
 ## JSON output
 
 | Command | Shape |
 |---|---|
 | `barca pin --json` | `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason}]}` |
-| `barca pin TARGET --versions --json` | `{node_id, pinnable, pin, versions: [{run_hash, run_id, materialized_at, elapsed_seconds, size_bytes, format, artifact, available, current, pinned}]}` |
+| `barca pin TARGET --versions --json` | `{node_id, pinnable, pin, versions: [{run_hash, run_id, materialized_at, elapsed_seconds, size_bytes, format, artifact, available, current, pinned, upload}]}` |
 | `barca pin TARGET --previous --json` | `{node_id, pin, version, replaced}` (`replaced`: the earlier pin, or null) |
+| `barca pin TARGET --from-file PATH --json` | the same; `version.upload` is set |
 | `barca unpin TARGET --json` | `{node_id, removed}` (`removed`: the pin, or null when it was not pinned) |
 
 Times are RFC 3339 UTC. Errors use the usual envelope; asking for a version that does not exist,
@@ -77,9 +102,13 @@ an evicted one, or pinning something that cannot be pinned exits 2.
 
 `barca serve` has the same operations: `GET /pins`, `GET /assets/{name}/versions?limit=N`,
 `POST /assets/{name}/pin` with `{"run_hash": "..."}` or `{"previous": true}` and an optional
-`"reason"`, and `DELETE /assets/{name}/pin`. A `--read-only` server refuses the writes (403).
-The web UI's asset panel lists the versions with **Roll back to this**, and shows a banner with
-**Unpin** while the asset is pinned. `barca pin --server` and `barca unpin --server` (or a
+`"reason"`, `POST /assets/{name}/pin/upload?file_name=NAME&format=FMT&reason=TEXT` with the
+file's bytes as the body (`format` or a `file_name` with a known extension is required; over
+256 MiB is refused with 413; a body that does not load is 400), and
+`DELETE /assets/{name}/pin`. A `--read-only` server refuses the writes (403).
+The web UI's asset panel lists the versions with **Roll back to this** and offers **Upload
+replacement…** (a file picker, then a confirmation naming the file and its size), and shows a
+banner with **Unpin** while the asset is pinned, naming who uploaded the override. `barca pin --server` and `barca unpin --server` (or a
 configured server) act on the server's database.
 
 ## Limits
@@ -93,7 +122,8 @@ configured server) act on the server's database.
   target `blocked`) until it is unpinned or pinned again.
 - `barca status` reports the asset's cache state for its current definition; a pinned asset
   reads `cached` with reason `pinned` in `barca get --dry-run`.
-- Uploading a file to become a pinned value is not supported yet.
+- An uploaded file is written to the local artifact directory of the machine that pins (the
+  server's, for `--server` and the UI); with a remote store it is not copied to the store.
 
 See also: [`barca docs cache`](/reference/cache/) (run hashes and artifacts), [`barca docs disk`](/reference/disk/) (what eviction keeps),
 [`barca docs server-mode`](/reference/server-mode/).

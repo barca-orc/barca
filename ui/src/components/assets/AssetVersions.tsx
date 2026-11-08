@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pin } from 'lucide-react'
 import { Age, Button, ConfirmDialog, Section } from '@/components'
@@ -14,11 +14,23 @@ import type { AssetVersion, AssetVersions as Versions, NodeState } from '@/lib/t
  * "Roll back to this" (`POST /assets/{name}/pin`), and, while it is pinned, a banner with
  * "Unpin" (`DELETE /assets/{name}/pin`). Both ask first. `barca docs pins` is the contract:
  * a pinned asset is read by every run as the pinned materialization and never recomputed.
+ * "Upload replacement…" pins it to a file the operator picks (`POST /assets/{name}/pin/upload`).
  */
+
+/** The formats an upload may be, by extension (`barca docs pins`). */
+export const UPLOAD_EXTENSIONS = ['.json', '.parquet', '.csv', '.pkl', '.pickle']
+
+/** The format a file name's extension names, or null. */
+export function uploadFormat(fileName: string): string | null {
+  const ext = fileName.slice(fileName.lastIndexOf('.')).toLowerCase()
+  if (!fileName.includes('.') || !UPLOAD_EXTENSIONS.includes(ext)) return null
+  return ext === '.pkl' || ext === '.pickle' ? 'pickle' : ext.slice(1)
+}
 
 export type VersionsConfirm =
   | { kind: 'pin'; version: AssetVersion }
   | { kind: 'unpin' }
+  | { kind: 'upload'; file: File; format: string }
 
 export interface AssetVersionsViewProps {
   name: string
@@ -32,6 +44,10 @@ export interface AssetVersionsViewProps {
   onAsk: (confirm: VersionsConfirm) => void
   onConfirm: () => void
   onCancel: () => void
+  /** A file was picked to upload (asks first). */
+  onPick?: (file: File) => void
+  /** Why a picked file cannot be uploaded (its extension). */
+  pickError?: string | null
 }
 
 const READ_ONLY = 'This server is read-only (barca serve --read-only)'
@@ -41,8 +57,10 @@ function who(by: string | null): string {
 }
 
 /** The section alone, for each state: a pure function of its props. */
-export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error, confirm, onAsk, onConfirm, onCancel }: AssetVersionsViewProps) {
+export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error, confirm, onAsk, onConfirm, onCancel, onPick, pickError }: AssetVersionsViewProps) {
   const pin = data.pin
+  const input = useRef<HTMLInputElement>(null)
+  const pinnedUpload = pin ? data.versions.find((v) => v.run_hash === pin.run_hash)?.upload ?? null : null
   return (
     <Section title="Versions">
       {pin && (
@@ -50,6 +68,11 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
           <Pin size={14} aria-hidden />
           <div>
             <strong>Pinned at {shortHash(pin.run_hash)}</strong>
+            {pinnedUpload && (
+              <p className="barca-note">
+                Override uploaded{who(pinnedUpload.uploaded_by)}{pinnedUpload.file_name ? ` from ${pinnedUpload.file_name}` : ''}.
+              </p>
+            )}
             <p className="barca-note">
               Every run reads this version and none recomputes {name} until it is unpinned. Pinned{' '}
               <Age at={pin.pinned_at} nowMs={nowMs} />{who(pin.pinned_by)}{pin.reason ? `: ${pin.reason}` : ''}.
@@ -62,6 +85,21 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
         </div>
       )}
       {error && <p className="barca-note" role="alert">Could not change the pin: {error}</p>}
+      {pickError && <p className="barca-note" role="alert">{pickError}</p>}
+      {data.pinnable && onPick && (
+        <div className="barca-version-upload">
+          <input ref={input} type="file" hidden accept={UPLOAD_EXTENSIONS.join(',')} aria-label={`Replacement data for ${name}`}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) onPick(file)
+            }} />
+          <Button variant="ghost" size="sm" disabled={readOnly || pending} title={readOnly ? READ_ONLY : 'Pin it to data you supply: .json, .parquet, .csv or .pkl'}
+            onClick={() => input.current?.click()}>
+            Upload replacement…
+          </Button>
+        </div>
+      )}
       {data.versions.length === 0 ? (
         <p className="barca-note">No successful materialization with an artifact yet.</p>
       ) : (
@@ -78,6 +116,7 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
                   {v.current && <> · latest</>}
                   {v.pinned && <> · pinned</>}
                   {!v.available && <> · evicted</>}
+                  {v.upload && <> · uploaded{v.upload.file_name ? ` (${v.upload.file_name})` : ''}</>}
                 </span>
               </div>
               {data.pinnable && !v.pinned && (
@@ -97,6 +136,15 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
           title={`Pin ${name} to ${shortHash(confirm.version.run_hash)}?`}
           body={`Every run, scheduled or requested, will read the version materialized ${confirm.version.materialized_at}${confirm.version.run_id ? ` (run ${confirm.version.run_id})` : ''} and none will recompute ${name} until it is unpinned. What reads it is computed against this version.`}
           action="Pin this version"
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
+      )}
+      {confirm?.kind === 'upload' && (
+        <ConfirmDialog
+          title={`Override ${name} with ${confirm.file.name}?`}
+          body={`${confirm.file.name} (${formatBytes(confirm.file.size)}, ${confirm.format}) is checked by loading it, stored as a new version of ${name} and pinned: every run reads it and none recomputes ${name} until it is unpinned. What reads it is computed against it.`}
+          action="Upload and pin"
           onConfirm={onConfirm}
           onCancel={onCancel}
         />
@@ -124,6 +172,7 @@ export interface AssetVersionsProps {
 export function AssetVersions({ node, nowMs, readOnly }: AssetVersionsProps) {
   const client = useQueryClient()
   const [confirm, setConfirm] = useState<VersionsConfirm | null>(null)
+  const [pickError, setPickError] = useState<string | null>(null)
   const isAsset = node.kind === 'asset'
   const versions = useQuery({
     queryKey: ['asset-versions', node.id],
@@ -132,7 +181,8 @@ export function AssetVersions({ node, nowMs, readOnly }: AssetVersionsProps) {
     retry: false,
   })
   const change = useMutation({
-    mutationFn: async (c: VersionsConfirm): Promise<unknown> => (c.kind === 'pin' ? api.pinAsset(node.id, c.version.run_hash) : api.unpinAsset(node.id)),
+    mutationFn: async (c: VersionsConfirm): Promise<unknown> =>
+      c.kind === 'pin' ? api.pinAsset(node.id, c.version.run_hash) : c.kind === 'upload' ? api.uploadPin(node.id, c.file, c.file.name) : api.unpinAsset(node.id),
     onSettled: () => client.invalidateQueries(),
   })
   if (!isAsset || !versions.data) return null
@@ -154,6 +204,17 @@ export function AssetVersions({ node, nowMs, readOnly }: AssetVersionsProps) {
         setConfirm(null)
       }}
       onCancel={() => setConfirm(null)}
+      pickError={pickError}
+      onPick={(file) => {
+        change.reset()
+        const format = uploadFormat(file.name)
+        if (!format) {
+          setPickError(`${file.name}: pick a .json, .parquet, .csv or .pkl file`)
+          return
+        }
+        setPickError(null)
+        setConfirm({ kind: 'upload', file, format })
+      }}
     />
   )
 }

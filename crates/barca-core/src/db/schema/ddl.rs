@@ -178,6 +178,8 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     ("sink_publications", crate::sink_publications::CREATE),
     // Assets held at an earlier materialization (`barca pin`, 0.41.0).
     ("asset_pins", crate::db::pins::CREATE),
+    // Materializations an operator uploaded to pin an asset to (`barca pin --from-file`).
+    ("asset_uploads", crate::db::pins::CREATE_UPLOADS),
     // The nodes an operator paused (`barca pause`): scheduled ticks do not compute them.
     ("asset_pauses", crate::db::CREATE_ASSET_PAUSES),
     // The component digests of a definition, once: the rows of its keys name it (`crate::changes`).

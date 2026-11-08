@@ -11,7 +11,9 @@ on stdout with {"value": ...} or {"error": "..."} per artifact, in order.
 `barca get -o url` sends a sign request instead (version 1, specs/interfaces/worker-protocol.md):
 {"op": "sign", "version": 1, "objects": [{"uri", "expires", "filename"}, ...]}, answered with
 {"url", "expires_at"} (and a "note" when the link ends sooner than asked) or {"error", "kind"}
-per object, in order. A signed URL is written to
+per object, in order. `barca pin --from-file` sends {"op": "check", "artifacts": [{"path",
+"format"}, ...]}, answered with {"ok": true, "type"} or {"error"} per artifact: whether it loads.
+A signed URL is written to
 stdout only, for the coordinator; errors never contain one.
 """
 
@@ -85,6 +87,18 @@ def value(path: str, fmt: str) -> dict:
         return {"error": f"{type(e).__name__}: {first}".rstrip(": ")}
 
 
+def check(path: str, fmt: str) -> dict:
+    """Whether the artifact at `path` loads as `fmt` with the reader runs use: {"ok": true,
+    "type": ...} or {"error": ...}. `barca pin --from-file` checks a supplied file with it.
+    Never raises."""
+    try:
+        loaded = _artifacts.deserialize(path, fmt)
+        return {"ok": True, "type": type(loaded).__name__}
+    except Exception as e:  # noqa: BLE001 — reported to the coordinator, never fails the command
+        first = str(e).splitlines()[0] if str(e) else ""
+        return {"error": f"{type(e).__name__}: {first}".rstrip(": ")}
+
+
 SIGN_VERSION = 1
 
 
@@ -118,6 +132,8 @@ def main() -> None:
                 f"{SIGN_VERSION}; reinstall matching barca packages"
             )
         answers = [sign(o) for o in request.get("objects", [])]
+    elif request.get("op") == "check":
+        answers = [check(a["path"], a["format"]) for a in request.get("artifacts", [])]
     else:
         answers = [value(a["path"], a["format"]) for a in request.get("artifacts", [])]
     json.dump(answers, sys.stdout)
