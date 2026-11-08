@@ -1231,3 +1231,6 @@
 .barca-keys-explore:hover { text-decoration-color: currentColor; }
 .barca-keys-error-link { color: inherit; text-decoration: none; }
 .barca-keys-error-link:hover b, .barca-keys-error-link:hover .barca-error-line { text-decoration: underline; text-underline-offset: 3px; }
+/* A run's failed keys of one node, one line: the node, how many keys, a way to them. */
+.barca-run-summary-keys { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.barca-run-summary-keys a { color: var(--text-default); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }

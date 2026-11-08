@@ -26,6 +26,7 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         pinned={data.pinned}
         live={data.live}
         stateHint={data.stateHint}
+        keys={data.keys}
         selected={selected}
       />
       <Handle type="source" position={data.direction === "TB" ? Position.Bottom : Position.Right} />

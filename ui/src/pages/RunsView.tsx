@@ -1,12 +1,14 @@
 import { Fragment, createContext, useContext, useState, type ReactNode } from 'react'
 import { pathBreaks, relativeTraceback } from '@/lib/health'
 import { X } from 'lucide-react'
+import { Link } from 'react-router'
 import { match } from 'ts-pattern'
 import { Absolute, Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
 import { RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
-import { failedSteps, raisedAt, traceUrl } from '@/lib/runRecovery'
+import { failedSteps, failureGroups, raisedAt, traceUrl } from '@/lib/runRecovery'
+import { keysHref } from '@/lib/keysPage'
 import { formatSeconds } from '@/lib/assetTable'
 import { zoneName } from '@/lib/time'
 import { plural } from '@/lib/plural'
@@ -184,23 +186,34 @@ function Fact({ label, wide = false, children }: { label: string; wide?: boolean
 function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: RunView; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
   const live = runIsLive(data.status)
   const failed = failedSteps(data)
-  const shown = failed.slice(0, SUMMARY_STEPS)
+  // The keys of a node that failed the same way are one entry: 83 keys, one error.
+  const groups = failureGroups(failed)
+  const shown = groups.slice(0, SUMMARY_STEPS)
+  const hidden = groups.slice(SUMMARY_STEPS).reduce((n, g) => n + Math.max(1, g.keys.length), 0)
   // A run that failed before any step did (it could not plan, say): its own error, said here once.
   const runError = runSummaryError(data)
   return <div className="barca-run-summary">
     {failed.length > 0 && <>
       <strong className="barca-run-summary-head"><StatusGlyph glyph="failed" />{failed.length.toLocaleString()} failed step{failed.length === 1 ? '' : 's'}</strong>
       <ul className="barca-run-summary-failed">
-        {shown.map((step) => {
+        {shown.map(({ node, first: step, keys }) => {
           const where = raisedAt(step.error_traceback ?? step.error)
-          return <li key={step.node_id}>
-            <button type="button" className="barca-run-link barca-step-name" title={`Show ${step.node_id}'s logs`} onClick={() => onFilter(step.node_id)}>{shortName(step.node_id)}</button>
+          return <li key={`${node}:${step.node_id}`}>
+            {keys.length > 1 ? (
+              <span className="barca-run-summary-keys">
+                <button type="button" className="barca-run-link barca-step-name" title={`Show ${shortName(node)}'s logs`} onClick={() => onFilter(step.node_id)}>{shortName(node)}</button>
+                <span className="barca-cell-sub">{keys.length.toLocaleString()} keys · </span>
+                <Link className="barca-cell-sub" to={keysHref(node, { filter: { states: ['failed'] } })}>open in the key explorer</Link>
+              </span>
+            ) : (
+              <button type="button" className="barca-run-link barca-step-name" title={`Show ${step.node_id}'s logs`} onClick={() => onFilter(step.node_id)}>{shortName(step.node_id)}</button>
+            )}
             <ErrorLine error={step.error_traceback ?? step.error} text={step.error_type && step.error_message ? `${step.error_type}: ${step.error_message}` : undefined} root={root} />
             {where && <span className="barca-run-summary-where" title={where}>raised at <code>{where.replace(/^.*\/([^/]+\/[^/]+:\d)/, '…/$1')}</code></span>}
             <TraceLink step={step} datadogUrl={datadogUrl} />
           </li>
         })}
-        {failed.length > shown.length && <li className="barca-note">and {(failed.length - shown.length).toLocaleString()} more below</li>}
+        {hidden > 0 && <li className="barca-note">and {hidden.toLocaleString()} more below</li>}
       </ul>
     </>}
     {runError && <div className="barca-run-error" role="alert"><ErrorLine error={runError} large root={root} /></div>}

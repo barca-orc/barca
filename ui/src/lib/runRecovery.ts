@@ -200,3 +200,42 @@ export function runLink(runId: string, href: string = window.location.href): str
   url.hash = `#/runs?run=${encodeURIComponent(runId)}`
   return url.toString()
 }
+
+/**
+ * A run's failed steps, the keys of one node that failed the same way as one entry: 83 keys of
+ * `scores` that raised one error are one line, with how many, not 83. The error is the first
+ * line with each key's own values replaced by its dimension's name (`<account>`), as the server
+ * groups a node's errors. Groups keep the order of their first step.
+ */
+export interface FailureGroup {
+  /** The node (its base id, without a key). */
+  node: string
+  /** The first failed step of the group: its error and where it raised stand for all. */
+  first: RunStep
+  /** The keys that failed this way (`account=acct-1`), empty for an unpartitioned step. */
+  keys: string[]
+}
+
+export function failureGroups(steps: readonly RunStep[]): FailureGroup[] {
+  const groups = new Map<string, FailureGroup>()
+  for (const step of steps) {
+    const open = step.node_id.indexOf('[')
+    const node = open > 0 && step.node_id.endsWith(']') ? step.node_id.slice(0, open) : step.node_id
+    const key = node === step.node_id ? null : step.node_id.slice(open + 1, -1)
+    const line = (step.error_type && step.error_message ? `${step.error_type}: ${step.error_message}` : step.error ?? '').split('\n')[0] ?? ''
+    const shape = key === null ? line : key.split(',').reduce((text, pair) => {
+      const at = pair.indexOf('=')
+      const [dim, value] = [pair.slice(0, at), pair.slice(at + 1)]
+      if (!value) return text
+      return text.replace(new RegExp(`(?<![\\w])${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`, 'g'), `<${dim}>`)
+    }, line)
+    const id = key === null ? `${node}\u0000${step.node_id}` : `${node}\u0000${shape}`
+    const group = groups.get(id)
+    if (group) {
+      if (key !== null) group.keys.push(key)
+    } else {
+      groups.set(id, { node, first: step, keys: key === null ? [] : [key] })
+    }
+  }
+  return [...groups.values()]
+}

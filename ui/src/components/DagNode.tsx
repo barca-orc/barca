@@ -1,3 +1,4 @@
+import { compactCount } from '@/lib/plural'
 import type { CSSProperties } from 'react'
 import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
 import { toneGlyph, type Glyph } from '@/lib/glyph'
@@ -24,6 +25,8 @@ export interface DagNodeProps {
   /** A run is working on it: the live border, and the running glyph turns. */
   live?: boolean
   stateHint?: string
+  /** A partitioned node's keys: a short count at the end, and a bar along the bottom of the share failed and waiting. */
+  keys?: { total: number; failed: number; waiting: number }
   selected?: boolean
   style?: CSSProperties
   onClick?: () => void
@@ -60,6 +63,7 @@ export function DagNode({
   pinned,
   live = false,
   stateHint,
+  keys,
   selected = false,
   style,
   onClick,
@@ -84,6 +88,7 @@ export function DagNode({
         <StatusGlyph glyph={shown} live={live} size={14} />
         <span className="barca-dag-name">{name}</span>
         {kindLabel && <span className="barca-dag-kind">{kindLabel}</span>}
+        {keys && <span className="barca-dag-kind" title={keysTitle(keys)}>{compactCount(keys.total)} keys</span>}
         {/* The state's word, for a screen reader and a search of the page: the glyph shows it. */}
         {word && (
           <span className="barca-dag-state barca-sr-only" data-failed={lastFailed || undefined} data-blocked={(!lastFailed && blockedBy) || undefined} data-pinned={(!lastFailed && pinned !== undefined) || undefined}>
@@ -91,6 +96,20 @@ export function DagNode({
           </span>
         )}
       </div>
+      {keys && (keys.failed > 0 || keys.waiting > 0) && (
+        // A sliver of a few keys in thousands still shows: at least 3px each.
+        <div className="barca-dag-keys" aria-hidden>
+          {keys.failed > 0 && <span className="is-failed" style={{ width: `max(3px, ${(100 * keys.failed) / keys.total}%)` }} />}
+          {keys.waiting > 0 && <span className="is-waiting" style={{ width: `max(3px, ${(100 * keys.waiting) / keys.total}%)` }} />}
+        </div>
+      )}
     </div>
   )
+}
+
+function keysTitle(keys: { total: number; failed: number; waiting: number }): string {
+  const parts = [`${keys.total.toLocaleString()} keys`]
+  if (keys.failed > 0) parts.push(`${keys.failed.toLocaleString()} failed`)
+  if (keys.waiting > 0) parts.push(`${keys.waiting.toLocaleString()} waiting to run`)
+  return parts.join(' · ')
 }
