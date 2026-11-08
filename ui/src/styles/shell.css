@@ -1164,3 +1164,70 @@
 }
 .barca-version-pinned .barca-version-tag { color: var(--text-strong); border-color: var(--border-strong); }
 .barca-version-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- The key explorer (#/keys) ---------- */
+/* Every key of a partitioned asset: a grid of all of them by state over the filtered keys as a
+   table, one key's detail at the right. The grid scrolls on its own, so the table keeps room. */
+.barca-keys-back { display: inline-flex; align-self: center; color: var(--text-muted); margin-right: -2px; }
+.barca-keys-back:hover { color: var(--text-strong); }
+.barca-keys-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: var(--text-sm); }
+.barca-keys-chain > .barca-cell-sub { margin-right: 4px; }
+.barca-keys-chain-step { display: inline-flex; align-items: center; gap: 6px; }
+.barca-keys-chain-step b { color: var(--text-strong); font-weight: var(--weight-semibold); }
+.barca-keys-chain-step a { color: var(--text-default); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+.barca-keys-chain-step a:hover { text-decoration-color: currentColor; }
+.barca-keys-chain-arrow { color: var(--text-faint); }
+.barca-keys-notice { margin: 8px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
+.barca-keys-notice a { color: var(--text-default); }
+.barca-keys-body { flex: 1; min-height: 0; display: flex; }
+.barca-keys-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 4px 24px 16px; }
+.barca-keys-main > .barca-note { margin: 0; }
+.barca-keys-grid { flex: none; max-height: 46vh; overflow: auto; scrollbar-gutter: stable; }
+.barca-keys-hint { margin: 6px 0 0; }
+.barca-keygrid { position: relative; }
+.barca-keygrid canvas { display: block; }
+.barca-keygrid-axis { margin: 0 0 6px; font-size: var(--text-xs); color: var(--text-muted); }
+.barca-keygrid-axis b { font-weight: var(--weight-medium); color: var(--text-default); }
+.barca-keygrid-tip {
+  position: absolute; z-index: 5; display: flex; flex-direction: column; gap: 2px; max-width: 280px;
+  padding: 6px 8px; pointer-events: none;
+  background: var(--bg-overlay); border: 1px solid var(--border-default); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop);
+  font-size: var(--text-xs); color: var(--text-default);
+}
+.barca-keygrid-tip code { font-family: var(--font-code); color: var(--text-strong); word-break: break-all; }
+.barca-keygrid-tip-error { color: var(--text-muted); }
+/* The table: a fixed head over rows that scroll; only the rows in view exist. */
+.barca-keytable { flex: 1; min-height: 160px; display: flex; flex-direction: column; border-top: 1px solid var(--border-subtle); }
+.barca-keytable-head, .barca-keytable-row { display: grid; align-items: center; gap: 12px; padding: 0 12px; }
+.barca-keytable-head { height: 32px; flex: none; font-size: var(--text-xs); color: var(--text-muted); border-bottom: 1px solid var(--border-subtle); }
+.barca-keytable-body { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.barca-keytable-row {
+  position: absolute; top: 0; left: 0; right: 0; font-size: var(--text-sm); color: var(--text-default);
+  border-bottom: 1px solid var(--border-subtle); cursor: pointer;
+}
+.barca-keytable-row:hover { background: var(--bg-hover); }
+.barca-keytable-row[aria-selected='true'] { background: var(--bg-selected); }
+.barca-keytable-row:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--focus-ring); }
+.barca-keytable-row > *, .barca-keytable-head > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-keytable-row code { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-strong); }
+.barca-keytable .is-num { text-align: right; font-variant-numeric: tabular-nums; }
+.barca-keytable-state { display: inline-flex; align-items: center; gap: 6px; }
+.barca-keytable-error { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); }
+.barca-keytable-empty { margin: 12px; }
+/* The key's detail: state beside the key, the chain as a short list. */
+.barca-keydetail-state { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: var(--text-sm); color: var(--text-muted); }
+.barca-keydetail-actions { margin-top: 10px; }
+.barca-keydetail-input + .barca-keydetail-input { margin-top: 12px; }
+.barca-keychain, .barca-keyattempts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.barca-keychain li, .barca-keyattempts li { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
+.barca-keychain a { color: var(--text-default); }
+.barca-keychain b { color: var(--text-strong); font-weight: var(--weight-semibold); }
+/* The asset panel's way into the key explorer, and its error groups as links into it. */
+.barca-keys-explore {
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px;
+  font-size: var(--text-sm); color: var(--text-strong); text-decoration: underline;
+  text-decoration-color: var(--border-strong); text-underline-offset: 3px;
+}
+.barca-keys-explore:hover { text-decoration-color: currentColor; }
+.barca-keys-error-link { color: inherit; text-decoration: none; }
+.barca-keys-error-link:hover b, .barca-keys-error-link:hover .barca-error-line { text-decoration: underline; text-underline-offset: 3px; }

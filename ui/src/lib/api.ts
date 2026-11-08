@@ -13,6 +13,8 @@ import type {
   NodeGroup,
   ListNode,
   AssetDetail,
+  PartitionGrid,
+  PartitionKeyDetail,
   PartitionKeys,
   NodeState,
   NodeStatus,
@@ -114,6 +116,11 @@ export const api = {
     if (filter.q) params.set('q', filter.q)
     return request<PartitionKeys>(`/assets/${encodeURIComponent(name)}/partitions?${params}`)
   },
+  /** Every key of a partitioned node, with its state and latest attempt. */
+  partitionGrid: (name: string) => request<PartitionGrid>(`/assets/${encodeURIComponent(name)}/partitions/grid`),
+  /** One key of a partitioned node, across its chain, with what it read and wrote. */
+  partitionKey: (name: string, key: string) =>
+    request<PartitionKeyDetail>(`/assets/${encodeURIComponent(name)}/partitions/key?${new URLSearchParams({ key, sample: String(PREVIEW_ROWS) })}`),
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema?sample=${PREVIEW_ROWS}`),
   project: () => request<{ root: string | null; telemetry?: { datadog_url: string | null } }>('/project'),
   plan: () => request<PlanResult>('/plan'),

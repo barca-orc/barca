@@ -7,6 +7,7 @@ import { DocsPage } from '@/pages/placeholders'
 import { RunsPage } from '@/pages/RunsPage'
 import { KitPage } from '@/pages/KitPage'
 import { TokensPage } from '@/pages/TokensPage'
+import { KeysPage } from '@/pages/KeysPage'
 import { AuthGate } from '@/context/AuthGate'
 
 // Hash routing: the page itself is always `<prefix>/ui/`, so relative asset URLs
@@ -21,6 +22,7 @@ export const router = createHashRouter([
       { path: 'graph', element: <LegacyGraph /> },
       { path: 'runs', element: <RunsPage /> },
       { path: 'assets', element: <AssetsView /> },
+      { path: 'keys', element: <KeysPage /> },
       { path: 'tasks', element: <AssetsPage kind="task" /> },
       { path: 'sensors', element: <AssetsPage kind="sensor" /> },
       { path: 'schedules', element: <SchedulesPage /> },
