@@ -6,7 +6,7 @@ import { shortName } from '@/lib/graph'
 import type { RunNotice as Notice } from '@/lib/runFeedback'
 import { statusMeta } from '@/lib/status'
 import { IconButton } from './IconButton'
-import { StatusDot } from './StatusDot'
+import { StatusGlyph } from './StatusGlyph'
 
 /**
  * The run a page started, in one line: what was asked for, the run id (a link to its page),
@@ -31,7 +31,7 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
   const failed = notice.kind === 'rejected' || (notice.kind === 'finished' && notice.status === 'failed')
   return (
     <p role={failed ? 'alert' : 'status'} className="barca-note barca-run-notice">
-      <StatusDot tone={statusMeta(status).tone} live={status === 'running'} size={6} />
+      <StatusGlyph glyph={statusMeta(status).glyph} live={status === 'running'} size={12} />
       {name && <strong title={notice.target ?? undefined}>{name}</strong>}
       {'runId' in notice && (
         <>

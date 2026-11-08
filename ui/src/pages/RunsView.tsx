@@ -2,7 +2,7 @@ import { Fragment, createContext, useContext, useState, type ReactNode } from 'r
 import { pathBreaks, relativeTraceback } from '@/lib/health'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Absolute, Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Absolute, Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
 import { RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
@@ -13,8 +13,8 @@ import { plural } from '@/lib/plural'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
-import { outcomeResult, parseOutcome, runIsLive, runLabel, runTone, triggeredByLabel } from '@/lib/runs'
-import { statusTone } from '@/lib/status'
+import { outcomeResult, parseOutcome, runGlyph, runIsLive, runLabel, triggeredByLabel } from '@/lib/runs'
+import { statusGlyph } from '@/lib/status'
 import { activityBarLabel, activityTicks, canLoadMore, groupRunSteps, hourLabel, runActivity, runFailed, runFailureLine, runNodeIdle, runNodeOutcome, runNodeTime, runProgress, runRowError, runTargetLines, splitRunSteps, runViewSteps, visibleRuns, type RunActivity, type RunFilter, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunNodeGroup } from '@/lib/runsPage'
 import type { RunList, RunStep, RunView } from '@/lib/types'
@@ -74,7 +74,7 @@ function StepList({ steps, root }: { steps: readonly RunStep[]; root?: string | 
     <ul className="barca-run-steps">
       {shown.map((step, index) => <li key={`${step.node_id}:${index}`}>
         <code>{step.node_id}</code>
-        <div><StatusBadge size="sm" tone={step.status === 'cached' ? 'neutral' : runTone(step.status)} label={step.status} />
+        <div><StatusBadge size="sm" glyph={step.status === 'cached' ? 'cached' : runGlyph(step.status)} label={step.status} />
           {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}
           <StepButtons stepId={step.node_id} failed={step.status === 'failed'} step={step} /></div>
         {step.error && <Traceback error={step.error} root={root} />}
@@ -95,7 +95,7 @@ function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; 
   if (runNodeIdle(summary)) {
     return <div className="barca-run-node barca-run-node-idle" data-status={summary.status}>
       <code>{shortName(summary.node_id)}</code>
-      <StatusBadge size="sm" tone={statusTone(outcome.kind)} label={outcome.label} />
+      <StatusBadge size="sm" glyph={statusGlyph(outcome.kind)} label={outcome.label} />
       {outcome.detail && <span className="barca-run-node-detail">{outcome.detail}</span>}
     </div>
   }
@@ -104,7 +104,7 @@ function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; 
   return <details className="barca-run-node" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>
       <code>{shortName(summary.node_id)}</code>
-      <StatusBadge size="sm" tone={statusTone(outcome.kind)} label={outcome.label} />
+      <StatusBadge size="sm" glyph={statusGlyph(outcome.kind)} label={outcome.label} />
       {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
       <StepButtons stepId={summary.node_id} failed={summary.failed > 0} />
     </summary>
@@ -151,7 +151,7 @@ function RunSummary({ data, datadogUrl, onStarted, onFilter }: { data: RunView; 
   const shown = failed.slice(0, 5)
   return <div className="barca-run-summary">
     {failed.length > 0 && <>
-      <strong>{failed.length.toLocaleString()} failed step{failed.length === 1 ? '' : 's'}</strong>
+      <strong className="barca-run-summary-head"><StatusGlyph glyph="failed" />{failed.length.toLocaleString()} failed step{failed.length === 1 ? '' : 's'}</strong>
       <ul className="barca-run-summary-failed">
         {shown.map((step) => {
           const where = raisedAt(step.error_traceback ?? step.error)
@@ -182,7 +182,7 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
   return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
     <RunSummary data={data} datadogUrl={datadogUrl} onStarted={onStarted} onFilter={setLogStep} />
     <Section title="Run">
-      <StatusBadge tone={runTone(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} />
+      <StatusBadge glyph={runGlyph(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} />
       {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
       <KeyValue label="id"><code className="barca-wrap">{data.run_id}</code></KeyValue>
       <KeyValue label="command">{data.command}</KeyValue>
@@ -269,7 +269,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
       </div>
       <div className="barca-activity-summary">
         <strong>{plural(activity.total, 'run')}</strong> in the last 24 h
-        {activity.failed > 0 && <> · <span className="barca-cell-failed">{activity.failed} not successful ({Math.round((activity.failed / activity.total) * 100)}%)</span></>}
+        {activity.failed > 0 && <> · <span className="barca-activity-failed">{activity.failed} not successful ({Math.round((activity.failed / activity.total) * 100)}%)</span></>}
         {activity.medianSeconds !== null && <> · median {formatSeconds(activity.medianSeconds)}</>}
         {activity.partial && <> · of the runs loaded</>}
       </div>
@@ -347,7 +347,7 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
     <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
     <td>{run.target ? <code className="barca-run-target" title={run.target}>{run.target}</code> : <span className="barca-run-target">all assets</span>}</td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
-    <td><StatusBadge size="sm" tone={runTone(run.status)} label={runLabel(run.status)} live={runIsLive(run.status)} /></td>
+    <td><StatusBadge size="sm" glyph={runGlyph(run.status)} label={runLabel(run.status)} live={runIsLive(run.status)} /></td>
     <td><Age at={run.started_at} nowMs={now} /></td>
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
     <td className="num barca-run-steps-cell" title={progress.title}>{progress.steps}</td>

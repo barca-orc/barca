@@ -1,5 +1,6 @@
 import { match } from 'ts-pattern'
-import { statusTone } from './status'
+import { statusGlyph, statusTone } from './status'
+import type { Glyph } from './glyph'
 import { formatAbsolute, type TimeZone } from './time'
 import type { Tone } from './tone'
 import type { ErrorEnvelope, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
@@ -38,6 +39,11 @@ export function runStatus(status: string): StatusKind {
 /** The colour of a run's status. */
 export function runTone(status: string): Tone {
   return statusTone(runStatus(status))
+}
+
+/** The glyph of a run's status. */
+export function runGlyph(status: string): Glyph {
+  return statusGlyph(runStatus(status))
 }
 
 export function runLabel(status: string): string {

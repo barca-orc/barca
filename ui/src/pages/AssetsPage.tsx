@@ -1,7 +1,7 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
-import { ArrowDown, ArrowUp, Ban, CircleX, Pin, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, X } from 'lucide-react'
 import {
   Button,
   Chip,
@@ -15,7 +15,7 @@ import {
   Select,
   Skeleton,
   StatusBadge,
-  StatusDot,
+  StatusGlyph,
   TableSpacer,
   Tag,
   ViewToggle,
@@ -30,7 +30,7 @@ import { useTimeZone } from '@/context/timeZone'
 import { formatShort, type TimeZone } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
-import { BLOCKED_UPSTREAM, PINNED, PINNED_HINT, CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { BLOCKED_UPSTREAM, PINNED, PINNED_HINT, CACHE_STATES, LAST_ATTEMPT_FAILED, cacheStateGlyph, cacheStateLabel, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { blockedBy } from '@/lib/graphView'
 import { shortName } from '@/lib/graph'
 import { formatAgo } from '@/lib/time'
@@ -238,23 +238,23 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
               <Skeleton width={64} height={14} />
             )}
             {/* The state words, as `barca status` prints them; a failed last attempt is a filter of its own. */}
-            <ChipGroup label="State">
+            <ChipGroup label="State" segmented>
               {(counts.failed > 0 || (filters.failed && !onDefault)) && (
-                <Chip pressed={filters.failed} tone="failed" onClick={() => setFilters({ ...filters, failed: !filters.failed })}>
-                  <CircleX size={12} aria-hidden />
-                  {counts.failed} {LAST_ATTEMPT_FAILED}
+                <Chip pressed={filters.failed} onClick={() => setFilters({ ...filters, failed: !filters.failed })}>
+                  <StatusGlyph glyph="failed" size={12} />
+                  <b>{counts.failed}</b> {LAST_ATTEMPT_FAILED}
                 </Chip>
               )}
               {(counts.pinned > 0 || filters.pinned) && (
-                <Chip pressed={filters.pinned} tone="warning" onClick={() => setFilters({ ...filters, pinned: !filters.pinned })}>
-                  <Pin size={12} aria-hidden />
-                  {counts.pinned} {PINNED}
+                <Chip pressed={filters.pinned} onClick={() => setFilters({ ...filters, pinned: !filters.pinned })}>
+                  <StatusGlyph glyph="pinned" size={12} />
+                  <b>{counts.pinned}</b> {PINNED}
                 </Chip>
               )}
               {(counts.blocked > 0 || (filters.blocked && !onDefault)) && (
-                <Chip pressed={filters.blocked} tone="warning" onClick={() => setFilters({ ...filters, blocked: !filters.blocked })}>
-                  <Ban size={12} aria-hidden />
-                  {counts.blocked} {BLOCKED_UPSTREAM}
+                <Chip pressed={filters.blocked} onClick={() => setFilters({ ...filters, blocked: !filters.blocked })}>
+                  <StatusGlyph glyph="blocked" size={12} />
+                  <b>{counts.blocked}</b> {BLOCKED_UPSTREAM}
                 </Chip>
               )}
               {CACHE_STATES.filter((state) => counts.states[state] > 0 || (filters.states.includes(state) && !onDefault)).map((state) => (
@@ -263,8 +263,8 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   pressed={filters.states.includes(state)}
                   onClick={() => setFilters({ ...filters, states: toggle(filters.states, state) })}
                 >
-                  <StatusDot tone={cacheStateTone(state)} size={6} />
-                  {counts.states[state]} {cacheStateLabel(state)}
+                  <StatusGlyph glyph={cacheStateGlyph(state)} size={12} />
+                  <b>{counts.states[state]}</b> {cacheStateLabel(state)}
                 </Chip>
               ))}
             </ChipGroup>
@@ -327,8 +327,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
 
       {failing.length > 0 && (
         <div className="barca-attention" role="status">
-          <StatusBadge tone={FAILED_TONE} label={plural(failing.length, 'failing', 'failing')} />
-          {blocked > 0 && <span>blocks {plural(blocked, 'downstream node')}</span>}
+          <StatusGlyph glyph="failed" size={14} />
+          <strong>{plural(failing.length, 'failing', 'failing')}</strong>
+          {blocked > 0 && <span>· blocks {plural(blocked, 'downstream node')}</span>}
           {!filters.failed && (
             <button type="button" className="barca-clear" onClick={() => setFilters({ ...filters, failed: true })}>Show only failing</button>
           )}
@@ -396,13 +397,13 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                   </td>
                   <td title={r.running ? undefined : r.pinned !== null && !r.lastFailed ? PINNED_HINT : r.stateHint}>
                     {liveStatus ? (
-                      <StatusBadge tone={liveGraphState(liveStatus).tone} label={liveGraphState(liveStatus).label} live={isLive(liveGraphState(liveStatus))} />
+                      <StatusBadge glyph={liveGraphState(liveStatus).glyph} label={liveGraphState(liveStatus).label} live={isLive(liveGraphState(liveStatus))} size="sm" />
                     ) : r.running ? (
                       <RunningBadge running={r.running} nowMs={now} />
                     ) : (
                       <>
                         <div className="barca-state-line">
-                          <StatusBadge {...nodeStateDisplay(r)} size="sm" />
+                          <StatusBadge glyph={nodeStateDisplay(r).glyph} label={nodeStateDisplay(r).label} size="sm" />
                         </div>
                         {r.lastFailed && (
                           <div className="barca-cell-sub">

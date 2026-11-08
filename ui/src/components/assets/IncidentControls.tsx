@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { Absolute, Button, ConfirmDialog, ErrorLine, KeyValue, Section, Tag } from '@/components'
+import { Absolute, Button, ConfirmDialog, ErrorLine, KeyValue, Section, StatusBadge } from '@/components'
 import { usePauses, useTogglePause } from '@/hooks/usePauses'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useSchedule, useToggleSchedulePause } from '@/hooks/useSchedule'
@@ -15,9 +15,9 @@ interface Confirm {
   run: () => void
 }
 
-/** A small "paused" label for a list row. */
+/** A small "paused" state for a list row: the paused glyph and its word. */
 export function PausedTag({ id, paused }: { id: string; paused: ReadonlySet<string> }) {
-  return paused.has(id) ? <Tag size="sm" tone="warning">paused</Tag> : null
+  return paused.has(id) ? <StatusBadge glyph="paused" label="paused" size="sm" /> : null
 }
 
 export interface IncidentControlsProps {
@@ -57,7 +57,7 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
       <KeyValue label="paused">
         {pause ? (
           <span className="barca-state-line">
-            <Tag size="sm" tone="warning">paused</Tag>
+            <StatusBadge glyph="paused" label="paused" size="sm" />
             <span className="barca-cell-sub">since <Absolute at={pause.paused_at * 1000} /> via {shortName(pause.via)}</span>
           </span>
         ) : 'no'}

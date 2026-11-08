@@ -13,7 +13,7 @@ import {
   Section,
   SidePanel,
   StatusBadge,
-  StatusDot,
+  StatusGlyph,
   Tag,
   TableSpacer,
 } from '@/components'
@@ -131,7 +131,7 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
                   <HealthBar counts={counts(entry.id)} />
                 ) : (
                   <div className="barca-state-line">
-                    <StatusBadge tone={state.tone} label={state.label} live={isLive(state)} size="sm" />
+                    <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} size="sm" />
                   </div>
                 )}
               </td>
@@ -206,7 +206,7 @@ export function GroupPanel({ group, tree, byId, leaves, live, state, statesFaile
       }
     >
       <div className="barca-node-summary">
-        <StatusBadge tone={state.tone} label={state.label} live={isLive(state)} />
+        <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} />
         {state !== PENDING_GRAPH_STATE && (
           <div className="barca-panel-health">
             <HealthBar counts={healthCounts(leaves, byId, live)} labelLimit={10} width={260} />
@@ -221,7 +221,7 @@ export function GroupPanel({ group, tree, byId, leaves, live, state, statesFaile
         <Section title="Failed members">
           {failedMembers.map((node) => (
             <button type="button" className="barca-group-failure" key={node.id} onClick={() => onReveal(node.id)}>
-              <StatusDot tone="failed" size={6} />
+              <StatusGlyph glyph="failed" size={12} />
               <span>
                 {shortName(node.id)}
                 <small>{node.last_materialization?.error?.split('\n')[0]}</small>
@@ -240,7 +240,7 @@ export function GroupPanel({ group, tree, byId, leaves, live, state, statesFaile
         {output ? (
           <OutputState node={output} nowMs={nowMs} />
         ) : (
-          <StatusBadge tone="neutral" label={statesFailed ? 'State unavailable' : 'Checking…'} size="sm" />
+          <StatusBadge glyph={statesFailed ? 'unknown' : 'pending'} label={statesFailed ? 'State unavailable' : 'Checking…'} size="sm" />
         )}
       </Section>
       <Section title="Members">
@@ -263,7 +263,7 @@ function OutputState({ node, nowMs }: { node: NodeState; nowMs: number }) {
   const box = memberHealth(node)
   return (
     <div className="barca-state-line" title={box.hint}>
-      <StatusBadge tone={box.tone} label={box.label} size="sm" />
+      <StatusBadge glyph={box.glyph} label={box.label} size="sm" />
     </div>
   )
 }
@@ -294,7 +294,7 @@ export function LineagePicker({ total, nodes, failures, onPick }: {
           <h3>Or start from a failure</h3>
           <ul>
             {failures.slice(0, 6).map((f) => (
-              <li key={f.id}><button type="button" onClick={() => onPick(f.id)}><StatusDot tone="failed" size={6} /> {f.name} <span>{f.headline}</span></button></li>
+              <li key={f.id}><button type="button" onClick={() => onPick(f.id)}><StatusGlyph glyph="failed" size={12} /> {f.name} <span>{f.headline}</span></button></li>
             ))}
           </ul>
         </>

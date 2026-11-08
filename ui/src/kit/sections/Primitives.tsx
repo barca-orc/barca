@@ -18,11 +18,12 @@ import {
   SidePanel,
   Skeleton,
   StatusBadge,
-  StatusDot,
+  StatusGlyph,
   Tag,
 } from '@/components'
 import { NOW_MS, STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
-import { CACHE_STATES, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { CACHE_STATES, cacheStateGlyph, cacheStateLabel, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { GLYPHS } from '@/lib/glyph'
 import { statusMeta } from '@/lib/status'
 import { Spec, Variant } from '../Kit'
 import { SidebarView } from '@/layouts/Sidebar'
@@ -39,9 +40,9 @@ export function Primitives() {
   { file: 'catalog.py', name: 'catalog.py', total: 561, worst: 'unknown', failed: 0, known: false, running: 0 },
 ]
 const KIT_GROUPS: SidebarGroup[] = [
-  { id: 'group:billing.py:raw', name: 'Raw', depth: 0, tone: 'failed' },
-  { id: 'group:billing.py:raw:invoices', name: 'Invoices', depth: 1, tone: 'success' },
-  { id: 'group:billing.py:marts', name: 'Marts', depth: 0, tone: null },
+  { id: 'group:billing.py:raw', name: 'Raw', depth: 0, tone: 'failed', glyph: 'failed' },
+  { id: 'group:billing.py:raw:invoices', name: 'Invoices', depth: 1, tone: 'success', glyph: 'fresh' },
+  { id: 'group:billing.py:marts', name: 'Marts', depth: 0, tone: null, glyph: null },
 ]
 
 const [query, setQuery] = useState('')
@@ -93,22 +94,41 @@ const [query, setQuery] = useState('')
       <Tag size="md">medium</Tag>
     </Spec>
 
-    <Spec title="StatusDot / StatusBadge" note="One state per node in plain words (failing, then pinned, then blocked by a failure upstream, outrank the cache state), each with a shape beside its colour; then the run lifecycle's statuses.">
+    <Spec title="StatusGlyph" note="The one way a state is drawn: a 14px shape in the state's hue, each state its own shape and hue, in both themes. Nothing around a glyph is coloured.">
+      {(['dark', 'light'] as const).map((theme) => (
+        <div key={theme} className="barca-kit-theme" data-theme={theme}>
+          <span className="barca-kit-theme-name">{theme}</span>
+          <div className="barca-kit-glyphs">
+            {GLYPHS.map((g) => (
+              <span key={g} className="barca-kit-glyph"><StatusGlyph glyph={g} label={g} />{g}</span>
+            ))}
+            <span className="barca-kit-glyph"><StatusGlyph glyph="running" live label="running, live" />running · live</span>
+          </div>
+          <div className="barca-kit-glyphs">
+            <StatusBadge {...nodeStateDisplay({ state: 'stale', lastFailed: true })} />
+            <StatusBadge glyph="running" label="running · 3/10 keys" live />
+            <StatusBadge {...nodeStateDisplay({ state: 'never_run', lastFailed: false, blockedBy: 'p:broken_report' })} />
+            <StatusBadge {...nodeStateDisplay({ state: 'cached', lastFailed: false })} />
+            <StatusBadge glyph="paused" label="paused" size="sm" />
+          </div>
+        </div>
+      ))}
+    </Spec>
+
+    <Spec title="StatusBadge" note="A glyph and its word in the text colour: one state per node in plain words (failing, then pinned, then blocked by a failure upstream, outrank the cache state); then the run lifecycle's statuses.">
       <StatusBadge {...nodeStateDisplay({ state: 'stale', lastFailed: true })} />
       <StatusBadge {...nodeStateDisplay({ state: 'stale', lastFailed: false, pinned: 'override from fix.json' })} />
       <StatusBadge {...nodeStateDisplay({ state: 'never_run', lastFailed: false, blockedBy: 'p:broken_report' })} />
       {CACHE_STATES.map((s) => (
-        <StatusBadge key={s} tone={cacheStateTone(s)} label={cacheStateLabel(s)} />
+        <StatusBadge key={s} glyph={cacheStateGlyph(s)} label={cacheStateLabel(s)} />
       ))}
-      <StatusBadge tone="neutral" label="paused" icon="paused" />
+      <StatusBadge glyph="paused" label="paused" />
       {STATUS_KINDS.map((s) => (
-        <StatusBadge key={s} tone={statusMeta(s).tone} label={statusMeta(s).label} live={statusMeta(s).live} />
+        <StatusBadge key={s} glyph={statusMeta(s).glyph} label={statusMeta(s).label} live={statusMeta(s).live} />
       ))}
       {STATUS_KINDS.map((s) => (
-        <StatusDot key={s} tone={statusMeta(s).tone} live={statusMeta(s).live} label={statusMeta(s).label} size={8} />
+        <StatusBadge key={s} glyph={statusMeta(s).glyph} label={statusMeta(s).label} live={statusMeta(s).live} size="sm" />
       ))}
-      <StatusBadge tone="failed" label="failed" subtle />
-      <StatusBadge tone="success" label="fresh" subtle={false} />
     </Spec>
 
     <Spec title="CommandPaletteView" note="⌘K: results, and nothing found.">
@@ -219,7 +239,7 @@ const [query, setQuery] = useState('')
           }
         >
           <Section title="State">
-            <StatusBadge tone="success" label="cached" />
+            <StatusBadge glyph="fresh" label="fresh" />
             <p className="barca-note">cached result for this code and these inputs</p>
             <KeyValue label="cache key">
               <code>9f2c0a41be77</code>

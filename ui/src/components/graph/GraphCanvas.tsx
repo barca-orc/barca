@@ -23,7 +23,7 @@ import { isFailed } from '@/lib/health'
 import { edgeClassName, type LayoutDir, type GraphEdgeData, type GraphNode, type GraphEntry } from '@/lib/graph'
 import { domainFile } from '@/lib/domainMap'
 import { useGraphLayout } from '@/hooks/useGraphLayout'
-import { toneMeta } from '@/lib/tone'
+import { glyphColor, toneGlyph } from '@/lib/glyph'
 
 // Defined once, outside the component — a fresh object each render is a perf bug.
 const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: PortNode }
@@ -163,6 +163,7 @@ export function GraphCanvas({
         data: {
           ...n.data,
           tone: pin !== undefined || wait ? 'warning' : state.tone,
+          glyph: pin !== undefined ? 'pinned' : wait ? 'blocked' : state.glyph,
           label: pin !== undefined ? PINNED : wait ? BLOCKED_UPSTREAM : state.label,
           blockedBy: pin === undefined && wait ? names.get(wait.by) ?? wait.by : undefined,
           pinned: pin,
@@ -174,6 +175,7 @@ export function GraphCanvas({
   }, [base.nodes, base.edges, selected, states, pins])
 
   const nodeTones = useMemo(() => new Map(nodes.map(n => [n.id, n.data.tone])), [nodes])
+  const nodeGlyphs = useMemo(() => new Map(nodes.map(n => [n.id, n.data.glyph ?? toneGlyph(n.data.tone)])), [nodes])
   const edges = useMemo(
     () =>
       base.edges.map((e) => {
@@ -252,7 +254,7 @@ export function GraphCanvas({
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-grid)" />
         <Controls showInteractive={false} />
-        {minimap && <MiniMap nodeColor={n => toneMeta(nodeTones.get(n.id) ?? 'neutral').color} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
+        {minimap && <MiniMap nodeColor={n => glyphColor(nodeGlyphs.get(n.id) ?? 'pending')} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
         <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={handleRef} />
       </ReactFlow>
     </ReactFlowProvider>

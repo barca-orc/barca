@@ -58,6 +58,44 @@ describe('design tokens', () => {
     expect(tokens).toMatch(/--text-faint:\s*var\(--c-ink-150\)/)
   })
 
+  // Every text colour and every state hue (a glyph, and the short word it may colour) reads at
+  // WCAG AA for small text, 4.5:1, on every background of its theme.
+  it('keeps text and state hues at 4.5:1 on every background, in both themes', () => {
+    const luminance = (color: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16) / 255)
+        .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)) as [number, number, number]
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const contrast = (a: string, b: string) => {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]
+      return (hi + 0.05) / (lo + 0.05)
+    }
+    const dark = readFileSync(join(SRC, 'styles', 'tokens', 'colors.css'), 'utf8')
+    const light = readFileSync(join(SRC, 'styles', 'tokens', 'theme-light.css'), 'utf8')
+    // A token's hex value in a theme, following `var(--x)` references (the light theme falls
+    // back to the dark file for a base value it does not redefine).
+    const resolve = (sources: string[], name: string): string => {
+      for (const css of sources) {
+        const value = css.match(new RegExp(`--${name}:\\s*([^;]+);`))?.[1]?.trim()
+        if (!value) continue
+        const ref = value.match(/^var\(--([a-z0-9-]+)\)$/)
+        return ref ? resolve(sources, ref[1]!) : value
+      }
+      throw new Error(`--${name} is not defined`)
+    }
+    const fg = ['text-strong', 'text-default', 'text-muted', 'text-faint', 'state-failed', 'state-running', 'state-fresh', 'state-stale', 'state-blocked', 'state-partial', 'state-unsynced', 'state-pinned', 'state-idle']
+    const themes = { dark: { sources: [dark], bg: ['bg-canvas', 'bg-surface', 'bg-raised', 'bg-overlay', 'bg-inset'] }, light: { sources: [light, dark], bg: ['bg-canvas', 'bg-surface', 'bg-raised', 'bg-overlay', 'bg-inset'] } }
+    for (const [theme, { sources, bg }] of Object.entries(themes)) {
+      for (const f of fg) {
+        for (const b of bg) {
+          const [fc, bc] = [resolve(sources, f), resolve(sources, b)]
+          expect(fc, `${theme} --${f}`).toMatch(/^#[0-9A-Fa-f]{6}$/)
+          expect(contrast(fc, bc), `${theme} --${f} on --${b}`).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+    }
+  })
+
   it('sets font sizes from the type scale', () => {
     const hits: string[] = []
     for (const path of css) {
