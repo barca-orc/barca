@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test'
 
 test('arrow keys move the selection and detail panel without wrapping', async ({ page }) => {
   await page.goto('/ui/#/assets')
-  const rows = page.locator('.barca-table tbody tr')
+  // A file's header is not a row of the selection: the arrow keys step over it.
+  const rows = page.locator('.barca-table tbody tr:not(.barca-file-head)')
   await expect(rows).toHaveCount(3)
   await rows.first().click()
   await expect(rows.first()).toHaveAttribute('aria-selected', 'true')
@@ -27,8 +28,8 @@ test('arrow keys move the selection and detail panel without wrapping', async ({
 
 test('navigation follows filtered sort order and leaves form controls alone', async ({ page }) => {
   await page.goto('/ui/#/assets')
-  const rows = page.locator('.barca-table tbody tr')
-  const search = page.getByPlaceholder('Search by name or file')
+  const rows = page.locator('.barca-table tbody tr:not(.barca-file-head)')
+  const search = page.getByLabel('Search by name or file')
   await search.fill('history')
   await expect(rows).toHaveCount(2)
   await page.getByRole('button', { name: 'Name', exact: true }).click()

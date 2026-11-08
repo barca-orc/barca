@@ -4,6 +4,8 @@ export interface SearchInputProps {
   value: string
   onChange: (value: string) => void
   placeholder?: string
+  /** Its name, when the placeholder is a short form of it (a toolbar's narrow search). */
+  label?: string
   autoFocus?: boolean
 }
 
@@ -11,13 +13,14 @@ export interface SearchInputProps {
  * barca · SearchInput
  * A filter box for a list or table: search icon, mono text, one focus ring on the box.
  */
-export function SearchInput({ value, onChange, placeholder = 'Search', autoFocus }: SearchInputProps) {
+export function SearchInput({ value, onChange, placeholder = 'Search', label, autoFocus }: SearchInputProps) {
   return (
     <label className="barca-search">
       <Search size={13} />
       <input
         placeholder={placeholder}
-        aria-label={placeholder}
+        aria-label={label ?? placeholder}
+        title={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         autoFocus={autoFocus}

@@ -1,5 +1,6 @@
+import type { ReactNode } from "react";
 import { match } from "ts-pattern";
-import { Absolute, Button, StatusBadge, Tag } from "@/components";
+import { Button, StatusBadge, Tag } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
 import { nodeStateDisplay } from "@/lib/cacheStateDisplay";
 import { inPipeline } from "@/lib/pipeline";
@@ -31,13 +32,15 @@ export interface SchedulesViewProps {
   onOpen: (id: string) => void;
   onToggle: (id: string, pause: boolean) => void;
   onRetry: () => void;
+  /** At the end of the toolbar: the page's Run (`PageRunButton`). */
+  actions?: ReactNode;
 }
 
 /**
  * Every node with a cron schedule: when it runs (in words and as cron), when
  * it next fires, and how its last run went. Soonest first.
  */
-export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, jobs, health, offline, toggle, onOpen, onToggle, onRetry }: SchedulesViewProps) {
+export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, jobs, health, offline, toggle, onOpen, onToggle, onRetry, actions }: SchedulesViewProps) {
   const rows =
     assets.kind === "ready" && states
       ? scheduleRows(assets.data.filter((a) => inPipeline(a.id, pipeline)), states, dataUpdatedAt, jobs ?? [])
@@ -52,11 +55,12 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
         <div className="barca-view-bar">
           <div className="barca-view-title">
             <h1>{title}</h1>
-            {current && rows && <span className="barca-count">{rows.length} scheduled</span>}
+            {current && rows && <span className="barca-count">{rows.length.toLocaleString()}<span className="barca-sr-only"> scheduled</span></span>}
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
             {current && health && <span className="barca-count">{health.scheduler ? "scheduler running" : "scheduler not running on this server"}</span>}
+            {actions}
           </div>
         </div>
         {health && !health.scheduler && rows && rows.length > 0 && (
@@ -110,8 +114,18 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
 
 function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<SchedulesViewProps, "toggle" | "onOpen" | "onToggle"> & { rows: ScheduleRow[]; canPause: boolean }) {
   const { zone } = useTimeZone();
+  // One line a row: the schedule in words with its cron after it, the next run as "in 5m" with
+  // the absolute time on hover, the name with its id on hover.
   return (
-    <table className="barca-table">
+    <table className="barca-table barca-schedule-table">
+      <colgroup>
+        <col />
+        <col className="col-schedule" />
+        <col className="col-when" />
+        <col className="col-when" />
+        <col className="col-state" />
+        {canPause && <col className="col-action" />}
+      </colgroup>
       <thead>
         <tr>
           <th>Name</th>
@@ -130,42 +144,30 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
             onClick={() => onOpen(r.id)}
             onKeyDown={(e) => e.key === "Enter" && onOpen(r.id)}
           >
-            <td>
+            <td title={r.id}>
               <div className="barca-cell-name">
-                <span className="name">{r.name}</span>
-                {r.kind !== "asset" && <Tag size="sm">{nodeKindLabel(r)}</Tag>}
+                <span className="name barca-cell-cut">{r.name}</span>
+                {r.kind !== "asset" && <Tag size="sm" tone="bare">{nodeKindLabel(r)}</Tag>}
               </div>
-              <div className="barca-cell-sub">{r.file}</div>
             </td>
-            <td>
-              <div>{r.human ?? r.cron}</div>
-              {r.human && <div className="barca-cell-sub">{r.cron}</div>}
+            <td title={r.cron}>
+              {r.human ?? <code>{r.cron}</code>}
+              {r.human && <code className="barca-schedule-cron">{r.cron}</code>}
             </td>
             <td>
               {r.nextRunMs !== null ? (
-                <>
-                  <div>{r.nextIn}</div>
-                  <div className="barca-cell-sub">
-                    <Absolute at={r.nextRunMs} />
-                  </div>
-                </>
+                <time dateTime={new Date(r.nextRunMs).toISOString()} title={formatInstant(r.nextRunMs, zone)}>{r.nextIn}</time>
               ) : (
                 "–"
               )}
             </td>
             <td>
               {r.last ? (
-                <span
-                  className={
-                    r.last.status === "failed"
-                      ? "barca-cell-failed"
-                      : undefined
-                  }
-                >
-                  {r.last.status} · {r.last.ago}
+                <span className={r.last.status === "failed" ? "barca-cell-failed" : undefined}>
+                  {r.last.status === "success" ? r.last.ago : `${r.last.status} ${r.last.ago}`}
                 </span>
               ) : (
-                <span className="barca-cell-sub">never</span>
+                "never"
               )}
             </td>
             <td>
@@ -188,7 +190,7 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
               )}
             </td>
             {canPause && (
-              <td>
+              <td className="barca-row-action">
                 <Button
                   size="sm"
                   variant="ghost"

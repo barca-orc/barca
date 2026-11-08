@@ -32,6 +32,11 @@ describe('runButton', () => {
   it('asks first only for the whole project', () => {
     expect(runButton({ kind: 'all', assets: 8070, sensors: 0 })).toMatchObject({ label: 'Run all 8,070 assets', confirm: { action: 'Run all 8,070 assets' } })
     expect(runButton({ kind: 'pipeline', file: 'a.py', assets: 2, sensors: 0 }).confirm).toBeNull()
-    expect(runButton({ kind: 'none', hint: 'h' })).toEqual({ label: 'Run', title: 'h', confirm: null })
+    expect(runButton({ kind: 'none', hint: 'h' })).toEqual({ label: 'Run', short: 'Run', title: 'h', confirm: null })
+  })
+  it('has a short form without the size, for a narrow toolbar', () => {
+    expect(runButton({ kind: 'all', assets: 9, sensors: 0 }).short).toBe('Run all')
+    expect(runButton({ kind: 'pipeline', file: 'x/billing.py', assets: 505, sensors: 1 }).short).toBe('Run billing.py')
+    expect(runButton({ kind: 'node', name: 'a' }).short).toBe('Run a')
   })
 })

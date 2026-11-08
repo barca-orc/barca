@@ -21,9 +21,8 @@ const outsideTokens = (path: string) => !relative(SRC, path).startsWith(join('st
 const css = files(SRC, /\.css$/).filter(outsideTokens)
 const code = files(SRC, /\.tsx?$/).filter((p) => !/generated|\.test\./.test(p))
 
-// Sizes that sit between steps of the type scale. Before adding a size, add a token (or use
-// the nearest step); do not extend this list.
-const OFF_SCALE_FONT_SIZES = new Set(['9px', '12.5px', '15px', '18px', '22px'])
+// The type scale is four sizes; every other size is one of their tokens.
+const TYPE_SCALE = new Set(['12px', '13px', '15px', '20px'])
 
 describe('design tokens', () => {
   it('has no raw color values outside styles/tokens/', () => {
@@ -99,11 +98,28 @@ describe('design tokens', () => {
   it('sets font sizes from the type scale', () => {
     const hits: string[] = []
     for (const path of css) {
-      for (const [, size] of readFileSync(path, 'utf8').matchAll(/font-size:\s*([\d.]+px)/g)) {
-        if (!OFF_SCALE_FONT_SIZES.has(size!)) hits.push(`${relative(SRC, path)}: ${size}`)
-      }
+      for (const [, size] of readFileSync(path, 'utf8').matchAll(/font-size:\s*([\d.]+px)/g)) hits.push(`${relative(SRC, path)}: ${size}`)
     }
     expect(hits, 'use var(--text-*) instead of a raw size').toEqual([])
+  })
+
+  it('has four type sizes: 12, 13, 15 and 20px', () => {
+    const tokens = readFileSync(join(SRC, 'styles', 'tokens', 'typography.css'), 'utf8')
+    const sizes = [...tokens.matchAll(/--text-[a-z0-9]+:\s*([\d.]+px)/g)].map((m) => m[1]!)
+    expect(sizes.length).toBeGreaterThan(0)
+    expect(sizes.filter((s) => !TYPE_SCALE.has(s))).toEqual([])
+  })
+
+  // Labels and headers are sentence case: capitals and tracking read as shouting in a dense table.
+  // The graph's node boxes are redrawn separately and keep their kind label for now.
+  it('sets no capitals or tracked-out labels', () => {
+    const hits: string[] = []
+    for (const path of css) {
+      for (const [, selector] of readFileSync(path, 'utf8').matchAll(/([^{}]+)\{[^}]*text-transform:\s*uppercase/g)) {
+        if (!selector!.trim().startsWith('.barca-dag-')) hits.push(`${relative(SRC, path)}: ${selector!.trim()}`)
+      }
+    }
+    expect(hits).toEqual([])
   })
 
   it('has no inline pixel font sizes in components', () => {

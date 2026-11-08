@@ -219,3 +219,83 @@ export function formatSeconds(s: number): string {
   if (s < 3600) return `${(s / 60).toFixed(1)}m`
   return `${(s / 3600).toFixed(1)}h`
 }
+
+// ── One line a row ────────────────────────────────────────────────────────────
+
+/**
+ * The Last run cell: one short line, no glyph (the state column has it), the time and, after a
+ * failed attempt, when it last went well. `17m ago`, `failed 17m ago · last ok 2d ago`,
+ * `failed 17m ago · never succeeded`, `not run`.
+ */
+export function lastRunText(row: Pick<AssetRow, 'last' | 'lastFailed' | 'lastSuccessAt'>, nowMs: number): string {
+  if (!row.last) return 'not run'
+  if (row.lastFailed || row.last.status === 'failed') {
+    return `failed ${row.last.ago} · ${row.lastSuccessAt ? `last ok ${formatAgo(row.lastSuccessAt, nowMs)}` : 'never succeeded'}`
+  }
+  return row.last.status === 'success' ? row.last.ago : `${row.last.status} ${row.last.ago}`
+}
+
+/** The Last run cell's tooltip: the rest of the story while it fails, how long and how often. */
+export function lastRunTitle(row: Pick<AssetRow, 'last' | 'lastFailed' | 'lastSuccessAt' | 'failingSince' | 'failures'>, nowMs: number): string {
+  const line = lastRunText(row, nowMs)
+  if (!row.failingSince) return line
+  return `${line} · failing since ${formatAgo(row.failingSince, nowMs)} · ${row.failures} ${row.failures === 1 ? 'run' : 'runs'}`
+}
+
+/** Below this a typical duration says nothing a reader can use, and reads as a dash. */
+const TYPICAL_MIN_SECONDS = 0.1
+
+/** The Typical cell: the median, or a dash when there is none or it is under 0.1s. */
+export function typicalText(row: Pick<AssetRow, 'typical' | 'typicalSeconds'>): string {
+  return row.typical !== null && row.typicalSeconds !== null && row.typicalSeconds >= TYPICAL_MIN_SECONDS ? row.typical : '–'
+}
+
+/**
+ * The optional columns, shown only when a row has something to say in them: Typical when some
+ * node takes 0.1s or more, Next run when some node has a schedule. Judged over the page's rows,
+ * not the filtered ones, so a filter never moves the columns.
+ */
+export function assetColumns(rows: readonly Pick<AssetRow, 'typicalSeconds' | 'nextRunMs'>[]): { typical: boolean; next: boolean } {
+  return {
+    typical: rows.some((r) => r.typicalSeconds !== null && r.typicalSeconds >= TYPICAL_MIN_SECONDS),
+    next: rows.some((r) => r.nextRunMs !== null),
+  }
+}
+
+/** A source file's rows, in the table's order, and the row that most needs attention. */
+export interface FileGroup {
+  file: string
+  rows: AssetRow[]
+  worst: AssetRow
+}
+
+/** The rows by file, each file where its first row falls in the sorted table. */
+export function groupByFile(rows: readonly AssetRow[]): FileGroup[] {
+  const groups = new Map<string, AssetRow[]>()
+  for (const r of rows) {
+    const list = groups.get(r.file)
+    if (list) list.push(r)
+    else groups.set(r.file, [r])
+  }
+  return [...groups].map(([file, list]) => ({
+    file,
+    rows: list,
+    worst: list.reduce((a, b) => (compareAttention(b, a) < 0 ? b : a)),
+  }))
+}
+
+/** One line of the table: a file's header, or a node's row. */
+export type TableLine =
+  | { kind: 'file'; group: FileGroup; collapsed: boolean }
+  | { kind: 'row'; row: AssetRow }
+
+/**
+ * The table's lines: grouped, a header per file and its rows unless it is folded; else the rows.
+ */
+export function tableLines(rows: readonly AssetRow[], grouped: boolean, collapsed: ReadonlySet<string>): TableLine[] {
+  if (!grouped) return rows.map((row) => ({ kind: 'row', row }))
+  return groupByFile(rows).flatMap((group): TableLine[] => {
+    const folded = collapsed.has(group.file)
+    return [{ kind: 'file', group, collapsed: folded }, ...(folded ? [] : group.rows.map((row): TableLine => ({ kind: 'row', row })))]
+  })
+}

@@ -1,5 +1,7 @@
 /**
- * What the topbar's Run button acts on, and how it says so: pure, so each case is a test.
+ * What a Run button acts on, and how it says so: pure, so each case is a test. A page's toolbar
+ * runs what is open (the pipeline or the whole project); the node panel runs its node; the
+ * command palette (⌘K) offers the selected node, else what is open.
  *
  * A selected node is run by itself. With nothing selected, Assets runs what is open: a pipeline
  * (`get` of its file) or the whole project (`get` with no target, after a confirmation). Both
@@ -40,7 +42,10 @@ export function runTarget({ node, group, pipeline }: RunScope, assets: readonly 
 }
 
 export interface RunButton {
+  /** Everything it says: what it runs and how much (`Run all 9 assets`); the accessible name. */
   label: string
+  /** The words without the size (`Run all`): a toolbar button's text, its size in the label. */
+  short: string
   title: string
   /** Asked before the run starts; null runs at once. */
   confirm: { title: string; body: string; action: string } | null
@@ -54,19 +59,21 @@ const WHAT_RUNS = 'Assets and sensors whose cached result is current are skipped
 
 export function runButton(target: RunTarget): RunButton {
   return match(target)
-    .with({ kind: 'node' }, ({ name }) => ({ label: `Run ${name}`, title: `Run ${name}`, confirm: null }))
+    .with({ kind: 'node' }, ({ name }) => ({ label: `Run ${name}`, short: `Run ${name}`, title: `Run ${name}`, confirm: null }))
     .with({ kind: 'pipeline' }, ({ file, assets, sensors }) => {
-      const label = `Run ${pipelineName(file)} (${size(assets, sensors)})`
-      return { label, title: `${label}. ${WHAT_RUNS}`, confirm: null }
+      const short = `Run ${pipelineName(file)}`
+      const label = `${short} (${size(assets, sensors)})`
+      return { label, short, title: `${label}. ${WHAT_RUNS}`, confirm: null }
     })
     .with({ kind: 'all' }, ({ assets, sensors }) => {
       const label = `Run all ${size(assets, sensors)}`
       return {
         label,
+        short: 'Run all',
         title: `${label}. ${WHAT_RUNS}`,
         confirm: { title: `${label}?`, body: `This starts one run over every pipeline. ${WHAT_RUNS}`, action: label },
       }
     })
-    .with({ kind: 'none' }, ({ hint }) => ({ label: 'Run', title: hint, confirm: null }))
+    .with({ kind: 'none' }, ({ hint }) => ({ label: 'Run', short: 'Run', title: hint, confirm: null }))
     .exhaustive()
 }

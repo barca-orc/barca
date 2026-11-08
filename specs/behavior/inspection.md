@@ -114,9 +114,9 @@ upstream cone, while All pipelines and the sidebar's health dots ask for everyth
 dot appears only when all of its file's state is known. Evidence:
 [`state-loading.spec.ts`](../../ui/e2e/state-loading.spec.ts).
 
-The grouped list and graph expose one shared run action for the selected member in the
-topbar and node panel. Assets and sensors use cache-aware `get`; tasks use `run`. Read-only
-mode disables both controls. An accepted target and its containing groups show live activity
+The grouped list and graph expose one run action for the selected member, in its node panel
+(the command palette offers the same action; the top bar has no Run). Assets and sensors use
+cache-aware `get`; tasks use `run`. Read-only mode disables it. An accepted target and its containing groups show live activity
 before the first SSE event; completed runs refresh status/history, and View run opens the
 durable run. Ungrouped node panels use the same action. Evidence:
 [`e2e-groups/groups.spec.ts`](../../ui/e2e-groups/groups.spec.ts), against a project declared in groups, including real run admission,

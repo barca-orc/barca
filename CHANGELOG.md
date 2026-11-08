@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- **Web UI: calmer, less crowded layout.** Four type sizes (12/13/15/20px, 13 body) with weight for hierarchy and sentence-case column headers. Each page has one toolbar row (title and count, the state filter, search, the last-run filter, the List/Graph switch and Run); the "1 failing · blocks N downstream" banner is gone (the failing filter's tooltip says what it blocks). Asset, task and sensor rows are one 36px line under a foldable header per source file (its count and worst state); the path under each name is gone (the id is in the tooltip), Last run and Last success are one cell (`17m ago`, `failed 17m ago · last ok 2d ago`), Next run shows only when a node has a schedule and Typical only when a node takes 0.1s or more. The top bar no longer has a Run button: the page toolbar runs what is open (`Run all`, `Run billing.py`, the count in its tooltip), the node panel or graph inspector runs its node, and Ctrl/Cmd-K offers both. The side panel is 400px with plain sections instead of cards, a one-line title and id with the copy button inline, and a failure's error shown once (the asset panel's Last attempt and History, and the run panel's Run and Steps sections, no longer repeat it). Runs, Tasks, Sensors and Schedules follow the same rules.
+
 ## 0.41.0 (2026-11-08)
 
 ### Breaking

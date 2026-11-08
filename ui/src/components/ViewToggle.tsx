@@ -15,10 +15,11 @@ export function ViewToggle() {
     else next.delete('view')
     setParams(next, { replace: true })
   }
+  // Two icons, each named (for a screen reader and the tooltip): the toolbar stays one line.
   return (
     <div className="barca-view-toggle" role="group" aria-label="Asset view">
-      <button type="button" aria-pressed={!graph} onClick={() => setView('list')}><List size={14} />List</button>
-      <button type="button" aria-pressed={graph} onClick={() => setView('graph')}><GitBranch size={14} />Graph</button>
+      <button type="button" aria-pressed={!graph} title="List" onClick={() => setView('list')}><List size={14} /><span className="barca-sr-only">List</span></button>
+      <button type="button" aria-pressed={graph} title="Graph" onClick={() => setView('graph')}><GitBranch size={14} /><span className="barca-sr-only">Graph</span></button>
     </div>
   )
 }

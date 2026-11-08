@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useSearchParams } from 'react-router'
-import { Sun, Moon, Play, Search } from 'lucide-react'
+import { Sun, Moon, Search } from 'lucide-react'
 import { Button, ConfirmDialog, ConnectionBadge, IconButton, RunsInProgress } from '@/components'
 import { useTheme } from '@/context/theme'
 import { useTimeZone } from '@/context/timeZone'
@@ -13,7 +13,10 @@ import type { TopbarRun } from './shellContext'
 import { NAV_ITEMS } from './nav'
 
 interface TopbarProps {
-  /** The current page's Run action; omitted when the page has nothing to run. */
+  /**
+   * The current page's Run action, for the command palette (⌘K). The bar has no Run button of
+   * its own: a page's toolbar runs what is open, its node panel runs its node.
+   */
   run?: TopbarRun | null
 }
 
@@ -69,19 +72,6 @@ export function Topbar({ run }: TopbarProps) {
         >
           {theme === 'light' ? <Moon size={15} /> : <Sun size={15} />}
         </IconButton>
-        {run && (
-          <Button
-            variant="signal"
-            size="sm"
-            iconLeft={<Play size={12} />}
-            loading={run.loading}
-            disabled={run.disabled}
-            title={run.title}
-            onClick={startRun}
-          >
-            <span className="barca-top-run">{run.label}</span>
-          </Button>
-        )}
         {palette && <CommandPalette run={run} onRun={startRun} onClose={() => setPalette(false)} />}
         {run?.confirm && confirming && (
           <ConfirmDialog

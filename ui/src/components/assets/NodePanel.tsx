@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { GitBranch, Play, X } from 'lucide-react'
@@ -50,12 +50,6 @@ interface NodePanelProps {
  * attempt, run history, lineage and declared metadata. All from existing
  * endpoints — `/state` (passed in) and `/assets/{id}` (fetched here).
  */
-/** `a__b__c` with a line-break opportunity after each `__`, so a long name wraps at its parts. */
-function Breakable({ name }: { name: string }) {
-  const parts = name.split('__')
-  return <>{parts.map((part, i) => <Fragment key={i}>{part}{i < parts.length - 1 && <>__<wbr /></>}</Fragment>)}</>
-}
-
 export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
   const { zone } = useTimeZone()
   const { data: detail, isLoading, isError } = useAssetDetail(node.id)
@@ -104,6 +98,10 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const roots = editorRoots(typeof localStorage === 'undefined' ? null : localStorage.getItem(EDITOR_ROOTS_KEY))
   const editor = definition?.file && definition.line && editorOpens(root, roots) ? editorLink(root, definition.file, definition.line) : null
   const artifact = node.cache.artifact ?? last?.artifact ?? null
+  // A failure's summary (`.barca-why`) says the last attempt: its error, when, how often. Last
+  // attempt then shows only what the summary does not, and is left out when that is nothing.
+  const summarized = failed && last !== undefined && last !== null && failedKeys === 0
+  const lastMore = !!last && (lastElapsed !== null || !!last.partition || !!last.format || !!artifact)
   // How fast the last run that recorded time went, per batched call (`steps_page.nodes` of the run).
   const pacedRun = node.partitioned ? stats?.recent_runs.find((r) => r.elapsed_seconds !== null)?.run_id ?? null : null
   const paced = useRunDetail(pacedRun)
@@ -121,9 +119,12 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   return (
     <SidePanel
       label={`${node.name} details`}
-      title={<Breakable name={node.name} />}
-      badge={<Tag size="sm">{nodeKindLabel(node)}</Tag>}
-      subtitle={<span className="barca-wrap">{node.id}</span>}
+      title={node.name}
+      titleText={node.name}
+      badge={node.kind !== 'asset' ? <Tag size="sm">{nodeKindLabel(node)}</Tag> : undefined}
+      subtitle={node.id}
+      subtitleText={node.id}
+      subtitleAction={<CopyButton label="Copy id" text={node.id} />}
       actions={
         <>
           <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
@@ -243,16 +244,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         </KeyValue>
       </div>
 
-      <Section title="Last attempt">
+      {(!summarized || lastMore) && <Section title="Last attempt">
         {last ? (
           <>
-            <p className="barca-stat-row">
+            {!summarized && <p className="barca-stat-row">
               <StatusBadge glyph={runGlyph((lastRun ?? last).status)} label={(lastRun ?? last).status} />
               {' · '}<Age at={(lastRun ?? last).created_at} nowMs={nowMs} />
-              {' · '}{lastElapsed !== null ? formatSeconds(lastElapsed) : '–'}
+              {lastElapsed !== null && <>{' · '}{formatSeconds(lastElapsed)}</>}
               {lastRun?.keys != null && <> · {plural(lastRun.keys, 'key')}{lastRun.failed_keys ? `, ${lastRun.failed_keys.toLocaleString()} failed` : ''}</>}
               {stats && <> · {stats.total_runs.toLocaleString()} {stats.total_runs === 1 ? 'run' : 'runs'}</>}
-            </p>
+            </p>}
             {lastElapsed !== null && (
               <div
                 className="barca-hist"
@@ -291,7 +292,10 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             )}
             {artifact && (
               <KeyValue label="path">
-                <code className="barca-wrap">{artifact}</code> <CopyButton label="Copy artifact path" text={artifact} />
+                <span className="barca-source-path">
+                  <code title={artifact}>{artifact}</code>
+                  <CopyButton label="Copy artifact path" text={artifact} />
+                </span>
               </KeyValue>
             )}
             {last.error && !failed && <pre className="barca-error">{last.error}</pre>}
@@ -299,7 +303,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         ) : (
           <p className="barca-note">Not run yet.</p>
         )}
-      </Section>
+      </Section>}
 
       <Section title="History">
         {isLoading && (
@@ -317,7 +321,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             No successful run yet: {stats.total_runs === 1 ? 'its only attempt' : `all ${stats.total_runs.toLocaleString()} attempts`} failed, so there are no durations to show.
           </p>
         )}
-        {stats && failuresOnly && <RunList runs={stats.recent_runs} nowMs={nowMs} />}
+        {stats && failuresOnly && <RunList runs={stats.recent_runs} nowMs={nowMs} said={summarized ? last?.error : null} />}
         {stats && stats.total_runs > 0 && !failuresOnly && (
           <>
             <div className="barca-stats">
@@ -366,7 +370,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                 />
               ))}
             </div>
-            <RunList runs={stats.recent_runs} nowMs={nowMs} />
+            <RunList runs={stats.recent_runs} nowMs={nowMs} said={summarized ? last?.error : null} />
           </>
         )}
       </Section>
@@ -386,7 +390,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           {schema.isFetching ? 'Inspecting…' : 'Refresh schema'}
         </Button>
         <div className="barca-schema-content">
-          {schema.isLoading ? <Skeleton height={360} /> : schema.isError ? (
+          {schema.isLoading ? <Skeleton height={120} /> : schema.isError ? (
             <div className="barca-schema-empty">
               <p>Couldn't load schemas: {schema.error.message}</p>
               <Button size="sm" variant="ghost" onClick={() => void schema.refetch()}>Retry</Button>
@@ -462,7 +466,15 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
 }
 
 /** A node's recent executions, newest first, each failure's error behind a disclosure. */
-function RunList({ runs, nowMs }: { runs: AssetRunEntry[]; nowMs: number }) {
+/** An error's first line, to tell whether two runs failed the same way. */
+const firstLine = (error: string) => error.trim().split('\n')[0]!.trim()
+
+/**
+ * Recent runs, one line each. `said` is the error the panel's summary already shows in full: a
+ * run that failed with it says nothing more, so the error is read once.
+ */
+function RunList({ runs, nowMs, said }: { runs: AssetRunEntry[]; nowMs: number; said?: string | null }) {
+  const saidLine = said ? firstLine(said) : null
   return (
     <ul className="barca-runs">
       {runs.map((r, i) => (
@@ -470,11 +482,11 @@ function RunList({ runs, nowMs }: { runs: AssetRunEntry[]; nowMs: number }) {
           <div className="barca-run-line">
             <StatusBadge glyph={runGlyph(r.status)} label={r.status} size="sm" />
             <Age at={r.created_at} nowMs={nowMs} />
-            <span>{r.elapsed_seconds !== null ? formatSeconds(r.elapsed_seconds) : '–'}</span>
+            {r.elapsed_seconds !== null && <span>{formatSeconds(r.elapsed_seconds)}</span>}
             {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}
             {r.attempts > 1 && <span>{r.attempts} attempts</span>}
           </div>
-          {r.error_message && (
+          {r.error_message && !(saidLine && (firstLine(r.error_message) === saidLine || saidLine.endsWith(firstLine(r.error_message)))) && (
             <details>
               <summary>{r.error_message.split('\n')[0]}</summary>
               <pre className="barca-error">{r.error_message}</pre>

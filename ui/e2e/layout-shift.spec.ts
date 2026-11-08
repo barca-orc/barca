@@ -40,7 +40,7 @@ test('tasks page: opening a node panel', async ({ page }) => {
 
 test('assets page: switching the node in the panel', async ({ page }) => {
   await page.goto('/ui/#/assets')
-  await page.getByRole('row', { name: /history_asset.*pipeline.py/ }).click()
+  await page.getByRole('row', { name: /^pipeline\.py:history_asset/ }).click()
   await expect(page.getByRole('complementary', { name: /details$/ })).toContainText('median')
   await takeShifts(page)
   await page.getByRole('row', { name: /numbers/ }).click()
@@ -60,23 +60,22 @@ test('schedules page: loading', async ({ page }) => {
 })
 
 // Typography and layout (#765). The panel beside a table must not make its headers wrap or
-// its rows grow; rows are the compact 44px, an error line is 13px in the text colour (only a
-// state's glyph is coloured, never its error), and a
+// its rows grow; rows are one line of 36px, a failing row's error after its name is 13px in the
+// muted grey (only a state's glyph is coloured, never its error), and a
 // name is one text node, so selecting it copies it whole. (The grouped page's header has its
 // own check in e2e-groups/groups.spec.ts, against a project declared in groups.)
 test('tasks page: compact rows and one-line headers beside the panel', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/ui/#/tasks?state=all')
-  // The row's name: a click on its error line opens the traceback instead, by design.
   await page.getByRole('row', { name: /history_failure/ }).locator('.name').click()
   await expect(page.getByRole('complementary', { name: /details$/ })).toBeVisible()
   const table = await page.locator('.barca-table').evaluate((el) => {
     const probe = document.createElement('span')
-    probe.style.color = 'var(--text-default)'
+    probe.style.color = 'var(--text-muted)'
     document.body.append(probe)
     const text = getComputedStyle(probe).color
     probe.remove()
-    const error = el.querySelector('.barca-error-line')!
+    const error = el.querySelector('.barca-cell-why')!
     return {
       headers: [...el.querySelectorAll('th')].map((th) => th.getBoundingClientRect().height),
       rows: [...el.querySelectorAll('tbody tr:not(.barca-table-spacer)')].map((tr) => tr.getBoundingClientRect().height),
@@ -84,7 +83,7 @@ test('tasks page: compact rows and one-line headers beside the panel', async ({ 
     }
   })
   for (const height of table.headers) expect(height, 'a header on one line').toBeLessThanOrEqual(36)
-  for (const height of table.rows) expect(height, 'a compact row').toBeLessThanOrEqual(45)
+  for (const height of table.rows) expect(height, 'a row on one line').toBeLessThanOrEqual(37)
   expect(table.error).toEqual({ size: '13px', text: true })
   const copied = await page.locator('tr[aria-selected="true"] .barca-mid').evaluate((el) => {
     const range = document.createRange()

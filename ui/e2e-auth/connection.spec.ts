@@ -21,7 +21,8 @@ test('bootstrap, authenticated execution, one-time token display, reload, discon
   await expect(page.getByRole('heading', { name: 'Assets', exact: true })).toBeVisible()
   await page.goto('/ui/#/graph')
   await page.getByText('say_hello', { exact: true }).first().click()
-  await page.getByRole('banner').getByRole('button', { name: 'Run say_hello', exact: true }).click()
+  // The inspector runs the selected node (the bar across the top has no Run).
+  await page.getByRole('complementary', { name: /inspector$/ }).getByRole('button', { name: 'Run', exact: true }).click()
   await expect(page.getByRole('complementary', { name: /inspector$/ })).toContainText('hello from authenticated stream', { timeout: 30_000 })
   expect(streams.length).toBeGreaterThan(0)
   expect(streams.every(Boolean)).toBe(true)
@@ -72,7 +73,8 @@ test('expired replay shows an incomplete transcript and follows the existing run
   await page.getByLabel('API token or bootstrap code').fill(code)
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
   await page.getByText('gap_job', { exact: true }).first().click()
-  await page.getByRole('banner').getByRole('button', { name: 'Run gap_job', exact: true }).click()
+  // The inspector runs the selected node (the bar across the top has no Run).
+  await page.getByRole('complementary', { name: /inspector$/ }).getByRole('button', { name: 'Run', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Event replay is incomplete' })).toBeVisible()
   const outcome = await page.waitForResponse(async response => /\/runs\/[^/]+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET' && (await response.json()).status === 'success')
   expect((await outcome.json()).outcome).toBeTruthy()
