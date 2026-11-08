@@ -14,7 +14,7 @@ import type { NodeState, StatusKind } from './types'
 
 export type GraphState =
   /** The node's cache state, as `GET /state` reports it. */
-  | { kind: 'cache'; tone: Tone; glyph: Glyph; label: string; hint: string; state: CacheState; lastFailed: boolean }
+  | { kind: 'cache'; tone: Tone; glyph: Glyph; label: string; hint: string; state: CacheState; lastFailed: boolean; keys?: GraphKeys }
   /** A run working on the node now, or the run this page streams. */
   | { kind: 'run'; tone: Tone; glyph: Glyph; label: string; hint: string; status: StatusKind }
   /** A group of nodes: its most urgent fact. */
@@ -25,12 +25,21 @@ export type GraphState =
 export const UNKNOWN_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'unknown', label: 'State unavailable', hint: 'Asset state has not been loaded.' }
 export const PENDING_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'pending', label: 'Checking…', hint: 'Cache state is being checked.' }
 
+/** A partitioned node's keys: how many, how many last failed, how many wait to run (stale or blocked). */
+export interface GraphKeys {
+  total: number
+  failed: number
+  waiting: number
+}
+
 /** A node's resting state: `cache.state` as the server says it, with the server's `detail`. */
 export function cacheGraphState(node: NodeState): GraphState {
   const state = node.cache.state
   const lastFailed = lastAttemptFailed(node)
   const shown = nodeStateDisplay({ state, lastFailed })
-  return { kind: 'cache', tone: shown.tone, glyph: shown.glyph, label: shown.label, hint: node.cache.detail, state, lastFailed }
+  const p = node.partitions
+  const keys = p ? { total: p.total, failed: p.failed ?? 0, waiting: Math.max(0, p.missing - (p.failed ?? 0)) } : undefined
+  return { kind: 'cache', tone: shown.tone, glyph: shown.glyph, label: shown.label, hint: node.cache.detail, state, lastFailed, ...(keys ? { keys } : {}) }
 }
 
 /** A run working on the node now (whoever started it) outranks its resting state. */

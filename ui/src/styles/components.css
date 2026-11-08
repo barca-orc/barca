@@ -339,3 +339,10 @@ a.barca-btn { text-decoration: none; }
 .barca-version-what { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .barca-version-pinned code { font-weight: 600; }
 .barca-version-upload { margin: 0; }
+/* A partitioned node's keys that are not fresh: a 2px bar along its bottom edge, failed then waiting. */
+.barca-dag-keys {
+  position: absolute; left: 6px; right: 6px; bottom: 3px; height: 2px; display: flex; gap: 1px;
+  border-radius: 1px; overflow: hidden; pointer-events: none;
+}
+.barca-dag-keys .is-failed { background: var(--state-failed); }
+.barca-dag-keys .is-waiting { background: var(--state-blocked); }

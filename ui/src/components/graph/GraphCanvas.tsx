@@ -262,6 +262,7 @@ export function GraphCanvas({
           lastFailed: isFailed(state),
           live: isLive(state),
           stateHint: pin !== undefined ? `Pinned: ${pin}. Runs read this version until it is unpinned.` : wait ? `${state.hint} ${wait.hint}` : state.hint,
+          keys: state.kind === 'cache' ? state.keys : undefined,
         } }
     })
   }, [base.nodes, base.edges, selected, states, pins, shown])

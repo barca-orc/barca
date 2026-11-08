@@ -89,3 +89,21 @@ describe('trace links', () => {
     expect(traceUrl('https://app.datadoghq.com', {})).toBeNull()
   })
 })
+
+describe('failureGroups', () => {
+  const step = (node_id: string, message: string) => ({ node_id, status: 'failed', error_type: 'ValueError', error_message: message, error: `ValueError: ${message}` }) as unknown as RunStep
+  it('makes one entry of the keys of a node that failed the same way', async () => {
+    const { failureGroups } = await import('./runRecovery')
+    const groups = failureGroups([
+      step('p.py:scores[account=a1]', 'no seats for a1'),
+      step('p.py:other', 'boom'),
+      step('p.py:scores[account=a2]', 'no seats for a2'),
+      step('p.py:scores[account=a3]', 'timeout'),
+    ])
+    expect(groups.map((g) => [g.node, g.keys])).toEqual([
+      ['p.py:scores', ['account=a1', 'account=a2']],
+      ['p.py:other', []],
+      ['p.py:scores', ['account=a3']],
+    ])
+  })
+})

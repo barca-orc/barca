@@ -30,6 +30,8 @@ interface GraphNodeData {
   /** Whether the node pulses: a run is working on it. */
   live?: boolean
   stateHint?: string
+  /** A partitioned node's keys: drawn as a count and a bar of the failed and waiting ones. */
+  keys?: import('./graphState').GraphKeys
   [key: string]: unknown
 }
 
