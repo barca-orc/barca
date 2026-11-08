@@ -189,3 +189,14 @@ export function incidentSummary(run: RunView, link: string, datadogUrl?: string 
   out.push('', `Logs: \`barca logs ${run.run_id}\``)
   return out.join('\n') + '\n'
 }
+
+/**
+ * The run's deep link from the page at `href`: the UI's hash route to the run
+ * (`…/ui/#/runs?run=<id>`), with any query or other route dropped.
+ */
+export function runLink(runId: string, href: string = window.location.href): string {
+  const url = new URL(href)
+  url.search = ''
+  url.hash = `#/runs?run=${encodeURIComponent(runId)}`
+  return url.toString()
+}

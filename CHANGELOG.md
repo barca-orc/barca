@@ -28,6 +28,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Web UI: a failed run's step count no longer reads "8 ran · 0 cached": the runs list and run panel say "7 ok · 1 failed · 0 cached" (and the skipped nodes, in the run panel). `barca get --json`'s `steps_executed` is unchanged (it counts executed steps, failed ones included, as the manual now says).
 - Web UI: the asset panel's History for a node whose every attempt failed says so ("No successful run yet") and lists the attempts with their errors, instead of empty duration tiles and a full-height placeholder bar.
+- Web UI: the asset panel's Blast radius names each downstream node's state in the assets list's words (`blocked`, `pinned`, `failing`), not its raw cache state (`never run`).
+- Web UI: the copied incident summary links to the run through the UI's hash route (`…/ui/#/runs?run=<id>`); the link it gave before opened the Assets page.
 
 ## 0.40.0 (2026-11-05)
 
