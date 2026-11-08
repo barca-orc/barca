@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Database, Radio, Zap } from 'lucide-react'
 import { DagNode } from '@/components'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { domainMap } from '@/lib/domainMap'
@@ -11,10 +10,8 @@ import { runningGraphState } from '@/lib/running'
 import { NODE_KINDS, STATUS_KINDS, failedNode, failedTask, neverSucceededNode, nodeByState, runningByStep, runningPartitioned, variants } from '../fixtures'
 import { Frame, Spec, Variant } from '../Kit'
 
-const KIND_ICON = { asset: <Database size={12} />, task: <Zap size={12} />, sensor: <Radio size={12} /> }
-
-function StateNode({ name, state, kind = 'asset' }: { name: string; state: GraphState; kind?: keyof typeof KIND_ICON }) {
-  return <DagNode name={name} kind={kind} tone={state.tone} label={state.label} lastFailed={isFailed(state)} live={isLive(state)} stateHint={state.hint} icon={KIND_ICON[kind]} />
+function StateNode({ name, state, kind = 'asset' }: { name: string; state: GraphState; kind?: 'asset' | 'task' | 'sensor' }) {
+  return <DagNode name={name} kind={kind} kindLabel={kind === 'asset' ? undefined : kind} tone={state.tone} glyph={state.glyph} label={state.label} lastFailed={isFailed(state)} live={isLive(state)} stateHint={state.hint} />
 }
 
 // A small pipeline with a node in each kind of state, a group, and a live edge (a cached
@@ -34,7 +31,7 @@ const PIPELINE_STATES: Record<string, GraphState> = {
   'p:product_catalog': graphState(nodeByState.cached),
   'p:orders_clean': graphState(nodeByState.cached),
   'p:orders_enriched': runningGraphState(runningPartitioned),
-  'group:p:modeling': { kind: 'group', tone: 'failed', label: '1 failing', hint: '1 failing · 23 fresh' },
+  'group:p:modeling': { kind: 'group', tone: 'failed', glyph: 'failed', label: '1 failing', hint: '1 failing · 23 fresh' },
   'p:revenue_daily': graphState(nodeByState.stale),
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
@@ -59,7 +56,7 @@ const DENSE_MAP = domainMap(
   ).flat(),
 )!
 const MAP_STATES: Record<string, GraphState> = Object.fromEntries(
-  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', label: '4 fresh', hint: '' } : { kind: 'group', tone: 'failed', label: '2 failing', hint: '' }]),
+  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', glyph: 'fresh', label: '4 fresh', hint: '' } : { kind: 'group', tone: 'failed', glyph: 'failed', label: '2 failing', hint: '' }]),
 )
 
 export function Graph() {
@@ -83,10 +80,10 @@ export function Graph() {
           <StateNode name={neverSucceededNode.name} state={graphState(neverSucceededNode)} />
         </Variant>
         <Variant label="never_run · blocked by a failure upstream">
-          <DagNode name="revenue_summary" kind="asset" tone="warning" label="blocked" blockedBy="broken_report" stateHint="Blocked: waits on broken_report, whose last attempt failed." icon={KIND_ICON.asset} />
+          <DagNode name="revenue_summary" kind="asset" tone="warning" label="blocked" blockedBy="broken_report" stateHint="Blocked: waits on broken_report, whose last attempt failed." />
         </Variant>
         <Variant label="stale · pinned (barca pin)">
-          <DagNode name="orders" kind="asset" tone="warning" label="pinned" pinned="override from fix.json by me@host" stateHint="Pinned: override from fix.json by me@host. Runs read this version until it is unpinned." icon={KIND_ICON.asset} />
+          <DagNode name="orders" kind="asset" tone="warning" label="pinned" pinned="override from fix.json by me@host" stateHint="Pinned: override from fix.json by me@host. Runs read this version until it is unpinned." />
         </Variant>
       </Spec>
 
@@ -113,10 +110,10 @@ export function Graph() {
           </Variant>
         ))}
         <Variant label="selected">
-          <DagNode name="orders_clean" kind="asset" tone="success" label="cached" selected icon={KIND_ICON.asset} />
+          <DagNode name="orders_clean" kind="asset" tone="success" glyph="fresh" label="fresh" selected />
         </Variant>
         <Variant label="long name">
-          <DagNode name="cv__fold_03__preprocessing__standard_scaler_fit" kind="asset" tone="warning" label="stale" icon={KIND_ICON.asset} />
+          <DagNode name="cv__fold_03__preprocessing__standard_scaler_fit" kind="asset" tone="warning" glyph="stale" label="stale" />
         </Variant>
       </Spec>
 

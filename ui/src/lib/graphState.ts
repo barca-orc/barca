@@ -9,27 +9,28 @@ import { lastAttemptFailed, nodeStateDisplay, type CacheState } from './cacheSta
 import { statusMeta } from './status'
 import { runningGraphState } from './running'
 import type { Tone } from './tone'
+import type { Glyph } from './glyph'
 import type { NodeState, StatusKind } from './types'
 
 export type GraphState =
   /** The node's cache state, as `GET /state` reports it. */
-  | { kind: 'cache'; tone: Tone; label: string; hint: string; state: CacheState; lastFailed: boolean }
+  | { kind: 'cache'; tone: Tone; glyph: Glyph; label: string; hint: string; state: CacheState; lastFailed: boolean }
   /** A run working on the node now, or the run this page streams. */
-  | { kind: 'run'; tone: Tone; label: string; hint: string; status: StatusKind }
+  | { kind: 'run'; tone: Tone; glyph: Glyph; label: string; hint: string; status: StatusKind }
   /** A group of nodes: its most urgent fact. */
-  | { kind: 'group'; tone: Tone; label: string; hint: string }
+  | { kind: 'group'; tone: Tone; glyph: Glyph; label: string; hint: string }
   /** No state for it: not loaded yet, or the state request failed. */
-  | { kind: 'none'; tone: Tone; label: string; hint: string }
+  | { kind: 'none'; tone: Tone; glyph: Glyph; label: string; hint: string }
 
-export const UNKNOWN_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', label: 'State unavailable', hint: 'Asset state has not been loaded.' }
-export const PENDING_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', label: 'Checking…', hint: 'Cache state is being checked.' }
+export const UNKNOWN_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'unknown', label: 'State unavailable', hint: 'Asset state has not been loaded.' }
+export const PENDING_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'pending', label: 'Checking…', hint: 'Cache state is being checked.' }
 
 /** A node's resting state: `cache.state` as the server says it, with the server's `detail`. */
 export function cacheGraphState(node: NodeState): GraphState {
   const state = node.cache.state
   const lastFailed = lastAttemptFailed(node)
   const shown = nodeStateDisplay({ state, lastFailed })
-  return { kind: 'cache', tone: shown.tone, label: shown.label, hint: node.cache.detail, state, lastFailed }
+  return { kind: 'cache', tone: shown.tone, glyph: shown.glyph, label: shown.label, hint: node.cache.detail, state, lastFailed }
 }
 
 /** A run working on the node now (whoever started it) outranks its resting state. */
@@ -41,7 +42,7 @@ export function graphState(node: NodeState): GraphState {
 /** A run streaming to this page: its status for the node, with the run's own words. */
 export function liveGraphState(status: StatusKind): GraphState {
   const meta = statusMeta(status)
-  return { kind: 'run', tone: meta.tone, label: meta.label, hint: 'Current run', status }
+  return { kind: 'run', tone: meta.tone, glyph: meta.glyph, label: meta.label, hint: 'Current run', status }
 }
 
 /** Whether the box shows run work: the run's colours and pulse, not a resting state. */

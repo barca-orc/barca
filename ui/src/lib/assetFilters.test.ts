@@ -199,7 +199,7 @@ describe('blocked rows', () => {
     expect(by).toEqual({ broken: null, report: 'p:broken', summary: 'p:broken', other: null })
     const shown = Object.fromEntries(rows.map((r) => [r.name, nodeStateDisplay(r).label]))
     expect(shown).toEqual({ broken: 'failing', report: 'blocked', summary: 'blocked', other: 'never run' })
-    expect(nodeStateDisplay(rows.find((r) => r.name === 'report')!)).toEqual({ label: 'blocked', tone: 'warning', icon: 'blocked' })
+    expect(nodeStateDisplay(rows.find((r) => r.name === 'report')!)).toEqual({ label: 'blocked', tone: 'warning', glyph: 'blocked' })
   })
 
   it('has a chip of its own: a blocked row counts as blocked, not as its cache state', () => {
@@ -230,7 +230,7 @@ describe('pinned rows', () => {
   const row = (name: string) => rows.find((r) => r.name === name)!
 
   it('reads pinned, not stale, and passes no failure above it on; failing still outranks it', () => {
-    expect(nodeStateDisplay(row('report'))).toEqual({ label: 'pinned', tone: 'warning', icon: 'pinned' })
+    expect(nodeStateDisplay(row('report'))).toEqual({ label: 'pinned', tone: 'warning', glyph: 'pinned' })
     expect(row('report').pinned).toBe('override from fix.json by me')
     expect(row('report').blockedBy).toBeNull()
     expect(row('summary').blockedBy).toBeNull()

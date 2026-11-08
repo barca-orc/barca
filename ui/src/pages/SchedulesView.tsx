@@ -177,7 +177,7 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
                       : "paused until resumed"
                   }
                 >
-                  <StatusBadge tone="neutral" label="paused" icon="paused" size="sm" />
+                  <StatusBadge glyph="paused" label="paused" size="sm" />
                 </span>
               ) : (
                 r.state && (

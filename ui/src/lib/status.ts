@@ -1,5 +1,6 @@
 import { match } from 'ts-pattern'
 import { toneMeta, type Tone, type ToneMeta } from './tone'
+import type { Glyph } from './glyph'
 import type { StatusKind, ListNode, NodeKind } from './types'
 
 interface StatusMeta extends ToneMeta {
@@ -8,6 +9,8 @@ interface StatusMeta extends ToneMeta {
   label: string
   /** Whether the indicator should pulse (live work). */
   live: boolean
+  /** How it is drawn. */
+  glyph: Glyph
 }
 
 /**
@@ -15,22 +18,27 @@ interface StatusMeta extends ToneMeta {
  * axis is a run's, never a node's cache state (`cacheStateDisplay.ts` has that one).
  */
 export function statusMeta(status: StatusKind): StatusMeta {
-  const [tone, label, live] = match<StatusKind, [Tone, string, boolean]>(status)
-    .with('queued', () => ['queued', 'queued', false])
-    .with('running', () => ['running', 'running', true])
-    .with('success', () => ['success', 'success', false])
-    .with('failed', () => ['failed', 'failed', false])
+  const [tone, label, live, glyph] = match<StatusKind, [Tone, string, boolean, Glyph]>(status)
+    .with('queued', () => ['queued', 'queued', false, 'queued'])
+    .with('running', () => ['running', 'running', true, 'running'])
+    .with('success', () => ['success', 'success', false, 'fresh'])
+    .with('failed', () => ['failed', 'failed', false, 'failed'])
     // Stopped by the operator or a server shutdown: inert, not an error.
-    .with('cancelled', () => ['neutral', 'cancelled', false])
+    .with('cancelled', () => ['neutral', 'cancelled', false, 'cancelled'])
     // A step the run did not reach, or served from cache.
-    .with('skipped', () => ['neutral', 'skipped', false])
+    .with('skipped', () => ['neutral', 'skipped', false, 'skipped'])
     .exhaustive()
-  return { tone, label, live, ...toneMeta(tone) }
+  return { tone, label, live, glyph, ...toneMeta(tone) }
 }
 
 /** The tone of a run status. */
 export function statusTone(status: StatusKind): Tone {
   return statusMeta(status).tone
+}
+
+/** The glyph of a run status. */
+export function statusGlyph(status: StatusKind): Glyph {
+  return statusMeta(status).glyph
 }
 
 /** Human-readable freshness summary: the cron expression for a scheduled node. */

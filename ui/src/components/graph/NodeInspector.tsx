@@ -1,6 +1,6 @@
-import { X, Play, Terminal, CircleAlert } from 'lucide-react'
+import { X, Play, Terminal } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Button, IconButton, KeyValue, SidePanel, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
+import { Button, IconButton, KeyValue, SidePanel, StatusBadge, StatusGlyph, Tag, LogViewer } from '@/components'
 import { isLive, type GraphState } from '@/lib/graphState'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
@@ -47,7 +47,7 @@ function ErrorPanel({ title, message }: { title: string; message: string }) {
   return (
     <div className="barca-insp-error">
       <div className="barca-insp-error-head">
-        <CircleAlert size={13} />
+        <StatusGlyph glyph="failed" size={12} />
         <span>{title}</span>
       </div>
       <div className="barca-insp-error-msg">{message}</div>
@@ -91,7 +91,6 @@ export function NodeInspector({
       label={`${name} inspector`}
       width={316}
       title={name}
-      badge={<StatusDot tone={state.tone} live={isLive(state)} label={state.label} size={8} />}
       actions={
         <IconButton label="Close" size="sm" onClick={onClose}>
           <X size={14} />
@@ -101,7 +100,7 @@ export function NodeInspector({
       <div className="barca-insp-body">
         <div className="barca-tagrow">
           <Tag>{nodeKindLabel(asset)}</Tag>
-          <StatusBadge tone={state.tone} label={state.label} live={isLive(state)} size="sm" />
+          <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} size="sm" />
         </div>
 
         <div>

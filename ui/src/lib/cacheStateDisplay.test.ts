@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CACHE_STATES, cacheStateDisplay, cacheStateRank, lastAttemptFailed, worstCacheState, type CacheState } from './cacheStateDisplay'
 import { TONES } from './tone'
+import { GLYPHS, glyphColor } from './glyph'
 
 // The eight words of `barca docs status`, as `barca status --json` prints them. The UI shows these
 // and no others (DIRECTION.md, "The UI").
@@ -18,6 +19,15 @@ describe('cache state display', () => {
     expect(cacheStateDisplay('cached').tone).toBe('success')
     expect(cacheStateDisplay('stale').tone).toBe('warning')
     expect(cacheStateDisplay('never_run').tone).toBe('neutral')
+  })
+
+  it('draws each state with a glyph of its own, though tones are shared', () => {
+    const glyphs = CACHE_STATES.map((state) => cacheStateDisplay(state).glyph)
+    expect(new Set(glyphs).size).toBe(CACHE_STATES.length)
+    for (const glyph of glyphs) expect(GLYPHS).toContain(glyph)
+    // The warnings (blocked, stale, partial, unsynced) share a tone, never a glyph or a hue.
+    const warnings = CACHE_STATES.filter((s) => cacheStateDisplay(s).tone === 'warning')
+    expect(new Set(warnings.map((s) => glyphColor(cacheStateDisplay(s).glyph))).size).toBe(warnings.length)
   })
 
   it('ranks what needs attention first, cached last', () => {

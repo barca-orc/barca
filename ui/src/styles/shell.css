@@ -249,7 +249,7 @@
   padding: 7px 12px;
   background: var(--bg-overlay);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-md);
   font-family: var(--font-sans);
   font-size: var(--text-2xs);
   color: var(--text-muted);
@@ -307,8 +307,8 @@
   flex-direction: column;
   gap: 6px;
   padding: 10px 12px;
-  background: var(--status-failed-bg);
-  border: 1px solid var(--status-failed-line);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
 }
 .barca-insp-error-head {
@@ -319,7 +319,7 @@
   font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--status-failed);
+  color: var(--text-muted);
 }
 .barca-insp-error-msg {
   font-family: var(--font-sans);
@@ -389,7 +389,7 @@
 .barca-table tbody tr:hover, .barca-table tbody tr:focus-visible { background: var(--bg-hover); }
 /* A row's ring is inside it: an outline would be cut by the table's scroll area. */
 .barca-table tbody tr:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--c-white-line); }
-.barca-table tbody tr[aria-selected="true"]:focus-visible { box-shadow: inset 2px 0 0 var(--signal), inset 0 0 0 2px var(--c-white-line); }
+.barca-table tbody tr[aria-selected="true"]:focus-visible { box-shadow: inset 0 0 0 2px var(--c-white-line); }
 /* The space of the rows a long table leaves out (components/TableWindow.tsx). */
 .barca-table tbody tr.barca-table-spacer { cursor: default; background: none; }
 .barca-table tbody tr.barca-table-spacer td { padding: 0; border: 0; height: auto; }
@@ -410,11 +410,11 @@
 .barca-mid::before, .barca-mid::after { content: '\200E' / ''; }
 .barca-cell-sub { font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
 .barca-table td > .barca-cell-sub { margin-top: 0; overflow: hidden; text-overflow: ellipsis; }
-.barca-cell-failed { color: var(--status-failed); }
+.barca-cell-failed { color: var(--text-strong); }
 .barca-cell-error { max-width: 420px; }
 /* ErrorLine: one line of headline, the most important text on a failed row, so never the
    smallest; a traceback, when there is one, opens under it. */
-.barca-error-line { display: block; min-width: 0; max-width: 420px; font-family: var(--font-sans); font-size: var(--text-sm); color: var(--status-failed); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-error-line { display: block; min-width: 0; max-width: 420px; font-family: var(--font-sans); font-size: var(--text-sm); color: var(--text-default); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-table .barca-error-line { display: inline-block; vertical-align: middle; max-width: 360px; }
 .barca-error-line > summary { overflow: hidden; text-overflow: ellipsis; cursor: pointer; list-style: none; }
 .barca-error-line > summary::-webkit-details-marker { display: none; }
@@ -446,7 +446,7 @@
 .barca-table th.num .barca-sort { flex-direction: row-reverse; }
 
 /* pipeline list: node count per file */
-.barca-pipe-nodot { width: 6px; height: 6px; flex: none; }
+.barca-pipe-nodot { width: 12px; height: 12px; flex: none; }
 .barca-pipe-count {
   margin-left: auto;
   font-family: var(--font-sans);
@@ -487,33 +487,32 @@
 @container (max-width: 740px) {
   .barca-asset-table th:nth-child(4), .barca-asset-table td:nth-child(4) { display: none; }
 }
-/* A failing row: a red accent bar and a faint tint, so it reads before its badge does. */
-.barca-table tbody tr[data-failing] { background: color-mix(in srgb, var(--status-failed-bg) 55%, transparent); box-shadow: inset 3px 0 0 var(--status-failed); }
-.barca-table tbody tr[data-failing]:hover { background: var(--status-failed-bg); }
-/* The page's one-line summary of what fails. */
+/* A failing row is not tinted: its glyph and its place at the top (the default sort) say it. */
+/* The page's one-line summary of what fails: neutral, the glyph its only colour. */
 .barca-attention {
-  display: flex; align-items: center; gap: 10px; margin: 0 24px 8px; padding: 6px 10px;
-  border: 1px solid var(--status-failed-line); border-left: 3px solid var(--status-failed); border-radius: var(--radius-sm);
-  background: var(--status-failed-bg); font-family: var(--font-sans); font-size: var(--text-sm); color: var(--text-default);
+  display: flex; align-items: center; gap: 8px; margin: 0 24px 8px; padding: 6px 10px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  background: var(--bg-surface); font-family: var(--font-sans); font-size: var(--text-sm); color: var(--text-muted);
 }
+.barca-attention strong { font-weight: 500; color: var(--text-strong); }
 .barca-attention .barca-clear { margin-left: auto; height: 22px; }
-.barca-table tbody tr[aria-selected="true"] { background: var(--bg-hover); box-shadow: inset 3px 0 0 var(--signal); }
+.barca-table tbody tr[aria-selected="true"] { background: var(--bg-active); }
 .barca-error {
   margin: 6px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto;
   background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
-  font-family: var(--font-code); font-size: var(--text-xs); color: var(--status-failed); white-space: pre-wrap;
+  font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); white-space: pre-wrap;
 }
 .barca-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .barca-stats div { display: flex; align-items: baseline; gap: 4px; }
 .barca-stats b { font-size: var(--text-sm); color: var(--text-strong); font-weight: 500; }
 .barca-stats span { font-size: var(--text-2xs); color: var(--text-muted); }
 .barca-bars { display: flex; align-items: flex-end; gap: 3px; height: 44px; margin: 12px 0 8px; }
-.barca-bars span { flex: 1; max-width: 22px; background: var(--status-success); opacity: 0.7; border-radius: 2px 2px 0 0; }
+.barca-bars span { flex: 1; max-width: 22px; background: var(--text-faint); opacity: 0.45; border-radius: 2px 2px 0 0; }
 .barca-bars span.is-failed { background: var(--status-failed); opacity: 0.9; }
 .barca-runs { list-style: none; margin: 0; padding: 0; }
 .barca-runs li { padding: 5px 0; border-top: 1px solid var(--border-subtle); font-size: var(--text-xs); }
 .barca-run-line { display: flex; gap: 12px; font-family: var(--font-sans); }
-.barca-runs summary { cursor: pointer; margin-top: 3px; color: var(--status-failed); font-family: var(--font-sans); font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-runs summary { cursor: pointer; margin-top: 3px; color: var(--text-default); font-family: var(--font-sans); font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-link {
   margin: 0 8px 2px 0; padding: 0; border: 0; background: none; cursor: pointer;
   font-family: var(--font-sans); font-size: var(--text-xs); color: var(--signal); text-decoration: underline dotted;
@@ -527,7 +526,7 @@
    a fixed height and is rendered whether or not there is a distribution yet. */
 .barca-hist { margin: 6px 0 10px; height: 56px; display: flex; flex-direction: column; }
 .barca-hist-bars { display: flex; align-items: flex-end; gap: 2px; height: 36px; border-bottom: 1px solid var(--border-subtle); }
-.barca-hist-bars span { flex: 1; background: var(--status-success); opacity: 0.45; border-radius: 2px 2px 0 0; }
+.barca-hist-bars span { flex: 1; background: var(--text-faint); opacity: 0.4; border-radius: 2px 2px 0 0; }
 .barca-hist-bars span.is-last { background: var(--signal); opacity: 1; }
 .barca-hist-axis { display: flex; justify-content: space-between; margin-top: 3px; font-family: var(--font-sans); font-size: var(--text-2xs); }
 .barca-hist-note { margin: 0; flex: 1; display: flex; align-items: center; font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-muted); }
@@ -557,6 +556,11 @@
 .barca-kit-contents button:hover { background: var(--bg-hover); color: var(--text-strong); }
 .barca-kit-row:has(> .barca-kit-variant) { align-items: flex-start; }
 .barca-kit-variant { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+/* The glyph set in each theme, side by side: a [data-theme] container resolves its own tokens. */
+.barca-kit-theme { flex: 1 1 420px; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-canvas); color: var(--text-default); }
+.barca-kit-theme-name { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-faint); }
+.barca-kit-glyphs { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.barca-kit-glyph { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-default); }
 .barca-kit-variant > figcaption { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-faint); }
 .barca-kit-box { width: 300px; padding: 10px 12px; border: 1px solid var(--border-default); border-radius: var(--radius-md); }
 /* A transformed box is the containing block of its fixed descendants: dialogs stay inside. */
@@ -608,41 +612,41 @@
 .barca-runs-chip {
   display: inline-flex; align-items: center; gap: 6px;
   height: 24px; padding: 0 10px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--status-running-line);
-  background: var(--status-running-bg);
-  color: var(--status-running);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-default);
   font-family: var(--font-sans);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   font-weight: 500;
   white-space: nowrap;
   text-decoration: none;
 }
-.barca-runs-chip:hover, .barca-runs-chip:focus-visible { border-color: var(--status-running); }
+.barca-runs-chip:hover, .barca-runs-chip:focus-visible { border-color: var(--border-strong); background: var(--bg-hover); }
 .barca-runs-chip:focus-visible { outline: none; box-shadow: var(--focus-glow); }
 .barca-running-badge { display: inline-flex; text-decoration: none; }
-.barca-running-badge:focus-visible { outline: 1px solid var(--status-running); outline-offset: 2px; border-radius: var(--radius-pill); }
+.barca-running-badge:focus-visible { outline: none; box-shadow: var(--focus-glow); border-radius: var(--radius-xs); }
 .barca-pipe-running {
   margin-left: auto;
   font-family: var(--font-sans);
   font-size: var(--text-2xs);
-  color: var(--status-running);
+  color: var(--text-muted);
 }
 .barca-pipe-running + .barca-pipe-count { margin-left: 6px; }
-.barca-count-running { display: inline-flex; align-items: center; gap: 5px; color: var(--status-running); }
+.barca-count-running { display: inline-flex; align-items: center; gap: 5px; color: var(--text-default); }
 
-/* The node panel's answer to "why": a failure's error, or the failures it waits on. */
+/* The node panel's answer to "why": a failure's error, or the failures it waits on. Neutral
+   text under a hairline; the glyph beside the headline is its one colour. */
 .barca-why {
-  margin: 10px 0; padding: 10px 12px;
-  border: 1px solid var(--status-failed-line); border-radius: var(--radius-md);
-  background: var(--status-failed-bg);
+  margin: 12px 0 10px; padding: 12px 0 0;
+  border-top: 1px solid var(--border-default);
 }
-.barca-why-head { display: flex; align-items: flex-start; gap: 8px; color: var(--status-failed); }
-.barca-why-head svg { flex: none; margin-top: 2px; }
+.barca-why-head { display: flex; align-items: flex-start; gap: 8px; color: var(--text-strong); }
+.barca-why-head svg { flex: none; margin-top: 3px; }
 .barca-why-head > .barca-error-line { flex: 1; }
 .barca-why-head strong { font-family: var(--font-name); font-size: var(--text-sm); font-weight: 500; color: var(--text-strong); overflow-wrap: anywhere; }
-.barca-why .barca-note { margin: 6px 0 0 22px; }
-.barca-why-list { list-style: none; margin: 6px 0 0 22px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.barca-why .barca-note { margin: 6px 0 0; }
+.barca-why-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .barca-why-list li { display: flex; flex-direction: column; font-size: var(--text-xs); }
 .barca-why-list li span { color: var(--text-muted); font-family: var(--font-name); overflow-wrap: anywhere; }
 .barca-keys summary { cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); margin: 4px 0; }
@@ -663,11 +667,11 @@
 .barca-keys-list { list-style: none; margin: 0 0 6px; padding: 0; max-height: 320px; overflow: auto; }
 .barca-keys-list li { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--border-default); }
 .barca-keys-list code { font-size: var(--text-xs); overflow-wrap: anywhere; }
-.barca-keys-list li.is-failed code { color: var(--status-failed); }
+.barca-keys-list li.is-failed code { color: var(--text-strong); }
 
-/* Node panel, a partitioned node (issue 763): errors in the failure colour and copyable, key rows
+/* Node panel, a partitioned node (issue 763): errors in full and copyable, key rows
    that can be run and show their artifact, a cut preview cell that opens on click. */
-.barca-node-keys .barca-error-line { max-width: none; color: var(--status-failed); white-space: normal; overflow-wrap: anywhere; }
+.barca-node-keys .barca-error-line { max-width: none; white-space: normal; overflow-wrap: anywhere; }
 .barca-node-keys .barca-error-line > summary { white-space: normal; }
 .barca-keys-errors li > .barca-iconbtn, .barca-key-artifact > .barca-iconbtn { flex: none; align-self: center; }
 .barca-key-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
@@ -676,7 +680,6 @@
 .barca-key-artifact { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .barca-key-artifact > code { font-size: var(--text-2xs); color: var(--text-muted); }
 .barca-keys-bar > span { flex: none; }
-.barca-keys > summary .barca-cell-failed { color: var(--status-failed); }
 .barca-source-path { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .barca-schema-cell-more {
   display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; cursor: pointer;
@@ -729,9 +732,8 @@
   padding: 12px 14px;
   background: var(--bg-raised);
   border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm), var(--edge-top);
+  box-shadow: var(--shadow-xs);
   cursor: pointer;
   position: relative;
 }
@@ -804,9 +806,8 @@
   color: var(--text-muted);
 }
 .barca-group-node[data-tone='failed'] .barca-group-node-health {
-  color: var(--status-failed);
+  color: var(--text-strong);
 }
-.barca-group-node { border-left-color: var(--tone); }
 .barca-group-row-name {
   display: flex;
   align-items: center;
@@ -883,7 +884,7 @@
   padding: 10px 0;
   border: 0;
   background: transparent;
-  color: var(--status-failed);
+  color: var(--text-strong);
   cursor: pointer;
   font-family: var(--font-sans);
   font-size: var(--text-xs);
@@ -904,7 +905,7 @@
    label gives way first (it has an ellipsis), the heading last; nothing wraps or overlaps. */
 .barca-scope-health { display: flex; align-items: center; min-height: 20px; min-width: 0; flex-shrink: 4; }
 .barca-group-external { color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; }
-.barca-view-toggle button[data-failed]:not([aria-pressed='true']) { color: var(--status-failed); }
+.barca-view-toggle button[data-failed]:not([aria-pressed='true']) { color: var(--text-strong); }
 .barca-panel-health { margin: 10px 0 4px; }
 
 /* The failures list: what is broken in scope, the most downstream impact first. The error
@@ -1024,7 +1025,7 @@
 .barca-activity-bars i { display: block; min-height: 2px; }
 .barca-activity-bars i[data-kind="failed"] { background: var(--status-failed); }
 .barca-activity-bars i[data-kind="live"] { background: var(--status-running); }
-.barca-activity-bars i[data-kind="ok"] { background: var(--status-success); opacity: 0.7; }
+.barca-activity-bars i[data-kind="ok"] { background: var(--text-faint); opacity: 0.5; }
 .barca-activity-summary { font-size: var(--text-xs); color: var(--text-muted); }
 .barca-activity-summary strong { color: var(--text-strong); font-weight: 500; }
 .barca-run-failure { font-size: var(--text-xs); }
@@ -1050,13 +1051,13 @@
 /* barca serve is not reachable (components/OfflineBanner.tsx). */
 .barca-offline {
   display: flex; align-items: center; gap: 10px; padding: 8px 20px;
-  border-bottom: 1px solid var(--status-warning-line); background: var(--status-warning-bg);
+  border-bottom: 1px solid var(--border-default); background: var(--bg-surface);
   color: var(--text-strong); font-family: var(--font-sans); font-size: var(--text-sm);
 }
 .barca-offline > svg { color: var(--status-warning); flex: none; }
 .barca-offline-retry { margin-left: auto; }
 /* Some assets are paused (components/PausedBanner.tsx): the offline banner's shape, neutral. */
-.barca-paused-banner { background: var(--bg-raised); border-bottom-color: var(--border-subtle, var(--status-warning-line)); }
+.barca-paused-banner { background: var(--bg-raised); border-bottom-color: var(--border-subtle); }
 /* The panel's blast radius and incident controls (components/assets/). */
 .barca-blast-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 4px; }
 .barca-blast-list > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }

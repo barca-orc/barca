@@ -7,6 +7,7 @@
 import type { GraphState } from './graphState'
 import { statusMeta } from './status'
 import type { Tone } from './tone'
+import type { Glyph } from './glyph'
 import type { NodeRunning, NodeState, StatusKind, TriggeredBy } from './types'
 
 /** `/state` poll interval while some node is running, and otherwise. */
@@ -61,6 +62,7 @@ export function runningGraphState(running: NodeRunning): GraphState {
   return {
     kind: 'run',
     tone: statusMeta(status).tone,
+    glyph: statusMeta(status).glyph,
     status,
     label: keys ? `${word} · ${keys}` : word,
     hint: `Run ${running.run_id}, started by ${startedBy(running.triggered_by)}`,
@@ -70,6 +72,7 @@ export function runningGraphState(running: NodeRunning): GraphState {
 /** The Running badge of the assets list: label with elapsed time, and the run's link. */
 export interface RunningBadge {
   tone: Tone
+  glyph: Glyph
   label: string
   hint: string
   href: string
@@ -80,6 +83,7 @@ export function runningBadge(running: NodeRunning, nowMs: number): RunningBadge 
   const elapsed = elapsedLabel(running.started_at, nowMs)
   return {
     tone: state.tone,
+    glyph: state.glyph,
     label: elapsed ? `${state.label} · ${elapsed}` : state.label,
     hint: state.hint,
     href: runHref(running.run_id),

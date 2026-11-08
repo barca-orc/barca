@@ -7,6 +7,7 @@ import { match } from 'ts-pattern'
 import { groupHealth, groupPath, type GroupTree } from './groups'
 import { only, type Next } from './program'
 import type { Tone } from './tone'
+import type { Glyph } from './glyph'
 import type { NodeState } from './types'
 
 export const SIDEBAR_KEY = 'barca.sidebar.collapsed'
@@ -40,6 +41,8 @@ export interface SidebarGroup {
   depth: number
   /** Null until every member's state is known: no dot beats a dot that says "fine" too soon. */
   tone: Tone | null
+  /** How that state is drawn; null with the tone. */
+  glyph: Glyph | null
 }
 
 /**
@@ -60,7 +63,8 @@ export function fileGroups(
     if (!group) return
     const leaves = leavesOf.get(id) ?? []
     const known = leaves.every((leaf) => byId.has(leaf))
-    out.push({ id, name: group.name, depth, tone: known ? groupHealth(leaves, byId).tone : null })
+    const health = known ? groupHealth(leaves, byId) : null
+    out.push({ id, name: group.name, depth, tone: health?.tone ?? null, glyph: health?.glyph ?? null })
     if (path.has(id)) for (const member of group.members) visit(member, depth + 1)
   }
   for (const id of tree.roots) if (id.startsWith(`group:${file}:`)) visit(id, 0)

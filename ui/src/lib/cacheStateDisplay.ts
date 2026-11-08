@@ -13,6 +13,7 @@
 import type { CacheState } from './generated/CacheState'
 import type { NodeState } from './types'
 import type { Tone } from './tone'
+import type { Glyph } from './glyph'
 
 export type { CacheState }
 
@@ -22,6 +23,8 @@ interface CacheStateDisplay {
   /** What the UI says for it: plain words, never the snake_case enum. */
   label: string
   tone: Tone
+  /** How it is drawn: the tone says how urgent, the glyph which state (states share tones, never glyphs). */
+  glyph: Glyph
 }
 
 /**
@@ -40,14 +43,14 @@ export const CACHE_STATES: readonly CacheState[] = [
 ]
 
 const DISPLAY = {
-  blocked: { word: 'blocked', label: 'blocked', tone: 'warning' },
-  stale: { word: 'stale', label: 'stale', tone: 'warning' },
-  partial: { word: 'partial', label: 'partial', tone: 'warning' },
-  unsynced: { word: 'unsynced', label: 'unsynced', tone: 'warning' },
-  unknown: { word: 'unknown', label: 'unknown', tone: 'neutral' },
-  never_run: { word: 'never_run', label: 'never run', tone: 'neutral' },
-  always_runs: { word: 'always_runs', label: 'always runs', tone: 'neutral' },
-  cached: { word: 'cached', label: 'fresh', tone: 'success' },
+  blocked: { word: 'blocked', label: 'blocked', tone: 'warning', glyph: 'blocked' },
+  stale: { word: 'stale', label: 'stale', tone: 'warning', glyph: 'stale' },
+  partial: { word: 'partial', label: 'partial', tone: 'warning', glyph: 'partial' },
+  unsynced: { word: 'unsynced', label: 'unsynced', tone: 'warning', glyph: 'unsynced' },
+  unknown: { word: 'unknown', label: 'unknown', tone: 'neutral', glyph: 'unknown' },
+  never_run: { word: 'never_run', label: 'never run', tone: 'neutral', glyph: 'never_run' },
+  always_runs: { word: 'always_runs', label: 'always runs', tone: 'neutral', glyph: 'always' },
+  cached: { word: 'cached', label: 'fresh', tone: 'success', glyph: 'fresh' },
 } satisfies Record<CacheState, CacheStateDisplay>
 
 export function cacheStateDisplay(state: CacheState): CacheStateDisplay {
@@ -59,9 +62,14 @@ export function cacheStateLabel(state: CacheState): string {
   return DISPLAY[state].label
 }
 
-/** The tone of a state's word, dot, bar segment or node. */
+/** The tone of a state: how urgent it is. */
 export function cacheStateTone(state: CacheState): Tone {
   return DISPLAY[state].tone
+}
+
+/** The glyph of a state: how it is drawn, beside its word, in a node, a bar or the legend. */
+export function cacheStateGlyph(state: CacheState): Glyph {
+  return DISPLAY[state].glyph
 }
 
 /** A state's place in `CACHE_STATES`: lower is more urgent. */
@@ -84,25 +92,25 @@ export const LAST_ATTEMPT_FAILED = 'failing'
 
 /**
  * The word of the fact "a failed node upstream keeps it from running": `blocked`, in the warning
- * tone with its own icon. It is derived on the client from the graph (`blockedBy` in
+ * tone with the blocked glyph. It is derived on the client from the graph (`blockedBy` in
  * `graphView`), never sent as a cache state; the cache state stays in the tooltip and the panel.
  */
 export const BLOCKED_UPSTREAM = 'blocked'
 
 /**
  * The word of a pinned asset (`barca pin`): every run reads its pinned version and none
- * recomputes it, so its cache state (often `stale`) would mislead. Warning tone, pin icon.
+ * recomputes it, so its cache state (often `stale`) would mislead. Warning tone, pinned glyph.
  */
 export const PINNED = 'pinned'
 
 /** What a pinned node's state means, in a line: in place of its cache state's explanation. */
 export const PINNED_HINT = 'Pinned: runs read this version until it is unpinned.'
 
-/** How a node's one state is drawn: its words, tone and, when the tone does not say it, an icon. */
+/** How a node's one state is drawn: its words, its tone (urgency) and its glyph. */
 export interface NodeStateShown {
   label: string
   tone: Tone
-  icon?: 'blocked' | 'pinned'
+  glyph: Glyph
 }
 
 /**
@@ -111,10 +119,10 @@ export interface NodeStateShown {
  * keeps it from running, else its cache state's words.
  */
 export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean; blockedBy?: string | null; pinned?: string | null }): NodeStateShown {
-  if (node.lastFailed) return { label: LAST_ATTEMPT_FAILED, tone: FAILED_TONE }
-  if (node.pinned != null) return { label: PINNED, tone: 'warning', icon: 'pinned' }
-  if (node.blockedBy) return { label: BLOCKED_UPSTREAM, tone: 'warning', icon: 'blocked' }
-  return { label: cacheStateLabel(node.state), tone: cacheStateTone(node.state) }
+  if (node.lastFailed) return { label: LAST_ATTEMPT_FAILED, tone: FAILED_TONE, glyph: 'failed' }
+  if (node.pinned != null) return { label: PINNED, tone: 'warning', glyph: 'pinned' }
+  if (node.blockedBy) return { label: BLOCKED_UPSTREAM, tone: 'warning', glyph: 'blocked' }
+  return { label: cacheStateLabel(node.state), tone: cacheStateTone(node.state), glyph: cacheStateGlyph(node.state) }
 }
 
 /**

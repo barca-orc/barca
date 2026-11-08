@@ -157,11 +157,11 @@ export function groupHealth(
   const counts = healthCounts(ids, states, live)
   const hint = healthLabel(counts) || 'No members with a state.'
   if (counts.running > 0) {
-    return { kind: 'run', tone: 'running', status: 'running', label: `${counts.running.toLocaleString()} running`, hint }
+    return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: `${counts.running.toLocaleString()} running`, hint }
   }
   const [first] = healthParts(counts, 1)
-  if (!first) return { kind: 'group', tone: 'neutral', label: 'empty', hint }
-  return { kind: 'group', tone: first.tone, label: first.text, hint }
+  if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint }
+  return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint }
 }
 
 /** Collapse only visual edges. Real inputs and the original graph stay intact. */

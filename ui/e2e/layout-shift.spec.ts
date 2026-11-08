@@ -60,7 +60,8 @@ test('schedules page: loading', async ({ page }) => {
 })
 
 // Typography and layout (#765). The panel beside a table must not make its headers wrap or
-// its rows grow; rows are the compact 44px, an error line is 13px in the failed colour, and a
+// its rows grow; rows are the compact 44px, an error line is 13px in the text colour (only a
+// state's glyph is coloured, never its error), and a
 // name is one text node, so selecting it copies it whole. (The grouped page's header has its
 // own check in e2e-groups/groups.spec.ts, against a project declared in groups.)
 test('tasks page: compact rows and one-line headers beside the panel', async ({ page }) => {
@@ -71,20 +72,20 @@ test('tasks page: compact rows and one-line headers beside the panel', async ({ 
   await expect(page.getByRole('complementary', { name: /details$/ })).toBeVisible()
   const table = await page.locator('.barca-table').evaluate((el) => {
     const probe = document.createElement('span')
-    probe.style.color = 'var(--status-failed)'
+    probe.style.color = 'var(--text-default)'
     document.body.append(probe)
-    const failed = getComputedStyle(probe).color
+    const text = getComputedStyle(probe).color
     probe.remove()
     const error = el.querySelector('.barca-error-line')!
     return {
       headers: [...el.querySelectorAll('th')].map((th) => th.getBoundingClientRect().height),
       rows: [...el.querySelectorAll('tbody tr:not(.barca-table-spacer)')].map((tr) => tr.getBoundingClientRect().height),
-      error: { size: getComputedStyle(error).fontSize, failed: getComputedStyle(error).color === failed },
+      error: { size: getComputedStyle(error).fontSize, text: getComputedStyle(error).color === text },
     }
   })
   for (const height of table.headers) expect(height, 'a header on one line').toBeLessThanOrEqual(36)
   for (const height of table.rows) expect(height, 'a compact row').toBeLessThanOrEqual(45)
-  expect(table.error).toEqual({ size: '13px', failed: true })
+  expect(table.error).toEqual({ size: '13px', text: true })
   const copied = await page.locator('tr[aria-selected="true"] .barca-mid').evaluate((el) => {
     const range = document.createRange()
     range.selectNodeContents(el)

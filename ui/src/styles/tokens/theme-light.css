@@ -1,115 +1,119 @@
 /* ============================================================
-   barca · light theme  (secondary)
+   barca · light theme
    Applied via [data-theme="light"] on <html> or any container.
-
-   Key idea: on a light surface the signal can't be the bright
-   mint that pops on near-black — it goes pale and flat. So on
-   light we drop the signal to a DEEPER, more saturated emerald
-   with white text, giving the green real weight against white.
-   Surfaces keep the faint green cast so the brand stays coherent.
+   Near-white surfaces, cool neutral greys, hairline borders; the
+   state hues are deepened (not brightened) so each glyph and its
+   word read at 4.5:1 or more on white and on the inset grey.
+   Every alias is declared here again (not only the base values),
+   so a light container inside a dark page resolves its own.
    ============================================================ */
 
 [data-theme="light"] {
-  /* ---- Light emerald signal: deeper + saturated so it carries ---- */
-  --c-green-l-100: #E2F6EC;
-  --c-green-l-200: #BEEBD2;
-  --c-green-l-300: #7FD6A7;
-  --c-green-l-500: #12A65C;  /* THE signal on light */
-  --c-green-l-600: #0E9150;  /* hover (darker) */
-  --c-green-l-700: #0B7942;  /* pressed */
-  --c-green-l-800: #075C32;
+  /* ---- Base values ---- */
+  --c-ink-300:     #C4C4CA;  /* hover border of a neutral button */
+  --c-ink-400:     #B4B4BB;
+  --c-ink-500:     #D4D4D8;  /* scrollbar thumb */
+  --c-white:       #111113;
+  --c-white-wash:  rgba(17, 17, 19, 0.05);
+  --c-white-line:  rgba(17, 17, 19, 0.28);
+  --c-indigo-400:  #4F55C2;
+  --c-indigo-wash: rgba(79, 85, 194, 0.10);
+  --c-indigo-line: rgba(79, 85, 194, 0.45);
 
-  --c-green-wash:  rgba(18, 166, 92, 0.10);
-  --c-green-line:  rgba(18, 166, 92, 0.30);
-  --c-green-glow:  rgba(18, 166, 92, 0.34);
-
-  /* Cyan reads better a touch deeper on white */
-  --c-cyan-l-500:  #0E96A0;
-  --c-cyan-wash:   rgba(14, 150, 160, 0.10);
-  --c-cyan-line:   rgba(14, 150, 160, 0.30);
-
-  /* ---- Surfaces: warm-neutral off-whites, faint green cast ---- */
-  --bg-canvas:   #F3F6F3;
-  --bg-surface:  #FFFFFF;
+  /* ---- Surfaces ---- */
+  --bg-canvas:   #FFFFFF;
+  --bg-surface:  #FAFAFA;
   --bg-raised:   #FFFFFF;
   --bg-overlay:  #FFFFFF;
-  --bg-inset:    #ECF1EC;
-  --bg-hover:    rgba(8, 24, 16, 0.04);
-  --bg-active:   rgba(8, 24, 16, 0.07);
+  --bg-inset:    #F5F5F6;
+  --bg-hover:    rgba(17, 17, 19, 0.035);
+  --bg-active:   rgba(17, 17, 19, 0.06);
   --bg-selected: var(--c-white-wash);
 
   /* ---- Borders ---- */
-  --border-subtle:  #EAEFEA;
-  --border-default: #DCE3DD;
-  --border-strong:  #C5CEC7;
+  --border-subtle:  #F0F0F2;
+  --border-default: #E6E6E8;
+  --border-strong:  #D9D9DD;
   --border-accent:  var(--c-white-line);
 
   /* ---- Text ---- */
-  --text-strong:    #0B1410;
-  --text-default:   #243029;
-  --text-muted:     #586860;  /* 5.2:1 on the inset ground, 5.9:1 on white */
-  --text-faint:     #606F67;  /* 4.6:1 on the inset ground, 5.3:1 on white (WCAG AA); was #8A968E, 2.7:1 */
-  --text-disabled:  #AEB8B1;
+  --text-strong:    #111113;
+  --text-default:   #2E2E33;
+  --text-muted:     #5F5F68;  /* 5.8:1 on the inset ground, 6.3:1 on white */
+  --text-faint:     #6B6B74;  /* 4.8:1 on the inset ground, 5.3:1 on white (WCAG AA) */
+  --text-disabled:  #A1A1AA;
   --text-on-signal: #FFFFFF;
-  --text-link:      #0B1410;
+  --text-link:      #111113;
 
   /* ---- Signal: neutral, as on dark ---- */
-  --c-white-wash:  rgba(11, 20, 16, 0.06);
-  --c-white-line:  rgba(11, 20, 16, 0.30);
-  --signal:        #0B1410;
-  --signal-hover:  #243029;
+  --signal:        #111113;
+  --signal-hover:  #2E2E33;
   --signal-press:  #000000;
-  --signal-dim:    #586860;
+  --signal-dim:    #5F5F68;
 
-  /* ---- Focus ---- */
-  --focus-ring:    #0B1410;
-  --focus-glow:    0 0 0 1px #FFFFFF, 0 0 0 3px var(--c-white-line);
+  /* ---- Accent and focus ---- */
+  --accent:        var(--c-indigo-400);
+  --accent-wash:   var(--c-indigo-wash);
+  --focus-ring:    var(--c-indigo-400);
+  --focus-glow:    0 0 0 1px #FFFFFF, 0 0 0 3px var(--c-indigo-line);
 
-  /* ---- Elevation: lift comes from soft gray shadow, not a white edge ---- */
+  /* ---- State hues (glyphs): 4.6:1 or more on #F5F5F6, 5:1 or more on white ---- */
+  --state-failed:   #C93A3E;
+  --state-running:  #2E68C0;
+  --state-fresh:    #1E7F52;
+  --state-stale:    #946410;
+  --state-blocked:  #B4521C;
+  --state-partial:  #6B4FC4;
+  --state-unsynced: #17766F;
+  --state-pinned:   var(--c-indigo-400);
+  --state-idle:     #6B6B74;
+  --glyph-ink:      #FFFFFF;
+
+  /* ---- Elevation: lift comes from soft grey shadow, not a white edge ---- */
   --edge-top:   inset 0 1px 0 rgba(255, 255, 255, 0.6);  /* @kind shadow */
-  --edge-inset: inset 0 0 0 1px rgba(8, 24, 16, 0.015);
-  --shadow-xs:  0 1px 2px rgba(16, 32, 24, 0.06);
-  --shadow-sm:  0 1px 2px rgba(16, 32, 24, 0.06), 0 2px 8px rgba(16, 32, 24, 0.06);
-  --shadow-md:  0 6px 20px rgba(16, 32, 24, 0.10);
-  --shadow-lg:  0 16px 44px rgba(16, 32, 24, 0.14);
-  --shadow-pop: 0 12px 32px rgba(16, 32, 24, 0.16);
+  --edge-inset: inset 0 0 0 1px rgba(17, 17, 19, 0.015);
+  --shadow-xs:  0 1px 2px rgba(17, 17, 19, 0.05);
+  --shadow-sm:  0 1px 2px rgba(17, 17, 19, 0.05), 0 2px 6px rgba(17, 17, 19, 0.04);
+  --shadow-md:  0 6px 20px rgba(17, 17, 19, 0.08);
+  --shadow-lg:  0 16px 44px rgba(17, 17, 19, 0.12);
+  --shadow-pop: 0 12px 32px rgba(17, 17, 19, 0.14);
+  --elev-card:    var(--shadow-sm), var(--edge-top);
+  --elev-popover: var(--shadow-md), var(--edge-top);
+  --elev-modal:   var(--shadow-lg), var(--edge-top);
 
-  /* Signal glows — subtler on light, still mean "alive" */
-  --glow-signal-sm: 0 0 0 1px var(--c-green-line), 0 0 8px -3px var(--c-green-glow);
-  --glow-signal-md: 0 0 0 1px var(--c-green-line), 0 0 16px -4px var(--c-green-glow);
-  --glow-running:   0 0 0 1px var(--c-cyan-line), 0 0 12px -4px rgba(14, 150, 160, 0.4);
-  --glow-failed:    0 0 0 1px rgba(206, 53, 53, 0.30), 0 0 12px -4px rgba(206, 53, 53, 0.35);
+  --glow-running:   0 0 0 1px rgba(46, 104, 192, 0.30), 0 0 12px -4px rgba(46, 104, 192, 0.35);
+  --glow-failed:    0 0 0 1px rgba(201, 58, 62, 0.30), 0 0 12px -4px rgba(201, 58, 62, 0.30);
 
   /* ---- Graph canvas ---- */
-  --graph-grid:  rgba(11, 20, 16, 0.10);     /* the dot grid behind the DAG */
-  --graph-mask:  rgba(243, 246, 243, 0.72);  /* what the minimap dims outside the viewport */
+  --graph-grid:  rgba(17, 17, 19, 0.09);     /* the dot grid behind the DAG */
+  --graph-mask:  rgba(255, 255, 255, 0.72);  /* what the minimap dims outside the viewport */
 
-  /* ---- Status: deepen fills so they read on white ---- */
-  --status-success:      var(--c-green-l-500);
-  --status-success-bg:   var(--c-green-wash);
-  --status-success-line: var(--c-green-line);
+  /* ---- Status (run lifecycle) ---- */
+  --status-success:      var(--state-fresh);
+  --status-success-bg:   rgba(30, 127, 82, 0.08);
+  --status-success-line: rgba(30, 127, 82, 0.28);
 
-  --status-running:      var(--c-cyan-l-500);
-  --status-running-bg:   var(--c-cyan-wash);
-  --status-running-line: var(--c-cyan-line);
+  --status-running:      var(--state-running);
+  --status-running-bg:   rgba(46, 104, 192, 0.08);
+  --status-running-line: rgba(46, 104, 192, 0.35);
 
-  --status-failed:       #CE3535;
-  --status-failed-bg:    rgba(206, 53, 53, 0.10);
-  --status-failed-line:  rgba(206, 53, 53, 0.30);
+  --status-failed:       var(--state-failed);
+  --status-failed-bg:    rgba(201, 58, 62, 0.07);
+  --status-failed-line:  rgba(201, 58, 62, 0.30);
 
-  --status-warning:      #B5790C;
-  --status-warning-bg:   rgba(181, 121, 12, 0.10);
-  --status-warning-line: rgba(181, 121, 12, 0.30);
+  --status-warning:      var(--state-stale);
+  --status-warning-bg:   rgba(148, 100, 16, 0.08);
+  --status-warning-line: rgba(148, 100, 16, 0.28);
 
-  --status-queued:       #6B7771;
-  --status-queued-bg:    rgba(107, 119, 113, 0.10);
-  --status-queued-line:  rgba(107, 119, 113, 0.26);
+  --status-queued:       #6B6B74;
+  --status-queued-bg:    rgba(107, 107, 116, 0.08);
+  --status-queued-line:  rgba(107, 107, 116, 0.24);
 
-  --status-skipped:      #9AA69E;
-  --status-skipped-bg:   rgba(154, 166, 158, 0.16);
+  --status-skipped:      #A1A1AA;
+  --status-skipped-bg:   rgba(161, 161, 170, 0.14);
 }
 
 [data-theme="light"] ::selection {
-  background: var(--c-green-line);
+  background: var(--c-indigo-wash);
   color: var(--text-strong);
 }

@@ -4,7 +4,8 @@
  * panel's "Why" section, only render these.
  */
 
-import { CACHE_STATES, cacheStateLabel, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone, type CacheState } from './cacheStateDisplay'
+import { CACHE_STATES, cacheStateGlyph, cacheStateLabel, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone, type CacheState } from './cacheStateDisplay'
+import type { Glyph } from './glyph'
 import { memberHealth, type GraphState } from './graphState'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
 import type { Tone } from './tone'
@@ -55,6 +56,13 @@ export function healthPartTone(part: HealthPart): Tone {
   return cacheStateTone(part)
 }
 
+/** The glyph of a part of the bar: the colour of its segment. */
+export function healthPartGlyph(part: HealthPart): Glyph {
+  if (part === 'running') return 'running'
+  if (part === 'pending') return 'pending'
+  return cacheStateGlyph(part)
+}
+
 /** Counts of `ids`; a live run's status (`live`) outranks the polled state. */
 export function healthCounts(
   ids: readonly string[],
@@ -88,6 +96,7 @@ interface HealthLabelPart {
   /** What the part counts: a state, run work, no state yet, or failed last attempts. */
   key: HealthPart | 'lastFailed'
   tone: Tone
+  glyph: Glyph
   text: string
 }
 
@@ -98,10 +107,10 @@ interface HealthLabelPart {
  */
 export function healthParts(counts: HealthCounts, limit = HEALTH_PARTS.length + 1): HealthLabelPart[] {
   const parts: HealthLabelPart[] = []
-  if (counts.lastFailed > 0) parts.push({ key: 'lastFailed', tone: FAILED_TONE, text: `${counts.lastFailed.toLocaleString()} ${LAST_ATTEMPT_FAILED}` })
+  if (counts.lastFailed > 0) parts.push({ key: 'lastFailed', tone: FAILED_TONE, glyph: 'failed', text: `${counts.lastFailed.toLocaleString()} ${LAST_ATTEMPT_FAILED}` })
   for (const part of HEALTH_PARTS) {
     const count = part === 'running' || part === 'pending' ? counts[part] : counts.states[part]
-    if (count > 0) parts.push({ key: part, tone: healthPartTone(part), text: partText(part, count) })
+    if (count > 0) parts.push({ key: part, tone: healthPartTone(part), glyph: healthPartGlyph(part), text: partText(part, count) })
   }
   return parts.slice(0, limit)
 }

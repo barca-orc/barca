@@ -1,29 +1,30 @@
-import type { CSSProperties, ReactNode } from 'react'
-import { Ban, CircleX, Pin } from 'lucide-react'
+import type { CSSProperties } from 'react'
 import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
+import { toneGlyph, type Glyph } from '@/lib/glyph'
 import type { Tone } from '@/lib/tone'
-import { StatusDot } from './StatusDot'
+import { StatusGlyph } from './StatusGlyph'
 
 export interface DagNodeProps {
   name: string
   kind: string
-  /** The word for its kind; none for an asset, which its icon says already. */
+  /** The word for its kind; none for an asset, the default kind. */
   kindLabel?: string
-  /** The colour of its state. */
+  /** How urgent its state is. */
   tone: Tone
+  /** How its state is drawn; by default the tone's plain glyph. */
+  glyph?: Glyph
   /** The word: its cache state as the CLI prints it, or a run's status. */
   label?: string | null
-  /** Its last attempt failed: a second fact, beside the state. */
+  /** Its last attempt failed: the one state shown, `failing`. */
   lastFailed?: boolean
-  /** The failed node upstream that keeps it from running: drawn with the `blocked` icon. */
+  /** The failed node upstream that keeps it from running: it reads `blocked`. */
   blockedBy?: string
-  /** Pinned (`barca pin`): what it is pinned to; drawn with the pin icon. */
+  /** Pinned (`barca pin`): what it is pinned to; it reads `pinned`. */
   pinned?: string
-  /** A run is working on it: the live border and pulse. */
+  /** A run is working on it: the live border, and the running glyph turns. */
   live?: boolean
   stateHint?: string
   selected?: boolean
-  icon?: ReactNode
   style?: CSSProperties
   onClick?: () => void
 }
@@ -31,16 +32,26 @@ export interface DagNodeProps {
 export const DAG_NODE_WIDTH = 208
 export const DAG_NODE_HEIGHT = 64
 
+/** The glyph a node shows: failing, pinned, blocked, then its state's own. */
+function nodeGlyph({ glyph, tone, lastFailed, blockedBy, pinned }: Pick<DagNodeProps, 'glyph' | 'tone' | 'lastFailed' | 'blockedBy' | 'pinned'>): Glyph {
+  if (lastFailed) return 'failed'
+  if (pinned !== undefined) return 'pinned'
+  if (blockedBy) return 'blocked'
+  return glyph ?? toneGlyph(tone)
+}
+
 /**
  * barca · DagNode
- * The signature object: one node in a pipeline graph. The tone drives the accent; the word is
- * always visible. `selected` rings it in the neutral signal; a live node gets a cyan border.
+ * One node in a pipeline graph: its state's glyph and its name, and under them the kind (for a
+ * task or a sensor) and the state's word. The card itself stays neutral whatever the state:
+ * the glyph is the only colour. `selected` rings it; a live node gets the running ring.
  */
 export function DagNode({
   name,
   kind,
   kindLabel,
   tone,
+  glyph,
   label,
   lastFailed = false,
   blockedBy,
@@ -48,16 +59,18 @@ export function DagNode({
   live = false,
   stateHint,
   selected = false,
-  icon,
   style,
   onClick,
 }: DagNodeProps) {
+  const shown = nodeGlyph({ glyph, tone, lastFailed, blockedBy, pinned })
+  const word = lastFailed ? LAST_ATTEMPT_FAILED : label
   return (
     <div
       className="barca-dag"
       onClick={onClick}
       title={stateHint ?? label ?? undefined}
       data-tone={tone}
+      data-glyph={shown}
       data-kind={kind}
       data-live={live || undefined}
       data-selected={selected || undefined}
@@ -65,23 +78,16 @@ export function DagNode({
       data-clickable={onClick ? '' : undefined}
       style={style}
     >
-      <span className="barca-dag-spine" />
       <div className="barca-dag-body">
         <div className="barca-dag-head">
-          <StatusDot tone={tone} live={live} size={7} />
+          <StatusGlyph glyph={shown} live={live} size={14} />
           <span className="barca-dag-name">{name}</span>
-          {icon && <span className="barca-dag-icon">{icon}</span>}
         </div>
         <div className="barca-dag-foot">
-          {/* The kind's word gives way to the failed fact: the icon above still says the kind. */}
-          {kindLabel && !lastFailed && <span className="barca-dag-kind">{kindLabel}</span>}
-          {/* One state per node: a failed last attempt is `failing`, in red with its icon, instead of the cache word. */}
-          {(label || lastFailed) && (
+          {kindLabel && <span className="barca-dag-kind">{kindLabel}</span>}
+          {word && (
             <span className="barca-dag-state" data-failed={lastFailed || undefined} data-blocked={(!lastFailed && blockedBy) || undefined} data-pinned={(!lastFailed && pinned !== undefined) || undefined}>
-              {lastFailed && <CircleX size={11} aria-hidden />}
-              {!lastFailed && pinned !== undefined && <Pin size={11} aria-hidden />}
-              {!lastFailed && pinned === undefined && blockedBy && <Ban size={11} aria-hidden />}
-              {lastFailed ? LAST_ATTEMPT_FAILED : label}
+              {word}
             </span>
           )}
         </div>

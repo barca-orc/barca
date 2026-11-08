@@ -2,10 +2,10 @@
    barca · elevation
    Dark UI: shadows are subtle; depth comes from hairline borders
    and faint inner highlights. The "glow" is reserved for the
-   signal green (focus / active node / live state).
+   live state (a running node); nothing else glows.
    ============================================================ */
 
-:root {
+:root, [data-theme="dark"] {
   /* Drop shadows — restrained, cast deeper into near-black */
   --shadow-none: none;
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -19,10 +19,8 @@
   --edge-inset: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 
   /* Signal glows — used sparingly: live nodes, focus, hover on signal */
-  --glow-signal-sm: 0 0 0 1px var(--c-green-line), 0 0 10px -2px var(--c-green-glow);
-  --glow-signal-md: 0 0 0 1px var(--c-green-line), 0 0 20px -4px var(--c-green-glow);
-  --glow-running:   0 0 0 1px var(--c-cyan-line), 0 0 16px -4px rgba(54, 203, 211, 0.5);
-  --glow-failed:    0 0 0 1px var(--c-red-line),  0 0 16px -4px rgba(255, 90, 90, 0.5);
+  --glow-running:   0 0 0 1px var(--status-running-line), 0 0 14px -4px rgba(106, 159, 230, 0.40);
+  --glow-failed:    0 0 0 1px var(--status-failed-line),  0 0 14px -4px rgba(229, 107, 111, 0.35);
 
   /* Composed elevations */
   --elev-card:    var(--shadow-sm), var(--edge-top);

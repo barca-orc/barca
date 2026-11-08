@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Absolute, KeyValue, Section, Tag } from '@/components'
+import { Absolute, KeyValue, Section, StatusBadge, Tag } from '@/components'
 import { useSchedule } from '@/hooks/useSchedule'
 import { usePinNotes } from '@/hooks/usePins'
 import { lastAttemptFailed, nodeStateDisplay } from '@/lib/cacheStateDisplay'
@@ -47,8 +47,8 @@ export function BlastRadius({ id, graph, states, paused, onSelect }: BlastRadius
             return (
               <li key={d}>
                 <button type="button" className="barca-link" onClick={() => onSelect(d)}>{shortName(d)}</button>
-                {shown && <span className="barca-cell-sub">{shown.label}</span>}
-                {paused.has(d) && <Tag size="sm" tone="warning">paused</Tag>}
+                {shown && <StatusBadge glyph={shown.glyph} label={shown.label} size="sm" />}
+                {paused.has(d) && <StatusBadge glyph="paused" label="paused" size="sm" />}
               </li>
             )
           })}

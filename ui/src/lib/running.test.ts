@@ -83,6 +83,7 @@ describe('running state from /state', () => {
   it('gives the assets list a Running badge with the elapsed time and the run link', () => {
     expect(runningBadge(run(), NOW)).toEqual({
       tone: 'running',
+      glyph: 'running',
       label: 'running · 1m 15s',
       hint: 'Run r1, started by the scheduler',
       href: '/runs?run=r1',

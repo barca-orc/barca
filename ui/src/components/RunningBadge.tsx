@@ -12,7 +12,7 @@ export interface RunningBadgeProps {
 
 /**
  * barca · RunningBadge
- * A node a run is working on now: a pulsing Running (or Queued) badge with the
+ * A node a run is working on now: a turning Running (or Queued) badge with the
  * elapsed time and keys done, linking to the run.
  */
 export function RunningBadge({ running, nowMs, size = 'sm' }: RunningBadgeProps) {
@@ -25,7 +25,7 @@ export function RunningBadge({ running, nowMs, size = 'sm' }: RunningBadgeProps)
       aria-label={`${badge.label}: open run ${running.run_id}`}
       onClick={(event) => event.stopPropagation()}
     >
-      <StatusBadge tone={badge.tone} label={badge.label} size={size} live={running.step === 'running'} />
+      <StatusBadge glyph={badge.glyph} label={badge.label} size={size} live={running.step === 'running'} />
     </Link>
   )
 }
