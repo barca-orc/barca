@@ -10,7 +10,7 @@ const FILE = 'grouped.py'
 const G = (name: string) => `group:${FILE}:${name}`
 const N = (name: string) => `${FILE}:${name}`
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`
-const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'unknown', 'never_run', 'always_runs', 'cached', 'last attempt failed']
+const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'unknown', 'never run', 'always runs', 'fresh', 'failing']
 
 // The whole pipeline once, and the fold 2 check (which fails) once: a failed last attempt on
 // record beside cached models.
@@ -47,22 +47,21 @@ test('a failed check is a fact beside its ancestors and itself; the model stays 
   await page.goto(`/ui/#/assets?pipeline=${FILE}&view=graph`)
   const cv = page.locator(node(G('cross_validation')))
   await expect(cv.locator('.barca-group-node[data-tone="failed"]')).toBeVisible()
-  await expect(cv).toContainText('1 last attempt failed')
+  await expect(cv).toContainText('1 failing')
   await cv.click()
   const panel = page.getByRole('complementary', { name: 'Cross-validation group details' })
-  await expect(panel).toContainText('1 last attempt failed')
+  await expect(panel).toContainText('1 failing')
   // The output's own state, in the CLI's word.
-  await expect(panel.getByText('cached', { exact: true })).toBeVisible()
+  await expect(panel.getByText('fresh', { exact: true })).toBeVisible()
   await expect(panel).toContainText('check__fold_02__model')
   await panel.getByRole('button', { name: /check__fold_02__model/ }).click()
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Fold 2')
   const check = page.locator(node(N('check__fold_02__model')))
   await expect(check.locator('.barca-dag[data-failed]')).toBeVisible()
-  await expect(check).toContainText('always_runs')
-  await expect(check).toContainText('last attempt failed')
+  await expect(check).toContainText('failing')
   const model = page.locator(node(N('fold_02__model')))
   await expect(model.locator('.barca-dag[data-tone="success"]')).toBeVisible()
-  await expect(model).toContainText('cached')
+  await expect(model).toContainText('fresh')
   await expect(model.locator('.barca-dag[data-failed]')).toHaveCount(0)
   // The node panel opens for the failed check with its error, from the real server.
   await expect(page.getByRole('complementary', { name: 'check__fold_02__model details' })).toContainText('feature count mismatch')
@@ -116,7 +115,7 @@ test('groups open worst first, a sort is kept in the URL, and rows read by their
   await page.goto(`/ui/#/assets?pipeline=${FILE}`)
   const rows = page.locator('.barca-group-table tbody tr')
   await expect(rows.first()).toContainText('Cross-validation')
-  await expect(rows.first()).toContainText('1 last attempt failed')
+  await expect(rows.first()).toContainText('1 failing')
   await expect(page.getByRole('columnheader', { name: 'Failed' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Output' })).toHaveCount(0)
   await page.getByLabel('Sort').selectOption('name')
@@ -125,9 +124,9 @@ test('groups open worst first, a sort is kept in the URL, and rows read by their
   await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('source')}`)
   await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Contents' })).toHaveCount(0)
-  // A row's state is the CLI's word; the reason the server gives is beside it.
+  // A row's state is in plain words; the reason the server gives is beside it.
   const check = page.getByRole('row', { name: /check__clean_rows/ })
-  await expect(check).toContainText('always_runs')
+  await expect(check).toContainText('always runs')
   await expect(check.locator('.barca-dag[data-failed], .barca-tag[data-tone="failed"]')).toHaveCount(0)
 })
 
@@ -277,6 +276,6 @@ test('a status failure leaves grouped metadata visible', async ({ page }) => {
   }))
   await page.goto(`/ui/#/assets?pipeline=${FILE}`)
   await expect(page.locator('.barca-group-table tbody tr')).toHaveCount(3)
-  await expect(page.getByRole('status')).toContainText('History is unavailable')
-  await expect(page.getByRole('status')).toContainText('Check the metadata volume')
+  const problem = page.getByRole('status').filter({ hasText: 'History is unavailable' })
+  await expect(problem).toContainText('Check the metadata volume')
 })
