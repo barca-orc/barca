@@ -30,6 +30,11 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // (`triggered_by: client`, RFC-0007 section 4.1). A repeated post of the same run is
     // recognised by it. NULL for every other run.
     "client_run_id TEXT",
+    // `datadog` when the run sent a Datadog trace per step (`BARCA_TELEMETRY=datadog`): the
+    // step trace ids are derived from the run and step (`telemetry::datadog::step_trace_ref`),
+    // so this is all a reader needs to link a step to its trace. NULL otherwise and on rows
+    // from older versions.
+    "trace TEXT",
 ];
 
 /// A schedule held back by `POST /schedule/{id}/pause` (#435): since when and until when

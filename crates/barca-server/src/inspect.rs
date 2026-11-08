@@ -302,6 +302,13 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
         "deployed_at": barca_core::outcome::rfc3339(state.started_at),
         "commit": root.as_deref().and_then(git_commit),
         "files": files,
+        // Where a step's `trace_id` opens (`{datadog_url}/apm/trace/{trace_id}`): `null`
+        // when no Datadog site is configured and the integration is off.
+        "telemetry": {
+            "datadog_url": barca_core::config::datadog_app_url(&state.config.resolved.project_root)
+                .ok()
+                .flatten(),
+        },
     })))
 }
 

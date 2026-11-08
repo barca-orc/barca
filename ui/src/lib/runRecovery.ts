@@ -153,7 +153,16 @@ export function failedSteps(run: Pick<RunView, 'steps'>): RunStep[] {
  * it ran and who started it, when and for how long, and each failed step with its error's first
  * line and where it raised.
  */
-export function incidentSummary(run: RunView, link: string): string {
+/**
+ * Where a step's Datadog trace opens: `{datadogUrl}/apm/trace/{trace_id}`. `null` when the
+ * server names no Datadog site or the step sent no trace (telemetry off, cached, skipped).
+ */
+export function traceUrl(datadogUrl: string | null | undefined, step: Pick<RunStep, 'trace_id'>): string | null {
+  if (!datadogUrl || !step.trace_id) return null
+  return `${datadogUrl.replace(/\/+$/, '')}/apm/trace/${encodeURIComponent(step.trace_id)}`
+}
+
+export function incidentSummary(run: RunView, link: string, datadogUrl?: string | null): string {
   const failed = failedSteps(run)
   const out = [
     `### barca run \`${run.run_id}\` ${run.status}`,
@@ -171,7 +180,8 @@ export function incidentSummary(run: RunView, link: string): string {
     for (const step of failed) {
       const error = firstLine(step.error_type && step.error_message ? `${step.error_type}: ${step.error_message}` : step.error) ?? 'no error recorded'
       const where = raisedAt(step.error_traceback ?? step.error)
-      out.push(`- \`${step.node_id}\`: ${error}${where ? ` (raised at \`${where}\`)` : ''}`)
+      const trace = traceUrl(datadogUrl, step)
+      out.push(`- \`${step.node_id}\`: ${error}${where ? ` (raised at \`${where}\`)` : ''}${trace ? ` · [trace](${trace})` : ''}`)
     }
   } else if (run.failure) {
     out.push('', `**Failed step:** \`${run.failure.node}\`: ${run.failure.error}`)

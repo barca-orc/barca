@@ -273,7 +273,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''))",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -287,6 +287,13 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             run.trigger.scheduled_at.clone().unwrap_or_default(),
             run.trigger.schedule_id.clone().unwrap_or_default(),
             run.job.unwrap_or("").to_string(),
+            // The run's steps are traced with the integration `crate::execution` starts for
+            // the same `BARCA_TELEMETRY` (`execution::workers`).
+            if crate::telemetry::is_on("datadog") {
+                "datadog".to_string()
+            } else {
+                String::new()
+            },
         ],
     )
     .await

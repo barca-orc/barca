@@ -166,6 +166,10 @@ pub(crate) async fn view_page(
         }
     }
     steps_page.truncated = view.steps.len() < steps_page.total;
+    // The steps streamed and not yet recorded get their trace ids as the recorded ones did.
+    if record.is_some() && db::get_run_traced(&snapshot.path, &view.run_id).await? {
+        db::attach_trace_ids(&mut view.steps, &view.run_id);
+    }
     // A finished run's planned nodes, the skipped and cached ones included, when today's
     // sources still plan what it ran (#758). Live runs stream their steps instead.
     if let Some(record) = &record

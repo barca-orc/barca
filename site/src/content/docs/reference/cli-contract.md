@@ -698,6 +698,7 @@ value of its first key only.
 | `BARCA_SERVER_AUTH` | server authentication mode, `off` (default) or `token`; overrides `[server] auth`, overridden by `serve --auth`; invalid values are exit 2 ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
 | `BARCA_SERVER_TOKEN` | server-only bearer credential for every CLI and deprecated Python Client request; nonempty ASCII without whitespace or control characters; cannot be combined with URL userinfo; invalid credentials are exit 2; removed from Python helper environments ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
 | `BARCA_SERVER_RECONNECT` | seconds a `--server` client following a run (`get`/`run --server`, `logs -f --server`) waits for a server whose stream broke to come back, and follows the same run id there (default 60; `0`: give up at once, exit 3); not a number of seconds is a usage error (exit 2) | experimental |
+| `DD_SITE` | the Datadog site (`datadoghq.com`, `us3.datadoghq.com`) whose web app the UI's trace links open (beats `[telemetry] datadog_site` in `barca.toml`); one that is not a host name stops `barca serve` with exit 2 ([`barca docs telemetry`](/reference/telemetry/)) | experimental |
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr ([`barca docs telemetry`](/reference/telemetry/), "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 The experimental HTTP query `GET /state?targets=a,b` computes only the named nodes and their
@@ -2239,7 +2240,10 @@ exception `Type: message` and the frames), `error_type`, `error_message` (the me
 `error_traceback`, `error_phase` (where the step failed, as in the error envelope's `phase`;
 `null` for a step that did not fail, a dead worker or a row from before #664) and
 `worker_exit` (how a dead worker ended: `SIGKILL (possibly the OOM killer)`, another signal
-name, `code N` or `disconnected`; `null` for a step that raised).
+name, `code N` or `disconnected`; `null` for a step that raised). A step that ran or failed in a run traced with
+`BARCA_TELEMETRY=datadog` also has `trace_id` (the Datadog trace it was sent as, 128 bits in 32
+hex digits) and `span_id` (its root `barca.step` span, decimal); the two keys are absent for
+every other step (experimental, additive, 0.41.0; [`barca docs telemetry`](/reference/telemetry/)).
 Cached steps are not listed: `run.steps_cached` counts them. `steps_page` is `{total,
 truncated}`: how many steps the run recorded and whether `steps` lists fewer (the table
 prints a note on stderr). `hint`, present when a step

@@ -43,6 +43,8 @@ pub(crate) async fn serve_cmd(
     } = args;
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
     let mut resolved = barca_core::config::resolve(env.as_deref()).map_err(engine)?;
+    // A Datadog site that is not a host name would make every trace link wrong: a usage error.
+    barca_core::config::datadog_app_url(&resolved.project_root).map_err(engine)?;
     if let Some(mode) = auth {
         resolved.server_auth = mode;
     }

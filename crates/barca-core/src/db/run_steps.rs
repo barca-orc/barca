@@ -76,6 +76,63 @@ pub struct RunStep {
     /// its own. Experimental.
     #[serde(default)]
     pub batch: Option<String>,
+    /// The Datadog trace the step was sent as: its 128-bit id in 32 hex digits, what
+    /// `https://app.<site>/apm/trace/<trace_id>` opens. Present only for a step that ran or
+    /// failed in a run traced with `BARCA_TELEMETRY=datadog`; absent otherwise. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub trace_id: Option<String>,
+    /// The id of that trace's root `barca.step` span, in decimal. Present with `trace_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub span_id: Option<String>,
+}
+
+/// Whether run `run_id` sent a Datadog trace per step (`runs.trace`, 0.41.0). `false` for a
+/// database from before the column.
+pub(crate) async fn run_traced(
+    conn: &libsql::Connection,
+    run_id: &str,
+) -> Result<bool, BarcaError> {
+    if !has_column(conn, "runs", "trace").await? {
+        return Ok(false);
+    }
+    let mut rows = conn
+        .query("SELECT trace FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run trace: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run trace: {e}")))?;
+    Ok(row
+        .and_then(|r| r.get::<String>(0).ok())
+        .is_some_and(|t| t == "datadog"))
+}
+
+/// Whether run `run_id` sent a Datadog trace per step: [`run_traced`] on the database at
+/// `db_path`.
+pub async fn get_run_traced(db_path: &str, run_id: &str) -> Result<bool, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    run_traced(&conn, run_id).await
+}
+
+/// Give each step of traced run `run_id` that ran or failed its Datadog trace and span ids
+/// (cached and skipped steps send no trace).
+pub fn attach_trace_ids(steps: &mut [RunStep], run_id: &str) {
+    for step in steps {
+        if step.trace_id.is_some()
+            || !(StepStatus::Success.is(Some(&step.status))
+                || StepStatus::Failed.is(Some(&step.status)))
+        {
+            continue;
+        }
+        let display = crate::StepId::parse(&step.node_id).display();
+        let (trace, span) = crate::telemetry::datadog::step_trace_ref(run_id, &display);
+        step.trace_id = Some(trace);
+        step.span_id = Some(span);
+    }
 }
 
 /// How many lines of a failed step's output `barca history RUN_ID` shows ([`RunStep::output_tail`]).
@@ -330,9 +387,14 @@ pub async fn get_run_steps_page(
             batch: text(&row, 13),
             error_phase: text(&row, 14),
             node_id,
+            trace_id: None,
+            span_id: None,
         });
     }
     drop(rows);
+    if run_traced(&conn, run_id).await? {
+        attach_trace_ids(&mut steps, run_id);
+    }
     // A failed step's last lines (#627). Failed steps are kept first in a page (#623), so every
     // failed step listed has its tail; only the listed failed steps' lines are read.
     // A key of a batched call: its call's output, recorded once for the call.
@@ -792,5 +854,72 @@ mod output_tail_tests {
         assert_eq!(tail.first().unwrap(), "line 10");
         assert_eq!(tail.last().unwrap(), "line 29");
         assert!(output_tail(&lines, "p.py:c").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn steps_of_a_traced_run_carry_the_trace_they_were_sent_as() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("m.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+        let (db, conn) = open_conn(&db_path).await.unwrap();
+        for (run, trace) in [("traced", "datadog"), ("plain", "")] {
+            conn.execute(
+                "INSERT INTO runs (run_id, command, files, status, trace) VALUES (?1, 'get', '[]', 'failed', NULLIF(?2, ''))",
+                [run, trace],
+            )
+            .await
+            .unwrap();
+            for (node, status) in [("p.py:a", "success"), ("p.py:b[k=1]", "failed")] {
+                conn.execute(
+                    "INSERT INTO materializations (node_id, run_hash, status, run_id) VALUES (?1, 'h', ?2, ?3)",
+                    [node, status, run],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        drop((conn, db));
+        let traced = get_run_steps(&db_path, "traced").await.unwrap();
+        assert_eq!(traced.len(), 2);
+        for step in &traced {
+            let (trace, span) = crate::telemetry::datadog::step_trace_ref("traced", &step.node_id);
+            assert_eq!(
+                step.trace_id.as_deref(),
+                Some(trace.as_str()),
+                "{}",
+                step.node_id
+            );
+            assert_eq!(step.span_id.as_deref(), Some(span.as_str()));
+        }
+        let json = serde_json::to_value(&traced[0]).unwrap();
+        assert!(json["trace_id"].is_string());
+
+        let plain = get_run_steps(&db_path, "plain").await.unwrap();
+        assert!(
+            plain
+                .iter()
+                .all(|s| s.trace_id.is_none() && s.span_id.is_none())
+        );
+        let json = serde_json::to_value(&plain[0]).unwrap();
+        assert!(
+            json.get("trace_id").is_none(),
+            "absent, not null, for an untraced run"
+        );
+    }
+
+    #[test]
+    fn cached_steps_get_no_trace() {
+        let mut steps = vec![RunStep {
+            node_id: "p.py:a".into(),
+            status: "cached".into(),
+            ..Default::default()
+        }];
+        attach_trace_ids(&mut steps, "r");
+        assert!(steps[0].trace_id.is_none());
     }
 }

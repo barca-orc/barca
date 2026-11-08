@@ -18,6 +18,7 @@
 .barca-btn[data-size="sm"] { height: 26px; padding: 0 10px; font-size: var(--text-sm); gap: 6px; }
 .barca-btn[data-size="lg"] { height: 40px; padding: 0 20px; font-size: var(--text-md); gap: 8px; border-radius: var(--radius-md); }
 .barca-btn[data-full] { width: 100%; }
+a.barca-btn { text-decoration: none; }
 .barca-btn:disabled { cursor: not-allowed; opacity: 0.45; }
 .barca-btn[data-loading]:disabled { opacity: 1; }
 .barca-btn--signal { background: var(--signal); color: var(--text-on-signal); font-weight: 600; }

@@ -784,3 +784,53 @@ async fn serve_lifecycle_reaches_a_dogstatsd_listener() {
     dd.statsd = Err("DD_DOGSTATSD_URL is not supported".to_string());
     assert!(dd.export_server(&report).await.is_err());
 }
+
+#[test]
+fn step_trace_ref_is_the_trace_the_step_was_sent_as() {
+    let (trace, span) = step_trace_ref("r1", "p.py:orders[week=w1]");
+    assert_eq!(trace.len(), 32);
+    assert_eq!(
+        trace,
+        format!(
+            "{:016x}{:016x}",
+            step_trace_id_high("r1", "p.py:orders[week=w1]"),
+            step_trace_id("r1", "p.py:orders[week=w1]")
+        )
+    );
+    assert_eq!(span, step_span_id("r1", "p.py:orders[week=w1]").to_string());
+    assert_ne!(
+        step_trace_ref("r1", "p.py:orders").0,
+        step_trace_ref("r2", "p.py:orders").0
+    );
+}
+
+#[test]
+fn app_url_follows_datadog_sites() {
+    assert_eq!(
+        app_url("datadoghq.com").as_deref(),
+        Some("https://app.datadoghq.com")
+    );
+    assert_eq!(
+        app_url("datadoghq.eu").as_deref(),
+        Some("https://app.datadoghq.eu")
+    );
+    assert_eq!(
+        app_url("us3.datadoghq.com").as_deref(),
+        Some("https://us3.datadoghq.com")
+    );
+    assert_eq!(
+        app_url(" AP1.datadoghq.com/ ").as_deref(),
+        Some("https://ap1.datadoghq.com")
+    );
+    assert_eq!(
+        app_url("ddog-gov.com").as_deref(),
+        Some("https://app.ddog-gov.com")
+    );
+    assert_eq!(
+        app_url("app.datadoghq.com").as_deref(),
+        Some("https://app.datadoghq.com")
+    );
+    assert_eq!(app_url(""), None);
+    assert_eq!(app_url("https://evil.example/x"), None);
+    assert_eq!(app_url("localhost"), None);
+}

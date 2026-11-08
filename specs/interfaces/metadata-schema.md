@@ -170,6 +170,11 @@ every database from before 0.29.2 (#629):
 - `runs.client_run_id` (TEXT, nullable, 0.27.0, RFC-0007 §4.1): on a server, the run id a laptop
   gave a run it posted to the ledger (`triggered_by: client`); a repeated post of that run is
   recognised by it.
+- `runs.trace` (TEXT, nullable, 0.41.0): `datadog` when the run sent a Datadog trace per step
+  (`BARCA_TELEMETRY=datadog` when it started), `NULL` otherwise and on older rows. Step trace
+  ids are not stored: they are derived from the run id and the step id
+  (`telemetry::datadog::step_trace_ref`), so `barca history RUN_ID --json` and `GET /runs/{id}`
+  serve `trace_id`/`span_id` only for steps of a run with this set. Older binaries ignore it.
 - `ledger_posts` (0.27.0, RFC-0007): on a machine that runs against a server's ledger, one row per
   run it posted or has yet to post (`client_run_id` primary key, `server`, the post `body` as
   JSON, `state` `unsynced` or `shared`, `server_run_id`, the last `error`, `attempts`,

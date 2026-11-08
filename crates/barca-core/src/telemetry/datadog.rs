@@ -232,6 +232,42 @@ pub(crate) fn step_span_id(run_id: &str, node: &str) -> u64 {
     span_id(&["step", run_id, node])
 }
 
+/// The ids of the trace the step `node` (its display id) of a run was sent as, as Datadog's
+/// UI writes them: the 128-bit trace id in 32 hex digits (what `https://app.<site>/apm/trace/`
+/// takes) and the root `barca.step` span's id in decimal. Derived, never stored: a run's row
+/// records only that it was traced (`runs.trace`), so these must stay the ids the run sent.
+pub fn step_trace_ref(run_id: &str, node: &str) -> (String, String) {
+    (
+        format!(
+            "{:016x}{:016x}",
+            step_trace_id_high(run_id, node),
+            step_trace_id(run_id, node)
+        ),
+        step_span_id(run_id, node).to_string(),
+    )
+}
+
+/// The Datadog web app for `site` (`DD_SITE`, `[telemetry] datadog_site`): `app.` before a
+/// two-label site (`datadoghq.com`, `datadoghq.eu`, `ddog-gov.com`), a regional site
+/// (`us3.datadoghq.com`, `ap1.datadoghq.com`) as it is. `None` for a value that is not a host
+/// name.
+pub fn app_url(site: &str) -> Option<String> {
+    let site = site.trim().trim_end_matches('/').to_ascii_lowercase();
+    let host_like = !site.is_empty()
+        && site.contains('.')
+        && site.split('.').all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    if !host_like {
+        return None;
+    }
+    if site.starts_with("app.") || site.split('.').count() > 2 {
+        Some(format!("https://{site}"))
+    } else {
+        Some(format!("https://app.{site}"))
+    }
+}
+
 /// The trace and span a `BARCA_LOG=json` line belongs to, as `(trace_id, span_id)`: the
 /// step's own trace and its root span for a line about `node`; the run's for a line with no
 /// node.

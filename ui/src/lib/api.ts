@@ -115,7 +115,7 @@ export const api = {
     return request<PartitionKeys>(`/assets/${encodeURIComponent(name)}/partitions?${params}`)
   },
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema?sample=${PREVIEW_ROWS}`),
-  project: () => request<{ root: string | null }>('/project'),
+  project: () => request<{ root: string | null; telemetry?: { datadog_url: string | null } }>('/project'),
   plan: () => request<PlanResult>('/plan'),
   /** `GET /state` of a group, a source file, or (`null`) every node. */
   state: (scope: StateScope | null, signal?: AbortSignal) =>

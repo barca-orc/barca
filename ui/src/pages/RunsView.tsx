@@ -6,7 +6,7 @@ import { Absolute, Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
 import { RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
-import { failedSteps, raisedAt } from '@/lib/runRecovery'
+import { failedSteps, raisedAt, traceUrl } from '@/lib/runRecovery'
 import { formatSeconds } from '@/lib/assetTable'
 import { zoneName } from '@/lib/time'
 import { plural } from '@/lib/plural'
@@ -40,15 +40,26 @@ interface StepTools {
   logStep: string | null
   setLogStep: (step: string | null) => void
   onStarted: (runId: string) => void
+  /** The Datadog web app a step's trace opens in; null when the server names none. */
+  datadogUrl: string | null
 }
 const StepToolsContext = createContext<StepTools | null>(null)
 
-/** A step's "Retry" (failed steps of a finished run) and "Logs" (filters the logs to it). */
-function StepButtons({ stepId, failed }: { stepId: string; failed: boolean }) {
+/** "View trace": the step's Datadog trace in a new tab; nothing when it sent none. */
+export function TraceLink({ step, datadogUrl }: { step: Pick<RunStep, 'node_id' | 'trace_id'>; datadogUrl: string | null | undefined }) {
+  const href = traceUrl(datadogUrl, step)
+  if (!href) return null
+  return <a className="barca-btn barca-btn--ghost" data-size="sm" href={href} target="_blank" rel="noreferrer noopener"
+    title={`Open ${step.node_id}'s trace in Datadog`} onClick={(e) => e.stopPropagation()}>View trace</a>
+}
+
+/** A step's "Retry" (failed steps of a finished run), "Logs" (filters the logs to it) and "View trace". */
+function StepButtons({ stepId, failed, step }: { stepId: string; failed: boolean; step?: RunStep }) {
   const tools = useContext(StepToolsContext)
   if (!tools) return null
   const on = tools.logStep === stepId
   return <span className="barca-run-step-actions">
+    {step && <TraceLink step={step} datadogUrl={tools.datadogUrl} />}
     <Button size="sm" variant="ghost" aria-pressed={on} title={on ? 'Show every step\'s logs' : `Show only ${stepId}'s logs`}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); tools.setLogStep(on ? null : stepId) }}>{on ? 'All logs' : 'Logs'}</Button>
     {failed && !runIsLive(tools.run.status) && <RetryStep run={tools.run} stepId={stepId} onStarted={tools.onStarted} />}
@@ -65,7 +76,7 @@ function StepList({ steps, root }: { steps: readonly RunStep[]; root?: string | 
         <code>{step.node_id}</code>
         <div><StatusBadge size="sm" tone={step.status === 'cached' ? 'neutral' : runTone(step.status)} label={step.status} />
           {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}
-          <StepButtons stepId={step.node_id} failed={step.status === 'failed'} /></div>
+          <StepButtons stepId={step.node_id} failed={step.status === 'failed'} step={step} /></div>
         {step.error && <Traceback error={step.error} root={root} />}
       </li>)}
     </ul>
@@ -105,7 +116,7 @@ function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; 
   </details>
 }
 
-export function RunPanelView({ id, run, eventGap = false, root, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; root?: string | null; dispatch: Dispatch<RunsMsg> }) {
+export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = null, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; root?: string | null; datadogUrl?: string | null; dispatch: Dispatch<RunsMsg> }) {
   const retry = <Button size="sm" onClick={() => dispatch({ type: 'retry_detail' })}>Retry</Button>
   return (
     <SidePanel label="Run details" title="Run details" subtitle={run.kind === 'ready' ? run.data.run_id : id}
@@ -123,7 +134,7 @@ export function RunPanelView({ id, run, eventGap = false, root, dispatch }: { id
             <p role="alert">Showing the last loaded run information: {refreshError}</p>
             {retry}
           </Section>}
-          <RunDetails data={data} eventGap={eventGap} root={root} onStarted={(runId) => dispatch({ type: 'run_selected', id: runId })} />
+          <RunDetails data={data} eventGap={eventGap} root={root} datadogUrl={datadogUrl} onStarted={(runId) => dispatch({ type: 'run_selected', id: runId })} />
         </>)
         .exhaustive()}
     </SidePanel>
@@ -134,7 +145,7 @@ export function RunPanelView({ id, run, eventGap = false, root, dispatch }: { id
  * The top of a run's panel: for a failed run, what failed and where, then the recovery and
  * hand-off actions, so neither needs a scroll.
  */
-function RunSummary({ data, onStarted, onFilter }: { data: RunView; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
+function RunSummary({ data, datadogUrl, onStarted, onFilter }: { data: RunView; datadogUrl: string | null; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
   const live = runIsLive(data.status)
   const failed = failedSteps(data)
   const shown = failed.slice(0, 5)
@@ -148,6 +159,7 @@ function RunSummary({ data, onStarted, onFilter }: { data: RunView; onStarted: (
             <button type="button" className="barca-run-link" title="Show this step's logs" onClick={() => onFilter(step.node_id)}><code>{shortName(step.node_id)}</code></button>
             {' '}<ErrorLine error={step.error_type && step.error_message ? `${step.error_type}: ${step.error_message}` : step.error} />
             {where && <span className="barca-cell-sub"> · raised at <code className="barca-wrap" title={where}>{where.replace(/^.*\/([^/]+\/[^/]+:\d)/, '…/$1')}</code></span>}
+            {' '}<TraceLink step={step} datadogUrl={datadogUrl} />
           </li>
         })}
         {failed.length > shown.length && <li className="barca-note">and {(failed.length - shown.length).toLocaleString()} more below</li>}
@@ -155,20 +167,20 @@ function RunSummary({ data, onStarted, onFilter }: { data: RunView; onStarted: (
     </>}
     <div className="barca-run-actions">
       {!live && <RunActions run={data} failed={runFailed(data.status)} onStarted={onStarted} />}
-      <IncidentSummaryButton run={data} />
+      <IncidentSummaryButton run={data} datadogUrl={datadogUrl} />
     </div>
   </div>
 }
 
-function RunDetails({ data, eventGap, root, onStarted }: { data: RunView; eventGap: boolean; root?: string | null; onStarted: (runId: string) => void }) {
+function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: RunView; eventGap: boolean; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void }) {
   const [logStep, setLogStep] = useState<string | null>(null)
   const outcome = parseOutcome(data.outcome)
   const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
   const result = outcomeResult(outcome)
   const nodes = data.steps_page?.nodes ?? []
   const targets = runTargetLines(data, nodes)
-  return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted }}>
-    <RunSummary data={data} onStarted={onStarted} onFilter={setLogStep} />
+  return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
+    <RunSummary data={data} datadogUrl={datadogUrl} onStarted={onStarted} onFilter={setLogStep} />
     <Section title="Run">
       <StatusBadge tone={runTone(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} />
       {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
@@ -213,6 +225,8 @@ export interface RunsViewProps {
   now: number
   /** The project root: traceback paths are shown relative to it. */
   root?: string | null
+  /** The Datadog web app (`GET /project` `telemetry.datadog_url`): steps link to their traces there. */
+  datadogUrl?: string | null
   dispatch: Dispatch<RunsMsg>
 }
 
@@ -263,7 +277,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
   )
 }
 
-export function RunsView({ model, runs, selected, queue, now, root, dispatch }: RunsViewProps) {
+export function RunsView({ model, runs, selected, queue, now, root, datadogUrl = null, dispatch }: RunsViewProps) {
   const { zone } = useTimeZone()
   const list = runs.kind === 'ready' ? runs.data : null
   return (
@@ -310,7 +324,7 @@ export function RunsView({ model, runs, selected, queue, now, root, dispatch }: 
             })
             .exhaustive()}
         </div>
-        {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} eventGap={selected.eventGap} root={root} dispatch={dispatch} />}
+        {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} eventGap={selected.eventGap} root={root} datadogUrl={datadogUrl} dispatch={dispatch} />}
       </div>
     </div>
   )
