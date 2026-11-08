@@ -75,10 +75,11 @@ test.describe('topbar Run', () => {
     await started
   })
 
-  test('is absent on pages with nothing to run', async ({ page }) => {
+  test('stays in the topbar on every page: the Tasks page offers to run all assets and sensors', async ({ page }) => {
     await page.goto('/ui/#/tasks?state=all')
     await expect(page.getByRole('banner')).toBeVisible()
-    await expect(topbarRun(page)).toHaveCount(0)
+    await expect(topbarRun(page)).toHaveText(/^Run all \d+ assets/)
+    await expect(topbarRun(page)).toBeEnabled()
   })
 })
 

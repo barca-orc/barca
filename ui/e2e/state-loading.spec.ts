@@ -37,8 +37,8 @@ test('a status failure leaves grouped metadata and sidebar counts visible', asyn
   }))
   await page.goto('/ui/#/assets?pipeline=forecast.py')
   await expect(page.locator('.barca-group-table tbody tr')).toHaveCount(2)
-  await expect(page.getByRole('status')).toContainText('History is unavailable')
-  await expect(page.getByRole('status')).toContainText('Check the metadata volume')
+  const problem = page.getByRole('status').filter({ hasText: 'History is unavailable' })
+  await expect(problem).toContainText('Check the metadata volume')
   await expect(page.locator('.barca-sidebar').getByRole('button', { name: 'other.py 1' })).toBeVisible()
 })
 
