@@ -174,7 +174,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             </Button>
             {unpin.error && <span role="alert"> Could not unpin: {unpin.error.message}</span>}
           </p>
-        ) : !(failed && last) && <p className="barca-note">{node.cache.detail}</p>}
+        ) : !(failed && last) && <p className="barca-note">{sentence(node.cache.detail)}</p>}
         {failedKeys > 0 && (
           <p className="barca-note">
             {failedRun && <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>Open the run</Link>}
@@ -432,17 +432,6 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       <IncidentControls node={node} graph={graph} readOnly={runAction.readOnly} />
       {runGuard.dialog}
 
-      {/* What reads it directly; nothing to say when nothing does (Blast radius says so). */}
-      {downstream.length > 0 && <Section title="Consumers">
-        <KeyValue label="reads it">
-          {downstream.map((n) => (
-            <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
-              {shortName(n.id)}
-            </button>
-          ))}
-        </KeyValue>
-      </Section>}
-
       <details className="barca-node-technical" key={node.id}>
         <summary>Technical details</summary>
         {node.cache.run_hash && (
@@ -460,6 +449,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         </KeyValue>
         {row?.nextRunMs != null && (
           <KeyValue label="next run"><Absolute at={row.nextRunMs} /></KeyValue>
+        )}
+        {/* Blast radius lists everything downstream; the direct readers are a detail. */}
+        {downstream.length > 0 && (
+          <KeyValue label="read directly by">
+            {downstream.map((n) => (
+              <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
+                {shortName(n.id)}
+              </button>
+            ))}
+          </KeyValue>
         )}
         <KeyValue label="partitioned">{node.partitioned ? 'yes' : 'no'}</KeyValue>
         <KeyValue label="env vars">{node.env.length ? <code>{node.env.join(', ')}</code> : '–'}</KeyValue>
@@ -503,4 +502,10 @@ function RunList({ runs, nowMs, said }: { runs: AssetRunEntry[]; nowMs: number; 
       ))}
     </ul>
   )
+}
+
+/** The server's state detail is a clause ("a successful materialization matches…"); shown alone it
+ *  reads as a sentence. */
+function sentence(text: string): string {
+  return text ? text[0]!.toUpperCase() + text.slice(1) : text
 }

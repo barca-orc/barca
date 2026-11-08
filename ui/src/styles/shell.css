@@ -1108,7 +1108,7 @@
 /* The panel's blast radius and incident controls (components/assets/). */
 .barca-blast-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 4px; }
 .barca-blast-list > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.barca-incident-actions { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0; }
+.barca-incident-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
 
 /* The panel header's text column; its actions sit beside it. */
 .barca-sidepanel-heading { min-width: 0; }
@@ -1147,3 +1147,20 @@
 .barca-run-target-line { color: var(--text-default); }
 .barca-cell-why .barca-link { margin: 0; font-size: inherit; color: inherit; }
 .barca-cell-why .barca-link:hover { color: var(--text-strong); }
+
+/* Links inside running text: the text's own colour with a faint underline, so a link reads as one
+   without a second accent colour on the page. */
+.barca-note a, .barca-cell-sub a, .barca-why a {
+  text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px;
+}
+.barca-note a:hover, .barca-cell-sub a:hover, .barca-why a:hover { text-decoration-color: currentColor; }
+.barca-incident-links { margin: 4px 0 0; }
+
+/* A version: its hash and what it is on one line, when and how big on the next, cut short. */
+.barca-version-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.barca-version-tag {
+  padding: 0 5px; border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  font-size: var(--text-2xs); line-height: 16px; color: var(--text-muted);
+}
+.barca-version-pinned .barca-version-tag { color: var(--text-strong); border-color: var(--border-strong); }
+.barca-version-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

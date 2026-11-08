@@ -166,7 +166,11 @@ a.barca-btn { text-decoration: none; }
   border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-inset); color: var(--text-default);
   font: inherit; cursor: pointer;
+  appearance: none; padding-right: 24px;
 }
+.barca-select select:hover { border-color: var(--border-strong); }
+.barca-select select:focus-visible { outline: none; box-shadow: var(--focus-glow); }
+.barca-select > svg.barca-select-chevron { left: auto; right: 8px; }
 /* An icon in place of the label (the label stays, for a screen reader): the icon sits in the box. */
 .barca-select > svg { position: absolute; left: 8px; pointer-events: none; color: var(--text-muted); }
 .barca-select:has(> svg) select { padding-left: 26px; }
@@ -332,6 +336,6 @@ a.barca-btn { text-decoration: none; }
 .barca-versions { list-style: none; margin: 0; padding: 0; }
 .barca-version { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border-default); }
 .barca-version:first-child { border-top: 0; }
-.barca-version-what { display: flex; flex-direction: column; min-width: 0; }
+.barca-version-what { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .barca-version-pinned code { font-weight: 600; }
 .barca-version-upload { margin: 0; }

@@ -107,7 +107,7 @@ describe('AssetVersionsView', () => {
       versions: [version('dddddddddddddddd', { current: true, pinned: true, run_id: null, upload }), version('aaaaaaaaaaaaaaaa')],
     }), { upload: true })
     expect(text(pinned)).toContain('Override uploaded by token:ops from fix.json.')
-    expect(text(pinned)).toContain('uploaded (fix.json)')
+    expect(text(pinned)).toContain('uploaded1h ago · 1.5s · 2.0 KB · fix.json')
   })
 
   it('tells the format from the extension', () => {

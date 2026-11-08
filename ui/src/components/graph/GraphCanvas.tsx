@@ -144,14 +144,40 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
     })
   }, [fitView, setViewport])
 
+  // Fit once the nodes are measured and the canvas has a size, and again on a new layout. A fit
+  // on a timer alone no-ops when the nodes are measured late (a slow status load), leaving the
+  // graph at the canvas's top-left corner.
+  // Every node has a measured size (React Flow's useNodesInitialized also waits for handle
+  // bounds, which a node without edges never gets).
+  const measured = useStore((s) => {
+    if (s.nodeLookup.size === 0) return false
+    for (const n of s.nodeLookup.values()) if (!n.hidden && !n.measured.width) return false
+    return true
+  })
+  const sized = width > 0 && height > 0
+  // Until the user pans or zooms, a canvas that changes size (a banner above it, the panel
+  // opening, the window) re-fits; after that the view is theirs until the layout changes.
+  const moved = useRef(false)
+  const pane = useStore((s) => s.domNode)
   useEffect(() => {
-    // Fit after mount and on every layout-direction change. A short settle
-    // delay lets React Flow register node measurements + container size; an
-    // immediate fitView no-ops (the design-system graph demo hit the same
-    // timing quirk). `fitView` is safe to call repeatedly.
-    const t = setTimeout(fit, 150)
+    if (!pane) return
+    const mine = () => { moved.current = true }
+    pane.addEventListener('wheel', mine, { passive: true })
+    pane.addEventListener('pointerdown', mine)
+    return () => {
+      pane.removeEventListener('wheel', mine)
+      pane.removeEventListener('pointerdown', mine)
+    }
+  }, [pane])
+  useEffect(() => {
+    moved.current = false
+  }, [layoutKey])
+  useEffect(() => {
+    if (!measured || !sized || moved.current) return
+    // A short settle so React Flow has registered every measurement; `fit` is safe to repeat.
+    const t = setTimeout(fit, 60)
     return () => clearTimeout(t)
-  }, [layoutKey, fit])
+  }, [layoutKey, fit, measured, sized, width, height])
 
   useImperativeHandle(handleRef, () => ({ fit }), [fit])
   return null

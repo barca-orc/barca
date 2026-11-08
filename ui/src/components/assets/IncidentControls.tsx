@@ -54,14 +54,15 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
 
   return (
     <Section title="Incident controls">
-      <KeyValue label="paused">
-        {pause ? (
+      {/* Not paused is the normal state: say only when it is. */}
+      {pause && (
+        <KeyValue label="paused">
           <span className="barca-state-line">
             <StatusBadge glyph="paused" label="paused" size="sm" />
             <span className="barca-cell-sub">since <Absolute at={pause.paused_at * 1000} /> via {shortName(pause.via)}</span>
           </span>
-        ) : 'no'}
-      </KeyValue>
+        </KeyValue>
+      )}
       <div className="barca-incident-actions">
         {pause ? (
           <>
@@ -69,13 +70,13 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
               Resume this asset
             </Button>
             {below > 0 && (
-              <Button size="sm" variant="ghost" disabled={disabled} onClick={() => toggle.mutate({ pause: false, target: node.id, downstream: true })}>
+              <Button size="sm" disabled={disabled} onClick={() => toggle.mutate({ pause: false, target: node.id, downstream: true })}>
                 Resume it and downstream
               </Button>
             )}
           </>
         ) : (
-          <Button size="sm" variant="danger" disabled={disabled}
+          <Button size="sm" disabled={disabled}
             onClick={() => ask({
               title: `Pause ${name} and downstream?`,
               body: `Scheduled and sensor-triggered runs skip ${name}${below ? ` and the ${below} ${below === 1 ? 'node' : 'nodes'} below it` : ''} until resumed. Runs by hand ask first.`,
@@ -85,7 +86,7 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
             Pause this asset and downstream
           </Button>
         )}
-        <Button size="sm" variant="ghost" disabled={disabled}
+        <Button size="sm" disabled={disabled}
           onClick={() => ask({
             title: `Pause every asset of ${file}?`,
             body: `Scheduled runs skip every node defined in ${file} until resumed.`,
@@ -95,7 +96,7 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
           Pause pipeline (file)
         </Button>
         {running.length > 0 && (
-          <Button size="sm" variant="ghost" disabled={disabled}
+          <Button size="sm" disabled={disabled}
             onClick={() => ask({
               title: `Pause ${running.length} ${running.length === 1 ? 'schedule' : 'schedules'}?`,
               body: `No tick of ${running.map((s) => shortName(s.job.id)).join(', ')} fires until resumed.`,
@@ -106,17 +107,17 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
           </Button>
         )}
         {held.length > 0 && (
-          <Button size="sm" variant="ghost" disabled={disabled}
+          <Button size="sm" disabled={disabled}
             onClick={() => held.forEach((s) => scheduleToggle.mutate({ id: s.job.id, pause: false }))}>
             Resume {held.length} {held.length === 1 ? 'schedule' : 'schedules'}
           </Button>
         )}
         {queuePaused ? (
-          <Button size="sm" variant="ghost" disabled={disabled} onClick={() => queueToggle.mutate(false)}>
+          <Button size="sm" disabled={disabled} onClick={() => queueToggle.mutate(false)}>
             Resume the run queue
           </Button>
         ) : (
-          <Button size="sm" variant="ghost" disabled={disabled}
+          <Button size="sm" disabled={disabled}
             onClick={() => ask({
               title: 'Pause the run queue?',
               body: 'No queued run starts until the queue is resumed, for every asset; runs in flight go on.',
@@ -127,7 +128,7 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
           </Button>
         )}
       </div>
-      <p className="barca-cell-sub">
+      <p className="barca-cell-sub barca-incident-links">
         <Link to="/assets?paused=1">All paused assets</Link> · <Link to="/schedules">Schedules</Link> · <Link to="/runs">Runs and queue</Link>
       </p>
       {readOnly && <p className="barca-cell-sub">This server is read-only: nothing can be paused here.</p>}

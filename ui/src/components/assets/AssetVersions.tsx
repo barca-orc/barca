@@ -98,16 +98,21 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
           {data.versions.map((v) => (
             <li key={v.run_hash} className={v.pinned ? 'barca-version barca-version-pinned' : 'barca-version'}>
               <div className="barca-version-what">
-                <code title={v.run_hash}>{shortHash(v.run_hash)}</code>
-                <span className="barca-cell-sub">
+                {/* What the version is (latest, pinned, evicted, uploaded) beside its hash; when and
+                    how big on one line under it, cut short rather than wrapped. */}
+                <span className="barca-version-head">
+                  <code title={v.run_hash}>{shortHash(v.run_hash)}</code>
+                  {v.current && <span className="barca-version-tag">latest</span>}
+                  {v.pinned && <span className="barca-version-tag">pinned</span>}
+                  {!v.available && <span className="barca-version-tag">evicted</span>}
+                  {v.upload && <span className="barca-version-tag" title={v.upload.file_name ?? undefined}>uploaded</span>}
+                </span>
+                <span className="barca-cell-sub barca-version-detail">
                   <Age at={v.materialized_at} nowMs={nowMs} />
                   {v.run_id && <> · run {v.run_id}</>}
                   {v.elapsed_seconds !== null && <> · {formatSeconds(v.elapsed_seconds)}</>}
                   {v.size_bytes !== null && <> · {formatBytes(v.size_bytes)}</>}
-                  {v.current && <> · latest</>}
-                  {v.pinned && <> · pinned</>}
-                  {!v.available && <> · evicted</>}
-                  {v.upload && <> · uploaded{v.upload.file_name ? ` (${v.upload.file_name})` : ''}</>}
+                  {v.upload?.file_name && <> · {v.upload.file_name}</>}
                 </span>
               </div>
               {data.pinnable && !v.pinned && (
