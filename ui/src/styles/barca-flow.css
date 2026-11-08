@@ -6,12 +6,12 @@
 
 .react-flow {
   background: var(--bg-canvas);
-}
-
-/* A card's state label is 12px at 1:1, the smallest a fit shows (graphView.ts READABLE_ZOOM):
-   DagNode sets its label size from this token. */
-.react-flow__node {
-  --text-2xs: var(--text-xs);
+  --xy-controls-button-border-color: var(--border-default);
+  --xy-controls-button-background-color: var(--bg-canvas);
+  --xy-controls-button-background-color-hover: var(--bg-hover);
+  --xy-controls-button-color: var(--text-muted);
+  --xy-controls-button-color-hover: var(--text-strong);
+  --xy-controls-box-shadow: none;
 }
 
 /* DagNode draws its own edge dots, so hide React Flow's handles. */
@@ -24,14 +24,15 @@
   border: none;
 }
 
-/* Edges */
+/* Edges: a neutral hairline; the selected or hovered node's edges a step stronger. */
 .react-flow__edge-path {
-  stroke: var(--border-strong);
-  stroke-width: 1.5;
+  stroke: var(--c-white-line);
+  stroke-width: 1;
+  transition: stroke var(--dur-fast, 120ms) var(--ease-out, ease);
 }
 .react-flow__edge.hot .react-flow__edge-path {
-  stroke: var(--c-white-line);
-  stroke-width: 1.8;
+  stroke: var(--text-default);
+  stroke-width: 1.5;
 }
 .react-flow__edge.live .react-flow__edge-path {
   stroke: var(--status-running-line);
@@ -85,26 +86,24 @@
   box-shadow: var(--focus-glow);
 }
 
-/* Controls */
+/* Controls: one quiet row at the bottom right, the legend's height. */
+.react-flow__panel { margin: 16px; }
 .react-flow__controls {
-  box-shadow: var(--shadow-md);
+  box-shadow: none;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   overflow: hidden;
+  background: var(--bg-canvas);
 }
 .react-flow__controls-button {
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  width: 26px;
+  width: 28px;
   height: 26px;
-}
-.react-flow__controls-button:hover {
-  background: var(--bg-raised);
-  color: var(--text-strong);
+  padding: 0;
 }
 .react-flow__controls-button svg {
   fill: currentColor;
+  max-width: 10px;
+  max-height: 10px;
 }
 
 /* MiniMap */

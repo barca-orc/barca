@@ -1,11 +1,12 @@
 import { StreamNotice } from '@/components/StreamNotice'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, CalendarClock, ChevronDown, Clock, Layers, X } from 'lucide-react'
 import {
   Button,
   Chip,
   ChipGroup,
+  EmptyNote,
   MiddleName,
   PageRunButton,
   ResetDatabaseButton,
@@ -55,6 +56,7 @@ import {
   DEFAULT_SORT,
   assetColumns,
   buildRows,
+  fileDisplay,
   lastRunText,
   lastRunTitle,
   nextSort,
@@ -72,6 +74,13 @@ import { usePausedSet } from '@/hooks/usePauses'
 import { usePinNotes } from '@/hooks/usePins'
 
 const PAGE_LABEL: Record<NodeKind, string> = { asset: 'Assets', task: 'Tasks', sensor: 'Sensors' }
+
+/** What a page with none of its kind says, in a sentence: what the kind is, and how to add one. */
+const EMPTY_HINT: Record<NodeKind, ReactNode> = {
+  asset: <>An asset is a cached function: decorate one with <code>@asset</code> in a served file and it appears here.</>,
+  task: <>A task is a step that always runs, never cached (deploy, notify, migrate): decorate one with <code>@task</code> and run it with <code>barca run</code>.</>,
+  sensor: <>A sensor observes something outside barca and says whether it changed: decorate one with <code>@sensor</code> and the assets downstream re-run when it does.</>,
+}
 
 const LAST_RUN_LABEL: Record<LastRun, string> = {
   any: 'Any time',
@@ -313,14 +322,13 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
           <div className="barca-view-actions">
             {nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            <SearchInput
+            {(rows.length > 0 || !data) && <SearchInput
               placeholder={`Search ${PAGE_LABEL[kind].toLowerCase()}`}
               label="Search by name or file"
               value={filters.query}
               onChange={(query) => setFilters({ ...filters, query })}
-              autoFocus
-            />
-            <Select
+            />}
+            {(rows.length > 0 || !data) && <Select
               label="Last run"
               icon={<Clock size={13} />}
               value={filters.lastRun}
@@ -329,7 +337,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 label: LAST_RUN_LABEL[l] + (l === 'any' ? '' : ` (${counts.lastRun[l]})`),
               }))}
               onChange={(lastRun) => setFilters({ ...filters, lastRun })}
-            />
+            />}
             {kind === 'asset' && <ViewToggle />}
             <PageRunButton run={nodeRun.scopeRun} />
           </div>
@@ -353,6 +361,8 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
               <Skeleton key={i} height={32} />
             ))}
           </div>
+        ) : rows.length === 0 && !onlyPaused ? (
+          <EmptyNote title={`No ${PAGE_LABEL[kind].toLowerCase()}${pipeline ? ` in ${pipelineName(pipeline)}` : ''}`}>{EMPTY_HINT[kind]}</EmptyNote>
         ) : visible.length === 0 ? (
           <p className="barca-table-empty">{onDefault ? 'Nothing needs attention, and nothing ran in the last 24h.' : 'Nothing matches.'}</p>
         ) : (
@@ -380,13 +390,14 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 if (!line) return null
                 if (line.kind === 'file') {
                   const { group, collapsed } = line
-                  const worst = nodeStateDisplay(group.worst)
+                  // The same derivation as the file's line in the sidebar (`fileDisplay`).
+                  const shown = fileDisplay(group.rows)!
                   return (
                     <tr key={`file:${group.file}`} ref={win.measure} data-index={index} className="barca-file-head">
                       <td colSpan={columnCount}>
                         <button type="button" aria-expanded={!collapsed} title={collapsed ? `Show ${group.file}` : `Fold ${group.file}`} onClick={() => setCollapsed((folded) => toggle([...folded], group.file))}>
                           <ChevronDown size={13} />
-                          <StatusGlyph glyph={worst.glyph} size={12} label={`worst: ${worst.label}`} />
+                          <StatusGlyph glyph={shown.glyph} live={shown.live} size={12} label={shown.live ? shown.label : `worst: ${shown.label}`} />
                           <span className="barca-file-name">{group.file || '(no file)'}</span>
                           <span className="barca-count">{group.rows.length.toLocaleString()}</span>
                         </button>

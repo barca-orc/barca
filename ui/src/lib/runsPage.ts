@@ -358,9 +358,12 @@ export function activityBarLabel(h: ActivityHour, zone: TimeZone = 'local'): str
   return parts.join(', ') + failure
 }
 
-/** A tick every `every` hours of the reader's chosen zone: an hour's bar index with its label. */
+/**
+ * A tick every `every` hours of the reader's chosen zone: an hour's bar index with its label.
+ * None in the last four hours, where `now` is: beside a side panel the chart is narrow.
+ */
 export function activityTicks(hours: readonly ActivityHour[], every = 6, zone: TimeZone = 'local'): { index: number; label: string }[] {
   return hours.flatMap((h, index) =>
-    hourOf(h.at, zone) % every === 0 && index < hours.length - 2 ? [{ index, label: hourLabel(h.at, zone) }] : [],
+    hourOf(h.at, zone) % every === 0 && index < hours.length - 4 ? [{ index, label: hourLabel(h.at, zone) }] : [],
   )
 }

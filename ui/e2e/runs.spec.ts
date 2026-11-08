@@ -85,7 +85,7 @@ test.describe('run history', () => {
     // Steps are counted in one unit (#776): the node row says it was cached, the summary says 0 ran.
     await expect(details.locator('.barca-run-nodes')).toContainText('numbers')
     await expect(details.locator('.barca-run-nodes')).toContainText('cached')
-    await expect(details.locator('.barca-kv').filter({ hasText: /^steps0 ok · 1 cached/ })).toHaveCount(1)
+    await expect(details.locator('.barca-fact').filter({ hasText: /^Steps0 ok · 1 cached/ })).toHaveCount(1)
     const created = (await history(request)).find((run) => !before.has(run.id) && run.target === 'pipeline.py:numbers')
     expect(created).toBeDefined()
     await expect(page.getByRole('button', { name: created!.id, exact: true })).toBeVisible()
@@ -93,7 +93,7 @@ test.describe('run history', () => {
     await page.reload()
     await expect(details.locator('.barca-run-nodes')).toContainText('cached')
     await expect(details).toContainText('success')
-    await expect(details.locator('.barca-kv').filter({ hasText: /^steps0 ok · 1 cached/ })).toHaveCount(1)
+    await expect(details.locator('.barca-fact').filter({ hasText: /^Steps0 ok · 1 cached/ })).toHaveCount(1)
     await page.screenshot({ path: '/tmp/barca-ui-runs-details.png', fullPage: true })
   })
 

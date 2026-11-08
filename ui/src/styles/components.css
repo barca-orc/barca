@@ -96,30 +96,25 @@ a.barca-btn { text-decoration: none; }
 .barca-tag-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--signal); flex: none; }
 
 /* ── DagNode ──────────────────────────────────────────────── */
+/* One 40px line: glyph, name, a task's or sensor's kind. Neutral card, hairline border. */
 .barca-dag {
-  position: relative; width: 208px;
+  position: relative; width: 208px; height: 40px;
   background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs); transition: var(--t-all);
+  box-shadow: var(--shadow-xs); transition: border-color var(--dur-fast, 120ms) var(--ease-out, ease), box-shadow var(--dur-fast, 120ms) var(--ease-out, ease);
 }
-.barca-dag[data-clickable]:hover { border-color: var(--c-white-line); }
+.barca-dag[data-clickable]:hover, .react-flow__node:hover .barca-dag { border-color: var(--c-white-line); }
 .barca-dag[data-clickable] { cursor: pointer; }
 /* Tasks always re-run (never cached): a dashed border marks that; assets (cached data) stay solid. */
 .barca-dag[data-kind="task"] { border-style: dashed; }
 .barca-dag[data-live] { border-color: var(--status-running-line); box-shadow: var(--glow-running); }
-.barca-dag[data-selected] { border-color: var(--text-strong); box-shadow: 0 0 0 1px var(--text-strong); }
-.barca-dag-body { padding: 10px 12px 10px; }
-.barca-dag-head { display: flex; align-items: center; gap: 8px; }
+.barca-dag[data-selected], .react-flow__node:hover .barca-dag[data-selected] { border-color: var(--text-strong); box-shadow: 0 0 0 1px var(--text-strong); }
+.barca-dag-body { display: flex; align-items: center; gap: 8px; height: 100%; padding: 0 12px; min-width: 0; }
+.barca-dag-body > svg { flex: none; }
 .barca-dag-name {
-  flex: 1; min-width: 0; font-family: var(--font-sans); font-size: var(--text-sm); font-weight: 500; color: var(--text-strong);
-  letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1; min-width: 0; font-family: var(--font-name); font-size: var(--text-sm); font-weight: 500; color: var(--text-strong);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.barca-dag-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; min-height: 18px; padding-left: 22px; }
-.barca-dag-kind { font-family: var(--font-sans); font-size: var(--text-2xs); letter-spacing: var(--tracking-wide); text-transform: uppercase; color: var(--text-faint); }
-.barca-dag-state { margin-left: auto; font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
-.barca-dag-foot { min-width: 0; flex-wrap: wrap; row-gap: 4px; }
-/* The word is never cut: when it does not share a line with the kind it takes the next. A
-   failing node's word is the text colour, a step stronger; only its glyph is red. */
-.barca-dag-state[data-failed] { color: var(--text-strong); font-weight: 500; }
+.barca-dag-kind { flex: none; font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-faint); }
 
 /* ── SearchInput ──────────────────────────────────────────── */
 /* One focus ring, on the box: the input inside would otherwise get the global
@@ -130,7 +125,7 @@ a.barca-btn { text-decoration: none; }
   border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-inset); color: var(--text-muted);
 }
-.barca-search:focus-within { border-color: var(--c-indigo-line); }
+.barca-search:focus-within { border-color: var(--c-white-line); }
 .barca-search input {
   flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
   color: var(--text-default); font-family: var(--font-sans); font-size: var(--text-sm);
@@ -211,6 +206,13 @@ a.barca-btn { text-decoration: none; }
 .barca-kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 3px 0; font-size: var(--text-sm); min-width: 0; }
 .barca-kv > span:first-child { color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-xs); }
 .barca-kv > span:last-child { min-width: 0; color: var(--text-default); }
+/* A run's facts (RunsView): two to a line, a muted label over each value; a long one, the line. */
+.barca-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin: 0; }
+.barca-fact { min-width: 0; }
+.barca-fact[data-wide] { grid-column: 1 / -1; }
+.barca-fact dt { margin: 0 0 2px; font-size: var(--text-xs); color: var(--text-muted); }
+.barca-fact dd { margin: 0; min-width: 0; font-size: var(--text-sm); color: var(--text-default); overflow-wrap: anywhere; }
+.barca-fact dd code { font-size: var(--text-xs); }
 .barca-note { margin: 6px 0; font-size: var(--text-sm); color: var(--text-default); }
 .barca-wrap { word-break: break-all; }
 

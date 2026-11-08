@@ -111,11 +111,12 @@ The grouped UI and sidebar render from graph/group metadata before cache status 
 Pending state is not presented as never-run or cached. Status arrival preserves row and graph
 geometry; a status error does not hide the graph. Pipeline/group views ask only for their
 upstream cone, while All pipelines and the sidebar's health dots ask for everything. A sidebar
-dot appears only when all of its file's state is known. Evidence:
+dot appears only when all of its file's state is known; it and its count are of the open page's
+kind, derived as that file's header in the table is. Evidence:
 [`state-loading.spec.ts`](../../ui/e2e/state-loading.spec.ts).
 
 The grouped list and graph expose one run action for the selected member, in its node panel
-(the command palette offers the same action; the top bar has no Run). Assets and sensors use
+(the command palette offers the same action; there is no top bar). Assets and sensors use
 cache-aware `get`; tasks use `run`. Read-only mode disables it. An accepted target and its containing groups show live activity
 before the first SSE event; completed runs refresh status/history, and View run opens the
 durable run. Ungrouped node panels use the same action. Evidence:

@@ -333,7 +333,7 @@ last run id, last status and consecutive failed ticks
 
 A scheduled run shows in the web UI while it runs, like any other: the node pulses on the graph
 and the pipeline page, the assets list shows a Running badge with the elapsed time and a link to
-the run, and the header counts the runs in progress. The UI reads it from `GET /state`'s
+the run, and Runs in the sidebar counts the runs in progress. The UI reads it from `GET /state`'s
 `running` field ([Server API](/reference/server-api/#state)), so it does not matter which tab,
 client or shell started the run.
 

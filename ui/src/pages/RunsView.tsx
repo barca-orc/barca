@@ -2,7 +2,7 @@ import { Fragment, createContext, useContext, useState, type ReactNode } from 'r
 import { pathBreaks, relativeTraceback } from '@/lib/health'
 import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Absolute, Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
+import { Absolute, Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
 import { RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
@@ -169,13 +169,24 @@ export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = nul
 /** How many failed steps the summary names, with their errors; the rest are in Steps. */
 const SUMMARY_STEPS = 5
 
+/** A run that failed before any step did (it could not plan, say): its own error; null otherwise. */
+function runSummaryError(data: RunView): string | null {
+  if (failedSteps(data).length > 0) return null
+  const outcome = parseOutcome(data.outcome)
+  return data.error ?? (outcome && outcome.status !== 'success' ? outcome.envelope?.error : null) ?? null
+}
+
+/** One fact of a run: a muted label over its value; `wide` takes the whole line. */
+function Fact({ label, wide = false, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return <div className="barca-fact" data-wide={wide || undefined}><dt>{label}</dt><dd>{children}</dd></div>
+}
+
 function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: RunView; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
   const live = runIsLive(data.status)
   const failed = failedSteps(data)
   const shown = failed.slice(0, SUMMARY_STEPS)
   // A run that failed before any step did (it could not plan, say): its own error, said here once.
-  const outcome = parseOutcome(data.outcome)
-  const runError = failed.length === 0 ? data.error ?? (outcome && outcome.status !== 'success' ? outcome.envelope?.error : null) ?? null : null
+  const runError = runSummaryError(data)
   return <div className="barca-run-summary">
     {failed.length > 0 && <>
       <strong className="barca-run-summary-head"><StatusGlyph glyph="failed" />{failed.length.toLocaleString()} failed step{failed.length === 1 ? '' : 's'}</strong>
@@ -211,15 +222,20 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
   return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
     <RunSummary data={data} root={root} datadogUrl={datadogUrl} onStarted={onStarted} onFilter={setLogStep} />
     <Section title="Run">
-      <StatusBadge glyph={runGlyph(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} />
-      {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
-      <KeyValue label="command">{data.command}</KeyValue>
-      <KeyValue label="target">{data.target ? <code className="barca-wrap">{data.target}</code> : 'all assets'}</KeyValue>
-      <KeyValue label="triggered by">{triggeredByLabel(data.triggered_by)}</KeyValue>
-      <KeyValue label="started"><Absolute at={data.started_at} /></KeyValue>
-      <KeyValue label="finished"><Absolute at={data.finished_at} /></KeyValue>
-      <KeyValue label="duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</KeyValue>
-      <KeyValue label="steps">{runViewSteps(data, nodes)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</KeyValue>
+      {/* The run's facts, two to a line. Its state is said once: by the summary above when a
+          step failed or the run did, else here. */}
+      <dl className="barca-facts">
+        {!summarized.size && !runSummaryError(data) && <Fact label="Status"><StatusBadge size="sm" glyph={runGlyph(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} /></Fact>}
+        <Fact label="Trigger">{triggeredByLabel(data.triggered_by)}</Fact>
+        <Fact label="Command"><code>{data.command}</code></Fact>
+        <Fact label="Target" wide>{data.target ? <code className="barca-wrap">{data.target}</code> : 'all assets'}</Fact>
+        <Fact label="Started"><Absolute at={data.started_at} /></Fact>
+        <Fact label="Finished"><Absolute at={data.finished_at} /></Fact>
+        <Fact label="Duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</Fact>
+        <Fact label="Steps">{runViewSteps(data, nodes)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</Fact>
+      </dl>
+      {/* What became of the target: unless the one line would repeat the summary's failure. */}
+      {!(summarized.size > 0 && targets.length === 1) && targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
       {/* The error itself is in the summary above, once. */}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
@@ -267,14 +283,27 @@ const FILTERS: { value: RunFilter; label: string }[] = [
   { value: 'live', label: 'In progress' },
 ]
 
-/** The last day hour by hour: a bar per hour, failures in red on top; a bar filters to its hour. */
+/**
+ * The last day hour by hour, the page's width: a bar per hour, its runs stacked (failures in
+ * red at the base, then running, then the rest in a quiet grey), a muted axis every six hours
+ * and `now` at the right; a bar filters the list to its hour. Above it, the day in one line.
+ */
 function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivity; hour: number | null; now: number; dispatch: Dispatch<RunsMsg> }) {
   const { zone } = useTimeZone()
   const peak = Math.max(1, ...activity.hours.map((h) => h.ok + h.failed + h.live))
   const width = 100 / activity.hours.length
   const nowAt = 100 - width + (width * ((now % 3_600_000) / 3_600_000))
   return (
-    <div className="barca-activity" aria-label="Runs started in the last 24 hours, hour by hour">
+    <section className="barca-activity" aria-label="Runs started in the last 24 hours, hour by hour">
+      <div className="barca-activity-head">
+        <span className="barca-activity-title">Last 24 hours</span>
+        <span className="barca-activity-summary">
+          {plural(activity.total, 'run')}
+          {activity.failed > 0 && <> · <span className="barca-activity-failed">{activity.failed} not successful</span></>}
+          {activity.medianSeconds !== null && <> · median {formatSeconds(activity.medianSeconds)}</>}
+          {activity.partial && <> · of the runs loaded</>}
+        </span>
+      </div>
       <div className="barca-activity-chart">
         <div className="barca-activity-bars">
           {activity.hours.map((h) => {
@@ -283,11 +312,11 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
             return (
               <button key={h.at} type="button" className="barca-activity-bar" title={label} aria-label={label} aria-pressed={hour === h.at} disabled={n === 0}
                 onClick={() => dispatch({ type: 'hour_toggled', at: h.at })}>
-                <span style={{ height: `${Math.max(n ? 8 : 2, (n / peak) * 100)}%` }}>
-                  {h.failed > 0 && <i data-kind="failed" style={{ flexGrow: h.failed }} />}
-                  {h.live > 0 && <i data-kind="live" style={{ flexGrow: h.live }} />}
+                {n === 0 ? <span className="barca-activity-idle" /> : <span style={{ height: `${Math.max(10, (n / peak) * 100)}%` }}>
                   {h.ok > 0 && <i data-kind="ok" style={{ flexGrow: h.ok }} />}
-                </span>
+                  {h.live > 0 && <i data-kind="live" style={{ flexGrow: h.live }} />}
+                  {h.failed > 0 && <i data-kind="failed" style={{ flexGrow: h.failed }} />}
+                </span>}
               </button>
             )
           })}
@@ -297,13 +326,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
           <span className="barca-activity-now" style={{ left: `${nowAt}%` }}>now</span>
         </div>
       </div>
-      <div className="barca-activity-summary">
-        <strong>{plural(activity.total, 'run')}</strong> in the last 24 h
-        {activity.failed > 0 && <> · <span className="barca-activity-failed">{activity.failed} not successful ({Math.round((activity.failed / activity.total) * 100)}%)</span></>}
-        {activity.medianSeconds !== null && <> · median {formatSeconds(activity.medianSeconds)}</>}
-        {activity.partial && <> · of the runs loaded</>}
-      </div>
-    </div>
+    </section>
   )
 }
 
@@ -345,7 +368,7 @@ export function RunsView({ model, runs, selected, queue, now, root, datadogUrl =
               {refreshError && <RunsError error={refreshError} dispatch={dispatch} />}
               {data.runs.length > 0 && <ActivityStrip activity={runActivity(data.runs, now, 24, data.truncated)} hour={model.hour} now={now} dispatch={dispatch} />}
               {data.runs.length === 0
-                ? <p className="barca-table-empty">No runs recorded. Start a run from the graph to see it here.</p>
+                ? <EmptyNote title="No runs yet">Start one with Run all, from an asset's panel, or with <code>barca get</code> in a terminal: every run appears here with its steps and logs.</EmptyNote>
                 : shown.length === 0
                   ? <p className="barca-table-empty">No loaded run matches.</p>
                   : <RunTable runs={shown} selected={selected?.id ?? null} now={now} dispatch={dispatch} />}

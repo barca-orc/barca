@@ -449,6 +449,11 @@ shows cache states as checking while `/state` runs, then fills them in without m
 graph. A selected pipeline or group requests only its upstream cone; All pipelines requests
 the whole graph, and so does the sidebar, once a minute, for its per-pipeline health dots (a
 dot appears only when all of its file's state is known). A status error leaves source metadata visible with the error above it.
+The sidebar is the UI's one navigation: Search (Ctrl/Cmd-K), then Assets, Runs, Schedules,
+Tasks and Sensors with how many each lists, then the pipelines, then the docs, the connection,
+the time zone and the theme; collapsed, it keeps their icons. A pipeline's count and dot are of
+the open page's kind (assets, except on Tasks and Sensors), with the same state its header in
+the table shows.
 On a project with groups, select a member node in either List or Graph to run it from its
 details panel (or the command palette, Ctrl/Cmd-K). Assets and sensors use cache-aware `get`;
 tasks use `run`. Groups organize nodes and are not run targets. Outside a group, the Run at the

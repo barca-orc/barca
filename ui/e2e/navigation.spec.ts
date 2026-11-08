@@ -7,8 +7,16 @@ test('the index keeps a deep link\'s filters', async ({ page }) => {
 
 test('primary sections are separate from the Assets view toggle', async ({ page }) => {
   await page.goto('/ui/#/assets')
+  // One navigation, in the sidebar: no tab bar above the page.
   const navigation = page.getByRole('navigation', { name: 'Main navigation' })
-  await expect(navigation.getByRole('link')).toHaveText(['Assets', 'Runs', 'Schedules', 'Tasks', 'Sensors'])
+  await expect(page.getByRole('navigation')).toHaveCount(1)
+  await expect(navigation.locator('xpath=ancestor::aside')).toHaveCount(1)
+  for (const name of ['Assets', 'Runs', 'Schedules', 'Tasks', 'Sensors']) {
+    await expect(navigation.getByRole('link', { name, exact: true })).toBeVisible()
+  }
+  // Each section's count is what its page lists.
+  await expect(navigation.getByRole('link', { name: 'Tasks', exact: true }).locator('.barca-nav-count')).toHaveText('2')
+  await expect(navigation.getByRole('link', { name: 'Sensors', exact: true }).locator('.barca-nav-count')).toHaveText('1')
   await expect(navigation.getByRole('link', { name: 'Assets', exact: true })).toHaveAttribute('aria-current', 'page')
   const toggle = page.getByRole('group', { name: 'Asset view' })
   await expect(toggle.getByRole('button', { name: 'List', exact: true })).toHaveAttribute('aria-pressed', 'true')
@@ -45,11 +53,17 @@ test('old graph links open Assets in graph view with the selected node', async (
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
 })
 
-test('the table starts within 120px of the top', async ({ page }) => {
+test('the table starts right under the toolbar, which is the first line of the page', async ({ page }) => {
   await page.goto('/ui/#/assets')
   await expect(page.getByRole('table')).toBeVisible()
   const box = await page.getByRole('table').boundingBox()
-  expect(box!.y).toBeLessThanOrEqual(120)
+  expect(box!.y).toBeLessThanOrEqual(64)
+})
+
+test('a page does not focus its search on load', async ({ page }) => {
+  await page.goto('/ui/#/assets')
+  await expect(page.getByRole('table')).toBeVisible()
+  await expect(page.getByLabel('Search by name or file')).not.toBeFocused()
 })
 
 test('idle furniture stays hidden and the version is on the connection dot', async ({ page }) => {
@@ -63,6 +77,11 @@ test('the sidebar collapses, and stays collapsed across a reload', async ({ page
   await page.goto('/ui/#/assets')
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
   await expect(page.locator('.barca-sidebar')).toHaveAttribute('data-collapsed', 'true')
+  // Collapsed, the sections stay: icons, named for a screen reader and in their tooltips.
+  const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+  await navigation.getByRole('link', { name: 'Runs', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible()
+  await expect(navigation.getByRole('link', { name: 'Runs', exact: true })).toHaveAttribute('aria-current', 'page')
   await page.reload()
   await page.getByRole('button', { name: 'Expand sidebar' }).click()
   await expect(page.locator('.barca-sidebar')).not.toHaveAttribute('data-collapsed', 'true')

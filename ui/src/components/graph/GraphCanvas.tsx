@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, type KeyboardEvent, type Ref } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { plural } from '@/lib/plural'
 import {
   ReactFlow,
@@ -7,6 +7,7 @@ import {
   BackgroundVariant,
   Controls,
   MiniMap,
+  Panel,
   useReactFlow,
   useStore,
   type Edge,
@@ -16,8 +17,9 @@ import {
 import { AssetNode } from './AssetNode'
 import { GroupNode } from './GroupNode'
 import { PortNode } from './PortNode'
+import { GraphLegend } from './GraphLegend'
 import { BLOCKED_UPSTREAM, PINNED } from '@/lib/cacheStateDisplay'
-import { fitTarget, isArrowKey, neighborInDirection, READABLE_ZOOM, waitStatus, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
+import { fitTarget, isArrowKey, MIN_FIT_ZOOM, neighborInDirection, READABLE_ZOOM, waitStatus, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
 import { isLive, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
 import { edgeClassName, type LayoutDir, type GraphEdgeData, type GraphNode, type GraphEntry } from '@/lib/graph'
@@ -28,8 +30,12 @@ import { glyphColor, toneGlyph } from '@/lib/glyph'
 // Defined once, outside the component — a fresh object each render is a perf bug.
 const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: PortNode }
 
-/** Room around a fit for what floats over the canvas: the legend, and the minimap beside it. */
-const FIT_INSET: Inset = { top: 32, right: 32, bottom: 64, left: 56 }
+/**
+ * Room around a fit: 48px on every side, and above the bottom row of what floats over the
+ * canvas (the legend at the left, the zoom controls at the right); the minimap's width at the
+ * right when there is one.
+ */
+const FIT_INSET: Inset = { top: 48, right: 48, bottom: 72, left: 48 }
 const FIT_INSET_BESIDE_MINIMAP: Inset = { ...FIT_INSET, right: 236 }
 const FIT_DURATION = 200
 
@@ -60,6 +66,8 @@ interface GraphCanvasProps {
   states: Record<string, GraphState>
   /** Pinned nodes (`GET /pins`) and what each is pinned to: they read `pinned`. */
   pins?: ReadonlyMap<string, string>
+  /** Legend entries of the page's own (a group card), before the states. */
+  legend?: ReactNode
   handleRef?: Ref<GraphCanvasHandle>
 }
 
@@ -82,8 +90,8 @@ function viewNodes(nodes: GraphNode[]): ViewNode[] {
  * direction flips. React Flow can't fit unmeasured nodes, so the `fitView` prop
  * alone races the first paint of DOM-rendered custom nodes.
  *
- * A fit never goes below the readable zoom (1:1): a graph that fits is shown whole at that
- * size, a bigger one from its selected node, else its failed nodes (`fitTarget`).
+ * A fit shows a graph whole, centred with room on every side, between 0.8 and 1:1; a graph too
+ * big for that is shown at 0.8 from its selected node, else its failed nodes (`fitTarget`).
  */
 function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes: GraphNode[]; layoutKey: string; focus: string | null; minimap: boolean; handleRef?: Ref<GraphCanvasHandle> }) {
   const { fitView } = useReactFlow()
@@ -102,7 +110,7 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
     void fitView({
       nodes: target.map(({ id }) => ({ id })),
       padding: { top: `${inset.top}px`, right: `${inset.right}px`, bottom: `${inset.bottom}px`, left: `${inset.left}px` },
-      minZoom: READABLE_ZOOM,
+      minZoom: MIN_FIT_ZOOM,
       maxZoom: READABLE_ZOOM,
       duration: FIT_DURATION,
     })
@@ -134,8 +142,11 @@ export function GraphCanvas({
   onOpenGroup,
   states,
   pins = NO_PINS,
+  legend,
   handleRef,
 }: GraphCanvasProps) {
+  // The node under the pointer: its edges light up like the selected node's.
+  const [hovered, setHovered] = useState<string | null>(null)
   // Re-layout only when structure or direction changes — never on selection or
   // a live status tick. A big graph is laid out in a worker: `null` until it is.
   const laidOut = useGraphLayout(assets, dir)
@@ -179,7 +190,7 @@ export function GraphCanvas({
   const edges = useMemo(
     () =>
       base.edges.map((e) => {
-        const hot = e.source === selected || e.target === selected
+        const hot = e.source === selected || e.target === selected || (hovered !== null && (e.source === hovered || e.target === hovered))
         const { weight, port, loose } = e.data as GraphEdgeData
         return {
           ...e,
@@ -193,8 +204,18 @@ export function GraphCanvas({
           ].filter(Boolean).join(' '),
         }
       }),
-    [base.edges, selected, nodeTones],
+    [base.edges, selected, hovered, nodeTones],
   )
+  // The legend names only the states this graph shows.
+  const shownGlyphs = useMemo(() => {
+    const words = new Map<string, string>()
+    for (const n of nodes) {
+      if (n.type === 'port') continue
+      const glyph = n.data.lastFailed ? 'failed' : n.data.glyph ?? toneGlyph(n.data.tone)
+      if (!words.has(glyph) && n.data.label) words.set(glyph, n.data.label)
+    }
+    return words
+  }, [nodes])
 
   const onNodeClick = useCallback((_: unknown, n: Node) => {
     if (n.type !== 'port') onSelect(n.id)
@@ -246,6 +267,8 @@ export function GraphCanvas({
         tabIndex={-1}
         zoomOnDoubleClick={!onOpenGroup}
         onPaneClick={() => onSelect(null)}
+        onNodeMouseEnter={(_, n) => setHovered(n.id)}
+        onNodeMouseLeave={() => setHovered(null)}
         minZoom={0.05}
         maxZoom={1.6}
         nodesDraggable={false}
@@ -253,8 +276,11 @@ export function GraphCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-grid)" />
-        <Controls showInteractive={false} />
-        {minimap && <MiniMap nodeColor={n => glyphColor(nodeGlyphs.get(n.id) ?? 'pending')} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
+        <Controls showInteractive={false} position="bottom-right" orientation="horizontal" />
+        <Panel position="bottom-left">
+          <GraphLegend shown={shownGlyphs}>{legend}</GraphLegend>
+        </Panel>
+        {minimap && <MiniMap position="top-right" nodeColor={n => glyphColor(nodeGlyphs.get(n.id) ?? 'pending')} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
         <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={handleRef} />
       </ReactFlow>
     </ReactFlowProvider>

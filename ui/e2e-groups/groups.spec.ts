@@ -68,10 +68,12 @@ test('a failed check is a fact beside its ancestors and itself; the model stays 
   expect(mutations).toEqual([])
 })
 
-test('the legend names every state in the CLI\'s words', async ({ page }) => {
+test('the legend names the states the graph shows, in the CLI\'s words', async ({ page }) => {
   await page.goto(`/ui/#/assets?pipeline=${FILE}&view=graph`)
   const legend = page.locator('.barca-legend')
-  for (const word of CACHE_STATES) await expect(legend).toContainText(word)
+  await expect(legend).toContainText('failing')
+  const words = (await legend.locator('span').allTextContents()).map((w) => w.trim())
+  for (const word of words) expect([...CACHE_STATES, 'failing', 'running', 'pinned', 'Group', 'Pipeline']).toContain(word)
   await expect(legend).not.toContainText(/Healthy|Not run|Stale/)
 })
 

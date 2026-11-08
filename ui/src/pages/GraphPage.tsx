@@ -4,7 +4,6 @@ import { Link, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
 import { Button, IconButton, PageRunButton, ViewToggle } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
-import { GraphLegend } from '@/components/graph/GraphLegend'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
@@ -126,7 +125,6 @@ export function GraphPage() {
             pins={pins}
             handleRef={canvasRef}
           />
-          <GraphLegend />
         </div>
         {selectedAsset && (
           <NodeInspector

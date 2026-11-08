@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CacheStatus, NodeState } from './types'
 import { inPipeline, pipelineSummaries, sourceFile } from './pipeline'
+import { buildRows, fileDisplay, groupByFile } from './assetTable'
 
 function node(id: string, state: CacheStatus['state'] = 'cached', failed = false): NodeState {
   return {
@@ -38,10 +39,11 @@ describe('pipelineSummaries', () => {
     node('pipeline/p02_reconcile.py:check', 'always_runs', true),
     node('other/p01_dims.py:clash'),
   ]
+  const summaries = (states: NodeState[], listed: Pick<NodeState, 'id' | 'kind'>[] = nodes, kind: NodeState['kind'] = 'asset') =>
+    pipelineSummaries(buildRows(states.filter((n) => n.kind === kind), 0), listed, kind)
 
   it('one entry per source file, in file order, with its node count', () => {
-    const s = pipelineSummaries(nodes)
-    expect(s.map((p) => [p.file, p.total])).toEqual([
+    expect(summaries(nodes).map((p) => [p.file, p.total])).toEqual([
       ['other/p01_dims.py', 1],
       ['pipeline/p01_dims.py', 2],
       ['pipeline/p02_reconcile.py', 2],
@@ -49,37 +51,49 @@ describe('pipelineSummaries', () => {
   })
 
   it('names are the file name; files are what tell same-named pipelines apart', () => {
-    const s = pipelineSummaries(nodes)
-    expect(s.filter((p) => p.name === 'p01_dims.py').map((p) => p.file)).toEqual([
+    expect(summaries(nodes).filter((p) => p.name === 'p01_dims.py').map((p) => p.file)).toEqual([
       'other/p01_dims.py',
       'pipeline/p01_dims.py',
     ])
   })
 
-  it('reports the most urgent state in each pipeline, and failed last attempts beside it', () => {
-    const byFile = Object.fromEntries(pipelineSummaries(nodes).map((p) => [p.file, [p.worst, p.failed]]))
-    expect(byFile['pipeline/p01_dims.py']).toEqual(['stale', 0])
-    // A failed check keeps its state (`always_runs`); the failure is counted on its own.
-    expect(byFile['pipeline/p02_reconcile.py']).toEqual(['always_runs', 1])
-    expect(byFile['other/p01_dims.py']).toEqual(['cached', 0])
+  it('shows each file as its header in the table does: a failed last attempt first, then the most urgent state', () => {
+    const rows = buildRows(nodes, 0)
+    const byFile = Object.fromEntries(summaries(nodes).map((p) => [p.file, p.shown?.label]))
+    expect(byFile['pipeline/p01_dims.py']).toBe('stale')
+    expect(byFile['pipeline/p02_reconcile.py']).toBe('failing')
+    expect(byFile['other/p01_dims.py']).toBe('fresh')
+    for (const group of groupByFile(rows)) {
+      expect(summaries(nodes).find((p) => p.file === group.file)?.shown).toEqual(fileDisplay(group.rows))
+    }
+  })
+
+  it('counts only the nodes of the kind, and keeps a file with none of it at 0', () => {
+    const mixed = [...nodes, { ...node('other/p01_dims.py:ping'), kind: 'task' as const }]
+    expect(summaries(mixed, mixed).find((p) => p.file === 'other/p01_dims.py')?.total).toBe(1)
+    const tasks = summaries(mixed, mixed, 'task')
+    expect(tasks.map((p) => [p.file, p.total])).toEqual([
+      ['other/p01_dims.py', 1],
+      ['pipeline/p01_dims.py', 0],
+      ['pipeline/p02_reconcile.py', 0],
+    ])
+    expect(tasks.find((p) => p.total === 0)?.shown).toBeNull()
   })
 
   it('counts metadata before status arrives and keeps other pipelines when only one cone is loaded', () => {
-    const assets = nodes.map(n => ({ id: n.id }))
-    const pending = pipelineSummaries([], assets)
-    expect(pending.map(p => p.total)).toEqual([1, 2, 2])
-    expect(pending.every(p => p.worst === 'unknown')).toBe(true)
-    const partial = pipelineSummaries(nodes.filter(n => n.id.startsWith('pipeline/p02')), assets)
-    expect(partial.map(p => p.total)).toEqual([1, 2, 2])
-    expect(partial.find(p => p.file === 'pipeline/p02_reconcile.py')).toMatchObject({ worst: 'always_runs', failed: 1 })
-    expect(partial.find(p => p.file === 'pipeline/p01_dims.py')?.worst).toBe('unknown')
+    const pending = summaries([])
+    expect(pending.map((p) => p.total)).toEqual([1, 2, 2])
+    expect(pending.every((p) => p.shown === null)).toBe(true)
+    const partial = summaries(nodes.filter((n) => n.id.startsWith('pipeline/p02')))
+    expect(partial.map((p) => p.total)).toEqual([1, 2, 2])
+    expect(partial.find((p) => p.file === 'pipeline/p02_reconcile.py')?.shown?.label).toBe('failing')
+    expect(partial.find((p) => p.file === 'pipeline/p01_dims.py')?.shown).toBeNull()
   })
 
   it('knows a file only when every node of it has a state: a part says nothing of the whole', () => {
-    const assets = nodes.map(n => ({ id: n.id }))
-    expect(pipelineSummaries(nodes, assets).every(p => p.known)).toBe(true)
-    const part = nodes.filter(n => n.id !== 'pipeline/p01_dims.py:dim_item')
-    expect(pipelineSummaries(part, assets).find(p => p.file === 'pipeline/p01_dims.py')?.known).toBe(false)
+    expect(summaries(nodes).every((p) => p.shown !== null)).toBe(true)
+    const part = nodes.filter((n) => n.id !== 'pipeline/p01_dims.py:dim_item')
+    expect(summaries(part).find((p) => p.file === 'pipeline/p01_dims.py')?.shown).toBeNull()
   })
 })
 
