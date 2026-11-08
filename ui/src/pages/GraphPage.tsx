@@ -1,12 +1,10 @@
 import { StreamNotice } from '@/components/StreamNotice'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { Button, IconButton, PageRunButton, ViewToggle } from '@/components'
-import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
+import { Button } from '@/components'
+import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
-import { useAssetStates } from '@/hooks/useAssetStates'
 import { useQueryClient } from '@tanstack/react-query'
 import { graphState, liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
@@ -14,7 +12,10 @@ import { useHealth } from '@/hooks/useHealth'
 import { useRunStream } from '@/hooks/useRunStream'
 import { useTriggerNode } from '@/hooks/useTriggerNode'
 import { useTopbarRun } from '@/hooks/useTopbarRun'
-import { inPipeline, pipelineName } from '@/lib/pipeline'
+import { inPipeline } from '@/lib/pipeline'
+import { isFiltered } from '@/lib/assetFilters'
+import { AssetsToolbar } from './AssetsToolbar'
+import { useAssetFilter } from '@/hooks/useAssetFilter'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
 import { usePinNotes } from '@/hooks/usePins'
 
@@ -22,7 +23,10 @@ export function GraphPage() {
   const pins = usePinNotes()
   const assetQuery = useAssets()
   const allAssets = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
-  const stateQuery = useAssetStates()
+  // The list's toolbar and filters: a node the filter leaves out is dimmed, not removed, so the
+  // graph keeps its shape.
+  const filter = useAssetFilter('asset')
+  const stateQuery = filter.states
   const queryClient = useQueryClient()
   const { data: health } = useHealth()
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
@@ -42,11 +46,22 @@ export function GraphPage() {
     [allAssets, pipeline],
   )
   const [run, setRun] = useState<{ handle: string; nodeId: string | null } | null>(null)
-  const canvasRef = useRef<GraphCanvasHandle>(null)
 
   const stream = useRunStream(run?.handle ?? null)
 
-  const title = pipeline ? `Assets · ${pipelineName(pipeline)}` : 'Assets'
+  const { visible, filters, onlyPaused } = filter
+  const shown = useMemo(
+    () => (isFiltered(filters) || onlyPaused ? new Set(visible.map((r) => r.id)) : null),
+    // `filters` is parsed afresh each render; `visible` follows it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visible, onlyPaused],
+  )
+  const toggleDir = useCallback(() => {
+    const next = new URLSearchParams(searchParams)
+    if (dir === 'LR') next.set('dir', 'TB')
+    else next.delete('dir')
+    setSearchParams(next, { replace: true })
+  }, [dir, searchParams, setSearchParams])
 
   const selectedAsset = useMemo(
     () => assets.find((a) => a.id === selected) ?? null,
@@ -91,25 +106,11 @@ export function GraphPage() {
     <div className="barca-view">
       <StreamNotice notice={stream.notice} runId={run?.handle} />
       <div className="barca-view-head">
-        <div className="barca-view-bar">
-          <div className="barca-view-title">
-            <h1>{title}</h1>
-          </div>
-          <div className="barca-view-actions">
-            {run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(run.handle)}`}>View run</Link>}
-            <ViewToggle />
-            <IconButton
-              label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
-              onClick={() => { const next = new URLSearchParams(searchParams); if (dir === 'LR') next.set('dir', 'TB'); else next.delete('dir'); setSearchParams(next, { replace: true }) }}
-            >
-              {dir === 'LR' ? <ArrowDown size={15} /> : <ArrowRight size={15} />}
-            </IconButton>
-            <IconButton label="Fit to screen" onClick={() => canvasRef.current?.fit()}>
-              <Maximize size={15} />
-            </IconButton>
-            <PageRunButton run={topbar.scopeRun} />
-          </div>
-        </div>
+        <AssetsToolbar
+          filter={filter}
+          run={topbar.scopeRun}
+          extra={run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(run.handle)}`}>View run</Link>}
+        />
       </div>
 
       {topbar.error && <p role="alert">Could not start run: {topbar.error.message}</p>}
@@ -123,7 +124,8 @@ export function GraphPage() {
             onSelect={setSelected}
             states={visualStates}
             pins={pins}
-            handleRef={canvasRef}
+            shown={shown}
+            onToggleDir={toggleDir}
           />
         </div>
         {selectedAsset && (

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { plural } from '@/lib/plural'
+import { ArrowDown, ArrowRight, Maximize, Minus, Plus } from 'lucide-react'
 import {
   ReactFlow,
   ReactFlowProvider,
   Background,
   BackgroundVariant,
+  ControlButton,
   Controls,
   MiniMap,
   Panel,
@@ -38,6 +40,9 @@ const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: Por
 const FIT_INSET: Inset = { top: 48, right: 48, bottom: 72, left: 48 }
 const FIT_INSET_BESIDE_MINIMAP: Inset = { ...FIT_INSET, right: 236 }
 const FIT_DURATION = 200
+/** Of the height a fitted graph leaves free, the share above it (the rest is below), at most so many px. */
+const OPTICAL_TOP = 0.35
+const OPTICAL_TOP_MAX = 120
 
 /** Below this many nodes the whole graph fits on screen, and a minimap only covers it. */
 const MINIMAP_FROM = 60
@@ -68,6 +73,10 @@ interface GraphCanvasProps {
   pins?: ReadonlyMap<string, string>
   /** Legend entries of the page's own (a group card), before the states. */
   legend?: ReactNode
+  /** The nodes a filter keeps; the others (and their edges) are dimmed. null: no filter. */
+  shown?: ReadonlySet<string> | null
+  /** Flip the layout direction: a control beside the zoom when given. */
+  onToggleDir?: () => void
   handleRef?: Ref<GraphCanvasHandle>
 }
 
@@ -94,7 +103,7 @@ function viewNodes(nodes: GraphNode[]): ViewNode[] {
  * big for that is shown at 0.8 from its selected node, else its failed nodes (`fitTarget`).
  */
 function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes: GraphNode[]; layoutKey: string; focus: string | null; minimap: boolean; handleRef?: Ref<GraphCanvasHandle> }) {
-  const { fitView } = useReactFlow()
+  const { fitView, setViewport } = useReactFlow()
   const width = useStore((s) => s.width)
   const height = useStore((s) => s.height)
   const inset = minimap ? FIT_INSET_BESIDE_MINIMAP : FIT_INSET
@@ -106,7 +115,26 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
 
   const fit = useCallback(() => {
     const { nodes, focus, width, height, inset } = latest.current
-    const target = fitTarget(viewNodes(nodes), width, height, inset, focus)
+    const all = viewNodes(nodes)
+    const target = fitTarget(all, width, height, inset, focus)
+    if (target === all && all.length > 0 && width > 0 && height > 0) {
+      // The whole graph fits: at most 1:1, centred across, and placed a little above the middle
+      // (optical centre), so a small graph does not float in the middle of a tall canvas.
+      const x0 = Math.min(...all.map((n) => n.x))
+      const y0 = Math.min(...all.map((n) => n.y))
+      const w = Math.max(...all.map((n) => n.x + n.width)) - x0
+      const h = Math.max(...all.map((n) => n.y + n.height)) - y0
+      const roomX = width - inset.left - inset.right
+      const roomY = height - inset.top - inset.bottom
+      const zoom = Math.max(MIN_FIT_ZOOM, Math.min(READABLE_ZOOM, roomX / w, roomY / h))
+      const free = Math.max(0, roomY - h * zoom)
+      void setViewport({
+        x: inset.left + (roomX - w * zoom) / 2 - x0 * zoom,
+        y: inset.top + Math.min(free * OPTICAL_TOP, OPTICAL_TOP_MAX) - y0 * zoom,
+        zoom,
+      }, { duration: FIT_DURATION })
+      return
+    }
     void fitView({
       nodes: target.map(({ id }) => ({ id })),
       padding: { top: `${inset.top}px`, right: `${inset.right}px`, bottom: `${inset.bottom}px`, left: `${inset.left}px` },
@@ -114,7 +142,7 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
       maxZoom: READABLE_ZOOM,
       duration: FIT_DURATION,
     })
-  }, [fitView])
+  }, [fitView, setViewport])
 
   useEffect(() => {
     // Fit after mount and on every layout-direction change. A short settle
@@ -127,6 +155,27 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
 
   useImperativeHandle(handleRef, () => ({ fit }), [fit])
   return null
+}
+
+/**
+ * The canvas's controls, one quiet row at the bottom right: zoom, fit (the same fit as on
+ * load) and, when the page can, the layout direction. Lucide icons, like every other control.
+ */
+function GraphControls({ dir, onFit, onToggleDir }: { dir: LayoutDir; onFit: () => void; onToggleDir?: () => void }) {
+  const { zoomIn, zoomOut } = useReactFlow()
+  const dirLabel = dir === 'LR' ? 'Top-down layout' : 'Left-right layout'
+  return (
+    <Controls showZoom={false} showFitView={false} showInteractive={false} position="bottom-right" orientation="horizontal">
+      <ControlButton aria-label="Zoom in" title="Zoom in" onClick={() => void zoomIn({ duration: FIT_DURATION })}><Plus size={14} /></ControlButton>
+      <ControlButton aria-label="Zoom out" title="Zoom out" onClick={() => void zoomOut({ duration: FIT_DURATION })}><Minus size={14} /></ControlButton>
+      <ControlButton aria-label="Fit to screen" title="Fit to screen" onClick={onFit}><Maximize size={13} /></ControlButton>
+      {onToggleDir && (
+        <ControlButton aria-label={dirLabel} title={dirLabel} onClick={onToggleDir}>
+          {dir === 'LR' ? <ArrowDown size={14} /> : <ArrowRight size={14} />}
+        </ControlButton>
+      )}
+    </Controls>
+  )
 }
 
 /** The node a key event came from, when it came from one. */
@@ -143,8 +192,13 @@ export function GraphCanvas({
   states,
   pins = NO_PINS,
   legend,
+  shown = null,
+  onToggleDir,
   handleRef,
 }: GraphCanvasProps) {
+  // The canvas's own Fit control and the page's (`handleRef`) are the same fit.
+  const fitRef = useRef<GraphCanvasHandle>(null)
+  useImperativeHandle(handleRef, () => ({ fit: () => fitRef.current?.fit() }), [])
   // The node under the pointer: its edges light up like the selected node's.
   const [hovered, setHovered] = useState<string | null>(null)
   // Re-layout only when structure or direction changes — never on selection or
@@ -171,6 +225,7 @@ export function GraphCanvas({
       // One state per node: failing > running > pinned > blocked > the cache state.
       const pin = !isFailed(state) && !isLive(state) && state.kind === 'cache' ? pins.get(n.id) : undefined
       return { ...n, selected: n.id === selected,
+        className: shown && n.type !== 'port' && !shown.has(n.id) ? 'is-dimmed' : undefined,
         data: {
           ...n.data,
           tone: pin !== undefined || wait ? 'warning' : state.tone,
@@ -183,7 +238,7 @@ export function GraphCanvas({
           stateHint: pin !== undefined ? `Pinned: ${pin}. Runs read this version until it is unpinned.` : wait ? `${state.hint} ${wait.hint}` : state.hint,
         } }
     })
-  }, [base.nodes, base.edges, selected, states, pins])
+  }, [base.nodes, base.edges, selected, states, pins, shown])
 
   const nodeTones = useMemo(() => new Map(nodes.map(n => [n.id, n.data.tone])), [nodes])
   const nodeGlyphs = useMemo(() => new Map(nodes.map(n => [n.id, n.data.glyph ?? toneGlyph(n.data.tone)])), [nodes])
@@ -201,10 +256,11 @@ export function GraphCanvas({
             edgeClassName({ sourceTone: nodeTones.get(e.source), targetTone: nodeTones.get(e.target), hot }),
             port ? 'port' : '',
             weight ? 'weighted' : '',
+            shown && !(shown.has(e.source) && shown.has(e.target)) ? 'is-dimmed' : '',
           ].filter(Boolean).join(' '),
         }
       }),
-    [base.edges, selected, hovered, nodeTones],
+    [base.edges, selected, hovered, nodeTones, shown],
   )
   // The legend names only the states this graph shows.
   const shownGlyphs = useMemo(() => {
@@ -276,12 +332,12 @@ export function GraphCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-grid)" />
-        <Controls showInteractive={false} position="bottom-right" orientation="horizontal" />
+        <GraphControls dir={dir} onFit={() => fitRef.current?.fit()} onToggleDir={onToggleDir} />
         <Panel position="bottom-left">
           <GraphLegend shown={shownGlyphs}>{legend}</GraphLegend>
         </Panel>
         {minimap && <MiniMap position="top-right" nodeColor={n => glyphColor(nodeGlyphs.get(n.id) ?? 'pending')} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
-        <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={handleRef} />
+        <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={fitRef} />
       </ReactFlow>
     </ReactFlowProvider>
   )

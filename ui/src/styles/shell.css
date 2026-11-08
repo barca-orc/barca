@@ -173,7 +173,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
+  /* The toolbar's one control height: buttons, the select and the view switch are 28px too. */
+  height: 28px;
   padding: 0 10px;
   background: var(--bg-inset);
   border: 1px solid var(--border-default);
@@ -294,7 +295,8 @@
   flex-wrap: wrap;
   gap: 4px 12px;
   max-width: min(560px, 60vw);
-  padding: 5px 10px;
+  padding: 4px 10px;
+  line-height: 18px;
   background: var(--bg-canvas);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -348,14 +350,11 @@
   font-size: var(--text-xs);
   color: var(--text-faint);
 }
+/* No card in a panel: the error is its headline (the traceback on expand), as in the node panel. */
 .barca-insp-error {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
 }
 .barca-insp-error-head {
   display: flex;
@@ -365,13 +364,6 @@
   font-size: var(--text-xs);
   font-weight: 500;
   color: var(--text-muted);
-}
-.barca-insp-error-msg {
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  color: var(--text-default);
-  word-break: break-word;
 }
 
 /* ---------- Empty / placeholder ---------- */
@@ -457,6 +449,7 @@
    leading or trailing punctuation (`_private`, `step:`) from flipping to the other end. */
 .barca-mid { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .barca-mid::before, .barca-mid::after { content: '\200E' / ''; }
+.barca-cell-kind { flex: none; font-size: var(--text-xs); color: var(--text-muted); }
 .barca-cell-sub { font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
 .barca-table td > .barca-cell-sub { margin-top: 0; overflow: hidden; text-overflow: ellipsis; }
 .barca-cell-failed { color: var(--text-strong); }
@@ -648,6 +641,7 @@
 .barca-node-technical > summary:hover { color: var(--text-strong); }
 
 .barca-schema-context, .barca-schema-empty { color: var(--text-muted); font-size: var(--text-sm); line-height: var(--leading-normal); margin: 8px 0; }
+.barca-schema-content > .barca-schema-label:first-child { margin-top: 4px; }
 .barca-schema-label { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-xs); font-weight: 500; color: var(--text-muted); margin: 16px 0 8px; }
 .barca-schema-label > span { font-size: var(--text-xs); font-weight: var(--weight-regular); color: var(--text-muted); overflow-wrap: anywhere; }
 .barca-schema-input { border-top: 1px solid var(--border-subtle); }
@@ -1011,7 +1005,11 @@
 .barca-run-link:hover { text-decoration: underline; }
 .barca-run-steps { list-style: none; margin: 0; padding: 0; }
 .barca-run-steps li { padding: 10px 0; border-bottom: 1px solid var(--border-default); }
-.barca-run-steps code { display: block; overflow-wrap: anywhere; margin-bottom: 6px; }
+.barca-run-steps .barca-step-name { display: block; white-space: normal; overflow-wrap: anywhere; margin-bottom: 6px; }
+/* A step's name reads like the node's name in every list: sans, the strong text colour. Mono is
+   for run ids, hashes, file:line, code and logs. */
+.barca-step-name { font-family: var(--font-name); font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-strong); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-run-link.barca-step-name { font-family: var(--font-name); color: var(--text-strong); }
 .barca-run-steps li > div:not(.barca-run-error) { display: flex; align-items: center; gap: 10px; }
 .barca-run-error { color: var(--text-default); font-family: var(--font-sans); }
 .barca-run-error-head { white-space: pre-wrap; overflow-wrap: break-word; }
@@ -1074,6 +1072,8 @@
 .barca-run-failure { font-size: var(--text-xs); }
 
 .barca-run-node { border-bottom: 1px solid var(--border-default); }
+/* The section's hairline follows the last row: no second rule under it. */
+.barca-run-nodes > .barca-run-node:last-child, .barca-run-steps > li:last-child { border-bottom: 0; }
 .barca-run-node > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0; cursor: pointer; font-size: var(--text-sm); }
 .barca-run-node > summary > span:last-child { margin-left: auto; color: var(--text-muted); }
 .barca-run-node .barca-run-steps { max-height: 420px; overflow: auto; }

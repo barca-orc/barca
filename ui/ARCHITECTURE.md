@@ -228,8 +228,9 @@ A project can have thousands of nodes; a view must not render all of them at onc
 A page must not move when its data arrives. The rules:
 
 - **Reserve the space.** Content that loads later gets a `Skeleton` sized like what will
-  replace it, or a fixed-size slot that is always rendered (the node panel's duration
-  histogram shows "needs two or more successful runs" in the same box). Never render
+  replace it, or decide from data already on screen whether the slot will exist (the node
+  panel's duration histogram is drawn only when the node's `durations.samples` from `/state`
+  is two or more, so it never appears or vanishes when the history loads). Never render
   `{data && <Thing/>}` where `Thing` changes the height of what follows it.
 - **Late things go last.** A control that appears after data loads (a filter chip) sits after
   the controls that are always there, so it pushes nothing that was already placed.

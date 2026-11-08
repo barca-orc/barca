@@ -234,8 +234,8 @@ const [query, setQuery] = useState('')
         <SidePanel
           label="example details"
           title="example"
-          badge={<Tag size="sm">asset</Tag>}
-          subtitle="pipeline.py"
+          badge={<span className="barca-sidepanel-kind">asset</span>}
+          subtitle="pipeline.py:example"
           width={380}
           actions={
             <IconButton label="Close" size="sm">

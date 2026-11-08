@@ -197,7 +197,7 @@ export function GroupPanel({ group, tree, byId, leaves, live, state, statesFaile
     <SidePanel
       label={`${group.name} group details`}
       title={group.name}
-      badge={<Tag size="sm">group</Tag>}
+      badge={<span className="barca-sidepanel-kind">group</span>}
       subtitle={sourceFile(group.id.replace(/^group:/, ''))}
       actions={
         <IconButton label="Close group details" size="sm" onClick={onClose}>

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { X } from 'lucide-react'
+import { Check, Copy, Download, X } from 'lucide-react'
 import { useTimeZone } from '@/context/timeZone'
 import { formatAbsolute, formatClock } from '@/lib/time'
 import { filterLogs, highlightParts, isErrorLine, logsText } from '@/lib/runRecovery'
 import type { LogLine } from '@/lib/types'
 import { Button } from './Button'
 import { Chip } from './Chip'
+import { IconButton } from './IconButton'
 import { SearchInput } from './SearchInput'
 
 export interface LogViewerProps {
@@ -95,8 +96,9 @@ export function LogViewer({
       <Chip pressed={errorsOnly} onClick={() => setErrorsOnly(!errorsOnly)}>Errors only</Chip>
       {step !== null && <Chip pressed onClick={() => onStepChange?.(null)}>step {step} <X size={12} aria-label="Show every step" /></Chip>}
       <Button size="sm" variant="ghost" disabled={firstError < 0} onClick={jumpToError}>First error</Button>
-      <Button size="sm" variant="ghost" disabled={shown.length === 0} onClick={copy}>{copied ? 'Copied' : 'Copy'}</Button>
-      <Button size="sm" variant="ghost" disabled={shown.length === 0} onClick={download}>Download</Button>
+      {/* Copy and Download as icons, named in their tooltips: the tools stay one line at a panel's width. */}
+      <IconButton size="sm" label={copied ? 'Copied' : 'Copy logs'} disabled={shown.length === 0} onClick={copy}>{copied ? <Check size={14} /> : <Copy size={14} />}</IconButton>
+      <IconButton size="sm" label="Download logs" disabled={shown.length === 0} onClick={download}><Download size={14} /></IconButton>
       {shown.length !== lines.length && <span className="barca-count">{shown.length.toLocaleString()} of {lines.length.toLocaleString()} lines</span>}
     </div>}
     <div className="barca-log" style={{ height, ...style }}>
