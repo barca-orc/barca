@@ -317,7 +317,7 @@ The UI shows what is running now on every page, whoever started it (the schedule
 client, a `barca get` in a shell on the same `.barca/`): a running node pulses on the graph and
 the pipeline page, the assets list shows a Running badge with the elapsed time (and keys
 done/total for a partitioned node) linking to the run, each pipeline and group counts its
-running nodes, and the header shows how many runs are in progress. It reads `GET /state`,
+running nodes, and Runs in the sidebar shows how many runs are in progress. It reads `GET /state`,
 whose `running` field names the run working on each node, every 2 s while anything runs.
 `GET /runs?status=running` lists the runs in flight with the nodes each is working on.
 

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { match } from "ts-pattern";
-import { Button, StatusBadge, Tag } from "@/components";
+import { Button, EmptyNote, StatusBadge, Tag } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
 import { nodeStateDisplay } from "@/lib/cacheStateDisplay";
 import { inPipeline } from "@/lib/pipeline";
@@ -97,11 +97,10 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
             !rows ? (
               <p className="barca-table-empty">Loading…</p>
             ) : rows.length === 0 ? (
-              <p className="barca-table-empty">
-                No scheduled nodes{pipeline ? " in this pipeline" : ""}. Give an
-                asset or task <code>freshness=Schedule("0 6 * * *")</code> to run it
+              <EmptyNote title={`No schedules${pipeline ? " in this pipeline" : ""}`}>
+                Give an asset or task <code>freshness=Schedule("0 6 * * *")</code> to run it
                 on a cron schedule while <code>barca serve</code> is running.
-              </p>
+              </EmptyNote>
             ) : (
               <ScheduleTable rows={rows} canPause={canPause} toggle={toggle} onOpen={onOpen} onToggle={onToggle} />
             ),

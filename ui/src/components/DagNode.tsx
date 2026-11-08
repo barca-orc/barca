@@ -30,7 +30,7 @@ export interface DagNodeProps {
 }
 
 export const DAG_NODE_WIDTH = 208
-export const DAG_NODE_HEIGHT = 64
+export const DAG_NODE_HEIGHT = 40
 
 /** The glyph a node shows: failing, pinned, blocked, then its state's own. */
 function nodeGlyph({ glyph, tone, lastFailed, blockedBy, pinned }: Pick<DagNodeProps, 'glyph' | 'tone' | 'lastFailed' | 'blockedBy' | 'pinned'>): Glyph {
@@ -42,9 +42,11 @@ function nodeGlyph({ glyph, tone, lastFailed, blockedBy, pinned }: Pick<DagNodeP
 
 /**
  * barca · DagNode
- * One node in a pipeline graph: its state's glyph and its name, and under them the kind (for a
- * task or a sensor) and the state's word. The card itself stays neutral whatever the state:
- * the glyph is the only colour. `selected` rings it; a live node gets the running ring.
+ * One node in a pipeline graph, on one line: its state's glyph and its name, and for a task or
+ * a sensor its kind, muted at the end. The state's word is not drawn again under the name: the
+ * glyph says it, and the card's tooltip and accessible name carry the word. The card itself
+ * stays neutral whatever the state: the glyph is the only colour. `selected` rings it; a live
+ * node gets the running ring.
  */
 export function DagNode({
   name,
@@ -68,7 +70,7 @@ export function DagNode({
     <div
       className="barca-dag"
       onClick={onClick}
-      title={stateHint ?? label ?? undefined}
+      title={[word, stateHint].filter(Boolean).join(' · ') || undefined}
       data-tone={tone}
       data-glyph={shown}
       data-kind={kind}
@@ -79,18 +81,15 @@ export function DagNode({
       style={style}
     >
       <div className="barca-dag-body">
-        <div className="barca-dag-head">
-          <StatusGlyph glyph={shown} live={live} size={14} />
-          <span className="barca-dag-name">{name}</span>
-        </div>
-        <div className="barca-dag-foot">
-          {kindLabel && <span className="barca-dag-kind">{kindLabel}</span>}
-          {word && (
-            <span className="barca-dag-state" data-failed={lastFailed || undefined} data-blocked={(!lastFailed && blockedBy) || undefined} data-pinned={(!lastFailed && pinned !== undefined) || undefined}>
-              {word}
-            </span>
-          )}
-        </div>
+        <StatusGlyph glyph={shown} live={live} size={14} />
+        <span className="barca-dag-name">{name}</span>
+        {kindLabel && <span className="barca-dag-kind">{kindLabel}</span>}
+        {/* The state's word, for a screen reader and a search of the page: the glyph shows it. */}
+        {word && (
+          <span className="barca-dag-state barca-sr-only" data-failed={lastFailed || undefined} data-blocked={(!lastFailed && blockedBy) || undefined} data-pinned={(!lastFailed && pinned !== undefined) || undefined}>
+            {word}
+          </span>
+        )}
       </div>
     </div>
   )

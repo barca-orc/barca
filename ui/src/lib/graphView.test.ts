@@ -14,6 +14,12 @@ describe('fitTarget', () => {
     expect(fitsReadably(nodes, 1192, 813, INSET)).toBe(true)
     expect(fitTarget(nodes, 1192, 813, INSET, null)).toEqual(nodes)
   })
+  it('zooms out a little, to 0.8, to show a graph whole rather than cut it', () => {
+    // 1,120px at 1:1 on a 960px canvas: it fits at 0.8.
+    const nodes = chain(4)
+    expect(fitsReadably(nodes, 1048, 720, INSET)).toBe(true)
+    expect(fitTarget(nodes, 1048, 720, INSET, null)).toEqual(nodes)
+  })
   it('shows the selected node of a graph too wide for the screen', () => {
     const nodes = chain(7, [3, 6])
     expect(fitsReadably(nodes, 1192, 813, INSET)).toBe(false)
@@ -21,7 +27,7 @@ describe('fitTarget', () => {
   })
   it('shows the failed nodes together when they fit, else the first', () => {
     expect(fitTarget(chain(7, [3, 4]), 1192, 813, INSET, null).map((n) => n.id)).toEqual(['n3', 'n4'])
-    expect(fitTarget(chain(7, [3, 6]), 1192, 813, INSET, null).map((n) => n.id)).toEqual(['n3'])
+    expect(fitTarget(chain(9, [2, 8]), 1192, 813, INSET, null).map((n) => n.id)).toEqual(['n2'])
   })
   it('falls back to everything, and to everything before the screen is measured', () => {
     const nodes = chain(7)

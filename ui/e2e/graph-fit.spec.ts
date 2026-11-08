@@ -39,17 +39,35 @@ test.beforeEach(async ({ page }) => {
   await page.waitForTimeout(600)
 })
 
-test('fit-to-screen stays readable: cards at 1:1, centred on the first failure', async ({ page }) => {
-  // The chain is wider than the canvas, so the fit cannot show it whole: it keeps 1:1 instead.
+test('fit-to-screen zooms out a little, never past 0.8, to show the failures together with room around them', async ({ page }) => {
   for (const box of await page.locator('.react-flow__node').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))) {
-    expect(box).toBeGreaterThanOrEqual(208)
+    expect(box).toBeGreaterThanOrEqual(208 * 0.8 - 0.5)
   }
   const failed = page.locator(node('demand_forecast'))
   // Its failed keys make it failing: the one state shown, instead of `partial`.
   await expect(failed).toContainText('failing')
-  const label = failed.locator('.barca-dag-state')
-  expect(parseFloat(await label.evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
+  // One line a card: the glyph and the name, the state's word in its tooltip and accessible name.
+  const name = failed.locator('.barca-dag-name')
+  expect(parseFloat(await name.evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
+  await expect(failed.locator('.barca-dag')).toHaveAttribute('title', /^failing/)
+  // Both failures are on screen, clear of the canvas's edges.
+  const canvas = (await page.locator('.react-flow').boundingBox())!
+  for (const name of ['demand_forecast', 'publish_plan']) {
+    const box = (await page.locator(node(name)).boundingBox())!
+    expect(box.x).toBeGreaterThanOrEqual(canvas.x + 24)
+    expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width - 24)
+  }
+})
+
+test('a graph too wide even at 0.8 is shown at 1:1 from its first failure', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await page.getByRole('button', { name: 'Fit to screen' }).click()
+  await page.waitForTimeout(500)
+  for (const box of await page.locator('.react-flow__node').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))) {
+    expect(box).toBeGreaterThanOrEqual(208)
+  }
   // Centred on the failed node upstream, which is on screen; the one downstream is not.
+  const failed = page.locator(node('demand_forecast'))
   const canvas = (await page.locator('.react-flow').boundingBox())!
   const box = (await failed.boundingBox())!
   expect(box.x).toBeGreaterThan(canvas.x)

@@ -110,7 +110,7 @@ export function layoutInput(assets: GraphEntry[], dir: LayoutDir): LayoutInput {
   const byId = new Map(assets.map((a) => [a.id, a]))
   return {
     dir,
-    ranksep: assets.some((a) => a.kind === 'group') ? 52 : 96,
+    ranksep: assets.some((a) => a.kind === 'group') ? 52 : 80,
     nodes: assets.map((a) => ({ id: a.id, ...size(a), first: a.kind === 'port' })),
     edges: dependencies(assets).filter(
       ([source, target]) => !byId.get(source)?.loose && !byId.get(target)?.loose,

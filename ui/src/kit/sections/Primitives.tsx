@@ -27,7 +27,7 @@ import { CACHE_STATES, cacheStateGlyph, cacheStateLabel, nodeStateDisplay } from
 import { GLYPHS } from '@/lib/glyph'
 import { statusMeta } from '@/lib/status'
 import { Spec, Variant } from '../Kit'
-import { SidebarView } from '@/layouts/Sidebar'
+import { SidebarNav, SidebarSearch, SidebarView } from '@/layouts/Sidebar'
 import type { PipelineSummary } from '@/lib/pipeline'
 import type { SidebarGroup } from '@/lib/sidebar'
 import { CommandPaletteView, ConfirmDialog } from '@/components'
@@ -37,8 +37,9 @@ import { runButton } from '@/lib/runTarget'
 /** Every primitive in components/, in each state it has. */
 export function Primitives() {
   const KIT_PIPELINES: PipelineSummary[] = [
-  { file: 'billing.py', name: 'billing.py', total: 639, worst: 'stale', failed: 2, known: true, running: 0 },
-  { file: 'catalog.py', name: 'catalog.py', total: 561, worst: 'unknown', failed: 0, known: false, running: 0 },
+  { file: 'billing.py', name: 'billing.py', total: 639, shown: { glyph: 'failed', label: 'failing', live: false }, running: 0 },
+  { file: 'catalog.py', name: 'catalog.py', total: 561, shown: null, running: 0 },
+  { file: 'ledger.py', name: 'ledger.py', total: 12, shown: { glyph: 'running', label: '2 running', live: true }, running: 2 },
 ]
 const KIT_GROUPS: SidebarGroup[] = [
   { id: 'group:billing.py:raw', name: 'Raw', depth: 0, tone: 'failed', glyph: 'failed' },
@@ -181,11 +182,13 @@ const [query, setQuery] = useState('')
       <Variant label="fits"><MiddleName name="invoices_00" /></Variant>
       <Variant label="cut"><div style={{ display: 'flex', width: 150 }}><MiddleName name="check__risk_review_alerts_01" /></div></Variant>
     </Spec>
-    <Spec title="Sidebar" note="SidebarView: the groups of an open file, nested under the open group; collapsed to dots.">
+    <Spec title="Sidebar" note="SidebarView: the sections, then the pipelines with the groups of an open file nested under the open group; collapsed to icons and glyphs.">
       {([['open', false], ['collapsed', true]] as const).map(([name, collapsed]) => (
         <Variant key={name} label={name}>
-          <div style={{ display: 'flex', height: 300 }}>
+          <div style={{ display: 'flex', height: 520 }}>
             <SidebarView
+              search={<SidebarSearch onOpen={() => undefined} />}
+              nav={<SidebarNav counts={{ assets: 1200, tasks: 14, sensors: 3, schedules: 6 }} search="" />}
               model={{ collapsed, expanded: [] }}
               total={1200}
               pipelines={KIT_PIPELINES}

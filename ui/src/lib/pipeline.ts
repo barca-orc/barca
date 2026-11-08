@@ -1,5 +1,5 @@
-import type { ListNode, NodeState } from './types'
-import { cacheStateRank, lastAttemptFailed, type CacheState } from './cacheStateDisplay'
+import type { ListNode, NodeKind, NodeState } from './types'
+import { fileDisplay, type AssetRow, type FileDisplay } from './assetTable'
 
 /**
  * Asset ids are "<source-file>:<name>" (e.g. "iris_project/assets.py:raw_data").
@@ -26,45 +26,49 @@ export interface Pipeline {
   file: string
 }
 
-/** A pipeline (source file) as the sidebar shows it. */
+/** A pipeline (source file) as the sidebar shows it, for the nodes of one kind. */
 export interface PipelineSummary extends Pipeline {
-  /** Nodes defined in this file. */
+  /** Its nodes of the counted kind, from graph metadata: known before any state is. */
   total: number
-  /** The most urgent `cache.state` among them, in the CLI's word; `unknown` until one is loaded. */
-  worst: CacheState
-  /** How many of them failed their last attempt: a fact beside the state. */
-  failed: number
-  /** Every one of them has a loaded state: `worst` is the file's, not just a part's. */
-  known: boolean
+  /**
+   * Its one state, exactly as the file's header in the table shows it (`fileDisplay`); null
+   * until every counted node of it has a state (a part says nothing of the whole) and nothing
+   * of it is running.
+   */
+  shown: FileDisplay | null
   /** How many of them a run is working on now. */
   running: number
 }
 
-/** Counts come from graph metadata; status may still be pending or cover only one cone. */
+/**
+ * One line per source file of the project, in file order: how many of its nodes are of `kind`
+ * (the page's: Assets counts assets), and their one state from `rows` (`buildRows` over the
+ * loaded states of that kind). A file with none of that kind stays listed, at 0, so the list
+ * does not move from page to page.
+ */
 export function pipelineSummaries(
-  nodes: NodeState[],
-  assets: readonly Pick<ListNode, 'id'>[] = nodes,
+  rows: readonly AssetRow[],
+  listed: readonly Pick<ListNode, 'id' | 'kind'>[],
+  kind: NodeKind,
 ): PipelineSummary[] {
-  const states = new Map(nodes.map(node => [node.id, node]))
-  const byFile = new Map<string, PipelineSummary>()
-  for (const asset of assets) {
-    const file = sourceFile(asset.id)
-    const n = states.get(asset.id)
-    const state: CacheState = n ? n.cache.state : 'unknown'
-    const failed = n && lastAttemptFailed(n) ? 1 : 0
-    const p = byFile.get(file)
-    const running = n?.running ? 1 : 0
-    if (!p) {
-      byFile.set(file, { file, name: pipelineName(file), total: 1, worst: state, failed, known: n !== undefined, running })
-    } else {
-      p.total += 1
-      p.running += running
-      p.failed += failed
-      p.known &&= n !== undefined
-      if (cacheStateRank(state) < cacheStateRank(p.worst)) p.worst = state
-    }
+  const rowById = new Map(rows.map((r) => [r.id, r]))
+  const byFile = new Map<string, { total: number; rows: AssetRow[]; known: boolean }>()
+  for (const node of listed) {
+    const file = sourceFile(node.id)
+    const entry = byFile.get(file) ?? { total: 0, rows: [], known: true }
+    byFile.set(file, entry)
+    if (node.kind !== kind) continue
+    entry.total += 1
+    const row = rowById.get(node.id)
+    if (row) entry.rows.push(row)
+    else entry.known = false
   }
-  return [...byFile.values()].sort((a, b) => a.file.localeCompare(b.file))
+  return [...byFile]
+    .map(([file, { total, rows, known }]) => {
+      const running = rows.filter((r) => r.running).length
+      return { file, name: pipelineName(file), total, running, shown: known || running > 0 ? fileDisplay(rows) : null }
+    })
+    .sort((a, b) => a.file.localeCompare(b.file))
 }
 
 /** Whether node `id` belongs to the selected pipeline (`null` = all). */

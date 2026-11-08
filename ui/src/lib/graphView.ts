@@ -28,11 +28,14 @@ export interface Inset {
   left: number
 }
 
-/**
- * The zoom at which a card is 1:1 with its design: 13px names, 12px labels. A fit never goes
- * below it; a graph that does not fit at this zoom is shown from its selected or failed nodes.
- */
+/** The zoom at which a card is 1:1 with its design (13px names): a fit never zooms in past it. */
 export const READABLE_ZOOM = 1
+
+/**
+ * The least a fit zooms out to show a whole graph: names stay above 10px. A graph that does not
+ * fit even at this zoom is shown at it from its selected or failed nodes.
+ */
+export const MIN_FIT_ZOOM = 0.8
 
 function bounds(nodes: ViewNode[]) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
@@ -45,11 +48,11 @@ function bounds(nodes: ViewNode[]) {
   return { width: x1 - x0, height: y1 - y0 }
 }
 
-/** Whether `nodes` fit in a `width` × `height` screen at the readable zoom, inside `inset`. */
+/** Whether `nodes` fit in a `width` × `height` screen at the least fit zoom, inside `inset`. */
 export function fitsReadably(nodes: ViewNode[], width: number, height: number, inset: Inset): boolean {
   if (nodes.length === 0) return true
   const b = bounds(nodes)
-  return b.width * READABLE_ZOOM <= width - inset.left - inset.right && b.height * READABLE_ZOOM <= height - inset.top - inset.bottom
+  return b.width * MIN_FIT_ZOOM <= width - inset.left - inset.right && b.height * MIN_FIT_ZOOM <= height - inset.top - inset.bottom
 }
 
 /** Upstream first: the reading order of a left-to-right or top-down layout. */
@@ -58,7 +61,7 @@ function byPosition(a: ViewNode, b: ViewNode): number {
 }
 
 /**
- * The nodes a fit shows: the whole graph when it fits at the readable zoom; else the selected
+ * The nodes a fit shows: the whole graph when it fits at a readable zoom; else the selected
  * node; else the failed nodes, or the first of them when they are too far apart; else the whole
  * graph, centred. An unmeasured screen (no size yet) fits everything, as before measurement.
  */

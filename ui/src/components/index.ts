@@ -67,3 +67,4 @@ export { CommandPaletteView } from './CommandPaletteView'
 
 export { PageRunButton } from './PageRunButton'
 export type { PageRun } from './PageRunButton'
+export { EmptyNote } from './EmptyNote'

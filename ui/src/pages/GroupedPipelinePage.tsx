@@ -6,7 +6,6 @@ import { ArrowLeft, ArrowDown, ArrowRight, ChevronRight, FolderOpen, Maximize } 
 import { Button, HealthBar, IconButton, PageRunButton, ResetDatabaseButton, SearchInput, Select, StatusGlyph, ViewToggle } from '@/components'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
-import { GraphLegend } from '@/components/graph/GraphLegend'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
@@ -307,12 +306,10 @@ export function GroupedPipelinePage() {
                     states={visualStates}
                     pins={pins}
                     handleRef={canvas}
+                    legend={drawn.some((entry) => entry.kind === 'group') && <span><FolderOpen size={12} />{map ? 'Pipeline' : 'Group'}</span>}
                   />
                 </>
               )}
-              <GraphLegend>
-                <span><FolderOpen size={12} />{map ? 'Pipeline' : 'Group'}</span>
-              </GraphLegend>
             </div>
           ) : show === 'failures' ? (
             <div className="barca-view-body barca-table-scroll" ref={scroller}>

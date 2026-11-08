@@ -1,12 +1,15 @@
 import { Activity, Layers, Clock, Play, Radar, type LucideIcon } from 'lucide-react'
 
+export type NavId = 'assets' | 'runs' | 'schedules' | 'tasks' | 'sensors'
+
 interface NavItem {
-  id: string
+  id: NavId
   label: string
   path: string
   icon: LucideIcon
 }
 
+/** The app's sections, in the sidebar's order. */
 export const NAV_ITEMS: NavItem[] = [
   { id: 'assets', label: 'Assets', path: '/assets', icon: Layers },
   { id: 'runs', label: 'Runs', path: '/runs', icon: Activity },

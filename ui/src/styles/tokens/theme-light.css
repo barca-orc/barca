@@ -31,9 +31,11 @@
   --bg-selected: var(--c-white-wash);
 
   /* ---- Borders ---- */
-  --border-subtle:  #F0F0F2;
-  --border-default: #E6E6E8;
-  --border-strong:  #D9D9DD;
+  /* Hairlines as alphas of the ink, 5 / 8 / 13%, as in the dark theme: they read the same on
+     the page, the sidebar and a raised card. */
+  --border-subtle:  rgba(17, 17, 19, 0.05);
+  --border-default: rgba(17, 17, 19, 0.08);
+  --border-strong:  rgba(17, 17, 19, 0.13);
   --border-accent:  var(--c-white-line);
 
   /* ---- Text ---- */

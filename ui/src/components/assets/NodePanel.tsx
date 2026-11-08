@@ -375,6 +375,9 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
       </Section>
 
+      {/* What follows History waits for it: drawn under a loading history, it would move down
+          when the runs arrive. */}
+      {!isLoading && <>
       {node.partitions && (
         <Section title="Keys">
           <NodeKeys key={node.id} id={node.id} partitions={node.partitions} nowMs={nowMs}
@@ -461,6 +464,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           <code className="barca-wrap">{node.id}</code>
         </KeyValue>
       </details>
+      </>}
     </SidePanel>
   )
 }

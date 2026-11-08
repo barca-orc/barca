@@ -103,7 +103,7 @@ describe('run list telemetry', () => {
     expect(activityBarLabel(day.hours.at(-1)!)).toContain('1 not successful\norders[day=1]: KeyError: x')
     const ticks = activityTicks(day.hours)
     expect(ticks.length).toBeGreaterThanOrEqual(3)
-    expect(ticks.every((t) => t.index < 22)).toBe(true)
+    expect(ticks.every((t) => t.index < 20)).toBe(true)
   })
 })
 

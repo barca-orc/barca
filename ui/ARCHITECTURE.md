@@ -73,13 +73,13 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre per connected part, parts packed in rows, no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
 | `lib/domainMap.ts` | `domainMap(assets)` — All pipelines as a card per file, weighted edges between files | `domainMap.test.ts` |
-| `lib/pipeline.ts` | derive pipeline/source names from asset ids; `mergeStates` for the sidebar | `pipeline.test.ts` |
+| `lib/pipeline.ts` | derive pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count and state, through `assetTable.fileDisplay`, as its table header shows it); `mergeStates` for the sidebar | `pipeline.test.ts` |
 | `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
 | `lib/sidebar.ts` | `updateSidebar`, `fileGroups` — the sidebar's collapse and the tree of groups under a file | `sidebar.test.ts` |
 | `lib/names.ts` | `splitMiddle` — a long name's cuttable head and its kept tail (`MiddleName`) | `names.test.ts` |
 | `lib/palette.ts` | `paletteIndex`, `searchPalette`, `updatePalette` — the command palette (⌘K) | `palette.test.ts` |
-| `lib/runTarget.ts` | `runTarget`, `runButton` — what the topbar's Run button acts on and how it says so | `runTarget.test.ts` |
+| `lib/runTarget.ts` | `runTarget`, `runButton` — what a page toolbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
 
