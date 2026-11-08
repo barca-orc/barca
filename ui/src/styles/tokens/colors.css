@@ -1,141 +1,134 @@
 /* ============================================================
-   barca · colors
-   Dark-first, terminal/console. Green-tinted near-black with a
-   neutral "signal" for actions, links and selection. Colour is
-   status only: green healthy, red failed, amber stale, cyan running.
-   Base values first, semantic aliases at the bottom.
+   barca · colors (dark, the default)
+   Nearly monochrome: true neutral greys, hairlines of low-alpha
+   white, one quiet indigo accent for focus and pinned. Colour is
+   status, and status is drawn only as a small glyph
+   (components/StatusGlyph.tsx) and its short word: never a row
+   tint, a bar, a banner or a paragraph.
+   Base values first, semantic aliases at the bottom. The same
+   tokens apply to any container marked [data-theme="dark"], so a
+   dark sample can sit inside a light page (the kit does).
    ============================================================ */
 
-:root {
-  /* ---- Neutral ramp (green-tinted charcoal -> off-white) ---- */
-  --c-black:      #050706;
-  --c-ink-900:    #080B0A;  /* page canvas */
-  --c-ink-850:    #0B0F0D;
-  --c-ink-800:    #0F1311;  /* surface / panels */
-  --c-ink-750:    #131815;
-  --c-ink-700:    #171D19;  /* raised / hover */
-  --c-ink-600:    #1D241F;  /* overlay */
-  --c-ink-500:    #252E28;
-  --c-ink-400:    #313B34;
-  --c-ink-300:    #475149;
-  --c-ink-200:    #6A746C;
-  --c-ink-150:    #848E87;  /* faint text: 4.5:1 on every dark background */
-  --c-ink-100:    #97A19A;
-  --c-ink-050:    #C2CCC5;
-  --c-white:      #E9F1EC;  /* near-white, faint green cast */
+:root, [data-theme="dark"] {
+  /* ---- Neutral ramp (true grey, a hair cool) ---- */
+  --c-black:      #050506;
+  --c-ink-900:    #0F0F11;  /* page canvas */
+  --c-ink-850:    #131315;  /* inset: sidebar, fields, logs */
+  --c-ink-800:    #151517;  /* surface */
+  --c-ink-750:    #17171A;
+  --c-ink-700:    #19191C;  /* raised: side panels, cards */
+  --c-ink-600:    #202024;  /* overlay */
+  --c-ink-500:    #2A2A2F;
+  --c-ink-400:    #37373D;
+  --c-ink-300:    #4E4E56;
+  --c-ink-200:    #6E6E77;
+  --c-ink-150:    #8A8A93;  /* faint text: 4.5:1 on every dark background */
+  --c-ink-100:    #A1A1A9;
+  --c-ink-050:    #D4D4D8;
+  --c-white:      #EDEDF0;
   --c-pure-white: #FFFFFF;
 
-  /* ---- Signal green (cool emerald "hacker green") ---- */
-  --c-green-200:  #BCF0D5;
-  --c-green-300:  #8CE6B6;
-  --c-green-400:  #5BDD9A;  /* brighter / hover */
-  --c-green-500:  #3FD181;  /* THE signal */
-  --c-green-600:  #2DB46C;  /* interactive hover/darker */
-  --c-green-700:  #209156;  /* pressed */
-  --c-green-800:  #145A38;
-  --c-green-900:  #0C2E1F;  /* faint tinted fills */
-  --c-green-950:  #081C13;
+  /* ---- Accent: a muted indigo, for focus and a pinned asset only ---- */
+  --c-indigo-400: #8E93EC;
+  --c-indigo-wash: rgba(142, 147, 236, 0.14);
+  --c-indigo-line: rgba(142, 147, 236, 0.55);
 
-  /* ---- Cyan (secondary accent / running / info) ---- */
-  --c-cyan-300:   #9BEEF0;
-  --c-cyan-400:   #5FDDE2;
-  --c-cyan-500:   #36CBD3;
-  --c-cyan-600:   #1F9FA8;
-  --c-cyan-900:   #0B2A2C;
+  /* ---- Status hues: desaturated, each 4.5:1 or more on every dark background ---- */
+  --c-red-400:    #E56B6F;
+  --c-blue-400:   #6A9FE6;
+  --c-green-400:  #4DBF85;
+  --c-amber-400:  #DDAE4F;
+  --c-orange-400: #E38A57;
+  --c-violet-400: #A28BE6;
+  --c-teal-400:   #4BBFB5;
 
-  /* ---- Status hues ---- */
-  --c-red-400:    #FF7A7A;
-  --c-red-500:    #FF5A5A;
-  --c-red-600:    #E03B3B;
-  --c-red-900:    #2E1212;
-
-  --c-amber-400:  #F7C65A;
-  --c-amber-500:  #F5B544;
-  --c-amber-600:  #D99520;
-  --c-amber-900:  #2C2008;
-
-  --c-violet-400: #B79BFF;
-  --c-violet-500: #9B7CF0;
-  --c-violet-900: #1E1633;
-
-  /* ---- Translucent signal washes (for glows / tints over dark) ---- */
-  --c-white-wash:  rgba(233, 241, 236, 0.08);
-  --c-white-line:  rgba(233, 241, 236, 0.34);
-  --c-green-wash:  rgba(63, 209, 129, 0.12);
-  --c-green-line:  rgba(63, 209, 129, 0.34);
-  --c-green-glow:  rgba(63, 209, 129, 0.48);
-  --c-cyan-wash:   rgba(54, 203, 211, 0.12);
-  --c-cyan-line:   rgba(54, 203, 211, 0.34);
-  --c-red-wash:    rgba(255, 90, 90, 0.12);
-  --c-red-line:    rgba(255, 90, 90, 0.34);
-  --c-amber-wash:  rgba(245, 181, 68, 0.12);
-  --c-amber-line:  rgba(245, 181, 68, 0.34);
+  /* ---- Translucent neutrals ---- */
+  --c-white-wash:  rgba(237, 237, 240, 0.07);
+  --c-white-line:  rgba(237, 237, 240, 0.30);
 
   /* ============================================================
      Semantic aliases (use THESE in components)
      ============================================================ */
 
-  /* Surfaces */
+  /* Surfaces: each barely lifted from the last */
   --bg-canvas:    var(--c-ink-900);
   --bg-surface:   var(--c-ink-800);
   --bg-raised:    var(--c-ink-700);
   --bg-overlay:   var(--c-ink-600);
   --bg-inset:     var(--c-ink-850);
-  --bg-hover:     rgba(255, 255, 255, 0.06);
-  --bg-active:    rgba(255, 255, 255, 0.10);
+  --bg-hover:     rgba(255, 255, 255, 0.04);
+  --bg-active:    rgba(255, 255, 255, 0.08);
   --bg-selected:  var(--c-white-wash);
 
-  /* Borders / hairlines */
-  --border-subtle:  #161B18;
-  --border-default: #2C3530;
-  --border-strong:  #4A5650;
+  /* Borders / hairlines: low-alpha white, so they sit on any surface */
+  --border-subtle:  rgba(255, 255, 255, 0.05);
+  --border-default: rgba(255, 255, 255, 0.08);
+  --border-strong:  rgba(255, 255, 255, 0.13);
   --border-accent:  var(--c-white-line);
 
   /* Text */
   --text-strong:   var(--c-white);
   --text-default:  var(--c-ink-050);
-  --text-muted:    var(--c-ink-100);  /* 6.0:1 or more on every dark ground */
+  --text-muted:    var(--c-ink-100);  /* 6.3:1 or more on every dark ground */
   --text-faint:    var(--c-ink-150);
   --text-disabled: var(--c-ink-300);
   --text-on-signal: var(--c-black);
   --text-link:     var(--c-white);
 
-  /* Signal: primary actions, links, selection. Neutral: green means healthy, nothing else. */
+  /* Signal: primary actions, links, selection. Neutral: colour means status, nothing else. */
   --signal:        var(--c-white);
   --signal-hover:  var(--c-pure-white);
   --signal-press:  var(--c-ink-050);
   --signal-dim:    var(--c-ink-100);
 
+  /* Accent: focus rings and the pinned state */
+  --accent:        var(--c-indigo-400);
+  --accent-wash:   var(--c-indigo-wash);
+
   /* Focus */
-  --focus-ring:    var(--c-white);
-  --focus-glow:    0 0 0 1px var(--c-ink-900), 0 0 0 3px var(--c-white-line);
+  --focus-ring:    var(--c-indigo-400);
+  --focus-glow:    0 0 0 1px var(--c-ink-900), 0 0 0 3px var(--c-indigo-line);
 
-  /* Status (run states) */
-  --status-success:      var(--c-green-500);
-  --status-success-bg:   var(--c-green-wash);
-  --status-success-line: var(--c-green-line);
+  /* State hues: the colour of each glyph (components/StatusGlyph.tsx). One hue per meaning. */
+  --state-failed:   var(--c-red-400);
+  --state-running:  var(--c-blue-400);
+  --state-fresh:    var(--c-green-400);
+  --state-stale:    var(--c-amber-400);
+  --state-blocked:  var(--c-orange-400);
+  --state-partial:  var(--c-violet-400);
+  --state-unsynced: var(--c-teal-400);
+  --state-pinned:   var(--c-indigo-400);
+  --state-idle:     var(--c-ink-150);   /* never run, unknown, paused, queued, skipped */
+  /* The check or cross cut out of a filled glyph: the page behind it. */
+  --glyph-ink:      var(--c-ink-900);
 
-  --status-running:      var(--c-cyan-500);
-  --status-running-bg:   var(--c-cyan-wash);
-  --status-running-line: var(--c-cyan-line);
+  /* Status (run lifecycle). The -bg and -line washes are for the few marks that are not a
+     glyph (a live graph node's ring, a danger button); never a row, a banner or a pill. */
+  --status-success:      var(--state-fresh);
+  --status-success-bg:   rgba(77, 191, 133, 0.10);
+  --status-success-line: rgba(77, 191, 133, 0.30);
 
-  --status-failed:       var(--c-red-500);
-  --status-failed-bg:    var(--c-red-wash);
-  --status-failed-line:  var(--c-red-line);
+  --status-running:      var(--state-running);
+  --status-running-bg:   rgba(106, 159, 230, 0.10);
+  --status-running-line: rgba(106, 159, 230, 0.40);
 
-  --status-warning:      var(--c-amber-500);
-  --status-warning-bg:   var(--c-amber-wash);
-  --status-warning-line: var(--c-amber-line);
+  --status-failed:       var(--state-failed);
+  --status-failed-bg:    rgba(229, 107, 111, 0.10);
+  --status-failed-line:  rgba(229, 107, 111, 0.35);
+
+  --status-warning:      var(--state-stale);
+  --status-warning-bg:   rgba(221, 174, 79, 0.10);
+  --status-warning-line: rgba(221, 174, 79, 0.30);
 
   --status-queued:       var(--c-ink-200);
-  --status-queued-bg:    rgba(150, 161, 154, 0.10);
-  --status-queued-line:  rgba(150, 161, 154, 0.26);
+  --status-queued-bg:    rgba(161, 161, 169, 0.08);
+  --status-queued-line:  rgba(161, 161, 169, 0.22);
 
   --status-skipped:      var(--c-ink-300);
-  --status-skipped-bg:   rgba(71, 81, 73, 0.18);
+  --status-skipped-bg:   rgba(161, 161, 169, 0.10);
 
   /* Graph canvas (a running node's halo, --glow-running, is in elevation.css) */
-  --graph-grid:  rgba(233, 241, 236, 0.08);   /* the dot grid behind the DAG */
-  --graph-mask:  rgba(8, 11, 10, 0.72);      /* what the minimap dims outside the viewport */
-
+  --graph-grid:  rgba(255, 255, 255, 0.06);   /* the dot grid behind the DAG */
+  --graph-mask:  rgba(15, 15, 17, 0.72);      /* what the minimap dims outside the viewport */
 }

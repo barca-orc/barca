@@ -1,7 +1,7 @@
 import type { RefObject } from 'react'
 import { plural } from '@/lib/plural'
 import { Copy, ExternalLink, RotateCw } from 'lucide-react'
-import { Age, ErrorLine, IconButton, MiddleName, StatusDot, TableSpacer, Tag } from '@/components'
+import { Age, ErrorLine, IconButton, MiddleName, StatusGlyph, TableSpacer, Tag } from '@/components'
 import type { FailureRow, FailuresModel, FailuresMsg } from '@/lib/failuresView'
 import { impactLabel, keysLine, type Failure } from '@/lib/health'
 import type { Dispatch } from '@/lib/program'
@@ -88,7 +88,7 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
             >
               <td>
                 <div className="barca-group-row-name">
-                  <StatusDot tone="failed" size={6} />
+                  <StatusGlyph glyph="failed" size={12} />
                   <strong><MiddleName name={labels.get(f.id) ?? f.name} title={f.id} /></strong>
                   {f.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(f)}</Tag>}
                 </div>

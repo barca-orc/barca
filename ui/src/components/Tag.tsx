@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 
-export type TagTone = 'default' | 'signal' | 'bare' | 'failed' | 'warning'
+export type TagTone = 'default' | 'signal' | 'bare'
 export type TagSize = 'sm' | 'md'
 
 export interface TagProps {
@@ -14,8 +14,8 @@ export interface TagProps {
 
 /**
  * barca · Tag
- * A small label for metadata (kinds, partitions, read-only) and for the fact beside a state
- * (`failed`: the last attempt failed).
+ * A small neutral label for metadata (kinds, partitions, read-only). A state is never a tag:
+ * it is a `StatusBadge`.
  */
 export function Tag({ tone = 'default', size = 'sm', dot = false, style, children }: TagProps) {
   return (

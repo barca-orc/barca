@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 import { match } from 'ts-pattern'
-import { Button, StatusDot, Tag } from '@/components'
+import { Button, StatusGlyph, Tag } from '@/components'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useTimeZone } from '@/context/timeZone'
 import { ApiError } from '@/lib/api'
@@ -33,7 +33,7 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
         {!data && isError && <span className="barca-note" role="alert">Queue unavailable: {error.message} <Button size="sm" onClick={() => void refetch()}>Retry</Button></span>}
         {data && <>
           <span className="barca-queue-count">
-            <StatusDot tone={data.running.length > 0 ? 'running' : 'queued'} live={data.running.length > 0} size={6} />
+            <StatusGlyph glyph={data.running.length > 0 ? 'running' : 'queued'} live={data.running.length > 0} size={12} />
             {capacityLabel(data.running.length, data.max_runs)}
           </span>
           <span className="barca-queue-count">{queuedLabel(data.queued.length)}</span>

@@ -1,49 +1,28 @@
 import type { CSSProperties } from 'react'
-import { Ban, CircleAlert, Pin, CircleX, Clock, LoaderCircle, Pause } from 'lucide-react'
-import type { Tone } from '@/lib/tone'
-import { StatusDot } from './StatusDot'
+import type { Glyph } from '@/lib/glyph'
+import { StatusGlyph } from './StatusGlyph'
 
 export interface StatusBadgeProps {
-  tone: Tone
+  /** How the state is drawn (`lib/glyph.ts`). */
+  glyph: Glyph
   /** The words: a node's state (`failing`, `never run`) or a run's status. */
   label: string
   size?: 'sm' | 'md'
-  /** Pulse (live work). */
+  /** Live work: the running glyph turns. */
   live?: boolean
-  /** Dot + plain text, no pill. By default only the failed and running tones, the exceptions, get a pill. */
-  subtle?: boolean
-  /** A shape for a state the tone does not name (`paused` is neutral in colour). */
-  icon?: 'paused' | 'blocked' | 'pinned'
   style?: CSSProperties
 }
 
 /**
- * The shape beside the word, so a state is never colour alone: failed is a crossed circle,
- * a warning (stale) an exclamation, blocked by a failure upstream a barred circle, running a spinner, queued a clock, paused bars.
- * The quiet tones (fresh, never run) keep a dot.
- */
-function StateIcon({ tone, live, size, icon }: { tone: Tone; live: boolean; size: number; icon?: 'paused' | 'blocked' | 'pinned' }) {
-  const props = { size, 'aria-hidden': true, strokeWidth: 2.25, className: 'barca-badge-icon' } as const
-  if (icon === 'paused') return <Pause {...props} />
-  if (icon === 'blocked') return <Ban {...props} />
-  if (icon === 'pinned') return <Pin {...props} />
-  if (tone === 'failed') return <CircleX {...props} />
-  if (tone === 'warning') return <CircleAlert {...props} />
-  if (tone === 'running') return <LoaderCircle {...props} data-spin={live || undefined} />
-  if (tone === 'queued') return <Clock {...props} />
-  return <StatusDot tone={tone} live={live} size={size === 11 ? 6 : 7} />
-}
-
-/**
  * barca · StatusBadge
- * An icon and its word. Pills are for exceptions: a failed or running state sits on a tinted
- * ground, any other is icon + plain text, so a column of fresh rows stays quiet.
+ * A state's glyph and its word, and nothing else: no pill, no tinted ground, no coloured text.
+ * The glyph carries the colour; the word stays in the text colour around it, so a column of
+ * states reads calmly and a failure stands out by its shape and hue alone.
  */
-export function StatusBadge({ tone, label, size = 'md', live = false, subtle, icon, style }: StatusBadgeProps) {
-  const plain = subtle ?? !(tone === 'failed' || tone === 'running')
+export function StatusBadge({ glyph, label, size = 'md', live = false, style }: StatusBadgeProps) {
   return (
-    <span className="barca-badge" data-tone={tone} data-size={size} data-plain={plain || undefined} style={style}>
-      <StateIcon tone={tone} live={live} size={size === 'sm' ? 11 : 13} icon={icon} />
+    <span className="barca-badge" data-glyph={glyph} data-size={size} style={style}>
+      <StatusGlyph glyph={glyph} live={live} size={size === 'sm' ? 12 : 14} />
       {label}
     </span>
   )

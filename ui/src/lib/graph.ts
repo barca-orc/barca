@@ -3,6 +3,7 @@ import { match } from 'ts-pattern'
 import { DAG_NODE_WIDTH, DAG_NODE_HEIGHT } from '@/components'
 import { layout, type LayoutDir, type LayoutInput, type LayoutPositions } from './graphLayout'
 import type { Tone } from './tone'
+import type { Glyph } from './glyph'
 import type { NodeKind, StatusKind } from './types'
 
 export type { LayoutDir }
@@ -14,8 +15,10 @@ interface GraphNodeData {
   kind: GraphKind
   summary?: string
   outputName?: string
-  /** The colour of its state; `label` is the word. */
+  /** How urgent its state is; `glyph` draws it and `label` is the word. */
   tone: Tone
+  /** How its state is drawn; none before any state is known. */
+  glyph?: Glyph
   /** The state's word, or a group's summary. */
   label?: string | null
   /** Its last attempt failed: shown as a second fact beside the state. */

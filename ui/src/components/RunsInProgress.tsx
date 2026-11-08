@@ -3,7 +3,7 @@ import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { healthQueueLabel } from '@/lib/queue'
 import { runsInProgress, runsInProgressLabel } from '@/lib/running'
-import { StatusDot } from './StatusDot'
+import { StatusGlyph } from './StatusGlyph'
 
 /**
  * barca · RunsInProgress
@@ -19,7 +19,7 @@ export function RunsInProgress() {
   if (count === 0 && queue === null) return null
   return (
     <Link to="/runs" className="barca-runs-chip" role="status">
-      <StatusDot tone={count > 0 ? 'running' : 'queued'} live={count > 0} size={6} />
+      <StatusGlyph glyph={count > 0 ? 'running' : 'queued'} live={count > 0} size={12} />
       {count > 0 && runsInProgressLabel(count)}
       {count > 0 && queue && ' · '}
       {queue}

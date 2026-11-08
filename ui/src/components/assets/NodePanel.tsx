@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
-import { CircleAlert, GitBranch, Play, X } from 'lucide-react'
+import { GitBranch, Play, X } from 'lucide-react'
 import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { runGlyph } from '@/lib/runs'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
 import { formatAbsolute } from '@/lib/time'
@@ -143,7 +144,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {/* The state as the server says it, its reason verbatim, and the last attempt as its own fact. */}
         <div className="barca-state-line">
           {runAction.liveState ? (
-            <StatusBadge tone={runAction.liveState.tone} label={runAction.liveState.label} live={isLive(runAction.liveState)} />
+            <StatusBadge glyph={runAction.liveState.glyph} label={runAction.liveState.label} live={isLive(runAction.liveState)} />
           ) : row && (
             <>
               <StatusBadge {...nodeStateDisplay({ ...row, blockedBy: blocker, pinned })} />
@@ -182,7 +183,6 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {failed && last && failedKeys === 0 && (
           <div className="barca-why" role="group" aria-label="Why it failed">
             <div className="barca-why-head">
-              <CircleAlert size={14} />
               <ErrorLine error={last.error} large root={root} />
               {last.error && <CopyButton label="Copy error" text={last.error} />}
             </div>
@@ -212,7 +212,6 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {blockedBy.length > 0 && (
           <div className="barca-why" role="group" aria-label="What it waits on">
             <div className="barca-why-head">
-              <CircleAlert size={14} />
               <strong>Waiting on {blockedBy.length} failed upstream node{blockedBy.length === 1 ? '' : 's'}</strong>
             </div>
             <ul className="barca-why-list">
@@ -248,7 +247,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {last ? (
           <>
             <p className="barca-stat-row">
-              <span className={(lastRun ?? last).status === 'failed' ? 'barca-cell-failed' : undefined}>{(lastRun ?? last).status}</span>
+              <StatusBadge glyph={runGlyph((lastRun ?? last).status)} label={(lastRun ?? last).status} />
               {' · '}<Age at={(lastRun ?? last).created_at} nowMs={nowMs} />
               {' · '}{lastElapsed !== null ? formatSeconds(lastElapsed) : '–'}
               {lastRun?.keys != null && <> · {plural(lastRun.keys, 'key')}{lastRun.failed_keys ? `, ${lastRun.failed_keys.toLocaleString()} failed` : ''}</>}
@@ -469,9 +468,7 @@ function RunList({ runs, nowMs }: { runs: AssetRunEntry[]; nowMs: number }) {
       {runs.map((r, i) => (
         <li key={i}>
           <div className="barca-run-line">
-            <span className={r.status === 'failed' ? 'barca-cell-failed' : undefined}>
-              {r.status}
-            </span>
+            <StatusBadge glyph={runGlyph(r.status)} label={r.status} size="sm" />
             <Age at={r.created_at} nowMs={nowMs} />
             <span>{r.elapsed_seconds !== null ? formatSeconds(r.elapsed_seconds) : '–'}</span>
             {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}

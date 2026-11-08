@@ -1,12 +1,12 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useMemo, type CSSProperties, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Layers, PanelLeft } from 'lucide-react'
-import { IconButton, StatusDot } from '@/components'
+import { IconButton, StatusGlyph } from '@/components'
 import { useAssetStates, useWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { useGroups } from '@/hooks/useGroups'
 import { useProgram } from '@/hooks/useProgram'
-import { LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone } from '@/lib/cacheStateDisplay'
+import { LAST_ATTEMPT_FAILED, cacheStateGlyph, cacheStateLabel } from '@/lib/cacheStateDisplay'
 import { groupTree, leavesByGroup } from '@/lib/groups'
 import { mergeStates, pipelineSummaries, type PipelineSummary } from '@/lib/pipeline'
 import { SIDEBAR_KEY, fileGroups, updateSidebar, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
@@ -91,9 +91,9 @@ export function SidebarView({ model, total, pipelines, groupsOf, selected, scope
                   aria-pressed={selected === p.file}
                   onClick={() => onSelect(selected === p.file ? null : p.file)}
                 >
-                  {/* A dot says the whole file's most urgent fact: none until all of it is known. */}
+                  {/* A glyph says the whole file's most urgent fact: none until all of it is known. */}
                   {p.running || p.known
-                    ? <StatusDot tone={p.running ? 'running' : p.failed ? 'failed' : cacheStateTone(p.worst)} live={p.running > 0} size={6} />
+                    ? <StatusGlyph glyph={p.running ? 'running' : p.failed ? 'failed' : cacheStateGlyph(p.worst)} live={p.running > 0} size={12} />
                     : <span className="barca-pipe-nodot" />}
                   <span className="barca-pipe-name">{p.name}</span>
                   {p.running > 0 && (
@@ -114,7 +114,7 @@ export function SidebarView({ model, total, pipelines, groupsOf, selected, scope
                   title={g.name}
                   onClick={() => onOpenGroup(p.file, g.id)}
                 >
-                  {g.tone ? <StatusDot tone={g.tone} live={g.tone === 'running'} size={6} /> : <span className="barca-pipe-nodot" />}
+                  {g.glyph ? <StatusGlyph glyph={g.glyph} live={g.glyph === 'running'} size={12} /> : <span className="barca-pipe-nodot" />}
                   <span className="barca-pipe-name">{g.name}</span>
                 </button>
               ))}

@@ -13,6 +13,9 @@ export type { IconButtonProps, IconButtonSize, IconButtonVariant } from './IconB
 export { StatusDot } from './StatusDot'
 export type { StatusDotProps } from './StatusDot'
 
+export { StatusGlyph } from './StatusGlyph'
+export type { StatusGlyphProps } from './StatusGlyph'
+
 export { StatusBadge } from './StatusBadge'
 export type { StatusBadgeProps } from './StatusBadge'
 

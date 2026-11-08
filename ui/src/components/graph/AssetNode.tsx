@@ -1,18 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { Database, Radio, Zap } from 'lucide-react'
-import { match } from 'ts-pattern'
 import { DagNode, DAG_NODE_WIDTH } from '@/components'
 import { nodeKindLabel } from '@/lib/status'
-import type { NodeKind } from '@/lib/types'
 import type { GraphNode } from '@/lib/graph'
-
-function kindIcon(kind: NodeKind) {
-  return match(kind)
-    .with('asset', () => <Database size={12} />)
-    .with('sensor', () => <Radio size={12} />)
-    .with('task', () => <Zap size={12} />)
-    .exhaustive()
-}
 
 /**
  * Custom React Flow node: the design-system DagNode plus the source/target
@@ -30,6 +19,7 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         kind={data.kind}
         kindLabel={leaf && leaf !== 'asset' ? nodeKindLabel({ id, kind: leaf }) : undefined}
         tone={data.tone}
+        glyph={data.glyph}
         label={data.label}
         lastFailed={data.lastFailed}
         blockedBy={data.blockedBy}
@@ -37,7 +27,6 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         live={data.live}
         stateHint={data.stateHint}
         selected={selected}
-        icon={leaf ? kindIcon(leaf) : undefined}
       />
       <Handle type="source" position={data.direction === "TB" ? Position.Bottom : Position.Right} />
     </div>

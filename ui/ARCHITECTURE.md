@@ -170,7 +170,7 @@ The look of the UI is defined in three places, in this order:
 1. **Tokens** (`styles/tokens/`): colors, type scale, spacing, radius, elevation, motion, and
    the light theme. The only place a color or a size is written as a value.
 2. **Primitives** (`components/`): `Button`, `IconButton`, `Age`/`LastSuccess`, `Tag`, `Chip`/`ChipGroup`, `Select`,
-   `SearchInput`, `StatusDot`/`StatusBadge`, `DagNode`, `HealthBar`, `Skeleton`, `ConnectionBadge`, `ErrorLine`,
+   `SearchInput`, `StatusGlyph`/`StatusBadge`, `StatusDot` (the connection only), `DagNode`, `HealthBar`, `Skeleton`, `ConnectionBadge`, `ErrorLine`,
    `MiddleName`, and `SidePanel` with `Section` and `KeyValue`. Their CSS is in
    `styles/components.css`, by class and `data-*` attribute (`data-tone`, `data-size`); an inline
    `style` is only for a value computed at render (a width, a position, a bar's share).
@@ -184,14 +184,21 @@ Rules:
 - A second use of a pattern is the cue to make the primitive; the first use stays in its page.
 - A new or changed primitive is added to the kit page (`pages/KitPage.tsx`, at `/ui/#/kit`
   under `pnpm dev`) in every state it has. The kit page is not in the built UI.
-- Colour is status, and never the only carrier: a `Tone` (`lib/tone.ts`: success, warning,
-  failed, running, queued, neutral) colours a dot, a badge or a node, and the word beside it says
-  what it is. A node's cache state is one of the CLI's eight words (`cached` green, `stale`,
-  `partial`, `unsynced`, `blocked` amber, `never_run`, `always_runs`, `unknown` neutral), mapped
-  once in `lib/cacheStateDisplay.ts`; a run's status (`queued`, `running` cyan, `success`,
-  `failed` red, `cancelled`, `skipped`) once in `lib/status.ts`; `last attempt failed`, a fact
-  beside a state, is red. `--signal` (primary actions, links, selection) is neutral;
-  `tokens.test.ts` keeps it off the status hues.
+- The palette is true neutral greys (hairline borders of low-alpha white on dark), one quiet
+  indigo accent (`--accent`: focus rings and the pinned state), and the state hues. Colour is
+  status, drawn only as a `StatusGlyph` (`lib/glyph.ts`): a ~14px shape in its state's hue, its
+  word beside it in the text colour (`StatusBadge`). Rows, banners, chips, node cards and error
+  text stay neutral; a failing row is found by its glyph and the default sort, not a tint. Each
+  state has its own glyph, shape and hue (`--state-*`): `failing` a red filled cross, `running`
+  a blue turning arc, `fresh` a green filled check, `stale` amber half-filled, `blocked` an
+  orange barred ring, `partial` violet three-quarters, `unsynced` teal arrow, `pinned` indigo,
+  and the quiet states (never run dashed, unknown, always runs, paused, queued, cancelled,
+  skipped) grey. A `Tone` (`lib/tone.ts`) is the separate question of urgency, which logic reads
+  (what needs attention, what sorts first); states may share a tone, never a glyph. A node's
+  cache state is one of the CLI's eight words, mapped once in `lib/cacheStateDisplay.ts`; a run's
+  status once in `lib/status.ts`. `--signal` (primary actions, links, selection) is neutral;
+  `tokens.test.ts` keeps it off the status hues and holds every text colour and state hue at
+  4.5:1 on every background of both themes.
 - `styles/tokens.test.ts` fails on a raw color or an off-scale font size outside
   `styles/tokens/`. Add a token instead of an exception.
 
@@ -255,9 +262,10 @@ they arrive. The tests do not exercise that (fonts are local and fast).
   invented colors.
 
 Graph state presentation lives in `src/lib/graphState.ts`. A resting node shows its
-`cache.state` from `/state` in the CLI's word and that state's tone; a failed last attempt is a
-red `last attempt failed` tag beside the word, and the state is never rewritten by it. A run
-working on the node overlays that (cyan, pulsing); completion refreshes it. Selection uses a
+`cache.state` from `/state` as its glyph and the CLI's word; a failed last attempt shows as
+`failing` (the red cross glyph) in its place, and the state stays in the tooltip and the panel. A
+run working on the node overlays that (the running glyph turns, the card gets the running
+ring); completion refreshes it. Selection uses a
 separate outline. The graph displays every asset and dependency in the selected pipeline. No
 nodes are grouped or collapsed automatically.
 

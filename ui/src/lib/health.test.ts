@@ -34,8 +34,8 @@ describe('health', () => {
     expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ cached: 3 }) })
     expect(healthLabel(counts)).toBe('2 failing · 1 stale · 4 fresh')
     expect(healthParts(counts, 2)).toEqual([
-      { key: 'lastFailed', tone: 'failed', text: '2 failing' },
-      { key: 'stale', tone: 'warning', text: '1 stale' },
+      { key: 'lastFailed', tone: 'failed', glyph: 'failed', text: '2 failing' },
+      { key: 'stale', tone: 'warning', glyph: 'stale', text: '1 stale' },
     ])
     expect(healthLabel(counts, 1)).toBe('2 failing')
     expect(healthTone(counts)).toBe('failed')
