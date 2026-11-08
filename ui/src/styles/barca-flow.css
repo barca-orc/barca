@@ -101,10 +101,17 @@
   padding: 0;
 }
 .react-flow__controls-button svg {
-  fill: currentColor;
-  max-width: 10px;
-  max-height: 10px;
+  fill: none;
+  max-width: 14px;
+  max-height: 14px;
 }
+.react-flow__controls-button + .react-flow__controls-button { border-left: 1px solid var(--border-subtle); }
+.react-flow__controls-button { border-bottom: 0; }
+
+/* Outside the toolbar's filter: still there, so the graph keeps its shape, but quiet. */
+.react-flow__node.is-dimmed { opacity: 0.32; transition: opacity var(--dur-fast, 120ms) var(--ease-out, ease); }
+.react-flow__node.is-dimmed:hover, .react-flow__node.is-dimmed.selected { opacity: 1; }
+.react-flow__edge.is-dimmed .react-flow__edge-path { stroke-opacity: 0.25; }
 
 /* MiniMap */
 .react-flow__minimap {

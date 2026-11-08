@@ -1,28 +1,19 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
-import { ArrowDown, ArrowUp, CalendarClock, ChevronDown, Clock, Layers, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown } from 'lucide-react'
 import {
   Button,
-  Chip,
-  ChipGroup,
   EmptyNote,
   MiddleName,
-  PageRunButton,
   ResetDatabaseButton,
   RunningBadge,
-  SearchInput,
-  Select,
   Skeleton,
   StatusBadge,
   StatusGlyph,
   TableSpacer,
-  Tag,
-  ViewToggle,
 } from '@/components'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
-import { useAssetStates } from '@/hooks/useAssetStates'
-import { useAssets } from '@/hooks/useAssets'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { RunNotice } from '@/components/RunNotice'
 import { useHealth } from '@/hooks/useHealth'
@@ -30,38 +21,19 @@ import { useTimeZone } from '@/context/timeZone'
 import { formatShort } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
-import { BLOCKED_UPSTREAM, PINNED, PINNED_HINT, CACHE_STATES, LAST_ATTEMPT_FAILED, cacheStateGlyph, cacheStateLabel, nodeStateDisplay } from '@/lib/cacheStateDisplay'
-import { blockedBy } from '@/lib/graphView'
+import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { shortName } from '@/lib/graph'
 import { headline } from '@/lib/health'
-import { plural } from '@/lib/plural'
 import { isLive, liveGraphState } from '@/lib/graphState'
-import { inPipeline, pipelineName } from '@/lib/pipeline'
-import {
-  EMPTY_FILTERS,
-  LAST_RUNS,
-  applyFilters,
-  facetCounts,
-  isFiltered,
-  NEEDS_ATTENTION,
-  NO_DEFAULTS,
-  RECENT_MS,
-  onDefaultStates,
-  parseFilters,
-  writeFilters,
-  type Filters,
-  type LastRun,
-} from '@/lib/assetFilters'
+import { pipelineName } from '@/lib/pipeline'
 import {
   DEFAULT_SORT,
   assetColumns,
-  buildRows,
   fileDisplay,
   lastRunText,
   lastRunTitle,
   nextSort,
   parseSort,
-  sortRows,
   tableLines,
   typicalText,
   type AssetRow,
@@ -70,29 +42,14 @@ import {
 } from '@/lib/assetTable'
 import type { NodeKind } from '@/lib/types'
 import { PausedTag } from '@/components/assets/IncidentControls'
-import { usePausedSet } from '@/hooks/usePauses'
-import { usePinNotes } from '@/hooks/usePins'
-
-const PAGE_LABEL: Record<NodeKind, string> = { asset: 'Assets', task: 'Tasks', sensor: 'Sensors' }
+import { AssetsToolbar } from './AssetsToolbar'
+import { PAGE_LABEL, toggle, useAssetFilter } from '@/hooks/useAssetFilter'
 
 /** What a page with none of its kind says, in a sentence: what the kind is, and how to add one. */
 const EMPTY_HINT: Record<NodeKind, ReactNode> = {
   asset: <>An asset is a cached function: decorate one with <code>@asset</code> in a served file and it appears here.</>,
   task: <>A task is a step that always runs, never cached (deploy, notify, migrate): decorate one with <code>@task</code> and run it with <code>barca run</code>.</>,
   sensor: <>A sensor observes something outside barca and says whether it changed: decorate one with <code>@sensor</code> and the assets downstream re-run when it does.</>,
-}
-
-const LAST_RUN_LABEL: Record<LastRun, string> = {
-  any: 'Any time',
-  hour: 'Last hour',
-  day: 'Last 24h',
-  week_plus: '7+ days ago',
-  never: 'Not run',
-}
-
-/** Add or remove `v` from a multi-select list. */
-function toggle<T>(list: T[], v: T): T[] {
-  return list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
 }
 
 /** A column header that sorts the table; the active one shows its direction. */
@@ -129,18 +86,13 @@ function SortHeader({
 }
 
 export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
-  const { data, isError, error, dataUpdatedAt, refetch } = useAssetStates()
   const { data: health } = useHealth()
   const { zone } = useTimeZone()
-  const assetQuery = useAssets()
-  const graph = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
   const navigate = useNavigate()
   // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
   // a reload and can be shared.
   const [params, setParams] = useSearchParams()
   const sort = parseSort(params.get('sort'), params.get('dir'))
-  // The pipeline picked in the sidebar (?pipeline=<file>); null = all.
-  const pipeline = params.get('pipeline')
   const onSort = (key: SortKey) => {
     const next = nextSort(sort, key)
     const isDefault = next.key === DEFAULT_SORT.key && next.dir === DEFAULT_SORT.dir
@@ -156,37 +108,14 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   }
 
   // "x ago" is relative to when the data was fetched, so it stays pure and
-  // refreshes with every poll.
-  // `?paused=1` (the paused banner's link): only the paused assets.
-  const paused = usePausedSet()
-  const onlyPaused = params.get('paused') === '1'
-  // Which nodes a failure upstream keeps from running: judged over the whole graph, so a
-  // pipeline's row is blocked by a failure in another one too.
-  // Pinned assets read `pinned` (`GET /pins`), and pass no failure above them on.
-  const pins = usePinNotes()
-  const blockers = useMemo(() => blockedBy(data ?? [], graph, pins), [data, graph, pins])
-  const rows = useMemo(
-    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, blockers, pins),
-    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused, blockers, pins],
-  )
-  // Filters live in the URL with the sort and pipeline, so a filtered view can
-  // be reloaded and shared.
-  const defaultStates = kind === 'task' ? NEEDS_ATTENTION : NO_DEFAULTS
-  const filters = { ...parseFilters(params, defaultStates), kinds: [] }
-  const onDefault = onDefaultStates(filters, defaultStates)
-  const setFilters = (f: Filters) => setParams(writeFilters(params, f, defaultStates), { replace: true })
-  const now = dataUpdatedAt
-  // The default also shows what ran recently: a task that just ran is what the page is for.
-  const opts = onDefault ? { recentMs: RECENT_MS } : {}
-  const counts = facetCounts(rows, filters, now, opts)
-  const visible = sortRows(applyFilters(rows, filters, now, opts), sort)
+  // refreshes with every poll. The rows and filters are the graph view's too (`useAssetFilter`).
+  const filter = useAssetFilter(kind, sort)
+  const { data, dataUpdatedAt, isError, error, refetch } = filter.states
+  const { graph, pipeline, paused, onlyPaused, rows, onDefault, visible, now } = filter
   // A name repeated across files reads as its id; two rows never show the same label.
   const nameCount = new Map<string, number>()
   for (const r of visible) nameCount.set(r.name, (nameCount.get(r.name) ?? 0) + 1)
   const labels = new Map(visible.filter((r) => nameCount.get(r.name)! > 1).map((r) => [r.id, r.id]))
-  // What fails, and how much of the graph waits on it: the failing segment's tooltip.
-  // The blocked count is the rows that read `blocked`, so the tooltip and the chip agree.
-  const blocked = rows.filter((r) => !r.lastFailed && r.pinned === null && r.blockedBy).length
   // Rows under a header per file, which names the file once (each row's tooltip has its id),
   // unless one pipeline is open: the title names it then. A header folds its file's rows away.
   const [collapsed, setCollapsed] = useState<string[]>([])
@@ -250,98 +179,11 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
     <div className="barca-view">
       <StreamNotice notice={nodeRun.stream.notice} runId={nodeRun.run?.handle} />
       <div className="barca-view-head">
-        {/* One toolbar: the title and count, the state filter, then search, the last-run filter,
-            the view and Run. What fails needs no banner: its segment says how many, and what it blocks. */}
-        <div className="barca-view-bar">
-          <div className="barca-view-title">
-            <h1>{PAGE_LABEL[kind]}{pipeline ? ` · ${pipelineName(pipeline)}` : ''}</h1>
-            {data ? (
-              <span className="barca-count" title={pipeline ?? undefined}>
-                {visible.length === rows.length ? rows.length.toLocaleString() : `${visible.length.toLocaleString()} of ${rows.length.toLocaleString()}`}
-                <span className="barca-sr-only"> {rows.length === 1 ? kind : `${kind}s`}{visible.length === rows.length ? '' : ' shown'}</span>
-              </span>
-            ) : (
-              <Skeleton width={24} height={14} />
-            )}
-          </div>
-          {/* The state words, as `barca status` prints them; a failed last attempt is a filter of its own. */}
-          <ChipGroup label="State" segmented>
-            {(counts.failed > 0 || (filters.failed && !onDefault)) && (
-              <Chip
-                pressed={filters.failed}
-                title={`${counts.failed} ${LAST_ATTEMPT_FAILED}${blocked > 0 ? ` · blocks ${plural(blocked, 'downstream node')}` : ''}`}
-                onClick={() => setFilters({ ...filters, failed: !filters.failed })}
-              >
-                <StatusGlyph glyph="failed" size={12} />
-                <b>{counts.failed}</b> <span className="barca-chip-word">{LAST_ATTEMPT_FAILED}</span>
-              </Chip>
-            )}
-            {(counts.pinned > 0 || filters.pinned) && (
-              <Chip pressed={filters.pinned} title={`${counts.pinned} ${PINNED}`} onClick={() => setFilters({ ...filters, pinned: !filters.pinned })}>
-                <StatusGlyph glyph="pinned" size={12} />
-                <b>{counts.pinned}</b> <span className="barca-chip-word">{PINNED}</span>
-              </Chip>
-            )}
-            {(counts.blocked > 0 || (filters.blocked && !onDefault)) && (
-              <Chip pressed={filters.blocked} title={`${counts.blocked} ${BLOCKED_UPSTREAM}`} onClick={() => setFilters({ ...filters, blocked: !filters.blocked })}>
-                <StatusGlyph glyph="blocked" size={12} />
-                <b>{counts.blocked}</b> <span className="barca-chip-word">{BLOCKED_UPSTREAM}</span>
-              </Chip>
-            )}
-            {CACHE_STATES.filter((state) => counts.states[state] > 0 || (filters.states.includes(state) && !onDefault)).map((state) => (
-              <Chip
-                key={state}
-                pressed={filters.states.includes(state)}
-                title={`${counts.states[state]} ${cacheStateLabel(state)}`}
-                onClick={() => setFilters({ ...filters, states: toggle(filters.states, state) })}
-              >
-                <StatusGlyph glyph={cacheStateGlyph(state)} size={12} />
-                <b>{counts.states[state]}</b> <span className="barca-chip-word">{cacheStateLabel(state)}</span>
-              </Chip>
-            ))}
-          </ChipGroup>
-          {(counts.scheduled > 0 || filters.scheduled) && (
-            <ChipGroup label="Scheduled">
-              <Chip pressed={filters.scheduled} title={`${counts.scheduled} scheduled`} onClick={() => setFilters({ ...filters, scheduled: !filters.scheduled })}>
-                <CalendarClock size={12} /><b>{counts.scheduled}</b> <span className="barca-chip-word">scheduled</span>
-              </Chip>
-            </ChipGroup>
-          )}
-          {(counts.partitioned > 0 || filters.partitioned) && (
-            <ChipGroup label="Partitioned">
-              <Chip pressed={filters.partitioned} title={`${counts.partitioned} partitioned`} onClick={() => setFilters({ ...filters, partitioned: !filters.partitioned })}>
-                <Layers size={12} /><b>{counts.partitioned}</b> <span className="barca-chip-word">partitioned</span>
-              </Chip>
-            </ChipGroup>
-          )}
-          {isFiltered(filters) && rows.length > 0 && (
-            <button type="button" className="barca-clear" onClick={() => setFilters(EMPTY_FILTERS)}>
-              <X size={12} /> {onDefault ? `Show all ${rows.length.toLocaleString()}` : 'Clear'}
-            </button>
-          )}
-          <div className="barca-view-actions">
-            {nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
-            {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            {(rows.length > 0 || !data) && <SearchInput
-              placeholder={`Search ${PAGE_LABEL[kind].toLowerCase()}`}
-              label="Search by name or file"
-              value={filters.query}
-              onChange={(query) => setFilters({ ...filters, query })}
-            />}
-            {(rows.length > 0 || !data) && <Select
-              label="Last run"
-              icon={<Clock size={13} />}
-              value={filters.lastRun}
-              options={LAST_RUNS.map((l) => ({
-                value: l,
-                label: LAST_RUN_LABEL[l] + (l === 'any' ? '' : ` (${counts.lastRun[l]})`),
-              }))}
-              onChange={(lastRun) => setFilters({ ...filters, lastRun })}
-            />}
-            {kind === 'asset' && <ViewToggle />}
-            <PageRunButton run={nodeRun.scopeRun} />
-          </div>
-        </div>
+        <AssetsToolbar
+          filter={filter}
+          run={nodeRun.scopeRun}
+          extra={nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
+        />
       </div>
       <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       <div className="barca-assets-split">

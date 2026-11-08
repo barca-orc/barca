@@ -1,9 +1,10 @@
 import { useState } from 'react'
+import { Check, Copy } from 'lucide-react'
 import { incidentSummary, runLink } from '@/lib/runRecovery'
 import type { RunView } from '@/lib/types'
-import { Button } from './Button'
+import { IconButton } from './IconButton'
 
-/** "Copy incident summary": the run as markdown, for an incident or a chat (`incidentSummary`). */
+/** "Copy incident summary": the run as markdown, for an incident or a chat (`incidentSummary`). An icon with its name as the tooltip. */
 export function IncidentSummaryButton({ run, datadogUrl }: { run: RunView; datadogUrl?: string | null }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const copy = () => {
@@ -12,7 +13,7 @@ export function IncidentSummaryButton({ run, datadogUrl }: { run: RunView; datad
     if (!navigator.clipboard) return done('failed')
     navigator.clipboard.writeText(text).then(() => done('copied'), () => done('failed'))
   }
-  return <Button size="sm" variant="ghost" onClick={copy}>
-    {state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy incident summary'}
-  </Button>
+  return <IconButton size="sm" label={state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy incident summary'} onClick={copy}>
+    {state === 'copied' ? <Check size={14} /> : <Copy size={14} />}
+  </IconButton>
 }

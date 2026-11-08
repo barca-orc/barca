@@ -2,7 +2,7 @@ import { StreamNotice } from '@/components/StreamNotice'
 import { useDeferredValue, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { match } from 'ts-pattern'
-import { ArrowLeft, ArrowDown, ArrowRight, ChevronRight, FolderOpen, Maximize } from 'lucide-react'
+import { ArrowLeft, ChevronRight, FolderOpen } from 'lucide-react'
 import { Button, HealthBar, IconButton, PageRunButton, ResetDatabaseButton, SearchInput, Select, StatusGlyph, ViewToggle } from '@/components'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
@@ -225,16 +225,6 @@ export function GroupedPipelinePage() {
               </button>
             </div>
             {show === 'items' && <ViewToggle />}
-            {graph && (
-              <>
-                <IconButton label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'} onClick={() => update(dirChanges(dir))}>
-                  {dir === 'LR' ? <ArrowDown size={15} /> : <ArrowRight size={15} />}
-                </IconButton>
-                <IconButton label="Fit to screen" onClick={() => canvas.current?.fit()}>
-                  <Maximize size={15} />
-                </IconButton>
-              </>
-            )}
             <PageRunButton run={nodeRun.scopeRun} />
           </div>
         </div>
@@ -306,6 +296,7 @@ export function GroupedPipelinePage() {
                     states={visualStates}
                     pins={pins}
                     handleRef={canvas}
+                    onToggleDir={() => update(dirChanges(dir))}
                     legend={drawn.some((entry) => entry.kind === 'group') && <span><FolderOpen size={12} />{map ? 'Pipeline' : 'Group'}</span>}
                   />
                 </>

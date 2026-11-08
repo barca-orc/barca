@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { GitBranch, Play, X } from 'lucide-react'
-import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
 import { runGlyph } from '@/lib/runs'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
@@ -121,7 +121,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       label={`${node.name} details`}
       title={node.name}
       titleText={node.name}
-      badge={node.kind !== 'asset' ? <Tag size="sm">{nodeKindLabel(node)}</Tag> : undefined}
+      badge={<span className="barca-sidepanel-kind">{nodeKindLabel(node)}</span>}
       subtitle={node.id}
       subtitleText={node.id}
       subtitleAction={<CopyButton label="Copy id" text={node.id} />}
@@ -254,14 +254,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               {lastRun?.keys != null && <> · {plural(lastRun.keys, 'key')}{lastRun.failed_keys ? `, ${lastRun.failed_keys.toLocaleString()} failed` : ''}</>}
               {stats && <> · {stats.total_runs.toLocaleString()} {stats.total_runs === 1 ? 'run' : 'runs'}</>}
             </p>}
-            {lastElapsed !== null && (
+            {/* The distribution of successful durations, when there are two or more to compare
+                (`durations.samples`, known before the history loads, so nothing moves). */}
+            {lastElapsed !== null && (node.durations?.samples ?? 0) >= 2 && (isLoading || histogram.length > 0) && (
               <div
                 className="barca-hist"
                 aria-label="Distribution of successful run durations; the last attempt is highlighted"
               >
                 {isLoading ? (
                   <Skeleton height={36} />
-                ) : histogram.length > 0 ? (
+                ) : (
                   <>
                     <div className="barca-hist-bars">
                       {histogram.map((b, i) => (
@@ -278,8 +280,6 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                       <span>{formatSeconds(histogram[histogram.length - 1]?.to ?? 0)}</span>
                     </div>
                   </>
-                ) : (
-                  <p className="barca-hist-note">needs two or more successful runs</p>
                 )}
               </div>
             )}
@@ -326,8 +326,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           <>
             <div className="barca-stats">
               <div>
-                <b>{stats.total_runs}</b>
-                <span>runs</span>
+                <b>{stats.total_runs.toLocaleString()}</b>
+                <span>{stats.total_runs === 1 ? 'run' : 'runs'}</span>
               </div>
               {pace && (
                 <div>
@@ -341,26 +341,27 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                   <span>{node.partitioned ? 'median / run' : 'median'}</span>
                 </div>
               )}
-              {stats.p95_elapsed_seconds !== null && (
+              {stats.p95_elapsed_seconds !== null && stats.total_runs > 1 && (
                 <div>
                   <b>{formatSeconds(stats.p95_elapsed_seconds)}</b>
                   <span>p95</span>
                 </div>
               )}
-              {stats.max_elapsed_seconds !== null && (
+              {stats.max_elapsed_seconds !== null && stats.total_runs > 1 && (
                 <div>
                   <b>{formatSeconds(stats.max_elapsed_seconds)}</b>
                   <span>max</span>
                 </div>
               )}
-              {node.kind !== 'task' && (
+              {node.kind !== 'task' && stats.total_runs > 1 && (
                 <div>
                   <b>{Math.round(stats.cache_hit_rate * 100)}%</b>
                   <span>re-ran with unchanged inputs</span>
                 </div>
               )}
             </div>
-            <div className="barca-bars" aria-label="Recent run durations, oldest first">
+            {/* One bar is no trend: the chart starts at two runs. */}
+            {bars.length > 1 && <div className="barca-bars" aria-label="Recent run durations, oldest first">
               {bars.map((b, i) => (
                 <span
                   key={i}
@@ -369,7 +370,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                   title={`${formatAbsolute(b.createdAt, zone)} · ${b.label}`}
                 />
               ))}
-            </div>
+            </div>}
             <RunList runs={stats.recent_runs} nowMs={nowMs} said={summarized ? last?.error : null} />
           </>
         )}
@@ -387,11 +388,12 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
 
       <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />
 
-      <Section title="Inputs & output">
-        <p className="barca-schema-context">Latest materialized data. Input schemas describe their own latest outputs.</p>
-        <Button variant="ghost" size="sm" disabled={schema.isFetching} onClick={() => void schema.refetch()}>
-          {schema.isFetching ? 'Inspecting…' : 'Refresh schema'}
+      <Section title="Inputs & output" action={
+        <Button variant="ghost" size="sm" disabled={schema.isFetching} title="Inspect the latest materialized data again. Input schemas describe their own latest outputs."
+          onClick={() => void schema.refetch()}>
+          {schema.isFetching ? 'Inspecting…' : 'Refresh'}
         </Button>
+      }>
         <div className="barca-schema-content">
           {schema.isLoading ? <Skeleton height={120} /> : schema.isError ? (
             <div className="barca-schema-empty">
@@ -400,12 +402,14 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             </div>
           ) : (
             <>
-              <h4 className="barca-schema-label">Output <span>{node.name}</span></h4>
+              <h4 className="barca-schema-label">Output</h4>
               <div className="barca-schema-output">
                 {output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
               </div>
-              <h4 className="barca-schema-label">Inputs <span>{node.inputs.length}</span></h4>
-              {node.inputs.length === 0 && <p className="barca-schema-empty">No upstream assets. This is a source node.</p>}
+              {/* A source node's inputs are one muted line, not a heading over nothing. */}
+              {node.inputs.length === 0 ? <p className="barca-schema-empty">No inputs: a source node.</p> : (
+                <h4 className="barca-schema-label">Inputs <span>{node.inputs.length}</span></h4>
+              )}
               {node.inputs.map(id => {
                 const input = schema.data?.find(n => n.id === id)
                 const name = input?.name ?? id.split(':').pop() ?? id
@@ -428,17 +432,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       <IncidentControls node={node} graph={graph} readOnly={runAction.readOnly} />
       {runGuard.dialog}
 
-      <Section title="Consumers">
-        <KeyValue label="downstream">
-          {downstream.length === 0
-            ? '–'
-            : downstream.map((n) => (
-                <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
-                  {shortName(n.id)}
-                </button>
-              ))}
+      {/* What reads it directly; nothing to say when nothing does (Blast radius says so). */}
+      {downstream.length > 0 && <Section title="Consumers">
+        <KeyValue label="reads it">
+          {downstream.map((n) => (
+            <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
+              {shortName(n.id)}
+            </button>
+          ))}
         </KeyValue>
-      </Section>
+      </Section>}
 
       <details className="barca-node-technical" key={node.id}>
         <summary>Technical details</summary>

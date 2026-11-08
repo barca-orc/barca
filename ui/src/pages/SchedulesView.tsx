@@ -59,8 +59,9 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            {current && health && <span className="barca-count">{health.scheduler ? "scheduler running" : "scheduler not running on this server"}</span>}
-            {actions}
+            {current && health && rows?.length !== 0 && <span className="barca-count">{health.scheduler ? "scheduler running" : "scheduler not running on this server"}</span>}
+            {/* No schedules: the page has nothing of its own to run. */}
+            {rows?.length !== 0 && actions}
           </div>
         </div>
         {health && !health.scheduler && rows && rows.length > 0 && (
@@ -146,7 +147,8 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
             <td title={r.id}>
               <div className="barca-cell-name">
                 <span className="name barca-cell-cut">{r.name}</span>
-                {r.kind !== "asset" && <Tag size="sm" tone="bare">{nodeKindLabel(r)}</Tag>}
+                {/* The kind in muted words, as beside a panel's name: not a badge. */}
+                {r.kind !== "asset" && <span className="barca-cell-kind">{nodeKindLabel(r)}</span>}
               </div>
             </td>
             <td title={r.cron}>

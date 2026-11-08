@@ -54,7 +54,20 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
   const input = useRef<HTMLInputElement>(null)
   const pinnedUpload = pin ? data.versions.find((v) => v.run_hash === pin.run_hash)?.upload ?? null : null
   return (
-    <Section title="Versions">
+    <Section title="Versions" action={data.pinnable && onPick && (
+        <div className="barca-version-upload">
+          <input ref={input} type="file" hidden accept={UPLOAD_EXTENSIONS.join(',')} aria-label={`Replacement data for ${name}`}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) onPick(file)
+            }} />
+          <Button variant="ghost" size="sm" disabled={readOnly || pending} title={readOnly ? READ_ONLY : 'Pin it to data you supply: .json, .parquet, .csv or .pkl'}
+            onClick={() => input.current?.click()}>
+            Upload replacement…
+          </Button>
+        </div>
+    )}>
       {pin && (
         <div className="barca-pin-banner" role="status">
           <Pin size={14} aria-hidden />
@@ -78,22 +91,8 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
       )}
       {error && <p className="barca-note" role="alert">Could not change the pin: {error}</p>}
       {pickError && <p className="barca-note" role="alert">{pickError}</p>}
-      {data.pinnable && onPick && (
-        <div className="barca-version-upload">
-          <input ref={input} type="file" hidden accept={UPLOAD_EXTENSIONS.join(',')} aria-label={`Replacement data for ${name}`}
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              e.target.value = ''
-              if (file) onPick(file)
-            }} />
-          <Button variant="ghost" size="sm" disabled={readOnly || pending} title={readOnly ? READ_ONLY : 'Pin it to data you supply: .json, .parquet, .csv or .pkl'}
-            onClick={() => input.current?.click()}>
-            Upload replacement…
-          </Button>
-        </div>
-      )}
       {data.versions.length === 0 ? (
-        <p className="barca-note">No successful materialization with an artifact yet.</p>
+        <p className="barca-note barca-muted">No successful materialization with an artifact yet.</p>
       ) : (
         <ul className="barca-versions">
           {data.versions.map((v) => (

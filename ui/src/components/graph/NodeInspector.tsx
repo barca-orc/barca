@@ -1,6 +1,7 @@
 import { X, Play, Terminal } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Button, IconButton, KeyValue, SidePanel, StatusBadge, StatusGlyph, Tag, LogViewer } from '@/components'
+import { Button, ErrorLine, IconButton, KeyValue, SidePanel, StatusBadge, StatusGlyph, LogViewer } from '@/components'
+import { CopyButton } from '@/components/assets/NodeKeys'
 import { isLive, type GraphState } from '@/lib/graphState'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
@@ -50,7 +51,7 @@ function ErrorPanel({ title, message }: { title: string; message: string }) {
         <StatusGlyph glyph="failed" size={12} />
         <span>{title}</span>
       </div>
-      <div className="barca-insp-error-msg">{message}</div>
+      <ErrorLine error={message} large />
     </div>
   )
 }
@@ -91,21 +92,37 @@ export function NodeInspector({
       label={`${name} inspector`}
       width={316}
       title={name}
+      titleText={name}
+      // The same header as the node panel: the name, its kind in words, the id with its copy, Run.
+      badge={<span className="barca-sidepanel-kind">{nodeKindLabel(asset)}</span>}
+      subtitle={asset.id}
+      subtitleText={asset.id}
+      subtitleAction={<CopyButton label="Copy id" text={asset.id} />}
       actions={
-        <IconButton label="Close" size="sm" onClick={onClose}>
-          <X size={14} />
-        </IconButton>
+        <>
+          <Button
+            variant="signal"
+            size="sm"
+            iconLeft={<Play size={12} />}
+            loading={triggering || running}
+            disabled={readOnly}
+            title={readOnly ? 'This server is read-only' : undefined}
+            onClick={onFire}
+          >
+            Run
+          </Button>
+          <IconButton label="Close" size="sm" onClick={onClose}>
+            <X size={14} />
+          </IconButton>
+        </>
       }
     >
       <div className="barca-insp-body">
         <div className="barca-tagrow">
-          <Tag>{nodeKindLabel(asset)}</Tag>
-          <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} size="sm" />
+          <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} />
         </div>
 
         <div>
-          <KeyValue label="id">{asset.id}</KeyValue>
-          <KeyValue label="kind">{nodeKindLabel(asset)}</KeyValue>
           <KeyValue label="freshness">{freshnessLabel(asset)}</KeyValue>
           <KeyValue label="inputs">{asset.inputs.length}</KeyValue>
         </div>
@@ -119,23 +136,6 @@ export function NodeInspector({
             ))}
           </div>
         )}
-
-        <div className="barca-insp-actions">
-          <Button
-            variant="signal"
-            size="sm"
-            iconLeft={<Play size={12} />}
-            loading={triggering || running}
-            disabled={readOnly}
-            title={readOnly ? 'This server is read-only' : undefined}
-            onClick={onFire}
-          >
-            Run
-          </Button>
-          <Button variant="ghost" size="sm" iconLeft={<Terminal size={13} />}>
-            logs
-          </Button>
-        </div>
 
         {feedback}
 

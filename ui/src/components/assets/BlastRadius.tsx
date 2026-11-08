@@ -36,9 +36,11 @@ export function BlastRadius({ id, graph, states, paused, onSelect }: BlastRadius
   const blockers = useMemo(() => blockedBy([...states.values()], graph, pins), [states, graph, pins])
   return (
     <Section title="Blast radius">
-      <KeyValue label="downstream">
-        {radius.downstream.length === 0 ? '–' : `${radius.downstream.length} ${radius.downstream.length === 1 ? 'node' : 'nodes'}`}
-      </KeyValue>
+      {/* Nothing it reaches: one line, not two rows of dashes. */}
+      {radius.downstream.length === 0 && radius.schedules.length === 0 && <p className="barca-note barca-muted">Nothing downstream, no related schedules.</p>}
+      {radius.downstream.length > 0 && <KeyValue label="downstream">
+        {`${radius.downstream.length} ${radius.downstream.length === 1 ? 'node' : 'nodes'}`}
+      </KeyValue>}
       {radius.downstream.length > 0 && (
         <ul className="barca-blast-list" aria-label="Downstream nodes">
           {radius.downstream.map((d) => {
@@ -54,9 +56,7 @@ export function BlastRadius({ id, graph, states, paused, onSelect }: BlastRadius
           })}
         </ul>
       )}
-      <KeyValue label="schedules">
-        {radius.schedules.length === 0 ? '–' : `${radius.schedules.length}`}
-      </KeyValue>
+      {radius.schedules.length > 0 && <KeyValue label="schedules">{`${radius.schedules.length}`}</KeyValue>}
       {radius.schedules.length > 0 && (
         <ul className="barca-blast-list" aria-label="Affected schedules">
           {radius.schedules.map(({ job, relation }) => (
