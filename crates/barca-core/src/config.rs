@@ -31,6 +31,52 @@ pub struct BarcaToml {
     pub cache: Option<CacheToml>,
     pub server: Option<ServerToml>,
     pub execution: Option<ExecutionToml>,
+    pub telemetry: Option<TelemetryToml>,
+}
+
+/// `[telemetry]`: what the telemetry integrations need beyond their environment variables.
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryToml {
+    /// The Datadog site traces go to (`datadoghq.com`, `datadoghq.eu`, `us3.datadoghq.com`):
+    /// where the web UI's "View trace" links open. `DD_SITE` wins over it.
+    pub datadog_site: Option<String>,
+}
+
+/// The Datadog web app a step's trace link opens (`https://app.datadoghq.com`): from `DD_SITE`,
+/// else `[telemetry] datadog_site`, else Datadog's default site `datadoghq.com` when
+/// `BARCA_TELEMETRY` switches the Datadog integration on. `None` when none applies; a usage
+/// error for a site that is not a host name.
+pub fn datadog_app_url(cwd: &Path) -> Result<Option<String>, BarcaError> {
+    let file = load_toml(cwd)?.unwrap_or_default();
+    datadog_app_url_with(
+        Vars::Process,
+        file.telemetry.as_ref(),
+        crate::telemetry::is_on("datadog"),
+    )
+}
+
+fn datadog_app_url_with(
+    vars: Vars<'_>,
+    file: Option<&TelemetryToml>,
+    datadog_on: bool,
+) -> Result<Option<String>, BarcaError> {
+    let (site, source) = match (
+        vars.get("DD_SITE"),
+        file.and_then(|t| t.datadog_site.clone()),
+    ) {
+        (Some(site), _) => (site, "DD_SITE"),
+        (None, Some(site)) => (site, "[telemetry] datadog_site"),
+        (None, None) if datadog_on => ("datadoghq.com".to_string(), "default"),
+        (None, None) => return Ok(None),
+    };
+    crate::telemetry::datadog::app_url(&site)
+        .map(Some)
+        .ok_or_else(|| {
+            BarcaError::Usage(format!(
+                "{source}: expected a Datadog site such as datadoghq.com or us3.datadoghq.com, got '{site}'"
+            ))
+        })
 }
 
 /// `[execution]`: how much runs at once (#436).
@@ -1053,6 +1099,37 @@ pub fn check_server_url(url: &str, what: &str) -> Result<String, BarcaError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn datadog_app_url_prefers_dd_site_then_the_file_then_the_default() {
+        use super::{TelemetryToml, Vars, datadog_app_url_with};
+        let file = TelemetryToml {
+            datadog_site: Some("datadoghq.eu".into()),
+        };
+        let eu = Some("https://app.datadoghq.eu".to_string());
+        assert_eq!(
+            datadog_app_url_with(
+                Vars::Fixed(&[("DD_SITE", "us5.datadoghq.com")]),
+                Some(&file),
+                false
+            )
+            .unwrap(),
+            Some("https://us5.datadoghq.com".to_string())
+        );
+        assert_eq!(
+            datadog_app_url_with(Vars::NONE, Some(&file), false).unwrap(),
+            eu
+        );
+        assert_eq!(
+            datadog_app_url_with(Vars::NONE, None, true).unwrap(),
+            Some("https://app.datadoghq.com".to_string())
+        );
+        assert_eq!(datadog_app_url_with(Vars::NONE, None, false).unwrap(), None);
+        let bad = datadog_app_url_with(Vars::Fixed(&[("DD_SITE", "not a site")]), None, true)
+            .unwrap_err()
+            .to_string();
+        assert!(bad.contains("DD_SITE"), "{bad}");
+    }
+
     use super::*;
 
     #[test]

@@ -97,8 +97,8 @@ pub(crate) use run_steps::get_run_steps;
 #[cfg(test)]
 pub(crate) use run_steps::worker_exit;
 pub use run_steps::{
-    RUN_STEPS_LIMIT, RunStep, StepRow, StepsPage, get_run_steps_page, planned_run_nodes,
-    read_step_rows, run_node_summaries,
+    RUN_STEPS_LIMIT, RunStep, StepRow, StepsPage, attach_trace_ids, get_run_steps_page,
+    get_run_traced, planned_run_nodes, read_step_rows, run_node_summaries,
 };
 #[cfg(test)]
 pub(crate) use runs::create_run_with;

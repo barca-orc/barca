@@ -249,6 +249,34 @@ Limits:
 - `level` is read from the line, so a new kind of line may be filed at `info` until barca
   learns it.
 
+## A step's trace from the web UI and `barca history`
+
+A run traced with `BARCA_TELEMETRY=datadog` is recorded as traced in the metadata database, and
+each step that ran or failed is listed with the trace it was sent as. Trace ids are derived from
+the run id and the step, so nothing extra crosses the worker protocol and nothing is asked of
+Datadog:
+
+- `barca history <run_id> --json` and `GET /runs/{run_id}` give such a step `trace_id` (the
+  128-bit id in 32 hex digits) and `span_id` (its `barca.step` root span, in decimal). The keys
+  are absent for a cached or skipped step, for a run without the integration and for a run
+  recorded by a barca before 0.41.0. Experimental.
+- `GET /project` names the Datadog web app in `telemetry.datadog_url`: from `DD_SITE`, else
+  `[telemetry] datadog_site` in `barca.toml`, else `https://app.datadoghq.com` when
+  `BARCA_TELEMETRY=datadog` is set for the server; `null` otherwise. A two-label site gets
+  `app.` (`datadoghq.eu` opens `https://app.datadoghq.eu`), a regional one is used as it is
+  (`us3.datadoghq.com`). A value that is not a host name stops `barca serve` with exit 2.
+
+```toml
+[telemetry]
+datadog_site = "datadoghq.eu"
+```
+
+The Runs page then shows **View trace** on each step row and on each failed step at the top of
+the run panel, opening `<datadog_url>/apm/trace/<trace_id>`, and **Copy incident summary** adds
+a `[trace](...)` link to each failed step. Without a Datadog URL, or for a step without a trace
+id, neither is shown. A run a laptop posted to a server's ledger (`triggered_by: client`) has no
+trace ids on the server.
+
 ## What is sent
 
 Exception messages and tracebacks are sent as they are (the message cut to its first 2,000

@@ -5452,6 +5452,16 @@ components:
         batch:
           type: [string, "null"]
           description: Run-local call id linking this key to the other keys of its batched call; null for unbatched steps.
+        trace_id:
+          type: string
+          pattern: ^[0-9a-f]{32}$
+          description: Experimental (0.41.0). The Datadog trace the step was sent as, 128 bits in 32 hex digits
+            (what {telemetry.datadog_url}/apm/trace/{trace_id} opens). Present only for a step that ran or
+            failed in a run traced with BARCA_TELEMETRY=datadog.
+        span_id:
+          type: string
+          pattern: ^[0-9]+$
+          description: Experimental (0.41.0). The step's root barca.step span id, decimal. Present with trace_id.
         node_id: *id003
         status:
           type: string
@@ -6578,6 +6588,7 @@ components:
       - deployed_at
       - commit
       - files
+      - telemetry
       properties:
         api_version:
           const: 1
@@ -6604,6 +6615,20 @@ components:
               sha256:
                 type: string
                 pattern: ^[0-9a-f]{64}$
+        telemetry:
+          type: object
+          additionalProperties: false
+          required:
+          - datadog_url
+          description: Experimental (0.41.0). What the UI links to.
+          properties:
+            datadog_url:
+              anyOf:
+              - type: string
+              - type: 'null'
+              description: The Datadog web app a step's trace_id opens in ({datadog_url}/apm/trace/{trace_id})
+                from DD_SITE, else [telemetry] datadog_site, else https://app.datadoghq.com when BARCA_TELEMETRY=datadog;
+                null otherwise.
 x-fallback-responses:
   '404':
     description: Unregistered route

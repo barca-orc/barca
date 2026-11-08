@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { LogLine, RunStep, RunView } from './types'
 import {
-  filterLogs, highlightParts, incidentSummary, isErrorLine, logsText, NO_LOG_FILTER, partitionArg, raisedAt,
+  filterLogs, highlightParts, incidentSummary, traceUrl, isErrorLine, logsText, NO_LOG_FILTER, partitionArg, raisedAt,
   rerunAllRequest, rerunFailedRequest, retryStepRequest, splitStepId,
 } from './runRecovery'
 
@@ -72,5 +72,20 @@ describe('incident summary', () => {
     expect(md).toContain('**Duration:** 1m 15s')
     expect(md).toContain('- `p.py:load`: ValueError: bad (raised at `/x/p.py:9 in load`)')
     expect(md).not.toContain('p.py:ok')
+  })
+  it('links each failed step to its Datadog trace when the server names a site', () => {
+    const traced = { ...view, steps: [{ ...step, trace_id: 'ab'.repeat(16) }] } as unknown as RunView
+    const md = incidentSummary(traced, 'http://h/runs?run=r1', 'https://app.datadoghq.eu')
+    expect(md).toContain(`(raised at \`/x/p.py:9 in load\`) · [trace](https://app.datadoghq.eu/apm/trace/${'ab'.repeat(16)})`)
+    expect(incidentSummary(traced, 'http://h/runs?run=r1', null)).not.toContain('[trace]')
+    expect(incidentSummary(view, 'http://h/runs?run=r1', 'https://app.datadoghq.eu')).not.toContain('[trace]')
+  })
+})
+
+describe('trace links', () => {
+  it('needs both a Datadog app and a trace id', () => {
+    expect(traceUrl('https://us3.datadoghq.com/', { trace_id: 'f0' })).toBe('https://us3.datadoghq.com/apm/trace/f0')
+    expect(traceUrl(null, { trace_id: 'f0' })).toBeNull()
+    expect(traceUrl('https://app.datadoghq.com', {})).toBeNull()
   })
 })

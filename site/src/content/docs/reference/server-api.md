@@ -96,7 +96,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/stats/{name}` | `barca stats --json` |
 | `GET`  | `/sql/views?files=a.py,b.py` | Which result each `barca sql` view reads in the ledger: `{"views": [{name, node, kind, partitioned, format, files: [{path, partition, content_hash}], stale, run_hash}], "missing": [{name, node, kind, partitioned, command, keys_unknown?}], "duplicates": [{name, ids}]}`, by the function a local `barca sql` uses. The client runs the query; the server runs no SQL. |
 | `GET`  | `/materializations?limit=N&offset=M` | Step results, newest first: `{"materializations": [{node_id, partition, run_id, run_hash, status, created_at, elapsed_seconds, cpu_seconds, max_rss_bytes, attempts, format, size_bytes, artifact, content_hash, error_type, error_message}], total, limit, offset}`; `limit` defaults to 1000, at most 10000. `barca sql`'s `barca.materializations`. |
-| `GET`  | `/project` | The deployed tree: `{api_version, root, env, deployed_at, commit, files: [{path, sha256}]}` |
+| `GET`  | `/project` | The deployed tree: `{api_version, root, env, deployed_at, commit, files: [{path, sha256}], telemetry: {datadog_url}}` |
 | `GET`  | `/health` | Liveness (or `draining`), `api_version`, `env`, the artifact store (`store_uri`), read-only, scheduler, load diagnostics, the cache size against its limit, `started_at` (changes on a restart) and `queue: {paused, queued, running, max_runs, capacity}` (`capacity: {total, in_use, waiting}` with `--capacity`, else `null`). |
 
 **The served graph and the UI.**
@@ -339,7 +339,11 @@ server builds them with the same functions. A `--server` client applies `--limit
 
 `GET /project` describes the deployed tree: `api_version`, `root`, `env`, `deployed_at` (when the
 server started), `commit` (read from `.git` at the root, `null` outside a git checkout) and each
-served file with its `sha256`, hashed on each request so an edit shows at once.
+served file with its `sha256`, hashed on each request so an edit shows at once. `telemetry.datadog_url`
+(experimental, 0.41.0) is the Datadog web app a run step's `trace_id` opens in
+(`{datadog_url}/apm/trace/{trace_id}`), or `null`; `GET /runs/{id}` gives a step that ran or
+failed in a run traced with `BARCA_TELEMETRY=datadog` its `trace_id` and `span_id`
+([Telemetry](/reference/telemetry/)).
 
 ### Health
 

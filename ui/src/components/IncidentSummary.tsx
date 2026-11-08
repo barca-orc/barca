@@ -12,10 +12,10 @@ function runLink(runId: string): string {
 }
 
 /** "Copy incident summary": the run as markdown, for an incident or a chat (`incidentSummary`). */
-export function IncidentSummaryButton({ run }: { run: RunView }) {
+export function IncidentSummaryButton({ run, datadogUrl }: { run: RunView; datadogUrl?: string | null }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const copy = () => {
-    const text = incidentSummary(run, runLink(run.run_id))
+    const text = incidentSummary(run, runLink(run.run_id), datadogUrl)
     const done = (s: 'copied' | 'failed') => { setState(s); setTimeout(() => setState('idle'), 1500) }
     if (!navigator.clipboard) return done('failed')
     navigator.clipboard.writeText(text).then(() => done('copied'), () => done('failed'))

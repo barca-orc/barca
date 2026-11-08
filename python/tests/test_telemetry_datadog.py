@@ -1187,3 +1187,62 @@ def test_a_pipeline_trace_passes_the_datadog_test_agent(tmp_path):
         SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
         SNAPSHOT.write_text("\n".join(lines) + "\n")
     assert lines == SNAPSHOT.read_text().splitlines()
+
+
+def trace_hex(span: dict) -> str:
+    """A step span's 128-bit trace id as the run detail serves it: `_dd.p.tid` then the low half."""
+    return f"{span['meta']['_dd.p.tid']}{span['trace_id']:016x}"
+
+
+def test_trace_ids_are_recorded_with_the_steps_and_served_to_the_ui(project, agent):
+    proc = cli(project, "run", "broken", "--json", **datadog(agent))
+    assert proc.returncode == 1, proc.stderr
+    run_id = json.loads(proc.stdout)["run_id"]
+    sent = agent.by_node_id()
+    assert set(sent) == {"pipeline.py:orders", "pipeline.py:report", "pipeline.py:broken"}
+
+    # The CLI's history lists each step's trace, without Datadog switched on in this shell.
+    history = cli(project, "history", run_id, "--json")
+    assert history.returncode == 0, history.stderr
+    steps = {s["node_id"]: s for s in json.loads(history.stdout)["steps"]}
+    for node_id, span in sent.items():
+        assert steps[node_id]["trace_id"] == trace_hex(span), node_id
+        assert steps[node_id]["span_id"] == str(span["span_id"])
+    assert steps["pipeline.py:broken"]["status"] == "failed"
+
+    # A server with only the site configured serves the ids and where they open.
+    (project / "barca.toml").write_text('[telemetry]\ndatadog_site = "datadoghq.eu"\n')
+    with serve(project) as server:
+        project_info = server.get("/project")
+        assert project_info["telemetry"] == {"datadog_url": "https://app.datadoghq.eu"}
+        detail = server.get(f"/runs/{run_id}")
+        served = {s["node_id"]: s for s in detail["steps"]}
+        assert served["pipeline.py:broken"]["trace_id"] == trace_hex(sent["pipeline.py:broken"])
+    with serve(project, DD_SITE="us3.datadoghq.com") as server:
+        assert server.get("/project")["telemetry"]["datadog_url"] == "https://us3.datadoghq.com"
+
+
+def test_an_untraced_run_has_no_trace_ids_and_no_datadog_url(project):
+    proc = cli(project, "run", "publish", "--json")
+    assert proc.returncode == 0, proc.stderr
+    run_id = json.loads(proc.stdout)["run_id"]
+    history = json.loads(cli(project, "history", run_id, "--json").stdout)
+    assert all("trace_id" not in s and "span_id" not in s for s in history["steps"])
+    with serve(project) as server:
+        assert server.get("/project")["telemetry"] == {"datadog_url": None}
+        detail = server.get(f"/runs/{run_id}")
+        assert all("trace_id" not in s for s in detail["steps"])
+
+
+def test_a_datadog_site_that_is_not_a_host_stops_serve(project):
+    (project / "barca.toml").write_text('[telemetry]\ndatadog_site = "https://x/y"\n')
+    proc = subprocess.run(
+        [_find_binary(), "serve", "pipeline.py", "--port", "0"],
+        cwd=project,
+        env=base_env(),
+        capture_output=True,
+        text=True,
+        timeout=RUN,
+    )
+    assert proc.returncode == 2, proc.stderr
+    assert "[telemetry] datadog_site" in proc.stderr

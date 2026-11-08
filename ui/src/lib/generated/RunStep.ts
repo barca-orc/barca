@@ -71,4 +71,14 @@ output_tail: Array<string> | null,
  * its output is recorded once under `<node>[batch=<id>]`. `null` for a step that ran on
  * its own. Experimental.
  */
-batch: string | null, };
+batch: string | null,
+/**
+ * The Datadog trace the step was sent as: its 128-bit id in 32 hex digits, what
+ * `https://app.<site>/apm/trace/<trace_id>` opens. Present only for a step that ran or
+ * failed in a run traced with `BARCA_TELEMETRY=datadog`; absent otherwise. Experimental.
+ */
+trace_id?: string,
+/**
+ * The id of that trace's root `barca.step` span, in decimal. Present with `trace_id`.
+ */
+span_id?: string, };

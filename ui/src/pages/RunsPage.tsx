@@ -17,7 +17,8 @@ export function RunsPage() {
   const [params, setParams] = useSearchParams()
   const selected = params.get('run')
   const health = useHealth()
-  const root = useProject().data?.root
+  const project = useProject().data
+  const root = project?.root
   const client = useQueryClient()
   // The URL owns the filters: read at each message, so back, forward and a link all apply.
   const filters = parseRunFilters(params)
@@ -58,6 +59,7 @@ export function RunsPage() {
       queue={<QueuePanel readOnly={health.data?.read_only} />}
       now={runs.dataUpdatedAt}
       root={root}
+      datadogUrl={project?.telemetry?.datadog_url ?? null}
       dispatch={dispatch}
     />
   )
