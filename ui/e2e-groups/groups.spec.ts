@@ -203,11 +203,11 @@ for (const view of ['list', 'graph']) {
       await page.goto(`/ui/#/assets?pipeline=${FILE}${group ? `&group=${group}` : ''}&${selection}`)
       if (group) await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Cross-validation')
       const panel = page.getByRole('complementary', { name: `${target} details` })
-      const topbar = page.getByRole('banner').getByRole('button', { name: `Run ${target}`, exact: true })
-      await expect(topbar).toBeEnabled()
+      // The bar across the top has no Run: the node's panel runs it, in either view.
+      await expect(page.getByRole('banner').getByRole('button', { name: /^Run/ })).toHaveCount(0)
       await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeEnabled()
       const started = page.waitForResponse((response) => isStartRun(response.request(), verb, nodeId))
-      await (view === 'graph' ? topbar : panel.getByRole('button', { name: 'Run', exact: true })).click()
+      await panel.getByRole('button', { name: 'Run', exact: true }).click()
       const response = await started
       expect(response.status()).toBe(202)
       const handle = (await response.json()).run_id
@@ -221,23 +221,20 @@ for (const view of ['list', 'graph']) {
     })
   }
 
-  test(`${view}: read-only mode disables both run actions`, async ({ page }) => {
+  test(`${view}: read-only mode disables the panel's Run`, async ({ page }) => {
     await page.route('**/health', async (route) => {
       const response = await route.fetch()
       await route.fulfill({ json: { ...(await response.json()), read_only: true } })
     })
     const selection = view === 'graph' ? `view=graph&focus=${N('raw_rows')}` : `node=${N('raw_rows')}`
     await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('source')}&${selection}`)
-    const topbar = page.getByRole('banner').getByRole('button', { name: 'Run raw_rows', exact: true })
     const panel = page.getByRole('complementary', { name: 'raw_rows details' })
-    await expect(topbar).toBeDisabled()
-    await expect(topbar).toHaveAttribute('title', 'This server is read-only')
     await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeDisabled()
     await expect(panel.getByRole('button', { name: 'Run', exact: true })).toHaveAttribute('title', 'This server is read-only')
   })
 }
 
-test('the grouped list topbar shows running before the first stream event arrives', async ({ page }) => {
+test('the grouped list shows running before the first stream event arrives', async ({ page }) => {
   let release!: () => void
   const held = new Promise<void>((resolve) => { release = resolve })
   await page.route(/\/runs\/[^/]+\/events$/, async (route) => {
@@ -247,7 +244,7 @@ test('the grouped list topbar shows running before the first stream event arrive
   try {
     await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('cross_validation')}&node=${N('summary')}`)
     const started = page.waitForResponse((response) => isStartRun(response.request(), 'get', N('summary')))
-    await page.getByRole('banner').getByRole('button', { name: 'Run summary', exact: true }).click()
+    await page.getByRole('complementary', { name: 'summary details' }).getByRole('button', { name: 'Run', exact: true }).click()
     expect((await started).status()).toBe(202)
     const row = page.getByRole('row').filter({ hasText: 'summary' })
     await expect(row).toContainText('running')

@@ -6,6 +6,7 @@ import { usePageTopbarRun } from "@/hooks/useTopbarRun";
 import { useSchedule, useToggleSchedulePause } from "@/hooks/useSchedule";
 import { pipelineName } from "@/lib/pipeline";
 import { remote } from "@/lib/remote";
+import { PageRunButton } from "@/components";
 import { SchedulesView } from "./SchedulesView";
 
 /** The Schedules page's server data, as `SchedulesView` shows it. */
@@ -18,7 +19,7 @@ export function SchedulesPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const pipeline = params.get("pipeline");
-  usePageTopbarRun((handle) => navigate(`/runs?run=${encodeURIComponent(handle)}`));
+  const { scopeRun } = usePageTopbarRun((handle) => navigate(`/runs?run=${encodeURIComponent(handle)}`));
 
   const open = (id: string) => {
     const p = new URLSearchParams();
@@ -46,6 +47,7 @@ export function SchedulesPage() {
       onOpen={open}
       onToggle={(id, pause) => toggle.mutate({ id, pause })}
       onRetry={() => void assets.refetch()}
+      actions={<PageRunButton run={scopeRun} />}
     />
   );
 }

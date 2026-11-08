@@ -64,3 +64,6 @@ export { ErrorLine } from './ErrorLine'
 export type { ErrorLineProps } from './ErrorLine'
 export { ViewToggle } from './ViewToggle'
 export { CommandPaletteView } from './CommandPaletteView'
+
+export { PageRunButton } from './PageRunButton'
+export type { PageRun } from './PageRunButton'

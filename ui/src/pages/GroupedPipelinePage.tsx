@@ -3,7 +3,7 @@ import { useDeferredValue, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { match } from 'ts-pattern'
 import { ArrowLeft, ArrowDown, ArrowRight, ChevronRight, FolderOpen, Maximize } from 'lucide-react'
-import { Button, HealthBar, IconButton, ResetDatabaseButton, SearchInput, Select, StatusGlyph, ViewToggle } from '@/components'
+import { Button, HealthBar, IconButton, PageRunButton, ResetDatabaseButton, SearchInput, Select, StatusGlyph, ViewToggle } from '@/components'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { GraphLegend } from '@/components/graph/GraphLegend'
@@ -236,6 +236,7 @@ export function GroupedPipelinePage() {
                 </IconButton>
               </>
             )}
+            <PageRunButton run={nodeRun.scopeRun} />
           </div>
         </div>
         {(!graph || show === 'failures') && (

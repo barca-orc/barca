@@ -55,12 +55,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 12px 6px 14px;
+  padding: 16px 12px 6px 17px;
   font-family: var(--font-sans);
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-muted);
 }
 .barca-pipes { padding: 0 8px; display: flex; flex-direction: column; gap: 1px; overflow: auto; }
 .barca-pipe-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
@@ -153,31 +152,29 @@
 }
 @container (max-width: 110px) { .barca-search kbd { display: none; } }
 .barca-top-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; min-width: 0; }
-.barca-top-run { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .barca-primary-nav { display: flex; align-self: stretch; gap: 20px; min-width: 0; overflow-x: auto; }
 .barca-primary-link {
   display: flex; align-items: center; flex: none;
   border-bottom: 2px solid transparent; padding: 0 2px;
-  color: var(--text-muted); font-size: var(--text-base); text-decoration: none;
+  color: var(--text-muted); font-size: var(--text-sm); font-weight: 500; text-decoration: none;
 }
 .barca-primary-link:hover { color: var(--text-strong); }
 .barca-primary-link[aria-current='page'] { color: var(--text-strong); border-bottom-color: var(--signal); }
 .barca-view-toggle {
-  display: flex; gap: 2px; padding: 1px;
+  display: flex; flex: none; gap: 2px; padding: 1px; height: 28px;
   background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
 }
 .barca-view-toggle button {
-  display: flex; align-items: center; gap: 6px; padding: 3px 8px;
+  position: relative; display: flex; align-items: center; gap: 6px; padding: 0 7px;
   background: transparent; color: var(--text-muted); border: 0; border-radius: var(--radius-sm);
-  font-family: var(--font-sans); font-size: var(--text-sm); cursor: pointer;
+  font-family: var(--font-sans); font-size: var(--text-xs); white-space: nowrap; cursor: pointer;
 }
 .barca-view-toggle button[aria-pressed='true'] { background: var(--bg-raised); color: var(--text-strong); box-shadow: var(--shadow-sm); }
 .barca-view-toggle button:hover { color: var(--text-strong); }
 /* A narrower bar keeps every control: the search button keeps its icon (its name stays in
-   aria-label and the tooltip), the Run label truncates, the nav tightens. */
+   aria-label and the tooltip), the nav tightens. */
 @media (max-width: 1240px) {
   .barca-top-search .barca-top-search-text, .barca-top-search kbd { display: none; }
-  .barca-top-run { max-width: 180px; }
   .barca-primary-nav { gap: 14px; }
 }
 @media (max-width: 900px) {
@@ -185,13 +182,18 @@
   .barca-primary-nav { gap: 12px; }
 }
 
-/* ---------- View head ---------- */
+/* ---------- View head: one toolbar row ---------- */
 .barca-view { display: flex; flex-direction: column; height: 100%; }
-/* A table starts within 120px of the top: 48 of topbar, then one row of where you are and how
-   it is, and one of tools. */
-.barca-view-head { padding: 6px 24px 0; flex: none; }
-.barca-view-bar { display: flex; align-items: center; gap: 10px; min-height: 30px; margin-bottom: 2px; }
-.barca-view-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* The page's one toolbar: its title and count, its filters, then search, view and Run at the
+   right, on one line with a 24px gutter. A table starts 100px from the top: 48 of topbar, 52
+   of toolbar. When a page has more filters than fit, they wrap to a second line, never off
+   screen. */
+.barca-view-head { padding: 12px 24px 12px; flex: none; container-type: inline-size; }
+.barca-view-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-height: 28px; }
+.barca-view-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-right: 6px; }
+/* A group's header (GroupedPipelinePage) stays one line: its breadcrumb and health give way,
+   cut at their ends, before its view switch wraps. */
+.barca-view-bar:has(> .barca-group-crumbs) { flex-wrap: nowrap; }
 .barca-view-title h1 {
   font-family: var(--font-display);
   font-size: var(--text-lg);
@@ -200,8 +202,21 @@
   margin: 0;
   white-space: nowrap;
 }
-.barca-view-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none; }
-.barca-view-body { flex: 1; min-height: 0; overflow: auto; padding: 18px 24px; scrollbar-gutter: stable; }
+.barca-view-actions { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; }
+/* With a search in it, the right-hand group takes the room left and the search gives first:
+   it narrows to 120px before anything wraps. */
+.barca-view-actions:has(> .barca-search) { flex: 1 1 0; min-width: min-content; }
+.barca-view-actions > .barca-search { min-width: 120px; width: auto; flex: 0 1 220px; }
+.barca-view-actions > .barca-search input { width: 0; }
+.barca-view-head > .barca-note { margin: 8px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
+/* A short toolbar keeps every control: a filter's word gives way to its count (the word stays
+   for a screen reader and in the tooltip), and the search narrows. */
+@container (max-width: 900px) {
+  .barca-chip-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+/* The table's text lines up with the title above it (24px); its hover runs 12px further out. */
+.barca-view-body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 24px; scrollbar-gutter: stable; }
+.barca-view-body > .barca-table-empty, .barca-view-body > .barca-note, .barca-view-body > p { margin-left: 12px; margin-right: 12px; }
 
 /* connection chip: a 12px dot; its text (the version, or why it is not green) is a label that
    opens under it on hover or focus, so nothing beside it moves. A server that is not up says
@@ -276,10 +291,9 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-sans);
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-muted);
 }
 .barca-insp-logs-live {
   margin-left: auto;
@@ -316,9 +330,8 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-sans);
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: var(--text-xs);
+  font-weight: 500;
   color: var(--text-muted);
 }
 .barca-insp-error-msg {
@@ -352,39 +365,43 @@
 }
 .barca-empty h2 {
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: var(--text-xl);
   font-weight: 600;
   color: var(--text-default);
   margin: 0;
 }
 .barca-empty p { font-family: var(--font-sans); font-size: var(--text-sm); margin: 0; }
 
-/* ── assets table ─────────────────────────────────────────── */
+/* ── tables ─────────────────────────────────────────────── */
 .barca-count {
   white-space: nowrap;
   font-family: var(--font-sans);
   font-size: var(--text-xs);
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
-.barca-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 2px; min-height: 32px; }
-/* The chips-only rows are shorter than the search row; the same minimum keeps them from
-   growing when their first chip appears. */
+.barca-table-tools { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; min-height: 28px; }
+/* One line a row, 36px: the name in the strong grey, everything else in the muted one (two
+   greys a row, no more). Headers are sentence case, 12px, a weight above the cells. A cell that
+   does not fit is cut at its end, whole in its tooltip; the row opens the panel that says the
+   rest. */
 .barca-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .barca-table th {
   position: sticky; top: 0; z-index: 1;
   text-align: left; font-weight: 500; font-size: var(--text-xs);
-  color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;
-  padding: 8px 12px; background: var(--bg-base, var(--bg-inset));
+  color: var(--text-muted);
+  height: 32px; padding: 0 12px; background: var(--bg-canvas);
   border-bottom: 1px solid var(--border-default);
   white-space: nowrap;
 }
-/* Compact density: 44px rows, so a 1440×900 screen shows 16 of them. What a cell shows is
-   its parts stacked (the name over its file, the status over its error), the same in every
-   row whatever the column's width; two lines fit the 44px. Headers never wrap. */
-.barca-table td { height: 44px; padding: 0 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+.barca-table td {
+  height: 36px; padding: 0 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle;
+  color: var(--text-muted); white-space: nowrap;
+}
 .barca-table td > div { display: block; white-space: nowrap; }
+.barca-table td > .barca-state-line { display: flex; flex-wrap: nowrap; }
+.barca-table .barca-badge { color: inherit; }
 .barca-table .barca-cell-name { display: flex; }
-.barca-table td > .barca-cell-name + .barca-cell-sub { margin-top: 1px; }
 .barca-table tbody tr { cursor: pointer; }
 .barca-table tbody tr:hover, .barca-table tbody tr:focus-visible { background: var(--bg-hover); }
 /* A row's ring is inside it: an outline would be cut by the table's scroll area. */
@@ -394,13 +411,13 @@
 .barca-table tbody tr.barca-table-spacer { cursor: default; background: none; }
 .barca-table tbody tr.barca-table-spacer td { padding: 0; border: 0; height: auto; }
 .barca-table .num { text-align: right; font-family: var(--font-sans); white-space: nowrap; }
-.barca-cell-name { display: flex; align-items: center; gap: 8px; max-width: 340px; }
-/* Identifiers (a node, a file, a key, a run id, a target, an error) are mono wherever they
-   are, on the same scale as the text around them; prose stays sans. */
-.barca-cell-name .name { min-width: 0; font-family: var(--font-name); color: var(--text-strong); }
-.barca-table code { font-family: var(--font-mono); }
+.barca-cell-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.barca-cell-name .name { min-width: 0; flex: 0 1 auto; font-family: var(--font-name); font-weight: 500; color: var(--text-strong); }
+/* Why a row is not fine, after its name: a failure's error, what blocks it, what it is pinned
+   to. Muted, cut to the cell; the panel has it whole. */
+.barca-cell-name .barca-cell-why { flex: 1 1 0; min-width: 0; max-width: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.barca-table code { font-family: var(--font-mono); font-size: inherit; }
 .barca-sidepanel-title h2, .barca-pipe-name { font-family: var(--font-name); }
-.barca-table code { font-size: inherit; }
 .barca-cell-name + .barca-cell-sub, .barca-group-row-name + .barca-cell-sub { font-family: var(--font-name); }
 /* A name that does not fit loses its head, not its tail, which is what tells rows apart. It
    stays one text node (copy and a screen reader get it whole): the box is laid out
@@ -412,15 +429,16 @@
 .barca-table td > .barca-cell-sub { margin-top: 0; overflow: hidden; text-overflow: ellipsis; }
 .barca-cell-failed { color: var(--text-strong); }
 .barca-cell-error { max-width: 420px; }
-/* ErrorLine: one line of headline, the most important text on a failed row, so never the
-   smallest; a traceback, when there is one, opens under it. */
+/* A cell's own text, cut at its end on one line. */
+.barca-cell-cut { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ErrorLine: one line of headline; a traceback, when there is one, opens under it. */
 .barca-error-line { display: block; min-width: 0; max-width: 420px; font-family: var(--font-sans); font-size: var(--text-sm); color: var(--text-default); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.barca-table .barca-error-line { display: inline-block; vertical-align: middle; max-width: 360px; }
+.barca-table .barca-error-line { display: inline-block; vertical-align: middle; max-width: 360px; color: inherit; }
 .barca-error-line > summary { overflow: hidden; text-overflow: ellipsis; cursor: pointer; list-style: none; }
 .barca-error-line > summary::-webkit-details-marker { display: none; }
 .barca-error-line > summary:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
 .barca-error-line[open] { white-space: normal; }
-.barca-error-line[data-large] { max-width: none; font-size: var(--text-md); font-weight: 500; line-height: var(--leading-snug); color: var(--text-strong); white-space: normal; overflow-wrap: break-word; }
+.barca-error-line[data-large] { max-width: none; font-size: var(--text-sm); font-weight: 500; line-height: var(--leading-snug); color: var(--text-strong); white-space: normal; overflow-wrap: break-word; }
 /* The traceback under a headline: code, so mono; long paths break after a `/` (the <wbr>s), not mid-name. */
 .barca-traceback { font-weight: 400; overflow-wrap: normal; word-break: normal; }
 .barca-error-line[data-large] > summary { white-space: normal; }
@@ -429,15 +447,30 @@
 .barca-run-table .barca-run-failure { max-width: 0; width: 40%; }
 .barca-why-list .barca-error-line { max-width: none; }
 .barca-failure-error .barca-error-line { max-width: 100%; }
-/* The message carries its own top spacing: the scroll area has none (see
-   .barca-table-scroll). */
 .barca-table-empty { margin-top: var(--space-4); color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-sm); }
+
+/* A file's rows under its header (AssetsPage): the header names the file once, counts its
+   rows and shows its worst state; it folds them away. */
+.barca-table tbody tr.barca-file-head { cursor: default; }
+.barca-table tbody tr.barca-file-head:hover { background: none; }
+.barca-table .barca-file-head td { height: 32px; padding: 0; background: var(--bg-surface); border-bottom: 1px solid var(--border-subtle); }
+.barca-file-head button {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 12px;
+  border: 0; background: none; cursor: pointer; text-align: left;
+  font-family: var(--font-name); font-size: var(--text-xs); font-weight: 500; color: var(--text-default);
+}
+.barca-file-head button:hover { color: var(--text-strong); }
+.barca-file-head button:focus-visible { box-shadow: inset 0 0 0 2px var(--c-white-line); border-radius: 0; }
+.barca-file-head button > svg:first-child { flex: none; color: var(--text-muted); transition: var(--t-transform); }
+.barca-file-head button[aria-expanded="false"] > svg:first-child { transform: rotate(-90deg); }
+.barca-file-head .barca-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-file-head .barca-count { font-weight: 400; }
 
 /* sortable headers */
 .barca-sort {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 0; border: 0; background: transparent; cursor: pointer;
-  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+  font: inherit; color: inherit;
 }
 .barca-sort:hover, .barca-sort:focus-visible { color: var(--text-strong); }
 .barca-sort:focus-visible { outline: none; box-shadow: var(--focus-glow); border-radius: var(--radius-xs); }
@@ -455,8 +488,8 @@
 }
 
 .barca-clear {
-  display: inline-flex; align-items: center; gap: 4px;
-  height: 26px; padding: 0 8px; border: 0; background: transparent; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap;
+  height: 28px; padding: 0 8px; border: 0; background: transparent; cursor: pointer;
   font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-muted);
 }
 .barca-clear:hover { color: var(--text-strong); }
@@ -465,38 +498,41 @@
 /* assets: table + node panel */
 .barca-assets-split { display: flex; flex: 1; min-height: 0; }
 .barca-assets-split > .barca-view-body { flex: 1; min-width: 0; container-type: inline-size; }
-/* The asset table never scrolls sideways: fixed columns, each cell truncates (its title has
-   the rest), and the low-priority columns leave first as the table narrows (beside the node
-   panel too, which says them): next run, then typical duration, then last success. */
+/* The asset table never scrolls sideways: fixed columns, each cell cut to one line (its title
+   has the rest), and the low-priority columns leave first as the table narrows (beside the node
+   panel too, which says them): next run, then typical duration. Name, state and last run stay. */
 .barca-asset-table { table-layout: fixed; }
-.barca-asset-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-asset-table td { overflow: hidden; text-overflow: ellipsis; }
 .barca-asset-table td > div { overflow: hidden; text-overflow: ellipsis; }
-.barca-asset-table .barca-cell-error { max-width: 100%; }
-.barca-asset-table .barca-error-line { max-width: 100%; }
-.barca-asset-table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.barca-asset-table th:nth-child(2) { width: 130px; }
-.barca-asset-table th:nth-child(4) { width: 130px; }
-.barca-asset-table th:nth-child(5) { width: 156px; }
-.barca-asset-table th:nth-child(6) { width: 110px; }
-@container (max-width: 940px) {
-  .barca-asset-table th:nth-child(6), .barca-asset-table td:nth-child(6) { display: none; }
+.barca-asset-table th { overflow: hidden; text-overflow: ellipsis; }
+.barca-asset-table col.col-state { width: 132px; }
+.barca-asset-table col.col-last { width: 264px; }
+.barca-asset-table col.col-typical { width: 84px; }
+.barca-asset-table col.col-next { width: 140px; }
+/* A column that leaves keeps its place in the table (a file header spans every column) at no
+   width, its cells out of sight. */
+@container (max-width: 820px) {
+  .barca-asset-table col.col-next { width: 0; }
+  .barca-asset-table .col-next { padding: 0; visibility: hidden; }
 }
-@container (max-width: 860px) {
-  .barca-asset-table th:nth-child(5), .barca-asset-table td:nth-child(5) { display: none; }
+@container (max-width: 680px) {
+  .barca-asset-table col.col-typical { width: 0; }
+  .barca-asset-table .col-typical { padding: 0; visibility: hidden; }
+  .barca-asset-table col.col-last { width: 200px; }
 }
-@container (max-width: 740px) {
-  .barca-asset-table th:nth-child(4), .barca-asset-table td:nth-child(4) { display: none; }
+/* Narrowest (beside the panel on a small window): the state is its glyph, its word in the
+   tooltip and for a screen reader, so the name keeps its room. */
+@container (max-width: 520px) {
+  .barca-asset-table col.col-state { width: 80px; }
+  .barca-asset-table td.col-state .barca-badge { font-size: 0; }
+  .barca-asset-table col.col-last { width: 148px; }
+  .barca-cell-name .barca-cell-why { display: none; }
 }
+/* A blocked row's blocker, after its state word. */
+.barca-state-by { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* A failing row is not tinted: its glyph and its place at the top (the default sort) say it. */
-/* The page's one-line summary of what fails: neutral, the glyph its only colour. */
-.barca-attention {
-  display: flex; align-items: center; gap: 8px; margin: 0 24px 8px; padding: 6px 10px;
-  border: 1px solid var(--border-default); border-radius: var(--radius-md);
-  background: var(--bg-surface); font-family: var(--font-sans); font-size: var(--text-sm); color: var(--text-muted);
-}
-.barca-attention strong { font-weight: 500; color: var(--text-strong); }
-.barca-attention .barca-clear { margin-left: auto; height: 22px; }
-.barca-table tbody tr[aria-selected="true"] { background: var(--bg-active); }
+
+.barca-table tbody tr[aria-selected="true"] { background: var(--bg-selected); }
 .barca-error {
   margin: 6px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto;
   background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
@@ -505,14 +541,14 @@
 .barca-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .barca-stats div { display: flex; align-items: baseline; gap: 4px; }
 .barca-stats b { font-size: var(--text-sm); color: var(--text-strong); font-weight: 500; }
-.barca-stats span { font-size: var(--text-2xs); color: var(--text-muted); }
+.barca-stats span { font-size: var(--text-xs); color: var(--text-muted); }
 .barca-bars { display: flex; align-items: flex-end; gap: 3px; height: 44px; margin: 12px 0 8px; }
 .barca-bars span { flex: 1; max-width: 22px; background: var(--text-faint); opacity: 0.45; border-radius: 2px 2px 0 0; }
 .barca-bars span.is-failed { background: var(--status-failed); opacity: 0.9; }
 .barca-runs { list-style: none; margin: 0; padding: 0; }
-.barca-runs li { padding: 5px 0; border-top: 1px solid var(--border-subtle); font-size: var(--text-xs); }
-.barca-run-line { display: flex; gap: 12px; font-family: var(--font-sans); }
-.barca-runs summary { cursor: pointer; margin-top: 3px; color: var(--text-default); font-family: var(--font-sans); font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-runs li { padding: 6px 0; border-top: 1px solid var(--border-subtle); font-size: var(--text-xs); color: var(--text-muted); }
+.barca-run-line { display: flex; align-items: center; gap: 12px; font-family: var(--font-sans); }
+.barca-runs summary { cursor: pointer; margin-top: 3px; color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-link {
   margin: 0 8px 2px 0; padding: 0; border: 0; background: none; cursor: pointer;
   font-family: var(--font-sans); font-size: var(--text-xs); color: var(--signal); text-decoration: underline dotted;
@@ -542,8 +578,8 @@
 /* The development kit page (pages/KitPage.tsx, kit/). */
 .barca-kit-spec { margin-bottom: 26px; scroll-margin-top: 12px; }
 .barca-kit-spec > h2 {
-  margin: 0 0 10px; font-family: var(--font-sans); font-size: var(--text-xs); font-weight: 500;
-  letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--text-muted);
+  margin: 0 0 10px; font-family: var(--font-sans); font-size: var(--text-sm); font-weight: 600;
+  color: var(--text-strong);
 }
 .barca-kit-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .barca-kit-panel { border: 1px solid var(--border-default); }
@@ -556,6 +592,7 @@
 .barca-kit-contents button:hover { background: var(--bg-hover); color: var(--text-strong); }
 .barca-kit-row:has(> .barca-kit-variant) { align-items: flex-start; }
 .barca-kit-variant { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.barca-kit-variant > .barca-page-run { align-self: flex-start; }
 /* The glyph set in each theme, side by side: a [data-theme] container resolves its own tokens. */
 .barca-kit-theme { flex: 1 1 420px; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-canvas); color: var(--text-default); }
 .barca-kit-theme-name { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-faint); }
@@ -575,27 +612,24 @@
 .barca-kit-msgs code { font-family: var(--font-mono); color: var(--text-muted); }
 
 /* Asset detail: state first, execution metrics second, diagnostics on demand. */
-.barca-node-summary {
-  margin-top: 24px; padding: 16px;
-  border: 1px solid var(--border-default); border-radius: var(--radius-md);
-  background: var(--bg-inset);
-}
-.barca-node-summary .barca-note { margin: 10px 0 0; font-size: var(--text-base); line-height: var(--leading-normal); }
-.barca-stat-row { margin: 0 0 10px; font-size: var(--text-sm); color: var(--text-default); }
-.barca-node-technical { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-strong); }
-.barca-node-technical > summary { cursor: pointer; font-size: var(--text-sm); color: var(--text-muted); margin-bottom: 12px; }
+.barca-node-summary { margin-top: 16px; }
+.barca-node-summary .barca-note { margin: 8px 0 0; line-height: var(--leading-normal); }
+.barca-node-summary > .barca-kv:first-of-type { margin-top: 8px; }
+.barca-stat-row { margin: 0 0 8px; font-size: var(--text-sm); color: var(--text-default); }
+.barca-node-technical { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+.barca-node-technical > summary { cursor: pointer; font-size: var(--text-xs); font-weight: 500; color: var(--text-muted); margin-bottom: 8px; }
 .barca-node-technical > summary:hover { color: var(--text-strong); }
 
 .barca-schema-context, .barca-schema-empty { color: var(--text-muted); font-size: var(--text-sm); line-height: var(--leading-normal); margin: 8px 0; }
-.barca-schema-label { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm); color: var(--text-strong); margin: 18px 0 10px; }
+.barca-schema-label { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-xs); font-weight: 500; color: var(--text-muted); margin: 16px 0 8px; }
 .barca-schema-label > span { font-size: var(--text-xs); font-weight: var(--weight-regular); color: var(--text-muted); overflow-wrap: anywhere; }
-.barca-schema-input { border: 1px solid var(--border-default); border-radius: var(--radius-md); margin-bottom: 8px; }
-.barca-schema-input > summary { padding: 12px; cursor: pointer; font: var(--text-sm) var(--font-sans); overflow-wrap: anywhere; }
-.barca-schema-input-body { padding: 0 12px 12px; }
-.barca-schema-output { padding: 14px; background: var(--bg-inset); border: 1px solid var(--border-strong); border-radius: var(--radius-md); }
+.barca-schema-input { border-top: 1px solid var(--border-subtle); }
+.barca-schema-input > summary { padding: 8px 0; cursor: pointer; font: var(--text-sm) var(--font-sans); overflow-wrap: anywhere; }
+.barca-schema-input-body { padding: 0 0 12px; }
+.barca-schema-output { padding: 0; }
 .barca-schema-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-top: 10px; font-size: var(--text-xs); color: var(--text-muted); }
-.barca-schema-meta strong { font-size: var(--text-base); font-weight: var(--weight-medium); color: var(--text-strong); }
-.barca-schema-provenance { margin: 8px 0 12px; font-size: var(--text-2xs); color: var(--text-muted); overflow-wrap: anywhere; }
+.barca-schema-meta strong { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-strong); }
+.barca-schema-provenance { margin: 8px 0 12px; font-size: var(--text-xs); color: var(--text-muted); overflow-wrap: anywhere; }
 .barca-schema-scroll { max-height: 240px; overflow: auto; scrollbar-gutter: stable; }
 .barca-schema-table { width: 100%; border-collapse: collapse; table-layout: fixed; font: var(--text-xs) var(--font-sans); }
 .barca-schema-table th { text-align: left; color: var(--text-muted); font-weight: var(--weight-regular); }
@@ -603,7 +637,7 @@
 .barca-schema-table td:first-child { color: var(--text-strong); }
 .barca-schema-table td:last-child { color: var(--text-link); }
 
-.barca-schema-content { height: 440px; overflow: auto; scrollbar-gutter: stable; }
+.barca-schema-content { max-height: 440px; overflow: auto; scrollbar-gutter: stable; }
 
 .barca-graph-tools { display: flex; align-items: center; gap: 14px; padding: 12px 24px; min-height: 50px; flex-wrap: wrap; border-bottom: 1px solid var(--border-default); }
 .barca-graph-tools > span { color: var(--text-muted); font-size: var(--text-xs); }
@@ -637,13 +671,12 @@
 
 /* The node panel's answer to "why": a failure's error, or the failures it waits on. Neutral
    text under a hairline; the glyph beside the headline is its one colour. */
-.barca-why {
-  margin: 12px 0 10px; padding: 12px 0 0;
-  border-top: 1px solid var(--border-default);
-}
-.barca-why-head { display: flex; align-items: flex-start; gap: 8px; color: var(--text-strong); }
-.barca-why-head svg { flex: none; margin-top: 3px; }
-.barca-why-head > .barca-error-line { flex: 1; }
+.barca-why { margin: 12px 0 0; }
+.barca-why-head { display: flex; align-items: flex-start; gap: 4px; color: var(--text-strong); }
+.barca-why-head svg { flex: none; }
+.barca-why-head > .barca-error-line { flex: 1; min-width: 0; padding-top: 3px; }
+.barca-why-head > .barca-iconbtn { margin-top: -1px; }
+.barca-why > .barca-note { font-size: var(--text-xs); color: var(--text-muted); }
 .barca-why-head strong { font-family: var(--font-name); font-size: var(--text-sm); font-weight: 500; color: var(--text-strong); overflow-wrap: anywhere; }
 .barca-why .barca-note { margin: 6px 0 0; }
 .barca-why-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -680,7 +713,10 @@
 .barca-key-artifact { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .barca-key-artifact > code { font-size: var(--text-2xs); color: var(--text-muted); }
 .barca-keys-bar > span { flex: none; }
-.barca-source-path { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.barca-source-path { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.barca-source-path > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barca-source-path > .barca-iconbtn { width: 20px; height: 20px; }
+.barca-source-path > a { flex: none; margin: 0 0 0 6px; }
 .barca-schema-cell-more {
   display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; cursor: pointer;
   font: inherit; color: inherit; text-align: left; overflow-wrap: anywhere;
@@ -929,7 +965,7 @@
   display: flex; flex-direction: column; gap: 12px;
 }
 .barca-lineage-picker h2 { margin: 0; font-size: var(--text-md); color: var(--text-strong); font-weight: 500; }
-.barca-lineage-picker h3 { margin: 8px 0 0; font-size: var(--text-xs); color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: var(--tracking-caps); }
+.barca-lineage-picker h3 { margin: 8px 0 0; font-size: var(--text-xs); color: var(--text-muted); font-weight: 500; }
 .barca-lineage-picker ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .barca-lineage-picker button {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px;
@@ -1035,6 +1071,10 @@
 .barca-run-node > summary > span:last-child { margin-left: auto; color: var(--text-muted); }
 .barca-run-node .barca-run-steps { max-height: 420px; overflow: auto; }
 .barca-run-node-time { margin-left: auto; color: var(--text-muted); font-size: var(--text-xs); }
+.barca-run-node-one { padding: 10px 0; }
+.barca-run-node-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: var(--text-sm); }
+/* The actions at the end of the line: after the time, which goes right, or after the state. */
+.barca-run-node-line > :not(.barca-run-node-time) + .barca-run-step-actions { margin-left: auto; }
 .barca-run-node-idle { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0; font-size: var(--text-sm); }
 .barca-run-node-detail { color: var(--text-muted); font-size: var(--text-xs); }
 .barca-run-node-ok > summary { padding: 8px 0; cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); }
@@ -1061,7 +1101,7 @@
 /* The panel's blast radius and incident controls (components/assets/). */
 .barca-blast-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 4px; }
 .barca-blast-list > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.barca-incident-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.barca-incident-actions { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0; }
 
 /* The panel header's text column; its actions sit beside it. */
 .barca-sidepanel-heading { min-width: 0; }
@@ -1085,3 +1125,22 @@
   margin-left: 4px; padding: 0 4px; border: 1px solid var(--border-default); border-radius: var(--radius-xs, 3px);
   font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-muted);
 }
+
+/* ---------- One line a row, everywhere (pages/SchedulesView.tsx, RunsView.tsx) ---------- */
+.barca-schedule-table { table-layout: fixed; }
+.barca-schedule-table td { overflow: hidden; text-overflow: ellipsis; }
+.barca-schedule-table col.col-schedule { width: 280px; }
+.barca-schedule-table col.col-when { width: 120px; }
+.barca-schedule-table col.col-state { width: 140px; }
+.barca-schedule-table col.col-action { width: 88px; }
+.barca-schedule-cron { margin-left: 8px; font-size: var(--text-xs); }
+.barca-table td.barca-row-action { width: 1%; padding-right: 4px; text-align: right; }
+/* A row's own action is quiet until the row is pointed at. */
+.barca-row-action .barca-btn--ghost { color: var(--text-muted); }
+.barca-table tr:hover .barca-row-action .barca-btn--ghost, .barca-row-action .barca-btn--ghost:focus-visible { color: var(--text-strong); }
+.barca-view-actions .barca-select select { width: 124px; }
+/* The activity strip and the notes around the run table line up with the toolbar's title. */
+.barca-view-body > .barca-activity, .barca-view-body > .barca-run-more { padding-left: 12px; padding-right: 12px; }
+.barca-run-target-line { color: var(--text-default); }
+.barca-cell-why .barca-link { margin: 0; font-size: inherit; color: inherit; }
+.barca-cell-why .barca-link:hover { color: var(--text-strong); }

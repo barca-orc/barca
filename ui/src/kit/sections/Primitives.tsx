@@ -9,6 +9,7 @@ import {
   ErrorLine,
   HealthBar,
   IconButton,
+  PageRunButton,
   KeyValue,
   LastSuccess,
   MiddleName,
@@ -141,10 +142,11 @@ const [query, setQuery] = useState('')
       <Variant label="run all"><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><ConfirmDialog {...runButton({ kind: 'all', assets: 8069, sensors: 1 }).confirm!} onConfirm={() => {}} onCancel={() => {}} /></div></Variant>
     </Spec>
 
-    <Spec title="Topbar Run labels" note="runButton() for each target: what it runs and how much.">
-      {[runButton({ kind: 'node', name: 'invoices_00' }), runButton({ kind: 'pipeline', file: 'billing.py', assets: 505, sensors: 1 }), runButton({ kind: 'all', assets: 8069, sensors: 1 }), runButton({ kind: 'none', hint: 'Select a node to run' })].map((b) => (
-        <Variant key={b.label} label={b.title}><Button variant="signal" size="sm">{b.label}</Button></Variant>
+    <Spec title="PageRunButton" note="The Run at the end of a page's toolbar: what is open, in runButton()'s short words; the size is in its name and tooltip.">
+      {[runButton({ kind: 'pipeline', file: 'billing.py', assets: 505, sensors: 1 }), runButton({ kind: 'all', assets: 8069, sensors: 1 })].map((b) => (
+        <Variant key={b.label} label={b.title}><PageRunButton run={{ ...b, onRun: () => {}, disabled: false, loading: false }} /></Variant>
       ))}
+      <Variant label="read-only"><PageRunButton run={{ ...runButton({ kind: 'all', assets: 9, sensors: 0 }), onRun: () => {}, disabled: true, loading: false, title: 'This server is read-only' }} /></Variant>
     </Spec>
 
     <Spec title="HealthBar" note="A scope's nodes by state; a single failure stays visible among thousands.">

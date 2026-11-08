@@ -9,6 +9,7 @@ import { useProgram } from '@/hooks/useProgram'
 import { useRunDetail, useRuns } from '@/hooks/useRuns'
 import { remote } from '@/lib/remote'
 import { INITIAL_RUNS, parseRunFilters, updateRuns, writeRunFilters, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { PageRunButton } from '@/components'
 import { QueuePanel } from './QueuePanel'
 import { RunsView } from './RunsView'
 
@@ -44,7 +45,7 @@ export function RunsPage() {
   const runs = useRuns(model.limit)
   const detail = useRunDetail(selected)
 
-  usePageTopbarRun((handle) => dispatch({ type: 'run_selected', id: handle }))
+  const { scopeRun } = usePageTopbarRun((handle) => dispatch({ type: 'run_selected', id: handle }))
 
   const durableId = detail.data?.run_id
   useEffect(() => {
@@ -60,6 +61,7 @@ export function RunsPage() {
       now={runs.dataUpdatedAt}
       root={root}
       datadogUrl={project?.telemetry?.datadog_url ?? null}
+      actions={<PageRunButton run={scopeRun} />}
       dispatch={dispatch}
     />
   )

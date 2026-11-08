@@ -8,19 +8,17 @@
   --font-sans:    "Inter", system-ui, -apple-system, sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Type scale — compact, technical. 1.0rem = 16px base. */
-  --text-2xs:  11px;
-  --text-xs:   12px;
-  --text-sm:   13px;
-  --text-base: 14px;   /* default UI body */
-  --text-md:   14px;
-  --text-lg:   16px;
-  --text-xl:   19px;
-  --text-2xl:  24px;
-  --text-3xl:  31px;
-  --text-4xl:  40px;
-  --text-5xl:  54px;
-  --text-6xl:  72px;
+  /* Type scale: four sizes, 12 / 13 / 15 / 20. Body is 13; hierarchy comes from weight
+     (400 / 500 / 600) and two text greys, not from more sizes, capitals or tracking.
+     The named steps are aliases of those four, so a component picks a role, not a pixel. */
+  --text-2xs:  12px;   /* = xs: the smallest step is 12 */
+  --text-xs:   12px;   /* secondary: counts, headers, metadata */
+  --text-sm:   13px;   /* body */
+  --text-base: 13px;   /* default UI body */
+  --text-md:   13px;
+  --text-lg:   15px;   /* page and panel titles */
+  --text-xl:   20px;   /* a page that is a single heading (empty states, sign-in) */
+  --text-2xl:  20px;
 
   /* Weights */
   --weight-regular: 400;

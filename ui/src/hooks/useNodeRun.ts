@@ -9,7 +9,7 @@ import { liveGraphState, type GraphState } from '@/lib/graphState'
 import { partitionSelection } from '@/lib/nodeDetail'
 import type { ListNode } from '@/lib/types'
 
-/** One action shared by the selected node's panel and the page's topbar. */
+/** One action shared by the selected node's panel and the command palette. */
 export interface NodeRunAction {
   /** `allowPaused`: run a paused node, after the operator confirmed it (`--allow-paused`). */
   fire: (allowPaused?: boolean) => void
@@ -75,5 +75,7 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
     notice, dismiss,
     /** Start any node, not only the selected one (a failures list's Retry). */
     retry: fireFor,
+    /** The toolbar's Run: what is open, the pipeline or the project (`PageRunButton`). */
+    scopeRun: topbar.scopeRun,
   }
 }

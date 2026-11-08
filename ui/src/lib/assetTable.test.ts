@@ -3,7 +3,13 @@ import type { CacheStatus, NodeState } from './types'
 import { CACHE_STATES } from './cacheStateDisplay'
 import {
   DEFAULT_SORT,
+  assetColumns,
   buildRows,
+  groupByFile,
+  lastRunText,
+  lastRunTitle,
+  tableLines,
+  typicalText,
   filterRows,
   formatAgo,
   formatSeconds,
@@ -325,5 +331,44 @@ describe('sorting', () => {
     expect(parseSort('typical', null)).toEqual({ key: 'typical', dir: 'desc' })
     expect(parseSort('bogus', 'asc')).toEqual(DEFAULT_SORT)
     expect(parseSort(null, null)).toEqual(DEFAULT_SORT)
+  })
+})
+
+describe('one line a row', () => {
+  const ok = { ...failedAttempt, status: 'success', error: null, created_at: '2026-10-02 11:43:00' }
+  it('says when it last ran, and after a failure when it last went well', () => {
+    const [fresh] = buildRows([node({ id: 'a.py:x', last_materialization: ok })], NOW)
+    expect(lastRunText(fresh!, NOW)).toBe('17m ago')
+    const [never] = buildRows([node({ id: 'a.py:x' })], NOW)
+    expect(lastRunText(never!, NOW)).toBe('not run')
+    const [failing] = buildRows([node({ id: 'a.py:x', last_materialization: failedAttempt })], NOW)
+    expect(lastRunText(failing!, NOW)).toBe('failed 35m ago · never succeeded')
+    const [recovered] = buildRows([node({ id: 'a.py:x', last_materialization: failedAttempt, last_success_at: '2026-09-30 12:00:00', failing_since: '2026-10-01 12:00:00', consecutive_failures: 3 })], NOW)
+    expect(lastRunText(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago')
+    expect(lastRunTitle(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago · failing since 1d ago · 3 runs')
+  })
+
+  it('shows a typical duration only when it says something', () => {
+    expect(typicalText({ typical: '0.0s', typicalSeconds: 0.04 })).toBe('–')
+    expect(typicalText({ typical: null, typicalSeconds: null })).toBe('–')
+    expect(typicalText({ typical: '2.5s', typicalSeconds: 2.5 })).toBe('2.5s')
+    expect(assetColumns([{ typicalSeconds: 0.01, nextRunMs: null }, { typicalSeconds: null, nextRunMs: null }])).toEqual({ typical: false, next: false })
+    expect(assetColumns([{ typicalSeconds: 0.3, nextRunMs: null }, { typicalSeconds: null, nextRunMs: NOW }])).toEqual({ typical: true, next: true })
+  })
+
+  it('groups rows by file, in table order, each with the row that most needs attention', () => {
+    const rows = buildRows([
+      node({ id: 'b.py:fine' }),
+      node({ id: 'a.py:ok' }),
+      node({ id: 'b.py:broken', last_materialization: failedAttempt }),
+    ], NOW)
+    const groups = groupByFile(rows)
+    expect(groups.map((g) => [g.file, g.rows.map((r) => r.name), g.worst.name])).toEqual([
+      ['b.py', ['broken', 'fine'], 'broken'],
+      ['a.py', ['ok'], 'ok'],
+    ])
+    expect(tableLines(rows, true, new Set(['b.py'])).map((l) => (l.kind === 'file' ? `# ${l.group.file}${l.collapsed ? ' (folded)' : ''}` : l.row.name)))
+      .toEqual(['# b.py (folded)', '# a.py', 'ok'])
+    expect(tableLines(rows, false, new Set()).map((l) => l.kind)).toEqual(['row', 'row', 'row'])
   })
 })

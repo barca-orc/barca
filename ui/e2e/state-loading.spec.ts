@@ -65,7 +65,7 @@ test('Reset database appears only for a database barca cannot use', async ({ pag
     ? route.fulfill({ status: 503, json: { error: 'unreadable', reason: 'metadata_unusable', remediation: 'Restore a backup' } })
     : route.fulfill({ json: states }))
   await page.goto('/ui/#/assets')
-  await expect(page.locator('.barca-table tbody tr')).toHaveCount(4)
+  await expect(page.locator('.barca-table tbody tr:not(.barca-file-head)')).toHaveCount(4)
   await expect(page.getByRole('button', { name: 'Reset database' })).toHaveCount(0)
   unusable = true
   await page.reload()

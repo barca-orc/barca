@@ -17,21 +17,25 @@ test.describe('graph page', () => {
   })
 })
 
-test.describe('topbar Run', () => {
-  const topbarRun = (page: Page) => page.getByRole('banner').getByRole('button', { name: /^Run/ })
+// The bar across the top has no Run: a page's toolbar runs what is open (the pipeline or the
+// project), the node panel or graph inspector runs its node, and ⌘K offers either.
+test.describe('toolbar Run', () => {
+  const toolbarRun = (page: Page) => page.locator('.barca-view-head').getByRole('button', { name: /^Run/ })
 
-  test('names what it runs: the selected node, else the open pipeline', async ({ page }) => {
+  test('names what is open, whatever is selected; the inspector runs the node', async ({ page }) => {
     await page.goto('/ui/#/graph?pipeline=pipeline.py')
-    await expect(topbarRun(page)).toHaveText(/^Run pipeline\.py \(\d+ assets?(, \d+ sensors?)?\)$/)
+    await expect(toolbarRun(page)).toHaveAccessibleName(/^Run pipeline\.py \(\d+ assets?(, \d+ sensors?)?\)$/)
     await page.getByText('say_hello').first().click()
-    await expect(topbarRun(page)).toHaveText('Run say_hello')
+    await expect(toolbarRun(page)).toHaveAccessibleName(/^Run pipeline\.py/)
+    await expect(inspector(page).getByRole('button', { name: 'Run', exact: true })).toBeVisible()
+    await expect(page.getByRole('banner').getByRole('button', { name: /^Run/ })).toHaveCount(0)
   })
 
   test('a pipeline gets its file at once', async ({ page }) => {
     await page.goto('/ui/#/assets?pipeline=other.py')
-    await expect(topbarRun(page)).toHaveText(/^Run other\.py/)
+    await expect(toolbarRun(page)).toHaveAccessibleName(/^Run other\.py/)
     const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/runs'))
-    await topbarRun(page).click()
+    await toolbarRun(page).click()
     expect((await started).postDataJSON()).toMatchObject({ command: 'get', targets: [], files: ['other.py'] })
   })
 
@@ -43,43 +47,46 @@ test.describe('topbar Run', () => {
       return route.fulfill({ status: 202, json: { run_id: 'r1', status: 'running', position: 0 } })
     })
     await page.goto('/ui/#/assets')
-    await expect(topbarRun(page)).toHaveText(/^Run all \d+ assets?(, \d+ sensors?)?$/)
-    await topbarRun(page).click()
+    await expect(toolbarRun(page)).toHaveAccessibleName(/^Run all \d+ assets?(, \d+ sensors?)?$/)
+    await toolbarRun(page).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByRole('button', { name: 'Cancel' }).click()
     await expect(dialog).toHaveCount(0)
     expect(posts).toEqual([])
-    await topbarRun(page).click()
+    await toolbarRun(page).click()
     await dialog.getByRole('button', { name: /^Run all/ }).click()
     await expect.poll(() => posts).toEqual([{ command: 'get', targets: [] }])
   })
 
-  test('runs the selected task and streams its output', async ({ page }) => {
+  test('the inspector runs the selected task and streams its output', async ({ page }) => {
     await page.goto('/ui/#/graph')
     await page.getByText('say_hello').first().click()
 
     const started = page.waitForRequest((r) => isStartRun(r, 'run', 'pipeline.py:say_hello'))
-    await topbarRun(page).click()
+    await inspector(page).getByRole('button', { name: 'Run', exact: true }).click()
     await started
 
     await expect(page).toHaveURL(/#\/assets\?.*view=graph/) // stays on the graph; no navigation
     await expect(inspector(page)).toContainText('hello from e2e 6', { timeout: 30_000 })
   })
 
-  test('gets the selected asset', async ({ page }) => {
+  test('the command palette runs the selected asset', async ({ page }) => {
     await page.goto('/ui/#/graph')
     await page.getByText('numbers').first().click()
 
     const started = page.waitForRequest((r) => isStartRun(r, 'get', 'pipeline.py:numbers'))
-    await topbarRun(page).click()
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox', { name: /^Jump to/ }).fill('Run numbers')
+    // Enter picks the highlighted result: wait for the list to show it, as a reader would.
+    await expect(page.getByRole('option', { name: /^Run numbers/ })).toHaveAttribute('aria-selected', 'true')
+    await page.keyboard.press('Enter')
     await started
   })
 
-  test('stays in the topbar on every page: the Tasks page offers to run all assets and sensors', async ({ page }) => {
+  test('is on every page: the Tasks page offers to run all assets and sensors', async ({ page }) => {
     await page.goto('/ui/#/tasks?state=all')
-    await expect(page.getByRole('banner')).toBeVisible()
-    await expect(topbarRun(page)).toHaveText(/^Run all \d+ assets/)
-    await expect(topbarRun(page)).toBeEnabled()
+    await expect(toolbarRun(page)).toHaveAccessibleName(/^Run all \d+ assets/)
+    await expect(toolbarRun(page)).toBeEnabled()
   })
 })
 

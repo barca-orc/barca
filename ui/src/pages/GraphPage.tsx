@@ -2,7 +2,7 @@ import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { Button, IconButton, ViewToggle } from '@/components'
+import { Button, IconButton, PageRunButton, ViewToggle } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { GraphLegend } from '@/components/graph/GraphLegend'
 import { NodeInspector } from '@/components/graph/NodeInspector'
@@ -61,8 +61,8 @@ export function GraphPage() {
   const trigger = useTriggerNode(selectedAsset, onTrigger)
   const readOnly = health?.read_only ?? false
 
-  // The topbar's Run button acts on the selected node, same as the inspector's, else on what
-  // is open.
+  // The toolbar's Run acts on what is open; the inspector's on its node; the command palette on
+  // the selected node, else what is open.
   const onStarted = useCallback((handle: string) => setRun({ handle, nodeId: null }), [])
   const topbar = useTopbarRun({
     node: selectedAsset, show: true, scopes: true, fireNode: trigger.fire,
@@ -108,6 +108,7 @@ export function GraphPage() {
             <IconButton label="Fit to screen" onClick={() => canvasRef.current?.fit()}>
               <Maximize size={15} />
             </IconButton>
+            <PageRunButton run={topbar.scopeRun} />
           </div>
         </div>
       </div>

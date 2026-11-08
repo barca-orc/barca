@@ -66,8 +66,16 @@ function StepButtons({ stepId, failed, step }: { stepId: string; failed: boolean
   </span>
 }
 
-/** A run's steps, at most `STEP_ROWS` until expanded. */
-function StepList({ steps, root }: { steps: readonly RunStep[]; root?: string | null }) {
+/** A step's error, unless the summary at the top of the panel already says it in full. */
+function StepError({ step, root, summarized }: { step: RunStep; root?: string | null; summarized: ReadonlySet<RunStep> }) {
+  return step.error && !summarized.has(step) ? <Traceback error={step.error} root={root} /> : null
+}
+
+/**
+ * A run's steps, at most `STEP_ROWS` until expanded. A failed step's error is said once: in the
+ * summary at the top of the panel, or, past the summary's first five, here with its traceback.
+ */
+function StepList({ steps, root, summarized }: { steps: readonly RunStep[]; root?: string | null; summarized: ReadonlySet<RunStep> }) {
   const [all, setAll] = useState(false)
   const shown = all ? steps : steps.slice(0, STEP_ROWS)
   return <>
@@ -77,7 +85,7 @@ function StepList({ steps, root }: { steps: readonly RunStep[]; root?: string | 
         <div><StatusBadge size="sm" glyph={step.status === 'cached' ? 'cached' : runGlyph(step.status)} label={step.status} />
           {step.elapsed_seconds !== null && <span>{formatSeconds(step.elapsed_seconds)}</span>}
           <StepButtons stepId={step.node_id} failed={step.status === 'failed'} step={step} /></div>
-        {step.error && <Traceback error={step.error} root={root} />}
+        <StepError step={step} root={root} summarized={summarized} />
       </li>)}
     </ul>
     {shown.length < steps.length && <Button size="sm" onClick={() => setAll(true)}>Show all {steps.length.toLocaleString()}</Button>}
@@ -88,7 +96,7 @@ function StepList({ steps, root }: { steps: readonly RunStep[]; root?: string | 
  * One planned node of a run: what became of it, and, for one that ran, its keys once opened:
  * failed keys listed at once, successful ones behind their count.
  */
-function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; root?: string | null }) {
+function RunNodeRow({ group: { summary, steps }, root, summarized }: { group: RunNodeGroup; root?: string | null; summarized: ReadonlySet<RunStep> }) {
   const [open, setOpen] = useState(summary.failed > 0)
   const outcome = runNodeOutcome(summary)
   const time = runNodeTime(summary, formatSeconds)
@@ -97,6 +105,19 @@ function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; 
       <code>{shortName(summary.node_id)}</code>
       <StatusBadge size="sm" glyph={statusGlyph(outcome.kind)} label={outcome.label} />
       {outcome.detail && <span className="barca-run-node-detail">{outcome.detail}</span>}
+    </div>
+  }
+  // One key, one step: the node's row is the step's, with nothing under it to open but an error.
+  const only = summary.keys <= 1 && steps.length === 1 ? steps[0]! : null
+  if (only) {
+    return <div className="barca-run-node barca-run-node-one" data-status={summary.status}>
+      <div className="barca-run-node-line">
+        <code>{shortName(summary.node_id)}</code>
+        <StatusBadge size="sm" glyph={statusGlyph(outcome.kind)} label={outcome.label} />
+        {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
+        <StepButtons stepId={only.node_id} failed={only.status === 'failed'} step={only} />
+      </div>
+      <StepError step={only} root={root} summarized={summarized} />
     </div>
   }
   const { failed, ok } = splitRunSteps(steps)
@@ -108,10 +129,10 @@ function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; 
       {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
       <StepButtons stepId={summary.node_id} failed={summary.failed > 0} />
     </summary>
-    {open && failed.length > 0 && <StepList steps={failed} root={root} />}
+    {open && failed.length > 0 && <StepList steps={failed} root={root} summarized={summarized} />}
     {open && ok.length > 0 && (failed.length > 0 || summary.keys > 1
-      ? <details className="barca-run-node-ok"><summary>{ok.length.toLocaleString()} successful key{ok.length === 1 ? '' : 's'}</summary><StepList steps={ok} root={root} /></details>
-      : <StepList steps={ok} root={root} />)}
+      ? <details className="barca-run-node-ok"><summary>{ok.length.toLocaleString()} successful key{ok.length === 1 ? '' : 's'}</summary><StepList steps={ok} root={root} summarized={summarized} /></details>
+      : <StepList steps={ok} root={root} summarized={summarized} />)}
     {open && hidden > 0 && <p className="barca-note">{hidden.toLocaleString()} more keys not listed here.</p>}
   </details>
 }
@@ -119,7 +140,7 @@ function RunNodeRow({ group: { summary, steps }, root }: { group: RunNodeGroup; 
 export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = null, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; root?: string | null; datadogUrl?: string | null; dispatch: Dispatch<RunsMsg> }) {
   const retry = <Button size="sm" onClick={() => dispatch({ type: 'retry_detail' })}>Retry</Button>
   return (
-    <SidePanel label="Run details" title="Run details" subtitle={run.kind === 'ready' ? run.data.run_id : id}
+    <SidePanel label="Run details" title="Run details" subtitle={run.kind === 'ready' ? run.data.run_id : id} subtitleText={run.kind === 'ready' ? run.data.run_id : id}
       actions={<IconButton label="Close run details" size="sm" onClick={() => dispatch({ type: 'panel_closed' })}><X size={14} /></IconButton>}>
       {match(run)
         .with({ kind: 'loading' }, () => <Skeleton height={180} />)
@@ -145,10 +166,16 @@ export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = nul
  * The top of a run's panel: for a failed run, what failed and where, then the recovery and
  * hand-off actions, so neither needs a scroll.
  */
-function RunSummary({ data, datadogUrl, onStarted, onFilter }: { data: RunView; datadogUrl: string | null; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
+/** How many failed steps the summary names, with their errors; the rest are in Steps. */
+const SUMMARY_STEPS = 5
+
+function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: RunView; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
   const live = runIsLive(data.status)
   const failed = failedSteps(data)
-  const shown = failed.slice(0, 5)
+  const shown = failed.slice(0, SUMMARY_STEPS)
+  // A run that failed before any step did (it could not plan, say): its own error, said here once.
+  const outcome = parseOutcome(data.outcome)
+  const runError = failed.length === 0 ? data.error ?? (outcome && outcome.status !== 'success' ? outcome.envelope?.error : null) ?? null : null
   return <div className="barca-run-summary">
     {failed.length > 0 && <>
       <strong className="barca-run-summary-head"><StatusGlyph glyph="failed" />{failed.length.toLocaleString()} failed step{failed.length === 1 ? '' : 's'}</strong>
@@ -157,14 +184,15 @@ function RunSummary({ data, datadogUrl, onStarted, onFilter }: { data: RunView; 
           const where = raisedAt(step.error_traceback ?? step.error)
           return <li key={step.node_id}>
             <button type="button" className="barca-run-link" title="Show this step's logs" onClick={() => onFilter(step.node_id)}><code>{shortName(step.node_id)}</code></button>
-            {' '}<ErrorLine error={step.error_type && step.error_message ? `${step.error_type}: ${step.error_message}` : step.error} />
-            {where && <span className="barca-cell-sub"> · raised at <code className="barca-wrap" title={where}>{where.replace(/^.*\/([^/]+\/[^/]+:\d)/, '…/$1')}</code></span>}
-            {' '}<TraceLink step={step} datadogUrl={datadogUrl} />
+            <ErrorLine error={step.error_traceback ?? step.error} text={step.error_type && step.error_message ? `${step.error_type}: ${step.error_message}` : undefined} root={root} />
+            {where && <span className="barca-run-summary-where" title={where}>raised at <code>{where.replace(/^.*\/([^/]+\/[^/]+:\d)/, '…/$1')}</code></span>}
+            <TraceLink step={step} datadogUrl={datadogUrl} />
           </li>
         })}
         {failed.length > shown.length && <li className="barca-note">and {(failed.length - shown.length).toLocaleString()} more below</li>}
       </ul>
     </>}
+    {runError && <div className="barca-run-error" role="alert"><ErrorLine error={runError} large root={root} /></div>}
     <div className="barca-run-actions">
       {!live && <RunActions run={data} failed={runFailed(data.status)} onStarted={onStarted} />}
       <IncidentSummaryButton run={data} datadogUrl={datadogUrl} />
@@ -179,12 +207,12 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
   const result = outcomeResult(outcome)
   const nodes = data.steps_page?.nodes ?? []
   const targets = runTargetLines(data, nodes)
+  const summarized = new Set<RunStep>(failedSteps(data).slice(0, SUMMARY_STEPS))
   return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
-    <RunSummary data={data} datadogUrl={datadogUrl} onStarted={onStarted} onFilter={setLogStep} />
+    <RunSummary data={data} root={root} datadogUrl={datadogUrl} onStarted={onStarted} onFilter={setLogStep} />
     <Section title="Run">
       <StatusBadge glyph={runGlyph(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} />
       {targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
-      <KeyValue label="id"><code className="barca-wrap">{data.run_id}</code></KeyValue>
       <KeyValue label="command">{data.command}</KeyValue>
       <KeyValue label="target">{data.target ? <code className="barca-wrap">{data.target}</code> : 'all assets'}</KeyValue>
       <KeyValue label="triggered by">{triggeredByLabel(data.triggered_by)}</KeyValue>
@@ -192,15 +220,15 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
       <KeyValue label="finished"><Absolute at={data.finished_at} /></KeyValue>
       <KeyValue label="duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</KeyValue>
       <KeyValue label="steps">{runViewSteps(data, nodes)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</KeyValue>
-      {(data.error ?? envelope?.error) && <div className="barca-run-error" role="alert"><ErrorLine error={data.error ?? envelope?.error} /></div>}
+      {/* The error itself is in the summary above, once. */}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
     <Section title="Steps">
       {nodes.length > 0
-        ? <div className="barca-run-nodes">{groupRunSteps(data.steps, nodes).map((group) => <RunNodeRow key={group.summary.node_id} group={group} root={root} />)}</div>
+        ? <div className="barca-run-nodes">{groupRunSteps(data.steps, nodes).map((group) => <RunNodeRow key={group.summary.node_id} group={group} root={root} summarized={summarized} />)}</div>
         : data.steps.length === 0
           ? <p className="barca-note">{runIsLive(data.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p>
-          : <StepList steps={data.steps} root={root} />}
+          : <StepList steps={data.steps} root={root} summarized={summarized} />}
       {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length} of {data.steps_page.total} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
     </Section>
     <Section title="Logs">
@@ -227,6 +255,8 @@ export interface RunsViewProps {
   root?: string | null
   /** The Datadog web app (`GET /project` `telemetry.datadog_url`): steps link to their traces there. */
   datadogUrl?: string | null
+  /** At the end of the toolbar: the page's Run (`PageRunButton`). */
+  actions?: ReactNode
   dispatch: Dispatch<RunsMsg>
 }
 
@@ -277,13 +307,33 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
   )
 }
 
-export function RunsView({ model, runs, selected, queue, now, root, datadogUrl = null, dispatch }: RunsViewProps) {
+export function RunsView({ model, runs, selected, queue, now, root, datadogUrl = null, actions, dispatch }: RunsViewProps) {
   const { zone } = useTimeZone()
   const list = runs.kind === 'ready' ? runs.data : null
+  const shown = list ? visibleRuns(list.runs, model) : []
+  const failedCount = list ? list.runs.filter((r) => runFailed(r.status)).length : 0
   return (
     <div className="barca-view">
+      {/* One toolbar: the title and count, which runs, a search, then Run. */}
       <div className="barca-view-head"><div className="barca-view-bar">
-        <div className="barca-view-title"><h1>Runs</h1>{list && <span className="barca-count">{plural(list.total, 'run')}</span>}</div>
+        <div className="barca-view-title">
+          <h1>Runs</h1>
+          {list && <span className="barca-count">{shown.length === list.runs.length ? list.total.toLocaleString() : `${shown.length.toLocaleString()} of ${list.total.toLocaleString()}`}<span className="barca-sr-only"> {list.total === 1 ? 'run' : 'runs'}</span></span>}
+        </div>
+        {list && list.runs.length > 0 && <>
+          <ChipGroup label="Show" segmented>
+            {FILTERS.map((f) => (
+              <Chip key={f.value} pressed={model.filter === f.value} onClick={() => dispatch({ type: 'filter_changed', filter: f.value })}>
+                {f.label}{f.value === 'failed' && <b>{failedCount}</b>}
+              </Chip>
+            ))}
+          </ChipGroup>
+          {model.hour !== null && <Chip pressed onClick={() => dispatch({ type: 'hour_toggled', at: model.hour! })}>{hourLabel(model.hour, zone)}–{hourLabel(model.hour + 3_600_000, zone)} {zoneName(zone, model.hour)} <X size={12} /></Chip>}
+        </>}
+        <div className="barca-view-actions">
+          {list && list.runs.length > 0 && <SearchInput placeholder="Filter runs" label="Filter by target or run id" value={model.query} onChange={(value) => dispatch({ type: 'query_changed', value })} />}
+          {actions}
+        </div>
       </div></div>
       {queue}
       <div className="barca-assets-split">
@@ -291,26 +341,9 @@ export function RunsView({ model, runs, selected, queue, now, root, datadogUrl =
           {match(runs)
             .with({ kind: 'loading' }, () => <div aria-label="Loading runs"><Skeleton height={180} /></div>)
             .with({ kind: 'failed' }, ({ error }) => <RunsError error={error} dispatch={dispatch} />)
-            .with({ kind: 'ready' }, ({ data, refreshError }) => {
-              const shown = visibleRuns(data.runs, model)
-              const failedCount = data.runs.filter((r) => runFailed(r.status)).length
-              return <>
+            .with({ kind: 'ready' }, ({ data, refreshError }) => <>
               {refreshError && <RunsError error={refreshError} dispatch={dispatch} />}
-              {data.runs.length > 0 && <>
-                <ActivityStrip activity={runActivity(data.runs, now, 24, data.truncated)} hour={model.hour} now={now} dispatch={dispatch} />
-                <div className="barca-table-tools">
-                  <ChipGroup label="Show">
-                    {FILTERS.map((f) => (
-                      <Chip key={f.value} pressed={model.filter === f.value} onClick={() => dispatch({ type: 'filter_changed', filter: f.value })}>
-                        {f.label}{f.value === 'failed' ? ` · ${failedCount}` : ''}
-                      </Chip>
-                    ))}
-                  </ChipGroup>
-                  <SearchInput placeholder="Filter by target or run id" value={model.query} onChange={(value) => dispatch({ type: 'query_changed', value })} />
-                  {model.hour !== null && <Chip pressed onClick={() => dispatch({ type: 'hour_toggled', at: model.hour! })}>{hourLabel(model.hour, zone)}–{hourLabel(model.hour + 3_600_000, zone)} {zoneName(zone, model.hour)} <X size={12} /></Chip>}
-                  <span className="barca-count">{shown.length.toLocaleString()} shown</span>
-                </div>
-              </>}
+              {data.runs.length > 0 && <ActivityStrip activity={runActivity(data.runs, now, 24, data.truncated)} hour={model.hour} now={now} dispatch={dispatch} />}
               {data.runs.length === 0
                 ? <p className="barca-table-empty">No runs recorded. Start a run from the graph to see it here.</p>
                 : shown.length === 0
@@ -320,8 +353,7 @@ export function RunsView({ model, runs, selected, queue, now, root, datadogUrl =
                 <p className="barca-note">Showing the latest {plural(data.runs.length, 'run')}.</p>
                 {canLoadMore(model) && <Button size="sm" onClick={() => dispatch({ type: 'load_more' })}>Load more</Button>}
               </div>}
-            </>
-            })
+            </>)
             .exhaustive()}
         </div>
         {selected && <RunPanelView key={selected.id} id={selected.id} run={selected.run} eventGap={selected.eventGap} root={root} datadogUrl={datadogUrl} dispatch={dispatch} />}
