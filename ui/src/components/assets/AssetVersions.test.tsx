@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AssetVersionsView, uploadFormat, type VersionsConfirm } from './AssetVersions'
+import { AssetVersionsView, type VersionsConfirm } from './AssetVersions'
+import { uploadFormat } from '@/lib/pins'
 import type { AssetVersion, AssetVersions } from '@/lib/types'
 
 const noop = () => {}
@@ -56,7 +57,7 @@ describe('AssetVersionsView', () => {
 
   it('shows who pinned it, when and why, with Unpin, while pinned', () => {
     const pinned = data({
-      pin: { node_id: 'p.py:orders', run_hash: 'bbbbbbbbbbbbbbbb', pinned_at: '2026-11-07T11:30:00Z', pinned_by: 'token:ops', reason: 'bad feed' },
+      pin: { node_id: 'p.py:orders', run_hash: 'bbbbbbbbbbbbbbbb', pinned_at: '2026-11-07T11:30:00Z', pinned_by: 'token:ops', reason: 'bad feed', run_id: null, upload: null },
       versions: [version('aaaaaaaaaaaaaaaa', { current: true }), version('bbbbbbbbbbbbbbbb', { pinned: true })],
     })
     const html = render(pinned)
@@ -66,7 +67,7 @@ describe('AssetVersionsView', () => {
   })
 
   it('disables every action on a read-only server', () => {
-    const html = render(data({ pin: { node_id: 'p.py:orders', run_hash: 'aaaaaaaaaaaaaaaa', pinned_at: '2026-11-07T11:30:00Z', pinned_by: null, reason: null } }), { readOnly: true })
+    const html = render(data({ pin: { node_id: 'p.py:orders', run_hash: 'aaaaaaaaaaaaaaaa', pinned_at: '2026-11-07T11:30:00Z', pinned_by: null, reason: null, run_id: null, upload: null } }), { readOnly: true })
     expect(buttons(html).every((b) => b.disabled)).toBe(true)
   })
 
@@ -102,7 +103,7 @@ describe('AssetVersionsView', () => {
 
     const upload = { uploaded_at: '2026-11-07T11:40:00Z', uploaded_by: 'token:ops', file_name: 'fix.json', reason: null }
     const pinned = render(data({
-      pin: { node_id: 'p.py:orders', run_hash: 'dddddddddddddddd', pinned_at: '2026-11-07T11:40:00Z', pinned_by: 'token:ops', reason: null },
+      pin: { node_id: 'p.py:orders', run_hash: 'dddddddddddddddd', pinned_at: '2026-11-07T11:40:00Z', pinned_by: 'token:ops', reason: null, run_id: null, upload: null },
       versions: [version('dddddddddddddddd', { current: true, pinned: true, run_id: null, upload }), version('aaaaaaaaaaaaaaaa')],
     }), { upload: true })
     expect(text(pinned)).toContain('Override uploaded by token:ops from fix.json.')

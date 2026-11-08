@@ -22,6 +22,8 @@ interface GraphNodeData {
   lastFailed?: boolean
   /** The failed node upstream (its name) that keeps it from running: it reads `blocked`. */
   blockedBy?: string
+  /** Pinned (`barca pin`): what it is pinned to; it reads `pinned`. */
+  pinned?: string
   /** Whether the node pulses: a run is working on it. */
   live?: boolean
   stateHint?: string

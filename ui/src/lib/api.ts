@@ -6,6 +6,7 @@
    ============================================================ */
 
 import { connectionToken, redactCredential, serverFetch } from './credentials'
+import type { Pins } from './pins'
 import type { PauseRequest, Pauses } from './pauses'
 
 import type {
@@ -151,6 +152,8 @@ export const api = {
     request<unknown>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   /** The paused assets (`barca pause`): scheduled runs skip them until resumed. */
   pauses: () => request<Pauses>('/pauses'),
+  /** Every pinned asset (`barca pin`). */
+  pins: () => request<Pins>('/pins'),
   /** Pause a node (with `downstream`, everything below it) or a file. 403 on a read-only server. */
   pauseAssets: (body: PauseRequest) => request<Pauses>('/pauses', { method: 'POST', body: JSON.stringify(body) }),
   /** Resume a node, a file, or (`all`) every paused node. */

@@ -12,13 +12,16 @@ import { CopyButton, NodeKeys, PartitionBar } from './NodeKeys'
 import { BlastRadius } from './BlastRadius'
 import { IncidentControls } from './IncidentControls'
 import { usePausedSet } from '@/hooks/usePauses'
+import { usePinNotes } from '@/hooks/usePins'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
 import { usePausedRunGuard } from '@/hooks/usePausedRunGuard'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
 import { useRunDetail } from '@/hooks/useRuns'
 import { buildRows, formatSeconds } from '@/lib/assetTable'
-import { nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { blockedBy as blockedByMap } from '@/lib/graphView'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, raisedAtLabel, runPace, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
@@ -76,7 +79,15 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   // Why a node that did not fail is not up to date: something it reads failed.
   const blockedBy = useMemo(() => (failed ? [] : failedUpstream(node.id, inputs, byId)), [failed, node.id, inputs, byId])
   // The one state it shows: `blocked` when a failed node upstream keeps it from running.
-  const blocker = useMemo(() => (failed ? null : blockedByMap(nodes, graph).get(node.id) ?? null), [failed, nodes, graph, node.id])
+  const pins = usePinNotes()
+  // Pinned (`barca pin`): it reads `pinned`, not its cache state; a failure above it does not block it.
+  const pinned = failed ? null : pins.get(node.id) ?? null
+  const blocker = useMemo(() => (failed ? null : blockedByMap(nodes, graph, pins).get(node.id) ?? null), [failed, nodes, graph, pins, node.id])
+  const client = useQueryClient()
+  const unpin = useMutation({
+    mutationFn: () => api.unpinAsset(node.id),
+    onSettled: () => client.invalidateQueries(),
+  })
   const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
@@ -135,8 +146,9 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             <StatusBadge tone={runAction.liveState.tone} label={runAction.liveState.label} live={isLive(runAction.liveState)} />
           ) : row && (
             <>
-              <StatusBadge {...nodeStateDisplay({ ...row, blockedBy: blocker })} />
-              {!row.lastFailed && blocker && (
+              <StatusBadge {...nodeStateDisplay({ ...row, blockedBy: blocker, pinned })} />
+              {pinned !== null && <span className="barca-cell-sub">{pinned}</span>}
+              {pinned === null && !row.lastFailed && blocker && (
                 <span className="barca-cell-sub">
                   by <button type="button" className="barca-link" title={`Open ${blocker}`} onClick={() => onSelect(blocker)}>{shortName(blocker)}</button>
                 </span>
@@ -152,7 +164,15 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           </KeyValue>
         )}
         {/* A failure's cache detail repeats its error; the block below says it once. */}
-        {!(failed && last) && <p className="barca-note">{node.cache.detail}</p>}
+        {pinned !== null ? (
+          <p className="barca-note">
+            {PINNED_HINT}{' '}
+            <Button variant="ghost" size="sm" disabled={runAction.readOnly || unpin.isPending} onClick={() => unpin.mutate()}>
+              Unpin
+            </Button>
+            {unpin.error && <span role="alert"> Could not unpin: {unpin.error.message}</span>}
+          </p>
+        ) : !(failed && last) && <p className="barca-note">{node.cache.detail}</p>}
         {failedKeys > 0 && (
           <p className="barca-note">
             {failedRun && <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>Open the run</Link>}

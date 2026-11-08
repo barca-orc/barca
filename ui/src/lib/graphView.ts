@@ -157,9 +157,20 @@ export function waitsOn(
   return out
 }
 
-/** Each blocked node of `nodes` and the failed node upstream it waits on (by id). */
-export function blockedBy(nodes: readonly NodeState[], graph: readonly { id: string; inputs: readonly string[] }[]): Map<string, string> {
-  const status = new Map(nodes.map((n) => [n.id, waitStatus(memberHealth(n))]))
+/**
+ * Each blocked node of `nodes` and the failed node upstream it waits on (by id). A pinned node
+ * (`pinned`) is never waiting: runs read its pinned version, so it does not pass a failure
+ * above it on to what reads it.
+ */
+export function blockedBy(
+  nodes: readonly NodeState[],
+  graph: readonly { id: string; inputs: readonly string[] }[],
+  pinned: { has(id: string): boolean } = new Set<string>(),
+): Map<string, string> {
+  const status = new Map(nodes.map((n): [string, WaitStatus] => {
+    const s = waitStatus(memberHealth(n))
+    return [n.id, s === 'waiting' && pinned.has(n.id) ? 'other' : s]
+  }))
   const edges = graph.flatMap((g): [string, string][] => g.inputs.map((i) => [i, g.id]))
   return new Map([...waitsOn(edges, status, (id) => id)].map(([id, w]) => [id, w.by]))
 }

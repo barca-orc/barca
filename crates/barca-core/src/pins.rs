@@ -198,6 +198,8 @@ pub async fn pin(
         pinned_at: crate::time::rfc3339(chrono::Utc::now().timestamp()),
         pinned_by: by,
         reason: reason.filter(|r| !r.trim().is_empty()),
+        run_id: version.run_id.clone(),
+        upload: version.upload.clone(),
     };
     db::set_pin(db_path, &pin).await?;
     let mut version = version;

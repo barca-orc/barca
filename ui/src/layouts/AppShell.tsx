@@ -5,6 +5,7 @@ import { Topbar } from './Topbar'
 import { LoadErrors } from './LoadErrors'
 import { OfflineBanner } from '@/components/OfflineBanner'
 import { PausedBanner } from '@/components/PausedBanner'
+import { PinnedBanner } from '@/components/PinnedBanner'
 import type { AppShellContext, TopbarRun } from './shellContext'
 
 export function AppShell() {
@@ -17,6 +18,7 @@ export function AppShell() {
         <Topbar run={topbarRun} />
         <OfflineBanner />
         <PausedBanner />
+        <PinnedBanner />
         <LoadErrors />
         <div className="barca-content">
           <Outlet context={{ setTopbarRun } satisfies AppShellContext} />

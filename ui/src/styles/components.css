@@ -120,7 +120,7 @@
 .barca-dag-foot { min-width: 0; flex-wrap: wrap; row-gap: 4px; }
 /* The fact beside the state is never cut: when the two do not share a line it takes the next. */
 .barca-dag-state[data-failed] { display: inline-flex; align-items: center; gap: 3px; color: var(--status-failed); font-weight: 600; }
-.barca-dag-state[data-blocked] { display: inline-flex; align-items: center; gap: 3px; color: var(--status-warning); font-weight: 600; }
+.barca-dag-state[data-blocked], .barca-dag-state[data-pinned] { display: inline-flex; align-items: center; gap: 3px; color: var(--status-warning); font-weight: 600; }
 
 /* ── SearchInput ──────────────────────────────────────────── */
 /* One focus ring, on the box: the input inside would otherwise get the global

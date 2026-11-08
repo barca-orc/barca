@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import { Ban, CircleAlert, CircleX, Clock, LoaderCircle, Pause } from 'lucide-react'
+import { Ban, CircleAlert, Pin, CircleX, Clock, LoaderCircle, Pause } from 'lucide-react'
 import type { Tone } from '@/lib/tone'
 import { StatusDot } from './StatusDot'
 
@@ -13,7 +13,7 @@ export interface StatusBadgeProps {
   /** Dot + plain text, no pill. By default only the failed and running tones, the exceptions, get a pill. */
   subtle?: boolean
   /** A shape for a state the tone does not name (`paused` is neutral in colour). */
-  icon?: 'paused' | 'blocked'
+  icon?: 'paused' | 'blocked' | 'pinned'
   style?: CSSProperties
 }
 
@@ -22,10 +22,11 @@ export interface StatusBadgeProps {
  * a warning (stale) an exclamation, blocked by a failure upstream a barred circle, running a spinner, queued a clock, paused bars.
  * The quiet tones (fresh, never run) keep a dot.
  */
-function StateIcon({ tone, live, size, icon }: { tone: Tone; live: boolean; size: number; icon?: 'paused' | 'blocked' }) {
+function StateIcon({ tone, live, size, icon }: { tone: Tone; live: boolean; size: number; icon?: 'paused' | 'blocked' | 'pinned' }) {
   const props = { size, 'aria-hidden': true, strokeWidth: 2.25, className: 'barca-badge-icon' } as const
   if (icon === 'paused') return <Pause {...props} />
   if (icon === 'blocked') return <Ban {...props} />
+  if (icon === 'pinned') return <Pin {...props} />
   if (tone === 'failed') return <CircleX {...props} />
   if (tone === 'warning') return <CircleAlert {...props} />
   if (tone === 'running') return <LoaderCircle {...props} data-spin={live || undefined} />

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pin } from 'lucide-react'
 import { Age, Button, ConfirmDialog, Section } from '@/components'
 import { api } from '@/lib/api'
+import { UPLOAD_EXTENSIONS, uploadFormat } from '@/lib/pins'
 import { formatSeconds } from '@/lib/assetTable'
 import { formatBytes, shortHash } from '@/lib/nodeDetail'
 import { shortName } from '@/lib/graph'
@@ -17,15 +18,6 @@ import type { AssetVersion, AssetVersions as Versions, NodeState } from '@/lib/t
  * "Upload replacement…" pins it to a file the operator picks (`POST /assets/{name}/pin/upload`).
  */
 
-/** The formats an upload may be, by extension (`barca docs pins`). */
-export const UPLOAD_EXTENSIONS = ['.json', '.parquet', '.csv', '.pkl', '.pickle']
-
-/** The format a file name's extension names, or null. */
-export function uploadFormat(fileName: string): string | null {
-  const ext = fileName.slice(fileName.lastIndexOf('.')).toLowerCase()
-  if (!fileName.includes('.') || !UPLOAD_EXTENSIONS.includes(ext)) return null
-  return ext === '.pkl' || ext === '.pickle' ? 'pickle' : ext.slice(1)
-}
 
 export type VersionsConfirm =
   | { kind: 'pin'; version: AssetVersion }

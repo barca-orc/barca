@@ -16,7 +16,7 @@ import {
 import { AssetNode } from './AssetNode'
 import { GroupNode } from './GroupNode'
 import { PortNode } from './PortNode'
-import { BLOCKED_UPSTREAM } from '@/lib/cacheStateDisplay'
+import { BLOCKED_UPSTREAM, PINNED } from '@/lib/cacheStateDisplay'
 import { fitTarget, isArrowKey, neighborInDirection, READABLE_ZOOM, waitStatus, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
 import { isLive, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
@@ -58,8 +58,12 @@ interface GraphCanvasProps {
   onOpenGroup?: (id: string) => void
   /** Persistent state with active-run overlays. */
   states: Record<string, GraphState>
+  /** Pinned nodes (`GET /pins`) and what each is pinned to: they read `pinned`. */
+  pins?: ReadonlyMap<string, string>
   handleRef?: Ref<GraphCanvasHandle>
 }
+
+const NO_PINS: ReadonlyMap<string, string> = new Map()
 
 function viewNodes(nodes: GraphNode[]): ViewNode[] {
   return nodes.map((n) => ({
@@ -129,6 +133,7 @@ export function GraphCanvas({
   onSelect,
   onOpenGroup,
   states,
+  pins = NO_PINS,
   handleRef,
 }: GraphCanvasProps) {
   // Re-layout only when structure or direction changes — never on selection or
@@ -144,24 +149,29 @@ export function GraphCanvas({
     for (const n of base.nodes) {
       const state = states[n.id]
       if (!state || state.kind !== 'cache') continue
-      waits.set(n.id, waitStatus(state))
+      const s = waitStatus(state)
+      // A pinned node is read as its pinned version: it never waits on a failure above it.
+      waits.set(n.id, s === 'waiting' && pins.has(n.id) ? 'other' : s)
     }
     const why = waitsOn(base.edges.map((e) => [e.source, e.target]), waits, (id) => names.get(id) ?? id)
     return base.nodes.map((n) => {
       const state = states[n.id] ?? UNKNOWN_GRAPH_STATE
       const wait = why.get(n.id)
+      // One state per node: failing > running > pinned > blocked > the cache state.
+      const pin = !isFailed(state) && !isLive(state) && state.kind === 'cache' ? pins.get(n.id) : undefined
       return { ...n, selected: n.id === selected,
         data: {
           ...n.data,
-          tone: wait ? 'warning' : state.tone,
-          label: wait ? BLOCKED_UPSTREAM : state.label,
-          blockedBy: wait ? names.get(wait.by) ?? wait.by : undefined,
+          tone: pin !== undefined || wait ? 'warning' : state.tone,
+          label: pin !== undefined ? PINNED : wait ? BLOCKED_UPSTREAM : state.label,
+          blockedBy: pin === undefined && wait ? names.get(wait.by) ?? wait.by : undefined,
+          pinned: pin,
           lastFailed: isFailed(state),
           live: isLive(state),
-          stateHint: wait ? `${state.hint} ${wait.hint}` : state.hint,
+          stateHint: pin !== undefined ? `Pinned: ${pin}. Runs read this version until it is unpinned.` : wait ? `${state.hint} ${wait.hint}` : state.hint,
         } }
     })
-  }, [base.nodes, base.edges, selected, states])
+  }, [base.nodes, base.edges, selected, states, pins])
 
   const nodeTones = useMemo(() => new Map(nodes.map(n => [n.id, n.data.tone])), [nodes])
   const edges = useMemo(

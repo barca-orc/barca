@@ -119,6 +119,7 @@ describe('URL round-trip', () => {
       states: ['blocked', 'stale'],
       failed: true,
       blocked: true,
+      pinned: true,
       kinds: ['asset'],
       lastRun: 'week_plus',
       scheduled: true,
@@ -213,5 +214,39 @@ describe('blocked rows', () => {
 
   it('sorts after failing and before the cache states', () => {
     expect(rows.map((r) => r.name)).toEqual(['broken', 'summary', 'report', 'other'])
+  })
+})
+
+describe('pinned rows', () => {
+  // broken fails; report is pinned (stale) below it; summary reads report; fresh is pinned but failing.
+  const nodes = [
+    node('p:broken', { lastAt: '2026-10-06 11:00:00', failed: true }),
+    node('p:report', { state: 'stale', inputs: ['p:broken'] }),
+    node('p:summary', { state: 'stale', inputs: ['p:report'] }),
+    node('p:fixed', { lastAt: '2026-10-06 11:00:00', failed: true }),
+  ]
+  const pins = new Map([['p:report', 'override from fix.json by me'], ['p:fixed', 'rolled back to abc']])
+  const rows = buildRows(nodes, NOW, blockedBy(nodes, nodes, pins), pins)
+  const row = (name: string) => rows.find((r) => r.name === name)!
+
+  it('reads pinned, not stale, and passes no failure above it on; failing still outranks it', () => {
+    expect(nodeStateDisplay(row('report'))).toEqual({ label: 'pinned', tone: 'warning', icon: 'pinned' })
+    expect(row('report').pinned).toBe('override from fix.json by me')
+    expect(row('report').blockedBy).toBeNull()
+    expect(row('summary').blockedBy).toBeNull()
+    expect(nodeStateDisplay(row('summary')).label).toBe('stale')
+    expect(nodeStateDisplay(row('fixed')).label).toBe('failing')
+  })
+
+  it('has a chip and a ?pinned=1 filter of its own', () => {
+    const c = facetCounts(rows, EMPTY_FILTERS, NOW)
+    expect(c.pinned).toBe(1)
+    expect(c.failed).toBe(2)
+    expect(c.states.stale).toBe(1)
+    expect(applyFilters(rows, parseFilters(new URLSearchParams('pinned=1')), NOW).map((r) => r.name)).toEqual(['report'])
+  })
+
+  it('sorts after failing and before blocked and the cache states', () => {
+    expect(rows.map((r) => r.name)).toEqual(['broken', 'fixed', 'report', 'summary'])
   })
 })

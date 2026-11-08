@@ -79,7 +79,7 @@ what reads it: a consumer that expects other columns fails when it runs, as with
 
 | Command | Shape |
 |---|---|
-| `barca pin --json` | `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason}]}` |
+| `barca pin --json` | `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason, run_id, upload}]}` (`run_id`: the run that computed the pinned version, null for an upload; `upload`: as on a version) |
 | `barca pin TARGET --versions --json` | `{node_id, pinnable, pin, versions: [{run_hash, run_id, materialized_at, elapsed_seconds, size_bytes, format, artifact, available, current, pinned, upload}]}` |
 | `barca pin TARGET --previous --json` | `{node_id, pin, version, replaced}` (`replaced`: the earlier pin, or null) |
 | `barca pin TARGET --from-file PATH --json` | the same; `version.upload` is set |

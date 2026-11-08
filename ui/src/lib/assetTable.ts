@@ -31,6 +31,8 @@ export interface AssetRow {
   lastFailed: boolean
   /** The failed node upstream that keeps it from running (`blocked`); null when none. */
   blockedBy: string | null
+  /** Pinned (`barca pin`): what it is pinned to, in a line; null when not pinned. Reads `pinned`. */
+  pinned: string | null
   /** Why, in words — the server's own explanation (`cache.detail`, a tooltip). */
   stateHint: string
   last: { status: string; ago: string; error: string | null } | null
@@ -91,12 +93,12 @@ function fileOf(id: string): string {
  * What needs attention first: a failed last attempt, then the state's rank, then the name.
  * Presentation order only; the state itself is never changed by the attempt.
  */
-function compareAttention(a: Pick<AssetRow, 'state' | 'lastFailed' | 'blockedBy' | 'name'>, b: Pick<AssetRow, 'state' | 'lastFailed' | 'blockedBy' | 'name'>): number {
-  return Number(b.lastFailed) - Number(a.lastFailed) || Number(!!b.blockedBy) - Number(!!a.blockedBy) || cacheStateRank(a.state) - cacheStateRank(b.state) || a.name.localeCompare(b.name)
+function compareAttention(a: Pick<AssetRow, 'state' | 'lastFailed' | 'blockedBy' | 'pinned' | 'name'>, b: Pick<AssetRow, 'state' | 'lastFailed' | 'blockedBy' | 'pinned' | 'name'>): number {
+  return Number(b.lastFailed) - Number(a.lastFailed) || Number(!b.lastFailed && b.pinned !== null) - Number(!a.lastFailed && a.pinned !== null) || Number(!!b.blockedBy) - Number(!!a.blockedBy) || cacheStateRank(a.state) - cacheStateRank(b.state) || a.name.localeCompare(b.name)
 }
 
 /** One row per node, what needs attention first. */
-export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMap<string, string> = new Map()): AssetRow[] {
+export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMap<string, string> = new Map(), pins: ReadonlyMap<string, string> = new Map()): AssetRow[] {
   return nodes
     .map((n): AssetRow => {
       const last = n.last_materialization
@@ -110,6 +112,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMa
         reason: n.cache.reason,
         lastFailed: lastAttemptFailed(n),
         blockedBy: blocked.get(n.id) ?? null,
+        pinned: pins.get(n.id) ?? null,
         stateHint: n.cache.detail,
         last: last
           ? { status: n.partitions?.failed ? 'failed' : last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
@@ -166,7 +169,7 @@ export function parseSort(key: string | null, dir: string | null): Sort {
 function sortValue(row: AssetRow, key: SortKey): string | number | null {
   return match(key)
     .with('name', () => row.name)
-    .with('state', () => (row.lastFailed ? 0 : row.blockedBy ? 1 : 2) * CACHE_STATES.length + cacheStateRank(row.state))
+    .with('state', () => (row.lastFailed ? 0 : row.pinned !== null ? 1 : row.blockedBy ? 2 : 3) * CACHE_STATES.length + cacheStateRank(row.state))
     .with('last', () => row.lastAtMs)
     .with('success', () => (row.lastSuccessAt === null ? null : parseTime(row.lastSuccessAt)))
     .with('typical', () => row.typicalSeconds)

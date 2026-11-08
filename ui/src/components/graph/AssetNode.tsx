@@ -33,6 +33,7 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         label={data.label}
         lastFailed={data.lastFailed}
         blockedBy={data.blockedBy}
+        pinned={data.pinned}
         live={data.live}
         stateHint={data.stateHint}
         selected={selected}

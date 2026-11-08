@@ -1,7 +1,7 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
-import { ArrowDown, ArrowUp, Ban, CircleX, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Ban, CircleX, Pin, X } from 'lucide-react'
 import {
   Button,
   Chip,
@@ -30,7 +30,7 @@ import { useTimeZone } from '@/context/timeZone'
 import { formatShort, type TimeZone } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
-import { BLOCKED_UPSTREAM, CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { BLOCKED_UPSTREAM, PINNED, PINNED_HINT, CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { blockedBy } from '@/lib/graphView'
 import { shortName } from '@/lib/graph'
 import { formatAgo } from '@/lib/time'
@@ -66,6 +66,7 @@ import {
 import type { NodeKind } from '@/lib/types'
 import { PausedTag } from '@/components/assets/IncidentControls'
 import { usePausedSet } from '@/hooks/usePauses'
+import { usePinNotes } from '@/hooks/usePins'
 
 const PAGE_LABEL: Record<NodeKind, string> = { asset: 'Assets', task: 'Tasks', sensor: 'Sensors' }
 
@@ -148,10 +149,12 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const onlyPaused = params.get('paused') === '1'
   // Which nodes a failure upstream keeps from running: judged over the whole graph, so a
   // pipeline's row is blocked by a failure in another one too.
-  const blockers = useMemo(() => blockedBy(data ?? [], graph), [data, graph])
+  // Pinned assets read `pinned` (`GET /pins`), and pass no failure above them on.
+  const pins = usePinNotes()
+  const blockers = useMemo(() => blockedBy(data ?? [], graph, pins), [data, graph, pins])
   const rows = useMemo(
-    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, blockers),
-    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused, blockers],
+    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, blockers, pins),
+    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused, blockers, pins],
   )
   // Filters live in the URL with the sort and pipeline, so a filtered view can
   // be reloaded and shared.
@@ -171,7 +174,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   // What fails, and how much of the graph waits on it: the page's one-line summary.
   // The blocked count is the rows that read `blocked`, so the summary and the chip agree.
   const failing = rows.filter((r) => r.lastFailed)
-  const blocked = rows.filter((r) => !r.lastFailed && r.blockedBy).length
+  const blocked = rows.filter((r) => !r.lastFailed && r.pinned === null && r.blockedBy).length
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const win = useTableWindow(visible.length, scroller)
@@ -240,6 +243,12 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 <Chip pressed={filters.failed} tone="failed" onClick={() => setFilters({ ...filters, failed: !filters.failed })}>
                   <CircleX size={12} aria-hidden />
                   {counts.failed} {LAST_ATTEMPT_FAILED}
+                </Chip>
+              )}
+              {(counts.pinned > 0 || filters.pinned) && (
+                <Chip pressed={filters.pinned} tone="warning" onClick={() => setFilters({ ...filters, pinned: !filters.pinned })}>
+                  <Pin size={12} aria-hidden />
+                  {counts.pinned} {PINNED}
                 </Chip>
               )}
               {(counts.blocked > 0 || (filters.blocked && !onDefault)) && (
@@ -385,7 +394,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                     </div>
                     <div className="barca-cell-sub">{r.file}</div>
                   </td>
-                  <td title={r.running ? undefined : r.stateHint}>
+                  <td title={r.running ? undefined : r.pinned !== null && !r.lastFailed ? PINNED_HINT : r.stateHint}>
                     {liveStatus ? (
                       <StatusBadge tone={liveGraphState(liveStatus).tone} label={liveGraphState(liveStatus).label} live={isLive(liveGraphState(liveStatus))} />
                     ) : r.running ? (
@@ -400,7 +409,8 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                             {r.lastSuccessAt ? `last good ${formatAgo(r.lastSuccessAt, now)}` : 'never succeeded'}
                           </div>
                         )}
-                        {!r.lastFailed && r.blockedBy && (
+                        {!r.lastFailed && r.pinned !== null && <div className="barca-cell-sub">{r.pinned}</div>}
+                        {!r.lastFailed && r.pinned === null && r.blockedBy && (
                           <div className="barca-cell-sub">
                             by{' '}
                             <button

@@ -3568,8 +3568,18 @@ components:
     AssetPin:
       type: object
       additionalProperties: false
-      required: [node_id, run_hash, pinned_at, pinned_by, reason]
+      required: [node_id, run_hash, pinned_at, pinned_by, reason, run_id, upload]
       properties:
+        run_id:
+          description: The run that computed the pinned version; null for an upload.
+          type:
+          - string
+          - 'null'
+        upload:
+          description: Set when the pinned version was uploaded (an override).
+          oneOf:
+          - $ref: '#/components/schemas/AssetUpload'
+          - type: 'null'
         node_id:
           type: string
         run_hash:

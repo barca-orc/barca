@@ -57,6 +57,13 @@ pub struct AssetPin {
     pub pinned_by: Option<String>,
     /// Why, as given with `--reason`.
     pub reason: Option<String>,
+    /// The run that computed the pinned materialization; null for an upload or an old row.
+    /// Filled when pins are listed (`get_pins`), not stored with the pin.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// Set when the pinned materialization was uploaded (an override). Filled when listed.
+    #[serde(default)]
+    pub upload: Option<Upload>,
 }
 
 /// One successful materialization of a node with an artifact: what a pin can choose.
@@ -95,6 +102,8 @@ fn pin_from(row: &libsql::Row) -> AssetPin {
         pinned_at: row.get::<String>(2).unwrap_or_default(),
         pinned_by: row.get::<String>(3).ok(),
         reason: row.get::<String>(4).ok(),
+        run_id: None,
+        upload: None,
     }
 }
 
@@ -130,7 +139,38 @@ pub async fn get_pins(db_path: &str) -> Result<Vec<AssetPin>, BarcaError> {
     }
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
-    Ok(pins_on(&conn).await?.into_values().collect())
+    let mut pins: Vec<AssetPin> = pins_on(&conn).await?.into_values().collect();
+    for pin in &mut pins {
+        pin.run_id = run_id_of(&conn, &pin.node_id, &pin.run_hash).await?;
+        pin.upload = uploads_on(&conn, &pin.node_id).await?.remove(&pin.run_hash);
+    }
+    Ok(pins)
+}
+
+/// The run of the newest successful row of `node_id` under `run_hash`, if any.
+async fn run_id_of(
+    conn: &libsql::Connection,
+    node_id: &str,
+    run_hash: &str,
+) -> Result<Option<String>, BarcaError> {
+    let mut rows = conn
+        .query(
+            "SELECT run_id FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
+             AND status = 'success' ORDER BY id DESC LIMIT 1",
+            [node_id, run_hash],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query a pinned version: {e}")))?;
+    Ok(
+        match rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read a pinned version: {e}")))?
+        {
+            Some(row) => row.get::<String>(0).ok(),
+            None => None,
+        },
+    )
 }
 
 /// A pin changes what runs read without a new materialization, so the freshness proofs
@@ -408,6 +448,8 @@ mod tests {
             pinned_at: "2026-11-07T10:00:00Z".into(),
             pinned_by: Some("me@host".into()),
             reason: None,
+            run_id: None,
+            upload: None,
         };
         set_pin(&path, &pin).await.unwrap();
         pin.run_hash = "h2".into();

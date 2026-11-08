@@ -85,6 +85,9 @@ export function Graph() {
         <Variant label="never_run · blocked by a failure upstream">
           <DagNode name="revenue_summary" kind="asset" tone="warning" label="blocked" blockedBy="broken_report" stateHint="Blocked: waits on broken_report, whose last attempt failed." icon={KIND_ICON.asset} />
         </Variant>
+        <Variant label="stale · pinned (barca pin)">
+          <DagNode name="orders" kind="asset" tone="warning" label="pinned" pinned="override from fix.json by me@host" stateHint="Pinned: override from fix.json by me@host. Runs read this version until it is unpinned." icon={KIND_ICON.asset} />
+        </Variant>
       </Spec>
 
       <Spec title="DagNode · a run working on it" note="runningGraphState(), whoever started the run; then a run streaming to this page.">

@@ -17,8 +17,10 @@ import { useTriggerNode } from '@/hooks/useTriggerNode'
 import { useTopbarRun } from '@/hooks/useTopbarRun'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
+import { usePinNotes } from '@/hooks/usePins'
 
 export function GraphPage() {
+  const pins = usePinNotes()
   const assetQuery = useAssets()
   const allAssets = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
   const stateQuery = useAssetStates()
@@ -120,6 +122,7 @@ export function GraphPage() {
             selected={selected}
             onSelect={setSelected}
             states={visualStates}
+            pins={pins}
             handleRef={canvasRef}
           />
           <GraphLegend />
