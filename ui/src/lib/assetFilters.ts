@@ -105,12 +105,20 @@ function matchesLastRun(row: AssetRow, lastRun: LastRun, nowMs: number): boolean
 type Group = 'states' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
 
 /**
+ * Blocked, whichever way it is known: a failure upstream the client found (`blockedBy`), or the
+ * server's `blocked` state (keys that wait on the same keys of a failed input). One word, one chip.
+ */
+function isBlocked(r: Pick<AssetRow, 'blockedBy' | 'state'>): boolean {
+  return r.blockedBy !== null || r.state === 'blocked'
+}
+
+/**
  * The state filter, as a group, by the one state each row shows: `failing` (a failed last
  * attempt), `blocked` (a failure upstream keeps it from running) or else its cache state, so a chip's count is the rows it shows.
  */
 function matchesStates(r: AssetRow, f: Filters): boolean {
   if (f.states.length === 0 && !f.failed && !f.blocked && !f.pinned) return true
-  return r.lastFailed ? f.failed : r.pinned !== null ? f.pinned : r.blockedBy ? f.blocked : f.states.includes(r.state)
+  return r.lastFailed ? f.failed : r.pinned !== null ? f.pinned : isBlocked(r) ? f.blocked : f.states.includes(r.state)
 }
 
 interface FilterOptions {
@@ -158,7 +166,7 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
   for (const r of filterExcept(rows, f, nowMs, 'states', opts)) {
     if (r.lastFailed) failed += 1
     else if (r.pinned !== null) pinned += 1
-    else if (r.blockedBy) blocked += 1
+    else if (isBlocked(r)) blocked += 1
     else states[r.state] += 1
   }
 

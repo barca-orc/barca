@@ -28,6 +28,7 @@ import { headline } from '@/lib/health'
 import { isLive, liveGraphState } from '@/lib/graphState'
 import { pipelineName } from '@/lib/pipeline'
 import {
+  blockedKeys,
   DEFAULT_SORT,
   assetColumns,
   fileDisplay,
@@ -276,6 +277,10 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                         r.last?.error && <span className="barca-cell-why" title={r.last.error}>{headline(r.last.error)}</span>
                       ) : r.pinned !== null ? (
                         <span className="barca-cell-why" title={r.pinned}>{r.pinned}</span>
+                      ) : !r.blockedBy && r.state === 'blocked' && r.keys && blockedKeys(r.stateHint) ? (
+                        <span className="barca-cell-why">
+                          {blockedKeys(r.stateHint)!.count.toLocaleString()} of {plural(r.keys.total, 'key')} wait on {blockedKeys(r.stateHint)!.upstream}
+                        </span>
                       ) : r.blockedBy && (
                         <span className="barca-cell-why">
                           waits on{' '}

@@ -418,9 +418,6 @@ list the first twenty keys in lexical order, independently of worker chunking.
 
 Failed batched calls automatically retry failed partitions in groups at most half the previous size, down to one partition, even without configured retries. Successful partitions are retained. Single-partition failures use the configured retry budget, counting earlier attempts. This also applies when a worker exits unexpectedly.
 
-See also: [`barca docs batched-partitions`](/reference/batched-partitions/), [`barca docs sinks`](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
-directory per key), `barca docs examples/partitions`.
-
 ## Exploring keys in the web UI
 
 `barca serve`'s web UI has a key explorer for a partitioned asset: the asset panel's
@@ -444,3 +441,6 @@ for every key, and draws them as a grid:
   of the whole asset; Shift-click a second key in the same row to select the keys between, and Run
   computes those, as `--partition` with each value listed. Keys are known once their source ran:
   for a `partitions_from(<asset>)` asset that has not, the explorer says so.
+
+See also: [`barca docs batched-partitions`](/reference/batched-partitions/), [`barca docs sinks`](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
+directory per key), `barca docs examples/partitions`.

@@ -18,7 +18,7 @@ export function CopyButton({ label, text }: { label: string; text: string }) {
 }
 
 /** A partitioned node's keys as parts of a whole, each counted; a few failed keys of thousands still show. */
-export function PartitionBar({ partitions }: { partitions: PartitionState }) {
+export function PartitionBar({ partitions, waiting = false }: { partitions: PartitionState; waiting?: boolean }) {
   const parts = keyBreakdown(partitions)
   const { cached, failed, stale, total } = parts
   const widths = barSegments(parts)
@@ -27,7 +27,7 @@ export function PartitionBar({ partitions }: { partitions: PartitionState }) {
       <KeyValue label="partitions">
         {cached.toLocaleString()} of {total.toLocaleString()} cached
         {failed > 0 && <> · <span className="barca-cell-failed">{failed.toLocaleString()} failed</span></>}
-        {stale > 0 && ` · ${stale.toLocaleString()} stale`}
+        {stale > 0 && ` · ${stale.toLocaleString()} ${waiting ? 'blocked' : 'stale'}`}
       </KeyValue>
       <div className="barca-keys-bar" role="img" aria-label={`${cached} cached, ${failed} failed, ${stale} stale, of ${total} keys`}>
         {cached > 0 && <span className="is-cached" style={{ width: `${widths.cached}%` }} />}

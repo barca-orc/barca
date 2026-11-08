@@ -372,3 +372,11 @@ describe('one line a row', () => {
     expect(tableLines(rows, false, new Set()).map((l) => l.kind)).toEqual(['row', 'row', 'row'])
   })
 })
+
+describe('blockedKeys', () => {
+  it('reads how many keys wait on which input from the state detail', async () => {
+    const { blockedKeys } = await import('./assetTable')
+    expect(blockedKeys("83 of 83 missing keys wait on 'account_scores': the same keys of it failed")).toEqual({ count: 83, upstream: 'account_scores' })
+    expect(blockedKeys('Code or upstream outputs changed')).toBeNull()
+  })
+})
