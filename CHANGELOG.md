@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.41.0 (2026-11-08)
+
 ### Breaking
 
 - Web UI: a node's state reads `fresh` where it read `cached`, and a node whose last attempt failed is `failing` everywhere, never also `never run` or `cached`; the state filters follow (a `state=never_run` deep link no longer lists failing nodes, which have their own filter). The CLI and JSON keep the `CacheState` values.
