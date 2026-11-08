@@ -68,10 +68,10 @@ describe('keyItems', () => {
     ])
     expect(items.every((i) => i.section === 'Keys')).toBe(true)
   })
-  it('opens the node panel with the key searched', () => {
-    expect(items[0]?.target).toEqual({ type: 'go', to: '/assets?pipeline=planning.py&node=planning.py%3Ademand_forecast&key=ra-02541' })
+  it('opens the key explorer at the key', () => {
+    expect(items[0]?.target).toEqual({ type: 'go', to: '/keys?node=planning.py%3Ademand_forecast&key=account%3Dra-02541' })
   })
-  it('keeps a key of several dimensions whole in the search', () => {
+  it('keeps a key of several dimensions whole', () => {
     const [item] = keyItems([{ node: 'a.py:n', keys: [row('region=eu,day=2026-10-30', 'cached')] }], now)
     expect(item?.target).toMatchObject({ to: expect.stringContaining('key=region%3Deu%2Cday%3D2026-10-30') })
   })

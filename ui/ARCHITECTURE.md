@@ -81,6 +81,8 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/palette.ts` | `paletteIndex`, `searchPalette`, `updatePalette` — the command palette (⌘K) | `palette.test.ts` |
 | `lib/runTarget.ts` | `runTarget`, `runButton` — what a page toolbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
+| `lib/partitionGrid.ts` | `gridOf`, `filterCells`, `layoutBlocks`, `gridGeometry`, `cellAt`, `rangeSelection` — every key of a partitioned node (`GET /assets/{id}/partitions/grid`) decoded, filtered, laid out in blocks and hit-tested, and a range turned into a run's `partition` | `partitionGrid.test.ts` |
+| `lib/keysPage.ts` | `keysParams`, `keysSearch`, `keysHref` — the key explorer's URL (node, open key, filters) | `keysPage.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.
@@ -112,6 +114,7 @@ folds its flags into the union at the edge.
 | Tokens | `lib/tokensPage.ts` | `pages/TokensView.tsx` | `pages/TokensPage.tsx` |
 | Runs | `lib/runsPage.ts` | `pages/RunsView.tsx` | `pages/RunsPage.tsx` |
 | Failures view | `lib/failuresView.ts` | `pages/FailuresView.tsx` | `pages/GroupedPipelinePage.tsx` |
+| Key explorer | `lib/keysPage.ts` + `lib/partitionGrid.ts` (pure derivation; the URL is the model) | `components/partitions/*` | `pages/KeysPage.tsx` |
 | Grouped pipeline | `lib/groupedPage.ts` (pure derivation; the URL is the model) | `pages/GroupedView.tsx` | `pages/GroupedPipelinePage.tsx` |
 
 Any screen of such a page is a value: construct a model and a `Remote`, render the view. The kit

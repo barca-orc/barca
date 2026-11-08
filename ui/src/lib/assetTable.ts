@@ -30,6 +30,8 @@ export interface AssetRow {
   reason: CacheStatus['reason']
   /** The latest attempt failed (or some keys did): shown beside the state, never in its place. */
   lastFailed: boolean
+  /** A partitioned node's keys: how many of how many last failed. Null for a node without keys. */
+  keys: { failed: number; total: number } | null
   /** The failed node upstream that keeps it from running (`blocked`); null when none. */
   blockedBy: string | null
   /** Pinned (`barca pin`): what it is pinned to, in a line; null when not pinned. Reads `pinned`. */
@@ -98,6 +100,16 @@ function compareAttention(a: Pick<AssetRow, 'state' | 'lastFailed' | 'blockedBy'
   return Number(b.lastFailed) - Number(a.lastFailed) || Number(!b.lastFailed && b.pinned !== null) - Number(!a.lastFailed && a.pinned !== null) || Number(!!b.blockedBy) - Number(!!a.blockedBy) || cacheStateRank(a.state) - cacheStateRank(b.state) || a.name.localeCompare(b.name)
 }
 
+/**
+ * A partitioned node the server reports blocked: how many of its keys wait, and on which input's
+ * failed keys, read from its state detail ("83 of 83 missing keys wait on 'scores': ..."). Null
+ * for any other detail.
+ */
+export function blockedKeys(detail: string): { count: number; upstream: string } | null {
+  const m = /^([\d,]+) of [\d,]+ missing keys wait on '([^']+)'/.exec(detail)
+  return m ? { count: Number(m[1]!.replace(/,/g, '')), upstream: m[2]! } : null
+}
+
 /** One row per node, what needs attention first. */
 export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMap<string, string> = new Map(), pins: ReadonlyMap<string, string> = new Map()): AssetRow[] {
   return nodes
@@ -112,6 +124,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMa
         state: n.cache.state,
         reason: n.cache.reason,
         lastFailed: lastAttemptFailed(n),
+        keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total } : null,
         blockedBy: blocked.get(n.id) ?? null,
         pinned: pins.get(n.id) ?? null,
         stateHint: n.cache.detail,

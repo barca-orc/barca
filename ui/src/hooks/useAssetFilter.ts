@@ -74,7 +74,7 @@ export function useAssetFilter(kind: NodeKind, sort?: Sort) {
   const visible = sort ? sortRows(filtered, sort) : filtered
   // What fails, and how much of the graph waits on it: the failing segment's tooltip.
   // The blocked count is the rows that read `blocked`, so the tooltip and the chip agree.
-  const blocked = rows.filter((r) => !r.lastFailed && r.pinned === null && r.blockedBy).length
+  const blocked = rows.filter((r) => !r.lastFailed && r.pinned === null && (r.blockedBy || r.state === 'blocked')).length
   return { kind, states, data, graph, pipeline, paused, onlyPaused, pins, blockers, rows, filters, onDefault, setFilters, counts, visible, blocked, now }
 }
 

@@ -1,3 +1,4 @@
+import { keysHref } from '@/lib/keysPage'
 import { useEffect, useMemo } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
@@ -219,7 +220,14 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               {blockedBy.slice(0, 8).map((id) => (
                 <li key={id}>
                   <button type="button" className="barca-link" onClick={() => onSelect(id)}>{shortName(id)}</button>
-                  <span>{headline(byId.get(id)?.last_materialization?.error)}</span>
+                  <span>{(() => {
+                    const up = byId.get(id)
+                    // A partitioned input fails key by key: say how many, not one key's error.
+                    const failedKeys = up?.partitions?.failed ?? 0
+                    return failedKeys > 0 && up?.partitions
+                      ? `${failedKeys.toLocaleString()} of ${up.partitions.total.toLocaleString()} keys failed`
+                      : headline(up?.last_materialization?.error)
+                  })()}</span>
                 </li>
               ))}
             </ul>
@@ -229,7 +237,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {node.cache.changed && node.cache.changed.length > 0 && (
           <KeyValue label="changed">{node.cache.changed.join(', ')}</KeyValue>
         )}
-        {node.partitions && <PartitionBar partitions={node.partitions} />}
+        {node.partitions && <PartitionBar partitions={node.partitions} waiting={node.cache.state === 'blocked'} />}
         {definition && definition.line > 0 && source !== null && (
           <KeyValue label="defined at">
             <span className="barca-source-path">
@@ -318,7 +326,9 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {stats && stats.total_runs === 0 && <p className="barca-note">No runs recorded.</p>}
         {stats && failuresOnly && (
           <p className="barca-note">
-            No successful run yet: {stats.total_runs === 1 ? 'its only attempt' : `all ${stats.total_runs.toLocaleString()} attempts`} failed, so there are no durations to show.
+            {node.partitioned
+              ? <>No run has computed every key yet ({stats.total_runs === 1 ? 'its only run' : `all ${stats.total_runs.toLocaleString()} runs`} had keys fail), so there are no durations to show.</>
+              : <>No successful run yet: {stats.total_runs === 1 ? 'its only attempt' : `all ${stats.total_runs.toLocaleString()} attempts`} failed, so there are no durations to show.</>}
           </p>
         )}
         {stats && failuresOnly && <RunList runs={stats.recent_runs} nowMs={nowMs} said={summarized ? last?.error : null} />}
@@ -386,7 +396,14 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         </Section>
       )}
 
-      <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />
+      {node.partitioned ? (
+        // Each key has its versions; an asset with keys is not pinned whole.
+        <Section title="Versions">
+          <p className="barca-note">Each key keeps its own results. Open a key in the <Link to={keysHref(node.id)}>key explorer</Link> to see its attempts and data; an asset with partitions cannot be pinned.</p>
+        </Section>
+      ) : (
+        <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />
+      )}
 
       <Section title="Inputs & output" action={
         <Button variant="ghost" size="sm" disabled={schema.isFetching} title="Inspect the latest materialized data again. Input schemas describe their own latest outputs."

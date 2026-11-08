@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router'
 import { KEYS_OPEN_MAX, NodeKeys, PartitionBar } from './NodeKeys'
 import { keyParam } from '@/lib/nodeDetail'
 import type { PartitionKeyRow, PartitionKeys, PartitionState } from '@/lib/types'
@@ -63,9 +64,9 @@ describe('NodeKeys with a pre-filled key', () => {
     client.setQueryData(['partition-keys', ID, { status: 'failed', q: 'ra-00001', limit: 100 }], page([]))
     client.setQueryData(['partition-keys', ID, { q: 'ra-00001', limit: 100 }], page([row('account=ra-00001', 'success')]))
     const html = renderToStaticMarkup(
-      <QueryClientProvider client={client}>
+      <QueryClientProvider client={client}><MemoryRouter>
         <NodeKeys id={ID} partitions={partitions({})} nowMs={Date.parse('2026-10-31T15:30:00Z')} />
-      </QueryClientProvider>,
+      </MemoryRouter></QueryClientProvider>,
     )
     expect(html).toContain('value="ra-00001"')
     expect(text(html)).toContain('No failed key matches; showing every key.')
@@ -79,9 +80,9 @@ describe('NodeKeys with a pre-filled key', () => {
     const client = new QueryClient()
     client.setQueryData(['partition-keys', ID, { status: 'failed', q: 'ra-02541', limit: 100 }], page([row('account=ra-02541', 'failed')]))
     const html = renderToStaticMarkup(
-      <QueryClientProvider client={client}>
+      <QueryClientProvider client={client}><MemoryRouter>
         <NodeKeys id={ID} partitions={partitions({})} nowMs={Date.parse('2026-10-31T15:30:00Z')} />
-      </QueryClientProvider>,
+      </MemoryRouter></QueryClientProvider>,
     )
     expect(text(html)).not.toContain('showing every key')
     expect(text(html)).toContain('account=ra-02541')

@@ -418,5 +418,29 @@ list the first twenty keys in lexical order, independently of worker chunking.
 
 Failed batched calls automatically retry failed partitions in groups at most half the previous size, down to one partition, even without configured retries. Successful partitions are retained. Single-partition failures use the configured retry budget, counting earlier attempts. This also applies when a worker exits unexpectedly.
 
+## Exploring keys in the web UI
+
+`barca serve`'s web UI has a key explorer for a partitioned asset: the asset panel's
+**Explore all N keys** opens it (`#/keys?node=<asset>`), and each of the panel's grouped errors
+opens it filtered to that error. It answers from `GET /assets/{name}/partitions/grid`, one request
+for every key, and draws them as a grid:
+
+- **One cell per key, coloured by state**: fresh, stale, never run, failed, or blocked (the same key
+  of an input failed). With two dimensions, one block per value of the shorter one, each running
+  through the longer one in order, every row starting with its first value: a week of failures
+  in one region is a red streak in that region's block.
+- **Filters** by state, by a dimension's value, by error group and by a substring of the key,
+  over a table of the keys they keep (one line per key, a column per dimension; only the lines in
+  view are rendered, so 10,000 keys scroll as fast as ten). The URL holds them, so a filtered view
+  is a link.
+- **One key**, clicked in the grid or the table (`GET /assets/{name}/partitions/key`): its state,
+  error and attempts, the schema and first rows of its result and of the same key of each input,
+  and the same key in every asset of its chain (the partitioned assets that share its keys),
+  each a click away.
+- **Running keys.** Run computes the keys that are not fresh, of the dimension values selected or
+  of the whole asset; Shift-click a second key in the same row to select the keys between, and Run
+  computes those, as `--partition` with each value listed. Keys are known once their source ran:
+  for a `partitions_from(<asset>)` asset that has not, the explorer says so.
+
 See also: [`barca docs batched-partitions`](/reference/batched-partitions/), [`barca docs sinks`](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
 directory per key), `barca docs examples/partitions`.

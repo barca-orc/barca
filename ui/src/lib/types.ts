@@ -7,6 +7,13 @@
    ============================================================ */
 
 export type { NodeGroup } from './generated/NodeGroup'
+export type { PartitionGrid } from './generated/PartitionGrid'
+export type { GridDimension } from './generated/GridDimension'
+export type { GridCounts } from './generated/GridCounts'
+export type { PartitionKeyDetail } from './generated/PartitionKeyDetail'
+export type { KeyArtifact } from './generated/KeyArtifact'
+export type { KeyAttempt } from './generated/KeyAttempt'
+export type { ChainKeyState } from './generated/ChainKeyState'
 
 // ── Generated from Rust (single source of truth) ──────────────────────────────
 export type { NodeKind } from './generated/NodeKind'

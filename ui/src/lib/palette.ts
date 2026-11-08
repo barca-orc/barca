@@ -4,6 +4,7 @@
  * `layouts/CommandPalette.tsx` runs it.
  */
 
+import { keysHref } from './keysPage'
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
 import { pipelineName, sourceFile } from './pipeline'
@@ -74,9 +75,6 @@ export interface KeyHits {
   keys: readonly PartitionKeyRow[]
 }
 
-/** `account=ra-02541` → `ra-02541`, what the node panel's key search is pre-filled with; a key of several dimensions stays whole. */
-const keyValue = (key: string) => /^[^=,]+=([^,]*)$/.exec(key)?.[1] ?? key
-
 /** One result per key found, failed keys first so the problem is on top, then in node and key order. */
 export function keyItems(hits: readonly KeyHits[], nowMs: number): PaletteItem[] {
   const items = hits.flatMap(({ node, keys }) =>
@@ -85,7 +83,8 @@ export function keyItems(hits: readonly KeyHits[], nowMs: number): PaletteItem[]
       section: 'Keys',
       label: `${shortName(node)} · ${k.key}`,
       detail: `${k.status} ${formatAgo(k.created_at, nowMs)}`,
-      target: { type: 'go', to: link('/assets', { pipeline: sourceFile(node), node, key: keyValue(k.key) }) },
+      // The key explorer, at the key: its data, its error and the same key along its chain.
+      target: { type: 'go', to: keysHref(node, { key: k.key }) },
     })),
   )
   const failed = (item: PaletteItem) => (item.detail.startsWith('failed') ? 0 : 1)

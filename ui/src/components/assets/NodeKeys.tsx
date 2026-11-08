@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import { Copy, Play } from 'lucide-react'
+import { ArrowRight, Copy, Play } from 'lucide-react'
 import { Age, Button, Chip, ChipGroup, ErrorLine, IconButton, KeyValue, SearchInput, Skeleton } from '@/components'
 import { usePartitionKeys } from '@/hooks/usePartitionKeys'
 import { formatSeconds, keyBreakdown } from '@/lib/assetTable'
 import { barSegments, formatBytes, keyParam } from '@/lib/nodeDetail'
+import { keysHref } from '@/lib/keysPage'
 import type { PartitionKeys, PartitionState } from '@/lib/types'
 
 const PAGE = 100
@@ -17,7 +18,7 @@ export function CopyButton({ label, text }: { label: string; text: string }) {
 }
 
 /** A partitioned node's keys as parts of a whole, each counted; a few failed keys of thousands still show. */
-export function PartitionBar({ partitions }: { partitions: PartitionState }) {
+export function PartitionBar({ partitions, waiting = false }: { partitions: PartitionState; waiting?: boolean }) {
   const parts = keyBreakdown(partitions)
   const { cached, failed, stale, total } = parts
   const widths = barSegments(parts)
@@ -26,7 +27,7 @@ export function PartitionBar({ partitions }: { partitions: PartitionState }) {
       <KeyValue label="partitions">
         {cached.toLocaleString()} of {total.toLocaleString()} cached
         {failed > 0 && <> · <span className="barca-cell-failed">{failed.toLocaleString()} failed</span></>}
-        {stale > 0 && ` · ${stale.toLocaleString()} stale`}
+        {stale > 0 && ` · ${stale.toLocaleString()} ${waiting ? 'blocked' : 'stale'}`}
       </KeyValue>
       <div className="barca-keys-bar" role="img" aria-label={`${cached} cached, ${failed} failed, ${stale} stale, of ${total} keys`}>
         {cached > 0 && <span className="is-cached" style={{ width: `${widths.cached}%` }} />}
@@ -72,12 +73,18 @@ export function NodeKeys({ id, partitions, nowMs, onRunKey, runDisabled = false,
   const toggleFailed = () => { setOnlyFailed(!onlyFailed); setLimit(PAGE) }
   return (
     <div className="barca-node-keys">
+      <Link className="barca-keys-explore" to={keysHref(id)}>
+        Explore {total === 1 ? 'the key' : `all ${total.toLocaleString()} keys`} <ArrowRight size={12} aria-hidden />
+      </Link>
       {(failed > 0 || stale > 0) && <p className="barca-note">Run computes only these {(failed + stale).toLocaleString()} keys; the others stay cached.</p>}
       {data && data.errors.length > 0 && failed > 0 && (
         <ul className="barca-keys-errors" aria-label="Errors of the failed keys">
-          {data.errors.map((e) => (
+          {data.errors.map((e, i) => (
             <li key={e.error}>
-              <b>{e.keys.toLocaleString()}</b> <ErrorLine error={e.error} /> <CopyButton label="Copy error" text={e.error} />
+              <Link className="barca-keys-error-link" to={keysHref(id, { filter: { error: i } })} title="Open these keys in the key explorer">
+                <b>{e.keys.toLocaleString()}</b> <ErrorLine error={e.error} />
+              </Link>
+              <CopyButton label="Copy error" text={e.error} />
             </li>
           ))}
         </ul>

@@ -22,11 +22,13 @@ import { formatShort } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { plural } from '@/lib/plural'
 import { shortName } from '@/lib/graph'
 import { headline } from '@/lib/health'
 import { isLive, liveGraphState } from '@/lib/graphState'
 import { pipelineName } from '@/lib/pipeline'
 import {
+  blockedKeys,
   DEFAULT_SORT,
   assetColumns,
   fileDisplay,
@@ -269,10 +271,16 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                       {/* Every row is of the page's kind (Assets, Tasks, Sensors): no tag says so. */}
                       <PausedTag id={r.id} paused={paused} />
                       {/* Why it is not fine, in a word or a line: what failed, what blocks it, what it is pinned to. */}
-                      {r.lastFailed ? (
+                      {r.lastFailed && r.keys && r.keys.failed > 0 ? (
+                        <span className="barca-cell-why">{r.keys.failed.toLocaleString()} of {plural(r.keys.total, 'key')} failed</span>
+                      ) : r.lastFailed ? (
                         r.last?.error && <span className="barca-cell-why" title={r.last.error}>{headline(r.last.error)}</span>
                       ) : r.pinned !== null ? (
                         <span className="barca-cell-why" title={r.pinned}>{r.pinned}</span>
+                      ) : !r.blockedBy && r.state === 'blocked' && r.keys && blockedKeys(r.stateHint) ? (
+                        <span className="barca-cell-why">
+                          {blockedKeys(r.stateHint)!.count.toLocaleString()} of {plural(r.keys.total, 'key')} wait on {blockedKeys(r.stateHint)!.upstream}
+                        </span>
                       ) : r.blockedBy && (
                         <span className="barca-cell-why">
                           waits on{' '}
