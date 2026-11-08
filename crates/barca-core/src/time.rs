@@ -61,6 +61,13 @@ pub fn sql_datetime_rfc3339(at: &str) -> String {
         .unwrap_or_else(|_| at.to_string())
 }
 
+/// A time the metadata DB recorded (`YYYY-MM-DD HH:MM:SS`, UTC) as unix seconds.
+pub fn parse_db_utc(at: &str) -> Option<i64> {
+    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|t| t.and_utc().timestamp())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

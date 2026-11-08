@@ -5,6 +5,7 @@
  */
 export type PartitionErrorGroup = {
 /**
- * The error's first line, with the key's own values replaced by `<key>`.
+ * The error's first line, with each of the key's own values replaced by its dimension's
+ * name in angle brackets (`<region>`).
  */
 error: string, keys: number, };

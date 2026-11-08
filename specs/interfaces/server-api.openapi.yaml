@@ -1221,6 +1221,186 @@ paths:
           description: Registered path with unsupported method; Allow header identifies supported methods
           headers: *id016_keys
       parameters: *id017_keys
+  /assets/{name}/partitions/grid:
+    get:
+      summary: Every key of a partitioned node, with its state and latest attempt
+      operationId: get_assets_name_partitions_grid
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartitionGrid'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '400':
+          description: Invalid target, or a node without partitions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown node or key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Execution/inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+    head:
+      summary: Every key of a partitioned node, with its state and latest attempt (headers only)
+      operationId: head_assets_name_partitions_grid
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '400':
+          description: Invalid target, or a node without partitions
+        '404':
+          description: Unknown node or key
+        '409':
+          description: Ambiguous target
+        '500':
+          description: Execution/inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+  /assets/{name}/partitions/key:
+    get:
+      summary: One key of a partitioned node across its chain, with what it read and wrote
+      operationId: get_assets_name_partitions_key
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartitionKeyDetail'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '400':
+          description: Invalid target, or a node without partitions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown node or key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Execution/inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+      - name: key
+        in: query
+        required: true
+        description: The key, its dimensions in name order (day=2026-01-01,region=apac).
+        schema:
+          type: string
+      - name: sample
+        in: query
+        required: false
+        description: First rows read from each artifact. Default 5, at most 50.
+        schema:
+          type: integer
+          minimum: 0
+    head:
+      summary: One key of a partitioned node across its chain, with what it read and wrote (headers only)
+      operationId: head_assets_name_partitions_key
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '400':
+          description: Invalid target, or a node without partitions
+        '404':
+          description: Unknown node or key
+        '409':
+          description: Ambiguous target
+        '500':
+          description: Execution/inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+      - name: key
+        in: query
+        required: true
+        description: The key, its dimensions in name order (day=2026-01-01,region=apac).
+        schema:
+          type: string
+      - name: sample
+        in: query
+        required: false
+        description: First rows read from each artifact. Default 5, at most 50.
+        schema:
+          type: integer
+          minimum: 0
   /assets/{name}/versions:
     get:
       summary: An asset's recent successful materializations and its pin
@@ -4688,8 +4868,8 @@ components:
         errors:
           type: array
           maxItems: 20
-          description: The failed keys' first error lines with the key's values replaced by <key>,
-            most common first.
+          description: The failed keys' first error lines, each of the key's values replaced by its
+            dimension's name in angle brackets (<region>), most common first.
           items:
             type: object
             additionalProperties: false
@@ -4699,6 +4879,174 @@ components:
               keys:
                 type: integer
                 minimum: 1
+    PartitionGrid:
+      type: object
+      additionalProperties: false
+      description: Every key of a partitioned node. Keys are the cells of the dimensions' product
+        in row-major order, the last dimension varying fastest; each per-key array has one entry
+        per cell.
+      required: [id, chain, known, dimensions, states, counts, attempted_base, attempted_at, elapsed_ms, size_bytes, run, error, errors, runs]
+      properties:
+        id: *id003
+        chain:
+          type: array
+          description: The partitioned nodes sharing this node's keys (the same dimensions, linked
+            through their inputs), upstream first, this node among them.
+          items: *id003
+        known:
+          type: boolean
+          description: False while the keys are not known (a partitions_from source that has not run).
+        dimensions:
+          type: array
+          description: In key-suffix order (by name), each with its values in order.
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, values]
+            properties:
+              name: *id003
+              values:
+                type: array
+                items: *id003
+        states:
+          type: string
+          pattern: '^[csnfb-]*$'
+          description: One character per cell. c fresh, s stale, n never run, f failed (its latest
+            attempt failed), b blocked (the same key of an input failed or is blocked), - not a key.
+        counts:
+          type: object
+          additionalProperties: false
+          required: [fresh, stale, never_run, failed, blocked]
+          properties:
+            fresh: {type: integer, minimum: 0}
+            stale: {type: integer, minimum: 0}
+            never_run: {type: integer, minimum: 0}
+            failed: {type: integer, minimum: 0}
+            blocked: {type: integer, minimum: 0}
+        attempted_base:
+          type: integer
+          description: Unix seconds that attempted_at counts from.
+        attempted_at:
+          type: array
+          description: When each cell's latest attempt was recorded, in seconds after attempted_base.
+          items:
+            type: [integer, "null"]
+        elapsed_ms:
+          type: array
+          description: How long each cell's latest attempt took, in milliseconds.
+          items:
+            type: [integer, "null"]
+            minimum: 0
+        size_bytes:
+          type: array
+          description: The size of each cell's latest artifact.
+          items:
+            type: [integer, "null"]
+        run:
+          type: array
+          description: Each cell's latest attempt's run, an index into runs.
+          items:
+            type: [integer, "null"]
+            minimum: 0
+        error:
+          type: object
+          description: Each failed cell's error, an index into errors, by cell index.
+          additionalProperties:
+            type: integer
+            minimum: 0
+        errors:
+          type: array
+          description: The failed keys' errors, most common first. The first line, each of the
+            key's values replaced by its dimension's name in angle brackets (<region>).
+          items:
+            type: object
+            additionalProperties: false
+            required: [error, keys]
+            properties:
+              error: *id003
+              keys:
+                type: integer
+                minimum: 1
+        runs:
+          type: array
+          items: *id003
+    KeyArtifact:
+      type: object
+      additionalProperties: false
+      required: [id, step, artifact_path, format, size_bytes, shape]
+      description: A node's latest successful result for one key (or, for an input that is not
+        partitioned, its latest result), and that result's shape.
+      properties:
+        id: *id003
+        step:
+          type: string
+          description: node[key] for a partitioned node, the node for one that is not.
+        artifact_path:
+          type: [string, "null"]
+        format:
+          type: [string, "null"]
+        size_bytes:
+          type: [integer, "null"]
+        shape:
+          type: [object, "null"]
+          description: Its type, columns or fields and first rows, as barca status --sample reads
+            them; null without a successful result.
+    PartitionKeyDetail:
+      type: object
+      additionalProperties: false
+      required: [id, key, state, chain, attempts, output, inputs]
+      properties:
+        id: *id003
+        key: *id003
+        state:
+          type: string
+          enum: [c, s, n, f, b]
+          description: As PartitionGrid.states.
+        chain:
+          type: array
+          description: The same key in each node of the chain, upstream first.
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, state]
+            properties:
+              id: *id003
+              state:
+                type: string
+                enum: [c, s, n, f, b, '-']
+        attempts:
+          type: array
+          maxItems: 20
+          description: The key's latest attempts, newest first.
+          items:
+            type: object
+            additionalProperties: false
+            required: [status, created_at, elapsed_seconds, error, run_id, artifact_path, format, size_bytes]
+            properties:
+              status: *id003
+              created_at: *id003
+              elapsed_seconds:
+                type: [number, "null"]
+              error:
+                type: [string, "null"]
+              run_id:
+                type: [string, "null"]
+              artifact_path:
+                type: [string, "null"]
+              format:
+                type: [string, "null"]
+              size_bytes:
+                type: [integer, "null"]
+        output:
+          oneOf:
+          - $ref: '#/components/schemas/KeyArtifact'
+          - type: 'null'
+        inputs:
+          type: array
+          description: The same key of each input that shares the node's dimensions, and the latest
+            result of each other input.
+          items:
+            $ref: '#/components/schemas/KeyArtifact'
     Materialization:
       type: object
       additionalProperties: false

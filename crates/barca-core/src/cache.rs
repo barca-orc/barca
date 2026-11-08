@@ -243,6 +243,9 @@ pub(crate) struct DecideState {
     // Monotonic: only this component can insert, and no key is removed during a run.
     run_hashes: HashMap<String, String>,
     expected_steps: BTreeMap<String, BTreeSet<String>>,
+    /// Keys a dry run predicts would run, per base id (display ids): every one, not the
+    /// report's preview, for a node's key grid (`GET /assets/{name}/partitions/grid`).
+    pub(crate) will_run: ExpandedMembership,
     complete_upstreams: HashSet<String>,
     validated_refresh: HashSet<String>,
     /// Refreshed display ids: one entry per actual key, or the base for a global asset.
@@ -344,8 +347,9 @@ impl DecideState {
         self.run_hashes.insert(id.to_owned(), hash);
         record_output(dag, self, id, content);
     }
-    pub(crate) fn into_membership(self) -> ExpandedMembership {
-        self.expected_steps
+    /// The membership and, per base id, the keys predicted to run ([`Self::will_run`]).
+    pub(crate) fn into_key_sets(self) -> (ExpandedMembership, ExpandedMembership) {
+        (self.expected_steps, self.will_run)
     }
 
     pub(crate) fn run_hashes(&self) -> &HashMap<String, String> {

@@ -259,6 +259,75 @@ pub async fn partitions(
     ))
 }
 
+/// `GET /assets/{name}/partitions/grid` — every key of a partitioned node: its state as the
+/// dry run decides it, across the node's chain, and its latest attempt, in columns.
+pub async fn partition_grid(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<std::sync::Arc<barca_core::partition_grid::PartitionGrid>>, ApiError> {
+    let dag = state.loaded_dag().await?;
+    let id = barca_core::targets::find_target_id(&dag, &name)
+        .map_err(|e| ApiError::run(e, context("partitions grid", &state)))?;
+    if dag
+        .get_node(&id)
+        .is_none_or(|n| n.extracted.partitions.is_empty())
+    {
+        return Err(ApiError::BadRequest(format!(
+            "'{name}' is not partitioned: it has no keys"
+        )));
+    }
+    let db = state.db_state();
+    if let Some(grid) = state.kept_grid(&dag, &db, &id) {
+        return Ok(Json(grid));
+    }
+    let snapshot = snapshot_db(&state).await?;
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = snapshot.path.clone();
+    let grid = std::sync::Arc::new(
+        barca_core::partition_grid::partition_grid(&cfg, &dag, &id)
+            .await
+            .map_err(|e| ApiError::run(e, context("partitions grid", &state)))?,
+    );
+    state.keep_grid(&dag, &db, grid.clone());
+    Ok(Json(grid))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PartitionKeyQuery {
+    /// The key: `day=2026-01-01,region=apac`.
+    pub key: String,
+    /// First rows of each artifact read (default 5, at most 50).
+    pub sample: Option<usize>,
+}
+
+/// `GET /assets/{name}/partitions/key?key=...` — one key: its state in each node of the chain,
+/// its latest attempts, and the shape of its result and of what it read.
+pub async fn partition_key(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<PartitionKeyQuery>,
+) -> Result<Json<barca_core::partition_grid::PartitionKeyDetail>, ApiError> {
+    let dag = state.loaded_dag().await?;
+    let id = barca_core::targets::find_target_id(&dag, &name)
+        .map_err(|e| ApiError::run(e, context("partition key", &state)))?;
+    let snapshot = snapshot_db(&state).await?;
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = snapshot.path.clone();
+    let detail = barca_core::partition_grid::partition_key_detail(
+        &cfg,
+        &dag,
+        &state.config.python,
+        &id,
+        &query.key,
+        query.sample.unwrap_or(5).min(50),
+    )
+    .await
+    .map_err(|e| ApiError::run(e, context("partition key", &state)))?;
+    detail
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("'{name}' has no key '{}'", query.key)))
+}
+
 /// `GET /stats/{name}` — `barca stats --json`.
 pub async fn stats(
     State(state): State<AppState>,
