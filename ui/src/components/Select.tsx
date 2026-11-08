@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { ChevronDown } from 'lucide-react'
 
 export interface SelectOption<V extends string> {
   value: V
@@ -14,7 +15,7 @@ export interface SelectProps<V extends string> {
   icon?: ReactNode
 }
 
-/** barca · Select — a native select with its label beside it, or an icon in its box. */
+/** barca · Select — a native select (drawn like the other controls, with the same chevron) with its label beside it, or an icon in its box. */
 export function Select<V extends string>({ label, value, options, onChange, icon }: SelectProps<V>) {
   return (
     <label className="barca-select" title={icon ? label : undefined}>
@@ -27,6 +28,7 @@ export function Select<V extends string>({ label, value, options, onChange, icon
           </option>
         ))}
       </select>
+      <ChevronDown size={12} className="barca-select-chevron" aria-hidden />
     </label>
   )
 }
