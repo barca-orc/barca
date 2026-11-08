@@ -118,6 +118,9 @@ client prints it as it would print the local command's.
 | `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause. |
 | `POST` | `/schedule/{id}/pause` | Hold one schedule back, optionally `?until=<RFC 3339>`. |
 | `POST` | `/schedule/{id}/resume` | Let a paused schedule fire again. |
+| `GET`  | `/pauses` | The paused assets (`barca pause`): `{total, paused: [{id, paused_at, via}]}`. Scheduled ticks skip them (step reason `paused`) until resumed. Experimental. |
+| `POST` | `/pauses` | Pause `{"target", "downstream"}`: a node, a node and everything below it, or a `file.py`. Answers `added` and every pause; `403` read-only. A `POST /runs` naming a paused node is `400` unless it sends `"allow_paused": true`. |
+| `POST` | `/pauses/resume` | Resume `{"target", "downstream"}` or `{"all": true}`. Answers `removed` and every pause; `403` read-only. |
 | `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at}`; `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
 | `POST` | `/queue/pause` | Hold every queued run back until resumed; runs in flight go on. Kept across restarts. Answers the queue; `403` read-only. |
 | `POST` | `/queue/resume` | Let queued runs start again, in order. Answers the queue; `403` read-only. |

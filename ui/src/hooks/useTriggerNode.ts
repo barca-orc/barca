@@ -27,10 +27,10 @@ export function useTriggerNode(
   const { mutate: run, reset: resetRun } = runTrigger
 
   /** Start `node`, whichever is selected: a failures list retries any of its rows. */
-  const fireFor = useCallback((node: Target) => {
+  const fireFor = useCallback((node: Target, allowPaused = false) => {
     const mutate = node.kind === 'task' ? run : get
     setAsked(node.id)
-    mutate(node.id, {
+    mutate(allowPaused ? { target: node.id, allowPaused } : node.id, {
       onSuccess: (data) => {
         setStarted({ runId: data.run_id, target: node.id })
         onTrigger(data.run_id, node.id)
@@ -38,8 +38,9 @@ export function useTriggerNode(
     })
   }, [get, run, onTrigger])
 
-  const fire = useCallback(() => {
-    if (asset) fireFor(asset)
+  // Strictly `true`: a button's onClick passes its event here.
+  const fire = useCallback((allowPaused?: unknown) => {
+    if (asset) fireFor(asset, allowPaused === true)
   }, [asset, fireFor])
 
   /** Follow a run started elsewhere (the topbar's pipeline run) in the same line. */

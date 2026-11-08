@@ -50,6 +50,9 @@ Options:
       --env <ENV>
           Use a separate cache and history for this environment
 
+      --allow-paused
+          Run a target even though it is paused (experimental)
+
       --server [<URL>]
           Use a server (URL or configured); get/run execute its deployed code
 
@@ -81,6 +84,7 @@ Examples:
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
   barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
+  barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 More: barca docs tasks, barca docs cache, barca docs agents

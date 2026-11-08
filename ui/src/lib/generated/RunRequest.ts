@@ -49,4 +49,9 @@ partition?: string,
  * `--batch` of `get` or `run` (RFC-0013), each as the flag takes it: `"all"`, `"none"`,
  * `"20"`, or `"scored=all"` for one node. Experimental.
  */
-batch?: Array<string>, };
+batch?: Array<string>,
+/**
+ * `--allow-paused`: run a target that is paused (`barca pause`). Without it, a request
+ * naming a paused node is refused. Experimental.
+ */
+allow_paused?: boolean, };

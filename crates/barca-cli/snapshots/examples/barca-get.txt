@@ -55,6 +55,9 @@ Options:
       --env <ENV>
           Use a separate cache and history for this environment
 
+      --allow-paused
+          Run a target even though it is paused (experimental)
+
       --server [<URL>]
           Use a server (URL or configured); get/run execute its deployed code
 
@@ -113,6 +116,7 @@ Examples:
   barca get total --server                 # run it on the configured barca server; prints here as a local run
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
   barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
+  barca get total pipeline.py --allow-paused   # run it even though it is paused (barca docs incidents)
   barca get --examples                     # the complete example collection; runs nothing
 
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents

@@ -18,6 +18,7 @@ pub(crate) async fn run_cmd(
     ledger: Option<barca_core::ledger::Ledger>,
     partition: Option<barca_core::selection::PartitionSelection>,
     batch: barca_core::batch::BatchOverride,
+    allow_paused: bool,
 ) -> Result<(), barca_core::BarcaError> {
     let mut cfg = barca_core::config::resolve(env)?;
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
@@ -42,6 +43,9 @@ pub(crate) async fn run_cmd(
             &batch,
         )
         .await;
+    }
+    if !allow_paused {
+        barca_core::pauses::check_request(&cfg.db_path, &targets).await?;
     }
     let (events, log_task) = super::execute::user_logs(!matches!(mode, OutputMode::Json));
     if targets.len() > 1 {

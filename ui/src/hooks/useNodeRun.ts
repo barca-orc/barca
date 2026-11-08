@@ -11,7 +11,8 @@ import type { ListNode } from '@/lib/types'
 
 /** One action shared by the selected node's panel and the page's topbar. */
 export interface NodeRunAction {
-  fire: () => void
+  /** `allowPaused`: run a paused node, after the operator confirmed it (`--allow-paused`). */
+  fire: (allowPaused?: boolean) => void
   /** `barca get <node> --partition <key>`: one key of a partitioned node, across its cone. */
   fireKey: (key: string) => void
   /** The key whose run is being started, while the request is in flight. */

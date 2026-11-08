@@ -31,6 +31,7 @@ pub(crate) const BY_NODE_RUN: &str = by_node_run!();
 
 // The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
 // this directory (one file per table family); `persist/recording.rs` drives the recording ones.
+mod asset_pauses;
 mod cache_reader;
 pub(crate) mod cost_estimates;
 mod failure;
@@ -57,6 +58,8 @@ mod write_boundary_tests;
 
 // Every family's items keep their `db::X` path. The private `use`s are `pub(super)` helpers one
 // family calls in another; each family file starts with `use super::*`.
+pub(crate) use asset_pauses::CREATE as CREATE_ASSET_PAUSES;
+pub use asset_pauses::{AssetPause, get_asset_pauses, pause_assets, resume_assets};
 pub(crate) use cache_reader::CacheReader;
 pub(crate) use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;

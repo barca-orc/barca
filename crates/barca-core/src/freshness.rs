@@ -119,18 +119,20 @@ pub(crate) struct Walk<'a> {
 
 #[cfg(test)]
 pub(crate) fn walk<'a>(dag: &'a Dag, targets: &[&str], policy: &CachePolicy) -> Walk<'a> {
-    walk_with(dag, targets, policy, &HashSet::new(), true)
+    walk_with(dag, targets, policy, &HashSet::new(), true, &HashSet::new())
 }
 
 /// The walk of `targets`, stopping also at every node in `user` (pinned with `barca pin`), whatever the
 /// policy and even as a target: a pinned asset is never computed. `manual`: stop at `Manual`
-/// nodes too ([`RunRules::pin_manual`]).
+/// nodes too ([`RunRules::pin_manual`]). `paused`: under a tick, the paused nodes
+/// (`crate::pauses`); one that is not a target is a stop, read as it is like a `Manual` one.
 pub(crate) fn walk_with<'a>(
     dag: &'a Dag,
     targets: &[&str],
     policy: &CachePolicy,
     user: &HashSet<String>,
     manual: bool,
+    paused: &HashSet<String>,
 ) -> Walk<'a> {
     let mut visited: HashSet<&str> = HashSet::new();
     let mut stops: HashSet<&str> = HashSet::new();
@@ -145,7 +147,9 @@ pub(crate) fn walk_with<'a>(
     while let Some(id) = queue.pop_front() {
         let task_target =
             targets.contains(&id) && dag.get_node(id).is_some_and(|n| n.kind() == NodeKind::Task);
+        let held = !targets.contains(&id) && paused.contains(id);
         if user.contains(id)
+            || held
             || (manual && !task_target && pins_itself(dag, id) && !refreshed(policy, id))
         {
             stops.insert(id);
@@ -427,6 +431,39 @@ mod tests {
     }
 
     #[test]
+    fn a_paused_node_upstream_of_a_target_is_read_as_it_is() {
+        let d = dag(&[
+            node("raw", 'a', "always", &[]),
+            node("clean", 'a', "always", &["raw"]),
+            node("report", 'a', "always", &["clean"]),
+        ]);
+        let report = id(&d, "report");
+        let none = HashSet::new();
+        let paused: HashSet<String> = [id(&d, "clean")].into_iter().collect();
+        let w = walk_with(
+            &d,
+            &[&report],
+            &CachePolicy::CacheAware,
+            &none,
+            true,
+            &paused,
+        );
+        assert_eq!(w.stops, [id(&d, "clean")]);
+        assert!(!w.cone.contains(&id(&d, "raw").as_str()));
+        // A paused target is not a stop: the tick removes it before walking.
+        let clean = id(&d, "clean");
+        let w = walk_with(
+            &d,
+            &[&clean],
+            &CachePolicy::CacheAware,
+            &none,
+            true,
+            &paused,
+        );
+        assert!(w.stops.is_empty());
+    }
+
+    #[test]
     fn a_chain_of_always_nodes_follows_the_scheduled_node() {
         let d = dag(&[
             node("inbox", 's', "*/5 * * * *", &[]),
@@ -527,25 +564,32 @@ mod tests {
         let user: HashSet<String> = [raw.clone()].into();
         for policy in [CachePolicy::CacheAware, CachePolicy::RefreshAll] {
             // Without `pin_manual`, only the pin stops the walk.
-            let w = walk_with(&d, &[&scored], &policy, &user, false);
+            let w = walk_with(&d, &[&scored], &policy, &user, false, &HashSet::new());
             assert_eq!(names(&w.stops), ["raw"]);
             assert_eq!(w.cone.len(), 3);
             // A pinned target is read as it is too, even when refreshed.
-            let w = walk_with(&d, &[&raw], &policy, &user, true);
+            let w = walk_with(&d, &[&raw], &policy, &user, true, &HashSet::new());
             assert_eq!(names(&w.stops), ["raw"]);
         }
         let named = CachePolicy::RefreshSelective {
             names: vec!["raw".into()],
             cascade: true,
         };
-        let w = walk_with(&d, &[&raw], &named, &user, true);
+        let w = walk_with(&d, &[&raw], &named, &user, true, &HashSet::new());
         assert_eq!(
             names(&w.stops),
             ["raw"],
             "--refresh does not recompute a pinned asset"
         );
         // With `pin_manual`, the Manual node stops the walk before the pin is reached.
-        let w = walk_with(&d, &[&scored], &CachePolicy::CacheAware, &user, true);
+        let w = walk_with(
+            &d,
+            &[&scored],
+            &CachePolicy::CacheAware,
+            &user,
+            true,
+            &HashSet::new(),
+        );
         assert_eq!(names(&w.stops), ["model"]);
     }
 

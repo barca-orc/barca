@@ -32,6 +32,8 @@ Options:
           Select JSON fields as a comma-separated list; implies --json [possible values: id, kind, action, status, reason, detail, changed, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env, undeclared_env, weight, batch, batch_execution]
       --env <ENV>
           Use a separate cache and history for this environment
+      --allow-paused
+          Run a target even though it is paused (experimental)
       --server [<URL>]
           Use a server (URL or configured); get/run execute its deployed code
       --local

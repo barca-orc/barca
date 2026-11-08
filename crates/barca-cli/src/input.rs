@@ -200,6 +200,8 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
         | Cli::Queue { format, .. }
         | Cli::Pin { format, .. }
         | Cli::Unpin { format, .. }
+        | Cli::Pause { format, .. }
+        | Cli::Resume { format, .. }
         | Cli::Doctor { format, .. }
         | Cli::Gc { format, .. } => is_json(*format),
         Cli::State { command } => match command {
@@ -228,6 +230,8 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::Status { args, .. } => ("status", paths(&split_target_files(args.clone()).1)),
         Cli::History { .. } => ("history", Vec::new()),
         Cli::Queue { .. } => ("queue", Vec::new()),
+        Cli::Pause { .. } => ("pause", Vec::new()),
+        Cli::Resume { .. } => ("resume", Vec::new()),
         Cli::Gc { .. } => ("gc", Vec::new()),
         Cli::Logs { .. } => ("logs", Vec::new()),
         Cli::State { .. } => ("state", Vec::new()),
@@ -492,6 +496,8 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         | Cli::Gc { .. }
         | Cli::Logs { .. }
         | Cli::Queue { .. }
+        | Cli::Pause { .. }
+        | Cli::Resume { .. }
         | Cli::State { .. }
         | Cli::Docs { .. }
         | Cli::Version

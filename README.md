@@ -194,6 +194,8 @@ runnable example collection, and `barca docs <topic>` for detailed behavior.
 | `barca unpin <TARGET> [<FILES>...]` | Remove an asset's pin; the next run decides it as before (experimental) |
 | `barca serve [<FILES>...]` | Manage runs, schedules and results on a server (experimental) |
 | `barca queue [<ACTION>]` | Show a barca server's run queue, or pause or resume it (experimental) |
+| `barca pause [<TARGET>]` | Pause assets on a barca server: scheduled runs skip them until resumed (experimental) |
+| `barca resume [<TARGET>]` | Resume paused assets on a barca server (experimental) |
 | `barca list [<FILES>...]` | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status [<ARGS>...]` | Show every node's cache state, last materialization and artifact shape (read-only) |
 | `barca sql <QUERY> [<FILES>...]` | Query cached results with SQL (DuckDB) — each asset is a named view (experimental) |

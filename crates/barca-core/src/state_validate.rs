@@ -148,6 +148,7 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         &["run_id", "seq", "state", "spec", "queued_at"],
     ),
     ("server_state", &["key", "value"]),
+    ("asset_pauses", &["node_id", "paused_at", "via"]),
     (
         "asset_pins",
         &["node_id", "run_hash", "pinned_at", "pinned_by", "reason"],

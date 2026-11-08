@@ -151,6 +151,8 @@ Tools:
   unpin     Release a pinned asset
   sql       Query cached results with SQL
   queue     Inspect or control the server queue
+  pause     Hold assets back from scheduled runs (server)
+  resume    Let paused assets run on schedule again
   gc        Free cache space
   state     Manage metadata backups
   tokens    Bootstrap project token access
@@ -238,6 +240,7 @@ Examples:
   barca get total --server                 # run it on the configured barca server; prints here as a local run
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
   barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
+  barca get total pipeline.py --allow-paused   # run it even though it is paused (barca docs incidents)
   barca get --examples                     # the complete example collection; runs nothing
 
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents";
@@ -262,6 +265,7 @@ Examples:
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
   barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
+  barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 More: barca docs tasks, barca docs cache, barca docs agents";
@@ -408,6 +412,25 @@ Examples:
   barca queue                          # the server in BARCA_SERVER or [server] url
 
 More: barca docs scheduling";
+
+const PAUSE_HELP: &str = "\
+Examples:
+  barca pause clean --server               # scheduled runs skip clean until it is resumed
+  barca pause clean --downstream --server  # clean and everything below it
+  barca pause pipeline.py --server         # every node of the file
+  barca pause --server --json              # {total, paused: [{id, paused_at, via}]}
+  barca get clean --allow-paused --server  # run a paused node by hand anyway
+
+More: barca docs incidents";
+
+const RESUME_HELP: &str = "\
+Examples:
+  barca resume clean --server               # the next tick computes clean again
+  barca resume clean --downstream --server  # clean and everything below it
+  barca resume pipeline.py --server         # every node of the file
+  barca resume --all --server --json        # {removed, total, paused}
+
+More: barca docs incidents";
 
 const LIST_HELP: &str = "\
 Examples:
@@ -624,6 +647,11 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
+        /// Run a target that is paused (`barca pause`); without it, naming a paused node is a
+        /// usage error. Experimental
+        #[arg(long)]
+        #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
+        allow_paused: bool,
         #[command(flatten)]
         server: ServerFlags,
     },
@@ -687,6 +715,11 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
+        /// Run a target that is paused (`barca pause`); without it, naming a paused node is a
+        /// usage error. Experimental
+        #[arg(long)]
+        #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
+        allow_paused: bool,
         #[command(flatten)]
         server: ServerFlags,
     },
@@ -986,6 +1019,57 @@ pub(crate) enum Cli {
         /// again. Omit to show the queue
         #[arg(value_enum)]
         action: Option<QueueAction>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// The server's environment, checked against it (as for the other --server commands)
+        #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
+        env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
+    },
+    /// Pause assets on a barca server: scheduled runs skip them until resumed (experimental)
+    ///
+    /// TARGET is a node, named as for `barca get`, or a file (`pipeline.py`: every node of it).
+    /// A scheduled tick does not compute a paused node: a paused target is a skipped step with
+    /// reason `paused`, and a paused node upstream of a target is read as it is. `barca get` or
+    /// `barca run` naming a paused node needs --allow-paused. Without TARGET, lists the paused
+    /// nodes. Pauses live on the server (--server URL, BARCA_SERVER or [server] url).
+    #[command(after_help = quick_help("pause", PAUSE_HELP), after_long_help = PAUSE_HELP, long_about = None)]
+    Pause {
+        /// The node or file to pause; omit to list the paused nodes
+        #[arg(help = "Node or file.py to pause; omit to list paused nodes", long_help = None)]
+        target: Option<String>,
+        /// Pause every node downstream of TARGET too
+        #[arg(long, requires = "target")]
+        #[arg(help = "Also pause every node downstream of the target", long_help = None)]
+        downstream: bool,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// The server's environment, checked against it (as for the other --server commands)
+        #[arg(long)]
+        #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
+        env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
+    },
+    /// Resume paused assets on a barca server (experimental)
+    ///
+    /// The next scheduled tick computes them again; the ticks they skipped are not caught up.
+    #[command(after_help = quick_help("resume", RESUME_HELP), after_long_help = RESUME_HELP, long_about = None)]
+    Resume {
+        /// The node or file to resume
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        #[arg(help = "Node or file.py to resume", long_help = None)]
+        target: Option<String>,
+        /// Resume every node downstream of TARGET too
+        #[arg(long, requires = "target")]
+        #[arg(help = "Also resume every node downstream of the target", long_help = None)]
+        downstream: bool,
+        /// Resume every paused node
+        #[arg(long)]
+        #[arg(help = "Resume every paused node", long_help = None)]
+        all: bool,
         #[command(flatten)]
         format: FormatFlags,
         /// The server's environment, checked against it (as for the other --server commands)

@@ -63,6 +63,8 @@ import {
   type SortKey,
 } from '@/lib/assetTable'
 import type { NodeKind } from '@/lib/types'
+import { PausedTag } from '@/components/assets/IncidentControls'
+import { usePausedSet } from '@/hooks/usePauses'
 
 const PAGE_LABEL: Record<NodeKind, string> = { asset: 'Assets', task: 'Tasks', sensor: 'Sensors' }
 
@@ -140,9 +142,12 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
 
   // "x ago" is relative to when the data was fetched, so it stays pure and
   // refreshes with every poll.
+  // `?paused=1` (the paused banner's link): only the paused assets.
+  const paused = usePausedSet()
+  const onlyPaused = params.get('paused') === '1'
   const rows = useMemo(
-    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline)), dataUpdatedAt),
-    [data, dataUpdatedAt, pipeline, kind],
+    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt),
+    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused],
   )
   // Filters live in the URL with the sort and pipeline, so a filtered view can
   // be reloaded and shared.
@@ -374,6 +379,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                     <div className="barca-cell-name">
                       <span className="name"><MiddleName name={labels.get(r.id) ?? r.name} title={r.id} /></span>
                       {r.kind !== 'asset' && <Tag size="sm">{nodeKindLabel(r)}</Tag>}
+                      <PausedTag id={r.id} paused={paused} />
                     </div>
                     <div className="barca-cell-sub">{r.file}</div>
                   </td>

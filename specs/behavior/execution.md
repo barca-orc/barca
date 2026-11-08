@@ -40,6 +40,7 @@ behavior follows the coordinator dependency rules, not ordinary data-failure pro
 | Admission/capacity permits execution | Begin work under that run's cancellation and progress ownership |
 | Work succeeds | Commit completed results and progress; a final successful outcome does not invent computations for cache hits |
 | A key fails | Preserve completed peers; skip data dependents that cannot proceed: only the same key of a dependent that reads it key for key (reported `upstream_key_failed`), the whole of one that reads every key (`upstream_failed`); the run goes on to later phases; finish the run with its real failures |
+| A scheduled tick meets a paused node (`asset_pauses`, `barca pause`) | Do not compute it: a paused target is reported `skipped` with reason `paused`; a paused node upstream of a target is read as its latest result, and a target reading a paused node that has never been computed is `skipped`, reason `paused`. A request naming a paused node is refused (usage) unless it allows paused targets |
 | Caller cancels | Stop owned work, persist truthful progress/outcome and reap owned helpers |
 | Server drains/restarts | Apply queue requeue/interruption rules and reuse already committed successes |
 

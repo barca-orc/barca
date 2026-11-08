@@ -21,6 +21,8 @@ Tools:
   unpin     Release a pinned asset
   sql       Query cached results with SQL
   queue     Inspect or control the server queue
+  pause     Hold assets back from scheduled runs (server)
+  resume    Let paused assets run on schedule again
   gc        Free cache space
   state     Manage metadata backups
   tokens    Bootstrap project token access

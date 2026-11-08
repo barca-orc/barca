@@ -1055,6 +1055,12 @@
 }
 .barca-offline > svg { color: var(--status-warning); flex: none; }
 .barca-offline-retry { margin-left: auto; }
+/* Some assets are paused (components/PausedBanner.tsx): the offline banner's shape, neutral. */
+.barca-paused-banner { background: var(--bg-raised); border-bottom-color: var(--border-subtle, var(--status-warning-line)); }
+/* The panel's blast radius and incident controls (components/assets/). */
+.barca-blast-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 4px; }
+.barca-blast-list > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.barca-incident-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 
 /* The panel header's text column; its actions sit beside it. */
 .barca-sidepanel-heading { min-width: 0; }

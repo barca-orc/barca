@@ -61,6 +61,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). `--server` on get/run/status/list/history/stats runs them there (`barca docs server-mode`). |
 | `barca tokens bootstrap` | On the deployed host, print a one-use bootstrap code for opt-in project token access (`barca docs server-mode`). |
 | `barca queue [pause\|resume] --server` | A server's run queue: the runs running and waiting, kept across restarts; pause it before a deploy (`barca docs scheduling`). |
+| `barca pause [target] --server` / `barca resume` | Hold back an asset (and what is below it, or a whole file) from scheduled runs until resumed (`barca docs incidents`). |
 | `barca docs [topic]` | This manual. |
 | `barca version` | Print the installed version (also `barca --version`). |
 
@@ -94,6 +95,7 @@ Getting work done:
 - `barca docs groups` — organizational groups and nesting in the UI and CLI
 - `barca docs scheduling` — freshness, cron schedules, `barca serve`, its run queue and restarting it without losing work, HTTP/Python client setup
 - `barca docs serve-ops` — operating `barca serve`: the run queue, stopping and restarting without losing work, the stop grace, a shared capacity, the run timeout
+- `barca docs incidents` — containing an incident: `barca pause` / `barca resume`, what scheduled runs and requests do with a paused asset
 - `barca docs server-mode` — one `barca serve` as the team's ledger: local runs read cache hits from it and post what they compute; `--server` runs `get`, `run`, `status`, `list`, `history`, `stats` there; `--local` leaves it out
 - `barca docs remote` — this machine's backup and read-through cache (S3, GCS, Azure), set with a few environment variables; sharing means a server (`barca docs server-mode`)
 - `barca docs backup` — metadata backups in the store, `barca state backups` / `barca state restore`, a server's backups

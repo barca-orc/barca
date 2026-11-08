@@ -27,6 +27,7 @@ pub(crate) async fn get_cmd(
     agent: bool,
     fields: Option<&[String]>,
     ledger: Option<barca_core::ledger::Ledger>,
+    allow_paused: bool,
 ) -> Result<(), barca_core::BarcaError> {
     let mut cfg = barca_core::config::resolve(env)?;
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
@@ -57,6 +58,9 @@ pub(crate) async fn get_cmd(
             &batch,
         )
         .await;
+    }
+    if !allow_paused {
+        barca_core::pauses::check_request(&cfg.db_path, &targets).await?;
     }
     let (events, log_task) = super::execute::user_logs(mode.shape != GetShape::Json);
     let reader = Reader {

@@ -9,7 +9,9 @@ import { api } from '@/lib/api'
 export function useTriggerGet() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (target: string) => api.getTarget(target),
+    /** `{ target, allowPaused }` runs a paused target, after the operator confirmed it. */
+    mutationFn: (target: string | { target: string; allowPaused: boolean }) =>
+      typeof target === 'string' ? api.getTarget(target) : api.getTarget(target.target, target.allowPaused),
     onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['runs'] }) },
   })
 }

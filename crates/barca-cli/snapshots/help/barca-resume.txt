@@ -1,0 +1,25 @@
+Resume paused assets on a barca server (experimental)
+
+Usage: barca resume [OPTIONS] [TARGET]
+
+Arguments:
+  [TARGET]  Node or file.py to resume
+
+Options:
+      --downstream      Also resume every node downstream of the target
+      --all             Resume every paused node
+      --json            Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty          Emit human-readable output (the default when stdout is a terminal)
+      --env <ENV>       Use a separate cache and history for this environment
+      --server [<URL>]  Use a server (URL or configured); get/run execute its deployed code
+      --local           Use independent local state; ignore the configured server
+  -h, --help            Show concise command help
+      --examples        Show all command examples without running anything
+
+Examples:
+  barca resume clean --server               # the next tick computes clean again
+  barca resume clean --downstream --server  # clean and everything below it
+  barca resume pipeline.py --server         # every node of the file
+
+All examples: barca resume --examples
+More: barca docs incidents

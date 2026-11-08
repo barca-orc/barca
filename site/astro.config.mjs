@@ -77,6 +77,7 @@ export default defineConfig({
             { label: 'Server API', slug: 'reference/server-api' },
             { label: 'Server Mode', slug: 'reference/server-mode' },
             { label: 'Serve Operations', slug: 'reference/serve-ops' },
+            { label: 'Pausing Assets', slug: 'reference/incidents' },
             { label: 'Sinks', slug: 'reference/sinks' },
             { label: 'SQL', slug: 'reference/sql' },
             { label: 'Status', slug: 'reference/status' },
