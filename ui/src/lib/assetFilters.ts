@@ -24,6 +24,8 @@ export interface Filters {
   states: CacheState[]
   /** Only nodes whose last attempt failed: a fact beside the state, so a filter of its own. */
   failed: boolean
+  /** Only nodes a failure upstream keeps from running (`blocked`): derived, so a filter of its own. */
+  blocked: boolean
   /** Empty = any kind. */
   kinds: Kind[]
   lastRun: LastRun
@@ -37,6 +39,7 @@ export const EMPTY_FILTERS: Filters = {
   query: '',
   states: [],
   failed: false,
+  blocked: false,
   kinds: [],
   lastRun: 'any',
   scheduled: false,
@@ -44,16 +47,16 @@ export const EMPTY_FILTERS: Filters = {
 }
 
 /** The state filters a page opens on, before the URL says otherwise. */
-export type StateDefaults = Pick<Filters, 'states' | 'failed'>
+export type StateDefaults = Pick<Filters, 'states' | 'failed' | 'blocked'>
 
-export const NO_DEFAULTS: StateDefaults = { states: [], failed: false }
+export const NO_DEFAULTS: StateDefaults = { states: [], failed: false, blocked: false }
 
 /**
  * What the Tasks page opens on: a task always runs, so its state says nothing to pick it by; what
  * needs a look is a failed last attempt, and a state other than `always_runs` (blocked, stale
  * keys, an unsynced result).
  */
-export const NEEDS_ATTENTION: StateDefaults = { states: ['blocked', 'stale', 'partial', 'unsynced'], failed: true }
+export const NEEDS_ATTENTION: StateDefaults = { states: ['blocked', 'stale', 'partial', 'unsynced'], failed: true, blocked: true }
 
 /**
  * With the default in force, a row that ran this recently is shown whatever its state: a task
@@ -61,11 +64,11 @@ export const NEEDS_ATTENTION: StateDefaults = { states: ['blocked', 'stale', 'pa
  */
 export const RECENT_MS = 24 * 3_600_000
 
-const hasDefaults = (d: StateDefaults) => d.states.length > 0 || d.failed
+const hasDefaults = (d: StateDefaults) => d.states.length > 0 || d.failed || d.blocked
 
 /** The default's states are in force: only `state=all` in the URL lifts them. */
 export function onDefaultStates(f: Filters, defaults: StateDefaults): boolean {
-  return hasDefaults(defaults) && f.failed === defaults.failed && f.states.length === defaults.states.length && defaults.states.every((s) => f.states.includes(s))
+  return hasDefaults(defaults) && f.failed === defaults.failed && f.blocked === defaults.blocked && f.states.length === defaults.states.length && defaults.states.every((s) => f.states.includes(s))
 }
 
 export function isFiltered(f: Filters): boolean {
@@ -73,6 +76,7 @@ export function isFiltered(f: Filters): boolean {
     f.query.trim() !== '' ||
     f.states.length > 0 ||
     f.failed ||
+    f.blocked ||
     f.kinds.length > 0 ||
     f.lastRun !== 'any' ||
     f.scheduled ||
@@ -98,11 +102,11 @@ type Group = 'states' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
 
 /**
  * The state filter, as a group, by the one state each row shows: `failing` (a failed last
- * attempt) or else its cache state, so a chip's count is the rows it shows.
+ * attempt), `blocked` (a failure upstream keeps it from running) or else its cache state, so a chip's count is the rows it shows.
  */
 function matchesStates(r: AssetRow, f: Filters): boolean {
-  if (f.states.length === 0 && !f.failed) return true
-  return r.lastFailed ? f.failed : f.states.includes(r.state)
+  if (f.states.length === 0 && !f.failed && !f.blocked) return true
+  return r.lastFailed ? f.failed : r.blockedBy ? f.blocked : f.states.includes(r.state)
 }
 
 interface FilterOptions {
@@ -132,6 +136,8 @@ interface FacetCounts {
   states: Record<CacheState, number>
   /** Rows whose last attempt failed. */
   failed: number
+  /** Rows a failure upstream keeps from running. */
+  blocked: number
   kinds: Record<Kind, number>
   lastRun: Record<LastRun, number>
   scheduled: number
@@ -141,8 +147,10 @@ interface FacetCounts {
 export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: FilterOptions = {}): FacetCounts {
   const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
   let failed = 0
+  let blocked = 0
   for (const r of filterExcept(rows, f, nowMs, 'states', opts)) {
     if (r.lastFailed) failed += 1
+    else if (r.blockedBy) blocked += 1
     else states[r.state] += 1
   }
 
@@ -157,6 +165,7 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
   return {
     states,
     failed,
+    blocked,
     kinds,
     lastRun,
     scheduled: filterExcept(rows, f, nowMs, 'scheduled', opts).filter((r) => r.nextRunMs !== null)
@@ -167,7 +176,7 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
 
 // ── URL ───────────────────────────────────────────────────────────────────────
 
-const PARAMS = ['q', 'state', 'failed', 'kind', 'ran', 'scheduled', 'partitioned'] as const
+const PARAMS = ['q', 'state', 'failed', 'blocked', 'kind', 'ran', 'scheduled', 'partitioned'] as const
 
 function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] {
   if (!raw) return []
@@ -176,15 +185,16 @@ function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] 
 
 /**
  * `defaults`: the state filters of a URL that names none (`state=all` asks for every state).
- * `state=` carries the CLI's words; `failed=1` asks for nodes whose last attempt failed.
+ * `state=` carries the CLI's words; `failed=1` asks for nodes whose last attempt failed, `blocked=1` for those a failure upstream keeps from running.
  */
 export function parseFilters(p: URLSearchParams, defaults: StateDefaults = NO_DEFAULTS): Filters {
   const ran = p.get('ran')
-  const named = p.has('state') || p.has('failed')
+  const named = p.has('state') || p.has('failed') || p.has('blocked')
   return {
     query: p.get('q') ?? '',
     states: named ? list(p.get('state'), CACHE_STATES) : [...defaults.states],
     failed: named ? p.get('failed') === '1' : defaults.failed,
+    blocked: named ? p.get('blocked') === '1' : defaults.blocked,
     kinds: list(p.get('kind'), KINDS),
     lastRun: LAST_RUNS.find((l) => l === ran) ?? 'any',
     scheduled: p.get('scheduled') === '1',
@@ -201,6 +211,7 @@ export function writeFilters(params: URLSearchParams, f: Filters, defaults: Stat
     if (f.states.length) p.set('state', f.states.join(','))
     else if (hasDefaults(defaults)) p.set('state', 'all')
     if (f.failed) p.set('failed', '1')
+    if (f.blocked) p.set('blocked', '1')
   }
   if (f.kinds.length) p.set('kind', f.kinds.join(','))
   if (f.lastRun !== 'any') p.set('ran', f.lastRun)

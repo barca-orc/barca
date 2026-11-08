@@ -51,22 +51,22 @@ describe('neighborInDirection', () => {
 describe('waitsOn', () => {
   const name = (id: string) => id.split(':').pop()!
   it('names the failed input of a never-run consumer, as a hint beside its state', () => {
-    const out = waitsOn([['p:publish', 'p:validate']], new Map([['p:publish', 'failed'], ['p:validate', 'never_run']]), name)
-    expect(out.get('p:validate')).toEqual({ hint: 'Waits on publish, whose last attempt failed.' })
+    const out = waitsOn([['p:publish', 'p:validate']], new Map([['p:publish', 'failed'], ['p:validate', 'waiting']]), name)
+    expect(out.get('p:validate')).toEqual({ by: 'p:publish', hint: 'Blocked: waits on publish, whose last attempt failed.' })
   })
   it('follows a chain of never-run nodes to the failure behind them', () => {
     const out = waitsOn(
       [['a', 'b'], ['b', 'c'], ['x', 'c']],
-      new Map([['a', 'failed'], ['b', 'never_run'], ['c', 'never_run'], ['x', 'other']]),
+      new Map([['a', 'failed'], ['b', 'waiting'], ['c', 'waiting'], ['x', 'other']]),
       name,
     )
-    expect(out.get('c')?.hint).toBe('Waits on a, whose last attempt failed.')
+    expect(out.get('c')?.hint).toBe('Blocked: waits on a, whose last attempt failed.')
     expect(out.size).toBe(2)
   })
   it('leaves nodes in other states, and unexplained never-run ones, alone', () => {
     const out = waitsOn(
       [['a', 'b'], ['a', 'c'], ['d', 'e']],
-      new Map([['a', 'failed'], ['b', 'other'], ['c', 'other'], ['d', 'other'], ['e', 'never_run']]),
+      new Map([['a', 'failed'], ['b', 'other'], ['c', 'other'], ['d', 'other'], ['e', 'waiting']]),
       name,
     )
     expect(out.size).toBe(0)

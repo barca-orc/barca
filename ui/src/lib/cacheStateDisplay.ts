@@ -83,11 +83,28 @@ export const FAILED_TONE: Tone = 'failed'
 export const LAST_ATTEMPT_FAILED = 'failing'
 
 /**
- * The one state a node shows: `failing` when its latest attempt failed (it outranks the cache
- * state, which stays in the tooltip and the panel), else its cache state's words.
+ * The word of the fact "a failed node upstream keeps it from running": `blocked`, in the warning
+ * tone with its own icon. It is derived on the client from the graph (`blockedBy` in
+ * `graphView`), never sent as a cache state; the cache state stays in the tooltip and the panel.
  */
-export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean }): { label: string; tone: Tone } {
-  return node.lastFailed ? { label: LAST_ATTEMPT_FAILED, tone: FAILED_TONE } : { label: cacheStateLabel(node.state), tone: cacheStateTone(node.state) }
+export const BLOCKED_UPSTREAM = 'blocked'
+
+/** How a node's one state is drawn: its words, tone and, when the tone does not say it, an icon. */
+export interface NodeStateShown {
+  label: string
+  tone: Tone
+  icon?: 'blocked'
+}
+
+/**
+ * The one state a node shows: `failing` when its latest attempt failed (it outranks the cache
+ * state, which stays in the tooltip and the panel), else `blocked` when a failed node upstream
+ * keeps it from running, else its cache state's words.
+ */
+export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean; blockedBy?: string | null }): NodeStateShown {
+  if (node.lastFailed) return { label: LAST_ATTEMPT_FAILED, tone: FAILED_TONE }
+  if (node.blockedBy) return { label: BLOCKED_UPSTREAM, tone: 'warning', icon: 'blocked' }
+  return { label: cacheStateLabel(node.state), tone: cacheStateTone(node.state) }
 }
 
 /**

@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
-import { CircleX } from 'lucide-react'
+import { Ban, CircleX } from 'lucide-react'
 import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
 import type { Tone } from '@/lib/tone'
 import { StatusDot } from './StatusDot'
@@ -15,6 +15,8 @@ export interface DagNodeProps {
   label?: string | null
   /** Its last attempt failed: a second fact, beside the state. */
   lastFailed?: boolean
+  /** The failed node upstream that keeps it from running: drawn with the `blocked` icon. */
+  blockedBy?: string
   /** A run is working on it: the live border and pulse. */
   live?: boolean
   stateHint?: string
@@ -39,6 +41,7 @@ export function DagNode({
   tone,
   label,
   lastFailed = false,
+  blockedBy,
   live = false,
   stateHint,
   selected = false,
@@ -71,8 +74,9 @@ export function DagNode({
           {kindLabel && !lastFailed && <span className="barca-dag-kind">{kindLabel}</span>}
           {/* One state per node: a failed last attempt is `failing`, in red with its icon, instead of the cache word. */}
           {(label || lastFailed) && (
-            <span className="barca-dag-state" data-failed={lastFailed || undefined}>
+            <span className="barca-dag-state" data-failed={lastFailed || undefined} data-blocked={(!lastFailed && blockedBy) || undefined}>
               {lastFailed && <CircleX size={11} aria-hidden />}
+              {!lastFailed && blockedBy && <Ban size={11} aria-hidden />}
               {lastFailed ? LAST_ATTEMPT_FAILED : label}
             </span>
           )}

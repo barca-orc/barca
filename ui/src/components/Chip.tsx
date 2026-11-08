@@ -4,8 +4,8 @@ export interface ChipProps {
   /** Whether the filter is on. */
   pressed: boolean
   onClick: () => void
-  /** `failed` makes the chip stand out (a count of failures); others recede. */
-  tone?: 'failed'
+  /** `failed` and `warning` make the chip stand out (failures, nodes they block); others recede. */
+  tone?: 'failed' | 'warning'
   children: ReactNode
 }
 

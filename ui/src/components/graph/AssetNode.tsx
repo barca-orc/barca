@@ -32,6 +32,7 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         tone={data.tone}
         label={data.label}
         lastFailed={data.lastFailed}
+        blockedBy={data.blockedBy}
         live={data.live}
         stateHint={data.stateHint}
         selected={selected}

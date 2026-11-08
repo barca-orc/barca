@@ -1,7 +1,7 @@
 import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
-import { ArrowDown, ArrowUp, CircleX, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Ban, CircleX, X } from 'lucide-react'
 import {
   Button,
   Chip,
@@ -30,8 +30,9 @@ import { useTimeZone } from '@/context/timeZone'
 import { formatShort, type TimeZone } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
-import { CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
-import { consumersOf, downstreamIds } from '@/lib/health'
+import { BLOCKED_UPSTREAM, CACHE_STATES, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateLabel, cacheStateTone, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { blockedBy } from '@/lib/graphView'
+import { shortName } from '@/lib/graph'
 import { formatAgo } from '@/lib/time'
 import { plural } from '@/lib/plural'
 import { isLive, liveGraphState } from '@/lib/graphState'
@@ -145,9 +146,12 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   // `?paused=1` (the paused banner's link): only the paused assets.
   const paused = usePausedSet()
   const onlyPaused = params.get('paused') === '1'
+  // Which nodes a failure upstream keeps from running: judged over the whole graph, so a
+  // pipeline's row is blocked by a failure in another one too.
+  const blockers = useMemo(() => blockedBy(data ?? [], graph), [data, graph])
   const rows = useMemo(
-    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt),
-    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused],
+    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, blockers),
+    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused, blockers],
   )
   // Filters live in the URL with the sort and pipeline, so a filtered view can
   // be reloaded and shared.
@@ -165,17 +169,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   for (const r of visible) nameCount.set(r.name, (nameCount.get(r.name) ?? 0) + 1)
   const labels = new Map(visible.filter((r) => nameCount.get(r.name)! > 1).map((r) => [r.id, r.id]))
   // What fails, and how much of the graph waits on it: the page's one-line summary.
+  // The blocked count is the rows that read `blocked`, so the summary and the chip agree.
   const failing = rows.filter((r) => r.lastFailed)
-  const blocked = useMemo(() => {
-    if (failing.length === 0 || graph.length === 0) return 0
-    const consumers = consumersOf(graph)
-    const ids = new Set(failing.map((r) => r.id))
-    const down = new Set<string>()
-    for (const id of ids) for (const d of downstreamIds(id, consumers)) if (!ids.has(d)) down.add(d)
-    return down.size
-    // `failing` is derived from `rows`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, graph])
+  const blocked = rows.filter((r) => !r.lastFailed && r.blockedBy).length
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const win = useTableWindow(visible.length, scroller)
@@ -244,6 +240,12 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 <Chip pressed={filters.failed} tone="failed" onClick={() => setFilters({ ...filters, failed: !filters.failed })}>
                   <CircleX size={12} aria-hidden />
                   {counts.failed} {LAST_ATTEMPT_FAILED}
+                </Chip>
+              )}
+              {(counts.blocked > 0 || (filters.blocked && !onDefault)) && (
+                <Chip pressed={filters.blocked} tone="warning" onClick={() => setFilters({ ...filters, blocked: !filters.blocked })}>
+                  <Ban size={12} aria-hidden />
+                  {counts.blocked} {BLOCKED_UPSTREAM}
                 </Chip>
               )}
               {CACHE_STATES.filter((state) => counts.states[state] > 0 || (filters.states.includes(state) && !onDefault)).map((state) => (
@@ -396,6 +398,23 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                         {r.lastFailed && (
                           <div className="barca-cell-sub">
                             {r.lastSuccessAt ? `last good ${formatAgo(r.lastSuccessAt, now)}` : 'never succeeded'}
+                          </div>
+                        )}
+                        {!r.lastFailed && r.blockedBy && (
+                          <div className="barca-cell-sub">
+                            by{' '}
+                            <button
+                              type="button"
+                              className="barca-link"
+                              title={`Open ${r.blockedBy}`}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setSelected(r.blockedBy)
+                              }}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              {shortName(r.blockedBy)}
+                            </button>
                           </div>
                         )}
                       </>
