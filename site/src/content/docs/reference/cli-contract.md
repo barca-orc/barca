@@ -140,7 +140,7 @@ stability; the row adds the keys and routes that go with it.
 | `partitions.failed` and `partitions.failed_keys` in `status --json`, `steps_page.nodes` in `history RUN_ID --json`, `recent_runs[].keys` and `recent_runs[].failed_keys` in `stats --json` | new in 0.38.0: what counts as a failed key (its latest attempt failed, with no later success) may change after field use |
 | `steps[].batch_execution` and `metadata_seconds` in `get`/`run` JSON, the `[barca] batch:<node> ...` and `[barca] metadata ...` lines | new in 0.38.0 (RFC-0013): which phases are reported and what each one covers may change after field use |
 | `steps_page.nodes[].status` (`ran`, `cached`, `skipped`) and `steps_page.nodes[].blocked_by` in `history RUN_ID --json` with a server | the server lists every planned node of a finished run whose plan it can rebuild; the local `history RUN_ID` lists only nodes with recorded steps and never has these keys ([`barca docs server-mode`](/reference/server-mode/)) |
-| `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin` | new in 0.41 ([`barca docs pins`](/reference/pins/)): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
+| `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 ([`barca docs pins`](/reference/pins/)): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 HTTP-only keys: `failing_since` and `consecutive_failures` (rows of `GET /state`), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
@@ -425,6 +425,7 @@ default, and any aliases.
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
 | `--run-hash` | `HASH` | - | experimental (with the command) | Pin the successful materialization with this run hash (or a unique prefix of at least 6 characters), from `--versions` |
 | `--previous` | - | default `false` | experimental (with the command) | Pin the newest successful materialization before the latest one (roll back one version) |
+| `--from-file` | `PATH` | - | experimental (with the command) | Pin it to data you supply: a .json, .parquet, .csv or .pkl file, checked by loading it and recorded as an uploaded (override) materialization |
 | `--versions` | - | default `false` | experimental (with the command) | List the asset's recent successful materializations (one per run hash) instead of pinning |
 | `-l, --limit` | `LIMIT` | - | experimental (with the command) | With --versions, the most listed (default 20) |
 | `--reason` | `TEXT` | - | experimental (with the command) | Why it is pinned, recorded with the pin and shown in the UI |

@@ -93,8 +93,9 @@ const [query, setQuery] = useState('')
       <Tag size="md">medium</Tag>
     </Spec>
 
-    <Spec title="StatusDot / StatusBadge" note="One state per node in plain words (failing, then blocked by a failure upstream, outrank the cache state), each with a shape beside its colour; then the run lifecycle's statuses.">
+    <Spec title="StatusDot / StatusBadge" note="One state per node in plain words (failing, then pinned, then blocked by a failure upstream, outrank the cache state), each with a shape beside its colour; then the run lifecycle's statuses.">
       <StatusBadge {...nodeStateDisplay({ state: 'stale', lastFailed: true })} />
+      <StatusBadge {...nodeStateDisplay({ state: 'stale', lastFailed: false, pinned: 'override from fix.json' })} />
       <StatusBadge {...nodeStateDisplay({ state: 'never_run', lastFailed: false, blockedBy: 'p:broken_report' })} />
       {CACHE_STATES.map((s) => (
         <StatusBadge key={s} tone={cacheStateTone(s)} label={cacheStateLabel(s)} />

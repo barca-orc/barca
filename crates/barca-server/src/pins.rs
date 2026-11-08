@@ -98,6 +98,64 @@ pub async fn pin(
     Ok(Json(pinned))
 }
 
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UploadQuery {
+    /// `json`, `parquet`, `csv` or `pickle`; default: the extension of `file_name`.
+    pub format: Option<String>,
+    /// The name of the file supplied, recorded with the upload.
+    pub file_name: Option<String>,
+    pub reason: Option<String>,
+}
+
+/// `POST /assets/{name}/pin/upload?format=&file_name=&reason=` — the body is the file's bytes
+/// (any content type): checked by loading it, written as a new artifact of the asset, recorded as
+/// an uploaded materialization and pinned, as `barca pin --from-file`.
+pub async fn upload(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<UploadQuery>,
+    principal: Option<Extension<Principal>>,
+    body: axum::body::Bytes,
+) -> Result<Json<Pinned>, ApiError> {
+    crate::runs::refuse_if_read_only(&state)?;
+    let file_name = query
+        .file_name
+        .as_deref()
+        .map(|n| n.rsplit(['/', '\\']).next().unwrap_or(n).to_string())
+        .unwrap_or_default();
+    if query.format.is_none() && file_name.is_empty() {
+        return Err(ApiError::BadRequest(
+            "say what the body is: ?format=json|parquet|csv|pickle or ?file_name=<name.ext>".into(),
+        ));
+    }
+    let dag = state.loaded_dag().await?;
+    let cfg = &state.config.resolved;
+    barca_core::db::ensure_env_dirs(&cfg.env)?;
+    barca_core::db::init_db(&cfg.db_path).await?;
+    let supplied = barca_core::pins::Supplied {
+        bytes: body.to_vec(),
+        file_name,
+        format: query.format,
+    };
+    let pinned = barca_core::pins::pin_upload(
+        cfg,
+        &state.config.python,
+        &dag,
+        &name,
+        supplied,
+        query.reason,
+        principal.map(|Extension(p)| p.0),
+    )
+    .await?;
+    barca_core::errln!(
+        "[barca] pinned {} at {} (uploaded)",
+        pinned.node_id,
+        pinned.pin.run_hash
+    );
+    Ok(Json(pinned))
+}
+
 /// `DELETE /assets/{name}/pin` — remove the asset's pin, as `barca unpin`.
 pub async fn unpin(
     State(state): State<AppState>,

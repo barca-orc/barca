@@ -16,6 +16,9 @@ Options:
       --previous
           Pin the newest successful materialization before the latest one (roll back one version)
 
+      --from-file <PATH>
+          Pin it to data you supply: a .json, .parquet, .csv or .pkl file, checked by loading it and recorded as an uploaded (override) materialization
+
       --versions
           List the asset's recent successful materializations (one per run hash) instead of pinning
 
@@ -55,5 +58,6 @@ Examples:
   barca pin --json                             # {pins: [...]}
   barca pin orders --versions --limit 5 --json # {node_id, pinnable, pin, versions}
   barca pin orders --previous --server         # pin on the configured barca server
+  barca pin orders --from-file fixed.parquet --reason "hand-corrected feed"   # override with your data
 
 More: barca docs pins

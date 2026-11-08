@@ -84,7 +84,10 @@ pub use materializations::{max_materialization_id, succeeded_since};
 pub(crate) use partition_keys::FailedKeys;
 pub(crate) use partition_keys::failed_partition_keys;
 pub use partition_keys::{PartitionKeys, PartitionKeysFilter, partition_keys};
-pub use pins::{AssetPin, Version, clear_pin, get_pins, get_versions, set_pin};
+pub use pins::{
+    AssetPin, Upload, UploadedArtifact, Version, clear_pin, get_pins, get_versions, record_upload,
+    set_pin,
+};
 pub(crate) use pins::{pins_on, success_at};
 pub(crate) use run_liveness::local_host;
 pub use run_liveness::{AliveRun, alive_running_runs, alive_running_runs_in};

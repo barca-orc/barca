@@ -243,6 +243,14 @@ every database from before 0.29.2 (#629):
   nullable. Every run reads a pinned asset as that materialization and never computes it; the
   cache size limit never evicts it. Writing or removing a row clears `freshness_proofs`. A
   database without the table has no pins; older binaries ignore it (and so do not honor pins).
+- `asset_uploads (node_id, run_hash, uploaded_at, uploaded_by, file_name, reason)` (0.41.0,
+  `barca pin --from-file`, `barca docs pins`), primary key `(node_id, run_hash)`: the successful
+  `materializations` row of `node_id` with `run_hash` holds data an operator supplied, not a
+  computation. That row has `run_id` NULL, `elapsed_seconds` 0 and the artifact the upload wrote
+  at `{artifacts}/{safe_node_id}/{run_hash}{ext}`; `run_hash` is the SHA-256 of
+  `barca-upload\0` followed by the file's bytes. `uploaded_at` is RFC 3339 UTC; `uploaded_by`,
+  `file_name` (the base name supplied) and `reason` are nullable. A database without the table
+  has no uploads; older binaries ignore it and read the row as an ordinary materialization.
 - `asset_pauses (node_id, paused_at, via)` (0.41.0, `barca docs incidents`), primary key
   `node_id`: a node an operator paused. `paused_at` is unix seconds; `via` is the target the pause
   named (the node, the node a `--downstream` pause started from, or a file). A scheduled tick does

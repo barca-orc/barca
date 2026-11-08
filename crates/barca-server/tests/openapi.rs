@@ -1785,3 +1785,58 @@ async fn asset_pauses_match_contract() {
     let (status, _) = request_json(&read_only, "POST", "/pauses", json!({"target": "first"})).await;
     assert_eq!(status, 403);
 }
+
+async fn upload(router: &Router, url: &str, body: &'static [u8]) -> (u16, Value) {
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(url)
+                .header("content-type", "application/octet-stream")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let spec =
+        &contract()["paths"]["/assets/{name}/pin/upload"]["post"]["responses"][status.to_string()];
+    assert!(!spec.is_null(), "undocumented upload status {status}");
+    if !answer.is_null() {
+        validate(&spec["content"]["application/json"]["schema"], &answer);
+    }
+    (status, answer)
+}
+
+#[tokio::test]
+async fn pin_upload_matches_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    let url = "/assets/first/pin/upload?file_name=fix.json&reason=hotfix";
+    let (status, pinned) = upload(&router, url, br#"{"n": 41}"#).await;
+    assert_eq!(status, 200, "{pinned}");
+    assert_eq!(pinned["version"]["upload"]["file_name"], "fix.json");
+    assert_eq!(pinned["version"]["upload"]["reason"], "hotfix");
+    assert_eq!(pinned["version"]["pinned"], true);
+    let versions = checked(
+        &router,
+        "GET",
+        "/assets/first/versions",
+        "/assets/{name}/versions",
+        200,
+    )
+    .await;
+    assert_eq!(versions["pin"]["run_hash"], pinned["pin"]["run_hash"]);
+    let (status, _) = upload(&router, "/assets/first/pin/upload?format=json", b"nope").await;
+    assert_eq!(status, 400);
+    let (status, _) = upload(&router, "/assets/first/pin/upload", b"{}").await;
+    assert_eq!(status, 400);
+    let (status, _) = upload(&router, "/assets/publish/pin/upload?format=json", b"{}").await;
+    assert_eq!(status, 400, "a task cannot be pinned");
+    let read_only = app(config(dir.path(), true));
+    let (status, _) = upload(&read_only, "/assets/first/pin/upload?format=json", b"{}").await;
+    assert_eq!(status, 403);
+}

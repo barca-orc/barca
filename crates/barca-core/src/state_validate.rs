@@ -154,6 +154,17 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         &["node_id", "run_hash", "pinned_at", "pinned_by", "reason"],
     ),
     (
+        "asset_uploads",
+        &[
+            "node_id",
+            "run_hash",
+            "uploaded_at",
+            "uploaded_by",
+            "file_name",
+            "reason",
+        ],
+    ),
+    (
         "sink_publications",
         &[
             "node_id",

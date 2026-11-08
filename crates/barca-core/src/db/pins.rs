@@ -16,6 +16,32 @@ pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS asset_pins (
     reason TEXT
 )";
 
+/// Replacement data an operator supplied for an asset (`barca pin --from-file`, `POST
+/// /assets/{name}/pin/upload`): the materialization with this run hash is an upload, not a
+/// computation. Created by `init_db` and by the additive migration (`schema::ddl::ADDED_TABLES`).
+pub(crate) const CREATE_UPLOADS: &str = "CREATE TABLE IF NOT EXISTS asset_uploads (
+    node_id TEXT NOT NULL,
+    run_hash TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    uploaded_by TEXT,
+    file_name TEXT,
+    reason TEXT,
+    PRIMARY KEY (node_id, run_hash)
+)";
+
+/// A materialization an operator uploaded instead of computing (an override).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, rename = "AssetUpload"))]
+pub struct Upload {
+    /// When it was uploaded (RFC 3339, UTC).
+    pub uploaded_at: String,
+    /// Who uploaded it, as `pinned_by` of a pin.
+    pub uploaded_by: Option<String>,
+    /// The name of the file supplied (its base name).
+    pub file_name: Option<String>,
+    pub reason: Option<String>,
+}
+
 /// One pinned asset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -31,6 +57,13 @@ pub struct AssetPin {
     pub pinned_by: Option<String>,
     /// Why, as given with `--reason`.
     pub reason: Option<String>,
+    /// The run that computed the pinned materialization; null for an upload or an old row.
+    /// Filled when pins are listed (`get_pins`), not stored with the pin.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// Set when the pinned materialization was uploaded (an override). Filled when listed.
+    #[serde(default)]
+    pub upload: Option<Upload>,
 }
 
 /// One successful materialization of a node with an artifact: what a pin can choose.
@@ -53,6 +86,9 @@ pub struct Version {
     pub current: bool,
     /// The materialization the node is pinned at.
     pub pinned: bool,
+    /// Set when an operator uploaded this materialization (an override) instead of a run
+    /// computing it.
+    pub upload: Option<Upload>,
 }
 
 async fn has_table(conn: &libsql::Connection) -> Result<bool, BarcaError> {
@@ -66,6 +102,8 @@ fn pin_from(row: &libsql::Row) -> AssetPin {
         pinned_at: row.get::<String>(2).unwrap_or_default(),
         pinned_by: row.get::<String>(3).ok(),
         reason: row.get::<String>(4).ok(),
+        run_id: None,
+        upload: None,
     }
 }
 
@@ -101,7 +139,38 @@ pub async fn get_pins(db_path: &str) -> Result<Vec<AssetPin>, BarcaError> {
     }
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
-    Ok(pins_on(&conn).await?.into_values().collect())
+    let mut pins: Vec<AssetPin> = pins_on(&conn).await?.into_values().collect();
+    for pin in &mut pins {
+        pin.run_id = run_id_of(&conn, &pin.node_id, &pin.run_hash).await?;
+        pin.upload = uploads_on(&conn, &pin.node_id).await?.remove(&pin.run_hash);
+    }
+    Ok(pins)
+}
+
+/// The run of the newest successful row of `node_id` under `run_hash`, if any.
+async fn run_id_of(
+    conn: &libsql::Connection,
+    node_id: &str,
+    run_hash: &str,
+) -> Result<Option<String>, BarcaError> {
+    let mut rows = conn
+        .query(
+            "SELECT run_id FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
+             AND status = 'success' ORDER BY id DESC LIMIT 1",
+            [node_id, run_hash],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query a pinned version: {e}")))?;
+    Ok(
+        match rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read a pinned version: {e}")))?
+        {
+            Some(row) => row.get::<String>(0).ok(),
+            None => None,
+        },
+    )
 }
 
 /// A pin changes what runs read without a new materialization, so the freshness proofs
@@ -207,9 +276,99 @@ pub async fn get_versions(
             format: row.get::<String>(5).ok(),
             artifact: row.get::<String>(6).unwrap_or_default(),
             available: row.get::<String>(7).is_err(),
+            upload: None,
         });
     }
+    if !out.is_empty() {
+        let mut uploads = uploads_on(&conn, node_id).await?;
+        for v in &mut out {
+            v.upload = uploads.remove(&v.run_hash);
+        }
+    }
     Ok(out)
+}
+
+/// The uploads of `node_id` on `conn`, by run hash. A database without the table has none.
+async fn uploads_on(
+    conn: &libsql::Connection,
+    node_id: &str,
+) -> Result<std::collections::HashMap<String, Upload>, BarcaError> {
+    let mut out = std::collections::HashMap::new();
+    if !has_column(conn, "asset_uploads", "node_id").await? {
+        return Ok(out);
+    }
+    let mut rows = conn
+        .query(
+            "SELECT run_hash, uploaded_at, uploaded_by, file_name, reason FROM asset_uploads \
+             WHERE node_id = ?1",
+            [node_id],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query asset uploads: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read an asset upload: {e}")))?
+    {
+        out.insert(
+            row.get::<String>(0).unwrap_or_default(),
+            Upload {
+                uploaded_at: row.get::<String>(1).unwrap_or_default(),
+                uploaded_by: row.get::<String>(2).ok(),
+                file_name: row.get::<String>(3).ok(),
+                reason: row.get::<String>(4).ok(),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// What an upload records: the artifact written for `node_id` under `run_hash`.
+#[derive(Debug, Clone)]
+pub struct UploadedArtifact {
+    pub node_id: String,
+    pub run_hash: String,
+    pub path: String,
+    pub format: String,
+    pub size_bytes: u64,
+    pub upload: Upload,
+}
+
+/// Record an uploaded artifact as a successful materialization of its node (no run, no
+/// elapsed time) and mark it as an upload. Uploading the same bytes again adds a newer row.
+pub async fn record_upload(db_path: &str, up: &UploadedArtifact) -> Result<(), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let opt = |v: &Option<String>| v.clone().map_or(libsql::Value::Null, libsql::Value::Text);
+    conn.execute(
+        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, \
+         artifact_size_bytes, elapsed_seconds, status) VALUES (?1, ?2, ?3, ?4, ?5, 0, 'success')",
+        vec![
+            libsql::Value::Text(up.node_id.clone()),
+            libsql::Value::Text(up.run_hash.clone()),
+            libsql::Value::Text(up.path.clone()),
+            libsql::Value::Text(up.format.clone()),
+            libsql::Value::Integer(up.size_bytes.min(i64::MAX as u64) as i64),
+        ],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record the upload: {e}")))?;
+    conn.execute(
+        "INSERT INTO asset_uploads (node_id, run_hash, uploaded_at, uploaded_by, file_name, \
+         reason) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(node_id, run_hash) DO UPDATE SET \
+         uploaded_at = ?3, uploaded_by = ?4, file_name = ?5, reason = ?6",
+        vec![
+            libsql::Value::Text(up.node_id.clone()),
+            libsql::Value::Text(up.run_hash.clone()),
+            libsql::Value::Text(up.upload.uploaded_at.clone()),
+            opt(&up.upload.uploaded_by),
+            opt(&up.upload.file_name),
+            opt(&up.upload.reason),
+        ],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record the upload: {e}")))?;
+    Ok(())
 }
 
 /// The newest successful materialization of `node_id` under `run_hash` whose artifact this run
@@ -289,6 +448,8 @@ mod tests {
             pinned_at: "2026-11-07T10:00:00Z".into(),
             pinned_by: Some("me@host".into()),
             reason: None,
+            run_id: None,
+            upload: None,
         };
         set_pin(&path, &pin).await.unwrap();
         pin.run_hash = "h2".into();
@@ -317,6 +478,36 @@ mod tests {
             get_versions(&path, "p.py:a", 1, None).await.unwrap().len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn an_upload_is_a_version_marked_as_one() {
+        let (_dir, path) = db().await;
+        success(&path, "p.py:a", "h1", false).await;
+        let upload = Upload {
+            uploaded_at: "2026-11-07T10:00:00Z".into(),
+            uploaded_by: Some("me@host".into()),
+            file_name: Some("fix.json".into()),
+            reason: Some("bad feed".into()),
+        };
+        record_upload(
+            &path,
+            &UploadedArtifact {
+                node_id: "p.py:a".into(),
+                run_hash: "u1".into(),
+                path: ".barca/artifacts/p.py--a/u1.json".into(),
+                format: "json".into(),
+                size_bytes: 3,
+                upload: upload.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let versions = get_versions(&path, "p.py:a", 10, None).await.unwrap();
+        assert_eq!(versions[0].run_hash, "u1");
+        assert_eq!(versions[0].upload, Some(upload));
+        assert_eq!(versions[0].size_bytes, Some(3));
+        assert_eq!(versions[1].upload, None);
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '20'
+  version: '21'
   description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -1427,6 +1427,94 @@ paths:
         schema:
           type: string
         description: The asset's full id (percent-encode a /) or its name.
+  /assets/{name}/pin/upload:
+    post:
+      summary: Pin an asset to data the request supplies
+      operationId: post_assets_name_pin_upload
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: The pin; version.upload is set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PinResult'
+        '400':
+          description: Neither format nor a file_name with a known extension, an empty body, a body that does not load as its format, or a node that cannot be pinned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: The body is over 256 MiB
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'The body is the file''s bytes (any content type). It is loaded with the reader runs use, written as a new artifact of the asset with run hash SHA-256 of "barca-upload\0" + bytes, recorded as a materialization marked as an upload, and pinned; as barca pin --from-file. Experimental.'
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The asset's full id (percent-encode a /) or its name.
+      - name: file_name
+        in: query
+        required: false
+        schema:
+          type: string
+        description: The name of the file supplied; its extension gives the format unless format does.
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [json, parquet, csv, pickle, pkl]
+      - name: reason
+        in: query
+        required: false
+        schema:
+          type: string
   /pins:
     get:
       summary: Every pinned asset
@@ -3480,8 +3568,18 @@ components:
     AssetPin:
       type: object
       additionalProperties: false
-      required: [node_id, run_hash, pinned_at, pinned_by, reason]
+      required: [node_id, run_hash, pinned_at, pinned_by, reason, run_id, upload]
       properties:
+        run_id:
+          description: The run that computed the pinned version; null for an upload.
+          type:
+          - string
+          - 'null'
+        upload:
+          description: Set when the pinned version was uploaded (an override).
+          oneOf:
+          - $ref: '#/components/schemas/AssetUpload'
+          - type: 'null'
         node_id:
           type: string
         run_hash:
@@ -3500,7 +3598,7 @@ components:
     AssetVersion:
       type: object
       additionalProperties: false
-      required: [run_hash, run_id, materialized_at, elapsed_seconds, size_bytes, format, artifact, available, current, pinned]
+      required: [run_hash, run_id, materialized_at, elapsed_seconds, size_bytes, format, artifact, available, current, pinned, upload]
       properties:
         run_hash:
           type: string
@@ -3530,6 +3628,30 @@ components:
           type: boolean
         pinned:
           type: boolean
+        upload:
+          description: Set when an operator uploaded this materialization (an override).
+          oneOf:
+          - $ref: '#/components/schemas/AssetUpload'
+          - type: 'null'
+    AssetUpload:
+      type: object
+      additionalProperties: false
+      required: [uploaded_at, uploaded_by, file_name, reason]
+      properties:
+        uploaded_at:
+          type: string
+        uploaded_by:
+          type:
+          - string
+          - 'null'
+        file_name:
+          type:
+          - string
+          - 'null'
+        reason:
+          type:
+          - string
+          - 'null'
     AssetVersions:
       type: object
       additionalProperties: false

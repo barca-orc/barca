@@ -369,6 +369,7 @@ Examples:
   barca pin --json                             # {pins: [...]}
   barca pin orders --versions --limit 5 --json # {node_id, pinnable, pin, versions}
   barca pin orders --previous --server         # pin on the configured barca server
+  barca pin orders --from-file fixed.parquet --reason \"hand-corrected feed\"   # override with your data
 
 More: barca docs pins";
 
@@ -905,11 +906,15 @@ pub(crate) enum Cli {
         files: Vec<PathBuf>,
         /// Pin the successful materialization with this run hash (or a unique prefix of at
         /// least 6 characters), from `--versions`
-        #[arg(long, value_name = "HASH", conflicts_with_all = ["previous", "versions"])]
+        #[arg(long, value_name = "HASH", conflicts_with_all = ["previous", "versions", "from_file"])]
         run_hash: Option<String>,
         /// Pin the newest successful materialization before the latest one (roll back one version)
-        #[arg(long, conflicts_with = "versions")]
+        #[arg(long, conflicts_with_all = ["versions", "from_file"])]
         previous: bool,
+        /// Pin it to data you supply: a .json, .parquet, .csv or .pkl file, checked by loading
+        /// it and recorded as an uploaded (override) materialization
+        #[arg(long, value_name = "PATH", conflicts_with = "versions")]
+        from_file: Option<PathBuf>,
         /// List the asset's recent successful materializations (one per run hash) instead of pinning
         #[arg(long)]
         versions: bool,

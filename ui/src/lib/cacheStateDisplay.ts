@@ -89,20 +89,30 @@ export const LAST_ATTEMPT_FAILED = 'failing'
  */
 export const BLOCKED_UPSTREAM = 'blocked'
 
+/**
+ * The word of a pinned asset (`barca pin`): every run reads its pinned version and none
+ * recomputes it, so its cache state (often `stale`) would mislead. Warning tone, pin icon.
+ */
+export const PINNED = 'pinned'
+
+/** What a pinned node's state means, in a line: in place of its cache state's explanation. */
+export const PINNED_HINT = 'Pinned: runs read this version until it is unpinned.'
+
 /** How a node's one state is drawn: its words, tone and, when the tone does not say it, an icon. */
 export interface NodeStateShown {
   label: string
   tone: Tone
-  icon?: 'blocked'
+  icon?: 'blocked' | 'pinned'
 }
 
 /**
  * The one state a node shows: `failing` when its latest attempt failed (it outranks the cache
- * state, which stays in the tooltip and the panel), else `blocked` when a failed node upstream
+ * state, which stays in the tooltip and the panel), else `pinned` when it is pinned (`barca pin`), else `blocked` when a failed node upstream
  * keeps it from running, else its cache state's words.
  */
-export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean; blockedBy?: string | null }): NodeStateShown {
+export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean; blockedBy?: string | null; pinned?: string | null }): NodeStateShown {
   if (node.lastFailed) return { label: LAST_ATTEMPT_FAILED, tone: FAILED_TONE }
+  if (node.pinned != null) return { label: PINNED, tone: 'warning', icon: 'pinned' }
   if (node.blockedBy) return { label: BLOCKED_UPSTREAM, tone: 'warning', icon: 'blocked' }
   return { label: cacheStateLabel(node.state), tone: cacheStateTone(node.state) }
 }

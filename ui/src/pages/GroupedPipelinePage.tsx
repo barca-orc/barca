@@ -41,6 +41,7 @@ import { shortName } from '@/lib/graph'
 import { healthCounts } from '@/lib/health'
 import { FailuresView } from './FailuresView'
 import { GroupedTable, GroupPanel, LineagePicker } from './GroupedView'
+import { usePinNotes } from '@/hooks/usePins'
 
 /** The hash route's query, as it is now (`#/assets?pipeline=…`). */
 function currentParams(): URLSearchParams {
@@ -55,6 +56,7 @@ function currentParams(): URLSearchParams {
  */
 export function GroupedPipelinePage() {
   const [params, setParams] = useSearchParams()
+  const pins = usePinNotes()
   const groupsQuery = useGroups()
   const assetQuery = useAssets()
   const stateQuery = useAssetStates()
@@ -302,6 +304,7 @@ export function GroupedPipelinePage() {
                     onSelect={(id) => (lineageOf && id === null ? undefined : select(id))}
                     onOpenGroup={openGroup}
                     states={visualStates}
+                    pins={pins}
                     handleRef={canvas}
                   />
                 </>

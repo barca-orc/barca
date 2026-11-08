@@ -198,6 +198,8 @@ pub async fn pin(
         pinned_at: crate::time::rfc3339(chrono::Utc::now().timestamp()),
         pinned_by: by,
         reason: reason.filter(|r| !r.trim().is_empty()),
+        run_id: version.run_id.clone(),
+        upload: version.upload.clone(),
     };
     db::set_pin(db_path, &pin).await?;
     let mut version = version;
@@ -208,6 +210,158 @@ pub async fn pin(
         version,
         replaced,
     })
+}
+
+/// The largest file `barca pin --from-file` and `POST /assets/{name}/pin/upload` accept.
+pub const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
+
+/// Data an operator supplies to pin an asset to (`barca pin --from-file`).
+#[derive(Debug, Clone)]
+pub struct Supplied {
+    pub bytes: Vec<u8>,
+    /// The base name of the file supplied; its extension gives the format unless `format` does.
+    pub file_name: String,
+    /// `json`, `parquet`, `csv` or `pickle`.
+    pub format: Option<String>,
+}
+
+/// The format of an upload: the one named, else the file name's extension.
+pub fn upload_format(file_name: &str, format: Option<&str>) -> Result<String, BarcaError> {
+    let known = ["json", "parquet", "csv", "pickle"];
+    let fmt = match format.map(str::trim).filter(|f| !f.is_empty()) {
+        Some("pkl") => "pickle".to_string(),
+        Some(f) => f.to_ascii_lowercase(),
+        None => crate::artifact_format::format_of(file_name).to_string(),
+    };
+    if known.contains(&fmt.as_str()) {
+        Ok(fmt)
+    } else {
+        Err(BarcaError::Usage(format!(
+            "cannot tell the format of '{file_name}': name a .json, .parquet, .csv or .pkl file, \
+             or give the format (json, parquet, csv or pickle)"
+        )))
+    }
+}
+
+/// The run hash of an upload of `bytes`: derived from the content, never equal to a computed
+/// run hash.
+pub fn upload_run_hash(bytes: &[u8]) -> String {
+    let mut tagged = b"barca-upload\0".to_vec();
+    tagged.extend_from_slice(bytes);
+    crate::hash::sha256_hex(&tagged)
+}
+
+/// Load the artifact at `path` with the reader runs use (`barca._value` `check`); why not.
+async fn check_loads(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    path: &str,
+    format: &str,
+) -> Result<(), String> {
+    let request = serde_json::json!({
+        "op": "check",
+        "artifacts": [{"path": path, "format": format}],
+    });
+    let cmd = crate::helper_proc::python_module(
+        python,
+        "barca._value",
+        cfg.storage_options_json.as_deref(),
+    );
+    let answers = crate::store_inspect::run_json_helper(cmd, python, &request)
+        .await
+        .map_err(|e| format!("could not run the artifact reader: {e}"))?;
+    match answers.first() {
+        Some(a) if a.get("ok").and_then(serde_json::Value::as_bool) == Some(true) => Ok(()),
+        Some(a) => Err(a
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("the artifact reader returned an unexpected result")
+            .to_string()),
+        None => Err("the artifact reader returned an unexpected result".into()),
+    }
+}
+
+/// Pin `name` to data an operator supplies: the bytes are checked by loading them as runs do,
+/// written as a new artifact of the asset (run hash [`upload_run_hash`]), recorded as a
+/// materialization marked as an upload, and pinned. `db_path` must exist (initialized).
+pub async fn pin_upload(
+    cfg: &crate::config::ResolvedConfig,
+    python: &std::path::Path,
+    dag: &Dag,
+    name: &str,
+    supplied: Supplied,
+    reason: Option<String>,
+    by: Option<String>,
+) -> Result<Pinned, BarcaError> {
+    let (id, ok) = pinnable(dag, name)?;
+    if !ok {
+        return Err(refuse(&id));
+    }
+    let short = short_name(&id).to_string();
+    if supplied.bytes.is_empty() {
+        return Err(BarcaError::Usage(format!(
+            "'{}' is empty: there is nothing to pin '{short}' to",
+            supplied.file_name
+        )));
+    }
+    if supplied.bytes.len() > MAX_UPLOAD_BYTES {
+        return Err(BarcaError::Usage(format!(
+            "'{}' is {} bytes, more than the {} an upload may be",
+            supplied.file_name,
+            supplied.bytes.len(),
+            crate::gc::size::human(MAX_UPLOAD_BYTES as u64)
+        )));
+    }
+    let format = upload_format(&supplied.file_name, supplied.format.as_deref())?;
+    let run_hash = upload_run_hash(&supplied.bytes);
+    let ext = if format == "pickle" { "pkl" } else { &format };
+    let dir = std::path::Path::new(&cfg.local_artifact_dir).join(crate::safe_node_id(&id));
+    let dest = dir.join(format!("{run_hash}.{ext}"));
+    let io = |e: std::io::Error| {
+        BarcaError::Io(std::io::Error::new(
+            e.kind(),
+            format!("could not write the upload to {}: {e}", dest.display()),
+        ))
+    };
+    std::fs::create_dir_all(&dir).map_err(io)?;
+    let tmp = dir.join(format!(".{run_hash}.upload.tmp"));
+    std::fs::write(&tmp, &supplied.bytes).map_err(io)?;
+    let tmp_str = tmp.display().to_string();
+    if let Err(why) = check_loads(python, cfg, &tmp_str, &format).await {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(BarcaError::Usage(format!(
+            "'{}' does not load as {format}: {why}\nNothing was pinned.",
+            supplied.file_name
+        )));
+    }
+    std::fs::rename(&tmp, &dest).map_err(io)?;
+    let upload = db::Upload {
+        uploaded_at: crate::time::rfc3339(chrono::Utc::now().timestamp()),
+        uploaded_by: by.clone(),
+        file_name: Some(supplied.file_name.clone()).filter(|n| !n.is_empty()),
+        reason: reason.clone().filter(|r| !r.trim().is_empty()),
+    };
+    db::record_upload(
+        &cfg.db_path,
+        &db::UploadedArtifact {
+            node_id: id.clone(),
+            run_hash: run_hash.clone(),
+            path: dest.display().to_string(),
+            format,
+            size_bytes: supplied.bytes.len() as u64,
+            upload,
+        },
+    )
+    .await?;
+    pin(
+        &cfg.db_path,
+        dag,
+        name,
+        &Choice::RunHash(run_hash),
+        reason,
+        by,
+    )
+    .await
 }
 
 /// Remove `name`'s pin. Unpinning an asset that is not pinned changes nothing.

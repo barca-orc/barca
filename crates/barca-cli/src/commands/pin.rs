@@ -19,6 +19,12 @@ pub(crate) enum PinAction {
         choice: Choice,
         reason: Option<String>,
     },
+    /// Pin to data the operator supplies (`--from-file`).
+    Upload {
+        target: String,
+        path: PathBuf,
+        reason: Option<String>,
+    },
 }
 
 /// The action the flags of `barca pin` name; a target without one is a usage error.
@@ -26,13 +32,14 @@ pub(crate) fn action(
     target: Option<String>,
     run_hash: Option<String>,
     previous: bool,
+    from_file: Option<PathBuf>,
     versions: bool,
     limit: Option<usize>,
     reason: Option<String>,
 ) -> Result<PinAction, CliError> {
     let usage = |text: &str| CliError::from_prose(ErrorKind::Usage, text.to_string());
     let Some(target) = target else {
-        if run_hash.is_some() || previous || versions || reason.is_some() {
+        if run_hash.is_some() || previous || from_file.is_some() || versions || reason.is_some() {
             return Err(usage(
                 "error: name the asset to pin: barca pin <TARGET> --previous\n\
                  Without a target, `barca pin` lists every pin.",
@@ -46,12 +53,20 @@ pub(crate) fn action(
             limit: limit.unwrap_or(barca_core::pins::DEFAULT_VERSIONS),
         });
     }
+    if let Some(path) = from_file {
+        return Ok(PinAction::Upload {
+            target,
+            path,
+            reason,
+        });
+    }
     let choice = match (run_hash, previous) {
         (Some(hash), _) => Choice::RunHash(hash),
         (None, true) => Choice::Previous,
         (None, false) => {
             return Err(usage(&format!(
-                "error: say which materialization to pin: --run-hash <HASH> or --previous\n\
+                "error: say which materialization to pin: --run-hash <HASH>, --previous or \
+                 --from-file <PATH>\n\
                  List them with: barca pin {target} --versions"
             )));
         }
@@ -113,8 +128,74 @@ pub(crate) async fn pin_cmd(
             .map_err(engine)?;
             render_pinned(&pinned, json);
         }
+        PinAction::Upload {
+            target,
+            path,
+            reason,
+        } => {
+            let supplied = read_supplied(path)?;
+            barca_core::layout::ensure_env_dirs(&cfg.env).map_err(engine)?;
+            barca_core::db::init_db(&cfg.db_path)
+                .await
+                .map_err(engine)?;
+            let pinned = barca_core::pins::pin_upload(
+                &cfg,
+                python,
+                &dag,
+                target,
+                supplied,
+                reason.clone(),
+                barca_core::pins::local_actor(),
+            )
+            .await
+            .map_err(engine)?;
+            render_pinned(&pinned, json);
+        }
     }
     Ok(())
+}
+
+/// The file `--from-file` names, read whole (refused over the upload limit before reading).
+pub(crate) fn read_supplied(
+    path: &std::path::Path,
+) -> Result<barca_core::pins::Supplied, CliError> {
+    let usage = |text: String| CliError::from_prose(ErrorKind::Usage, text);
+    let meta = std::fs::metadata(path).map_err(|e| {
+        usage(format!(
+            "error: cannot read --from-file {}: {e}",
+            path.display()
+        ))
+    })?;
+    if !meta.is_file() {
+        return Err(usage(format!(
+            "error: --from-file {} is not a file",
+            path.display()
+        )));
+    }
+    if meta.len() > barca_core::pins::MAX_UPLOAD_BYTES as u64 {
+        return Err(usage(format!(
+            "error: --from-file {} is {} bytes, more than the {} an upload may be",
+            path.display(),
+            meta.len(),
+            barca_core::gc::size::human(barca_core::pins::MAX_UPLOAD_BYTES as u64)
+        )));
+    }
+    let bytes = std::fs::read(path).map_err(|e| {
+        usage(format!(
+            "error: cannot read --from-file {}: {e}",
+            path.display()
+        ))
+    })?;
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    barca_core::pins::upload_format(&file_name, None).map_err(|e| usage(format!("error: {e}")))?;
+    Ok(barca_core::pins::Supplied {
+        bytes,
+        file_name,
+        format: None,
+    })
 }
 
 pub(crate) async fn unpin_cmd(
@@ -226,6 +307,9 @@ pub(crate) fn render_versions(v: &Versions, json: bool) {
         if !ver.available {
             note.push("evicted");
         }
+        if ver.upload.is_some() {
+            note.push("uploaded");
+        }
         barca_core::outln!(
             "{:<12}  {:<20}  {:>9}  {:>9}  {:<24}  {}",
             hash(&ver.run_hash),
@@ -243,6 +327,21 @@ pub(crate) fn render_versions(v: &Versions, json: bool) {
 pub(crate) fn render_pinned(p: &Pinned, json: bool) {
     if json {
         json_line(p);
+        return;
+    }
+    if let Some(up) = &p.version.upload {
+        barca_core::outln!(
+            "pinned {} at {}, uploaded from {} ({}); runs read it and never recompute it until \
+             `barca unpin {}`",
+            short(&p.node_id),
+            hash(&p.pin.run_hash),
+            up.file_name.as_deref().unwrap_or("a file"),
+            size(&p.version),
+            short(&p.node_id)
+        );
+        if let Some(old) = &p.replaced {
+            barca_core::errln!("[barca] replaced its pin at {}", hash(&old.run_hash));
+        }
         return;
     }
     barca_core::outln!(

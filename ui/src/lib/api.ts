@@ -6,6 +6,7 @@
    ============================================================ */
 
 import { connectionToken, redactCredential, serverFetch } from './credentials'
+import type { Pins } from './pins'
 import type { PauseRequest, Pauses } from './pauses'
 
 import type {
@@ -151,6 +152,8 @@ export const api = {
     request<unknown>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   /** The paused assets (`barca pause`): scheduled runs skip them until resumed. */
   pauses: () => request<Pauses>('/pauses'),
+  /** Every pinned asset (`barca pin`). */
+  pins: () => request<Pins>('/pins'),
   /** Pause a node (with `downstream`, everything below it) or a file. 403 on a read-only server. */
   pauseAssets: (body: PauseRequest) => request<Pauses>('/pauses', { method: 'POST', body: JSON.stringify(body) }),
   /** Resume a node, a file, or (`all`) every paused node. */
@@ -165,6 +168,16 @@ export const api = {
   /** Pin an asset to one of its versions (`barca pin`). 403 on a read-only server. */
   pinAsset: (name: string, runHash: string, reason?: string) =>
     request<PinResult>(`/assets/${encodeURIComponent(name)}/pin`, { method: 'POST', body: JSON.stringify({ run_hash: runHash, reason: reason ?? null }) }),
+  /** Pin an asset to a file the operator supplies (`barca pin --from-file`); its extension gives the format. */
+  uploadPin: (name: string, file: Blob, fileName: string, reason?: string) => {
+    const query = new URLSearchParams({ file_name: fileName })
+    if (reason) query.set('reason', reason)
+    return request<PinResult>(`/assets/${encodeURIComponent(name)}/pin/upload?${query}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+    })
+  },
   /** Remove an asset's pin (`barca unpin`). */
   unpinAsset: (name: string) => request<UnpinResult>(`/assets/${encodeURIComponent(name)}/pin`, { method: 'DELETE' }),
   /** `barca state reset`: move the metadata database aside and start an empty one. */

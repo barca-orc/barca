@@ -26,6 +26,8 @@ export interface Filters {
   failed: boolean
   /** Only nodes a failure upstream keeps from running (`blocked`): derived, so a filter of its own. */
   blocked: boolean
+  /** Only pinned nodes (`barca pin`): they read `pinned`, so a filter of its own. */
+  pinned: boolean
   /** Empty = any kind. */
   kinds: Kind[]
   lastRun: LastRun
@@ -40,6 +42,7 @@ export const EMPTY_FILTERS: Filters = {
   states: [],
   failed: false,
   blocked: false,
+  pinned: false,
   kinds: [],
   lastRun: 'any',
   scheduled: false,
@@ -68,7 +71,7 @@ const hasDefaults = (d: StateDefaults) => d.states.length > 0 || d.failed || d.b
 
 /** The default's states are in force: only `state=all` in the URL lifts them. */
 export function onDefaultStates(f: Filters, defaults: StateDefaults): boolean {
-  return hasDefaults(defaults) && f.failed === defaults.failed && f.blocked === defaults.blocked && f.states.length === defaults.states.length && defaults.states.every((s) => f.states.includes(s))
+  return hasDefaults(defaults) && !f.pinned && f.failed === defaults.failed && f.blocked === defaults.blocked && f.states.length === defaults.states.length && defaults.states.every((s) => f.states.includes(s))
 }
 
 export function isFiltered(f: Filters): boolean {
@@ -77,6 +80,7 @@ export function isFiltered(f: Filters): boolean {
     f.states.length > 0 ||
     f.failed ||
     f.blocked ||
+    f.pinned ||
     f.kinds.length > 0 ||
     f.lastRun !== 'any' ||
     f.scheduled ||
@@ -105,8 +109,8 @@ type Group = 'states' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
  * attempt), `blocked` (a failure upstream keeps it from running) or else its cache state, so a chip's count is the rows it shows.
  */
 function matchesStates(r: AssetRow, f: Filters): boolean {
-  if (f.states.length === 0 && !f.failed && !f.blocked) return true
-  return r.lastFailed ? f.failed : r.blockedBy ? f.blocked : f.states.includes(r.state)
+  if (f.states.length === 0 && !f.failed && !f.blocked && !f.pinned) return true
+  return r.lastFailed ? f.failed : r.pinned !== null ? f.pinned : r.blockedBy ? f.blocked : f.states.includes(r.state)
 }
 
 interface FilterOptions {
@@ -138,6 +142,8 @@ interface FacetCounts {
   failed: number
   /** Rows a failure upstream keeps from running. */
   blocked: number
+  /** Pinned rows. */
+  pinned: number
   kinds: Record<Kind, number>
   lastRun: Record<LastRun, number>
   scheduled: number
@@ -148,8 +154,10 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
   const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
   let failed = 0
   let blocked = 0
+  let pinned = 0
   for (const r of filterExcept(rows, f, nowMs, 'states', opts)) {
     if (r.lastFailed) failed += 1
+    else if (r.pinned !== null) pinned += 1
     else if (r.blockedBy) blocked += 1
     else states[r.state] += 1
   }
@@ -166,6 +174,7 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
     states,
     failed,
     blocked,
+    pinned,
     kinds,
     lastRun,
     scheduled: filterExcept(rows, f, nowMs, 'scheduled', opts).filter((r) => r.nextRunMs !== null)
@@ -176,7 +185,7 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
 
 // ── URL ───────────────────────────────────────────────────────────────────────
 
-const PARAMS = ['q', 'state', 'failed', 'blocked', 'kind', 'ran', 'scheduled', 'partitioned'] as const
+const PARAMS = ['q', 'state', 'failed', 'blocked', 'pinned', 'kind', 'ran', 'scheduled', 'partitioned'] as const
 
 function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] {
   if (!raw) return []
@@ -189,12 +198,13 @@ function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] 
  */
 export function parseFilters(p: URLSearchParams, defaults: StateDefaults = NO_DEFAULTS): Filters {
   const ran = p.get('ran')
-  const named = p.has('state') || p.has('failed') || p.has('blocked')
+  const named = p.has('state') || p.has('failed') || p.has('blocked') || p.has('pinned')
   return {
     query: p.get('q') ?? '',
     states: named ? list(p.get('state'), CACHE_STATES) : [...defaults.states],
     failed: named ? p.get('failed') === '1' : defaults.failed,
     blocked: named ? p.get('blocked') === '1' : defaults.blocked,
+    pinned: named ? p.get('pinned') === '1' : false,
     kinds: list(p.get('kind'), KINDS),
     lastRun: LAST_RUNS.find((l) => l === ran) ?? 'any',
     scheduled: p.get('scheduled') === '1',
@@ -212,6 +222,7 @@ export function writeFilters(params: URLSearchParams, f: Filters, defaults: Stat
     else if (hasDefaults(defaults)) p.set('state', 'all')
     if (f.failed) p.set('failed', '1')
     if (f.blocked) p.set('blocked', '1')
+    if (f.pinned) p.set('pinned', '1')
   }
   if (f.kinds.length) p.set('kind', f.kinds.join(','))
   if (f.lastRun !== 'any') p.set('ran', f.lastRun)

@@ -56,6 +56,32 @@ pub(crate) async fn pin(
             let pinned = parse(server, "POST /assets/{name}/pin", value)?;
             render_pinned(&pinned, json);
         }
+        PinAction::Upload {
+            target,
+            path,
+            reason,
+        } => {
+            let supplied = crate::commands::pin::read_supplied(path)?;
+            let mut route = format!(
+                "/assets/{}/pin/upload?file_name={}",
+                encode(target),
+                encode(&supplied.file_name)
+            );
+            if let Some(reason) = reason {
+                route.push_str(&format!("&reason={}", encode(reason)));
+            }
+            let what = format!("POST /assets/{}/pin/upload", encode(target));
+            let request = server
+                .http
+                .request(reqwest::Method::POST, &route)?
+                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                .body(supplied.bytes);
+            let (_, body) = server.send(request, &what).await?;
+            let value: Value = serde_json::from_slice(&body)
+                .map_err(|e| server.unexpected(&what, &e.to_string()))?;
+            let pinned = parse(server, &what, value)?;
+            render_pinned(&pinned, json);
+        }
     }
     Ok(())
 }
