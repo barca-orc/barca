@@ -1840,3 +1840,142 @@ async fn pin_upload_matches_contract() {
     let (status, _) = upload(&read_only, "/assets/first/pin/upload?format=json", b"{}").await;
     assert_eq!(status, 403);
 }
+
+#[tokio::test]
+async fn partition_grid_and_key_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path(), false);
+    std::fs::write(
+        dir.path().join("pipeline.py"),
+        r#"
+from barca import asset, partitions, partitions_from
+@asset(partitions={"k": partitions(["a", "b", "c"])})
+def base(k: str) -> dict:
+    if k == "b":
+        raise ValueError(f"no rows for {k}")
+    return {"k": k, "n": len(k)}
+@asset(partitions={"k": partitions_from(base)})
+def follow(k: str, base: dict) -> dict:
+    return {"k": k, "seen": base["n"]}
+@asset()
+def plain() -> dict:
+    return {}
+"#,
+    )
+    .unwrap();
+    let router = app(cfg);
+    // Before any run: every key never ran.
+    let grid = checked(
+        &router,
+        "GET",
+        "/assets/base/partitions/grid",
+        "/assets/{name}/partitions/grid",
+        200,
+    )
+    .await;
+    assert_eq!(grid["states"], "nnn");
+    let names = |ids: &Value| -> Vec<String> {
+        ids.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                let id = v.as_str().or_else(|| v["id"].as_str()).unwrap();
+                let state = v["state"]
+                    .as_str()
+                    .map(|s| format!("={s}"))
+                    .unwrap_or_default();
+                format!("{}{state}", id.rsplit(':').next().unwrap())
+            })
+            .collect()
+    };
+    assert_eq!(names(&grid["chain"]), ["base", "follow"]);
+    assert_eq!(
+        grid["dimensions"],
+        json!([{"name": "k", "values": ["a", "b", "c"]}])
+    );
+    let handle = checked(&router, "POST", "/get/follow", "/get/{target}", 200).await["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    wait(&router, &handle).await;
+    let url = "/assets/base/partitions/grid";
+    let grid = checked(&router, "GET", url, "/assets/{name}/partitions/grid", 200).await;
+    assert_eq!(grid["states"], "cfc");
+    assert_eq!(grid["counts"]["failed"], 1);
+    assert_eq!(grid["error"], json!({"1": 0}));
+    assert_eq!(grid["errors"][0]["error"], "ValueError: no rows for <k>");
+    assert_eq!(grid["runs"], json!([handle]));
+    not_modified(&router, url, "/assets/{name}/partitions/grid").await;
+    checked(&router, "HEAD", url, "/assets/{name}/partitions/grid", 200).await;
+    checked(&router, "PUT", url, "/assets/{name}/partitions/grid", 405).await;
+    // The same key downstream waits on the failed one.
+    let follow = checked(
+        &router,
+        "GET",
+        "/assets/follow/partitions/grid",
+        "/assets/{name}/partitions/grid",
+        200,
+    )
+    .await;
+    assert_eq!(follow["states"], "cbc");
+    assert_eq!(follow["counts"]["blocked"], 1);
+    let path = "/assets/{name}/partitions/key";
+    let failed = checked(
+        &router,
+        "GET",
+        "/assets/follow/partitions/key?key=k=b",
+        path,
+        200,
+    )
+    .await;
+    assert_eq!(failed["state"], "b");
+    assert_eq!(names(&failed["chain"]), ["base=f", "follow=b"]);
+    assert_eq!(failed["output"], Value::Null);
+    let fresh = checked(
+        &router,
+        "GET",
+        "/assets/follow/partitions/key?key=k=a&sample=2",
+        path,
+        200,
+    )
+    .await;
+    assert_eq!(fresh["state"], "c");
+    assert_eq!(fresh["attempts"][0]["status"], "success");
+    assert!(
+        fresh["output"]["step"]
+            .as_str()
+            .unwrap()
+            .ends_with(":follow[k=a]")
+    );
+    assert!(
+        fresh["inputs"][0]["step"]
+            .as_str()
+            .unwrap()
+            .ends_with(":base[k=a]")
+    );
+    assert!(fresh["inputs"][0]["shape"].is_object());
+    checked(
+        &router,
+        "GET",
+        "/assets/follow/partitions/key?key=k=zzz",
+        path,
+        404,
+    )
+    .await;
+    checked(
+        &router,
+        "GET",
+        "/assets/plain/partitions/grid",
+        "/assets/{name}/partitions/grid",
+        400,
+    )
+    .await;
+    checked(
+        &router,
+        "GET",
+        "/assets/missing/partitions/grid",
+        "/assets/{name}/partitions/grid",
+        404,
+    )
+    .await;
+}

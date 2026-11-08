@@ -83,7 +83,10 @@ pub(crate) use materializations::{
 pub use materializations::{max_materialization_id, succeeded_since};
 pub(crate) use partition_keys::FailedKeys;
 pub(crate) use partition_keys::failed_partition_keys;
-pub use partition_keys::{PartitionKeys, PartitionKeysFilter, partition_keys};
+pub use partition_keys::{
+    KeyAttempt, LatestAttempt, PartitionErrorGroup, PartitionKeyRow, PartitionKeys,
+    PartitionKeysFilter, error_shape, key_attempts, latest_attempts, partition_keys,
+};
 pub use pins::{
     AssetPin, Upload, UploadedArtifact, Version, clear_pin, get_pins, get_versions, record_upload,
     set_pin,

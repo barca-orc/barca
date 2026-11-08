@@ -325,13 +325,35 @@ pub(crate) async fn read_shapes(
     if wanted.is_empty() {
         return;
     }
+    let artifacts: Vec<(String, String)> = wanted
+        .iter()
+        .map(|(_, path, format)| (path.clone(), format.clone()))
+        .collect();
+    let shapes = artifact_shapes(python, cfg, &artifacts, sample, fields).await;
+    for ((i, _, _), shape) in wanted.into_iter().zip(shapes) {
+        nodes[i].shape = Some(shape);
+    }
+}
+
+/// The shape of each artifact (`(path, format)`), as `barca status` reads it: one per artifact,
+/// a `{note}` where it could not be read.
+pub(crate) async fn artifact_shapes(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    artifacts: &[(String, String)],
+    sample: usize,
+    fields: bool,
+) -> Vec<serde_json::Value> {
+    if artifacts.is_empty() {
+        return Vec::new();
+    }
     let request = serde_json::json!({
         "sample": sample,
         "fields": fields,
         "inspection_cache": cfg.inspection_cache_path(),
-        "artifacts": wanted
+        "artifacts": artifacts
             .iter()
-            .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))
+            .map(|(path, format)| serde_json::json!({"path": path, "format": format}))
             .collect::<Vec<_>>(),
     });
     let inspector = crate::helper_proc::python_module(
@@ -339,13 +361,10 @@ pub(crate) async fn read_shapes(
         "barca._inspect",
         cfg.storage_options_json.as_deref(),
     );
-    let shapes = match run_json_helper(inspector, python, &request).await {
-        Ok(shapes) if shapes.len() == wanted.len() => shapes,
-        Ok(_) => vec![note("the shape reader returned an unexpected result"); wanted.len()],
-        Err(e) => vec![note(&format!("could not run the shape reader: {e}")); wanted.len()],
-    };
-    for ((i, _, _), shape) in wanted.into_iter().zip(shapes) {
-        nodes[i].shape = Some(shape);
+    match run_json_helper(inspector, python, &request).await {
+        Ok(shapes) if shapes.len() == artifacts.len() => shapes,
+        Ok(_) => vec![note("the shape reader returned an unexpected result"); artifacts.len()],
+        Err(e) => vec![note(&format!("could not run the shape reader: {e}")); artifacts.len()],
     }
 }
 

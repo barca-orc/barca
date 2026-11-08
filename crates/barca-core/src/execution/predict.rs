@@ -41,6 +41,40 @@ pub(crate) async fn explain_dag_with_membership(
     rules: &crate::freshness::RunRules,
     file_args: &[String],
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
+    let (explained, members, _) = explain_dag_with_keys(
+        dag,
+        cfg,
+        target_names,
+        policy,
+        command_label,
+        partition,
+        rules,
+        file_args,
+    )
+    .await?;
+    Ok((explained, members))
+}
+
+/// [`explain_dag_with_membership`], and the keys of each partitioned node the dry run predicts
+/// would run: every one, where the report previews a few.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn explain_dag_with_keys(
+    dag: &Dag,
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    policy: CachePolicy,
+    command_label: &str,
+    partition: Option<&crate::selection::PartitionSelection>,
+    rules: &crate::freshness::RunRules,
+    file_args: &[String],
+) -> Result<
+    (
+        ExplainResult,
+        crate::cache::ExpandedMembership,
+        crate::cache::ExpandedMembership,
+    ),
+    BarcaError,
+> {
     let t0 = std::time::Instant::now();
     let mut targets = resolve_targets(dag, target_names, command_label)?;
     // The `Manual` nodes a real run would read as they are, and the cone it would plan.
@@ -237,6 +271,7 @@ pub(crate) async fn explain_dag_with_membership(
     } else {
         Vec::new()
     };
+    let (members, will_run) = state.into_key_sets();
     Ok((
         ExplainResult {
             dry_run: true,
@@ -253,7 +288,8 @@ pub(crate) async fn explain_dag_with_membership(
             capacity,
             partition_selection: narrowing.as_ref().map(|n| n.report()),
         },
-        state.into_membership(),
+        members,
+        will_run,
     ))
 }
 
@@ -540,6 +576,17 @@ pub(super) async fn predict_steps(
         match decision {
             Decision::Run(_) => {
                 ctx.summary.will_run += step.partition_keys.len().max(1);
+                if !step.partition_keys.is_empty() {
+                    ctx.state
+                        .will_run
+                        .entry(step.step_id.base.to_string())
+                        .or_default()
+                        .extend(
+                            step.partition_keys
+                                .iter()
+                                .map(|k| k.display_id(&step.step_id.base)),
+                        );
+                }
                 to_run.push(step);
             }
             Decision::Cached { oref, held, .. } => {
@@ -562,6 +609,11 @@ pub(super) async fn predict_steps(
                     ctx.all_outputs.insert(pdisplay, oref);
                 }
                 if !missing.is_empty() {
+                    ctx.state
+                        .will_run
+                        .entry(step.step_id.base.to_string())
+                        .or_default()
+                        .extend(missing.iter().map(|k| k.display_id(&step.step_id.base)));
                     // Its run hashes, for the keys that run only; not a copy of every key.
                     let mut partial = step.with_keys(missing);
                     partial.run_hashes = partial

@@ -245,6 +245,9 @@ pub struct ReadCache {
     /// When `GET /state` was last asked (unix seconds): [`keep_warm`] works only while
     /// someone is looking.
     last_poll: std::sync::atomic::AtomicI64,
+    /// The last key grids computed (`GET /assets/{name}/partitions/grid`), by node, with what
+    /// they were computed from: kept until the graph or the database changes.
+    grids: Mutex<HashMap<String, (StatusKey, Arc<barca_core::partition_grid::PartitionGrid>)>>,
     /// How many times a graph was loaded for inspection and a status was computed (tests).
     pub(crate) dag_loads: std::sync::atomic::AtomicUsize,
     pub(crate) status_computes: std::sync::atomic::AtomicUsize,
@@ -367,6 +370,45 @@ impl AppState {
     /// The state of the metadata DB on disk now, for keying what is computed from it.
     pub(crate) fn db_state(&self) -> Stamp {
         db_stamp(&self.config.resolved.db_path)
+    }
+
+    /// The key grid of `id` computed over `dag` and the database in state `db`, if it is kept.
+    pub(crate) fn kept_grid(
+        &self,
+        dag: &Arc<Dag>,
+        db: &Stamp,
+        id: &str,
+    ) -> Option<Arc<barca_core::partition_grid::PartitionGrid>> {
+        let key = StatusKey {
+            dag: dag.clone(),
+            db: db.clone(),
+        };
+        let grids = self.reads.grids.lock().unwrap();
+        grids
+            .get(id)
+            .filter(|(k, _)| k.same(&key))
+            .map(|(_, grid)| grid.clone())
+    }
+
+    /// Keep `grid`, computed over `dag` and the database in state `db`, if the database has
+    /// settled: a grid read while a run writes is answered, not kept.
+    pub(crate) fn keep_grid(
+        &self,
+        dag: &Arc<Dag>,
+        db: &Stamp,
+        grid: Arc<barca_core::partition_grid::PartitionGrid>,
+    ) {
+        if !db.settled(SystemTime::now(), DB_SETTLED) {
+            return;
+        }
+        let key = StatusKey {
+            dag: dag.clone(),
+            db: db.clone(),
+        };
+        let mut grids = self.reads.grids.lock().unwrap();
+        // A grid of an older graph or database is never answered again.
+        grids.retain(|_, (k, _)| k.same(&key));
+        grids.insert(grid.id.clone(), (key, grid));
     }
 
     /// `compute()`'s status result for `query` over `dag` and the database in state `db`,
