@@ -1,56 +1,60 @@
 ---
-title: Barca
-description: Run Python tasks, cache assets and manage partitions locally or on one server.
+title: Cached Python pipelines, no platform to run
+description: Barca runs Python functions as a dependency graph and reuses every result whose code and inputs have not changed. One package, no daemon or database to set up.
 template: splash
 hero:
-  tagline: Run tasks. Cache assets. Manage partitions. Locally or on one server.
+  title: Barca
+  tagline: >-
+    Cached Python pipelines, with no platform to run. Decorate functions, declare their inputs, and
+    barca runs only what changed. Everything else comes from the cache. One <code>uv add</code>,
+    no daemon, no database, no config.
+  image:
+    html: |
+      <div class="hero-demo" aria-label="A two-asset pipeline and two runs of barca get">
+        <div class="hero-demo-file">pipeline.py</div>
+        <pre class="hero-demo-code"><code><span class="k">from</span> barca <span class="k">import</span> asset
+
+      <span class="d">@asset()</span>
+      <span class="k">def</span> <span class="f">raw_data</span>() -&gt; list[dict]:
+          <span class="k">return</span> [{<span class="s">"x"</span>: 1}, {<span class="s">"x"</span>: 2}]
+
+      <span class="d">@asset(inputs={"data": raw_data})</span>
+      <span class="k">def</span> <span class="f">summary</span>(data) -&gt; dict:
+          <span class="k">return</span> {<span class="s">"total"</span>: sum(d[<span class="s">"x"</span>] <span class="k">for</span> d <span class="k">in</span> data)}</code></pre>
+        <pre class="hero-demo-term"><code><span class="p">$</span> barca get pipeline.py
+      <span class="m">Run 7357ed8eb218 | all assets in 0.040s (2 steps, 1 phase)</span>
+      <span class="p">$</span> barca get pipeline.py   <span class="m"># nothing changed</span>
+      <span class="m">Run 7357e7b67d18 | all assets in 0.004s (</span><span class="ok">0 steps</span><span class="m">, 1 phase)</span></code></pre>
+      </div>
   actions:
-    - text: Get Started
+    - text: Get started
       link: /getting-started/
       icon: right-arrow
-    - text: View on GitHub
-      link: https://github.com/barca-orc/barca
-      icon: external
+    - text: Compare with Dagster, Prefect, Airflow
+      link: /comparisons/
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Use `@asset` for a cached result and `@task` for an action that runs every time. Declare
-inputs between functions; barca runs their dependencies and reuses unchanged results.
-Partitions give each customer, date or other key its own cache entry.
-
-Start with `barca get` and `barca run` on your machine. Add `barca serve` when you want a
-shared run history, schedules and a web UI. `--server` runs the deployed project's code
-there and prints the result here. [Getting Started](/getting-started/) walks through all
-three: assets, tasks and partitions, then remote execution.
-
-```python
-# pipeline.py
-from barca import asset
-
-
-@asset()
-def raw_data() -> list[dict]:
-    return [{"x": 1}, {"x": 2}, {"x": 3}]
-
-
-@asset(inputs={"data": raw_data})
-def summary(data: list[dict]) -> dict:
-    return {"count": len(data), "total": sum(d["x"] for d in data)}
-```
-
-```
-$ barca get pipeline.py
-[barca] 2/2 steps | done in 0.0s
-Run 51fabebab1c0 | all assets in 0.135s (2 steps, 1 phase)
-
-.barca/artifacts/pipeline.py--summary/....json
-  {
-    "count": 3,
-    "total": 6
-  }
-```
+<div class="stat-strip">
+  <a href="/comparisons/dagster/">
+    <strong>1</strong>
+    <span>package to install. Dagster installs 48</span>
+  </a>
+  <a href="/comparisons/dagster/">
+    <strong>73 ms</strong>
+    <span>for a first run of two assets. Dagster takes 3.6 s</span>
+  </a>
+  <a href="/comparisons/dagster/">
+    <strong>13 ms</strong>
+    <span>for a rerun when nothing changed</span>
+  </a>
+</div>
+<p class="stat-note">
+  Measured with barca 0.28.0 and Dagster 1.13.26 on 2026-10-21;
+  [method and raw numbers](/comparisons/dagster/).
+</p>
 
 ## Install
 
@@ -58,53 +62,73 @@ Run 51fabebab1c0 | all assets in 0.135s (2 steps, 1 phase)
 uv add barca          # or: pip install barca
 ```
 
-Python 3.12 or later; uv is not required. [Getting Started](/getting-started/) walks through
-the first run.
+Python 3.12 or later. Wheels for macOS on Apple Silicon and Linux (x86-64 and arm64).
 
-## What to know first
+## Where to go next
 
 <CardGrid>
-	<Card title="Where results live" icon="document">
-		`.barca/` in the project root holds the cache and the run history; git already ignores
-		it. A [remote store](/reference/remote-storage/) is this machine's backup and
-		read-through cache; sharing means a [server](/deploying/). `--env` keeps dev and prod apart.
-	</Card>
-	<Card title="Inspection commands" icon="magnifier">
-		`barca list`, `barca status`, `--dry-run` and `barca plan` show what exists, what is
-		cached and what would run. [`barca sql`](/reference/sql/) queries cached results. All
-		print JSON when piped.
-	</Card>
-	<Card title="Outside data comes in through a sensor" icon="information">
-		An asset that reads a file or a bucket in its own body is computed once and then served
-		from cache. Put a `@sensor` in front of it. See the
-		[guide](/guide/#4-sensors-data-from-outside).
-	</Card>
-	<Card title="Large inputs" icon="seti:db">
-		An unannotated parquet input is read in full with pandas. Annotate the parameter
-		`duckdb.DuckDBPyRelation` or `pl.LazyFrame` to read only what the step uses. See
-		[Large inputs](/patterns/08-large-inputs/).
-	</Card>
-	<Card title="Many partitions, few changes" icon="rocket">
-		A sensor that returns `{key: version}` feeds `partitions_from`: each key runs again only
-		when its version changes, out of 200,000 keys. See
-		[Only what changed](/patterns/09-changed-partitions/).
-	</Card>
-	<Card title="get for assets, run for tasks" icon="list-format">
-		The target comes first, then files: `barca get <asset> <files>`,
-		`barca run <task> <files>`. `get` uses the cache. A task always runs. See the
-		[CLI reference](/reference/cli/).
-	</Card>
-	<Card title="Scheduler and server" icon="setting">
-		`barca serve` runs `Schedule("<cron>")` nodes on their cron ticks and serves an HTTP API
-		and a web UI. See [Scheduling](/scheduling/).
-	</Card>
+  <LinkCard
+    title="New to barca"
+    description="Write two assets, run them, change the code and see what reruns."
+    href="/getting-started/"
+  />
+  <LinkCard
+    title="Choosing a tool"
+    description="The same pipelines in barca, Dagster, Prefect and Airflow, with install size and run time measured."
+    href="/comparisons/"
+  />
+  <LinkCard
+    title="Writing a pipeline"
+    description="Short recipes: chain assets, run tasks in parallel, retry, read large inputs lazily, rerun changed partitions."
+    href="/patterns/"
+  />
+  <LinkCard
+    title="Running it on a schedule"
+    description="barca serve runs cron schedules and serves a web UI and an HTTP API. Deploy it as one service."
+    href="/scheduling/"
+  />
+  <LinkCard
+    title="Driving it from a script or AI agent"
+    description="JSON on stdout, stable exit codes and an agent skill file."
+    href="/reference/agents/"
+  />
+  <LinkCard
+    title="Looking something up"
+    description="Every page A to Z, or press ⌘K / Ctrl+K to search."
+    href="/reference/"
+  />
+</CardGrid>
+
+## The ideas
+
+<CardGrid>
+  <Card title="Assets are cached, tasks always run" icon="document">
+    An `@asset` returns a value that barca stores and reuses until its code or an input changes.
+    A `@task` does something (deploy, notify, migrate) and runs every time. `barca get` gets
+    assets, `barca run` runs tasks. See [Assets](/reference/assets/) and
+    [Tasks](/reference/tasks/).
+  </Card>
+  <Card title="Outside data comes in through sensors" icon="information">
+    An asset that reads a file or a bucket in its own body is computed once and then served from
+    cache. Put a `@sensor` in front of it so barca notices when the data changes. See
+    [Sensors](/guide/#4-sensors-data-from-outside).
+  </Card>
+  <Card title="Partitions cache each key on its own" icon="list-format">
+    One function runs once per customer, date or region, and each key reruns only when it
+    changes, even across 200,000 keys. See [Partitions](/reference/partitions/).
+  </Card>
+  <Card title="A server when you want one" icon="setting">
+    Everything above works on your laptop with a local `.barca/` directory. Add `barca serve` for
+    cron schedules, a web UI and a run history the team shares. See
+    [Share Results With a Team](/team-server/).
+  </Card>
 </CardGrid>
 
 ## How it works
 
-The binary reads your Python source statically, so decorators and `inputs=` have to be written
-literally; only a nonliteral `partitions(...)` or `batches(...)` expression and a `batches_by`
-function are evaluated in a resolver subprocess that imports the module. An asset is cached by
-run hash, which covers its code and its inputs,
-not the bytes of its result. [Architecture](/architecture/#a-run) describes a run step by step,
-and [Philosophy](/philosophy/) says what each design choice costs.
+The `barca` binary reads your Python source without importing it, builds the dependency graph and
+runs each step in a pool of Python workers. A result is cached by a hash of its code and its
+inputs, so a step reruns only when one of those changes. Because the graph is read statically,
+decorator arguments such as `inputs=` must be written literally.
+[Architecture](/architecture/#a-run) walks through a run step by step, and
+[Philosophy](/philosophy/) says what each design choice costs.
