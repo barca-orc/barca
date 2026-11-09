@@ -1,0 +1,37 @@
+---
+// Wraps Starlight's MarkdownContent. Design records (RFCs) and contributor pages rank below
+// the user docs in search, and an RFC says up front that it is a design record, so a search
+// hit on a proposal is never mistaken for the reference.
+import Default from '@astrojs/starlight/components/MarkdownContent.astro';
+
+const id = Astro.locals.starlightRoute.entry.id;
+const isRfc = id.startsWith('rfcs/') && id !== 'rfcs/template';
+const isProject = isRfc || id.startsWith('contributing/');
+---
+
+<div data-pagefind-weight={isProject ? '0.1' : undefined}>
+  {
+    isRfc && (
+      <aside class="rfc-note" aria-label="About this page">
+        <strong>Design record.</strong> This RFC explains why and how a feature was designed. For
+        how barca behaves today, see the <a href="/reference/">reference</a>; where they disagree,
+        the reference is right.
+      </aside>
+    )
+  }
+  <Default><slot /></Default>
+</div>
+
+<style>
+  .rfc-note {
+    margin-bottom: 1.5rem;
+    padding: 0.75rem 1rem;
+    border-inline-start: 3px solid var(--sl-color-text-accent);
+    background: var(--sl-color-gray-6);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .rfc-note a {
+    color: var(--sl-color-text-accent);
+  }
+</style>

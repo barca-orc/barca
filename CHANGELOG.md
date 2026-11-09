@@ -10,6 +10,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - UI-only PRs and merge groups run UI checks and browser tests without unrelated backend suites; releases keep full coverage.
 
+### Documentation
+
+- **barca.sh is organized by what you are doing.** The sidebar groups pages as Start Here, Why Barca, Writing Pipelines, Running and Caching, Scheduling and Servers, Storage and Configuration, Scripts and AI Agents, and Recipes (with the worked examples inside), where Reference was one list of 30 pages. Architecture pages are under Internals, and contributor pages and RFCs under Project, both collapsed. `/reference/` lists every page A to Z with what it covers, and `/patterns/`, `/workflows/`, `/comparisons/`, `/rfcs/` and `/contributing/` are index pages instead of 404s. RFCs rank below the reference in search and open with a note that they are design records. "Edit page" links no longer 404. No page moved.
+
 ## 0.42.0 (2026-11-09)
 
 ### Features
