@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 6
 title: "Retries, Timeouts and Failures"
 description: Declare retries and a timeout on the decorator. A step that still fails stops the steps that depend on it and the command exits 1.
 ---

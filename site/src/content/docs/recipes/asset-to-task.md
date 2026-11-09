@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 2
 title: "Feed an Asset to a Task"
 description: An asset produces a cached value; a task reads it and does something with it. The task runs every time.
 ---

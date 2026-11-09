@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 4
 title: "Worked Example: Renaming and Moving an Asset"
 description: What happens to an asset's cache and history when its function is renamed or its file is moved, with and without an explicit name=, on barca 0.18.0.
 ---

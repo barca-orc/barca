@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 5
 title: "Worked Example: Freshness and Schedules"
 description: What the freshness argument does. Schedule fires a node under barca serve, Always nodes below it follow its ticks, and a Manual node is refreshed by hand only.
 ---
