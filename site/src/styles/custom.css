@@ -267,3 +267,69 @@ a[aria-current='true'] {
   font-size: var(--sl-text-xs);
   color: var(--sl-color-gray-3);
 }
+
+/* ----------------------------------------------------------------
+   Diagrams: inline SVG drawn with theme tokens, so they follow
+   light and dark. Wide diagrams scroll sideways on a phone rather
+   than shrinking their text below legibility.
+   ---------------------------------------------------------------- */
+.diagram {
+  margin-block: 1.5rem;
+  overflow-x: auto;
+}
+.diagram svg {
+  display: block;
+  width: 100%;
+  min-width: 36rem;
+  height: auto;
+}
+.diagram figcaption {
+  margin-top: 0.5rem;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-2);
+}
+.diagram .dg-box {
+  fill: var(--sl-color-bg-nav);
+  stroke: var(--sl-color-gray-4);
+  stroke-width: 1;
+}
+.diagram .dg-box.dg-accent {
+  stroke: var(--sl-color-accent-high);
+  stroke-width: 1.5;
+}
+.diagram .dg-box.dg-ok {
+  fill: var(--sl-color-accent-low);
+  stroke: var(--sl-color-accent-high);
+}
+.diagram .dg-box.dg-run {
+  stroke: var(--sl-color-accent-high);
+  stroke-width: 2;
+}
+.diagram text {
+  fill: var(--sl-color-white);
+  font-family: var(--sl-font);
+  font-size: 14px;
+  font-weight: 500;
+}
+.diagram text.dg-sub {
+  fill: var(--sl-color-gray-2);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+.diagram text.dg-label {
+  fill: var(--sl-color-gray-2);
+  font-size: 12px;
+  font-weight: 400;
+}
+.diagram .dg-edge {
+  fill: none;
+  stroke: var(--sl-color-gray-3);
+  stroke-width: 1.5;
+}
+.diagram .dg-edge.dg-hot {
+  stroke: var(--sl-color-accent-high);
+  stroke-width: 2;
+}
+.diagram .dg-head {
+  fill: var(--sl-color-gray-3);
+}
