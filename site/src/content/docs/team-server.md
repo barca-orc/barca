@@ -7,7 +7,8 @@ Once one person has computed something, nobody else has to compute it again. You
 `barca serve` that everyone points at, and you keep using `barca get` exactly as before.
 
 :::tip[Which server page do I need?]
-Start here to set a server up for a team. Then [Deploying barca serve](/deploying/) runs it as
+[Running barca serve](/serve/) maps every server page to the question it answers. Start here to
+set a server up for a team. Then [Deploying barca serve](/deploying/) runs it as
 a long-lived service, [Server Mode](/reference/server-mode/) is the reference for how laptops
 and the server share results, and [Serve Operations](/reference/serve-ops/) covers the run
 queue, restarts and capacity.
