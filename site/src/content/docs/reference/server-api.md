@@ -597,7 +597,7 @@ again), and the server exits 0. A second SIGTERM or SIGINT cancels them instead,
 cancelled: server shutdown` in their logs and `barca.reason: server shutdown` on their
 `barca.run` span; the server exits 1. The queued runs are kept either way. Open `/events` streams
 end once the runs are over, without `run_finished` for a run still queued; the CLI's clients
-reconnect to the next server. See [Deploying](/deploying/#restarting-without-losing-work) for
+reconnect to the next server. See [Deploying](/reference/serve-ops/#restarting-without-losing-work) for
 supervisor grace periods. The first signal marks the runs in flight `draining` in the queue: if
 the server is killed before the drain ends (a grace period that ran out), the next server puts
 them back in the queue, once, instead of recording them interrupted.
@@ -835,7 +835,7 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 - One server per project. Machines share results by pointing at it ([the ledger](#the-ledger));
   a second server on the same project, or a bucket on its own, shares nothing (RFC-0007).
 - A run cancelled by a second shutdown signal is not restarted. Queued runs, and runs the drain
-  put back, resume at the next start ([Restarting without losing work](/deploying/#restarting-without-losing-work));
+  put back, resume at the next start ([Restarting without losing work](/reference/serve-ops/#restarting-without-losing-work));
   a finished run's outcome is kept and `GET /runs/{run_id}` answers it.
 - One machine: steps run in worker processes on the host that runs the server.
 

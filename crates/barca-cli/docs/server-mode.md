@@ -1,5 +1,10 @@
 # Server mode: one ledger for a team, and running commands on it
 
+One `barca serve` can do two things for a team. It runs commands on its own deployed copy of
+the project (`--server`, first below), and it can be the ledger every laptop reads cache hits
+from and records its runs in ("Local computation with shared results"). Opt-in project tokens
+protect both ("Opt-in project tokens").
+
 To execute a deployed project remotely, start `barca serve` there and use an explicit URL:
 
 ```bash
@@ -9,8 +14,9 @@ barca history --server http://barca.internal:8274
 ```
 
 This runs the server's code and keeps history there; it does not upload local edits.
-No shared artifact store is needed for this path. Keep the server on a private network
-or behind an authenticating proxy (https://barca.sh/deploying/).
+No shared artifact store is needed for this path. Turn on project tokens ("Opt-in project
+tokens" below), or keep the server on a private network or behind an authenticating proxy
+(https://barca.sh/deploying/).
 
 ## Local computation with shared results
 

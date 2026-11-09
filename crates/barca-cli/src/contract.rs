@@ -1009,10 +1009,17 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "telemetry",
         file: "telemetry.md",
         slug: "reference/telemetry",
-        title: "Telemetry and Slack Alerts",
-        description: "Report every step and every run to Datadog as a trace of its own, barca \
-                      serve as DogStatsD metrics, and post to Slack when a job starts failing \
-                      or recovers.",
+        title: "Telemetry (Datadog)",
+        description: "Report every step and every run to Datadog as a trace of its own, and \
+                      barca serve as DogStatsD metrics and JSON logs.",
+    },
+    SitePage {
+        topic: "slack",
+        file: "slack.md",
+        slug: "reference/slack",
+        title: "Slack Alerts",
+        description: "Post to Slack when a job starts failing, recovers, or is still failing a \
+                      day later, with BARCA_SLACK_WEBHOOK_URL.",
     },
 ];
 

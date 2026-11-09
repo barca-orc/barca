@@ -267,7 +267,7 @@ Variables with no `barca.toml` key:
 | `BARCA_TELEMETRY` | `datadog` sends finished runs to Datadog. See [Telemetry](/reference/telemetry/) for it and the `DD_*` variables. |
 | `BARCA_COMM_COST_SECONDS` | The scheduler's estimate of the cost of dispatching one step. |
 | `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. See [Telemetry](/reference/telemetry/). |
-| `BARCA_SLACK_WEBHOOK_URL` | A Slack incoming webhook (`https://`): barca posts when a job starts failing, recovers, or is still failing a day later. Never printed. See [Telemetry](/reference/telemetry/). |
+| `BARCA_SLACK_WEBHOOK_URL` | A Slack incoming webhook (`https://`): barca posts when a job starts failing, recovers, or is still failing a day later. Never printed. See [Slack Alerts](/reference/slack/). |
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value warns and `changes` applies. |
 | `BARCA_UI_URL` | Base URL of the web UI; Slack posts link the run id to it. |
 | `BARCA_SERVER_TOKEN` | Experimental. The bearer credential the CLI and the deprecated Python `Client` send to a server with token auth; not combinable with URL userinfo; an invalid one exits 2. See [Server Mode](/reference/server-mode/). |

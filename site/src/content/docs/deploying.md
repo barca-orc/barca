@@ -94,22 +94,14 @@ computes ([Server Mode](/reference/server-mode/)); `barca status`,
 and sends nothing. With a remote store the server backs its history up there, as described below.
 `barca.Client` is deprecated in favour of `barca.get(..., server=True)`.
 
-## Restarting without losing work
+## Restarts and memory limits
 
-A deploy, a reboot or a config change restarts the server, and no accepted run is lost: the run
-queue lives in the metadata DB on the persistent `.barca/`, the server drains on SIGTERM, and the
-new server resumes the queue in order.
-
-```bash
-barca queue pause --server       # optional: nothing new starts; runs in flight finish
-systemctl restart barca          # or: docker restart barca, docker compose up -d
-barca queue resume --server      # if you paused it
-```
-
-Give the supervisor a stop grace longer than the drain timeout; under a supervisor, `barca serve`
-prints the number it needs at startup. A requeued run starts again from its beginning, so make tasks with side
-effects safe to repeat. [Serve Operations](/reference/serve-ops/#restarting-without-losing-work)
-has the drain, the grace period for systemd, Docker and Kubernetes, and what a killed drain costs.
+A deploy, a reboot or a config change restarts the server without losing accepted runs: the run
+queue is in the metadata DB on the persistent `.barca/`, the server drains on SIGTERM, and the new
+server resumes it. Give the supervisor a stop grace of at least what `barca serve` prints at
+startup. Under a container memory limit, give heavy steps a `weight=`.
+[Serve Operations](/reference/serve-ops/) owns both: the drain, grace periods for systemd, Docker
+and Kubernetes, the run queue and capacity.
 
 ## Listen on another interface
 
@@ -242,13 +234,6 @@ What each part is for:
 
 The published port above is bound to the host's loopback. Authentication defaults off, so
 before you bind it to anything wider, add [authentication](#authentication) at the proxy.
-
-### Containers with a memory limit
-
-Under a hard memory limit, heavy steps that become ready together can add up past it and the
-kernel kills one. Give those steps a `weight=` so the steps running at once fit the capacity;
-[Serve Operations](/reference/serve-ops/#containers-with-a-memory-limit) and
-[Heavy steps](/reference/api/decorators/#heavy-steps-weight) show how.
 
 ### Native Debian and Alpine targets
 
@@ -475,12 +460,11 @@ Traefik needs no streaming settings: run events pass straight through.
 
 ## Authentication
 
-Authentication is off by default: anyone who can reach the server can start and cancel runs.
-Turn on [project tokens](/reference/server-mode/#opt-in-project-tokens) with `barca serve --auth token` (or `[server] auth = "token"`): every API request,
-health probes included, then needs a bearer token, which `barca tokens bootstrap` on the host
-starts. A health check in a Compose file or Kubernetes probe needs that token too. You can
-instead, or as well, authenticate at the proxy, for example with nginx basic auth or an SSO
-proxy such as oauth2-proxy:
+Authentication is off by default. To require tokens, follow
+[Requiring a token](/serve/#requiring-a-token-authentication-login). In a container, note that every API request, health
+checks included, then needs a token: a Compose `healthcheck` or Kubernetes probe must send one.
+You can instead, or as well, authenticate at the proxy, for example with nginx basic auth or an
+SSO proxy such as oauth2-proxy:
 
 ```nginx
 location /barca/ {

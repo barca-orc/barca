@@ -62,7 +62,6 @@ An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **H
 
 ## Connecting to a server with tokens
 
-When the server runs with `--auth token`, the UI asks for a credential on its Connect screen: a
-bootstrap code from `barca tokens bootstrap`, or an existing API token. **API tokens** in the
-sidebar then creates named tokens, shows each secret once, and revokes them. See
-[project tokens](/reference/server-mode/#opt-in-project-tokens).
+When the server runs with `--auth token`, the UI asks for a bootstrap code or an API token on its
+Connect screen, and **API tokens** in the sidebar creates and revokes named tokens. The steps are
+in [Requiring a token](/serve/#requiring-a-token-authentication-login).
