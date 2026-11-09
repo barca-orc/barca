@@ -11,6 +11,8 @@ export interface KeysParams {
   node: string | null
   key: string | null
   filter: KeyFilter
+  /** Every key in the table, not only those that need attention (`show=all`). */
+  all: boolean
 }
 
 const VALUE_PREFIX = 'v.'
@@ -25,6 +27,7 @@ export function keysParams(params: URLSearchParams): KeysParams {
   }
   const error = params.get('error')
   const parsed = error === null || error === '' ? NaN : Number(error)
+  const range = params.get('range')?.split('..')
   return {
     node: params.get('node') || null,
     key: params.get('key') || null,
@@ -33,7 +36,9 @@ export function keysParams(params: URLSearchParams): KeysParams {
       values,
       error: Number.isInteger(parsed) && parsed >= 0 ? parsed : null,
       q: params.get('q') ?? '',
+      range: range?.length === 2 && range[0] && range[1] ? { from: range[0], to: range[1] } : null,
     },
+    all: params.get('show') === 'all',
   }
 }
 
@@ -48,12 +53,14 @@ export function keysSearch(p: KeysParams): string {
   }
   if (p.filter.error !== null) out.set('error', String(p.filter.error))
   if (p.filter.q !== '') out.set('q', p.filter.q)
+  if (p.filter.range) out.set('range', `${p.filter.range.from}..${p.filter.range.to}`)
+  if (p.all) out.set('show', 'all')
   return out.toString()
 }
 
 /** The explorer of `node`, optionally at one key or with a filter: the link other pages use. */
 export function keysHref(node: string, extra: { key?: string; filter?: Partial<KeyFilter> } = {}): string {
-  return `/keys?${keysSearch({ node, key: extra.key ?? null, filter: { ...NO_FILTER, ...extra.filter } })}`
+  return `/keys?${keysSearch({ node, key: extra.key ?? null, filter: { ...NO_FILTER, ...extra.filter }, all: false })}`
 }
 
 /** A state chip pressed: it is added to the shown states, or taken out of them. */

@@ -9,9 +9,17 @@ describe('the key explorer address', () => {
     expect(p).toEqual({
       node: 'p.py:events',
       key: 'day=d1,region=apac',
-      filter: { states: ['failed', 'blocked'], values: { region: ['apac', 'emea'] }, error: 0, q: 'd1' },
+      filter: { states: ['failed', 'blocked'], values: { region: ['apac', 'emea'] }, error: 0, q: 'd1', range: null },
+      all: false,
     })
     expect(keysSearch(p)).toBe(search)
+  })
+
+  it('round-trips a range of the long dimension and the all-keys view', () => {
+    const p = keysParams(new URLSearchParams('node=n&range=d1..d9&show=all'))
+    expect(p.filter.range).toEqual({ from: 'd1', to: 'd9' })
+    expect(p.all).toBe(true)
+    expect(keysSearch(p)).toBe('node=n&range=d1..d9&show=all')
   })
 
   it('ignores states it does not know and a malformed error index', () => {

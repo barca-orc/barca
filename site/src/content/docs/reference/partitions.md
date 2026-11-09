@@ -421,26 +421,30 @@ Failed batched calls automatically retry failed partitions in groups at most hal
 ## Exploring keys in the web UI
 
 `barca serve`'s web UI has a key explorer for a partitioned asset: the asset panel's
-**Explore all N keys** opens it (`#/keys?node=<asset>`), and each of the panel's grouped errors
-opens it filtered to that error. It answers from `GET /assets/{name}/partitions/grid`, one request
-for every key, and draws them as a grid:
+**Explore all N keys** (or **See where they are**) opens it (`#/keys?node=<asset>`), and each
+of the panel's grouped errors opens it filtered to that error. It answers from
+`GET /assets/{name}/partitions/grid`, one request for every key, and reads top down, what is
+wrong first:
 
-- **One cell per key, coloured by state**: fresh, stale, never run, failed, or blocked (the same key
-  of an input failed). With two dimensions, one block per value of the shorter one, each running
-  through the longer one in order, every row starting with its first value: a week of failures
-  in one region is a red streak in that region's block.
-- **Filters** by state, by a dimension's value, by error group and by a substring of the key,
-  over a table of the keys they keep (one line per key, a column per dimension; only the lines in
-  view are rendered, so 10,000 keys scroll as fast as ten). The URL holds them, so a filtered view
-  is a link.
-- **One key**, clicked in the grid or the table (`GET /assets/{name}/partitions/key`): its state,
-  error and attempts, the schema and first rows of its result and of the same key of each input,
-  and the same key in every asset of its chain (the partitioned assets that share its keys),
-  each a click away.
-- **Running keys.** Run computes the keys that are not fresh, of the dimension values selected or
-  of the whole asset; Shift-click a second key in the same row to select the keys between, and Run
-  computes those, as `--partition` with each value listed. Keys are known once their source ran:
-  for a `partitions_from(<asset>)` asset that has not, the explorer says so.
+- **The counts**: how many keys are failed, blocked (the same key of an input failed), stale,
+  never run and fresh, each a filter.
+- **The problems**: one line per error of the failed keys, then the blocked, stale and never-run
+  keys, each with how many keys and where they are (`day 2023-03-01 → 2023-03-20 · region apac`),
+  a **Show** that narrows the keys to it and a **Run** that computes them.
+- **The overview**: every key in a few rows, one per value of the shorter dimensions, the longest
+  cut into columns that fit the page, each column drawn in the most urgent state of its keys
+  (fresh is quiet; a column where only a few keys need attention is marked at its foot). Drag
+  across columns to zoom to them, down to one key per column; click a one-key column to open it.
+- **The keys**: those that need attention, or all of them, filtered by dimension value and key
+  text, one line each, in a table that scrolls on its own: the page itself does not scroll. The
+  URL holds every filter and the zoom, so a view is a link.
+- **One key** (`GET /assets/{name}/partitions/key`): its error first, the same key along its
+  chain (the partitioned assets that share its keys), what it read (the same key of each input)
+  and wrote, schema and first rows, and its attempts.
+- **Running keys.** Run in the header computes the keys that are not fresh, of the dimension
+  values selected and the zoomed range or of the whole asset, as `--partition` with each value
+  listed. Keys are known once their source ran: for a `partitions_from(<asset>)` asset that has
+  not, the explorer says so.
 
 See also: [`barca docs batched-partitions`](/reference/batched-partitions/), [`barca docs sinks`](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
 directory per key), `barca docs examples/partitions`.

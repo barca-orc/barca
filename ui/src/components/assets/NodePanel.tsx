@@ -1,5 +1,5 @@
 import { keysHref } from '@/lib/keysPage'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { GitBranch, Play, X } from 'lucide-react'
@@ -53,6 +53,8 @@ interface NodePanelProps {
  */
 export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
   const { zone } = useTimeZone()
+  // The subject under the state: kept as the panel moves from node to node.
+  const [tab, setTab] = useState<PanelTab>('overview')
   const { data: detail, isLoading, isError } = useAssetDetail(node.id)
   const [row] = buildRows([node], nowMs)
   const last = node.last_materialization
@@ -252,6 +254,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         </KeyValue>
       </div>
 
+      {/* Below the state, one subject at a time: the panel never asks for a long scroll. */}
+      <div className="barca-panel-tabs" role="tablist" aria-label="Asset details">
+        {PANEL_TABS.map((t) => (
+          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
+            {t.label}{t.id === 'history' && stats && stats.total_runs > 0 ? <span className="barca-count">{stats.total_runs.toLocaleString()}</span> : null}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'overview' && <>
       {(!summarized || lastMore) && <Section title="Last attempt">
         {last ? (
           <>
@@ -313,6 +325,92 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
       </Section>}
 
+      {!isLoading && <>
+      {node.partitions && (
+        <Section title="Keys">
+          <NodeKeys key={node.id} id={node.id} partitions={node.partitions} />
+        </Section>
+      )}
+
+      <details className="barca-node-technical" key={node.id}>
+        <summary>Technical details</summary>
+        {node.cache.run_hash && (
+          <KeyValue label="cache key">
+            <code title={node.cache.run_hash}>{shortHash(node.cache.run_hash)}</code>
+          </KeyValue>
+        )}
+        {node.cache.artifact && (
+          <KeyValue label="cached result">
+            <code className="barca-wrap">{node.cache.artifact}</code>
+          </KeyValue>
+        )}
+        <KeyValue label="runs when">
+          {detail ? freshnessLabel(detail.asset) : <Skeleton width={72} height={12} />}
+        </KeyValue>
+        {row?.nextRunMs != null && (
+          <KeyValue label="next run"><Absolute at={row.nextRunMs} /></KeyValue>
+        )}
+        {/* Blast radius lists everything downstream; the direct readers are a detail. */}
+        {downstream.length > 0 && (
+          <KeyValue label="read directly by">
+            {downstream.map((n) => (
+              <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
+                {shortName(n.id)}
+              </button>
+            ))}
+          </KeyValue>
+        )}
+        <KeyValue label="partitioned">{node.partitioned ? 'yes' : 'no'}</KeyValue>
+        <KeyValue label="env vars">{node.env.length ? <code>{node.env.join(', ')}</code> : '–'}</KeyValue>
+        <KeyValue label="id">
+          <code className="barca-wrap">{node.id}</code>
+        </KeyValue>
+      </details>
+      </>}
+      </>}
+      {tab === 'data' && <>
+      <Section title="Inputs & output" action={
+        <Button variant="ghost" size="sm" disabled={schema.isFetching} title="Inspect the latest materialized data again. Input schemas describe their own latest outputs."
+          onClick={() => void schema.refetch()}>
+          {schema.isFetching ? 'Inspecting…' : 'Refresh'}
+        </Button>
+      }>
+        <div className="barca-schema-content">
+          {schema.isLoading ? <Skeleton height={120} /> : schema.isError ? (
+            <div className="barca-schema-empty">
+              <p>Couldn't load schemas: {schema.error.message}</p>
+              <Button size="sm" variant="ghost" onClick={() => void schema.refetch()}>Retry</Button>
+            </div>
+          ) : (
+            <>
+              <h4 className="barca-schema-label">Output</h4>
+              <div className="barca-schema-output">
+                {output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
+              </div>
+              {/* A source node's inputs are one muted line, not a heading over nothing. */}
+              {node.inputs.length === 0 ? <p className="barca-schema-empty">No inputs: a source node.</p> : (
+                <h4 className="barca-schema-label">Inputs <span>{node.inputs.length}</span></h4>
+              )}
+              {node.inputs.map(id => {
+                const input = schema.data?.find(n => n.id === id)
+                const name = input?.name ?? id.split(':').pop() ?? id
+                return (
+                  <details className="barca-schema-input" key={id}>
+                    <summary>{name}</summary>
+                    <div className="barca-schema-input-body">
+                      <button type="button" className="barca-link" onClick={() => onSelect(id)}>Open {name} →</button>
+                      {input ? <ArtifactSchema node={input} /> : <p className="barca-schema-empty">Input schema unavailable.</p>}
+                    </div>
+                  </details>
+                )
+              })}
+            </>
+          )}
+        </div>
+      </Section>
+
+      </>}
+      {tab === 'history' && <>
       <Section title="History">
         {isLoading && (
           <>
@@ -386,16 +484,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
       </Section>
 
-      {/* What follows History waits for it: drawn under a loading history, it would move down
-          when the runs arrive. */}
+      {/* Drawn under a loading history, it would move down when the runs arrive. */}
       {!isLoading && <>
-      {node.partitions && (
-        <Section title="Keys">
-          <NodeKeys key={node.id} id={node.id} partitions={node.partitions} nowMs={nowMs}
-            onRunKey={runAction.fireKey} runDisabled={runAction.readOnly || runAction.triggering} startingKey={runAction.startingKey} />
-        </Section>
-      )}
-
       {node.partitioned ? (
         // Each key has its versions; an asset with keys is not pinned whole.
         <Section title="Versions">
@@ -405,88 +495,26 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />
       )}
 
-      <Section title="Inputs & output" action={
-        <Button variant="ghost" size="sm" disabled={schema.isFetching} title="Inspect the latest materialized data again. Input schemas describe their own latest outputs."
-          onClick={() => void schema.refetch()}>
-          {schema.isFetching ? 'Inspecting…' : 'Refresh'}
-        </Button>
-      }>
-        <div className="barca-schema-content">
-          {schema.isLoading ? <Skeleton height={120} /> : schema.isError ? (
-            <div className="barca-schema-empty">
-              <p>Couldn't load schemas: {schema.error.message}</p>
-              <Button size="sm" variant="ghost" onClick={() => void schema.refetch()}>Retry</Button>
-            </div>
-          ) : (
-            <>
-              <h4 className="barca-schema-label">Output</h4>
-              <div className="barca-schema-output">
-                {output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
-              </div>
-              {/* A source node's inputs are one muted line, not a heading over nothing. */}
-              {node.inputs.length === 0 ? <p className="barca-schema-empty">No inputs: a source node.</p> : (
-                <h4 className="barca-schema-label">Inputs <span>{node.inputs.length}</span></h4>
-              )}
-              {node.inputs.map(id => {
-                const input = schema.data?.find(n => n.id === id)
-                const name = input?.name ?? id.split(':').pop() ?? id
-                return (
-                  <details className="barca-schema-input" key={id}>
-                    <summary>{name}</summary>
-                    <div className="barca-schema-input-body">
-                      <button type="button" className="barca-link" onClick={() => onSelect(id)}>Open {name} →</button>
-                      {input ? <ArtifactSchema node={input} /> : <p className="barca-schema-empty">Input schema unavailable.</p>}
-                    </div>
-                  </details>
-                )
-              })}
-            </>
-          )}
-        </div>
-      </Section>
-
+      </>}
+      </>}
+      {tab === 'incident' && <>
       <BlastRadius id={node.id} graph={graph} states={byId} paused={pausedSet} onSelect={onSelect} />
       <IncidentControls node={node} graph={graph} readOnly={runAction.readOnly} />
-      {runGuard.dialog}
-
-      <details className="barca-node-technical" key={node.id}>
-        <summary>Technical details</summary>
-        {node.cache.run_hash && (
-          <KeyValue label="cache key">
-            <code title={node.cache.run_hash}>{shortHash(node.cache.run_hash)}</code>
-          </KeyValue>
-        )}
-        {node.cache.artifact && (
-          <KeyValue label="cached result">
-            <code className="barca-wrap">{node.cache.artifact}</code>
-          </KeyValue>
-        )}
-        <KeyValue label="runs when">
-          {detail ? freshnessLabel(detail.asset) : <Skeleton width={72} height={12} />}
-        </KeyValue>
-        {row?.nextRunMs != null && (
-          <KeyValue label="next run"><Absolute at={row.nextRunMs} /></KeyValue>
-        )}
-        {/* Blast radius lists everything downstream; the direct readers are a detail. */}
-        {downstream.length > 0 && (
-          <KeyValue label="read directly by">
-            {downstream.map((n) => (
-              <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
-                {shortName(n.id)}
-              </button>
-            ))}
-          </KeyValue>
-        )}
-        <KeyValue label="partitioned">{node.partitioned ? 'yes' : 'no'}</KeyValue>
-        <KeyValue label="env vars">{node.env.length ? <code>{node.env.join(', ')}</code> : '–'}</KeyValue>
-        <KeyValue label="id">
-          <code className="barca-wrap">{node.id}</code>
-        </KeyValue>
-      </details>
       </>}
+      {runGuard.dialog}
     </SidePanel>
   )
 }
+
+type PanelTab = 'overview' | 'data' | 'history' | 'incident'
+
+/** The panel's subjects under its state, one shown at a time. */
+const PANEL_TABS: ReadonlyArray<{ id: PanelTab; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'data', label: 'Data' },
+  { id: 'history', label: 'History' },
+  { id: 'incident', label: 'Incident' },
+]
 
 /** A node's recent executions, newest first, each failure's error behind a disclosure. */
 /** An error's first line, to tell whether two runs failed the same way. */

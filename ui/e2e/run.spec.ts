@@ -103,9 +103,9 @@ test.describe('node panel', () => {
     // The slot is there from the start (a skeleton); the bars arrive with the run history.
     await expect.poll(() => hist.locator('.barca-hist-bars span').count()).toBeGreaterThan(1)
     await expect(hist.locator('.is-last')).toHaveCount(1)
-    // A task never uses the cache, so the panel has no cache-hit stat for it.
+    // A task never uses the cache, so the panel has no cache-hit stat for it (on its History tab).
+    await page.getByRole('complementary', { name: /details$/ }).getByRole('tab', { name: /History/ }).click()
     await expect(page.getByRole('complementary', { name: /details$/ }).locator('.barca-stats')).not.toContainText('cache hits')
-    await hist.scrollIntoViewIfNeeded()
     await page.screenshot({ path: 'test-results/duration-histogram.png' })
   })
 })

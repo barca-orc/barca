@@ -346,3 +346,13 @@ a.barca-btn { text-decoration: none; }
 }
 .barca-dag-keys .is-failed { background: var(--state-failed); }
 .barca-dag-keys .is-waiting { background: var(--state-blocked); }
+/* The asset panel's subjects: a row of quiet tabs under its state, the chosen one underlined. */
+.barca-panel-tabs { display: flex; gap: 18px; margin: 18px 0 0; border-bottom: 1px solid var(--border-subtle); }
+.barca-panel-tabs button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 0 8px; margin-bottom: -1px;
+  background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-muted);
+  font: inherit; font-size: var(--text-sm); cursor: pointer;
+}
+.barca-panel-tabs button:hover { color: var(--text-strong); }
+.barca-panel-tabs button[aria-selected='true'] { color: var(--text-strong); border-bottom-color: var(--text-strong); }
+.barca-panel-tabs + .barca-section { border-top: 0; margin-top: 4px; }

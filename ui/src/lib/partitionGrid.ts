@@ -126,12 +126,31 @@ export interface KeyFilter {
   error: number | null
   /** A substring of the key, in any case. */
   q: string
+  /** A stretch of the longest dimension (its values, in order, from and to inclusive). */
+  range: { from: string; to: string } | null
 }
 
-export const NO_FILTER: KeyFilter = { states: [], values: {}, error: null, q: '' }
+export const NO_FILTER: KeyFilter = { states: [], values: {}, error: null, q: '', range: null }
+
+/** The dimension a grid's blocks and its overview run along: the one with the most values. */
+export function alongOf(g: Grid): number {
+  let along = 0
+  g.dims.forEach((d, i) => { if (d.values.length > g.dims[along]!.values.length) along = i })
+  return along
+}
+
+/** A range's index bounds along `alongOf(g)`, or null when it names no value of it. */
+export function rangeBounds(g: Grid, range: KeyFilter['range']): [number, number] | null {
+  if (!range || g.dims.length === 0) return null
+  const values = g.dims[alongOf(g)]!.values
+  const a = values.indexOf(range.from)
+  const b = values.indexOf(range.to)
+  if (a < 0 || b < 0) return null
+  return a <= b ? [a, b] : [b, a]
+}
 
 export function filterIsSet(f: KeyFilter): boolean {
-  return f.states.length > 0 || f.error !== null || f.q.trim() !== '' || Object.values(f.values).some((v) => v.length > 0)
+  return f.states.length > 0 || f.error !== null || f.q.trim() !== '' || f.range !== null || Object.values(f.values).some((v) => v.length > 0)
 }
 
 /**
@@ -147,11 +166,17 @@ export function filterCells(g: Grid, f: KeyFilter): number[] {
   })
   const states = f.states.length > 0 ? new Set(f.states) : null
   const q = f.q.trim().toLowerCase()
+  const bounds = rangeBounds(g, f.range)
+  const along = alongOf(g)
   const out: number[] = []
   for (let cell = 0; cell < g.size; cell++) {
     const state = stateOf(g, cell)
     if (state === null) continue
     if (states && !states.has(state)) continue
+    if (bounds) {
+      const i = Math.floor(cell / g.strides[along]!) % g.dims[along]!.values.length
+      if (i < bounds[0] || i > bounds[1]) continue
+    }
     if (f.error !== null && g.raw.error[String(cell)] !== f.error) continue
     let ok = true
     for (let d = 0; d < kept.length; d++) {
@@ -233,92 +258,7 @@ export function layoutBlocks(g: Grid): GridLayout {
   return { along, blocks }
 }
 
-/** A block and the cell under a canvas point, for hit tests (see `gridGeometry`). */
-export interface GridGeometry {
-  /** Room at the left for each row's first value (the long dimension's), 0 for none. */
-  gutter: number
-  cell: number
-  gap: number
-  columns: number
-  /** Each block's top, below its label. */
-  tops: number[]
-  height: number
-  labelHeight: number
-}
-
-/** How big each cell is, and where each block starts, for a canvas `width` wide. */
-export function gridGeometry(layout: GridLayout, full: number, gutter = 0): GridGeometry {
-  const width = Math.max(40, full - gutter)
-  const longest = Math.max(1, ...layout.blocks.map((b) => b.cells.length))
-  const labelHeight = layout.blocks.length > 1 || layout.blocks[0]?.label ? 20 : 0
-  // Big cells for a few keys, small ones for many: at least 4px, at most 18px.
-  const cell = Math.max(4, Math.min(18, Math.floor(Math.sqrt((width * 260) / Math.max(1, longest * layout.blocks.length)))))
-  const gap = cell >= 8 ? 2 : 1
-  const columns = Math.max(1, Math.floor((width + gap) / (cell + gap)))
-  const tops: number[] = []
-  let y = 0
-  for (const block of layout.blocks) {
-    y += labelHeight
-    tops.push(y)
-    y += Math.ceil(block.cells.length / columns) * (cell + gap) + 10
-  }
-  return { gutter, cell, gap, columns, tops, height: Math.max(0, y - 10), labelHeight }
-}
-
-/** The block and position in it of a canvas point, or null where there is no cell. */
-export function cellAt(layout: GridLayout, geo: GridGeometry, px: number, y: number): { block: number; index: number } | null {
-  const x = px - geo.gutter
-  const step = geo.cell + geo.gap
-  for (let b = 0; b < layout.blocks.length; b++) {
-    const top = geo.tops[b]!
-    const rows = Math.ceil(layout.blocks[b]!.cells.length / geo.columns)
-    if (y < top || y >= top + rows * step) continue
-    const col = Math.floor(x / step)
-    const row = Math.floor((y - top) / step)
-    if (col < 0 || col >= geo.columns || x - col * step >= geo.cell || y - top - row * step >= geo.cell) return null
-    const index = row * geo.columns + col
-    return index < layout.blocks[b]!.cells.length ? { block: b, index } : null
-  }
-  return null
-}
-
-/**
- * A range of one block, from one of its positions to another: the keys between them along the
- * block's dimension, with the block's other values. `selection` is what `POST /runs` takes as
- * `partition` to compute just those keys.
- */
-export interface KeyRange {
-  block: number
-  from: number
-  to: number
-}
-
-export function rangeCells(layout: GridLayout, range: KeyRange): number[] {
-  const block = layout.blocks[range.block]
-  if (!block) return []
-  const [lo, hi] = range.from <= range.to ? [range.from, range.to] : [range.to, range.from]
-  return block.cells.slice(lo, hi + 1)
-}
-
-/** The `partition` selection of a range: `{"day": [...], "region": "apac"}`. */
-export function rangeSelection(g: Grid, layout: GridLayout, range: KeyRange): string | null {
-  const cells = rangeCells(layout, range).filter((cell) => stateOf(g, cell) !== null)
-  if (cells.length === 0) return null
-  const first = coordsOf(g, cells[0]!)
-  const selection: Record<string, string | string[]> = {}
-  g.dims.forEach((d, i) => {
-    selection[d.name] = i === layout.along
-      ? cells.map((cell) => d.values[coordsOf(g, cell)[i]!]!)
-      : d.values[first[i]!]!
-  })
-  if (g.dims.length === 1) {
-    const values = selection[g.dims[0]!.name] as string[]
-    return values.length === 1 ? `${g.dims[0]!.name}=${values[0]}` : JSON.stringify(selection)
-  }
-  return JSON.stringify(selection)
-}
-
-/** The selection of one dimension filter as a run: each filtered dimension's values, every value of the rest. */
+/** The run selection of the dimension filters and the range: each filtered dimension's values, every value of the rest. */
 export function filterSelection(g: Grid, f: KeyFilter): string | null {
   if (f.states.length > 0 || f.error !== null || f.q.trim() !== '') return null
   const selection: Record<string, string[]> = {}
@@ -330,5 +270,177 @@ export function filterSelection(g: Grid, f: KeyFilter): string | null {
       any = true
     }
   }
+  const bounds = rangeBounds(g, f.range)
+  if (bounds) {
+    const d = g.dims[alongOf(g)]!
+    const inRange = d.values.slice(bounds[0], bounds[1] + 1)
+    const kept = selection[d.name]
+    selection[d.name] = kept ? inRange.filter((v) => kept.includes(v)) : inRange
+    any = true
+  }
   return any ? JSON.stringify(selection) : null
+}
+
+// ── What is wrong, where ──────────────────────────────────────────────────────
+
+/** How one group of keys spreads over one dimension: which values, how many keys each. */
+export interface DimSpread {
+  name: string
+  /** Distinct values among the group's keys. */
+  distinct: number
+  /** Of how many the dimension has. */
+  of: number
+  /** The values with the most keys, at most three, most first. */
+  top: Array<{ value: string; keys: number }>
+  /** The first and last value in the dimension's order. */
+  from: string
+  to: string
+  /** The values are one unbroken stretch of the dimension. */
+  contiguous: boolean
+}
+
+/** A problem shared by some keys: one error of the failed keys, or a state (blocked, stale, never run). */
+export interface IssueGroup {
+  kind: 'error' | 'blocked' | 'stale' | 'never_run'
+  /** The error's index, for an error group. */
+  error: number | null
+  /** The error's first line, or what the state means. */
+  title: string
+  cells: number[]
+  spread: DimSpread[]
+}
+
+function spreadOf(g: Grid, cells: readonly number[]): DimSpread[] {
+  return g.dims.map((d, i) => {
+    const counts = new Map<number, number>()
+    for (const cell of cells) {
+      const v = Math.floor(cell / g.strides[i]!) % d.values.length
+      counts.set(v, (counts.get(v) ?? 0) + 1)
+    }
+    const idx = [...counts.keys()].sort((a, b) => a - b)
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 3).map(([v, keys]) => ({ value: d.values[v]!, keys }))
+    return {
+      name: d.name,
+      distinct: idx.length,
+      of: d.values.length,
+      top,
+      from: d.values[idx[0] ?? 0] ?? '',
+      to: d.values[idx[idx.length - 1] ?? 0] ?? '',
+      contiguous: idx.length > 0 && idx[idx.length - 1]! - idx[0]! === idx.length - 1,
+    }
+  })
+}
+
+const STATE_TITLE: Record<'blocked' | 'stale' | 'never_run', string> = {
+  blocked: 'Waiting on the same keys of an input that failed',
+  stale: 'Code or inputs changed since they succeeded',
+  never_run: 'Never run',
+}
+
+/** Every problem of a grid, the most keys first: each error of its failed keys, then blocked, stale and never-run keys. */
+export function issueGroups(g: Grid): IssueGroup[] {
+  const byError = new Map<number, number[]>()
+  const byState: Record<'blocked' | 'stale' | 'never_run', number[]> = { blocked: [], stale: [], never_run: [] }
+  for (let cell = 0; cell < g.size; cell++) {
+    const state = stateOf(g, cell)
+    if (state === 'failed') {
+      const e = g.raw.error[String(cell)] ?? -1
+      const list = byError.get(e) ?? []
+      list.push(cell)
+      byError.set(e, list)
+    } else if (state === 'blocked' || state === 'stale' || state === 'never_run') {
+      byState[state].push(cell)
+    }
+  }
+  const groups: IssueGroup[] = [...byError.entries()].map(([e, cells]) => ({
+    kind: 'error' as const,
+    error: e < 0 ? null : e,
+    title: e < 0 ? 'Failed' : g.raw.errors[e]?.error ?? 'Failed',
+    cells,
+    spread: spreadOf(g, cells),
+  }))
+  groups.sort((a, b) => b.cells.length - a.cells.length)
+  for (const state of ['blocked', 'stale', 'never_run'] as const) {
+    if (byState[state].length > 0) groups.push({ kind: state, error: null, title: STATE_TITLE[state], cells: byState[state], spread: spreadOf(g, byState[state]) })
+  }
+  return groups
+}
+
+/** Where a group sits, in words, for each dimension it does not span whole: `apac`, `2023-03-01 → 2023-03-20`, `7 values`. */
+export function spreadWords(s: DimSpread): string | null {
+  if (s.distinct === s.of && s.of > 1) return null
+  if (s.distinct <= 3) return s.top.map((t) => t.value).join(', ')
+  if (s.contiguous) return `${s.from} → ${s.to}`
+  return `${s.distinct.toLocaleString()} values, ${s.from} … ${s.to}`
+}
+
+// ── The overview: every key in one small picture ──────────────────────────────
+
+/** One column of the overview: a stretch of the long dimension in one row. */
+export interface HeatBin {
+  /** Index bounds along the long dimension, inclusive. */
+  from: number
+  to: number
+  counts: Record<KeyState, number>
+  /** The most urgent state in it; null where it has no key. */
+  worst: KeyState | null
+}
+
+export interface Heatmap {
+  along: number
+  /** One row per value combination of the other dimensions; one row for a one-dimension grid. */
+  rows: Array<{ label: string; bins: HeatBin[] }>
+  /** Labels under the columns: the long dimension's value where each starts, a few of them. */
+  ticks: Array<{ bin: number; label: string }>
+  /** The stretch drawn, inclusive. */
+  window: [number, number]
+}
+
+/**
+ * Every key in at most `columns` columns: each row a block of `layoutBlocks`, its long dimension
+ * cut into equal stretches, each drawn in the most urgent state of its keys. Keys a filter leaves
+ * out still count; `window` zooms to a stretch of the long dimension.
+ */
+export function heatmap(g: Grid, layout: GridLayout, columns: number, window: [number, number] | null = null, maxTicks = 6): Heatmap {
+  const along = layout.along
+  const values = g.dims[along]?.values ?? []
+  const [lo, hi] = window ?? [0, Math.max(0, values.length - 1)]
+  const n = hi - lo + 1
+  const cols = Math.max(1, Math.min(columns, n))
+  const edges = Array.from({ length: cols + 1 }, (_, b) => lo + Math.floor((b * n) / cols))
+  const rows = layout.blocks.map((block) => ({
+    label: block.label.replace(/[^=, ]+=/g, ''),
+    bins: Array.from({ length: cols }, (_, b): HeatBin => {
+      const counts: Record<KeyState, number> = { failed: 0, blocked: 0, stale: 0, never_run: 0, fresh: 0 }
+      for (let i = edges[b]!; i < edges[b + 1]!; i++) {
+        const s = stateOf(g, block.cells[i]!)
+        if (s) counts[s]++
+      }
+      const worst = KEY_STATES.find((s) => counts[s] > 0) ?? null
+      return { from: edges[b]!, to: edges[b + 1]! - 1, counts, worst }
+    }),
+  }))
+  const tickCount = Math.max(1, Math.min(cols, maxTicks))
+  const ticks = Array.from({ length: tickCount }, (_, t) => {
+    const bin = Math.round((t * (cols - 1)) / Math.max(1, tickCount - 1))
+    return { bin, label: values[edges[bin]!] ?? '' }
+  })
+  return { along, rows, ticks, window: [lo, hi] }
+}
+
+/** The run selection that covers an issue's keys: each dimension's values among them (with a few more keys, served from cache when fresh). */
+export function issueSelection(g: Grid, issue: IssueGroup): string {
+  const selection: Record<string, string[]> = {}
+  g.dims.forEach((d, i) => {
+    const seen = new Set<number>()
+    for (const cell of issue.cells) seen.add(Math.floor(cell / g.strides[i]!) % d.values.length)
+    selection[d.name] = [...seen].sort((a, b) => a - b).map((v) => d.values[v]!)
+  })
+  if (g.dims.length === 1 && selection[g.dims[0]!.name]!.length === 1) return `${g.dims[0]!.name}=${selection[g.dims[0]!.name]![0]}`
+  return JSON.stringify(selection)
+}
+
+/** The filter that shows an issue's keys in the table. */
+export function issueFilter(issue: IssueGroup): Pick<KeyFilter, 'states' | 'error'> {
+  return issue.kind === 'error' ? { states: ['failed'], error: issue.error } : { states: [issue.kind], error: null }
 }
