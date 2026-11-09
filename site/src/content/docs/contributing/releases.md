@@ -51,7 +51,7 @@ a pre-commit hook.
 
 ## What the release workflow does
 
-`.github/workflows/release.yml` runs on a `v*` tag:
+`.github/examples/release.yml` runs on a `v*` tag:
 
 1. **Restores or builds the web UI** in each build job: `ui/dist` comes from the cache CI's
    `build` job fills, keyed on a hash of `ui/` (Depot Cache is shared across refs), or from

@@ -149,7 +149,7 @@ and a failure that depends on timing may need several tries. It is not determini
 it explores real timing and does not control the scheduler, the clock or the disk.
 
 `--sabotage` breaks what an invariant watches. `python/tests/test_simulation.py` uses it to prove
-each one can fail, and runs a short seed, in CI's full tier. `.github/workflows/simulation.yml`
+each one can fail, and runs a short seed, in CI's full tier. `.github/examples/simulation.yml`
 runs the long version weekly, with `--strict-reads`: a read the `--read-only` server lost to the
 writer fails it. Those reads (`database disk image is malformed`) came from the server's own check
 of the database file's header, which closed a descriptor of the file and so dropped the process's
@@ -208,7 +208,7 @@ The other site pages are written by hand, and no test compares them with the man
 
 ## What CI runs
 
-`.depot/workflows/ci.yml` runs on every pull request into `main` and on every merge group in
+`.depot/examples/ci.yml` runs on every pull request into `main` and on every merge group in
 the merge queue. It does not run on push to `main`: `main` only moves to a merge group's
 commit, which the queue has just tested. The required checks are `CI / test` and
 `CI / backends`. Each is a job that passes when the jobs it needs succeeded.

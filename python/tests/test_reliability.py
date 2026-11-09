@@ -147,7 +147,7 @@ class TestFanInCache:
         phase merge, landing in the same "runs before its data exists" bug as
         the static-partitions case — just via phase merging instead of chain
         fusion. This is the exact shape documented in
-        workflows/03-parametrized-assets-and-partitions.md's collect() example."""
+        examples/partitions.md's collect() example."""
         f = write_module(
             tmp_path,
             "fanin_dynamic.py",

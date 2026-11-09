@@ -139,7 +139,7 @@ order after the steps above:
 What the hash does not cover (installed packages, environment variables that are not declared
 with `env=`, files the function reads) is listed in `barca docs cache`. A function that reads a
 file or a bucket is computed once and then served from cache; see
-[Sensors and external observations](/workflows/06-sensors-and-external-observations/).
+[Sensors and external observations](/examples/sensors/).
 
 `--no-cache` was removed in 0.24.0; use `--refresh-all`.
 
@@ -162,4 +162,4 @@ barca.get("a", "pipeline.py")   # "yellow banana"
 
 `barca.get` runs the `barca` binary and returns the deserialized value, with the same caching.
 
-Next: [one asset with one input](/workflows/02-single-asset-one-input/).
+Next: [one asset with one input](/examples/one-asset-one-input/).

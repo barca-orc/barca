@@ -31,7 +31,7 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
     ("crates/barca-cli/docs/assets.md", "report", "raw"),
     ("site/src/content/docs/reference/assets.md", "report", "raw"),
     (
-        "site/src/content/docs/patterns/03-ordering-only-deps.md",
+        "site/src/content/docs/recipes/ordering-only-deps.md",
         "seed_data",
         "migrate",
     ),

@@ -84,7 +84,7 @@ Each target is brought up to date, not forced:
 The cache is keyed by the sensor's value, not by time. A scheduled asset that fetches outside
 data in its own body, with no sensor upstream, is computed once and then served from cache on
 every tick. Outside data has to come in through a sensor: see
-[Outside data that changes in place](/workflows/06-sensors-and-external-observations/#outside-data-that-changes-in-place).
+[Outside data that changes in place](/examples/sensors/#outside-data-that-changes-in-place).
 
 Each tick is an ordinary run in `barca history` and `GET /runs`. Its result lists a step for
 each target that was checked, so the `Always` nodes below `prices` appear in the run of
@@ -161,7 +161,7 @@ schedule the sensor once and let the `Always` nodes below it follow instead.
 ## Related pages
 
 - [Scheduling](/scheduling/): cron syntax, time zones, keeping the server running.
-- [Sensors](/workflows/06-sensors-and-external-observations/): outside data, and what a
+- [Sensors](/examples/sensors/): outside data, and what a
   scheduled sensor does.
 - [Server API](/reference/server-api/): `GET /schedule`, pausing a schedule, `POST /runs`, cancelling a run.
 - `barca docs scheduling` in the terminal.

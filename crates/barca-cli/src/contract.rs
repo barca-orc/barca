@@ -944,7 +944,7 @@ const SITE_PAGES: &[SitePage] = &[
     SitePage {
         topic: "incidents",
         file: "incidents.md",
-        slug: "reference/incidents",
+        slug: "reference/pausing",
         title: "Pausing Assets",
         description: "Containing an incident: barca pause and barca resume, and what scheduled \
                       runs and requests do with a paused asset.",

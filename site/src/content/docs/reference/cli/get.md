@@ -88,7 +88,7 @@ stderr, and the exit code is unchanged. With no target the selection applies to 
 sensor; `barca run` and `barca plan` take it too. JSON gains `partition_selection` (the
 selection, each narrowed node's `selected` and `skipped` key counts, `skipped_nodes`). A
 dimension no node in the cone has, a value no node with that dimension has, or a target the
-selection would skip is a usage error (exit 2). See [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/#selecting-keys-with---partition). When some keys fail the run
+selection would skip is a usage error (exit 2). See [Parametrized Assets and Partitions](/examples/partitions/#selecting-keys-with---partition). When some keys fail the run
 fails (exit 1, `failed_node` names the key) and `final_output` in the result line holds the
 keys that succeeded; how a partial failure is reported may still change
 (`barca docs partitions`).

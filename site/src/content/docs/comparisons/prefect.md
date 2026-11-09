@@ -139,7 +139,7 @@ later Prefect release, except where a note dated 2026-10-21 says so.
 
 - `process_customer.map(customer_ids)` fans one task out over a list in one call. barca's
   equivalents are `parallel_map` inside a task and `partitions` on an asset
-  ([Parallel tasks](/patterns/04-parallel-tasks/)).
+  ([Parallel tasks](/recipes/parallel-tasks/)).
 - Flow runs get generated names such as "tricky-kiwi". barca run ids are hexadecimal strings.
 - `prefect flow-run ls` listed past runs with their status across separate invocations.
   barca's equivalent is `barca history`.

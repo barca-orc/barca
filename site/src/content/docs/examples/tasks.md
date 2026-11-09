@@ -164,7 +164,7 @@ warming cache; _migrate is None
 [barca] 2/2 steps | done in 0.0s
 ```
 
-See [Ordering-Only Dependencies](/patterns/03-ordering-only-deps/).
+See [Ordering-Only Dependencies](/recipes/ordering-only-deps/).
 
 ## Several tasks in one run
 
@@ -205,15 +205,15 @@ A task as the target of `barca get`, and an asset as the target of `barca run`, 
 `barca get pipeline.py` with no target computes the assets and skips every task, naming them on
 stderr. A task as an input to an asset is rejected when the graph is built (exit 2); a sensor
 cannot have inputs of any kind, so a task cannot feed one either. See
-[Asset-to-Task](/patterns/02-asset-to-task/#limits) for the messages.
+[Asset-to-Task](/recipes/asset-to-task/#limits) for the messages.
 
 ## Related pages
 
-- [Error Handling](/patterns/06-error-handling/) and
-  [Execution Controls](/workflows/09-execution-controls-and-ad-hoc-params/): `retries=`,
+- [Error Handling](/recipes/retries-timeouts-failures/) and
+  [Execution Controls](/examples/timeouts-and-cancelling/): `retries=`,
   `retry_backoff=` and `timeout_seconds=` work on tasks as they do on assets.
-- [Freshness and Schedules](/workflows/05-schedule-driven-reconciliation-and-effects/):
+- [Freshness and Schedules](/examples/freshness-and-schedules/):
   `@task(freshness=Schedule("<cron>"))` runs a task on a timer under `barca serve`.
-- [Parallel Tasks](/patterns/04-parallel-tasks/): `parallel()` and `parallel_map()` inside a task.
+- [Parallel Tasks](/recipes/parallel-tasks/): `parallel()` and `parallel_map()` inside a task.
 - [`examples/basic_app`](https://github.com/barca-orc/barca/tree/main/examples/basic_app): a
   task that reads an asset, and an ordering-only chain.

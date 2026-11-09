@@ -52,7 +52,7 @@ returns or prints.
 
 To make a failed check stop everything after it and fail the command, raise in a step and
 make the later steps depend on it. The `_` prefix makes the dependency ordering-only
-([Ordering-Only Dependencies](/patterns/03-ordering-only-deps/)).
+([Ordering-Only Dependencies](/recipes/ordering-only-deps/)).
 
 ```python
 @task(inputs={"result": validation})

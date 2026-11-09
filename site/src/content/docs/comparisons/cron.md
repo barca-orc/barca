@@ -98,7 +98,7 @@ Three limits on the barca side:
 - A tick brings a scheduled asset up to date; it does not force it to recompute. An asset that
   fetches outside data in its own body is computed once and then served from cache on every
   tick. Outside data has to come in through a sensor
-  ([Sensors](/workflows/06-sensors-and-external-observations/)). A scheduled task runs on every
+  ([Sensors](/examples/sensors/)). A scheduled task runs on every
   tick.
 
 ## When to use which
