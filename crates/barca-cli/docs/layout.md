@@ -24,7 +24,7 @@ configuration page points there too. Delete nothing by hand to force a recompute
 `<ext>` is `.json`, `.pkl`, `.parquet` or `.csv` (see `barca docs types`). An artifact's path
 names the computation, not the bytes: the run hash covers the step's code and inputs, so the same
 step with the same inputs always writes the same path, and computing it again overwrites the file
-(`barca docs cache`, "Recompute byte checks"). To keep artifacts and a backup of the history in a bucket, set
+(`barca docs artifacts`, "Recompute byte checks"). To keep artifacts and a backup of the history in a bucket, set
 `BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca

@@ -6,6 +6,8 @@ day while it keeps failing**. It never posts for an ordinary success, a fully ca
 skipped `barca serve` tick, a cancelled run or a run that was killed. Like Datadog it covers
 `barca get`, `barca run` and every run `barca serve` starts.
 
+## Turning it on
+
 ```bash
 export BARCA_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/XXXX
 barca serve --timezone utc
@@ -22,6 +24,8 @@ on the deployment only: a laptop with it exported posts its own failures too.
 | `BARCA_SLACK_NOTIFY` | `changes`: starts failing, recovered, and the daily reminder. `failures`: every failed run, plus recovered. `all`: every finished run that executed at least one step | `changes` |
 | `BARCA_UI_URL` | base URL of the web UI (as reached through its proxy, e.g. `https://barca.example.com/ui/`); the run id in a post links to that run | unset, no link |
 
+## When it posts
+
 A **job** is the canonical resolved target, the same as `barca.job` on a Datadog span:
 `nightly` and `pipeline.py:nightly` are one job. After each finished run barca compares its
 outcome with the job's previous finished run in the metadata database and with the last post
@@ -37,6 +41,8 @@ restart:
 
 A run where every step was cached counts as a success. A cancelled run, a skipped tick and a
 run recorded as `interrupted` do not change the job's state.
+
+## What a post looks like
 
 What a post looks like (the run id links to the web UI when `BARCA_UI_URL` is set):
 
@@ -59,7 +65,9 @@ failed step (and how many failed), the exception type and the first line of its 
 most 300 characters), attempts, duration, env, host and run id. Tracebacks are not sent. The
 wording is not a contract and may change in any release.
 
-**Delivery.** The post goes out after the run's results are recorded, within the same 3-second
+## Delivery
+
+The post goes out after the run's results are recorded, within the same 3-second
 limit as every telemetry integration, and never changes the run's outcome or exit code. When
 the webhook cannot be reached or refuses the post, stderr gets the usual telemetry warning,
 naming the failure category and never the webhook URL:
@@ -72,7 +80,9 @@ Categories are `connection failed`, `HTTP <code>` (`HTTP 429 (rate limited)` whe
 rate-limits), `no reply within 3s` and `request failed`. barca does not wait out a `429`. A post
 that was not delivered is not recorded, so the next run of the job posts the transition again.
 
-**Creating the webhook.** At [api.slack.com/apps](https://api.slack.com/apps) choose *Create New
+## Creating the webhook
+
+At [api.slack.com/apps](https://api.slack.com/apps) choose *Create New
 App*, then *From a manifest*, pick the workspace and paste:
 
 ```yaml
@@ -94,7 +104,7 @@ Webhooks*. The URL is a secret: anyone holding it can post to that channel, so k
 `barca.toml` and the repository. A webhook posts to one channel; to route projects to different
 channels, give each deployment its own webhook.
 
-Limits:
+## Limits
 
 - A run that fails before it starts (a syntax error, an unknown target, a shared-state pull
   that fails) is not a finished run and posts nothing, as with Datadog.

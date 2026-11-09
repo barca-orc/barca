@@ -63,6 +63,11 @@ pub const TOPICS: &[Topic] = &[
         "cache.md"
     ),
     topic!(
+        "artifacts",
+        "What a run reports per step, recompute byte checks, and a cached result whose file is gone",
+        "artifacts.md"
+    ),
+    topic!(
         "hashing",
         "What a step's definition covers: helpers followed, decorator arguments that count",
         "hashing.md"

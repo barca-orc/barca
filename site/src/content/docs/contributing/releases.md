@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: Releases
 description: How a barca release is cut, what the release workflow builds and publishes, and where release notes are.
 ---

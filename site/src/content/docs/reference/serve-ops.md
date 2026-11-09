@@ -1,5 +1,5 @@
 ---
-title: "Serve Operations"
+title: "Operating barca serve"
 description: "Operating barca serve: the run queue, stopping and restarting without losing work, the stop grace a supervisor needs, a shared capacity and the run timeout."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/serve-ops.md
 ---

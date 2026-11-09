@@ -1,6 +1,6 @@
 """A directory where an artifact file belongs (#249), end to end through the binary.
 
-The rule (`barca docs cache`, "A directory at an artifact's path"):
+The rule (`barca docs artifacts`, "A directory at an artifact's path"):
 
 - An artifact is one file. A directory at its path is not an artifact, so the cached result
   counts as missing, exactly like a deleted file: it is fetched from the store, or computed

@@ -1,6 +1,6 @@
 """A cached result whose artifact is gone is computed again when something needs it (#252).
 
-The rule (`barca docs cache`, "A cached result whose artifact is missing"):
+The rule (`barca docs artifacts`, "A cached result whose artifact is missing"):
 
 - an artifact is needed when a step that is going to run reads it, when a `partitions_from`
   step is expanded from it, or when it is the output the command returns (its targets; with

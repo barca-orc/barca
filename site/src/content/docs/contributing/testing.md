@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: Testing
 description: The test suites in the barca repository, how to run each, and what CI runs.
 ---

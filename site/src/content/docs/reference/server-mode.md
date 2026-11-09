@@ -1,5 +1,5 @@
 ---
-title: "Server Mode"
+title: "Server Mode: a Shared Ledger and --server"
 description: "One barca serve as the team's ledger: laptops read its cache hits and post their runs, and --server runs a command on it."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/server-mode.md
 ---

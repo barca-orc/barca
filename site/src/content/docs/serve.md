@@ -21,7 +21,7 @@ Authentication is off by default ("Requiring a token" below).
 | Give a team one cache and one run history | [Share Results With a Team](/team-server/) |
 | Run it as a service: a container, systemd, behind nginx or Traefik | [Deploying barca serve](/deploying/) |
 | Understand how laptops and the server share results, and what `--server` does | [Server Mode](/reference/server-mode/) |
-| Manage the run queue, restarts, stop grace, capacity and run timeouts | [Serve Operations](/reference/serve-ops/) |
+| Manage the run queue, restarts, stop grace, capacity and run timeouts | [Operating barca serve](/reference/serve-ops/) |
 | Start runs and read results from code, over HTTP or with the Python client | [Server API](/reference/server-api/) |
 | Post to Slack when a job starts failing or recovers | [Slack Alerts](/reference/slack/) |
 | Send traces and metrics to Datadog | [Telemetry](/reference/telemetry/) |

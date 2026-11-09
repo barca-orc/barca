@@ -1,6 +1,6 @@
 ---
 title: "Why Did (or Didn't) It Run?"
-description: "Common surprises: an asset that did not rerun after its data, an environment variable or an option changed; a step that reran when nothing seemed to change; and how to ask barca why."
+description: "Common surprises (stale data, a file or CSV that changed but did not rerun): an asset that did not rerun after its data, an environment variable or an option changed; a step that reran when nothing seemed to change; and how to ask barca why."
 ---
 
 Barca reruns an asset when its **run hash** changes: a hash of its code (and the helper code it

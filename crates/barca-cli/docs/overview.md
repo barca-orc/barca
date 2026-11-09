@@ -82,6 +82,8 @@ Getting work done:
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs batched-partitions` — `batch=`: one call of a partitioned step computes many keys
 - `barca docs cache` — what is cached, artifacts, `--refresh` / `--refresh-all`, environments
+- `barca docs artifacts` — what a run reports per step, byte checks, and a cached result whose file
+  is gone
 - `barca docs hashing` — which code and decorator arguments a run hash follows, and what it does not
 - `barca docs disk` — the size limit for `.barca/`, what `barca gc` evicts and in which order
 - `barca docs layout` — the project root, the `.barca/` directory, concurrent and killed runs, upgrading
