@@ -1,0 +1,23 @@
+---
+// Starlight's previous/next links, kept inside the current sidebar group: the last page of
+// "Commands" no longer leads to "barca serve Overview", nor the first recipe back to a reference
+// page. A link a page sets in its frontmatter (`prev:` / `next:`) is kept as written.
+import Default from '@astrojs/starlight/components/Pagination.astro';
+
+const route = Astro.locals.starlightRoute;
+type Entry = { type: string; href?: string; entries?: Entry[] };
+const hrefs = (e: Entry): string[] =>
+  e.type === 'link' ? [e.href ?? ''] : (e.entries ?? []).flatMap(hrefs);
+const groupOf = (href: string | undefined) =>
+  href ? (route.sidebar as Entry[]).findIndex((g) => hrefs(g).includes(href)) : -1;
+const here = groupOf(Astro.url.pathname);
+const data = route.entry.data as { prev?: unknown; next?: unknown };
+const keep = (link: { href: string } | undefined, set: unknown) =>
+  link && (typeof set === 'object' || groupOf(link.href) === here) ? link : undefined;
+route.pagination = {
+  prev: keep(route.pagination.prev, data.prev),
+  next: keep(route.pagination.next, data.next),
+};
+---
+
+<Default />
