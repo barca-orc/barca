@@ -21,6 +21,6 @@ export const latest = versions[0];
   {versions.map((v) => <a href={`#${v.slug}`}>{v.text.split(' ')[0]} <small>{(v.text.match(/\((.*)\)/) || [])[1]}</small></a>)}
 </nav>
 
-<div class="release-notes">
+<div class="release-notes" data-pagefind-ignore="all">
   <Changelog />
 </div>

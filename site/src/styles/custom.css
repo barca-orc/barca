@@ -459,7 +459,7 @@ starlight-menu-button[aria-expanded='true'] button {
 }
 .release-index {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
   gap: 0.25rem 1rem;
   font-family: var(--sl-font-mono);
   font-size: var(--sl-text-sm);

@@ -7,7 +7,8 @@ description: "What barca serve's web UI shows and does: assets and their states,
 project, history and cache as the CLI, and its buttons start the same runs as `barca get` and
 `barca run` on the server. A `--read-only` server shows a `read-only` tag and disables them.
 
-![The Assets view: a pipeline with one failing partitioned asset, one blocked asset waiting on it, and two fresh assets, with filters for each state along the top](../../assets/web-ui/assets.png)
+![The Assets view: a pipeline with one failing partitioned asset, one blocked asset waiting on it, and two fresh assets, with filters for each state along the top](../../assets/web-ui/assets-table.png)
+*The Assets view: worst first. `revenue` failed for one of its three keys, so `report`, which reads it, is blocked.*
 
 ## Finding your way
 
@@ -36,7 +37,8 @@ A pinned asset shows `pinned` beside its version ([Pinning and Rollback](/refere
 
 A run's panel opens with what failed: each failed step, its error and where it raised.
 
-![A failed run's panel: the failed step revenue[region=apac] with its ValueError and the line it raised at, Re-run failed and Re-run all buttons, and the run's trigger, target, timing and step counts](../../assets/web-ui/run-panel.png)
+![A failed run's panel: the failed step revenue[region=apac] with its ValueError and the line it raised at, Re-run failed and Re-run all buttons, and the run's trigger, target, timing and step counts](../../assets/web-ui/run-details.png)
+*A failed run: the failed key, its error and the line it raised at, with **Re-run failed** first.*
 
 Its actions:
 
@@ -56,7 +58,8 @@ The logs filter by step, by text, and to errors only.
 An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **History** and
 **Incident**.
 
-![The panel of a partitioned asset with one failed key: 2 of 3 keys cached, the error grouped by message, and a Run button that computes only the failed key](../../assets/web-ui/asset-panel.png)
+![The panel of a partitioned asset with one failed key: 2 of 3 keys cached, the error grouped by message, and a Run button that computes only the failed key](../../assets/web-ui/asset-details.png)
+*A partitioned asset with one failed key: **Run** computes only that key; the other two stay cached.*
 
 - **Incident** holds the controls for an incident: pausing and resuming the asset, as
   `barca pause` and `barca resume` do, and resuming a paused pipeline
