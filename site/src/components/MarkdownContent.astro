@@ -9,7 +9,12 @@ const isRfc = id.startsWith('rfcs/') && id !== 'rfcs/template';
 const isProject = isRfc || id.startsWith('contributing/');
 // Pages written to answer a question in its reader's words rank above long reference pages that
 // mention the same words in passing ("csv changed", "cron").
-const BOOST: Record<string, string> = { troubleshooting: '3', scheduling: '2' };
+const BOOST: Record<string, string> = {
+  troubleshooting: '3',
+  scheduling: '2',
+  // A comparison that names cron in every line outranked the how-to for "cron".
+  'comparisons/cron': '0.3',
+};
 const weight = isProject ? '0.1' : BOOST[id];
 ---
 

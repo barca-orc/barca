@@ -1,5 +1,5 @@
 ---
-title: "Barca vs cron / systemd timers"
+title: "Barca vs Cron and systemd Timers"
 description: What a scheduled job gets from a crontab line, a systemd timer, and a barca Schedule under barca serve, feature by feature.
 ---
 

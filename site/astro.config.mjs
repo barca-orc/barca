@@ -31,6 +31,20 @@ export default defineConfig({
         },
       },
       customCss: ['./src/styles/fonts.css', './src/styles/custom.css'],
+      head: [
+        {
+          // On a fresh load Starlight shows the sidebar from the top, so a page far down the list
+          // (a recipe, a worked example) was highlighted out of sight. Bring it into view once.
+          tag: 'script',
+          content: `document.addEventListener('DOMContentLoaded', () => {
+  const pane = document.querySelector('.sidebar-pane');
+  const cur = pane && pane.querySelector('a[aria-current="page"]');
+  if (!cur) return;
+  const r = cur.getBoundingClientRect(), p = pane.getBoundingClientRect();
+  if (p.height && (r.top < p.top || r.bottom > p.bottom)) pane.scrollTop += r.top - p.top - p.height / 2;
+});`,
+        },
+      ],
       components: {
         MarkdownContent: './src/components/MarkdownContent.astro',
         PageTitle: './src/components/PageTitle.astro',
@@ -134,14 +148,14 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { slug: 'workflows' },
-                { slug: 'workflows/01-single-asset-no-inputs' },
-                { slug: 'workflows/02-single-asset-one-input' },
-                { slug: 'workflows/03-parametrized-assets-and-partitions' },
-                { slug: 'workflows/04-asset-continuity-rename-and-move' },
-                { slug: 'workflows/05-schedule-driven-reconciliation-and-effects' },
-                { slug: 'workflows/06-sensors-and-external-observations' },
-                { slug: 'workflows/09-execution-controls-and-ad-hoc-params' },
-                { slug: 'workflows/10-tasks-and-workflow-management' },
+                { label: 'One Asset, No Inputs', slug: 'workflows/01-single-asset-no-inputs' },
+                { label: 'One Asset, One Input', slug: 'workflows/02-single-asset-one-input' },
+                { label: 'Partitions', slug: 'workflows/03-parametrized-assets-and-partitions' },
+                { label: 'Renaming and Moving an Asset', slug: 'workflows/04-asset-continuity-rename-and-move' },
+                { label: 'Freshness and Schedules', slug: 'workflows/05-schedule-driven-reconciliation-and-effects' },
+                { label: 'Sensors and Outside Data', slug: 'workflows/06-sensors-and-external-observations' },
+                { label: 'Timeouts and Cancelling', slug: 'workflows/09-execution-controls-and-ad-hoc-params' },
+                { label: 'Tasks', slug: 'workflows/10-tasks-and-workflow-management' },
               ],
             },
           ],

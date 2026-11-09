@@ -64,7 +64,7 @@ anything.
 The [CLI contract](/reference/cli-contract/) lists every command, flag, environment variable, exit
 code and JSON output schema, marked stable or experimental, with the policy for changing them.
 
-## Commands
+## All commands
 
 ```
 barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
@@ -152,7 +152,12 @@ which is still loaded and still part of the cache key. Warnings do not change th
 or nested function/class definition is treated conservatively, so dynamic SQL access does
 not cause a false unused-input warning.
 
-## get
+## Commands in detail
+
+Each command, the most used first. `barca <command> --help` prints the
+same syntax for the version you have installed.
+
+### get
 
 Compute one or more assets and print where their results are. Only the target and what is
 upstream of it are considered, and a step whose code and inputs are unchanged is served from
@@ -307,7 +312,7 @@ environment variables with `env=[...]` also carries `env`, the values the step w
 (`null` when unset, `<redacted>` for names like `*_TOKEN`), and its `--agent` progress line ends
 with `env NAME=value ...`. See [Decorators](/reference/api/decorators/#declared-environment-variables-env).
 
-## run
+### run
 
 Run a task and what it depends on. The task always runs; it is never cached. The assets
 upstream of it are served from cache when unchanged, as with `barca get`. `run` takes the same
@@ -333,7 +338,7 @@ barca run deploy pipeline.py --dry-run --refresh fetch  # preview the cascade
 To have assets pick up outside data that changed, put a `@sensor` in front of them
 (see [Decorators](/reference/api/decorators/#sensor)).
 
-### Several targets
+#### Several targets
 
 `barca run` and `barca get` take one comma-separated list of targets (no spaces):
 
@@ -361,7 +366,7 @@ A failed target is `{"status": "failed", "failed_node": "pipeline.py:...", "erro
 `--dry-run` with several targets reports `targets` in place of `target`, each with a `summary`
 counted over that target's cone. The full shapes are in `barca docs agents`.
 
-## plan
+### plan
 
 The document includes `plan_version: 1`, independent of the package and database versions.
 Consumers of saved plans should reject unsupported versions.
@@ -400,23 +405,7 @@ $ barca plan pipeline.py
 }
 ```
 
-## Run timing
-
-Run JSON includes `steps[].elapsed_seconds` and `attempts` for executed steps, including
-failures; cache hits and dry runs omit them. Elapsed time sums active worker time across
-attempts, including import/input loading/call/serialization and excluding retry backoff.
-After a worker disconnect, the coordinator's observed in-flight time is used. For
-partitioned steps it sums executed keys, while attempts is the maximum for one key.
-
-Under `--agent` (and in every run `barca serve` starts) a worker prints
-`[barca] importing <module>` before loading a module; otherwise it prints nothing. Imports longer
-than one second add `import_seconds`, included in elapsed time and summed across
-attempts/keys. Reused modules add no import time. Agent completion and permanent failure
-lines append `attempts=N` for retries. `history --json` sums recorded materialization
-attempts (including existing upload-failure retry counts); `stats` retains each
-materialization's attempts and final-attempt duration. Timeout errors name the step id.
-
-## history
+### history
 
 
 After verifying that the process or container has stopped, explicitly reconcile an uncertain
@@ -474,7 +463,7 @@ Failed batches are retained and retried without waiting for another step; replay
 not count a completed step twice. Progress can be absent while the database cannot commit.
 The final write still records completed results not saved during execution.
 
-### Finding and reading a failed run
+#### Finding and reading a failed run
 
 Filters combine with AND, and `--limit`, `total` and `truncated` count the runs they keep:
 `--status` (comma-separated: `success`, `failed`, `cancelled`, `error`, `running`,
@@ -535,7 +524,7 @@ process-id and host-name checks. See
 `barca docs layout`, "While a run is going, and after one is killed", and the shared-state
 [limitations](/reference/remote-storage/#limitations).
 
-## pin and unpin
+### pin and unpin
 
 Roll an asset back to an earlier materialization: every run (downstream steps, `barca get`,
 `barca.get()`, schedules) reads the pinned result and nothing recomputes the asset until
@@ -548,7 +537,7 @@ barca pin orders --from-file fix.json   # or override it with data you supply
 barca unpin orders                   # back to normal
 ```
 
-## gc
+### gc
 
 Evict cached results so `.barca/` stays under its size limit (`[cache].max_size` or
 `BARCA_CACHE_MAX_SIZE`, default 10% of the filesystem; see
@@ -580,7 +569,7 @@ considered (`restricted` says why). `--env NAME` evicts only that environment's 
 that cannot be deleted is skipped with a warning; exit 3 only when a metadata database cannot be
 read. The remote store is never touched.
 
-## stats
+### stats
 
 Show statistics for one node: how many times it executed, timings (average, median, p95,
 max), how many executions repeated unchanged inputs, and recent runs. The target is required.
@@ -613,7 +602,7 @@ barca stats summary pipeline.py --fields status,error_message   # JSON; trims re
 barca stats summary --fields run_id,elapsed_seconds,max_rss_bytes   # each recent run's id, time and peak memory
 ```
 
-## serve
+### serve
 
 Start an HTTP server with a JSON API, the cron scheduler and the web UI at `/ui/`. It binds to
 `127.0.0.1` by default; `--host 0.0.0.0` listens on every interface. It has no authentication. See [Server API](/reference/server-api/) for the
@@ -653,7 +642,7 @@ instead (recorded as `cancelled`, reason `server shutdown`): exit code `1`. See
 [Server API](/reference/server-api/#stopping-the-drain) and
 [Restarting without losing work](/deploying/#restarting-without-losing-work).
 
-## queue
+### queue
 
 A barca server's run queue: the runs executing and the runs waiting to start, in order. It needs
 a server (`--server URL`, `BARCA_SERVER` or `[server] url`); without one it exits 2. Experimental.
@@ -672,7 +661,7 @@ With a remote store, `barca serve` backs its metadata DB up every minute it chan
 `--read-only`), and `barca state restore` refuses to run while it is up. See
 [Remote storage](/reference/remote-storage/).
 
-## list
+### list
 
 List every asset, task and sensor barca finds, with its kind, freshness and inputs. A scheduled
 node also shows its cron and its next fire time, to the second. The time is the next match of
@@ -709,28 +698,7 @@ also has `schedule`, its cron expression. `list` reads no state, so it takes no 
 When any node declares environment variables (`@asset(env=["SOURCE_CSV"])`), the table gains an
 ENV column listing them; `--json` always includes `env` (an empty list when none are declared).
 
-## Bounded output
-
-List-shaped commands (`list`, `status`, `history`) return every item in JSON unless `--limit N`
-is explicit, including piped output and `--fields`. Human tables show at most 100 nodes or
-10 history runs by default; `--all` removes the bound. Their JSON keeps its envelope:
-
-```json
-{"nodes": [...], "total": 312, "truncated": true,
- "hint": "pass --limit N for more, or --all for all 312 nodes"}
-```
-
-`truncated` and `total` are always present, `hint` only when truncated. `--limit N` and `--all`
-choose how many items to print.
-
-`--fields a,b` keeps only those keys on each item of any JSON output: `nodes` (`list`, `status`), `runs`
-(`history`), `recent_runs` (`stats`), `steps` (`get`/`run`, including `--dry-run`) and `topics`
-(`docs`). It implies JSON everywhere; combining it with `--pretty`, `-o pretty` or `run -o value` is
-a usage error (exit 2). An unknown key is a usage error (exit 2) that lists the valid ones. Limits bound
-how many items are printed, never their content: error messages and tracebacks are always
-complete. `plan` has no per-item objects (its steps are id strings), so it takes no `--fields`.
-
-## status
+### status
 
 Show, for every node in scope, its kind, inputs, whether it is partitioned, its cache state
 with the reason, its last run, and the shape of its result. It runs nothing.
@@ -801,7 +769,7 @@ Status executes no pipeline step and records no new run; `partitions(<expression
 resolving keys. An unknown target
 is a usage error (exit 2). See `barca docs status`.
 
-## sql
+### sql
 
 Query cached results with DuckDB. Every asset, sensor and task with a result on disk is a view
 named after its declared `name=`, or its function when unset; a partitioned asset is one
@@ -831,7 +799,7 @@ emea    10.0
 
 See [barca sql](/reference/sql/) for views, errors and limits.
 
-## state
+### state
 
 With a remote store (`[remote] uri` or `BARCA_REMOTE_URI`), `get` and `run` back the metadata
 DB up on a one-minute checkpoint and when they end, and `serve` every minute it changed: to
@@ -869,7 +837,7 @@ undo}`. Exit 3: a run is in progress on this machine, or `barca serve` is runnin
 environment (use its UI's **Reset database** button or `POST /state/reset`). Undo with
 `barca state restore --from <the moved file>`, which also takes any database file's path.
 
-## docs
+### docs
 
 The manual, compiled into the binary, so it works offline and describes the installed version.
 Every command's `--help` ends with examples.
@@ -889,14 +857,63 @@ barca docs cache --pretty     # markdown, the default even when piped
 `barca docs contract` is the [CLI contract](/reference/cli-contract/). `barca docs agents`
 describes the output contract for scripts and AI agents.
 
+### version
+
+```
+$ barca version
+barca 0.27.0
+```
+
+`barca --version` prints the same. Neither takes `--json`.
+
+## Run timing
+
+Run JSON includes `steps[].elapsed_seconds` and `attempts` for executed steps, including
+failures; cache hits and dry runs omit them. Elapsed time sums active worker time across
+attempts, including import/input loading/call/serialization and excluding retry backoff.
+After a worker disconnect, the coordinator's observed in-flight time is used. For
+partitioned steps it sums executed keys, while attempts is the maximum for one key.
+
+Under `--agent` (and in every run `barca serve` starts) a worker prints
+`[barca] importing <module>` before loading a module; otherwise it prints nothing. Imports longer
+than one second add `import_seconds`, included in elapsed time and summed across
+attempts/keys. Reused modules add no import time. Agent completion and permanent failure
+lines append `attempts=N` for retries. `history --json` sums recorded materialization
+attempts (including existing upload-failure retry counts); `stats` retains each
+materialization's attempts and final-attempt duration. Timeout errors name the step id.
+
+## Bounded output
+
+List-shaped commands (`list`, `status`, `history`) return every item in JSON unless `--limit N`
+is explicit, including piped output and `--fields`. Human tables show at most 100 nodes or
+10 history runs by default; `--all` removes the bound. Their JSON keeps its envelope:
+
+```json
+{"nodes": [...], "total": 312, "truncated": true,
+ "hint": "pass --limit N for more, or --all for all 312 nodes"}
+```
+
+`truncated` and `total` are always present, `hint` only when truncated. `--limit N` and `--all`
+choose how many items to print.
+
+`--fields a,b` keeps only those keys on each item of any JSON output: `nodes` (`list`, `status`), `runs`
+(`history`), `recent_runs` (`stats`), `steps` (`get`/`run`, including `--dry-run`) and `topics`
+(`docs`). It implies JSON everywhere; combining it with `--pretty`, `-o pretty` or `run -o value` is
+a usage error (exit 2). An unknown key is a usage error (exit 2) that lists the valid ones. Limits bound
+how many items are printed, never their content: error messages and tracebacks are always
+complete. `plan` has no per-item objects (its steps are id strings), so it takes no `--fields`.
+
 ## Errors and exit codes
 
-The exit codes and their `kind` are the generated table in the
-[CLI contract](/reference/cli-contract/#exit-codes): 0 success, 1 `step_failed` (a step of yours
-raised; the traceback is included and the run is recorded as failed), 2 `usage` (bad flags or
-arguments, an unknown target, `get` on a task or `run` on an asset, an unreadable or invalid
-`.py` file, an invalid `--env` or barca.toml), 3 `infra` (barca or its environment failed:
-metadata DB, worker pool, remote state, I/O), 130 `cancelled` (Ctrl-C or SIGTERM).
+| Code | `kind` | Meaning |
+|---|---|---|
+| 0 | | Success |
+| 1 | `step_failed` | A step of yours raised. The traceback is included and the run is recorded as failed |
+| 2 | `usage` | Bad flags or arguments, an unknown target, `get` on a task or `run` on an asset, an unreadable or invalid `.py` file, an invalid `--env` or barca.toml |
+| 3 | `infra` | Barca or its environment failed: metadata DB, worker pool, remote state, I/O |
+| 130 | `cancelled` | Ctrl-C or SIGTERM |
+
+The same table, generated from the code, is in the [CLI contract](/reference/cli-contract/#exit-codes).
 
 A closed stdout or stderr never makes barca panic, never stops a run and is not an error:
 output for the closed stream is dropped, a `get` or `run` finishes and is recorded, and the
@@ -961,15 +978,6 @@ run at once (see [Decorators](/reference/api/decorators/#heavy-steps-weight)). A
 its `parallel()` branches adds `while it waited for its parallel() branches`. When the exit
 status is not available within a few hundred milliseconds, the error is the plain
 `worker disconnected`.
-
-## version
-
-```
-$ barca version
-barca 0.27.0
-```
-
-`barca --version` prints the same. Neither takes `--json`.
 
 ## `--env`
 

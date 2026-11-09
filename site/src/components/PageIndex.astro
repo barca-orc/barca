@@ -37,22 +37,62 @@ pages = all
   ? pages.sort((a, b) => sortKey(a.data.title).localeCompare(sortKey(b.data.title)))
   : pages.sort((a, b) => a.id.localeCompare(b.id));
 
+const letterOf = (p: (typeof pages)[number]) => sortKey(p.data.title).charAt(0).toUpperCase();
+const letters = [...new Set(pages.map(letterOf))];
 const section = (id: string) => SECTIONS.find(([p]) => id.startsWith(p))?.[1] ?? 'Guide';
 ---
 
+{
+  all && (
+    <nav class="az-jump" aria-label="Jump to letter">
+      {letters.map((l) => (
+        <a href={`#letter-${l.toLowerCase()}`}>{l}</a>
+      ))}
+    </nav>
+  )
+}
+
 <ul class="page-index" role="list">
   {
-    pages.map((p) => (
-      <li>
-        <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
-        {all && <span class="kind">{section(p.id)}</span>}
-        <p>{p.data.description}</p>
-      </li>
+    pages.map((p, i) => (
+      <>
+        {all && (i === 0 || letterOf(pages[i - 1]) !== letterOf(p)) && (
+          <li class="az-letter" id={`letter-${letterOf(p).toLowerCase()}`}>
+            {letterOf(p)}
+          </li>
+        )}
+        <li>
+          <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
+          {all && <span class="kind">{section(p.id)}</span>}
+          <p>{p.data.description}</p>
+        </li>
+      </>
     ))
   }
 </ul>
 
 <style>
+  .az-jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    margin-bottom: 1rem;
+    font-family: var(--sl-font-mono);
+  }
+  .az-jump a {
+    text-decoration: none;
+    color: var(--sl-color-text-accent);
+  }
+  .page-index .az-letter {
+    grid-column: 1 / -1;
+    border-top: none;
+    padding: 1rem 0 0;
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xl);
+    font-weight: 600;
+    color: var(--sl-color-accent-high);
+    scroll-margin-top: 5rem;
+  }
   .page-index {
     list-style: none;
     padding: 0;

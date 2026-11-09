@@ -212,6 +212,7 @@ mobile-starlight-toc code {
 }
 .hero .tagline code {
   font-size: 0.9em;
+  white-space: nowrap;
 }
 /* On a phone the sample wraps instead of being cut off at the edge */
 @media (max-width: 49.99rem) {
@@ -307,8 +308,24 @@ mobile-starlight-toc code {
 .diagram svg {
   display: block;
   width: 100%;
-  min-width: 36rem;
   height: auto;
+}
+.diagram svg.dg-wide {
+  min-width: 36rem;
+}
+/* A phone gets the same diagram laid out top to bottom, at a readable size */
+.diagram svg.dg-tall {
+  display: none;
+  max-width: 24rem;
+  margin-inline: auto;
+}
+@media (max-width: 49.99rem) {
+  .diagram svg.dg-wide {
+    display: none;
+  }
+  .diagram svg.dg-tall {
+    display: block;
+  }
 }
 .diagram figcaption {
   margin-top: 0.5rem;
