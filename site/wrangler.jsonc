@@ -3,7 +3,12 @@
 	"compatibility_date": "2026-07-18",
 	"compatibility_flags": ["global_fetch_strictly_public"],
 	"name": "barca",
+	"workers_dev": true,
 	"main": "@astrojs/cloudflare/entrypoints/server",
+	"routes": [
+		{ "pattern": "barca.sh", "custom_domain": true },
+		{ "pattern": "www.barca.sh", "custom_domain": true }
+	],
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS"
