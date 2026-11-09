@@ -975,7 +975,7 @@ may grow.
   ([`barca docs partitions`](/reference/partitions/), "Failed keys block their own keys"); a node that reads every key
   (a `collect()` fan-in, an unpartitioned node) is `skipped` with reason `upstream_failed`,
   as before. `barca status` reports such a node `blocked`. In a scheduled tick of `barca serve`,
-  a paused target (`barca pause`, [`barca docs incidents`](/reference/incidents/)) is `skipped` with reason `paused` and a
+  a paused target (`barca pause`, [`barca docs incidents`](/reference/pausing/)) is `skipped` with reason `paused` and a
   `detail` naming `barca resume`. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
   stale; [`barca docs cache`](/reference/cache/)) carries a `detail` starting `Manual`. Breaking in this release: a
   stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.

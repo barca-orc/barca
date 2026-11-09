@@ -200,7 +200,7 @@ cached    -                                                                     
 1 will run, 7 cached, 0 unknown
 ```
 
-More on sensors: [Sensors and External Observations](/workflows/06-sensors-and-external-observations/).
+More on sensors: [Sensors and External Observations](/examples/sensors/).
 
 ## Adding and removing keys
 
@@ -316,7 +316,7 @@ After removing `amer` from the file, `regions` and `summary` ran and no key of `
 When the source returns a **dict** instead of a list, its keys are the keys and each key is
 called with its own value; a key runs again only when its value changes. One sensor query
 that returns `{retailer: max(updated_at)}` then runs only the retailers with new data, out of
-any number: see [Only What Changed, Across Many Partitions](/patterns/09-changed-partitions/).
+any number: see [Only What Changed, Across Many Partitions](/recipes/changed-partitions/).
 
 The keys are known only after `regions` has run. Before its first run, `--dry-run` and
 `barca status` report `sales` and everything below it as `unknown` ("partition keys come from
@@ -450,7 +450,7 @@ per key, not what your functions cost.
   `@sink("out/")` writes one Hive-partitioned dataset with a `retailer=r1/` directory per key:
   `barca docs sinks`.
 - To fan work out at run time from inside a task, without caching, see
-  [Parallel Tasks](/patterns/04-parallel-tasks/).
+  [Parallel Tasks](/recipes/parallel-tasks/).
 
 Mixing `partitions()` and `partitions_from()` dimensions on one asset is unsupported
 and returns exit 2 before execution. Use only derived dimensions or declare every

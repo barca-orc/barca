@@ -96,6 +96,6 @@ relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
 
   Use `inputs={"_name": upstream}`.
 - **A task cannot be an ordering-only input to an asset**, for the same reason it cannot be a
-  data input: [Asset-to-Task](/patterns/02-asset-to-task/).
+  data input: [Asset-to-Task](/recipes/asset-to-task/).
 - A linter that reports unused parameters may flag `_migrate`. Most linters can be configured
   to allow parameters that start with `_`.

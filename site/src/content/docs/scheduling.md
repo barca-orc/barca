@@ -370,5 +370,5 @@ client or shell started the run.
   its metadata DB up every minute it changed; see
   [Deploying](/deploying/#with-a-remote-store).
 
-[Freshness and Schedules](/workflows/05-schedule-driven-reconciliation-and-effects/) walks
+[Freshness and Schedules](/examples/freshness-and-schedules/) walks
 through a pipeline with scheduled, `Always` and `Manual` nodes.

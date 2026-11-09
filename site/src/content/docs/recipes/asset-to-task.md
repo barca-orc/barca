@@ -97,8 +97,8 @@ To recompute the asset as well, name it: `barca run deploy pipeline.py --refresh
   ```
 
   A task may be an input to another task; see
-  [Ordering-Only Dependencies](/patterns/03-ordering-only-deps/).
+  [Ordering-Only Dependencies](/recipes/ordering-only-deps/).
 - **A task that fails is not retried unless you ask.** See
-  [Error Handling](/patterns/06-error-handling/).
+  [Error Handling](/recipes/retries-timeouts-failures/).
 
 The same material is in the terminal manual: `barca docs tasks`.

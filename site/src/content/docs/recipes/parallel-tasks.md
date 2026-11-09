@@ -8,7 +8,7 @@ upload per file. `parallel()` and `parallel_map()` run other `@task` functions i
 worker processes and return the results in argument order.
 
 To fan an asset out over a fixed set of keys, with each key cached, use partitions instead:
-[Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/).
+[Parametrized Assets and Partitions](/examples/partitions/).
 
 ## Example
 

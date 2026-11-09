@@ -166,7 +166,7 @@ barca get order_count pipeline.py    # 3 steps run; the value is 3
 - `--dry-run` and `barca status` run nothing, so they assume the sensor returns the value
   it returned last time.
 
-[Sensors and External Observations](/workflows/06-sensors-and-external-observations/) walks
+[Sensors and External Observations](/examples/sensors/) walks
 through each of these with output.
 
 ### Recomputing by hand: `--refresh`
@@ -248,9 +248,9 @@ reads it depends on the annotation of the parameter that receives it:
 A declared input is loaded whether or not the function uses it, and barca warns at plan time
 about one the function never mentions. `barca get` on an asset stored as parquet prints a
 pointer to the file, not the rows; use `barca sql` to look at it.
-[Large inputs](/patterns/08-large-inputs/) has a worked example and the limits.
+[Large inputs](/recipes/large-inputs/) has a worked example and the limits.
 
-More: [`barca docs big-inputs`](/patterns/08-large-inputs/), [`barca docs types`](/reference/types/).
+More: [`barca docs big-inputs`](/recipes/large-inputs/), [`barca docs types`](/reference/types/).
 
 ## 7. Partitions
 
@@ -327,7 +327,7 @@ Limits:
   in the history. `barca sql` shows only the current keys: with `latam` removed again, the view
   above has three rows.
 
-[Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/) shows
+[Parametrized Assets and Partitions](/examples/partitions/) shows
 each of these with output. More: [`barca docs partitions`](/reference/partitions/).
 
 ## 8. Projects with several files
@@ -427,5 +427,5 @@ node is refreshed by hand only: ticks skip it, and what reads it uses its last r
 - `barca docs` in the terminal: the manual, by topic. `barca <command> --help` ends with
   examples.
 - [CLI reference](/reference/cli/) and [Configuration](/reference/config/).
-- [Patterns](/patterns/01-asset-to-asset/) for common shapes and what to avoid.
+- [Patterns](/recipes/chain-assets/) for common shapes and what to avoid.
 - `barca history` and `barca stats <asset>` for past runs and timings.

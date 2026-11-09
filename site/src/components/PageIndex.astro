@@ -1,7 +1,7 @@
 ---
 // Lists docs pages with their descriptions, read from the content collection so a new page
 // shows up without editing an index by hand.
-//   <PageIndex prefix="patterns/" />          pages under one section, in file order
+//   <PageIndex prefix="recipes/" />          pages under one section, in file order
 //   <PageIndex all />                         every user-facing page, A to Z, with its section
 import { getCollection } from 'astro:content';
 
@@ -12,12 +12,12 @@ interface Props {
 const { prefix, all = false } = Astro.props;
 
 const SECTIONS: [string, string][] = [
-  ['patterns/', 'Recipe'],
-  ['workflows/', 'Worked example'],
+  ['recipes/', 'Recipe'],
+  ['examples/', 'Worked example'],
   ['comparisons/', 'Comparison'],
   ['reference/', 'Reference'],
 ];
-const SECTION_INDEXES = ['reference', 'patterns', 'workflows', 'comparisons', 'rfcs', 'contributing', '404'];
+const SECTION_INDEXES = ['reference', 'recipes', 'examples', 'comparisons', 'rfcs', 'contributing', '404'];
 
 const docs = await getCollection('docs');
 let pages = docs.filter((d) => {
