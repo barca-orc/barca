@@ -621,7 +621,7 @@ pub async fn no_route(method: axum::http::Method, uri: axum::http::Uri) -> ApiEr
                 .into(),
         ),
         _ => ApiError::NotFound(format!(
-            "no such endpoint: {method} {path}\nThe routes are listed at https://barca.sh/reference/server-api/."
+            "no such endpoint: {method} {path}\nThe routes are listed at https://barca.sh/reference/server-api-endpoints/."
         )),
     }
 }

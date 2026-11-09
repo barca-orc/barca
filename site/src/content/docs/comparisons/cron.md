@@ -86,7 +86,7 @@ job.py:refresh  task  cron: */10 * * * *  2026-10-21 17:10:00     -
 | **Process model** | starts a process per tick | starts a process per tick | one long-running `barca serve` process |
 
 The barca column is from the [Scheduling guide](/scheduling/) and
-[Server API](/reference/server-api/#scheduling), and `--timezone`, `barca list` and the example
+[Server API](/reference/server-api-endpoints/#scheduling), and `--timezone`, `barca list` and the example
 above were run on barca 0.18.0. Catch-up, overlap skipping and retries were not re-tested for
 this page.
 

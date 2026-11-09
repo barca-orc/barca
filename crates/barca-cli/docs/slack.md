@@ -6,6 +6,9 @@ day while it keeps failing**. It never posts for an ordinary success, a fully ca
 skipped `barca serve` tick, a cancelled run or a run that was killed. Like Datadog it covers
 `barca get`, `barca run` and every run `barca serve` starts.
 
+Slack is the only built-in alert. For email, PagerDuty or anything else, have your own monitor
+read run outcomes from `barca history --json`, or from the server's `GET /runs`.
+
 ## Turning it on
 
 ```bash

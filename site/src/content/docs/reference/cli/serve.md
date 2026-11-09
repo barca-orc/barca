@@ -48,7 +48,7 @@ starts (new ones are still accepted and queued), the scheduler stops, `/health` 
 finished, and `0` when `--drain-timeout` passed and the runs left were put back at the head of
 the queue (they start again from the beginning after the restart). A second signal cancels them
 instead (recorded as `cancelled`, reason `server shutdown`): exit code `1`. See
-[Server API](/reference/server-api/#stopping-the-drain) and
+[Server API](/reference/server-api-endpoints/#stopping-the-drain) and
 [Restarting without losing work](/reference/serve-ops/#restarting-without-losing-work).
 
 With a remote store, `barca serve` backs its metadata DB up every minute it changed (not with

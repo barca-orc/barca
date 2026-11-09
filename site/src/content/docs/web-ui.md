@@ -21,15 +21,16 @@ what is open. Filters and the open item are in the address, so a link reopens th
 
 Each node shows one state in plain words, with an icon beside its colour. The UI and the CLI use
 different words for some of them (the UI says `fresh` where `barca status` says `cached`); this is
-how they map:
+how they map. The full list of states and their reasons is in
+[barca status: Cache state](/reference/cli/status/#cache-state).
 
-| Web UI | `barca status` |
-|---|---|
-| `fresh` | `cached` |
-| `stale` | `stale` |
-| `never run` | `never_run` |
-| `failing`: the last attempt failed, with "last good 3h ago" or "never succeeded" | `stale` with reason `failed` |
-| `blocked`: a failing node upstream keeps it from running, with a link to that failure | `blocked` for partition keys; otherwise derived in the UI from the graph |
+| Web UI | What it means | `barca status` |
+|---|---|---|
+| `fresh` | Its result matches the current code and inputs; a run serves it from cache | `cached` |
+| `stale` | It ran before, but its code or an input changed (or its file is gone), so the next run computes it again | `stale` |
+| `never run` | No successful result is recorded yet | `never_run` |
+| `failing` | Its last attempt failed, shown with "last good 3h ago" or "never succeeded" | `stale` with reason `failed` |
+| `blocked` | A failing node upstream keeps it from running; the row links to that failure | `blocked` for partition keys; otherwise worked out in the UI from the graph |
 
 A pinned asset shows `pinned` beside its version ([Pinning and Rollback](/reference/cli/pin/)).
 
