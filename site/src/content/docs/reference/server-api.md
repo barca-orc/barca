@@ -33,7 +33,7 @@ barca serve --port 8400 --timezone utc    # every file in the project
 
 The flags (`--host`, `--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`,
 `--drain-timeout`, `--env`) are in
-the [CLI reference](/reference/cli/#serve). On start the server prints its address and the
+the [CLI reference](/reference/cli/serve/). On start the server prints its address and the
 schedule on stderr:
 
 ```
@@ -426,7 +426,7 @@ finishing), `keys` how many rows the run recorded for the node, `calls` how many
 ran in (`0` when each ran on its own) and `failed` how many failed; absent until a run recorded a row
 for it. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
 `blocked`, `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
-[`barca status`](/reference/cli/#status)). `shape` is always `null` here:
+[`barca status`](/reference/cli/status/)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
 check uses read-only connections to a compatible WAL metadata DB, or a private copy
 when migration is needed; this endpoint never writes the original rows.

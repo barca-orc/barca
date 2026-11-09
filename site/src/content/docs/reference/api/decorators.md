@@ -505,10 +505,10 @@ Up to 0.11 this passed the list without an error.
 - Artifacts are stored per key: `.barca/artifacts/pipeline.py--sales_region_emea/<run_hash>.json`.
 - `barca get sales` on a partitioned asset returns every key: one artifact path per key, and a
   `final_output` object keyed by partition key (`region=emea`); past 1000 keys, only the keys
-  the run computed ([many partition keys](/reference/cli/#many-partition-keys)). `--partition region=emea`
+  the run computed ([many partition keys](/reference/cli/get/#many-partition-keys)). `--partition region=emea`
   selects keys across the run (upstream partitioned assets too; a `collect()` over them is
   skipped), computes only those and scopes `--refresh sales` to them
-  ([CLI reference](/reference/cli/#get)). [`barca sql`](/reference/sql/) has one view with a
+  ([CLI reference](/reference/cli/get/)). [`barca sql`](/reference/sql/) has one view with a
   `partition` column holding `region=emea`.
 - `barca status` shows a partitioned asset as one node with `partitions: {total, cached,
   missing, missing_keys}`.
@@ -729,7 +729,7 @@ not cached. A task runs every time it is in a run's cone.
 - They must not be an input to an asset or sensor. This exits 2:
   `task 'pipeline.py:t1' cannot be an input to asset 'pipeline.py:d'`.
 
-Run a task with [`barca run`](/reference/cli/#run). Upstream assets are served from cache, as
+Run a task with [`barca run`](/reference/cli/run/). Upstream assets are served from cache, as
 with `barca get`. `barca get` on a task exits 2 and names `barca run`. A task with
 `freshness=Schedule("<cron>")` runs on that cron under `barca serve`.
 
