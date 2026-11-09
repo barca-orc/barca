@@ -1,7 +1,8 @@
 # barca
 
 The Barca documentation site — [Astro](https://astro.build) +
-[Starlight](https://starlight.astro.build), source content in
+[Starlight](https://starlight.astro.build), served from a [Cloudflare
+Worker](https://developers.cloudflare.com/workers/) with static assets. Source content lives in
 `src/content/docs/`.
 
 ## Develop
@@ -11,27 +12,15 @@ npm install
 npm run dev       # http://localhost:4321
 ```
 
-## Build
+## Build and deploy
 
 ```bash
-npm run build     # outputs static site to dist/
-npm run preview   # serve the built output locally
+npm run build     # outputs to dist/ for the Cloudflare adapter
+npm run preview   # build and serve locally with wrangler dev
+npm run deploy    # build and wrangler deploy (production Worker + barca.sh routes)
 ```
 
-`npm run build` produces a fully static site — no server runtime or adapter
-is required.
-
-## Deploying to Cloudflare Pages
-
-Create a Cloudflare Pages project pointed at this repository with:
-
-| Setting | Value |
-|---|---|
-| Root directory | `site` |
-| Build command | `npm run build` |
-| Build output directory | `dist` |
-| Framework preset | Astro |
-
-No environment variables or adapters are needed since the output is static.
-Attach a custom domain (e.g. `barca.sh`) from the Cloudflare Pages project
-settings once the first deploy succeeds.
+`site/wrangler.jsonc` names the Worker (`barca`), attaches `barca.sh` and `www.barca.sh`, and
+points assets at `dist/client` after `astro build`. Release tags deploy through the `deploy-site`
+job in `.github/workflows/release.yml` with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+Between releases, deploy from this directory after `npx wrangler login` or with those variables set.

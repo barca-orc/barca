@@ -25,6 +25,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Web UI: the graph fits once its nodes are measured and re-fits when the canvas changes size until you pan or zoom; switching from List to Graph could leave it unfitted at the canvas's top-left corner.
 
+### Documentation
+
+- barca.sh: attach the Worker custom domains in `site/wrangler.jsonc` and build the site in CI's fast tier so docs deploy fixes are validated without touching the release workflow.
+
 ## 0.41.0 (2026-11-08)
 
 ### Breaking

@@ -151,6 +151,18 @@ jobs:
       - name: Check specification models and negative controls
         run: python3 specs/models/check.py --jar .spec-check/tla2tools.jar
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Build the docs site for Cloudflare Workers
+        working-directory: site
+        run: |
+          npm ci
+          npm run build
+
   clippy:
     runs-on: depot-ubuntu-24.04-4
     # A hung step fails the job instead of holding it for hours (#637).
