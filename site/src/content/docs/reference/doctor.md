@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/doct
 
 <!-- Generated from crates/barca-cli/docs/doctor.md (barca docs doctor). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs doctor`: the CLI prints the same text.
-:::
-
 `barca doctor` reports what a run would need (project root, Python, cache, metadata, stores,
 capacity, and a configured server) without executing a step, so a broken setup is found before
 the first `get`.
@@ -110,3 +106,7 @@ barca get --refresh-all
 
 See also: [`barca docs remote`](/reference/remote-storage/) (store configuration), [`barca docs discovery`](/reference/discovery/) (project roots and
 source selection), [`barca docs server-mode`](/reference/server-mode/), [`barca docs agents`](/reference/agents/) ("Debugging pipelines").
+
+---
+
+*The same text is in your terminal: `barca docs doctor`.*

@@ -8,6 +8,12 @@ $ barca version
 barca 0.27.0
 ```
 
+## Usage
+
+```
+barca version
+```
+
 `barca --version` prints the same. Neither takes `--json`.
 
 ---

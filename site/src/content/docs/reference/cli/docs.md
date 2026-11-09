@@ -6,6 +6,12 @@ description: "The built-in manual, for the installed version."
 The manual, compiled into the binary, so it works offline and describes the installed version.
 Every command's `--help` ends with examples.
 
+## Usage
+
+```
+barca docs [topic] [--all] [--json]
+```
+
 ```bash
 barca docs                    # topic index with one-line summaries
 barca docs types              # one topic as markdown (output formats, annotations, duckdb)

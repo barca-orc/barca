@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/sql.
 
 <!-- Generated from crates/barca-cli/docs/sql.md (barca docs sql). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs sql`: the CLI prints the same text.
-:::
-
 `barca sql` runs a DuckDB query over the results barca already has on disk. Use it to look at
 data while debugging, for example to see which keys a validation counted as failing, without
 writing a probe step or a script.
@@ -194,3 +190,7 @@ the row count, `env="dev"` to select an environment, and `server=True` or
 executing assets and raises `barca.BarcaError` on failure.
 
 See also: [`barca docs status`](/reference/status/), [`barca docs types`](/reference/types/), [`barca docs cache`](/reference/cache/), [`barca docs server-mode`](/reference/server-mode/).
+
+---
+
+*The same text is in your terminal: `barca docs sql`.*

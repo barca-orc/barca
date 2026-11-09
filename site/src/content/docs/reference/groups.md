@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/grou
 
 <!-- Generated from crates/barca-cli/docs/groups.md (barca docs groups). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs groups`: the CLI prints the same text.
-:::
-
 `group()` organizes assets, tasks and sensors in the UI and CLI. It never adds a
 step, dependency, execution boundary or cache key. A group's output identifies
 an existing node; it does not hide other dependencies crossing the group.
@@ -72,3 +68,7 @@ Groups that reference excluded definitions are omitted and reported through
 One-shot CLI commands continue to reject invalid group declarations.
 
 See also: [`barca docs assets`](/reference/assets/), [`barca docs scheduling`](/scheduling/).
+
+---
+
+*The same text is in your terminal: `barca docs groups`.*

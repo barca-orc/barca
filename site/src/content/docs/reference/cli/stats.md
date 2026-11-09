@@ -7,6 +7,12 @@ Show statistics for one node: how many times it executed, timings (average, medi
 max), how many executions repeated unchanged inputs, and recent runs. The target is required.
 Times are UTC.
 
+## Usage
+
+```
+barca stats <target> [file.py|dir/ ...]
+```
+
 ```
 $ barca stats total pipeline.py
 Asset: pipeline.py:total

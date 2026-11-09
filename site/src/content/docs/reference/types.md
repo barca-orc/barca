@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/type
 
 <!-- Generated from crates/barca-cli/docs/types.md (barca docs types). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs types`: the CLI prints the same text.
-:::
-
 How barca stores each step's output and how it hands values to downstream steps.
 
 ## Output: the returned value picks the format
@@ -180,3 +176,7 @@ def orders() -> pd.DataFrame:
 The CSV boundary is specified in `specs/interfaces/artifact-formats.md`.
 
 See also: `barca docs big-inputs`, [`barca docs duckdb`](/reference/duckdb/), [`barca docs cache`](/reference/cache/), `barca docs examples/duckdb`.
+
+---
+
+*The same text is in your terminal: `barca docs types`.*

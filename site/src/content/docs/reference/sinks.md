@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/sink
 
 <!-- Generated from crates/barca-cli/docs/sinks.md (barca docs sinks). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs sinks`: the CLI prints the same text.
-:::
-
 `@sink` writes an asset's output to an extra location whenever the asset materializes, for
 example to export a file for another system. It is stacked on top of `@asset`.
 
@@ -223,3 +219,7 @@ only that directory; a column nobody filters on only adds directories.
   `__HIVE_DEFAULT_PARTITION__`.
 
 See also: [`barca docs types`](/reference/types/), [`barca docs partitions`](/reference/partitions/).
+
+---
+
+*The same text is in your terminal: `barca docs sinks`.*

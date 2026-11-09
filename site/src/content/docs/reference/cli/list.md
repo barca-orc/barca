@@ -10,6 +10,12 @@ the cron expression in the local time of the machine `list` runs on (the table c
 `--timezone`: a server started with one fires at the same wall-clock time in that zone, and its
 [`GET /schedule`](/reference/server-api/#get-schedule) reports the times it will fire at.
 
+## Usage
+
+```
+barca list [file.py|dir/ ...] [-l N | --all] [--json]
+```
+
 ```
 $ barca list pipeline.py
 NAME                KIND   FRESHNESS  DEPS

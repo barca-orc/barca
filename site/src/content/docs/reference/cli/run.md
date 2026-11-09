@@ -8,6 +8,12 @@ upstream of it are served from cache when unchanged, as with `barca get`. `run` 
 flags as `get`. In a terminal it prints the task's value under the summary; `-o value` prints
 only the value.
 
+## Usage
+
+```
+barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
+```
+
 ```
 $ barca run notify pipeline.py
 [barca] 1/3 steps | done in 0.0s

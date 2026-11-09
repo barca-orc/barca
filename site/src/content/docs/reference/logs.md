@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/logs
 
 <!-- Generated from crates/barca-cli/docs/logs.md (barca docs logs). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs logs`: the CLI prints the same text.
-:::
-
 `barca logs RUN_ID` reads what a run's steps wrote, line by line: their stdout, and their
 Python stderr (`logging`, `warnings`, `print(..., file=sys.stderr)` and the traceback of each
 failed attempt). It loads no pipeline code and contacts no store. Find the exact id in get/run
@@ -187,3 +183,7 @@ notice.
 
 See also: [`barca docs tasks`](/reference/tasks/), [`barca docs status`](/reference/status/), [`barca docs agents`](/reference/agents/), `barca docs
 server-mode`.
+
+---
+
+*The same text is in your terminal: `barca docs logs`.*

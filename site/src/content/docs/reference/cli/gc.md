@@ -8,6 +8,12 @@ Evict cached results so `.barca/` stays under its size limit (`[cache].max_size`
 [Cache size](/reference/config/#cache-size)). barca already does this after every `get` and
 `run` once the limit is passed; `barca gc` does it now. Experimental.
 
+## Usage
+
+```
+barca gc [--dry-run] [--max-size SIZE] [--json]
+```
+
 ```bash
 barca gc --dry-run              # what would be evicted, per tier, and what it leaves
 barca gc                        # evict now, down to 80% of the limit

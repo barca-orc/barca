@@ -7,6 +7,12 @@ Start an HTTP server with a JSON API, the cron scheduler and the web UI at `/ui/
 `127.0.0.1` by default; `--host 0.0.0.0` listens on every interface. It has no authentication. See [Server API](/reference/server-api/) for the
 endpoints and [Deploying](/deploying/) for running it behind nginx.
 
+## Usage
+
+```
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
+```
+
 ```bash
 barca serve pipeline.py                 # default port 8274
 barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no auth
@@ -16,6 +22,8 @@ barca serve pipeline.py --max-runs 2    # at most 2 runs at once; the others wai
 barca serve pipeline.py --capacity 4    # the weight= of every run's running steps adds up to at most 4
 barca serve pipeline.py --run-timeout 3600   # stop a run that takes longer than an hour
 ```
+
+## Flags
 
 | Flag | Default | Meaning |
 |---|---|---|

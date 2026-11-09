@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/serv
 
 <!-- Generated from crates/barca-cli/docs/serve-ops.md (barca docs serve-ops). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs serve-ops`: the CLI prints the same text.
-:::
-
 A running server accepts runs into a durable queue, drains when told to stop and resumes the
 queue when it starts again. This topic is for the person who deploys and restarts it: the run
 queue and `barca queue`, what each signal does and the exit code it ends with, the stop grace a
@@ -337,3 +333,7 @@ not configurable; `--run-timeout 600` restores it.
 
 See also: [`barca docs scheduling`](/scheduling/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs telemetry`](/reference/telemetry/),
 [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs serve-ops`.*

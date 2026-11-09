@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/cont
 
 <!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs contract`: the CLI prints the same text.
-:::
-
 This page is the written-down CLI surface of this version of barca: every command, argument,
 environment variable, exit code, JSON output schema, the stderr error envelope and the
 `--agent` line formats. Scripts and AI agents can rely on everything marked `stable`.
@@ -3078,3 +3074,7 @@ The existing refresh list in CLI, Python and server requests shares these semant
 `--partition` continues to narrow execution and skip affected fan-ins.
 
 See also: [`barca docs agents`](/reference/agents/) (how to drive barca from scripts and agents), [`barca docs skill`](/reference/agent-skill/).
+
+---
+
+*The same text is in your terminal: `barca docs contract`.*

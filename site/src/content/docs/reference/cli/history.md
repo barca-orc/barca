@@ -13,6 +13,12 @@ unknown end time and duration as `null`. It does not stop a process. Ordinary hi
 still keep an uncertain owner `running`; reconciliation is your assertion that it stopped.
 The change is local to the selected environment's metadata database.
 
+## Usage
+
+```
+barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
+```
+
 
 Show recent runs from `.barca/metadata.db`: run id, command, target, status, step counts and
 timing. TARGET is the run's job by function name, `all` for a run without targets, cut at 24

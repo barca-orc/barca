@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/cach
 
 <!-- Generated from crates/barca-cli/docs/cache.md (barca docs cache). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs cache`: the CLI prints the same text.
-:::
-
 Barca skips a step when it has already computed the same thing. This topic covers what "the
 same" means (the run hash), what the hash does and does not see, the states a cached result
 can be in, how to force a recompute, the cache size limit, and where everything is stored.
@@ -984,3 +980,7 @@ records while it goes and after it is killed, and what an upgrade recomputes are
 
 See also: [`barca docs disk`](/reference/disk/), [`barca docs layout`](/reference/layout/), [`barca docs remote`](/reference/remote-storage/), [`barca docs types`](/reference/types/),
 [`barca docs partitions`](/reference/partitions/), [`barca docs status`](/reference/status/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs cache`.*

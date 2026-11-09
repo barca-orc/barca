@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/task
 
 <!-- Generated from crates/barca-cli/docs/tasks.md (barca docs tasks). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs tasks`: the CLI prints the same text.
-:::
-
 A task is a workflow step that *does* something (deploy, notify, migrate, warm a cache). Tasks
 always re-run and are never cached.
 
@@ -247,3 +243,7 @@ lines and trailing partial lines flushed on return/failure are recorded. `--step
 See [`barca docs logs`](/reference/logs/) for the full contract.
 
 See also: [`barca docs cache`](/reference/cache/), `barca docs examples/deploy-task`, [`barca docs logs`](/reference/logs/).
+
+---
+
+*The same text is in your terminal: `barca docs tasks`.*

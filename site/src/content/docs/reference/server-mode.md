@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/serv
 
 <!-- Generated from crates/barca-cli/docs/server-mode.md (barca docs server-mode). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs server-mode`: the CLI prints the same text.
-:::
-
 To execute a deployed project remotely, start `barca serve` there and use an explicit URL:
 
 ```bash
@@ -467,3 +463,7 @@ The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route 
 described at https://barca.sh/reference/server-api/.
 
 See also: [`barca docs scheduling`](/scheduling/), [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs server-mode`.*

@@ -6,6 +6,12 @@ description: "A server's run queue; pause or resume it (experimental)."
 A barca server's run queue: the runs executing and the runs waiting to start, in order. It needs
 a server (`--server URL`, `BARCA_SERVER` or `[server] url`); without one it exits 2. Experimental.
 
+## Usage
+
+```
+barca queue [pause|resume] [--server [URL]] [--json]
+```
+
 ```bash
 barca queue --server                 # running and queued runs (a table in a terminal)
 barca queue --server --json          # {paused, paused_at, draining, max_runs, running, queued}

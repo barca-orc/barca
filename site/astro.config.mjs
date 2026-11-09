@@ -94,12 +94,18 @@ export default defineConfig({
           items: [
             { slug: 'troubleshooting' },
             { slug: 'reference/cli' },
+            { label: 'Exit Codes', link: '/reference/cli/#errors-and-exit-codes' },
             {
-              label: 'More Commands',
+              label: 'Commands',
               collapsed: true,
               items: [
                 { slug: 'reference/cli/get' },
                 { slug: 'reference/cli/run' },
+                { label: 'barca status', slug: 'reference/status' },
+                { label: 'barca logs', slug: 'reference/logs' },
+                { label: 'barca sql', slug: 'reference/sql' },
+                { label: 'barca pin and unpin', slug: 'reference/pins' },
+                { label: 'barca doctor', slug: 'reference/doctor' },
                 { slug: 'reference/cli/plan' },
                 { slug: 'reference/cli/history' },
                 { slug: 'reference/cli/gc' },
@@ -114,12 +120,7 @@ export default defineConfig({
             },
             { slug: 'reference/cache' },
             { label: 'Forcing a Recompute', link: '/reference/cache/#forcing-a-recompute' },
-            { slug: 'reference/status' },
-            { slug: 'reference/logs' },
-            { slug: 'reference/sql' },
-            { slug: 'reference/pins' },
             { slug: 'reference/incidents' },
-            { slug: 'reference/doctor' },
           ],
         },
         {
@@ -152,7 +153,6 @@ export default defineConfig({
           collapsed: true,
           items: [
             { slug: 'reference/agents' },
-            { label: 'Exit Codes', link: '/reference/cli/#errors-and-exit-codes' },
             { slug: 'reference/agent-skill' },
             { slug: 'reference/cli-contract' },
           ],

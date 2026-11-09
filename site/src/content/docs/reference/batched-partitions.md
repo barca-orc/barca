@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/batc
 
 <!-- Generated from crates/barca-cli/docs/batched-partitions.md (barca docs batched-partitions). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs batched-partitions`: the CLI prints the same text.
-:::
-
 This topic owns `batch=`: how keys are grouped into calls, what a batch function receives and
 returns, what does not change (run hashes, artifacts, caching per key), how calls are reported
 and the known limits. Partitions themselves are [`barca docs partitions`](/reference/partitions/).
@@ -239,3 +235,7 @@ barca get scored pipeline.py --refresh scored --batch scored=all       # every k
   `refresh` list without `batch` recomputes the same keys, grouped by the declared `batch=`.
 
 See also: [`barca docs partitions`](/reference/partitions/), [`barca docs cache`](/reference/cache/), [`barca docs assets`](/reference/assets/), [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs batched-partitions`.*

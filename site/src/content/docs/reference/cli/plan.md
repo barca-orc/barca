@@ -6,6 +6,12 @@ description: "Print the execution plan as JSON without running anything (experim
 The document includes `plan_version: 1`, independent of the package and database versions.
 Consumers of saved plans should reject unsupported versions.
 
+## Usage
+
+```
+barca plan [file.py|dir/ ...]
+```
+
 Parse the source files and print the execution plan as JSON, without running anything.
 The pool size matches execution: a positive `BARCA_POOL_SIZE`, else `[execution] pool_size`, else
 the available cores, or the capacity when it is smaller; `pool_size` and `pool_source` say which.

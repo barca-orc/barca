@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/inci
 
 <!-- Generated from crates/barca-cli/docs/incidents.md (barca docs incidents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs incidents`: the CLI prints the same text.
-:::
-
 When an asset is failing or producing bad data, an operator holds it back on the server so that
 scheduled runs stop computing it (and what reads it) until it is fixed. A pause names a node, a
 node and everything below it, or every node of a file. Pauses are experimental (new in 0.41).
@@ -65,3 +61,7 @@ back every queued run); the web UI's asset panel offers all three in one place.
   later is not paused.
 
 See also: [`barca docs serve-ops`](/reference/serve-ops/) (the run queue), [`barca docs scheduling`](/scheduling/) (schedules and their pause), [`barca docs server-mode`](/reference/server-mode/).
+
+---
+
+*The same text is in your terminal: `barca docs incidents`.*

@@ -7,6 +7,32 @@ Compute one or more assets and print where their results are. Only the target an
 upstream of it are considered, and a step whose code and inputs are unchanged is served from
 cache.
 
+## Usage
+
+```
+barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
+```
+
+## Flags
+
+| Flag | Meaning |
+|---|---|
+| `--refresh a,b` | Recompute the named assets (one comma-separated list) and everything downstream of them in the target's cone. The target itself may be named. |
+| `--no-cascade` | With `--refresh`: recompute only the named assets. Downstream assets stay cached and do not reflect the refresh; barca warns. |
+| `--refresh-all` | Recompute every asset in the target's cone. |
+| `--dry-run` | Report each step as cached or to run, and why, without running or writing anything. |
+| `--json`, `--pretty` | Force JSON or human output. |
+| `-o path` | Print only the artifact paths, one per line (one per partition key). With `--json`, the default JSON. |
+| `-o value` | Print only the value. With `--json`, the JSON result with the value in `final_output`. |
+| `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
+| `--partition KEY=V[,V]` | Select partition keys across the cone (a JSON object for compound keys): every partitioned node with that dimension computes only them, and fan-ins over them are skipped. Works without a target. |
+| `--agent` | Plain progress lines on stderr in place of the progress bar. |
+| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
+| `--env <name>` | Use a named environment's cache and history. |
+
+
+## Example
+
 ```
 $ barca get summary pipeline.py --json
 [barca] 2/2 steps | done in 0.0s
@@ -30,7 +56,8 @@ Run 14f389a807a2 | got 'summary' in 0.050s (0 steps, 1 phase)
   }
 ```
 
-To read the result:
+## Reading the result
+
 
 ```bash
 barca get summary pipeline.py -o value           # only the value, pretty-printed
@@ -41,13 +68,14 @@ barca get summary pipeline.py -o url --expires 12h  # a signed HTTPS link to the
 
 `-o value` reads json, parquet, CSV and pickle with the reader `barca.get()` uses; a table
 prints as a list of row objects. `-o path` is the default spelled out: with `--json` it prints
-the default JSON. Up to 0.24 `final_output` was the value of a json result and a terminal
-printed the value; `-o value` prints it now. `-o url` (experimental) prints a signed HTTPS link to
+the default JSON. `-o url` (experimental) prints a signed HTTPS link to
 each result in a cloud store, valid for `--expires` (default `1h`, at most `7d`); with `--json`
 each `_barca_artifact` pointer gains `url` and `url_expires_at`. See
 [Remote storage: signed URLs](/reference/remote-storage/#sharing-a-result-signed-urls).
 
-**Partitioned targets.** A partitioned asset returns every key, sorted: `final_output` is an
+## Partitioned targets
+
+A partitioned asset returns every key, sorted: `final_output` is an
 object keyed by partition key (`"region=emea"`; a compound key is `"day=d1,region=emea"`), each a
 pointer, or a value under `-o value`, and `-o path` prints one line per key.
 `--partition region=emea,amer` selects keys across the whole run: every partitioned node with
@@ -60,8 +88,7 @@ stderr, and the exit code is unchanged. With no target the selection applies to 
 sensor; `barca run` and `barca plan` take it too. JSON gains `partition_selection` (the
 selection, each narrowed node's `selected` and `skipped` key counts, `skipped_nodes`). A
 dimension no node in the cone has, a value no node with that dimension has, or a target the
-selection would skip is a usage error (exit 2). Up to 0.29.2 `--partition` narrowed only the
-target. See [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/#selecting-keys-with---partition). When some keys fail the run
+selection would skip is a usage error (exit 2). See [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/#selecting-keys-with---partition). When some keys fail the run
 fails (exit 1, `failed_node` names the key) and `final_output` in the result line holds the
 keys that succeeded; how a partial failure is reported may still change
 (`barca docs partitions`).
@@ -84,10 +111,14 @@ paths and a note on stderr. `--partition` returns every key it selects, however 
 `barca sql` reads every current key's rows. `barca.get()` raises for such a target; pass
 `partition=`. The same object is the outcome `barca serve` records for the run.
 
+## Without a target
+
 With no target (`barca get pipeline.py`, or `barca get`), barca gets every asset and sensor and
 returns the last asset's artifact. Tasks are skipped, and stderr names them and the `barca run`
 command. A sensor nothing depends on still runs. A file with only tasks gets nothing: exit 0,
 `"steps": []`, and a stderr note pointing at `barca run`.
+
+## Usage errors
 
 Every `get`/`run` usage error exits 2. An unknown or ambiguous target (and `run` without one)
 ends with ``Run `barca list <files>` to see available assets and tasks.``; the others state
@@ -97,22 +128,9 @@ their own fix: the corrected command for the wrong order, `barca run` for a task
 best match within one edit (two for a name longer than four characters), or two that tie. The
 exit code is still 2 and nothing runs.
 
-| Flag | Meaning |
-|---|---|
-| `--refresh a,b` | Recompute the named assets (one comma-separated list) and everything downstream of them in the target's cone. The target itself may be named. |
-| `--no-cascade` | With `--refresh`: recompute only the named assets. Downstream assets stay cached and do not reflect the refresh; barca warns. |
-| `--refresh-all` | Recompute every asset in the target's cone. |
-| `--dry-run` | Report each step as cached or to run, and why, without running or writing anything. |
-| `--json`, `--pretty` | Force JSON or human output. |
-| `-o path` | Print only the artifact paths, one per line (one per partition key). With `--json`, the default JSON. |
-| `-o value` | Print only the value. With `--json`, the JSON result with the value in `final_output`. |
-| `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
-| `--partition KEY=V[,V]` | Select partition keys across the cone (a JSON object for compound keys): every partitioned node with that dimension computes only them, and fan-ins over them are skipped. Works without a target. |
-| `--agent` | Plain progress lines on stderr in place of the progress bar. |
-| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
-| `--env <name>` | Use a named environment's cache and history. |
 
-`--no-cache` was removed in 0.24.0; use `--refresh-all`.
+
+## Refreshing selected keys
 
 To refresh a key or set while retaining the complete output domain:
 
@@ -126,6 +144,8 @@ cached and invalidated `collect()` publishers read the complete domain. Cutoff b
 `--no-cascade` retain their usual behavior. `--partition` still narrows the DAG. Python uses
 `barca.get("final", "pipeline.py", refresh=["source[account=A]", "source[account=C]"])`;
 `barca.run` and the server's `refresh` request array accept the same selectors.
+
+## Dry run
 
 A dry run of the same target:
 
@@ -155,6 +175,13 @@ Each entry in the result's `steps` array says what happened to that step. A node
 environment variables with `env=[...]` also carries `env`, the values the step was hashed with
 (`null` when unset, `<redacted>` for names like `*_TOKEN`), and its `--agent` progress line ends
 with `env NAME=value ...`. See [Decorators](/reference/api/decorators/#declared-environment-variables-env).
+
+
+## Changes from earlier versions
+
+- Up to 0.24, `final_output` was the value of a json result and a terminal printed the value;
+  `-o value` prints it now. `--no-cache` was removed in 0.24.0; use `--refresh-all`.
+- Up to 0.29.2, `--partition` narrowed only the target.
 
 ---
 

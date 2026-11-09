@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/tele
 
 <!-- Generated from crates/barca-cli/docs/telemetry.md (barca docs telemetry). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs telemetry`: the CLI prints the same text.
-:::
-
 barca can report every step and every run to a telemetry backend, and post to Slack when a job
 starts failing or recovers (see the Slack section below; it has its own switch). Each backend is off
 unless you switch it on. Datadog is switched on by name:
@@ -457,3 +453,7 @@ Limits:
 
 See also: [`barca docs scheduling`](/scheduling/), [`barca docs groups`](/reference/groups/), [`barca docs partitions`](/reference/partitions/),
 [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs telemetry`.*

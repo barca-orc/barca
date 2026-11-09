@@ -12,6 +12,14 @@ downloaded before a run. A store is one machine's backup: when another machine's
 newer than this one's own, a backup or `barca state backups` warns once, pruning keeps each
 machine's newest backup, and `restore` without `--from` picks this machine's.
 
+## Usage
+
+```
+barca state backups [--json]
+barca state restore [--from N|NAME|PATH]
+barca state reset [--yes]
+```
+
 ```bash
 barca state backups                  # newest first: # NAME WHERE SIZE ROWS RUN HOST
 barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, digest, agree, barca_version, db_format, host, project, mine}], local_dir, store}
