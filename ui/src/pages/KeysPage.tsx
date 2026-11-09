@@ -8,11 +8,13 @@ import { KeyDetail } from '@/components/partitions/KeyDetail'
 import { KeyHeatmap } from '@/components/partitions/KeyHeatmap'
 import { KeyTable } from '@/components/partitions/KeyTable'
 import { usePartitionGrid, usePartitionKey } from '@/hooks/usePartitionGrid'
+import { useRunDetail } from '@/hooks/useRuns'
+import { runIsLive, runLabel } from '@/lib/runs'
 import { api } from '@/lib/api'
 import { shortName } from '@/lib/graph'
 import { keysParams, keysSearch, withValues, type KeysParams } from '@/lib/keysPage'
 import {
-  cellOf, countStates, filterCells, filterSelection, gridOf, issueFilter, issueGroups, issueSelection, keyOf, KEY_STATE_GLYPH,
+  cellOf, countStates, filterCells, exactSelection, gridOf, issueFilter, issueGroups, issueSelection, keyOf, KEY_STATE_GLYPH,
   KEY_STATE_WORD, KEY_STATES, layoutBlocks, NO_FILTER, rangeBounds, type IssueGroup, type KeyFilter, type KeyState,
 } from '@/lib/partitionGrid'
 import { plural } from '@/lib/plural'
@@ -81,9 +83,19 @@ export function KeysPage() {
       api.startRun({ command: 'get', targets: [node!], ...(partition ? { partition } : {}) }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['runs'] })
-      setTimeout(() => void client.invalidateQueries({ queryKey: ['partition-grid'] }), 1500)
+      void client.invalidateQueries({ queryKey: ['partition-grid'] })
     },
   })
+
+  const retry = useRunDetail(start.data?.run_id ?? null)
+  const retryStatus = retry.data?.status
+  const retryId = start.data?.run_id
+  useEffect(() => {
+    if (retryId && retryStatus && !runIsLive(retryStatus)) {
+      void client.invalidateQueries({ queryKey: ['partition-grid'] })
+      void client.invalidateQueries({ queryKey: ['partition-key'] })
+    }
+  }, [client, retryId, retryStatus])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -101,10 +113,9 @@ export function KeysPage() {
   const keyCount = totals ? KEY_STATES.reduce((n, s) => n + totals[s], 0) : 0
   const valueDims = grid?.dims.filter((d) => d.values.length > 1 && d.values.length <= SELECT_MAX) ?? []
   const along = grid && layout ? grid.dims[layout.along] : null
-  // What Run in the head computes: the keys of the dimension filters and the range, or every key.
-  const scoped = grid && (filter.range !== null || Object.values(filter.values).some((v) => v.length > 0))
-  const scopeFilter = { ...NO_FILTER, values: filter.values, range: filter.range }
-  const scopeNeeding = grid && scoped ? countNeeding(countStates(grid, filterCells(grid, scopeFilter))) : needing
+  // The primary action follows the same search, state, error and range as the table.
+  const scopeNeeding = grid ? countNeeding(countStates(grid, cells)) : 0
+  const selection = grid ? exactSelection(grid, cells) : null
 
   return (
     <div className="barca-view barca-keys">
@@ -133,12 +144,12 @@ export function KeysPage() {
             <Button
               size="sm"
               iconLeft={<Play size={11} />}
-              disabled={scopeNeeding === 0}
+              disabled={scopeNeeding === 0 || selection === null}
               loading={start.isPending}
-              title={scopeNeeding === 0 ? 'Every key here is fresh' : 'Compute the keys that are not fresh; the rest stay cached'}
-              onClick={() => start.mutate(scoped && grid ? filterSelection(grid, scopeFilter) : null)}
+              title={selection === null && scopeNeeding > 0 ? 'These keys do not form an exact selection. Open a key to run it individually.' : scopeNeeding === 0 ? 'Every key here is fresh' : 'Compute the keys that are not fresh; the rest stay cached'}
+              onClick={() => start.mutate(selection)}
             >
-              {scopeNeeding === 0 ? 'All fresh' : `Run ${plural(scopeNeeding, 'key')}${scoped ? ' here' : ''}`}
+              {scopeNeeding === 0 ? 'All fresh' : `Run ${plural(scopeNeeding, 'key')} shown`}
             </Button>
           </div>
         </div>
@@ -146,7 +157,7 @@ export function KeysPage() {
           <p className="barca-keys-notice" role="status">
             {start.error
               ? `Couldn't start the run: ${(start.error as Error).message}`
-              : <>Started run <Link to={`/runs?run=${encodeURIComponent(start.data!.run_id)}`}>{start.data!.run_id}</Link>; keys update as it goes.</>}
+              : <>{retryStatus ? `Run ${runLabel(retryStatus)}` : 'Started run'} <Link to={`/runs?run=${encodeURIComponent(start.data!.run_id)}`}>{start.data!.run_id}</Link></>}
           </p>
         )}
       </div>

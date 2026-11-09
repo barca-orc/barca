@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  attemptOf, cellOf, countStates, errorOf, filterCells, filterSelection, gridOf, keyOf, layoutBlocks, NO_FILTER, stateOf,
+  attemptOf, cellOf, countStates, errorOf, filterCells, filterSelection, exactSelection, gridOf, keyOf, layoutBlocks, NO_FILTER, stateOf,
 } from './partitionGrid'
 import type { PartitionGrid } from './types'
 
@@ -124,4 +124,11 @@ describe('what is wrong, where', () => {
     expect(filterCells(g, f)).toEqual([3, 5, 7])
     expect(JSON.parse(filterSelection(g, f)!)).toEqual({ region: ['apac'], day: ['d2', 'd3', 'd4'] })
   })
+})
+
+it('never widens a nonrectangular key selection into additional partitions', () => {
+  const g = gridOf(dayRegion('ffffff'))
+  expect(exactSelection(g, [0, 3])).toBeNull()
+  expect(exactSelection(g, [])).toBeNull()
+  expect(JSON.parse(exactSelection(g, [0, 1])!)).toEqual({ day: ['d1'], region: ['emea', 'apac'] })
 })
