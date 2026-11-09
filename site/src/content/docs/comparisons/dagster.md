@@ -3,6 +3,11 @@ title: "Barca vs Dagster"
 description: Install size, steps to a first result, run time, run output and error output for the same two-asset pipeline, measured on 2026-10-21 with barca 0.28.0 and Dagster 1.13.26.
 ---
 
+Dagster and barca both model a pipeline as assets that depend on each other. Dagster is a
+platform: a project scaffold, a daemon, a UI and a catalog of integrations. barca is one package
+that reruns only what changed, on the machine that runs it. This page maps Dagster's concepts to
+barca's, says when to choose Dagster, and then measures the same pipeline in both.
+
 ## Coming from Dagster
 
 | Dagster | barca |
