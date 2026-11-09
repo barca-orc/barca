@@ -1,13 +1,15 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Play, X, ZoomOut } from 'lucide-react'
-import { Button, SearchInput, Select, Skeleton, StatusGlyph } from '@/components'
+import { Button, ConfirmDialog, SearchInput, Select, Skeleton, StatusGlyph } from '@/components'
 import { IssueList } from '@/components/partitions/IssueList'
 import { KeyDetail } from '@/components/partitions/KeyDetail'
 import { KeyHeatmap } from '@/components/partitions/KeyHeatmap'
 import { KeyTable } from '@/components/partitions/KeyTable'
 import { usePartitionGrid, usePartitionKey } from '@/hooks/usePartitionGrid'
+import { useHealth } from '@/hooks/useHealth'
+import { usePausedSet } from '@/hooks/usePauses'
 import { useRunDetail } from '@/hooks/useRuns'
 import { runIsLive, runLabel } from '@/lib/runs'
 import { api } from '@/lib/api'
@@ -42,6 +44,9 @@ export function KeysPage() {
   const params = keysParams(search)
   const { node, filter } = params
   const client = useQueryClient()
+  const readOnly = useHealth().data?.read_only ?? true
+  const paused = usePausedSet().has(node ?? '')
+  const [runConfirm, setRunConfirm] = useState<{ node: string; partition: string } | null>(null)
   const gridQuery = usePartitionGrid(node)
   const keyQuery = usePartitionKey(node, params.key)
   const grid = useMemo(() => (gridQuery.data ? gridOf(gridQuery.data) : null), [gridQuery.data])
@@ -79,13 +84,19 @@ export function KeysPage() {
   const select = (cell: number | null) => go(() => ({ key: cell === null || !grid ? null : keyOf(grid, cell) }))
 
   const start = useMutation({
-    mutationFn: (partition: string | null) =>
-      api.startRun({ command: 'get', targets: [node!], ...(partition ? { partition } : {}) }),
+    mutationFn: ({ target, partition, allowPaused = false }: { target: string; partition: string; allowPaused?: boolean }) =>
+      api.startRun({ command: 'get', targets: [target], partition, ...(allowPaused ? { allow_paused: true } : {}) }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['runs'] })
       void client.invalidateQueries({ queryKey: ['partition-grid'] })
     },
   })
+
+  const run = (partition: string | null) => {
+    if (!node || !partition || readOnly) return
+    if (paused) setRunConfirm({ node, partition })
+    else start.mutate({ target: node, partition })
+  }
 
   const retry = useRunDetail(start.data?.run_id ?? null)
   const retryStatus = retry.data?.status
@@ -144,10 +155,10 @@ export function KeysPage() {
             <Button
               size="sm"
               iconLeft={<Play size={11} />}
-              disabled={scopeNeeding === 0 || selection === null}
+              disabled={readOnly || scopeNeeding === 0 || selection === null}
               loading={start.isPending}
-              title={selection === null && scopeNeeding > 0 ? 'These keys do not form an exact selection. Open a key to run it individually.' : scopeNeeding === 0 ? 'Every key here is fresh' : 'Compute the keys that are not fresh; the rest stay cached'}
-              onClick={() => start.mutate(selection)}
+              title={readOnly ? 'This server is read-only' : scopeNeeding === 0 ? 'Every key here is fresh' : 'Compute the keys that are not fresh; the rest stay cached'}
+              onClick={() => run(selection)}
             >
               {scopeNeeding === 0 ? 'All fresh' : `Run ${plural(scopeNeeding, 'key')} shown`}
             </Button>
@@ -162,6 +173,13 @@ export function KeysPage() {
         )}
       </div>
 
+      {runConfirm && <ConfirmDialog
+        title={`Run ${shortName(runConfirm.node)} while it is paused?`}
+        body="Scheduled runs skip this asset until resumed. This runs only the selected keys now; the asset stays paused."
+        action="Run anyway"
+        onCancel={() => setRunConfirm(null)}
+        onConfirm={() => { start.mutate({ target: runConfirm.node, partition: runConfirm.partition, allowPaused: true }); setRunConfirm(null) }}
+      />}
       <div className="barca-keys-body">
         <div className="barca-keys-main">
           {gridQuery.isError && <p className="barca-note">Couldn't load the keys: {(gridQuery.error as Error).message}</p>}
@@ -200,7 +218,7 @@ export function KeysPage() {
                 const same = f.error === next.error && f.states.length === 1 && f.states[0] === next.states[0]
                 return same ? { ...f, states: [], error: null } : { ...f, ...next }
               })}
-              onRun={(issue) => start.mutate(issueSelection(grid, issue))}
+              onRun={readOnly ? null : (issue) => run(issueSelection(grid, issue))}
             />
           )}
 
@@ -276,7 +294,7 @@ export function KeysPage() {
             error={keyQuery.error as Error | null}
             hrefFor={(id) => `/keys?${chainSearch(id)}`}
             running={start.isPending}
-            onRun={() => start.mutate(partitionSelection(params.key!))}
+            onRun={readOnly ? null : () => run(partitionSelection(params.key!))}
             onClose={() => go(() => ({ key: null }))}
           />
         )}

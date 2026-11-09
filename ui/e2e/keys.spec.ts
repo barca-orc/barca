@@ -153,3 +153,61 @@ test('repair names one key, records the reason, and refreshes its pin', async ({
   await expect(panel).toContainText('repair the broken feed')
   await expect(page.getByRole('link', { name: '1 key pinned in events' })).toHaveAttribute('href', new RegExp(`keys\\?node=${encodeURIComponent(NODE)}&state=pinned$`))
 })
+
+
+test('both retry controls preserve scattered compound keys', async ({ page }) => {
+  await page.route(/\/assets\/[^/]+\/partitions\/grid/, route => route.fulfill({ json: {
+    ...grid, states: 'fccfcc', counts: { fresh: 4, stale: 0, never_run: 0, failed: 2, blocked: 0 },
+    error: { '0': 0, '3': 0 }, errors: [{ error: 'ValueError: bad feed', keys: 2 }],
+  } }))
+  const requests: Record<string, unknown>[] = []
+  await page.route(/\/runs$/, route => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    requests.push(route.request().postDataJSON())
+    return route.fulfill({ json: { run_id: 'retry-exact', handle: 'retry-exact' } })
+  })
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}`)
+  await page.getByRole('button', { name: 'Run 2 keys shown' }).click()
+  await expect.poll(() => requests.length).toBe(1)
+  await page.getByRole('region', { name: 'What needs attention' }).getByRole('button', { name: 'Run', exact: true }).click()
+  await expect.poll(() => requests.length).toBe(2)
+  for (const request of requests) {
+    expect(JSON.parse(String(request.partition))).toEqual([
+      { day: 'd1', region: 'emea' }, { day: 'd2', region: 'apac' },
+    ])
+  }
+})
+
+test('paused key retries ask before submitting the retained selection', async ({ page }) => {
+  await mock(page)
+  await page.route(/\/pauses$/, route => route.fulfill({ json: {
+    total: 1, paused: [{ id: NODE, paused_at: 1, via: NODE }],
+  } }))
+  const requests: Record<string, unknown>[] = []
+  await page.route(/\/runs$/, route => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    requests.push(route.request().postDataJSON())
+    return route.fulfill({ json: { run_id: 'paused-retry', handle: 'paused-retry' } })
+  })
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}`)
+  await page.getByRole('button', { name: 'Run 2 keys shown' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText('only the selected keys')
+  expect(requests).toHaveLength(0)
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  expect(requests).toHaveLength(0)
+  await page.getByRole('button', { name: 'Run 2 keys shown' }).click()
+  await dialog.getByRole('button', { name: 'Run anyway' }).click()
+  await expect.poll(() => requests.length).toBe(1)
+  expect(requests[0]).toMatchObject({ allow_paused: true, targets: [NODE] })
+  expect(JSON.parse(String(requests[0]!.partition))).toEqual({ day: ['d2', 'd3'], region: ['emea'] })
+})
+
+test('read-only key inspection does not offer execution', async ({ page }) => {
+  await mock(page)
+  await page.route(/\/health$/, route => route.fulfill({ json: { read_only: true } }))
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&key=day%3Dd2%2Cregion%3Demea`)
+  await expect(page.getByRole('button', { name: 'Run 2 keys shown' })).toBeDisabled()
+  await expect(page.getByRole('region', { name: 'What needs attention' }).getByRole('button', { name: 'Run', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Run this key' })).toHaveCount(0)
+})

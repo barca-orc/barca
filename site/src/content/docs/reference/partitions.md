@@ -367,6 +367,19 @@ barca run notify pipeline.py --partition region=emea                    # a task
 barca plan pipeline.py --partition region=emea                          # the narrowed plan
 ```
 
+For scattered failures, pass a JSON array of key objects to preserve the exact combinations:
+
+```bash
+barca get sales pipeline.py --partition '[{"day":"d1","region":"east"},{"day":"d2","region":"west"}]'
+```
+
+This selects two combinations, not the four combinations of both days and both regions.
+Each object must name the same dimensions with string or numeric values. Duplicate keys are
+removed. A node with fewer of those dimensions receives the matching projection. The key
+explorer uses this form for nonrectangular filters and issue groups. Queued runs preserve it
+across server restarts. JSON reports include `exact_keys` alongside the dimension summary
+`selection`, so the scope is unambiguous.
+
 - **Narrowed.** Every planned partitioned node with a named dimension computes only the keys
   whose value of that dimension is selected: `partitions_from` chains, `partitions([...])` nodes
   that declare the same dimension name, and partitioned sensors and tasks. With a JSON object a

@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Retry exactly the partition keys shown or grouped under one issue, including scattered multi-dimensional combinations. `--partition` also accepts a JSON array of exact key objects; queued runs retain that scope across restarts.
+
 ### Features
 
 - **Repair individual partition keys:** upload replacement data or pin an earlier version from the key inspector or `barca pin 'asset[dimension=value]'`. Pins hold only the named key through refresh, identify held keys in the explorer, and show the held version in previews. Confirmations accept a repair reason. Unpinning restores normal computation.

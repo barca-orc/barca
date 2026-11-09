@@ -262,7 +262,7 @@ def get(
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
-    partition: "str | dict[str, Any] | None" = None,
+    partition: "str | dict[str, Any] | list[dict[str, Any]] | None" = None,
     server: bool | str = False,
     batch: "str | int | dict[str, str | int] | None" = None,
 ) -> Any:
@@ -285,7 +285,8 @@ def get(
 
     A partitioned target returns a dict of partition key (``"region=emea"``) to
     value, for every key or for the keys ``partition`` selects: ``"region=emea,amer"``
-    or a dict for compound keys, ``{"region": "emea", "day": ["d1", "d2"]}``
+    or a dict for compound keys, ``{"region": "emea", "day": ["d1", "d2"]}``,
+    or a list of key dicts for exact combinations (no cross-product)
     (``--partition``). The selection applies to the whole cone: every partitioned asset
     with a selected dimension computes only those keys, and a ``collect()`` fan-in over
     them is skipped. It works without a target too (``get("pipeline.py", partition=...)``).
@@ -326,7 +327,7 @@ def run(
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
-    partition: "str | dict[str, Any] | None" = None,
+    partition: "str | dict[str, Any] | list[dict[str, Any]] | None" = None,
     server: bool | str = False,
     batch: "str | int | dict[str, str | int] | None" = None,
 ) -> Any:
@@ -360,7 +361,11 @@ def run(
     return output
 
 
-def plan(file: str, *extra_files: str, partition: "str | dict[str, Any] | None" = None) -> dict:
+def plan(
+    file: str,
+    *extra_files: str,
+    partition: "str | dict[str, Any] | list[dict[str, Any]] | None" = None,
+) -> dict:
     """Return the execution plan as a dict.
 
     ``partition=`` plans only the selected partition keys (``barca plan --partition``); the

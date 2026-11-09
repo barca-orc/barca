@@ -391,3 +391,66 @@ def pair(x: str, y: str):
     assert counts(result)["pair"] == (1, 8)
     predicted = doc(cli(tmp_path, *args, "--dry-run"))
     assert counts(predicted)["pair"] == (1, 8)
+
+
+@pytest.mark.parametrize("runtime", [False, True])
+def test_exact_compound_keys_do_not_run_cross_product_neighbors(tmp_path, runtime):
+    """An incident's diagonal keys remain diagonal in prediction and execution."""
+    (tmp_path / "barca.toml").write_text("")
+    source = (
+        '@asset()\ndef days():\n    return ["d1", "d2"]\n\n@asset()\ndef regions():\n    return ["east", "west"]\n\n'
+        if runtime
+        else ""
+    )
+    day_spec = "partitions_from(days)" if runtime else 'partitions(["d1", "d2"])'
+    region_spec = "partitions_from(regions)" if runtime else 'partitions(["east", "west"])'
+    dims = f'{{"day": {day_spec}, "region": {region_spec}}}'
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, partitions, partitions_from\n\n"
+        + source
+        + f"@asset(partitions={dims})\n"
+        + 'def raw(day, region):\n    return {"day": day, "region": region}\n\n'
+        + f'@asset(inputs={{"raw": raw}}, partitions={dims})\ndef result(raw, day, region):\n    return raw\n'
+    )
+    selected = [{"day": "d1", "region": "east"}, {"day": "d2", "region": "west"}]
+    expected = ["day=d1,region=east", "day=d2,region=west"]
+    if runtime:
+        cli(tmp_path, "get", "days,regions", "pipeline.py")
+    for extra in [("--dry-run",), ()]:
+        result = doc(
+            cli(
+                tmp_path,
+                "get",
+                "result",
+                "pipeline.py",
+                "--partition",
+                json.dumps(selected),
+                "--json",
+                *extra,
+            )
+        )
+        assert keys_of(result, "raw") == expected
+        assert keys_of(result, "result") == expected
+        assert result["partition_selection"]["exact_keys"] == selected
+        if not extra:
+            assert sorted(result["final_output"]) == expected
+
+    with Server(tmp_path, "--no-schedule") as server:
+        server.ready()
+        result = doc(
+            cli(
+                tmp_path,
+                "get",
+                "result",
+                "--server",
+                server.url,
+                "--partition",
+                json.dumps(selected),
+                "--refresh-all",
+                "--json",
+            )
+        )
+        assert keys_of(result, "raw") == expected
+        assert keys_of(result, "result") == expected
+        assert result["partition_selection"]["exact_keys"] == selected
+        assert sorted(result["final_output"]) == expected

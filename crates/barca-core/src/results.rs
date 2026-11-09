@@ -134,6 +134,9 @@ impl KeySummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionSelectionReport {
+    /// When present, only these combinations are selected; `selection` summarizes their values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_keys: Option<Vec<std::collections::BTreeMap<String, String>>>,
     /// Dimension → the selected values, sorted.
     pub selection: std::collections::BTreeMap<String, Vec<String>>,
     /// Each narrowed node (a planned partitioned node with a selected dimension), by id.

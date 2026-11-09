@@ -4632,6 +4632,13 @@ components:
       - nodes
       - skipped_nodes
       properties:
+        exact_keys:
+          type: array
+          description: When present, only these key combinations are selected; selection summarizes their dimension values.
+          items:
+            type: object
+            additionalProperties:
+              type: string
         selection:
           type: object
           additionalProperties:
@@ -6138,7 +6145,7 @@ components:
         partition:
           type: string
           description: --partition of get or run, as the flag takes it (region=emea,amer, or a JSON object
-            for compound keys). It narrows every partitioned node of the run with a named dimension;
+            for compound keys, or a JSON array of exact key objects). It narrows every partitioned node of the run with a named dimension;
             400 when it does not parse.
         allow_paused:
           type: boolean

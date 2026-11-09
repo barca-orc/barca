@@ -603,11 +603,12 @@ pub(crate) enum Cli {
         #[command(flatten)]
         format: FormatFlags,
         /// Select partition keys across the cone: `region=emea,amer`, or a JSON object for
-        /// compound keys (`{"region": "emea", "day": "2026-10-14"}`). Every partitioned node
+        /// compound keys (`{"region": "emea", "day": "2026-10-14"}`), or a JSON array of exact
+        /// key objects. Every partitioned node
         /// with a named dimension computes only those keys (--refresh too); a fan-in over them
         /// is skipped. Works without a target
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
-        #[arg(help = "Select keys, e.g. customer=acme; affected collect() fan-ins are skipped", long_help = None)]
+        #[arg(help = "Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped", long_help = None)]
         partition: Option<String>,
         /// Override `batch=` for this run: `none` (one key per call), `all` or a whole number,
         /// for every node that declares `batch=`; `NODE=V` (repeatable) for one node only.
@@ -687,7 +688,7 @@ pub(crate) enum Cli {
         /// Select partition keys across the task's cone, as for `barca get --partition`: every
         /// partitioned node with a named dimension computes only those keys
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
-        #[arg(help = "Select keys, e.g. customer=acme; affected collect() fan-ins are skipped", long_help = None)]
+        #[arg(help = "Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped", long_help = None)]
         partition: Option<String>,
         /// Override `batch=` for this run, as for `barca get --batch`. Experimental
         #[arg(long, value_name = "[NODE=]none|all|N")]
@@ -734,7 +735,7 @@ pub(crate) enum Cli {
         /// Plan only these partition keys, as `barca get --partition` does: narrowed nodes keep
         /// the selected keys, and fan-ins over them are left out (listed in partition_selection)
         #[arg(long, value_name = "KEY=VALUE[,VALUE]|JSON")]
-        #[arg(help = "Select keys, e.g. customer=acme; affected collect() fan-ins are skipped", long_help = None)]
+        #[arg(help = "Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped", long_help = None)]
         partition: Option<String>,
         /// Accepted for symmetry with the other commands: the plan is always pretty-printed
         /// JSON, so this changes nothing

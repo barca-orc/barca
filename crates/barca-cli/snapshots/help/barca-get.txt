@@ -15,7 +15,7 @@ Options:
       --pretty
           Emit human-readable output (the default when stdout is a terminal)
       --partition <KEY=VALUE[,VALUE]|JSON>
-          Select keys, e.g. customer=acme; affected collect() fan-ins are skipped
+          Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped
       --batch <[NODE=]none|all|N>
           Override declared batching: none, all, N or NODE=N (experimental)
       --refresh <REFRESH>

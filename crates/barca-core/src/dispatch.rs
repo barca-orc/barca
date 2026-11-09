@@ -192,7 +192,7 @@ pub(crate) fn selected_source(
     dim: &str,
     source: &str,
 ) -> Option<(usize, crate::keyed::SourceKeys)> {
-    let selected = selection?.0.get(dim)?.iter().cloned().collect();
+    let selected = selection?.dimensions.get(dim)?.iter().cloned().collect();
     let output = outputs.get(source)?;
     crate::source_observation::Source::project_file(&output.path, &selected).ok()
 }

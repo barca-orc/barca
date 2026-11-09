@@ -25,7 +25,7 @@ use barca_core::outcome::{RunCommand, Trigger, TriggeredBy};
 use barca_core::serve::run_queue::{self, QueueState};
 use barca_core::time::{now_secs_f64 as now_ts, rfc3339_millis as timestamp};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
@@ -108,7 +108,7 @@ struct Stored {
     #[serde(default)]
     values: bool,
     #[serde(default)]
-    partition: Option<BTreeMap<String, BTreeSet<String>>>,
+    partition: Option<serde_json::Value>,
     /// `--batch` (RFC-0013).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     batch: Vec<String>,
@@ -150,7 +150,7 @@ fn store(spec: &RunSpec, accepted_at: f64) -> String {
         },
         trigger: spec.trigger.clone(),
         values: spec.values,
-        partition: spec.partition.as_ref().map(|p| p.0.clone()),
+        partition: spec.partition.as_ref().map(|p| p.to_json()),
         batch: spec.batch.clone(),
         pin_manual: spec.rules.pin_manual,
         tick: spec.rules.tick.clone(),
@@ -179,7 +179,8 @@ fn load(text: &str) -> Result<(RunSpec, f64), String> {
         values: stored.values,
         partition: stored
             .partition
-            .map(barca_core::selection::PartitionSelection),
+            .map(|value| barca_core::selection::PartitionSelection::parse(&value.to_string()))
+            .transpose()?,
         batch: stored.batch,
         rules: barca_core::freshness::RunRules {
             pin_manual: stored.pin_manual,
@@ -659,6 +660,7 @@ pub fn health(state: &AppState) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn state(dir: &std::path::Path) -> AppState {
         let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
@@ -750,6 +752,25 @@ mod tests {
     }
 
     #[test]
+    fn queued_exact_keys_do_not_widen_after_reload() {
+        let spec = RunSpec {
+            partition: Some(
+                barca_core::selection::PartitionSelection::parse(
+                    r#"[{"day":"d1","region":"east"},{"day":"d2","region":"west"}]"#,
+                )
+                .unwrap(),
+            ),
+            ..RunSpec::api(
+                RunCommand::Get,
+                vec!["result".into()],
+                vec!["p.py:result".into()],
+            )
+        };
+        let (back, _) = load(&store(&spec, 1.0)).unwrap();
+        assert_eq!(back.partition, spec.partition);
+    }
+
+    #[test]
     fn a_stored_run_reads_back_as_it_was_accepted() {
         let mut selection = BTreeMap::new();
         selection.insert(
@@ -767,7 +788,12 @@ mod tests {
             },
             trigger: Trigger::schedule("p.py:report", 1_760_000_000),
             values: true,
-            partition: Some(barca_core::selection::PartitionSelection(selection)),
+            partition: Some(
+                barca_core::selection::PartitionSelection::parse(
+                    &serde_json::to_string(&selection).unwrap(),
+                )
+                .unwrap(),
+            ),
             batch: vec!["all".into()],
             rules: barca_core::freshness::RunRules::tick("p.py:report"),
             timeout: None,

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 3. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 4. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -52,7 +52,14 @@ and [durability rules](cache-decisions.md#recording-progress).
 ### Batches and partial failure
 
 Batch selection groups stale keys without changing their individual result identities.
-Explicit selection narrows keys before grouping. Group order and explicit `batches(...)`
+Explicit selection narrows keys before grouping. A JSON array passed to `--partition` names
+exact key combinations, not the cross-product of their dimension values. Prediction, execution,
+refresh, and queue persistence preserve those combinations. Upstream nodes with fewer named
+dimensions receive their projection; unrelated dimensions remain unrestricted. Reports include
+`exact_keys` so a dimension summary cannot be mistaken for the selected combinations. Controls:
+[`test_partition_selection.py`](../../python/tests/test_partition_selection.py),
+`queue::tests::queued_exact_keys_do_not_widen_after_reload`, and the key-explorer browser tests.
+ Group order and explicit `batches(...)`
 boundaries must not depend on how a worker pool happens to divide streams.
 
 A table result (DuckDB, Arrow or polars) is split into one artifact per key whose rows are
