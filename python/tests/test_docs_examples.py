@@ -486,7 +486,7 @@ def test_site_ordering_only_pattern_example_runs(binary, tmp_path):
     without the unused-input warning. (The page is not a manual topic, so it is read from the
     repository; the helpers it calls but does not define are stubbed.)"""
     page = Path(__file__).resolve().parents[2] / (
-        "site/src/content/docs/recipes/03-ordering-only-deps.md"
+        "site/src/content/docs/recipes/ordering-only-deps.md"
     )
     if not page.exists():
         pytest.skip("site docs are not in this checkout")
