@@ -347,6 +347,8 @@ pub(super) async fn prepare_run(
         Some(selection) => Some(selection.apply(&dag, &mut exec_plan, &target_ids)?),
         None => None,
     };
+    let user_pins = db::get_pins(&request.cfg.db_path).await?;
+    crate::pins::prune_partition_inputs(&dag, &mut exec_plan, &target_ids, &user_pins);
     trace("planned");
 
     if let CachePolicy::RefreshSelective { names, .. } = policy {

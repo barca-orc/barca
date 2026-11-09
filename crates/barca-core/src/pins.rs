@@ -60,11 +60,37 @@ pub struct Versions {
 
 /// The node `name` names, checked to be one that can be pinned.
 fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
-    let id = find_target_id(dag, name)?;
-    let ok = dag
-        .get_node(&id)
-        .is_some_and(|n| n.kind() == crate::NodeKind::Asset && n.extracted.partitions.is_empty());
-    Ok((id, ok))
+    let step = crate::StepId::parse(name);
+    let id = find_target_id(dag, step.base_id())?;
+    let node = dag.get_node(&id).expect("resolved node exists");
+    if !step.partition.is_empty() {
+        if !name.ends_with(']') || step.partition.0.keys().ne(node.extracted.partitions.keys()) {
+            return Err(BarcaError::Usage(
+                "name exactly one key with every partition dimension".into(),
+            ));
+        }
+        for (dim, value) in &step.partition.0 {
+            if let crate::PartitionSpec::Static { values } = &node.extracted.partitions[dim] {
+                let known = values.iter().any(|v| match v {
+                    crate::PartitionValue::Str(s) => s == value,
+                    crate::PartitionValue::Int(n) => n.to_string() == *value,
+                });
+                if !known {
+                    return Err(BarcaError::Usage(format!(
+                        "unknown partition value {dim}={value}"
+                    )));
+                }
+            }
+        }
+        return Ok((
+            step.partition.display_id(&id),
+            node.kind() == crate::NodeKind::Asset,
+        ));
+    }
+    Ok((
+        id,
+        node.kind() == crate::NodeKind::Asset && node.extracted.partitions.is_empty(),
+    ))
 }
 
 fn refuse(id: &str) -> BarcaError {
@@ -367,8 +393,8 @@ pub async fn pin_upload(
 /// Remove `name`'s pin. Unpinning an asset that is not pinned changes nothing.
 pub async fn unpin(db_path: &str, dag: &Dag, name: &str) -> Result<Unpinned, BarcaError> {
     // A pin of a node that is no longer defined is removed by its node id.
-    let id = match find_target_id(dag, name) {
-        Ok(id) => id,
+    let id = match pinnable(dag, name) {
+        Ok((id, _)) => id,
         Err(e) => match db::get_pins(db_path)
             .await?
             .into_iter()
@@ -383,4 +409,117 @@ pub async fn unpin(db_path: &str, dag: &Dag, name: &str) -> Result<Unpinned, Bar
         node_id: id,
         removed,
     })
+}
+
+/// Remove work that is only read by held partition keys. Unknown memberships are left to
+/// runtime expansion; never guess a key set from a historical materialization.
+pub(crate) fn prune_partition_inputs(
+    dag: &Dag,
+    plan: &mut crate::planner::ExecutionPlan,
+    targets: &[&str],
+    pins: &[AssetPin],
+) {
+    use std::collections::{HashMap, HashSet};
+    let held: HashSet<&str> = pins.iter().map(|p| p.node_id.as_str()).collect();
+    if held.is_empty()
+        || plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .any(|s| !s.pending_partitions.is_empty())
+    {
+        return;
+    }
+    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
+    for step in plan
+        .phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+    {
+        let set = members.entry(step.step_id.base.to_string()).or_default();
+        if step.partition_keys.is_empty() {
+            set.insert(step.step_id.display());
+        } else {
+            set.extend(
+                step.partition_keys
+                    .iter()
+                    .map(|k| k.display_id(step.step_id.base_id())),
+            );
+        }
+    }
+    let mut needed: HashMap<String, HashSet<String>> = targets
+        .iter()
+        .filter_map(|id| members.get(*id).map(|keys| (id.to_string(), keys.clone())))
+        .collect();
+    for id in dag.topo_order().into_iter().rev() {
+        let Some(keys) = needed.get(id).cloned() else {
+            continue;
+        };
+        let node = dag.get_node(id).expect("topological node exists");
+        for display in keys {
+            if held.contains(display.as_str()) {
+                continue;
+            }
+            let key = crate::StepId::parse(&display).partition;
+            for up in dag.upstream(id) {
+                let Some(all) = members.get(up) else { continue };
+                let upstream = dag.get_node(up).expect("input node exists");
+                let dims = &upstream.extracted.partitions;
+                let wanted = needed.entry(up.to_string()).or_default();
+                if dims.is_empty() {
+                    wanted.insert(up.to_string());
+                } else if !node.resolved_collected.values().any(|v| v == up)
+                    && dims.keys().all(|dim| key.0.contains_key(dim))
+                {
+                    let projected = crate::PartitionKey(
+                        dims.keys()
+                            .map(|dim| (dim.clone(), key.0[dim].clone()))
+                            .collect(),
+                    );
+                    let projected = projected.display_id(up);
+                    if all.contains(&projected) {
+                        wanted.insert(projected);
+                    }
+                } else {
+                    wanted.extend(all.iter().cloned());
+                }
+            }
+        }
+    }
+    for phase in &mut plan.phases {
+        for stream in &mut phase.streams {
+            stream.steps.retain_mut(|step| {
+                let Some(wanted) = needed.get(step.step_id.base_id()) else {
+                    return false;
+                };
+                if step.partition_keys.is_empty() {
+                    return wanted.contains(&step.step_id.display());
+                }
+                step.partition_keys
+                    .retain(|k| wanted.contains(&k.display_id(step.step_id.base_id())));
+                if step.partition_keys.is_empty() {
+                    return false;
+                }
+                if step
+                    .partition_keys
+                    .iter()
+                    .all(|k| held.contains(k.display_id(step.step_id.base_id()).as_str()))
+                {
+                    step.inputs.clear();
+                }
+                true
+            });
+        }
+        phase.streams.retain(|s| !s.steps.is_empty());
+    }
+    plan.phases.retain(|p| !p.streams.is_empty());
+    plan.total_steps = plan
+        .phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+        .map(|s| s.partition_keys.len().max(1))
+        .sum();
 }
