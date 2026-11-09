@@ -101,6 +101,19 @@ const markSection = () => {
     a.classList.toggle('section-open', inSection));
 };
 document.addEventListener('DOMContentLoaded', markSection);
+// Screenshots open at full size in a new tab.
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.sl-markdown-content img[src*="/_astro/"]').forEach((img) => {
+    if (img.closest('a')) return;
+    const a = document.createElement('a');
+    a.href = img.currentSrc || img.src;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.title = 'Open full size';
+    img.replaceWith(a);
+    a.append(img);
+  });
+});
 addEventListener('hashchange', markSection);`,
         },
       ],
@@ -122,7 +135,7 @@ addEventListener('hashchange', markSection);`,
           ],
         },
         {
-          label: 'Why Barca',
+          label: 'Why Barca and How It Works',
           collapsed: true,
           items: [
             { slug: 'philosophy' },
@@ -131,6 +144,9 @@ addEventListener('hashchange', markSection);`,
             { slug: 'comparisons/dagster' },
             { slug: 'comparisons/prefect' },
             { slug: 'comparisons/cron' },
+            { slug: 'architecture' },
+            { slug: 'architecture-decisions' },
+            { slug: 'core-constraints' },
           ],
         },
         {
@@ -150,7 +166,7 @@ addEventListener('hashchange', markSection);`,
         },
         {
           label: 'Running and Caching',
-          collapsed: false,
+          collapsed: true,
           items: [
             { slug: 'troubleshooting' },
             { slug: 'reference/cache' },
@@ -174,7 +190,7 @@ addEventListener('hashchange', markSection);`,
           ],
         },
         {
-          label: 'Scheduling and Servers',
+          label: 'Servers: Guides',
           collapsed: true,
           items: [
             { slug: 'serve' },
@@ -182,10 +198,17 @@ addEventListener('hashchange', markSection);`,
             { slug: 'web-ui' },
             { slug: 'auth' },
             { slug: 'deploying' },
+            { slug: 'reference/slack' },
+          ],
+        },
+        {
+          label: 'Servers: Reference',
+          collapsed: true,
+          items: [
             { slug: 'reference/server-mode' },
             { slug: 'reference/serve-ops' },
             { slug: 'reference/server-api' },
-            { slug: 'reference/slack' },
+            { slug: 'reference/server-api-endpoints' },
             { slug: 'reference/telemetry' },
           ],
         },
@@ -239,15 +262,6 @@ addEventListener('hashchange', markSection);`,
             { slug: 'examples/sensors' },
             { slug: 'examples/timeouts-and-cancelling' },
             { slug: 'examples/tasks' },
-          ],
-        },
-        {
-          label: 'Internals',
-          collapsed: true,
-          items: [
-            { slug: 'architecture' },
-            { slug: 'architecture-decisions' },
-            { slug: 'core-constraints' },
           ],
         },
         {

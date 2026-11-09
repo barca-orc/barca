@@ -332,14 +332,14 @@ for `0 5 * * *` it shows 05:00 local, while a server running with `--timezone ut
 
 While the server is running, `GET /schedule` returns each job's next fire time, last fire time,
 last run id, last status and consecutive failed ticks
-([Server API](/reference/server-api/#scheduling)), and the web UI at
+([Server API](/reference/server-api-endpoints/#scheduling)), and the web UI at
 `/ui/` shows the next scheduled run of each node. Both are computed in the server's
 `--timezone`, so they are the times the job will fire at.
 
 A scheduled run shows in the web UI while it runs, like any other: the node pulses on the graph
 and the pipeline page, the assets list shows a Running badge with the elapsed time and a link to
 the run, and Runs in the sidebar counts the runs in progress. The UI reads it from `GET /state`'s
-`running` field ([Server API](/reference/server-api/#state)), so it does not matter which tab,
+`running` field ([Server API](/reference/server-api-endpoints/#state)), so it does not matter which tab,
 client or shell started the run.
 
 ## Caveats
@@ -364,7 +364,7 @@ client or shell started the run.
 - **Pausing one job.** `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) holds one
   job back and `POST /schedule/{id}/resume` lets it fire again; its ticks meanwhile are skipped
   with `skip_reason: "paused"`, and are not caught up. The pause is kept in the metadata DB, so
-  a restart does not resume it. See the [server API](/reference/server-api/#scheduling).
+  a restart does not resume it. See the [server API](/reference/server-api-endpoints/#scheduling).
 - **What started a run.** A scheduled run is recorded with `triggered_by: "schedule"`, the tick
   (`scheduled_at`) and the schedule (`schedule_id`), in `barca history --json`,
   `GET /runs/{run_id}` and the `barca.run` span.

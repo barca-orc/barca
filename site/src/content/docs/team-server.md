@@ -9,7 +9,7 @@ next:
 Once one person has computed something, nobody else has to compute it again. You run one
 `barca serve` that everyone points at, and you keep using `barca get` exactly as before.
 
-Part of the server section: [barca serve Overview](/serve/) lists every server page and the question it answers.
+Part of the server section: [Server Overview](/serve/) lists every server page and the question it answers.
 
 ## Only need to run on the server?
 

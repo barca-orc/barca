@@ -7,7 +7,7 @@ List every asset, task and sensor barca finds, with its kind, freshness and inpu
 node also shows its cron and its next fire time, to the second. The time is the next match of
 the cron expression in the local time of the machine `list` runs on (the table column is
 `NEXT FIRE (LOCAL TIME)`). Run locally, `list` does not know a server's `--timezone`: a server started with one fires at the same wall-clock time in that zone, and its
-[`GET /schedule`](/reference/server-api/#get-schedule) reports the times it will fire at.
+[`GET /schedule`](/reference/server-api-endpoints/#get-schedule) reports the times it will fire at.
 
 ## Usage
 

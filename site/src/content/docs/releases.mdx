@@ -6,7 +6,7 @@ tableOfContents: false
 
 import Changelog, { getHeadings as changelogHeadings } from '../../../../CHANGELOG.md';
 
-export const versions = changelogHeadings().filter((h) => h.depth === 2 && /^\d/.test(h.text));
+export const versions = changelogHeadings().filter((h) => h.depth === 2 && /^\d+\.\d+\.\d+ \(/.test(h.text));
 export const latest = versions[0];
 
 <div class="release-latest">

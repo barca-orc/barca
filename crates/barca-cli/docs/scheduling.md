@@ -308,7 +308,7 @@ outside; barca then prints a warning on stderr, because anyone who can reach the
 runs when authentication is off. Turn on tokens, or keep it on a private network or behind a
 proxy that authenticates. Open
 `http://127.0.0.1:8274/` for the web UI. Endpoints are documented at
-https://barca.sh/reference/server-api/; the normative wire contract is
+https://barca.sh/reference/server-api-endpoints/; the normative wire contract is
 https://github.com/barca-orc/barca/blob/main/specs/interfaces/server-api.openapi.yaml. Handler errors are
 JSON, while malformed request parameters can produce plain-text extractor errors.
 `GET /schedule` reports live schedule status. Behind

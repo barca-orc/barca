@@ -5,6 +5,9 @@ the project (`--server`, first below), and it can be the ledger every laptop rea
 from and records its runs in ("Local computation with shared results"). Opt-in project tokens
 protect both ("Opt-in project tokens").
 
+This is the reference. To set a team up in three steps: https://barca.sh/team-server/. To run
+the server as a service: https://barca.sh/deploying/.
+
 To execute a deployed project remotely, start `barca serve` there and use an explicit URL:
 
 ```bash
@@ -460,6 +463,6 @@ Read-only servers disable the actions.
 The selected node shows as running as soon as the server accepts it; View run opens its
 durable status, steps and logs. Ungrouped list panels offer the same action.
 The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
-described at https://barca.sh/reference/server-api/.
+described at https://barca.sh/reference/server-api-endpoints/.
 
 See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.
