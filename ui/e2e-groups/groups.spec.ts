@@ -278,3 +278,15 @@ test('a status failure leaves grouped metadata visible', async ({ page }) => {
   const problem = page.getByRole('status').filter({ hasText: 'History is unavailable' })
   await expect(problem).toContainText('Check the metadata volume')
 })
+
+test('mixed groups and nodes keep their columns readable at laptop width', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto(`/ui/#/assets?pipeline=${FILE}`)
+  const table = page.locator('.barca-group-table')
+  await expect(table).toBeVisible()
+  const widths = await table.locator('th').evaluateAll(cells => cells.map(c => ({ name: c.textContent?.trim(), width: c.getBoundingClientRect().width })))
+  for (const cell of widths) {
+    if (cell.name === 'Contents') expect(cell.width).toBeGreaterThanOrEqual(140)
+    if (cell.name === 'Age' || cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
+  }
+})

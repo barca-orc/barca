@@ -113,10 +113,10 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
     latest.current = { nodes, focus, width, height, inset }
   })
 
-  const fit = useCallback(() => {
+  const fit = useCallback((whole = false) => {
     const { nodes, focus, width, height, inset } = latest.current
     const all = viewNodes(nodes)
-    const target = fitTarget(all, width, height, inset, focus)
+    const target = whole ? all : fitTarget(all, width, height, inset, focus)
     if (target === all && all.length > 0 && width > 0 && height > 0) {
       // The whole graph fits: at most 1:1, centred across, and placed a little above the middle
       // (optical centre), so a small graph does not float in the middle of a tall canvas.
@@ -126,7 +126,7 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
       const h = Math.max(...all.map((n) => n.y + n.height)) - y0
       const roomX = width - inset.left - inset.right
       const roomY = height - inset.top - inset.bottom
-      const zoom = Math.max(MIN_FIT_ZOOM, Math.min(READABLE_ZOOM, roomX / w, roomY / h))
+      const zoom = Math.max(0.05, Math.min(READABLE_ZOOM, roomX / w, roomY / h))
       const free = Math.max(0, roomY - h * zoom)
       void setViewport({
         x: inset.left + (roomX - w * zoom) / 2 - x0 * zoom,
@@ -175,17 +175,16 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
   useEffect(() => {
     if (!measured || !sized || moved.current) return
     // A short settle so React Flow has registered every measurement; `fit` is safe to repeat.
-    const t = setTimeout(fit, 60)
+    const t = setTimeout(() => { if (!moved.current) fit() }, 60)
     return () => clearTimeout(t)
   }, [layoutKey, fit, measured, sized, width, height])
 
-  useImperativeHandle(handleRef, () => ({ fit }), [fit])
+  useImperativeHandle(handleRef, () => ({ fit: () => { moved.current = true; fit(true) } }), [fit])
   return null
 }
 
 /**
- * The canvas's controls, one quiet row at the bottom right: zoom, fit (the same fit as on
- * load) and, when the page can, the layout direction. Lucide icons, like every other control.
+ * The canvas's controls, one quiet row at the bottom right: zoom, fit the entire graph and, when the page can, the layout direction. Lucide icons, like every other control.
  */
 function GraphControls({ dir, onFit, onToggleDir }: { dir: LayoutDir; onFit: () => void; onToggleDir?: () => void }) {
   const { zoomIn, zoomOut } = useReactFlow()

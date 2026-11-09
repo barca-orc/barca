@@ -62,7 +62,15 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
   const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 2 : 0)
   const counts = (id: string): HealthCounts => healthCounts(leaves(id), byId, live)
   return (
-    <table className="barca-table barca-group-table">
+    <table className="barca-table barca-group-table" style={{ minWidth: 240 + 240 + 250 + (hasGroups ? 260 : 0) + (hasLeaves ? 200 : 0) }}>
+      <colgroup>
+        <col style={{ width: 240 }} /><col style={{ width: 240 }} /><col style={{ width: 250 }} />
+        {hasGroups && <col style={{ width: 150 }} />}
+        {hasGroups && <col style={{ width: 70 }} />}
+        {hasLeaves && <col style={{ width: 100 }} />}
+        {hasLeaves && <col style={{ width: 100 }} />}
+        {hasGroups && <col style={{ width: 40 }} />}
+      </colgroup>
       <thead>
         <tr>
           <th className="barca-group-col-name">Name</th>
