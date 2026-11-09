@@ -42,7 +42,14 @@ export default defineConfig({
   if (!cur) return;
   const r = cur.getBoundingClientRect(), p = pane.getBoundingClientRect();
   if (p.height && (r.top < p.top || r.bottom > p.bottom)) pane.scrollTop += r.top - p.top - p.height / 2;
-});`,
+});
+// Sidebar shortcuts into a section ("Exit Codes") show as current while that section is open.
+const markSection = () => document.querySelectorAll('.sidebar-content a[href*="#"]').forEach((a) => {
+  const u = new URL(a.href);
+  a.classList.toggle('current-section', u.pathname === location.pathname && u.hash === location.hash);
+});
+document.addEventListener('DOMContentLoaded', markSection);
+addEventListener('hashchange', markSection);`,
         },
       ],
       components: {

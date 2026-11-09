@@ -70,6 +70,7 @@
   --sl-color-bg-inline-code: var(--sl-color-gray-6);
   --sl-color-bg-accent: var(--sl-color-accent);
   --sl-color-hairline-light: var(--sl-color-gray-6);
+  --sl-color-hairline: var(--sl-color-gray-5);
   --sl-color-hairline-shade: var(--sl-color-gray-6);
 }
 
@@ -389,4 +390,24 @@ mobile-starlight-toc code {
 }
 .diagram .dg-head {
   fill: var(--sl-color-gray-3);
+}
+
+/* The phone menu button: a quiet outlined square like the rest of the controls, not a bright
+   filled circle (it was the brightest thing on a dark page) */
+starlight-menu-button button {
+  background-color: transparent !important;
+  color: var(--sl-color-white) !important;
+  box-shadow: none !important;
+  border: 1px solid var(--sl-color-gray-5) !important;
+  border-radius: 3px !important;
+}
+starlight-menu-button[aria-expanded='true'] button {
+  background-color: var(--sl-color-gray-6) !important;
+}
+
+/* A sidebar shortcut into a section ("Exit Codes") is current while its section is the one in
+   the address bar; the page it belongs to stays marked too */
+.sidebar-content a.current-section {
+  background-color: var(--sl-color-accent-low);
+  color: var(--sl-color-white);
 }

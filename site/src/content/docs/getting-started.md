@@ -3,6 +3,11 @@ title: Getting Started
 description: Run cached assets, tasks and partitions locally, then run the same project on a server.
 ---
 
+This page takes a new project from install to a first cached run, then shows the rest of what
+barca does in one short section each: tasks that always run, partitions, running on a server
+and querying results with SQL. The [Guide](/guide/) goes further into each, and is the next
+step after this one.
+
 ## Install
 
 You need Python 3.12 or later. With [uv](https://docs.astral.sh/uv/):

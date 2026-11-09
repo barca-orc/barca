@@ -6,13 +6,14 @@ import Default from '@astrojs/starlight/components/SocialIcons.astro';
 const path = Astro.url.pathname;
 const links = [
   { label: 'Recipes', href: '/patterns/', match: (p: string) => p.startsWith('/patterns') || p.startsWith('/workflows') },
+  { label: 'CLI', href: '/reference/cli/', match: (p: string) => p.startsWith('/reference/cli') },
   { label: 'All Pages', href: '/reference/', match: (p: string) => p === '/reference/' },
   { label: 'Changelog', href: '/contributing/changelog/', match: (p: string) => p.startsWith('/contributing/changelog') },
 ];
 // "Docs" is every other page: the guides, concepts and comparisons.
 const sections = [...links];
 links.unshift({
-  label: 'Docs',
+  label: 'Get Started',
   href: '/getting-started/',
   match: (p: string) => p !== '/' && !sections.some((l) => l.match(p)),
 });
@@ -46,7 +47,8 @@ links.unshift({
     color: var(--sl-color-white);
   }
   @media (min-width: 50rem) and (max-width: 72rem) {
-    .top-links a:last-child {
+    .top-links a:last-child,
+    .top-links a:nth-last-child(2) {
       display: none;
     }
   }
