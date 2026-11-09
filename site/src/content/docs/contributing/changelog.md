@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: Changelog
 description: Where to find what changed in each barca release.
 ---

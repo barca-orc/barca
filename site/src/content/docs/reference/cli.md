@@ -84,7 +84,7 @@ you have installed.
 | [`queue`](/reference/cli/queue/) | `barca queue [pause\|resume] [--server [URL]] [--json]` | A server's run queue; pause or resume it (experimental) |
 | [`pause`](/reference/pausing/) | `barca pause [target] [--downstream] [--json]` | Stop scheduled ticks and requests from computing an asset (experimental) |
 | [`resume`](/reference/pausing/) | `barca resume [target] [--downstream \| --all] [--json]` | Let a paused asset be computed again (experimental) |
-| [`tokens`](/reference/server-mode/#opt-in-project-tokens) | `barca tokens bootstrap` | Print a one-use code to connect to a server with --auth token (experimental) |
+| [`tokens`](/serve/#requiring-a-token-authentication-login) | `barca tokens bootstrap` | Print a one-use code to connect to a server with --auth token (experimental) |
 | [`list`](/reference/cli/list/) | `barca list [file.py\|dir/ ...] [--groups] [-l N \| --all] [--json]` | List discovered definitions and their deps |
 | [`status`](/reference/status/) | `barca status [target[,target...]] [file.py\|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]` | Cache state, last run and artifact shape per node |
 | [`sql`](/reference/sql/) | `barca sql "<query>" [file.py\|dir/ ...] [--json] [-l N \| --all]` | Query cached results with DuckDB (experimental) (install: uv add 'barca[sql]') |

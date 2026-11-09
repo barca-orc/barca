@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC Process & Template'
 description: How barca RFCs work, and the template to copy for a new one.
 ---

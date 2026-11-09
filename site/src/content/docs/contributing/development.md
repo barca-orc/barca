@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: Development Setup
 description: Build barca from source, run it, and find your way around the repository.
 ---
