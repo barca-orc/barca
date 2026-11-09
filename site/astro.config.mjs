@@ -104,6 +104,7 @@ addEventListener('hashchange', markSection);`,
             { label: 'Exit Codes', link: '/reference/cli/#errors-and-exit-codes' },
             { slug: 'reference/cache' },
             { label: 'Forcing a Recompute', link: '/reference/cache/#forcing-a-recompute' },
+            { slug: 'reference/hashing' },
             { slug: 'reference/incidents' },
             {
               label: 'Commands',

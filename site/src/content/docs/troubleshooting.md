@@ -43,7 +43,7 @@ Only variables listed in the asset's `env=[...]` are part of its run hash. Barca
 
 That is intended. Of the decorator's options, only `inputs=`, `serializer=` and the dimension
 names in `partitions=` are part of the run hash; changing the others, or reformatting the
-decorator, reruns nothing. See [Which decorator arguments count](/reference/cache/#which-decorator-arguments-count).
+decorator, reruns nothing. See [Which decorator arguments count](/reference/hashing/#which-decorator-arguments-count).
 
 ## Everything downstream reran, although the result did not change
 

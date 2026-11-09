@@ -63,6 +63,11 @@ pub const TOPICS: &[Topic] = &[
         "cache.md"
     ),
     topic!(
+        "hashing",
+        "What a step's definition covers: helpers followed, decorator arguments that count",
+        "hashing.md"
+    ),
+    topic!(
         "disk",
         "The size limit for .barca/, what barca gc evicts and in which order",
         "disk.md"
