@@ -422,7 +422,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<TARGET>` | - | - | experimental (with the command) | The asset (a function name or node id); omit to list every pin |
+| `<TARGET>` | - | - | experimental (with the command) | The asset or complete key (e.g. orders[region=emea]); omit to list every pin |
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
 | `--run-hash` | `HASH` | - | experimental (with the command) | Pin the successful materialization with this run hash (or a unique prefix of at least 6 characters), from `--versions` |
 | `--previous` | - | default `false` | experimental (with the command) | Pin the newest successful materialization before the latest one (roll back one version) |
@@ -441,7 +441,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<TARGET>` | - | required | experimental (with the command) | The pinned asset (a function name or node id) |
+| `<TARGET>` | - | required | experimental (with the command) | The pinned asset or complete key (e.g. orders[region=emea]) |
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |

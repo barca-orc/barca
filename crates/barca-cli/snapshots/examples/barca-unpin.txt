@@ -4,7 +4,7 @@ Usage: barca unpin [OPTIONS] <TARGET> [FILES]...
 
 Arguments:
   <TARGET>
-          The pinned asset (a function name or node id)
+          The pinned asset or complete key (e.g. orders[region=emea])
 
   [FILES]...
           Python files or directories; default: discover the project

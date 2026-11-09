@@ -3,7 +3,7 @@ Pin an asset to an earlier materialization, or list pins and versions
 Usage: barca pin [OPTIONS] [TARGET] [FILES]...
 
 Arguments:
-  [TARGET]    The asset (a function name or node id); omit to list every pin
+  [TARGET]    The asset or complete key (e.g. orders[region=emea]); omit to list every pin
   [FILES]...  Python files or directories; default: discover the project
 
 Options:

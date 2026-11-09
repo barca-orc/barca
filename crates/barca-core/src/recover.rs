@@ -441,6 +441,7 @@ fn predicted_gone(oref: &OutputRef, layout: Option<&ArtifactLayout>) -> bool {
 /// Dry run: the cached steps a run would compute again because it reads one of the artifacts at
 /// `needed` and finds it missing (and, for each such step, what it reads in turn). Their report
 /// lines become `run` with reason `artifact_missing`, and they leave `all_outputs`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn predict_recomputes(
     needed: Vec<String>,
     cached_steps: &mut CachedSteps,
@@ -449,17 +450,22 @@ pub(crate) fn predict_recomputes(
     evicted: &HashSet<String>,
     steps: &mut [StepReport],
     summary: &mut ExplainSummary,
-) {
+    pins: &HashMap<String, crate::freshness::Pin>,
+) -> Result<(), crate::BarcaError> {
     let gone = |oref: &&OutputRef| predicted_gone(oref, layout);
     // Each lost output's path is taken as it leaves `all_outputs`: copying every path first
     // cost a string per output per phase, 200k for a 200k-key node.
     for (id, path) in lose(cached_steps, all_outputs, &needed, gone) {
+        if pins.get(&id).is_some_and(|pin| pin.user.is_some()) {
+            return Err(crate::BarcaError::Usage(crate::freshness::pin_lost(&id)));
+        }
         let was_evicted = evicted.contains(&path);
         if mark_recomputed(steps, &id, true, was_evicted) {
             summary.cached = summary.cached.saturating_sub(1);
             summary.will_run += 1;
         }
     }
+    Ok(())
 }
 
 /// Dry run: the cached outputs that a run reading `needed` (artifact paths) would find missing

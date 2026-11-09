@@ -367,6 +367,7 @@ Examples:
   barca pin orders pipeline.py --previous --json   # {node_id, pin, version, replaced}
   barca pin                                    # every pinned asset
   barca pin --json                             # {pins: [...]}
+  barca pin 'orders[region=emea]' --from-file fixed.json --reason \"bad key\"
   barca pin orders --versions --limit 5 --json # {node_id, pinnable, pin, versions}
   barca pin orders --previous --server         # pin on the configured barca server
   barca pin orders --from-file fixed.parquet --reason \"hand-corrected feed\"   # override with your data
@@ -899,7 +900,7 @@ pub(crate) enum Cli {
     /// target, lists every pin.
     #[command(after_help = quick_help("pin", PIN_HELP), after_long_help = PIN_HELP, long_about = None)]
     Pin {
-        /// The asset (a function name or node id); omit to list every pin
+        /// The asset or complete key (e.g. orders[region=emea]); omit to list every pin
         target: Option<String>,
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         #[arg(help = "Python files or directories; default: discover the project", long_help = None)]
@@ -936,7 +937,7 @@ pub(crate) enum Cli {
     /// Remove an asset's pin; the next run decides it as before
     #[command(after_help = quick_help("unpin", UNPIN_HELP), after_long_help = UNPIN_HELP, long_about = None)]
     Unpin {
-        /// The pinned asset (a function name or node id)
+        /// The pinned asset or complete key (e.g. orders[region=emea])
         target: String,
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         #[arg(help = "Python files or directories; default: discover the project", long_help = None)]

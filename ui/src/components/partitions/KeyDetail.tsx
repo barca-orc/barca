@@ -1,4 +1,6 @@
 import { Link } from 'react-router'
+import { AssetVersions } from '@/components/assets/AssetVersions'
+import { useHealth } from '@/hooks/useHealth'
 import { Copy, Play, X } from 'lucide-react'
 import { Button, IconButton, KeyValue, Section, SidePanel, Skeleton } from '@/components'
 import { StatusGlyph } from '@/components/StatusGlyph'
@@ -12,7 +14,7 @@ import { plural } from '@/lib/plural'
 import { KEY_STATE_GLYPH, KEY_STATE_MEANING, KEY_STATE_WORD, needsRun, type KeyState } from '@/lib/partitionGrid'
 import type { KeyArtifact, PartitionKeyDetail } from '@/lib/types'
 
-const STATE: Record<string, KeyState> = { c: 'fresh', s: 'stale', n: 'never_run', f: 'failed', b: 'blocked' }
+const STATE: Record<string, KeyState> = { p: 'pinned', c: 'fresh', s: 'stale', n: 'never_run', f: 'failed', b: 'blocked' }
 
 /** A key's result or input: its type and columns, and its first rows. */
 function Shape({ artifact, label }: { artifact: KeyArtifact; label: string }) {
@@ -69,6 +71,7 @@ export interface KeyDetailProps {
 export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRun, running, onClose }: KeyDetailProps) {
   const state = detail ? STATE[detail.state] ?? null : null
   const latest = detail?.attempts[0]
+  const health = useHealth()
   return (
     <SidePanel
       label={`Key ${keyName}`}
@@ -120,6 +123,8 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
               })}
             </ol>
           )}
+          <AssetVersions key={`${node}[${keyName}]`} node={{ id: `${node}[${keyName}]`, kind: 'asset' }}
+            nowMs={health.dataUpdatedAt} readOnly={health.data?.read_only ?? true} />
           {/* What it read comes before what it wrote: for a failed key, the input is the evidence. */}
           {detail.inputs.length > 0 && (
             <Section title={detail.inputs.length === 1 ? `Input · ${shortName(detail.inputs[0]!.id)}` : 'Inputs'}>
@@ -131,11 +136,11 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
               ))}
             </Section>
           )}
-          <Section title={state === 'fresh' ? 'Output' : 'Last successful output'}>
+          <Section title={state === 'pinned' ? 'Pinned output' : state === 'fresh' ? 'Output' : 'Last successful output'}>
             {detail.output && state === 'failed' && (
               <p className="barca-note">The latest attempt failed; this data is from an earlier successful attempt.</p>
             )}
-            {detail.output && state !== 'fresh' && state !== 'failed' && (
+            {detail.output && state !== 'fresh' && state !== 'failed' && state !== 'pinned' && (
               <p className="barca-note">This retained result may be out of date for the current code and inputs.</p>
             )}
             {detail.output ? <Shape artifact={detail.output} label={`${keyName} output`} /> : <p className="barca-schema-empty">No successful result for this key yet.</p>}

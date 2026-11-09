@@ -3,7 +3,7 @@ Remove an asset's pin; the next run decides it as before
 Usage: barca unpin [OPTIONS] <TARGET> [FILES]...
 
 Arguments:
-  <TARGET>    The pinned asset (a function name or node id)
+  <TARGET>    The pinned asset or complete key (e.g. orders[region=emea])
   [FILES]...  Python files or directories; default: discover the project
 
 Options:

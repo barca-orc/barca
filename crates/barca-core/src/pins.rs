@@ -52,7 +52,7 @@ pub struct Unpinned {
 )]
 pub struct Versions {
     pub node_id: String,
-    /// Whether it can be pinned: an asset without partitions.
+    /// Whether it can be pinned: an unpartitioned asset or one complete partition key.
     pub pinnable: bool,
     pub pin: Option<AssetPin>,
     pub versions: Vec<Version>,
@@ -60,17 +60,50 @@ pub struct Versions {
 
 /// The node `name` names, checked to be one that can be pinned.
 fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
-    let id = find_target_id(dag, name)?;
-    let ok = dag
-        .get_node(&id)
-        .is_some_and(|n| n.kind() == crate::NodeKind::Asset && n.extracted.partitions.is_empty());
-    Ok((id, ok))
+    // A literal node id can itself contain brackets in its source path.
+    if let Ok(id) = find_target_id(dag, name) {
+        let node = dag.get_node(&id).expect("resolved node exists");
+        return Ok((
+            id,
+            node.kind() == crate::NodeKind::Asset && node.extracted.partitions.is_empty(),
+        ));
+    }
+    let step = crate::StepId::parse(name);
+    let id = find_target_id(dag, step.base_id())?;
+    let node = dag.get_node(&id).expect("resolved node exists");
+    if !step.partition.is_empty() {
+        if !name.ends_with(']') || step.partition.0.keys().ne(node.extracted.partitions.keys()) {
+            return Err(BarcaError::Usage(
+                "name exactly one key with every partition dimension".into(),
+            ));
+        }
+        for (dim, value) in &step.partition.0 {
+            if let crate::PartitionSpec::Static { values } = &node.extracted.partitions[dim] {
+                let known = values.iter().any(|v| match v {
+                    crate::PartitionValue::Str(s) => s == value,
+                    crate::PartitionValue::Int(n) => n.to_string() == *value,
+                });
+                if !known {
+                    return Err(BarcaError::Usage(format!(
+                        "unknown partition value {dim}={value}"
+                    )));
+                }
+            }
+        }
+        return Ok((
+            step.partition.display_id(&id),
+            node.kind() == crate::NodeKind::Asset,
+        ));
+    }
+    Ok((
+        id,
+        node.kind() == crate::NodeKind::Asset && node.extracted.partitions.is_empty(),
+    ))
 }
 
 fn refuse(id: &str) -> BarcaError {
     BarcaError::Usage(format!(
-        "'{}' cannot be pinned: only an asset without partitions can be pinned\nTasks, sensors \
-         and partitioned assets are not supported.",
+        "'{}' cannot be pinned: name an asset or one complete partition key\nTasks and sensors cannot be pinned.",
         short_name(id)
     ))
 }
@@ -281,6 +314,91 @@ async fn check_loads(
     }
 }
 
+/// Validate runtime membership before recording replacement bytes. Read the same current
+/// source (including a source pin) as execution; never create a key by uploading to a typo.
+async fn check_runtime_key(
+    cfg: &crate::config::ResolvedConfig,
+    python: &std::path::Path,
+    dag: &Dag,
+    id: &str,
+) -> Result<(), BarcaError> {
+    let step = crate::StepId::parse(id);
+    if step.partition.is_empty() {
+        return Ok(());
+    }
+    let node = dag.get_node(step.base_id()).expect("resolved node exists");
+    for (dim, value) in &step.partition.0 {
+        let crate::PartitionSpec::DerivedFrom { source_ref } = &node.extracted.partitions[dim]
+        else {
+            continue;
+        };
+        let source = dag
+            .partition_sources(step.base_id())
+            .into_iter()
+            .find(|id| short_name(id) == source_ref.resolution_name())
+            .ok_or_else(|| {
+                BarcaError::Usage(format!("cannot resolve the partition source for {dim}"))
+            })?;
+        let reader = db::CacheReader::for_config(cfg).await?;
+        let pins = db::pins_on(reader.conn()).await?;
+        let output = match pins.get(source) {
+            Some(pin) => db::success_at(&reader, source, &pin.run_hash).await,
+            None => db::latest_success(&reader, source)
+                .await
+                .map(|row| row.output),
+        };
+        drop(reader);
+        let output = output.ok_or_else(|| {
+            BarcaError::Usage(format!(
+                "partition keys are unknown: run {} first",
+                short_name(source)
+            ))
+        })?;
+        let cmd = crate::helper_proc::python_module(
+            python,
+            "barca._value",
+            cfg.storage_options_json.as_deref(),
+        );
+        let answers = crate::store_inspect::run_json_helper(
+            cmd,
+            python,
+            &serde_json::json!({
+                "artifacts": [{"path": output.path, "format": output.format}]
+            }),
+        )
+        .await
+        .map_err(|e| BarcaError::Usage(format!("cannot read partition membership: {e}")))?;
+        let source_value = answers
+            .first()
+            .and_then(|a| a.get("value"))
+            .ok_or_else(|| {
+                BarcaError::Usage("cannot read partition membership from its source".into())
+            })?;
+        let known = match source_value {
+            serde_json::Value::Object(values) => values.contains_key(value),
+            serde_json::Value::Array(values) => values.iter().any(|v| {
+                v.as_str().map_or_else(
+                    || {
+                        v.as_number().is_some_and(|number| {
+                            value
+                                .parse::<serde_json::Number>()
+                                .is_ok_and(|parsed| parsed == *number)
+                        })
+                    },
+                    |v| v == value,
+                )
+            }),
+            _ => false,
+        };
+        if !known {
+            return Err(BarcaError::Usage(format!(
+                "unknown partition value {dim}={value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Pin `name` to data an operator supplies: the bytes are checked by loading them as runs do,
 /// written as a new artifact of the asset (run hash [`upload_run_hash`]), recorded as a
 /// materialization marked as an upload, and pinned. `db_path` must exist (initialized).
@@ -297,6 +415,7 @@ pub async fn pin_upload(
     if !ok {
         return Err(refuse(&id));
     }
+    check_runtime_key(cfg, python, dag, &id).await?;
     let short = short_name(&id).to_string();
     if supplied.bytes.is_empty() {
         return Err(BarcaError::Usage(format!(
@@ -367,8 +486,8 @@ pub async fn pin_upload(
 /// Remove `name`'s pin. Unpinning an asset that is not pinned changes nothing.
 pub async fn unpin(db_path: &str, dag: &Dag, name: &str) -> Result<Unpinned, BarcaError> {
     // A pin of a node that is no longer defined is removed by its node id.
-    let id = match find_target_id(dag, name) {
-        Ok(id) => id,
+    let id = match pinnable(dag, name) {
+        Ok((id, _)) => id,
         Err(e) => match db::get_pins(db_path)
             .await?
             .into_iter()
@@ -383,4 +502,208 @@ pub async fn unpin(db_path: &str, dag: &Dag, name: &str) -> Result<Unpinned, Bar
         node_id: id,
         removed,
     })
+}
+
+/// Remove work that is only read by held partition keys. Unknown memberships are left to
+/// runtime expansion; never guess a key set from a historical materialization.
+pub(crate) fn prune_partition_inputs(
+    dag: &Dag,
+    plan: &mut crate::planner::ExecutionPlan,
+    targets: &[&str],
+    pins: &[AssetPin],
+) {
+    use std::collections::{HashMap, HashSet};
+    let held: HashSet<&str> = pins.iter().map(|p| p.node_id.as_str()).collect();
+    if held.is_empty()
+        || plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .any(|s| !s.pending_partitions.is_empty())
+    {
+        return;
+    }
+    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
+    for step in plan
+        .phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+    {
+        let set = members.entry(step.step_id.base.to_string()).or_default();
+        if step.partition_keys.is_empty() {
+            set.insert(step.step_id.display());
+        } else {
+            set.extend(
+                step.partition_keys
+                    .iter()
+                    .map(|k| k.display_id(step.step_id.base_id())),
+            );
+        }
+    }
+    let mut needed: HashMap<String, HashSet<String>> = targets
+        .iter()
+        .filter_map(|id| members.get(*id).map(|keys| (id.to_string(), keys.clone())))
+        .collect();
+    for id in dag.topo_order().into_iter().rev() {
+        let Some(keys) = needed.get(id).cloned() else {
+            continue;
+        };
+        let node = dag.get_node(id).expect("topological node exists");
+        for display in keys {
+            if held.contains(display.as_str()) {
+                continue;
+            }
+            let key = crate::StepId::parse(&display).partition;
+            for up in dag.upstream(id) {
+                let Some(all) = members.get(up) else { continue };
+                let upstream = dag.get_node(up).expect("input node exists");
+                let dims = &upstream.extracted.partitions;
+                let wanted = needed.entry(up.to_string()).or_default();
+                if dims.is_empty() {
+                    wanted.insert(up.to_string());
+                } else if !node.resolved_collected.values().any(|v| v == up)
+                    && dims.keys().all(|dim| key.0.contains_key(dim))
+                {
+                    let projected = crate::PartitionKey(
+                        dims.keys()
+                            .map(|dim| (dim.clone(), key.0[dim].clone()))
+                            .collect(),
+                    );
+                    let projected = projected.display_id(up);
+                    if all.contains(&projected) {
+                        wanted.insert(projected);
+                    }
+                } else {
+                    wanted.extend(all.iter().cloned());
+                }
+            }
+        }
+    }
+    for phase in &mut plan.phases {
+        for stream in &mut phase.streams {
+            stream.steps.retain_mut(|step| {
+                let Some(wanted) = needed.get(step.step_id.base_id()) else {
+                    return false;
+                };
+                if step.partition_keys.is_empty() {
+                    return wanted.contains(&step.step_id.display());
+                }
+                step.partition_keys
+                    .retain(|k| wanted.contains(&k.display_id(step.step_id.base_id())));
+                if step.partition_keys.is_empty() {
+                    return false;
+                }
+                if step
+                    .partition_keys
+                    .iter()
+                    .all(|k| held.contains(k.display_id(step.step_id.base_id()).as_str()))
+                {
+                    step.inputs.clear();
+                }
+                true
+            });
+        }
+        phase.streams.retain(|s| !s.steps.is_empty());
+    }
+    plan.phases.retain(|p| !p.streams.is_empty());
+    plan.total_steps = plan
+        .phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+        .map(|s| s.partition_keys.len().max(1))
+        .sum();
+}
+
+/// Prune expanded runtime keys whose every path to a requested target stops at a pin.
+/// Membership sources still run: a pin does not invent or retain a removed partition key.
+pub(crate) fn prune_expanded_inputs(
+    dag: &Dag,
+    phase: &mut crate::planner::Phase,
+    targets: &[&str],
+    pins: &[AssetPin],
+) {
+    use std::collections::{HashMap, HashSet};
+    struct Demand<'a> {
+        dag: &'a Dag,
+        targets: HashSet<&'a str>,
+        held: HashSet<&'a str>,
+        memo: HashMap<String, bool>,
+        relevant: HashSet<String>,
+    }
+    impl Demand<'_> {
+        fn needed(&mut self, id: &str, key: &crate::PartitionKey) -> bool {
+            let display = key.display_id(id);
+            if let Some(needed) = self.memo.get(&display) {
+                return *needed;
+            }
+            let needed = self.targets.contains(id)
+                || self.dag.downstream(id).into_iter().any(|down| {
+                    if !self.relevant.contains(down) {
+                        return false;
+                    }
+                    let node = self.dag.get_node(down).expect("downstream node exists");
+                    // A dimension not carried by this input may fan out to unpinned keys.
+                    if !node
+                        .extracted
+                        .partitions
+                        .keys()
+                        .all(|dim| key.0.contains_key(dim))
+                    {
+                        return true;
+                    }
+                    let projected = crate::PartitionKey(
+                        node.extracted
+                            .partitions
+                            .keys()
+                            .map(|dim| (dim.clone(), key.0[dim].clone()))
+                            .collect(),
+                    );
+                    !self.held.contains(projected.display_id(down).as_str())
+                        && self.needed(down, &projected)
+                });
+            self.memo.insert(display, needed);
+            needed
+        }
+    }
+    if pins.is_empty() {
+        return;
+    }
+    let mut relevant = HashSet::new();
+    let mut pending: Vec<String> = targets.iter().map(|id| id.to_string()).collect();
+    while let Some(id) = pending.pop() {
+        if relevant.insert(id.clone()) {
+            pending.extend(dag.upstream(&id).into_iter().map(str::to_string));
+        }
+    }
+    let mut demand = Demand {
+        relevant,
+        dag,
+        targets: targets.iter().copied().collect(),
+        held: pins.iter().map(|p| p.node_id.as_str()).collect(),
+        memo: HashMap::new(),
+    };
+    for stream in &mut phase.streams {
+        stream.steps.retain_mut(|step| {
+            if step.partition_keys.is_empty() {
+                return true;
+            }
+            let base = step.step_id.base_id();
+            step.partition_keys.retain(|key| demand.needed(base, key));
+            if step.partition_keys.is_empty() {
+                return false;
+            }
+            if step
+                .partition_keys
+                .iter()
+                .all(|key| demand.held.contains(key.display_id(base).as_str()))
+            {
+                step.inputs.clear();
+            }
+            true
+        });
+    }
+    phase.streams.retain(|stream| !stream.steps.is_empty());
 }

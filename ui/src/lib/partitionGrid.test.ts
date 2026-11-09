@@ -15,7 +15,7 @@ function dayRegion(states: string, extra: Partial<PartitionGrid> = {}): Partitio
       { name: 'region', values: ['emea', 'apac'] },
     ],
     states,
-    counts: { fresh: 0, stale: 0, never_run: 0, failed: 0, blocked: 0 },
+    counts: { pinned: 0, fresh: 0, stale: 0, never_run: 0, failed: 0, blocked: 0 },
     attempted_base: 1000,
     attempted_at: [0, 0, 5, 5, null, null],
     elapsed_ms: [10, 12, 9, 40, null, null],
@@ -54,7 +54,7 @@ describe('a grid', () => {
     expect(filterCells(g, { ...NO_FILTER, values: { region: ['apac'] } })).toEqual([1, 3])
     expect(filterCells(g, { ...NO_FILTER, error: 0 })).toEqual([3])
     expect(filterCells(g, { ...NO_FILTER, q: 'D2' })).toEqual([2, 3])
-    expect(countStates(g, null)).toEqual({ failed: 1, blocked: 0, stale: 1, never_run: 1, fresh: 2 })
+    expect(countStates(g, null)).toEqual({ pinned: 0, failed: 1, blocked: 0, stale: 1, never_run: 1, fresh: 2 })
   })
 
   it('lays out one block per region running through the days', () => {

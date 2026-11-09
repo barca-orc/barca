@@ -1544,7 +1544,7 @@ paths:
               schema:
                 type: string
               description: Methods accepted by this route
-      description: 'Every run of this server reads the pinned materialization and never computes the asset until it is unpinned; as barca pin. pinned_by is token:<name> for a request with a project token. Experimental.'
+      description: 'The name may include a complete partition key (URL-encoded brackets and dimensions). Every run of this server reads the pinned materialization and never computes the asset until it is unpinned; as barca pin. pinned_by is token:<name> for a request with a project token. Experimental.'
       parameters:
       - name: name
         in: path
@@ -1670,7 +1670,7 @@ paths:
               schema:
                 type: string
               description: Methods accepted by this route
-      description: 'The body is the file''s bytes (any content type). It is loaded with the reader runs use, written as a new artifact of the asset with run hash SHA-256 of "barca-upload\0" + bytes, recorded as a materialization marked as an upload, and pinned; as barca pin --from-file. Experimental.'
+      description: 'The name may include one complete partition key. The body is the file''s bytes (any content type). It is loaded with the reader runs use, written as a new artifact of the asset with run hash SHA-256 of "barca-upload\0" + bytes, recorded as a materialization marked as an upload, and pinned; as barca pin --from-file. Experimental.'
       parameters:
       - name: name
         in: path
@@ -4910,15 +4910,16 @@ components:
                 items: *id003
         states:
           type: string
-          pattern: '^[csnfb-]*$'
-          description: One character per cell. c fresh, s stale, n never run, f failed (its latest
+          pattern: '^[cpsnfb-]*$'
+          description: One character per cell. c fresh, p pinned, s stale, n never run, f failed (its latest
             attempt failed), b blocked (the same key of an input failed or is blocked), - not a key.
         counts:
           type: object
           additionalProperties: false
-          required: [fresh, stale, never_run, failed, blocked]
+          required: [fresh, pinned, stale, never_run, failed, blocked]
           properties:
             fresh: {type: integer, minimum: 0}
+            pinned: {type: integer, minimum: 0}
             stale: {type: integer, minimum: 0}
             never_run: {type: integer, minimum: 0}
             failed: {type: integer, minimum: 0}
@@ -5000,7 +5001,7 @@ components:
         key: *id003
         state:
           type: string
-          enum: [c, s, n, f, b]
+          enum: [c, p, s, n, f, b]
           description: As PartitionGrid.states.
         chain:
           type: array
@@ -5013,7 +5014,7 @@ components:
               id: *id003
               state:
                 type: string
-                enum: [c, s, n, f, b, '-']
+                enum: [c, p, s, n, f, b, '-']
         attempts:
           type: array
           maxItems: 20

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 5. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 6. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -204,6 +204,16 @@ Machine ids, host names and clocks decide nothing. `barca history --reconcile RU
 single uncertain row as `interrupted` on the operator's assertion, and refuses a proven live
 owner.
 
+### Operator-held partition data
+
+A pin can name one complete partition key. The key's materialization identity is its pinned
+run hash, even under refresh, and aligned consumers fold in that hash. Other keys retain
+their normal decisions. Static and expanded runtime keys used only through a pinned key do
+not need computation. Runtime membership sources remain authoritative: a pin never adds a
+key to their output. Uploaded replacements validate the selected key before recording data.
+The grid distinguishes a held key (`p`) from a fresh computed key (`c`), and key inspection
+reads the held version even when a newer materialization exists.
+
 ## Invariants
 
 - **INV-CACHE-HASH-01:** A consumer cannot use a cache decision based on an incomplete set
@@ -250,6 +260,8 @@ run owners in [run_owner.rs](../../crates/barca-core/src/run_owner.rs) and
 Conformance: [incremental DAG regressions](../../python/tests/test_incremental_dag.py),
 [missing artifact recovery](../../python/tests/test_missing_artifact.py), dataset sink,
 cutoff, telemetry and startup suites; [benchmark](../../benchmarks/incremental_dag/bench.py).
+
+Conformance: [partition pin recovery](../../python/tests/test_partition_pins.py) exercises static and runtime-derived keys, downstream repair, refresh, unpinning, unknown-key rejection, and HTTP rollback inspection.
 
 ## Open questions and gaps
 

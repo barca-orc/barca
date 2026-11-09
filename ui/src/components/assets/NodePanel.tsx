@@ -481,7 +481,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       <IncidentControls node={node} graph={graph} readOnly={runAction.readOnly} />
       {node.partitioned ? (
         <Section title="Repair data">
-          <p className="barca-note">Open a key in the <Link to={keysHref(node.id)}>key explorer</Link> to inspect its attempts and data. Partition replacement is not available yet.</p>
+          <p className="barca-note">Open a key in the <Link to={keysHref(node.id)}>key explorer</Link> to inspect its attempts, upload replacement data, or pin an earlier version.</p>
         </Section>
       ) : <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />}
       <BlastRadius id={node.id} graph={graph} states={byId} paused={pausedSet} onSelect={onSelect} />

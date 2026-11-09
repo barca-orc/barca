@@ -210,7 +210,7 @@ def test_a_partitioned_node_reports_its_failed_keys_and_its_runs(keys5):
         assert [k["key"] for k in failed["keys"]] == ["retailer=r2", "retailer=r4"]
         assert (failed["total"], failed["recorded"], failed["failed"]) == (2, 5, 2)
         # The key's own value does not split one problem into a group per key.
-        assert failed["errors"] == [{"error": "BatchKeyFailed: no plan for <key>", "keys": 2}]
+        assert failed["errors"] == [{"error": "BatchKeyFailed: no plan for <retailer>", "keys": 2}]
         found = serve.get("/assets/scored/partitions?q=R3&limit=1")
         assert [k["key"] for k in found["keys"]] == ["retailer=r3"] and found["keys"][0][
             "artifact_path"

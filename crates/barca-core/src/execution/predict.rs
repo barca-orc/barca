@@ -192,7 +192,13 @@ pub(crate) async fn explain_dag_with_keys(
     let mut steps: Vec<StepReport> = Vec::new();
     let mut summary = ExplainSummary::default();
 
+    let user_pins: Vec<db::AssetPin> = match &cache {
+        Some(cache) => db::pins_on(cache.conn()).await?.into_values().collect(),
+        None => Vec::new(),
+    };
     let mut prediction = Prediction {
+        targets: &target_ids,
+        user_pins: &user_pins,
         dag,
         policy: &policy,
         cache: cache.as_ref(),
@@ -232,7 +238,8 @@ pub(crate) async fn explain_dag_with_keys(
         &evicted,
         &mut steps,
         &mut summary,
-    );
+        &state.pinned,
+    )?;
 
     let mut steps = merge_partition_reports(steps);
     if let Some(n) = &narrowing {
@@ -294,6 +301,8 @@ pub(crate) async fn explain_dag_with_keys(
 }
 
 pub(super) struct Prediction<'a> {
+    pub(super) targets: &'a [&'a str],
+    pub(super) user_pins: &'a [db::AssetPin],
     pub(super) dag: &'a Dag,
     pub(super) policy: &'a CachePolicy,
     pub(super) cache: Option<&'a db::CacheReader>,
@@ -322,7 +331,10 @@ pub(super) fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: Str
     }
 }
 
-pub(super) fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phase {
+pub(super) fn expand_prediction(
+    ctx: &mut Prediction<'_>,
+    phase: &Phase,
+) -> Result<Phase, BarcaError> {
     // A `partitions_from` source is read to expand its consumers: if its artifact is
     // missing it runs again first, and its keys are not known until it has.
     let sources = dispatch::partition_sources(phase, ctx.all_outputs)
@@ -337,7 +349,8 @@ pub(super) fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phas
         ctx.evicted,
         ctx.steps,
         ctx.summary,
-    );
+        &ctx.state.pinned,
+    )?;
 
     // Dynamic partitions need their source's output to know their keys. If the source is
     // not available (it would have to run first) the step cannot be expanded.
@@ -371,13 +384,21 @@ pub(super) fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phas
         });
     }
 
-    ready
+    Ok(ready)
 }
 
 pub(super) async fn predict_steps(
     ctx: &mut Prediction<'_>,
     phase_ref: &Phase,
 ) -> Result<Vec<crate::planner::StreamStep>, BarcaError> {
+    let mut pruned;
+    let phase_ref = if ctx.user_pins.is_empty() {
+        phase_ref
+    } else {
+        pruned = phase_ref.clone();
+        crate::pins::prune_expanded_inputs(ctx.dag, &mut pruned, ctx.targets, ctx.user_pins);
+        &pruned
+    };
     ctx.state.register_phase(phase_ref);
     if let Some(ledger) = ctx.cache.and_then(|c| c.ledger()) {
         ledger
@@ -640,7 +661,7 @@ pub(super) async fn predict_phase(
     ctx: &mut Prediction<'_>,
     phase: &Phase,
 ) -> Result<(), BarcaError> {
-    let ready = expand_prediction(ctx, phase);
+    let ready = expand_prediction(ctx, phase)?;
     let expansion = dispatch::expand_pending_partitions_filtered(
         ctx.dag,
         &ready,
@@ -694,6 +715,7 @@ pub(super) async fn predict_phase(
         ctx.evicted,
         ctx.steps,
         ctx.summary,
-    );
+        &ctx.state.pinned,
+    )?;
     Ok(())
 }

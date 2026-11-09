@@ -23,6 +23,16 @@ pub(super) async fn select_work<'p>(
         Work::Recompute(mut ids) => {
             // One of them may have been computed again since this was queued.
             ids.retain(|id| session.state.cached_node_ids.contains(id));
+            if let Some(id) = ids.iter().find(|id| {
+                session
+                    .state
+                    .decide_state
+                    .pinned
+                    .get(*id)
+                    .is_some_and(|pin| pin.user.is_some())
+            }) {
+                return Err(BarcaError::Usage(crate::freshness::pin_lost(id)));
+            }
             match session.state.cached_steps.phase_for(&ids) {
                 Some(phase) => (phase, true),
                 None => return Ok(None),
@@ -358,6 +368,21 @@ pub(super) async fn expand_and_decide<'p>(
         (session.state.narrowing.as_mut(), expanded_phase.as_mut())
     {
         narrowing.narrow_projected(expanded, &expansion.key_counts);
+    }
+    if !session.prepared.user_pins.is_empty() {
+        let expanded = expanded_phase.get_or_insert_with(|| phase.clone());
+        let targets: Vec<&str> = session
+            .prepared
+            .targets
+            .iter()
+            .map(|(_, id)| id.as_str())
+            .collect();
+        crate::pins::prune_expanded_inputs(
+            &session.prepared.dag,
+            expanded,
+            &targets,
+            &session.prepared.user_pins,
+        );
     }
     let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
     // The whole key set of each asset with a dataset sink, before the cache drops the keys

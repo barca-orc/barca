@@ -7,6 +7,6 @@ import type { AssetVersion } from "./AssetVersion";
  */
 export type AssetVersions = { node_id: string,
 /**
- * Whether it can be pinned: an asset without partitions.
+ * Whether it can be pinned: an unpartitioned asset or one complete partition key.
  */
 pinnable: boolean, pin: AssetPin | null, versions: Array<AssetVersion>, };

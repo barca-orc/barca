@@ -262,6 +262,7 @@ pub(crate) struct DecideState {
     pub(crate) sensor_previous: HashMap<String, crate::dispatch::OutputRef>,
     /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
     pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
+    partition_pins: Option<BTreeMap<String, db::AssetPin>>,
     /// Under a tick: the scheduled node. Every other task fires only when it is out of date.
     pub(crate) tick: Option<String>,
     /// Under a tick: the tasks decided to run in this run (base ids). A task reading one fires.
@@ -648,7 +649,12 @@ pub(crate) fn hash_step(
         });
         state.run_hashes.reserve(hashed.len());
         step.run_hashes.reserve(hashed.len());
-        for (pdisplay, run_h) in hashed {
+        for (pdisplay, mut run_h) in hashed {
+            if let Some(pin) = state.pinned.get(&pdisplay) {
+                run_h = pin.run_hash.clone();
+                let content_hash = pin.output.content_hash.clone();
+                record_output(dag, state, &pdisplay, content_hash.as_ref());
+            }
             state.run_hashes.insert(pdisplay.clone(), run_h.clone());
             step.run_hashes.insert(pdisplay, run_h);
         }
@@ -755,6 +761,35 @@ pub(crate) async fn decide_step(
     state: &mut DecideState,
     step: &crate::planner::StreamStep,
 ) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
+    // Partition pins are resolved after expansion, only for keys in this step.
+    // A missing pinned artifact must never silently fall back to computation.
+    if !step.partition_keys.is_empty() {
+        if state.partition_pins.is_none() {
+            state.partition_pins = Some(match cache {
+                Some(cache) => db::pins_on(cache.conn()).await?,
+                None => BTreeMap::new(),
+            });
+        }
+        for key in &step.partition_keys {
+            let id = key.display_id(step.step_id.base_id());
+            if let Some(pin) = state.partition_pins.as_ref().and_then(|pins| pins.get(&id)) {
+                let output = match cache {
+                    Some(cache) => db::success_at(cache, &id, &pin.run_hash).await,
+                    None => None,
+                }
+                .ok_or_else(|| crate::BarcaError::Usage(crate::freshness::pin_lost(&id)))?;
+                state.pinned.insert(
+                    id,
+                    crate::freshness::Pin {
+                        run_hash: pin.run_hash.clone(),
+                        output,
+                        stale: false,
+                        user: Some(pin.clone()),
+                    },
+                );
+            }
+        }
+    }
     let step = hash_step(dag, state, step)?;
     // Its `partitions_from` source returned no key: nothing to run, nothing cached.
     if step.keyed.no_keys {
@@ -918,6 +953,10 @@ pub(crate) async fn decide_step(
                     None => lookup_in(cache, &pdisplay, &run_h).await,
                 },
             };
+            if let Some(pin) = state.pinned.get(&pdisplay) {
+                cached.push((pdisplay, pin.output.clone()));
+                continue;
+            }
             let forced = refresh_reason(dag, policy, state, &step, &pdisplay, is_asset);
             if let Some(reason) = forced {
                 remember_refresh(state, &pdisplay, base_id, &reason);
