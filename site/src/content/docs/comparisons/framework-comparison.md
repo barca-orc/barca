@@ -1,5 +1,5 @@
 ---
-title: "Framework Comparison: Code, Features and Overhead"
+title: "Framework Comparison"
 description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured with barca 0.39.4 on 2026-11-04 and Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on 2026-10-21.
 ---
 

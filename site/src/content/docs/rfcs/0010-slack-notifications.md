@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0010: Slack Notifications'
 description: 'Setting BARCA_SLACK_WEBHOOK_URL posts to a Slack incoming webhook when a job starts failing, when it recovers, and once a day while it keeps failing. No new config file, no hooks system.'
 ---

@@ -1,5 +1,5 @@
 ---
-// Wraps Starlight's MarkdownContent. Design records (RFCs) and contributor pages rank below
+// Wraps Starlight's MarkdownContent. Contributor pages rank below
 // the user docs in search, and an RFC says up front that it is a design record, so a search
 // hit on a proposal is never mistaken for the reference.
 import Default from '@astrojs/starlight/components/MarkdownContent.astro';
@@ -7,9 +7,13 @@ import Default from '@astrojs/starlight/components/MarkdownContent.astro';
 const id = Astro.locals.starlightRoute.entry.id;
 const isRfc = id.startsWith('rfcs/') && id !== 'rfcs/template';
 const isProject = isRfc || id.startsWith('contributing/');
+// Pages written to answer a question in its reader's words rank above long reference pages that
+// mention the same words in passing ("csv changed", "cron").
+const BOOST: Record<string, string> = { troubleshooting: '3', scheduling: '2' };
+const weight = isProject ? '0.1' : BOOST[id];
 ---
 
-<div data-pagefind-weight={isProject ? '0.1' : undefined}>
+<div data-pagefind-weight={weight}>
   {
     isRfc && (
       <aside class="rfc-note" aria-label="About this page">

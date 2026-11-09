@@ -174,6 +174,26 @@ a[aria-current='true'] {
   box-decoration-break: clone;
 }
 
+/* A flag in an outline entry ("--refresh") stays on one line */
+starlight-toc code,
+mobile-starlight-toc code {
+  white-space: nowrap;
+}
+
+/* MDX leaves empty paragraphs around block HTML; they only add stray space */
+.sl-markdown-content > p:empty {
+  display: none;
+}
+
+/* The search box starts at the same place on every page: the site-title column is always the
+   sidebar's width (Starlight sizes it from the page layout, so it moved between the homepage,
+   pages without an outline and the rest) */
+@media (min-width: 50rem) {
+  .header {
+    grid-template-columns: calc(var(--sl-sidebar-width) - var(--sl-nav-pad-x)) 1fr auto !important;
+  }
+}
+
 /* ----------------------------------------------------------------
    Homepage
    ---------------------------------------------------------------- */
@@ -192,6 +212,13 @@ a[aria-current='true'] {
 }
 .hero .tagline code {
   font-size: 0.9em;
+}
+/* On a phone the sample wraps instead of being cut off at the edge */
+@media (max-width: 49.99rem) {
+  .hero-demo pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 }
 
 .hero-demo {

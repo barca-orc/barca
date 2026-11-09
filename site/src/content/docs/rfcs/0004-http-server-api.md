@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0004: HTTP Server API'
 description: 'barca serve — endpoints, the async run/poll contract, cron scheduling, and the Python client.'
 ---

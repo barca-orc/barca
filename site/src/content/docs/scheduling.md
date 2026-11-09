@@ -1,5 +1,5 @@
 ---
-title: Scheduling
+title: "Scheduling With Cron"
 description: Run assets, tasks and sensors on a cron schedule with barca serve, what a tick does, how Always and Manual nodes below a schedule behave, and what happens when ticks fail.
 ---
 

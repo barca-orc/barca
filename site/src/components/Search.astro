@@ -1,0 +1,27 @@
+---
+// Starlight's search, plus a "Docs" link that shows only on phones on pages without a sidebar
+// (the splash homepage and 404), where Starlight renders no menu button.
+import Default from '@astrojs/starlight/components/Search.astro';
+---
+
+<Default />
+<a class="mobile-docs-link" href="/getting-started/">Docs</a>
+
+<style>
+  .mobile-docs-link {
+    display: none;
+  }
+  @media (max-width: 49.99rem) {
+    :global(:root:not([data-has-sidebar])) .mobile-docs-link {
+      display: inline-flex;
+      align-items: center;
+      margin-inline-start: 0.75rem;
+      padding: 0.3rem 0.75rem;
+      border: 1px solid var(--sl-color-gray-5);
+      border-radius: 3px;
+      font-size: var(--sl-text-sm);
+      color: var(--sl-color-white);
+      text-decoration: none;
+    }
+  }
+</style>

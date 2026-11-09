@@ -1,5 +1,5 @@
 ---
-title: "Pattern: Asset-to-Asset"
+title: "Chain Assets"
 description: Chain assets with inputs=. Each step is cached and runs again only when its code or an upstream changes.
 ---
 

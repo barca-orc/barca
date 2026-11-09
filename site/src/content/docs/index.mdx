@@ -7,7 +7,7 @@ hero:
   tagline: >-
     Cached Python pipelines, with no platform to run. Decorate functions, declare their inputs, and
     barca runs only what changed. Everything else comes from the cache. One <code>uv add</code>,
-    no daemon, no database, no config.
+    no daemon or database server to run, no config file needed.
   image:
     html: |
       <div class="hero-demo" aria-label="A two-asset pipeline and two runs of barca get">
@@ -32,6 +32,7 @@ hero:
       icon: right-arrow
     - text: Compare with Dagster, Prefect, Airflow
       link: /comparisons/
+      icon: right-arrow
       variant: minimal
 ---
 
@@ -52,8 +53,9 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   </a>
 </div>
 <p class="stat-note">
-  Measured with barca 0.28.0 and Dagster 1.13.26 on 2026-10-21;
-  [method and raw numbers](/comparisons/dagster/).
+  Benchmarked on one Linux machine with barca 0.28.0 and Dagster 1.13.26 on 2026-10-21
+  ([method and raw numbers](/comparisons/dagster/)). The times in the example above are from a
+  different machine and barca 0.42.0; run times vary with the machine.
 </p>
 
 ## Install
@@ -96,6 +98,11 @@ Python 3.12 or later. Wheels for macOS on Apple Silicon and Linux (x86-64 and ar
     title="Looking something up"
     description="Every page A to Z, or press ⌘K / Ctrl+K to search."
     href="/reference/"
+  />
+  <LinkCard
+    title="Something did not rerun (or did)"
+    description="The common caching surprises and how to ask barca why."
+    href="/troubleshooting/"
   />
 </CardGrid>
 

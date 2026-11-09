@@ -1,5 +1,5 @@
 ---
-title: Anti-Patterns
+title: "Anti-Patterns to Avoid"
 description: Things that fail or give stale or wrong results in barca, what was observed on 0.18.0, and what to do instead.
 ---
 

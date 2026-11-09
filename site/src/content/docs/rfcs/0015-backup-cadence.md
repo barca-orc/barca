@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0015: Configurable Metadata Backup Cadence'
 description: 'Control routine whole-database backups, retain the final shutdown backup, and report local backup storage outside the cache budget.'
 ---

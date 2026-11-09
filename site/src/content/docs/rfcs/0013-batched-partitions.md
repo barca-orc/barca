@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0013: Batched Partitions'
 description: 'batch= lets one call of a partitioned step compute many keys: N at a time, all of them, or groups you name. Each key keeps its own run hash and artifact, so caching, selection and change detection are the same as one key per call.'
 ---

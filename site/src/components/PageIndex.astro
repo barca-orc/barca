@@ -8,9 +8,8 @@ import { getCollection } from 'astro:content';
 interface Props {
   prefix?: string;
   all?: boolean;
-  stripPrefix?: string;
 }
-const { prefix, all = false, stripPrefix } = Astro.props;
+const { prefix, all = false } = Astro.props;
 
 const SECTIONS: [string, string][] = [
   ['patterns/', 'Recipe'],
@@ -31,10 +30,11 @@ let pages = docs.filter((d) => {
   return d.id.startsWith(prefix ?? '') && d.id !== (prefix ?? '').replace(/\/$/, '');
 });
 
-const clean = (t: string) =>
-  stripPrefix ? t.replace(new RegExp(`^${stripPrefix}\\s*`), '') : t.replace(/^(Pattern|Workflow):\s*/, '');
+// The "Kind" label says a page is a worked example, so the title's prefix is not repeated.
+const clean = (t: string) => t.replace(/^Worked Example:\s*/, '');
+const sortKey = clean;
 pages = all
-  ? pages.sort((a, b) => clean(a.data.title).localeCompare(clean(b.data.title)))
+  ? pages.sort((a, b) => sortKey(a.data.title).localeCompare(sortKey(b.data.title)))
   : pages.sort((a, b) => a.id.localeCompare(b.id));
 
 const section = (id: string) => SECTIONS.find(([p]) => id.startsWith(p))?.[1] ?? 'Guide';

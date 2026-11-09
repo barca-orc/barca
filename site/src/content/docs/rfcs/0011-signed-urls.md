@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0011: Signed URLs'
 description: 'barca.signed_url(uri) returns a time-limited HTTPS link to any object in S3, GCS or Azure using the credentials barca already uses, and barca get -o url returns one for a result.'
 ---

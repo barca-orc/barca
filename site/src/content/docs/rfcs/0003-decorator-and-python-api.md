@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0003: Decorator Surface & Python API'
 description: '@asset/@sensor/@task/@sink, partitions, parallel(), and the barca.api programmatic surface.'
 ---

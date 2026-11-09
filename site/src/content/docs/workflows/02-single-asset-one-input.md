@@ -1,5 +1,5 @@
 ---
-title: "Workflow: Single Asset With One Upstream Input"
+title: "Worked Example: One Asset, One Input"
 description: One asset that reads another, run with barca 0.30.2. What runs after each kind of change, and what --refresh and --no-cascade do.
 ---
 

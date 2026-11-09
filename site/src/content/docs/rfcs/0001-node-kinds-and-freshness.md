@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0001: Node Kinds & Freshness Model'
 description: The asset/sensor/task vocabulary and the Always/Manual/Schedule freshness contract.
 ---

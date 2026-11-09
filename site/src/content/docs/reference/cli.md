@@ -31,10 +31,10 @@ available topics for scripts and agents. Help and examples never load a project 
 | Free disk space under `.barca/` | `barca gc` | [gc](#gc) |
 | Check the setup without running anything | `barca doctor` | [Doctor](/reference/doctor/) |
 | Read the manual in the terminal | `barca docs cache` | [docs](#docs) |
+| Look up what an exit code means | | [Errors and exit codes](#errors-and-exit-codes) |
 
 `get`, `run`, `list`, `status`, `sql`, `history` and `stats` print JSON when their output is
-piped ([Output format](#output-format)); exit codes are under
-[Errors and exit codes](#errors-and-exit-codes).
+piped ([Output format](#output-format)).
 
 ## Command shape
 
@@ -971,7 +971,7 @@ barca 0.27.0
 
 `barca --version` prints the same. Neither takes `--json`.
 
-## --env
+## `--env`
 
 `get`, `run`, `status`, `sql`, `history`, `stats`, `serve`, `state backups`, `state restore` and `state reset` accept `--env <name>` (default:
 `BARCA_ENV`, then `default_env` in `barca.toml`, then `default`). `plan` and `list` read no

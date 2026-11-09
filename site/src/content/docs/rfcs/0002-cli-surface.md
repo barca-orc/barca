@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0002: CLI Surface'
 description: The barca binary — commands, flags, exit codes, and the stdout/stderr contract.
 ---

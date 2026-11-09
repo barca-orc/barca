@@ -1,5 +1,5 @@
 ---
-title: "Workflow: Single Asset, No Inputs"
+title: "Worked Example: One Asset, No Inputs"
 description: One asset with no inputs, run with barca 0.30.2. What is written to disk, when it is served from cache, and how to look at the result.
 ---
 

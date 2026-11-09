@@ -1,5 +1,5 @@
 ---
-title: "Workflow: Asset Continuity Across Rename and Move"
+title: "Worked Example: Renaming and Moving an Asset"
 description: What happens to an asset's cache and history when its function is renamed or its file is moved, with and without an explicit name=, on barca 0.18.0.
 ---
 

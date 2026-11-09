@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0012: A Size Limit for .barca'
 description: 'max_size caps what barca keeps on disk. Past the limit, barca evicts leftovers, then superseded results, then local copies the store holds, then the least recently read results, and recomputes or refetches anything evicted when it is needed.'
 ---
