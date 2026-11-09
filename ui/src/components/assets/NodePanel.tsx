@@ -15,8 +15,6 @@ import { BlastRadius } from './BlastRadius'
 import { IncidentControls } from './IncidentControls'
 import { usePausedSet } from '@/hooks/usePauses'
 import { usePinNotes } from '@/hooks/usePins'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
 import { usePausedRunGuard } from '@/hooks/usePausedRunGuard'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
@@ -81,11 +79,6 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   // Pinned (`barca pin`): it reads `pinned`, not its cache state; a failure above it does not block it.
   const pinned = failed ? null : pins.get(node.id) ?? null
   const blocker = useMemo(() => (failed ? null : blockedByMap(nodes, graph, pins).get(node.id) ?? null), [failed, nodes, graph, pins, node.id])
-  const client = useQueryClient()
-  const unpin = useMutation({
-    mutationFn: () => api.unpinAsset(node.id),
-    onSettled: () => client.invalidateQueries(),
-  })
   const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
@@ -172,10 +165,9 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {pinned !== null ? (
           <p className="barca-note">
             {PINNED_HINT}{' '}
-            <Button variant="ghost" size="sm" disabled={runAction.readOnly || unpin.isPending} onClick={() => unpin.mutate()}>
-              Unpin
+            <Button variant="ghost" size="sm" onClick={() => setTab('incident')}>
+              Review pin
             </Button>
-            {unpin.error && <span role="alert"> Could not unpin: {unpin.error.message}</span>}
           </p>
         ) : !(failed && last) && <p className="barca-note">{sentence(node.cache.detail)}</p>}
         {failedKeys > 0 && (
@@ -484,22 +476,15 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
       </Section>
 
-      {/* Drawn under a loading history, it would move down when the runs arrive. */}
-      {!isLoading && <>
-      {node.partitioned ? (
-        // Each key has its versions; an asset with keys is not pinned whole.
-        <Section title="Versions">
-          <p className="barca-note">Each key keeps its own results. Open a key in the <Link to={keysHref(node.id)}>key explorer</Link> to see its attempts and data; an asset with partitions cannot be pinned.</p>
-        </Section>
-      ) : (
-        <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />
-      )}
-
-      </>}
       </>}
       {tab === 'incident' && <>
-      <BlastRadius id={node.id} graph={graph} states={byId} paused={pausedSet} onSelect={onSelect} />
       <IncidentControls node={node} graph={graph} readOnly={runAction.readOnly} />
+      {node.partitioned ? (
+        <Section title="Repair data">
+          <p className="barca-note">Open a key in the <Link to={keysHref(node.id)}>key explorer</Link> to inspect its attempts and data. Partition replacement is not available yet.</p>
+        </Section>
+      ) : <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />}
+      <BlastRadius id={node.id} graph={graph} states={byId} paused={pausedSet} onSelect={onSelect} />
       </>}
       {runGuard.dialog}
     </SidePanel>

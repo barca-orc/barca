@@ -1125,8 +1125,8 @@
 .barca-failure-col-impact { width: 12%; }
 .barca-failure-col-actions { width: 118px; }
 /* The grouped table's columns. */
-.barca-group-col-name { width: 30%; }
-.barca-group-col-state { width: 22%; }
+.barca-group-col-name { width: 240px; }
+.barca-group-col-state { width: 240px; }
 .barca-group-col-open { width: 40px; }
 
 /* ---------- One line a row, everywhere (pages/SchedulesView.tsx, RunsView.tsx) ---------- */
@@ -1297,3 +1297,9 @@
 .barca-heat-bin[data-some][data-state='never_run'] { --bin-mark: var(--state-idle); }
 .barca-keys-error-link { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .barca-keys-error-link b { flex: none; font-variant-numeric: tabular-nums; }
+
+/* A mixed group table preserves column widths and scrolls instead of colliding. */
+.barca-group-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
