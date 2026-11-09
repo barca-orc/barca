@@ -7,7 +7,7 @@ description: The HTTP and JSON API of barca serve, with its endpoints, asynchron
 `Schedule(...)` nodes on their cron, and serves a web UI at `/ui/`.
 
 The server binds to `127.0.0.1`, and authentication is off by default: anyone who can reach the
-port can start and cancel runs. To reach it from another machine, turn on [project tokens](/serve/#requiring-a-token-authentication-login)
+port can start and cancel runs. To reach it from another machine, turn on [project tokens](/auth/)
 (`--auth token`; requests then carry `Authorization: Bearer <token>`), put a reverse proxy that
 authenticates in front of it, or both (see [Deploying](/deploying/#authentication)).
 
@@ -47,7 +47,7 @@ schedule and its address on stderr:
 The default bind address is `127.0.0.1`. `--host` takes an IP address, including `::` for
 IPv6; hostnames are rejected. `0.0.0.0` listens on every IPv4 interface. With authentication
 off (the default) anyone who can reach the port can trigger runs; a non-loopback address prints
-a startup warning. Turn on [project tokens](/serve/#requiring-a-token-authentication-login), or
+a startup warning. Turn on [project tokens](/auth/), or
 use a private network or an authenticating proxy.
 
 `--watch` re-parses the DAG when a source file changes, so `/assets` and `/plan` reflect edits
@@ -116,8 +116,8 @@ client prints it as it would print the local command's.
 | `GET`  | `/assets/{name}/partitions/grid` | Every key of a partitioned node in one compact body: the dimensions and their values, each key's state (fresh, stale, never run, failed, or blocked behind the same key of a failed input), its latest attempt's time, duration, size and run, and the failed keys' errors grouped. Decided across the node's chain, the partitioned nodes it shares its keys with. Experimental. |
 | `GET`  | `/assets/{name}/partitions/key?key=` | One key (`?key=day=2026-01-01,region=apac`, `?sample=`): its state in each node of the chain, its latest attempts, and the shape and first rows of its result and of what it read (the same key of each input in the chain). `404` for a key the node does not have. Experimental. |
 | `GET`  | `/assets/{name}/versions` | The asset's recent successful materializations (one per run hash, newest first, `?limit=N`, default 20) and its pin, as `barca pin <name> --versions --json`. Experimental. |
-| `POST` | `/assets/{name}/pin` | Pin the asset to `{"run_hash": "..."}` (or a unique prefix) or `{"previous": true}`, with an optional `"reason"`, as `barca pin`; `pinned_by` is the request's token name. `403` read-only. Experimental ([Pinning and Rollback](/reference/pins/)). |
-| `POST` | `/assets/{name}/pin/upload` | Pin the asset to the request body (a file's bytes), as `barca pin --from-file`: `?file_name=` (its extension gives the format) or `?format=json\|parquet\|csv\|pickle`, and `?reason=`. At most 256 MiB (`413`); a body that does not load is `400`; `403` read-only. Experimental ([Pinning and Rollback](/reference/pins/)). |
+| `POST` | `/assets/{name}/pin` | Pin the asset to `{"run_hash": "..."}` (or a unique prefix) or `{"previous": true}`, with an optional `"reason"`, as `barca pin`; `pinned_by` is the request's token name. `403` read-only. Experimental ([Pinning and Rollback](/reference/cli/pin/)). |
+| `POST` | `/assets/{name}/pin/upload` | Pin the asset to the request body (a file's bytes), as `barca pin --from-file`: `?file_name=` (its extension gives the format) or `?format=json\|parquet\|csv\|pickle`, and `?reason=`. At most 256 MiB (`413`); a body that does not load is `400`; `403` read-only. Experimental ([Pinning and Rollback](/reference/cli/pin/)). |
 | `DELETE` | `/assets/{name}/pin` | Remove the asset's pin, as `barca unpin`. `403` read-only. Experimental. |
 | `GET`  | `/pins` | Every pinned asset: `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason, run_id, upload}]}`. Experimental. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
@@ -438,7 +438,7 @@ finishing), `keys` how many rows the run recorded for the node, `calls` how many
 ran in (`0` when each ran on its own) and `failed` how many failed; absent until a run recorded a row
 for it. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
 `blocked`, `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
-[`barca status`](/reference/status/)). `shape` is always `null` here:
+[`barca status`](/reference/cli/status/)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
 check uses read-only connections to a compatible WAL metadata DB, or a private copy
 when migration is needed; this endpoint never writes the original rows.
@@ -535,7 +535,7 @@ it remembered are cleared with the database.
 server stopped. `409` while a run is pending or running (this server's, or a local run's on this
 machine), naming it, with nothing changed; `403` under `--read-only`; `503` while the server
 drains. With authentication off (the default), anyone who can open the UI can reset; with
-[project tokens](/serve/#requiring-a-token-authentication-login), only a token holder can.
+[project tokens](/auth/), only a token holder can.
 
 ### Logs
 
@@ -829,7 +829,7 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 ## Limits
 
-- No TLS, and authentication only if you turn on [project tokens](/serve/#requiring-a-token-authentication-login). The server listens on
+- No TLS, and authentication only if you turn on [project tokens](/auth/). The server listens on
   `127.0.0.1` by default; `--host` can make it reachable from other machines. Terminate TLS at a
   proxy.
 - One server per project. Machines share results by pointing at it ([the ledger](#the-ledger));

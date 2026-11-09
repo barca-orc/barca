@@ -295,7 +295,7 @@ barca run report pipeline.py --dry-run --refresh src
 One call answers "what is here and what state is it in": `barca status` gives, per node, its
 kind and inputs, its cache state with the reason (the same decision `--dry-run` makes), its last
 materialization, and the artifact's row count and columns, without executing steps
-([barca status](/reference/status/)):
+([barca status](/reference/cli/status/)):
 
 ```bash
 barca status pipeline.py --json                 # every node: cache state, last run, shape
@@ -341,18 +341,18 @@ machine's own records, or `--server <url>` for another server.
    and each failed check's detail ends with what to do. With a server it also checks the
    server: its version and API version against this client, its store against this project's
    `[remote]`, whether it is draining, the files it failed to load, its scheduler (schedules
-   paused or failing) and the runs this machine has not posted to it yet ([barca doctor: Local Debugging](/reference/doctor/)).
+   paused or failing) and the runs this machine has not posted to it yet ([barca doctor](/reference/cli/doctor/)).
 2. **`barca status --problems`**: which nodes need attention, and why. Every state but `cached`
    and `always_runs`, a task or sensor whose last run failed, and a schedule that is paused or
    failing. A failed node's error is `last_materialization.error` in JSON and its first line
    is in the WHY column; a scheduled node has `schedule` (`failures`, `max_failures`,
-   `failing`, `paused`, `next_fire`). The summary still counts every node ([barca status](/reference/status/)).
+   `failing`, `paused`, `next_fire`). The summary still counts every node ([barca status](/reference/cli/status/)).
 3. **`barca history --status failed`**: the failed runs, newest first, each with its first
    failed step and error; `--target NODE`, `--since 24h` and `--triggered-by schedule` narrow
    it. **`barca history RUN_ID`** shows one run: every step it recorded, each failed step's
-   error and traceback, and how a dead worker ended ([barca status: Finding and reading a failed run](/reference/status/#finding-and-reading-a-failed-run)).
+   error and traceback, and how a dead worker ended ([barca status: Finding and reading a failed run](/reference/cli/status/#finding-and-reading-a-failed-run)).
 4. **`barca logs RUN_ID --step NODE --stream stderr`**: the step's traceback, warnings and
-   logging, as recorded ([barca logs](/reference/logs/)).
+   logging, as recorded ([barca logs](/reference/cli/logs/)).
 5. **Fix, then re-run the same command.** Steps that succeeded stay cached. For a schedule that
    reached `max_failures`, a successful `barca get NODE --server` (`barca run` for a task) resets
    the count and its ticks resume.
@@ -371,7 +371,7 @@ barca status --problems --local                     # this machine's own state, 
 Against a server with an asset that raises, an asset whose code changed, and a scheduled task
 that failed `max_failures=2` ticks in a row, `barca status --problems` lists the three nodes with
 their WHY (`failed: ZeroDivisionError...`, `changed: code`, `last run failed: ...; failing 2/2`)
-before the summary of every node; the table is shown in [barca status: Finding problems](/reference/status/#finding-problems---problems-and---state).
+before the summary of every node; the table is shown in [barca status: Finding problems](/reference/cli/status/#finding-problems---problems-and---state).
 The failed runs behind them:
 
 ```text
@@ -411,7 +411,7 @@ $ barca doctor
 ```
 
 `barca sql` answers the questions the commands above do not, over barca's own tables
-(`barca.runs`, `barca.materializations`, `barca.nodes`; [barca sql](/reference/sql/)), from the server's
+(`barca.runs`, `barca.materializations`, `barca.nodes`; [barca sql](/reference/cli/sql/)), from the server's
 records with a server configured:
 
 ```bash
@@ -496,7 +496,7 @@ To inspect data (which rows failed a check, what an asset holds), query it inste
 script: `barca sql "select * from revenue where amount < 0" --json`. Every asset with a result is
 a view named after its function; the JSON is `{columns, rows, total, truncated}`. It never runs a
 step or imports user code. To recompute first, use `--refresh`; never delete files under
-`.barca/`. See [barca sql](/reference/sql/).
+`.barca/`. See [barca sql](/reference/cli/sql/).
 
 ## Targets and files
 
@@ -579,14 +579,14 @@ barca docs --json             # topic index as JSON; add a topic for its full te
 barca get --help               # flags and runnable examples (every command has --help)
 ```
 
-Online: https://barca.sh/
+Online: [barca.sh](/)
 
 Plan documents include `plan_version: 1`, independent of the package and database versions.
 Workers and the transfer helper negotiate their socket protocol before receiving work.
 A version mismatch exits 3 and names the helper version and expected version; reinstall
 Barca in the Python environment used for the run. The handshake does not import pipeline code.
 
-See also: [Agent Skill](/reference/agent-skill/), [CLI Contract](/reference/cli-contract/), [barca status](/reference/status/).
+See also: [Agent Skill](/reference/agent-skill/), [CLI Contract](/reference/cli-contract/), [barca status](/reference/cli/status/).
 
 ---
 

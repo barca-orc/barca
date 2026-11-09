@@ -143,7 +143,6 @@ The `barca` binary reads your Python source without importing it, builds the dep
 and runs each step in a pool of Python workers. A result is cached by a hash of its code and its
 inputs, so a step reruns only when one of those changes. Because the graph is read statically,
 decorator arguments such as `inputs=` must be written literally. (The one exception to "without
-importing": a partition list or batch grouping computed by code is evaluated in a subprocess;
-see [Architecture](/architecture/).)
+importing": a partition list or batch grouping computed by code is evaluated in a subprocess.)
 [Architecture](/architecture/#a-run) walks through a run step by step, and
 [Philosophy](/philosophy/) says what each design choice costs.

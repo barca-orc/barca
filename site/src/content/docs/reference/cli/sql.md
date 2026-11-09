@@ -189,7 +189,7 @@ the row count, `env="dev"` to select an environment, and `server=True` or
 `server="https://..."` to query a server. It queries cached results without
 executing assets and raises `barca.BarcaError` on failure.
 
-See also: [barca status](/reference/status/), [Output Formats and Types](/reference/types/), [The Cache](/reference/cache/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/).
+See also: [barca status](/reference/cli/status/), [Output Formats and Types](/reference/types/), [The Cache](/reference/cache/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/).
 
 ---
 

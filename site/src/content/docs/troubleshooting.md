@@ -18,7 +18,7 @@ barca get revenue --dry-run          # what this command would run and why, with
 
 `--dry-run` gives each step an `action` (`cached`, `run`, `partial`, `unknown`) and, for one that
 runs, a `reason`. `not_materialized` with `changed: code` means the code changed; `changed` lists
-everything that differs from the last success. [Status](/reference/status/) lists every state and
+everything that differs from the last success. [Status](/reference/cli/status/) lists every state and
 reason.
 
 ## I changed a file (a CSV, a table, a bucket) and the asset did not rerun
@@ -84,18 +84,18 @@ below it, or name it in `--refresh`. See [Exactly what --refresh does](/referenc
 It may be pinned. A pinned asset (`barca pin`) is served from the result it was pinned to on
 every run, `--refresh` and `--refresh-all` included; a run reports its step `cached` with
 reason `pinned`.
-`barca unpin <asset>` releases it. See [Pinning and Rollback](/reference/pins/).
+`barca unpin <asset>` releases it. See [Pinning and Rollback](/reference/cli/pin/).
 
 ## A schedule skipped an asset, or `barca get` refuses it
 
 It may be paused. A scheduled tick does not compute an asset paused with `barca pause`: its step
 is `skipped` with reason `paused`. A `barca get` that names it is refused (exit 2) unless you add
 `--allow-paused`. `barca resume <asset>` lets the next tick compute it again. See
-[Pausing Assets](/reference/pausing/).
+[Pausing Assets](/reference/cli/pause/).
 
 ## Still stuck
 
-[`barca doctor`](/reference/doctor/) checks the project's prerequisites without running anything,
-and [Logs](/reference/logs/) shows what a step printed. The
+[`barca doctor`](/reference/cli/doctor/) checks the project's prerequisites without running anything,
+and [Logs](/reference/cli/logs/) shows what a step printed. The
 [Anti-Patterns](/recipes/anti-patterns/) page lists the mistakes that give stale or wrong
 results.

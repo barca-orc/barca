@@ -8,27 +8,19 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/stat
 
 One read-only view of every node: what it is, whether it is cached and why, when it last ran,
 and what its artifact looks like. It answers in one call what would otherwise take `barca list`,
-`--dry-run`, `barca history` and a script that opens the artifact.
+`--dry-run`, `barca history` and a script that opens the artifact. After one `barca get`,
+`barca status pipeline.py` prints:
 
-```python
-import pandas as pd
-from barca import asset, task
-
-
-@asset()
-def orders() -> pd.DataFrame:
-    return pd.DataFrame({"id": [1, 2, 3], "amount": [9.5, 3.0, 12.25]})
-
-
-@asset(inputs={"df": orders})
-def total(df: pd.DataFrame) -> dict:
-    return {"total": float(df["amount"].sum())}
-
-
-@task(inputs={"t": total})
-def notify(t: dict) -> None:
-    print(t)
 ```
+NAME    KIND   STATE        WHY           LAST RUN                               SHAPE            DEPS
+orders  asset  cached       materialized  success 2026-10-02 11:56:43 UTC 0.54s  3 rows x 2 cols  -
+total   asset  cached       materialized  success 2026-10-02 11:56:43 UTC 0.00s  dict (1 key)     orders
+notify  task   always-runs  task          -                                      -                total
+
+2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
+```
+
+The forms it takes:
 
 ```bash
 barca get total pipeline.py
@@ -42,13 +34,23 @@ barca status pipeline.py --problems             # only the nodes that need atten
 barca status pipeline.py --state stale,never_run   # only nodes in these cache states
 ```
 
-```
-NAME    KIND   STATE        WHY           LAST RUN                               SHAPE            DEPS
-orders  asset  cached       materialized  success 2026-10-02 11:56:43 UTC 0.54s  3 rows x 2 cols  -
-total   asset  cached       materialized  success 2026-10-02 11:56:43 UTC 0.00s  dict (1 key)     orders
-notify  task   always-runs  task          -                                      -                total
+The examples run on this `pipeline.py`:
 
-2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
+```python
+import pandas as pd
+from barca import asset, task
+
+@asset()
+def orders() -> pd.DataFrame:
+    return pd.DataFrame({"id": [1, 2, 3], "amount": [9.5, 3.0, 12.25]})
+
+@asset(inputs={"df": orders})
+def total(df: pd.DataFrame) -> dict:
+    return {"total": float(df["amount"].sum())}
+
+@task(inputs={"t": total})
+def notify(t: dict) -> None:
+    print(t)
 ```
 
 Status executes no pipeline step and records no new run, and it does not create `.barca/`.
@@ -496,7 +498,7 @@ a busy cache-write lock is skipped. Cold inspection still hashes selected local 
 plain-directory store objects once, so its cost grows with their bytes. These limits do not
 resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
 
-See also: [The Cache](/reference/cache/), [barca logs](/reference/logs/), [barca sql](/reference/sql/), [Scripts and AI Agents](/reference/agents/).
+See also: [The Cache](/reference/cache/), [barca logs](/reference/cli/logs/), [barca sql](/reference/cli/sql/), [Scripts and AI Agents](/reference/agents/).
 
 ---
 

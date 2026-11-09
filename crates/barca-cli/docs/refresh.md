@@ -1,6 +1,6 @@
 # Forcing a recompute, --refresh and --dry-run
 
-A step that is cached is not run again (`barca docs cache`, "At a glance"). This topic covers
+A step that is cached is not run again (`barca docs cache`, "At a glance"). Below:
 forcing one to run anyway: `--refresh` and `--refresh-all`, what they do to what is downstream,
 refreshing selected partition keys, `Manual` upstreams, and `--dry-run`, which shows what a
 command would run without running it.

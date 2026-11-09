@@ -6,7 +6,8 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/batc
 
 <!-- Generated from crates/barca-cli/docs/batched-partitions.md (barca docs batched-partitions). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-This topic owns `batch=`: how keys are grouped into calls, what a batch function receives and
+`batch=` makes one call of a partitioned step compute several keys, for steps where each call
+has a cost of its own (loading a model, opening a connection). Below: how keys are grouped into calls, what a batch function receives and
 returns, what does not change (run hashes, artifacts, caching per key), how calls are reported
 and the known limits. Partitions themselves are [Partitions](/reference/partitions/).
 

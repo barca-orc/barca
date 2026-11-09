@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/refr
 
 <!-- Generated from crates/barca-cli/docs/refresh.md (barca docs refresh). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-A step that is cached is not run again ([The Cache: At a glance](/reference/cache/#at-a-glance)). This topic covers
+A step that is cached is not run again ([The Cache: At a glance](/reference/cache/#at-a-glance)). Below:
 forcing one to run anyway: `--refresh` and `--refresh-all`, what they do to what is downstream,
 refreshing selected partition keys, `Manual` upstreams, and `--dry-run`, which shows what a
 command would run without running it.
@@ -95,7 +95,7 @@ the asset that reads it with a target downstream of everything built from it: wh
 it in that target's cone re-runs.
 
 Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
-consistent. To look at a cached result, use `barca sql` ([barca sql](/reference/sql/)).
+consistent. To look at a cached result, use `barca sql` ([barca sql](/reference/cli/sql/)).
 
 ### A `Manual` upstream is read as it is
 
@@ -170,11 +170,11 @@ Each step has an `action`:
 `not_materialized` (no cached result for this code and these inputs: never run, or the code, an
 upstream or a sensor's output changed; when the step succeeded before, `changed` lists what
 differs from that success and `detail` reads `changed: code (+1 more)`, with the entries
-[barca status](/reference/status/) describes; for a partitioned step, those of its first key that runs),
+[barca status](/reference/cli/status/) describes; for a partitioned step, those of its first key that runs),
 `artifact_missing` (the result is cached, but its
 artifact is gone and something needs to read it) or `evicted` (the same, because the cache size
 limit deleted it). A `cached` step of an asset pinned with `barca pin` has `reason` `pinned`
-([barca pin: Pinning and Rollback](/reference/pins/)). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
+([barca pin and unpin](/reference/cli/pin/)). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
 `warning`. A step that reads a sensor is predicted from the sensor's last recorded output, and
 its `detail` says so. `summary` counts steps, one per partition key.
 
@@ -182,7 +182,7 @@ A dry run makes the same decisions a real run makes (it calls the same code), an
 checks that `will_run` equals the real run's `steps_executed` across cold, warm, `--refresh`,
 `--refresh --no-cascade` and `--refresh-all` runs.
 
-See also: [The Cache](/reference/cache/), [Partitions](/reference/partitions/), [barca status](/reference/status/), [The Run Hash](/reference/hashing/).
+See also: [The Cache](/reference/cache/), [Partitions](/reference/partitions/), [barca status](/reference/cli/status/), [The Run Hash](/reference/hashing/).
 
 ---
 

@@ -20,7 +20,7 @@ barca tokens bootstrap
 ```
 
 The steps from a code to a token a laptop or script uses are in
-[Requiring a token](/serve/#requiring-a-token-authentication-login). The routes, storage and
+[Authentication and Tokens](/auth/). The routes, storage and
 limits are in [Server Mode: Opt-in project tokens](/reference/server-mode/#opt-in-project-tokens).
 
 ---

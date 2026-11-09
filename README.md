@@ -241,7 +241,7 @@ patterns.
 | A remote store (S3, GCS, Azure): this machine's backup and read-through cache | `barca docs remote` | [Remote storage](https://barca.sh/reference/remote-storage/) |
 | Datadog traces, JSON logs | `barca docs telemetry` | [Telemetry](https://barca.sh/reference/telemetry/) |
 | Slack notifications | `barca docs slack` | [Slack Alerts](https://barca.sh/reference/slack/) |
-| Inspecting results: status, logs, sql | `barca docs status`, `barca docs logs`, `barca docs sql` | [SQL](https://barca.sh/reference/sql/) |
+| Inspecting results: status, logs, sql | `barca docs status`, `barca docs logs`, `barca docs sql` | [SQL](https://barca.sh/reference/cli/sql/) |
 | Scripts and AI agents | `barca docs skill`, `barca docs agents` | [Agent skill](https://barca.sh/reference/agent-skill/) |
 | The CLI contract: commands, flags, JSON schemas, exit codes, stability | `barca docs contract` | [CLI contract](https://barca.sh/reference/cli-contract/) |
 

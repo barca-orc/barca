@@ -20,7 +20,7 @@ Three facts shape every deployment:
 - **It binds `127.0.0.1` by default, with authentication off.** `--host 0.0.0.0` (or `--host ::`
   for IPv6) makes it reachable through another interface. Anyone who can reach the port can
   start runs unless you enable `--auth token` or authenticate at a proxy; use a private network and TLS.
-  Project tokens and local bootstrap are documented in [Requiring a token](/serve/#requiring-a-token-authentication-login).
+  Project tokens and local bootstrap are documented in [Authentication and Tokens](/auth/).
 - **State is the `.barca/` directory in the project.** It holds the cache, the run history
   and the scheduler's last fire times. Keep it on storage that survives a restart.
 - **One instance per project.** Runs in progress and their live events are held in the
@@ -461,7 +461,7 @@ Traefik needs no streaming settings: run events pass straight through.
 ## Authentication
 
 Authentication is off by default. To require tokens, follow
-[Requiring a token](/serve/#requiring-a-token-authentication-login). In a container, note that every API request, health
+[Authentication and Tokens](/auth/). In a container, note that every API request, health
 checks included, then needs a token: a Compose `healthcheck` or Kubernetes probe must send one.
 You can instead, or as well, authenticate at the proxy, for example with nginx basic auth or an
 SSO proxy such as oauth2-proxy:

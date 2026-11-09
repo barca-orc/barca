@@ -225,7 +225,7 @@ the producer module's import-time setup once; it does not execute the producer a
 - Ids changed in 0.13: before, an id kept the spelling you typed (`./p.py:f`, an absolute path).
   Cache entries recorded under another spelling are not found once; the first run recomputes them.
 
-See also: [Assets, Sensors and Inputs](/reference/assets/), [The Cache](/reference/cache/), [barca doctor: Local Debugging](/reference/doctor/).
+See also: [Assets, Sensors and Inputs](/reference/assets/), [The Cache](/reference/cache/), [barca doctor](/reference/cli/doctor/).
 
 ---
 

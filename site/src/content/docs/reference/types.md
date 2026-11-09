@@ -87,7 +87,7 @@ To see the data:
 
 - `barca get orders pipeline.py -o value` prints the value; a table (parquet, CSV, a pickled
   DataFrame) prints as a list of row objects. `-o value --json` puts it in `final_output`.
-- `barca sql "select * from orders"` queries it ([barca sql](/reference/sql/)).
+- `barca sql "select * from orders"` queries it ([barca sql](/reference/cli/sql/)).
 - The Python API deserializes for you: `import barca; barca.get("orders", "pipeline.py")`
   returns a pandas `DataFrame` for parquet.
 - Or read the `path` yourself (`duckdb.sql("select * from '<path>'")`, or

@@ -1,6 +1,6 @@
 # Where things live: the project root and `.barca/`
 
-Everything barca keeps is under `.barca/` in the project root. This topic says where that root
+Everything barca keeps is under `.barca/` in the project root. Below: where that root
 is and what the directory holds, what happens when several barca processes share one project,
 what a run records while it goes and after it is killed, and what an upgrade recomputes.
 

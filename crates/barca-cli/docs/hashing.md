@@ -1,6 +1,6 @@
 # The run hash: code, helpers and decorator arguments
 
-A step runs again when its run hash changes (`barca docs cache`, "At a glance"). This topic is the
+A step runs again when its run hash changes (`barca docs cache`, "At a glance"). Here is the
 full rule for the part of that hash that comes from code. In short:
 
 - **The function and the project code it uses.** The function as written, and every module-level

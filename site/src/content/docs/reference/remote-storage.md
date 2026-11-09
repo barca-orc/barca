@@ -20,7 +20,7 @@ barca get total                              # results and a history backup go t
 
 Sharing state between machines means a server (RFC-0007), not a shared bucket. Up to 0.25,
 `optimistic` mode pulled a shared history from the bucket before each run and pushed it after;
-barca 0.26.0 removed it ([Metadata Backups](/reference/backup/), "Upgrading from the shared history").
+barca 0.26.0 removed it ([Metadata Backups: Upgrading from the shared history](/reference/backup/#upgrading-from-the-shared-history)).
 
 ## Each cloud
 
@@ -109,7 +109,7 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 Keep secrets out of it: credentials still come from the environment. Precedence, highest first:
 `BARCA_REMOTE_URI` over `[remote].uri`; `BARCA_STORAGE_OPTIONS` (JSON keyed by protocol) over
 `[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the configuration
-reference: https://barca.sh/reference/config/
+reference: [Configuration](/reference/config/)
 
 ## Storage for one process
 
@@ -253,7 +253,7 @@ the store's object and the digest recorded with the result all agree. It asks th
 every such node with one `python -m barca._state stat`. Anything else is `unsynced`, with the
 reason in `cache.reason` (WHY in the table): `local_only`, `store_only` or `mismatch`. The
 states and reasons, what each means and what `get` does about it are owned by
-[barca status: Cache state](/reference/status/#cache-state); the repair of a `mismatch` is "Checking a local copy against
+[barca status: Cache state](/reference/cli/status/#cache-state); the repair of a `mismatch` is "Checking a local copy against
 the store" below. A result in neither place is `stale` with reason `artifact_missing`. A store
 that cannot be asked leaves the states as they are, with a note in `cache.detail`.
 
@@ -504,8 +504,8 @@ barca sql "select * from total"          # downloads `total` into .barca/sql-cac
 
 `barca status` reads a parquet footer by ranged requests and downloads json or pickle results of
 up to 16 MB; a store it cannot read is a `note` on each shape, not a failed command
-([barca status](/reference/status/)). `barca sql` downloads the artifacts of the views a query names and reuses
-the copies while the objects are unchanged ([barca sql](/reference/sql/)).
+([barca status](/reference/cli/status/)). `barca sql` downloads the artifacts of the views a query names and reuses
+the copies while the objects are unchanged ([barca sql](/reference/cli/sql/)).
 
 ## Sharing a result: signed URLs
 
@@ -607,9 +607,9 @@ resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
 ## Diagnose configuration
 
 Run `barca doctor --pretty` before a run to check configured stores and credential identity.
-See [barca doctor: Local Debugging](/reference/doctor/) for check limits and a copyable local-only debugging profile.
+See [barca doctor](/reference/cli/doctor/) for check limits and a copyable local-only debugging profile.
 
-See also: [Metadata Backups](/reference/backup/), [The Cache](/reference/cache/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [barca doctor: Local Debugging](/reference/doctor/).
+See also: [Metadata Backups](/reference/backup/), [The Cache](/reference/cache/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [barca doctor](/reference/cli/doctor/).
 
 ---
 

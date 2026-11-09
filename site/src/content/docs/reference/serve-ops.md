@@ -7,7 +7,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/serv
 <!-- Generated from crates/barca-cli/docs/serve-ops.md (barca docs serve-ops). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
 A running server accepts runs into a durable queue, drains when told to stop and resumes the
-queue when it starts again. This topic is for the person who deploys and restarts it: the run
+queue when it starts again. For whoever deploys and restarts it: the run
 queue and `barca queue`, what each signal does and the exit code it ends with, the stop grace a
 supervisor must allow, memory limits in containers, a capacity shared by every run, and the run
 timeout. What a schedule does is [Scheduling With Cron](/scheduling/).

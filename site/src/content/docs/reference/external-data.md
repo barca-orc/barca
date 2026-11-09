@@ -190,7 +190,7 @@ Whether an output is small is only known after it ran, so an automatic rule woul
 plan and the dry run from run to run. You choose where the extra phase pays for itself: a global
 step read by many keys, or one whose inputs change more often than its result.
 
-See also: [The Cache](/reference/cache/), [Assets, Sensors and Inputs: Sensors](/reference/assets/#sensors), [The Run Hash](/reference/hashing/), [barca status](/reference/status/).
+See also: [The Cache](/reference/cache/), [Assets, Sensors and Inputs: Sensors](/reference/assets/#sensors), [The Run Hash](/reference/hashing/), [barca status](/reference/cli/status/).
 
 ---
 

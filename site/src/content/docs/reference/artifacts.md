@@ -191,7 +191,7 @@ renames and replaces nothing anywhere else:
   path, and is left as it is. The message says to remove or rename it there; `--refresh-all`
   does not help ([Remote Storage](/reference/remote-storage/)).
 
-See also: [The Cache](/reference/cache/), [barca status](/reference/status/), [Disk Use](/reference/disk/).
+See also: [The Cache](/reference/cache/), [barca status](/reference/cli/status/), [Disk Use](/reference/disk/).
 
 ---
 

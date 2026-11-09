@@ -27,7 +27,7 @@ barca history --server http://barca.internal:8274
 
 This executes the server's copy of the project and keeps results and history there. It
 needs no bucket on your laptop and does not upload local edits. Authentication is off by
-default: turn on [project tokens](/serve/#requiring-a-token-authentication-login), or keep the server on a private network or behind an
+default: turn on [project tokens](/auth/), or keep the server on a private network or behind an
 authenticating proxy.
 
 ## Also want laptops to compute against the same cache?
@@ -84,7 +84,7 @@ port 8274 can trigger runs
 ```
 
 The web UI is at `http://barca.internal:8274/`. The warning is there because authentication is
-off by default: turn on [project tokens](/serve/#requiring-a-token-authentication-login) with `--auth token`, or keep the server on a private
+off by default: turn on [project tokens](/auth/) with `--auth token`, or keep the server on a private
 network or behind a proxy that authenticates ([Deploying](/deploying/#authentication)).
 
 ## 3. Use barca as usual

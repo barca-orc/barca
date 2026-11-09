@@ -1,10 +1,12 @@
 # Disk use: the size limit for `.barca/`
 
-This topic owns what the size limit of `.barca/` counts, what is evicted in which order, what is
-never evicted and how the metadata database keeps to its own share; `barca gc` runs the same
-eviction on demand.
+`.barca/` has a size limit, and barca deletes old artifacts to stay under it. Below: what the
+limit counts, what is evicted first and what never is, and how the metadata database keeps to
+its own share. `barca gc` runs the same eviction on demand.
 
-`.barca/` has a size limit. Without one, every recompute under a new run hash (a code edit, an
+## Setting the limit
+
+Without a limit, every recompute under a new run hash (a code edit, an
 input change, a sensor tick) adds an artifact and keeps the old one, so the cache only grows.
 
 ```toml
@@ -26,7 +28,9 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
   outside this budget; the five-copy rotation stays. Unrelated files and directories merely
   named `backups` remain budgeted. Physical totals still include backup storage.
 
-**When.** At the end of `barca get` and `barca run` (after results are recorded and uploads have
+## When eviction runs
+
+At the end of `barca get` and `barca run` (after results are recorded and uploads have
 finished), after every run under `barca serve`, and once a minute under `barca serve`. When
 `.barca/` is over the limit, barca deletes files in this order until it is at or below **80%** of
 the limit:
@@ -38,7 +42,7 @@ the limit:
 | 3 | Local copies the artifact store holds (its upload was confirmed with a digest) | least recently read first | a download |
 | 4 | Current results | least recently read first | a recompute |
 
-**Never evicted:**
+## What is never evicted
 
 - what the command produced, read or returns: a path `barca get` just printed still exists when
   the command exits;
@@ -63,7 +67,9 @@ the limit:
   Nothing outside `.barca/` is ever deleted, and the artifact store is
   never touched.
 
-**The metadata database.** Each environment's database may use a tenth of the limit, at most
+## The metadata database
+
+Each environment's database may use a tenth of the limit, at most
 1 GiB. When its file is past that, barca trims it down to 80% of its share, at the same moments as
 eviction and for at most 5 seconds at a time, and nothing is evicted in a check that ran out of
 that time still trimming. Eviction counts a database as at most its share, so one past it never
@@ -91,7 +97,9 @@ The file shrinks through `VACUUM`, which holds the database's lock while it rewr
 keeps its size and reuses the freed space until a moment with no run, and eviction still counts
 the whole file.
 
-**After `barca state reset` or `barca state restore`.** The artifacts the old database named stay
+## After `barca state reset` or `barca state restore`
+
+The artifacts the old database named stay
 on disk, and the new one names none of them (after a restore, none the restored copy does not
 name). They are leftovers: the next check past the limit evicts them first, and `barca gc
 --max-size off` deletes them now. Until then, putting the old database back (`barca state restore
@@ -101,7 +109,9 @@ needed. A reset says how much stays:
 With a server, a result fetched from the store for a hit in the server's ledger is also a file
 this machine's database does not name; evicting it costs a download.
 
-**What you see.** One line on stderr when something was evicted:
+## What you see
+
+One line on stderr when something was evicted:
 
 ```
 [barca] cache 21.4 GB over its 20 GB limit; evicted 312 files (5.4 GB): 290 superseded results, 22 local copies held by the store
@@ -126,7 +136,9 @@ The step's `reason` is `evicted`. `barca status` shows the node as `stale` with 
 and `--dry-run` predicts `run` with reason `evicted`. A result the store holds is predicted
 `cached`: it costs a download, not a recompute.
 
-**`barca gc`** runs the same eviction now:
+## `barca gc`
+
+`barca gc` runs the same eviction now:
 
 ```bash
 barca gc --dry-run              # what would be evicted, per tier, and what it leaves
@@ -162,7 +174,9 @@ nothing to evict: 355 KB budgeted of 1 KB
 held by: 115 KB metadata databases (never evicted), 111 KB databases moved aside by state reset/restore (never evicted; delete them once you no longer need to undo), 2 B other
 ```
 
-**How it is measured.** The check after a command adds the recorded sizes of the results the
+## How it is measured
+
+The check after a command adds the recorded sizes of the results the
 metadata DBs hold, walks everything outside the artifact directories, and applies what the last
 full walk of the artifact directories found. A full walk happens when that says `.barca/` is over
 the limit, at least once a day, and under `barca gc`. The check under the limit takes about 2 ms
@@ -178,7 +192,9 @@ that ends while `barca serve` walks) skips its own, and the walk under way recor
 With 465,000 artifact files and 2.8M recorded results a full walk takes minutes on a cold
 filesystem cache.
 
-**Read times.** "Least recently read" is the `last_read_at` of a result: set when a step is given
+## Read times
+
+"Least recently read" is the `last_read_at` of a result: set when a step is given
 it as an input, when `barca get` returns it, and when a `barca sql` query names its view. File
 access times are not used (most filesystems do not keep them). A key of a partitioned asset
 with 256 keys or more whose `last_read_at` is less than an hour old keeps it: a run that reads

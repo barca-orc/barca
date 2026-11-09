@@ -822,8 +822,8 @@ const SITE_PAGES: &[SitePage] = &[
     SitePage {
         topic: "doctor",
         file: "doctor.md",
-        slug: "reference/doctor",
-        title: "barca doctor: Local Debugging",
+        slug: "reference/cli/doctor",
+        title: "barca doctor",
         description: "Check project prerequisites, stores and credential identity without \
                       running steps.",
     },
@@ -968,8 +968,8 @@ const SITE_PAGES: &[SitePage] = &[
     SitePage {
         topic: "incidents",
         file: "incidents.md",
-        slug: "reference/pausing",
-        title: "barca pause: Pausing Assets",
+        slug: "reference/cli/pause",
+        title: "barca pause and resume",
         description: "Containing an incident: barca pause and barca resume, and what scheduled \
                       runs and requests do with a paused asset.",
     },
@@ -992,7 +992,7 @@ const SITE_PAGES: &[SitePage] = &[
     SitePage {
         topic: "status",
         file: "status.md",
-        slug: "reference/status",
+        slug: "reference/cli/status",
         title: "barca status",
         description: "barca status: every node's cache state and why, its last run, its \
                       artifact's shape, --problems and --state.",
@@ -1000,15 +1000,15 @@ const SITE_PAGES: &[SitePage] = &[
     SitePage {
         topic: "pins",
         file: "pins.md",
-        slug: "reference/pins",
-        title: "barca pin: Pinning and Rollback",
+        slug: "reference/cli/pin",
+        title: "barca pin and unpin",
         description: "barca pin and unpin: roll an asset back to an earlier materialization, \
                       held for every run until unpinned.",
     },
     SitePage {
         topic: "logs",
         file: "logs.md",
-        slug: "reference/logs",
+        slug: "reference/cli/logs",
         title: "barca logs",
         description: "barca logs: a run's recorded step stdout and stderr, following a live \
                       run, and how lines are kept.",
@@ -1024,7 +1024,7 @@ const SITE_PAGES: &[SitePage] = &[
     SitePage {
         topic: "sql",
         file: "sql.md",
-        slug: "reference/sql",
+        slug: "reference/cli/sql",
         title: "barca sql",
         description: "barca sql: query cached results with DuckDB while debugging, without \
                       writing a step.",
@@ -1185,6 +1185,65 @@ fn link_topics(body: &str) -> String {
     out
 }
 
+/// The title of the site page at `route` (`/deploying/`): a generated page's, else the
+/// `title:` of its source under `site/src/content/docs`.
+fn site_title(route: &str) -> Option<String> {
+    let slug = route.trim_matches('/');
+    if slug.is_empty() {
+        return Some("barca.sh".to_string());
+    }
+    if let Some(p) = SITE_PAGES.iter().find(|p| p.slug == slug) {
+        return Some(p.title.to_string());
+    }
+    let docs = site_dir()?.join("src/content/docs");
+    ["md", "mdx"].iter().find_map(|ext| {
+        let text = std::fs::read_to_string(docs.join(format!("{slug}.{ext}"))).ok()?;
+        let line = text.lines().find(|l| l.starts_with("title: "))?;
+        Some(line["title: ".len()..].trim().trim_matches('"').to_string())
+    })
+}
+
+/// Turn a bare `https://barca.sh/<path>` in prose (the manual's pointer for terminal readers)
+/// into a link to the page on this site, titled by the page, so it stays on the site it is
+/// read on. Code blocks and code spans are left alone.
+fn link_site_urls(body: &str) -> String {
+    const SITE: &str = "https://barca.sh";
+    let mut out = String::new();
+    let mut fenced = false;
+    for line in body.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        if fenced || !line.contains(SITE) {
+            out.push_str(line);
+            continue;
+        }
+        let mut rest = line;
+        while let Some(i) = rest.find(SITE) {
+            let before = &rest[..i];
+            let in_code = before.matches('`').count() % 2 == 1;
+            let in_link = before.ends_with("](") || before.ends_with('<');
+            let after = &rest[i + SITE.len()..];
+            let len = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || "/-_#".contains(c)))
+                .unwrap_or(after.len());
+            let route = &after[..len];
+            let end = i + SITE.len() + len;
+            let title = (route.starts_with('/') && !in_code && !in_link)
+                .then(|| site_title(route.split('#').next().unwrap_or(route)))
+                .flatten();
+            out.push_str(before);
+            match title {
+                Some(title) => out.push_str(&format!("[{title}]({route})")),
+                None => out.push_str(&rest[i..end]),
+            }
+            rest = &rest[end..];
+        }
+        out.push_str(rest);
+    }
+    out
+}
+
 fn site_page(page: &SitePage, topic: &str) -> String {
     let (title_line, body) = topic
         .split_once('\n')
@@ -1211,7 +1270,7 @@ fn site_page(page: &SitePage, topic: &str) -> String {
         description = yaml(page.description),
         file = page.file,
         topic = page.topic,
-        body = link_topics(body.trim_start_matches('\n').trim_end()),
+        body = link_site_urls(&link_topics(body.trim_start_matches('\n').trim_end())),
     )
 }
 
@@ -1267,7 +1326,7 @@ fn site_links_skip_code_and_unknown_topics() {
     let body = "See `barca docs sql` and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n";
     assert_eq!(
         link_topics(body),
-        "See [barca sql](/reference/sql/) and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n"
+        "See [barca sql](/reference/cli/sql/) and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n"
     );
 }
 

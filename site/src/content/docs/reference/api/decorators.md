@@ -508,7 +508,7 @@ Up to 0.11 this passed the list without an error.
   the run computed ([many partition keys](/reference/cli/get/#many-partition-keys)). `--partition region=emea`
   selects keys across the run (upstream partitioned assets too; a `collect()` over them is
   skipped), computes only those and scopes `--refresh sales` to them
-  ([CLI reference](/reference/cli/get/)). [`barca sql`](/reference/sql/) has one view with a
+  ([CLI reference](/reference/cli/get/)). [`barca sql`](/reference/cli/sql/) has one view with a
   `partition` column holding `region=emea`.
 - `barca status` shows a partitioned asset as one node with `partitions: {total, cached,
   missing, missing_keys}`.
@@ -846,7 +846,7 @@ seconds field. There is no year field. See [Scheduling](/scheduling/) for what a
 | `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See [Scripts and AI Agents: Getting values, not pointers](/reference/agents/#getting-values-not-pointers). |
 | `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`, `phase`. |
 | `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |
-| `sql()` | Query cached results with DuckDB from Python, as `barca sql` does. See [SQL](/reference/sql/). |
+| `sql()` | Query cached results with DuckDB from Python, as `barca sql` does. See [SQL](/reference/cli/sql/). |
 | `signed_url()` | A time-limited HTTPS link to an object in S3, GCS or Azure. See [Remote Storage](/reference/remote-storage/#sharing-a-result-signed-urls). |
 | `batches()`, `batches_by()`, `Failed` | Grouping for `batch=`, and the value that fails one key of a batched call alone. See [Batched Partitions](/reference/batched-partitions/). |
 | `group()`, `Group` | Organize nodes in the UI and CLI without changing execution or caching. See [Groups](/reference/groups/). |

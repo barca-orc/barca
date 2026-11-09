@@ -239,9 +239,9 @@ Use `barca logs RUN_ID --pretty` for only the recorded lines, or `--json` for
 `[{node_id, stream, ts, line}]`. What a task writes to `sys.stderr` (`logging`, warnings) is
 recorded too, as `stream: "stderr"`, and so is the traceback of a failed attempt. Complete
 lines and trailing partial lines flushed on return/failure are recorded. `--step report` selects a function name; exact node ids disambiguate.
-See [barca logs](/reference/logs/) for the full contract.
+See [barca logs](/reference/cli/logs/) for the full contract.
 
-See also: [The Cache](/reference/cache/), `barca docs examples/deploy-task`, [barca logs](/reference/logs/).
+See also: [The Cache](/reference/cache/), `barca docs examples/deploy-task`, [barca logs](/reference/cli/logs/).
 
 ---
 
