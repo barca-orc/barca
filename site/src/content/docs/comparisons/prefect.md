@@ -125,7 +125,7 @@ The frame from the user's file (`broken.py`, line 6) comes after the Prefect fra
 
 Barca caches every asset by its run hash, a hash of the function's code and its inputs, with no
 option to set. A second run of the same pipeline on barca 0.28.0 took 13 ms (median of 10) and
-ran no step. `barca docs cache` says what the hash covers.
+ran no step. [`barca docs cache`](/reference/cache/) says what the hash covers.
 
 Prefect has `cache_policy=INPUTS`. With both tasks set to it and two `python pipeline.py` runs
 on Prefect 3.9.0 under the temporary server, the second run reported `summary` as

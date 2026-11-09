@@ -76,7 +76,7 @@ the deployed version` and continues; deploy the change to run it there. Use the 
 path prefix included (`https://example.com/barca`). A server that cannot be reached, or one
 that is not barca or runs another API version, is exit 3 naming the URL; nothing runs locally
 instead. If the connection drops during a run, the client exits 3 naming the run id, and the
-run continues on the server (`barca history --server`). `barca docs server-mode` has the full
+run continues on the server (`barca history --server`). [`barca docs server-mode`](/reference/server-mode/) has the full
 rules, and the few declared differences from a local run (the server's paths, `triggered_by`).
 
 The client sends no credentials. Reach the server over a private network (a VPN, Tailscale,
@@ -368,7 +368,7 @@ tracing are in [Telemetry](/reference/telemetry/#datadog).
   history. That holds for a `.barca` on a named volume, as here. With `.barca` on a bind mount from a Docker Desktop
   host the run can stay `running`: after a restart of the machine, or when another
   container was started before the replacement. The rule and its limits are in
-  `barca docs layout`, "While a run is going, and after one is killed".
+  [`barca docs layout`](/reference/layout/), "While a run is going, and after one is killed".
 - **Runs are not resumed.** Nothing restarts a cancelled or killed run. The next tick or
   request starts a new one, which reuses whatever was cached.
 - **Schedules catch up once.** If a tick passed while the server was down, the job fires once

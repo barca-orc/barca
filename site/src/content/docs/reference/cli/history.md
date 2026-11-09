@@ -122,7 +122,7 @@ killed in a container is `interrupted` too, once a container starts again on the
 volume (from 0.20.0; earlier versions left it `running`). For runs started with 0.20.0 or later, a run stays `running`
 whenever barca cannot establish that its process is gone. Earlier runs retain their legacy
 process-id and host-name checks. See
-`barca docs layout`, "While a run is going, and after one is killed", and the shared-state
+[`barca docs layout`](/reference/layout/), "While a run is going, and after one is killed", and the shared-state
 [limitations](/reference/remote-storage/#limitations).
 
 ---

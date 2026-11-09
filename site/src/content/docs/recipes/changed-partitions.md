@@ -78,5 +78,5 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.
 - Measured costs at 10k, 50k and 200k keys are in `benchmarks/RESULTS.md` ("Keyed
   partitions"); the per-tick cost grows with the key count even when one key changed.
 
-The manual has the details: `barca docs partitions`, "Updating only what changed, across many
+The manual has the details: [`barca docs partitions`](/reference/partitions/), "Updating only what changed, across many
 partitions".

@@ -156,7 +156,7 @@ runs with how many steps each executed and how many it served from cache.
 - The upstream must be named statically in `inputs=`. An input defined in another file is
   imported like any Python name; see [Discovery](/reference/discovery/).
 - `a`'s result is written to a file and read back for `b`. `b` receives a deserialized copy,
-  not the object `a` returned. Formats and readers: `barca docs types`.
+  not the object `a` returned. Formats and readers: [`barca docs types`](/reference/types/).
 - An asset that reads a file or a bucket in its body has no input that changes when the data
   does. See [Sensors and External Observations](/examples/sensors/).
 

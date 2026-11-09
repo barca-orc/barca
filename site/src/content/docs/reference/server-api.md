@@ -78,7 +78,7 @@ return the corresponding headers without a body.
 | `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
 
-<a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to (`barca docs server-mode`).
+<a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to ([`barca docs server-mode`](/reference/server-mode/)).
 
 | Method | Path | Description |
 |--------|------|-------------|

@@ -63,7 +63,7 @@ Commit it. Everyone, the server included, uses this same file. `barca serve` ign
 
 Install the extra for your bucket, for example with `uv add 'barca[s3]'` (or `barca[gcs]`
 or `barca[azure]`). Bucket credentials come from the usual places, such as `AWS_PROFILE`, so
-`barca docs remote` has the details.
+[`barca docs remote`](/reference/remote-storage/) has the details.
 
 ## 2. Start the server
 
@@ -175,4 +175,4 @@ you mean it.
 - [Deploying](/deploying/): run the server under systemd or Docker, behind nginx or Traefik.
 - [Server Mode reference](/reference/server-mode/): every rule, including what is shared,
   what happens when a post fails, and the HTTP routes. In the terminal, run
-  `barca docs server-mode`.
+  [`barca docs server-mode`](/reference/server-mode/).

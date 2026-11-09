@@ -59,8 +59,8 @@ the one owner of the layout. A `.gitignore` inside `.barca/` keeps all of it out
 | `.barca/inspection-cache/<env>.json` | Disposable evidence `barca status` reuses (with `.lock` and `.epoch` files), at most 8 MiB. | Yes, always. |
 | `.barca/auth/` | `barca serve` token state ([server mode](/reference/server-mode/)), owner-only. | Not while `barca serve` runs; deleting it discards every token. |
 
-Some rows appear only in the situations named. For backups see `barca docs remote`; for a missing artifact see
-`barca docs cache`, "A cached result whose artifact is missing".
+Some rows appear only in the situations named. For backups see [`barca docs remote`](/reference/remote-storage/); for a missing artifact see
+[`barca docs cache`](/reference/cache/), "A cached result whose artifact is missing".
 
 Do not edit files under `.barca/`, and do not open `metadata.db` with another program while
 barca is running. To look at results use [`barca sql`](/reference/sql/) and
@@ -186,7 +186,7 @@ had none: every new run hash added a file and kept the old one).
 - `KB`, `MB`, `GB`, `TB` are decimal (`20GB` is 20 × 10⁹ bytes); `KiB`, `MiB`, `GiB`, `TiB` are
   binary; a bare number is bytes. A percentage is of the filesystem's size, read at each check.
 - Budgeted size covers `.barca/` across every environment, including the metadata databases
-  (counted, and each trimmed to a tenth of the limit, at most 1 GiB; `barca docs cache`), except recognized local metadata backup files. Those restore
+  (counted, and each trimmed to a tenth of the limit, at most 1 GiB; [`barca docs cache`](/reference/cache/)), except recognized local metadata backup files. Those restore
   copies, their owned sidecars, markers and temporary copies keep the five-copy rotation
   and are reported outside the budget. Physical totals and free-space usage include them.
   Unrelated files in backup directories and other directories named `backups` remain budgeted.
@@ -220,7 +220,7 @@ later run needs is downloaded or computed again under the same run hash, with re
 eviction on demand (`--dry-run` to see it first, `--max-size` for a one-off limit; when it
 cannot reach its target, `held` says what holds the rest), and
 `barca doctor` reports the size against the limit and the free space. The full description is
-in `barca docs disk` ([Disk Use](/reference/disk/)).
+in [`barca docs disk`](/reference/disk/) ([Disk Use](/reference/disk/)).
 
 `[remote].state`, `[remote].state_uri` and `[remote].push_retries` were removed in 0.26.0 with
 the shared history (RFC-0009). A file that still sets one is a usage error (exit 2) naming it,
@@ -284,7 +284,7 @@ complete remote setup with no `barca.toml`. See [Remote Storage](/reference/remo
 
 ## Server mode
 
-A configured server is the team's ledger (experimental; `barca docs server-mode`,
+A configured server is the team's ledger (experimental; [`barca docs server-mode`](/reference/server-mode/),
 [Deploying](/deploying/), [RFC-0007](/rfcs/0007-server-mode/)). Which server:
 
 **`--server <url>` > `BARCA_SERVER` > `[server].url` in `barca.toml`**

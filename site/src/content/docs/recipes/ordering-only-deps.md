@@ -76,7 +76,7 @@ A `_`-prefixed input is never reported. There is no flag or configuration key th
 warning off. A name that appears inside a string in the body counts as used (SQL such as
 `duckdb.sql("select * from orders")`, a pandas `query("x > @limit")`). The exact rule, and what
 is never reported (stubs, `**kwargs`, `locals()`, queries built outside the body, DuckDB
-relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
+relation inputs, sensor inputs), is in [`barca docs assets`](/reference/assets/), "Unused inputs".
 
 ## Limits
 
