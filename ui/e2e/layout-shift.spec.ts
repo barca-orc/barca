@@ -41,6 +41,8 @@ test('tasks page: opening a node panel', async ({ page }) => {
 test('assets page: switching the node in the panel', async ({ page }) => {
   await page.goto('/ui/#/assets')
   await page.getByRole('row', { name: /^pipeline\.py:history_asset/ }).click()
+  // The run history is the panel's History tab; it stays open as the panel moves on.
+  await page.getByRole('complementary', { name: /details$/ }).getByRole('tab', { name: /History/ }).click()
   await expect(page.getByRole('complementary', { name: /details$/ })).toContainText('median')
   await takeShifts(page)
   await page.getByRole('row', { name: /numbers/ }).click()

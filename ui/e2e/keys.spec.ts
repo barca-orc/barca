@@ -37,37 +37,47 @@ async function mock(page: Page) {
   await page.route(/\/assets\/[^/]+\/partitions\/key\?/, (route) => route.fulfill({ json: detail }))
 }
 
-test('shows every key by state, filters them, opens one and runs a dimension', async ({ page }) => {
+test('says what is wrong and where, shows those keys, zooms and opens one', async ({ page }) => {
   await mock(page)
   await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}`)
   const bar = page.locator('.barca-view-head')
   await expect(bar.getByRole('heading', { name: 'events' })).toBeVisible()
   await expect(bar).toContainText('6 keys')
-  await expect(page.getByRole('img', { name: /Every key, coloured by state: 2 blocks of day/ })).toBeVisible()
-  await expect(page.getByRole('row')).toHaveCount(7) // the head and six keys
 
-  // A state chip keeps that state; the count says how many of how many.
-  await bar.getByRole('button', { name: '1 failed' }).click()
-  await expect(bar).toContainText('1 of 6 keys')
-  await expect(page).toHaveURL(/state=failed/)
-  await bar.getByRole('button', { name: '1 failed' }).click()
+  // The counts, then each problem with where its keys are.
+  const counts = page.getByRole('group', { name: 'Keys by state' })
+  await expect(counts.getByRole('button', { name: '1 failed' })).toBeVisible()
+  const issues = page.getByRole('region', { name: 'What needs attention' })
+  await expect(issues).toContainText('ValueError: no rows for <region> on <day>')
+  await expect(issues.getByRole('listitem').first()).toContainText('day d2')
+  await expect(issues.getByRole('listitem').first()).toContainText('region emea')
 
-  // A dimension's value narrows the keys, the chips and what Run computes.
-  await bar.getByRole('combobox', { name: 'region', exact: true }).selectOption('emea')
-  await expect(bar).toContainText('3 of 6 keys')
-  await expect(bar.getByRole('button', { name: '1 blocked' })).toBeVisible()
+  // The table starts with what needs attention: the failed and the blocked key.
+  await expect(page.getByRole('table', { name: 'Keys' }).getByRole('row')).toHaveCount(3)
+  await page.getByRole('group', { name: 'Which keys' }).getByRole('button', { name: /^All/ }).click()
+  await expect(page.getByRole('table', { name: 'Keys' }).getByRole('row')).toHaveCount(7)
+  await expect(page).toHaveURL(/show=all/)
+
+  // Show narrows the table to one problem's keys; its Run computes them.
+  await issues.getByRole('button', { name: 'Show' }).first().click()
+  await expect(page).toHaveURL(/state=failed&error=0/)
+  await expect(page.getByRole('table', { name: 'Keys' }).getByRole('row')).toHaveCount(2)
   const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/runs'))
   await page.route(/\/runs$/, (route) => route.request().method() === 'POST' ? route.fulfill({ json: { run_id: 'r9', handle: 'r9' } }) : route.fallback())
-  await bar.getByRole('button', { name: 'Run 2 keys' }).click()
-  expect((await started).postDataJSON()).toMatchObject({ command: 'get', targets: [NODE], partition: JSON.stringify({ region: ['emea'] }) })
+  await issues.getByRole('button', { name: 'Run' }).first().click()
+  expect((await started).postDataJSON()).toMatchObject({ command: 'get', targets: [NODE], partition: JSON.stringify({ day: ['d2'], region: ['emea'] }) })
   await expect(page.locator('.barca-keys-notice')).toContainText('Started run r9')
-  await bar.getByRole('button', { name: 'Clear' }).click()
 
-  // A row opens the key: its error, its chain and its input's first rows.
-  await page.getByRole('row', { name: /d2 emea failed/ }).click()
+  // The overview: one row per region; a column of one key opens it.
+  const overview = page.getByRole('region', { name: 'Every key by state' })
+  await expect(overview.getByRole('row')).toHaveCount(2)
+  await overview.getByRole('row', { name: 'emea' }).locator('.barca-heat-bin').nth(1).dispatchEvent('mousedown')
+  await overview.getByRole('row', { name: 'emea' }).locator('.barca-heat-bin').nth(1).dispatchEvent('mouseup')
   await expect(page).toHaveURL(/key=day%3Dd2%2Cregion%3Demea/)
+
+  // The key: its error first, its chain, its input's first rows.
   const panel = page.getByRole('complementary', { name: 'Key day=d2,region=emea' })
-  await expect(panel).toContainText('ValueError: no rows for emea on d2')
+  await expect(panel.getByRole('alert')).toContainText('ValueError: no rows for emea on d2')
   await expect(panel.getByRole('link', { name: 'raw' })).toHaveAttribute('href', /node=lake\.py%3Araw&key=/)
   await expect(panel.getByRole('table', { name: /raw for day=d2,region=emea/ })).toContainText('1')
   await page.keyboard.press('Escape')

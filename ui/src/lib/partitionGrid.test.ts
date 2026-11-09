@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  attemptOf, cellAt, cellOf, countStates, errorOf, filterCells, filterSelection, gridGeometry, gridOf, keyOf,
-  layoutBlocks, NO_FILTER, rangeSelection, stateOf,
+  attemptOf, cellOf, countStates, errorOf, filterCells, filterSelection, gridOf, keyOf, layoutBlocks, NO_FILTER, stateOf,
 } from './partitionGrid'
 import type { PartitionGrid } from './types'
 
@@ -67,11 +66,7 @@ describe('a grid', () => {
     ])
   })
 
-  it('turns a range of one block into a run selection', () => {
-    const layout = layoutBlocks(g)
-    expect(JSON.parse(rangeSelection(g, layout, { block: 1, from: 1, to: 0 })!)).toEqual({ day: ['d1', 'd2'], region: 'apac' })
-    // d3 × apac is not a key: the range keeps the keys it covers.
-    expect(JSON.parse(rangeSelection(g, layout, { block: 1, from: 1, to: 2 })!)).toEqual({ day: ['d2'], region: 'apac' })
+  it('turns the dimension filters into a run selection', () => {
     expect(JSON.parse(filterSelection(g, { ...NO_FILTER, values: { region: ['apac'] } })!)).toEqual({ region: ['apac'] })
     expect(filterSelection(g, { ...NO_FILTER, states: ['failed'] })).toBeNull()
   })
@@ -84,20 +79,49 @@ describe('a one-dimension grid', () => {
     attempted_at: [0, 0, 0], elapsed_ms: [1, 1, 1], size_bytes: [1, 1, 1], run: [0, 0, 0], error: { '1': 0 },
   })
 
-  it('is one block with no label, and a single key runs as key=value', () => {
-    const layout = layoutBlocks(g)
-    expect(layout.blocks).toEqual([{ label: '', cells: [0, 1, 2] }])
-    expect(rangeSelection(g, layout, { block: 0, from: 1, to: 1 })).toBe('k=b')
+  it('is one block with no label', () => {
+    expect(layoutBlocks(g).blocks).toEqual([{ label: '', cells: [0, 1, 2] }])
+  })
+})
+
+describe('what is wrong, where', () => {
+  // day (6) × region (2): apac fails on d2..d4, emea is blocked on d6.
+  const days = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6']
+  const states = days.map((_, i) => `${i === 5 ? 'b' : 'c'}${i >= 1 && i <= 3 ? 'f' : 'c'}`).join('')
+  const g = gridOf({
+    ...dayRegion(states),
+    dimensions: [{ name: 'day', values: days }, { name: 'region', values: ['emea', 'apac'] }],
+    attempted_at: Array(12).fill(0), elapsed_ms: Array(12).fill(1), size_bytes: Array(12).fill(1), run: Array(12).fill(0),
+    error: { '3': 0, '5': 0, '7': 0 },
+    errors: [{ error: 'no rows for <region> on <day>', keys: 3 }],
   })
 
-  it('maps canvas points to cells and misses the gaps', () => {
+  it('groups failed keys by error, then blocked keys, and says where each sits', async () => {
+    const { issueGroups, spreadWords } = await import('./partitionGrid')
+    const groups = issueGroups(g)
+    expect(groups.map((x) => [x.kind, x.cells.length])).toEqual([['error', 3], ['blocked', 1]])
+    const [day, region] = groups[0]!.spread
+    expect(spreadWords(region!)).toBe('apac')
+    expect(day).toMatchObject({ distinct: 3, from: 'd2', to: 'd4', contiguous: true })
+    expect(spreadWords(day!)).toBe('d2, d3, d4')
+  })
+
+  it('bins the long dimension into columns, each in its most urgent state, and zooms to a window', async () => {
+    const { heatmap, layoutBlocks } = await import('./partitionGrid')
     const layout = layoutBlocks(g)
-    const geo = gridGeometry(layout, 100)
-    expect(geo.labelHeight).toBe(0)
-    const step = geo.cell + geo.gap
-    expect(cellAt(layout, geo, 1, 1)).toEqual({ block: 0, index: 0 })
-    expect(cellAt(layout, geo, step + 1, 1)).toEqual({ block: 0, index: 1 })
-    expect(cellAt(layout, geo, geo.cell + 0.5, 1)).toBeNull() // the gap
-    expect(cellAt(layout, geo, 3 * step + 1, 1)).toBeNull() // past the last key
+    const all = heatmap(g, layout, 3)
+    expect(all.rows.map((r) => r.label)).toEqual(['emea', 'apac'])
+    expect(all.rows[1]!.bins.map((b) => b.worst)).toEqual(['failed', 'failed', 'fresh'])
+    expect(all.rows[0]!.bins.map((b) => b.worst)).toEqual(['fresh', 'fresh', 'blocked'])
+    expect(all.ticks[0]).toEqual({ bin: 0, label: 'd1' })
+    const zoomed = heatmap(g, layout, 10, [1, 3])
+    expect(zoomed.rows[1]!.bins.map((b) => b.from)).toEqual([1, 2, 3])
+  })
+
+  it('filters and runs a range of the long dimension', async () => {
+    const { filterCells, filterSelection, NO_FILTER } = await import('./partitionGrid')
+    const f = { ...NO_FILTER, range: { from: 'd4', to: 'd2' }, values: { region: ['apac'] } }
+    expect(filterCells(g, f)).toEqual([3, 5, 7])
+    expect(JSON.parse(filterSelection(g, f)!)).toEqual({ region: ['apac'], day: ['d2', 'd3', 'd4'] })
   })
 })

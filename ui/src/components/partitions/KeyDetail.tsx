@@ -8,6 +8,7 @@ import { artifactSchema } from '@/lib/artifactSchema'
 import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
 import { formatBytes, previewRows, truncateCell } from '@/lib/nodeDetail'
+import { plural } from '@/lib/plural'
 import { KEY_STATE_GLYPH, KEY_STATE_MEANING, KEY_STATE_WORD, needsRun, type KeyState } from '@/lib/partitionGrid'
 import type { KeyArtifact, PartitionKeyDetail } from '@/lib/types'
 
@@ -84,66 +85,70 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
       {error && !detail && <p className="barca-note">Couldn't load this key: {error.message}</p>}
       {detail && state && (
         <>
-          <Section title="State">
-            <p className="barca-note">{KEY_STATE_MEANING[state]}</p>
-            {state === 'failed' && latest?.error && <ErrorLine error={latest.error.split('\n')[0]!} />}
-            {latest && (
+          {/* What is wrong with it, first and loud; otherwise what its state means. */}
+          {state === 'failed' && latest?.error ? (
+            <div className="barca-keydetail-error" role="alert">
+              <ErrorLine error={latest.error} />
               <p className="barca-cell-sub">
-                Last attempt <Absolute at={latest.created_at} />
-                {latest.elapsed_seconds !== null && ` · ${formatSeconds(latest.elapsed_seconds)}`}
+                Failed <Absolute at={latest.created_at} />
                 {latest.run_id && <> · <Link to={`/runs?run=${encodeURIComponent(latest.run_id)}`}>open the run</Link></>}
               </p>
-            )}
-            {onRun && needsRun(state) && (
-              <div className="barca-keydetail-actions">
-                <Button size="sm" iconLeft={<Play size={11} />} loading={running} onClick={onRun}>
-                  Run this key
-                </Button>
-              </div>
-            )}
-          </Section>
-          {detail.chain.length > 1 && (
-            <Section title="Along the chain">
-              <ol className="barca-keychain">
-                {detail.chain.map((c) => {
-                  const s = STATE[c.state] ?? null
-                  return (
-                    <li key={c.id} aria-current={c.id === node ? 'true' : undefined}>
-                      {s ? <StatusGlyph glyph={KEY_STATE_GLYPH[s]} size={12} /> : <StatusGlyph glyph="unknown" size={12} />}
-                      {c.id === node ? <b>{shortName(c.id)}</b> : <Link to={hrefFor(c.id)}>{shortName(c.id)}</Link>}
-                      <span className="barca-cell-sub">{s ? KEY_STATE_WORD[s] : 'keys not known yet'}</span>
-                    </li>
-                  )
-                })}
-              </ol>
-            </Section>
+            </div>
+          ) : (
+            <p className="barca-keydetail-meaning">
+              {KEY_STATE_MEANING[state]}
+              {latest && <span className="barca-cell-sub"> Last attempt <Absolute at={latest.created_at} />{latest.run_id && <> · <Link to={`/runs?run=${encodeURIComponent(latest.run_id)}`}>run</Link></>}</span>}
+            </p>
           )}
-          <Section title="Output">
-            {detail.output ? <Shape artifact={detail.output} label={`${keyName} output`} /> : <p className="barca-schema-empty">No successful result for this key yet.</p>}
-          </Section>
+          {onRun && needsRun(state) && (
+            <div className="barca-keydetail-actions">
+              <Button size="sm" iconLeft={<Play size={11} />} loading={running} onClick={onRun}>Run this key</Button>
+            </div>
+          )}
+          {/* The same key along its chain: where it broke, upstream first. */}
+          {detail.chain.length > 1 && (
+            <ol className="barca-keychain" aria-label="This key along its chain">
+              {detail.chain.map((c, i) => {
+                const s = STATE[c.state] ?? null
+                return (
+                  <li key={c.id} aria-current={c.id === node ? 'true' : undefined}>
+                    {i > 0 && <span aria-hidden className="barca-keys-chain-arrow">→</span>}
+                    {s ? <StatusGlyph glyph={KEY_STATE_GLYPH[s]} size={12} label={KEY_STATE_WORD[s]} /> : <StatusGlyph glyph="unknown" size={12} label="keys not known yet" />}
+                    {c.id === node ? <b>{shortName(c.id)}</b> : <Link to={hrefFor(c.id)}>{shortName(c.id)}</Link>}
+                  </li>
+                )
+              })}
+            </ol>
+          )}
+          {/* What it read comes before what it wrote: for a failed key, the input is the evidence. */}
           {detail.inputs.length > 0 && (
-            <Section title="Inputs">
+            <Section title={detail.inputs.length === 1 ? `Input · ${shortName(detail.inputs[0]!.id)}` : 'Inputs'}>
               {detail.inputs.map((input) => (
                 <div key={input.step} className="barca-keydetail-input">
-                  <KeyValue label={shortName(input.id)}><code className="barca-cell-sub">{input.step === input.id ? 'whole result' : 'same key'}</code></KeyValue>
+                  {detail.inputs.length > 1 && <KeyValue label={shortName(input.id)}><code className="barca-cell-sub">{input.step === input.id ? 'whole result' : 'same key'}</code></KeyValue>}
                   <Shape artifact={input} label={`${shortName(input.id)} for ${keyName}`} />
                 </div>
               ))}
             </Section>
           )}
-          <Section title="Attempts">
-            {detail.attempts.length === 0 && <p className="barca-note">No attempt recorded.</p>}
-            <ul className="barca-keyattempts">
-              {detail.attempts.map((a, i) => (
-                <li key={i}>
-                  <StatusGlyph glyph={a.status === 'success' ? 'fresh' : 'failed'} size={12} />
-                  <Absolute at={a.created_at} />
-                  {a.elapsed_seconds !== null && <span className="barca-cell-sub">{formatSeconds(a.elapsed_seconds)}</span>}
-                  {a.run_id && <Link className="barca-cell-sub" to={`/runs?run=${encodeURIComponent(a.run_id)}`}>run</Link>}
-                </li>
-              ))}
-            </ul>
+          <Section title="Output">
+            {detail.output ? <Shape artifact={detail.output} label={`${keyName} output`} /> : <p className="barca-schema-empty">No successful result for this key yet.</p>}
           </Section>
+          {detail.attempts.length > 0 && (
+            <details className="barca-keydetail-attempts">
+              <summary>{plural(detail.attempts.length, 'attempt')}</summary>
+              <ul className="barca-keyattempts">
+                {detail.attempts.map((a, i) => (
+                  <li key={i}>
+                    <StatusGlyph glyph={a.status === 'success' ? 'fresh' : 'failed'} size={12} />
+                    <Absolute at={a.created_at} />
+                    {a.elapsed_seconds !== null && <span className="barca-cell-sub">{formatSeconds(a.elapsed_seconds)}</span>}
+                    {a.run_id && <Link className="barca-cell-sub" to={`/runs?run=${encodeURIComponent(a.run_id)}`}>run</Link>}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </>
       )}
     </SidePanel>
