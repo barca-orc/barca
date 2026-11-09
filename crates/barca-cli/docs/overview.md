@@ -81,7 +81,9 @@ Getting work done:
 - `barca docs tasks` — tasks and `barca run`
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs batched-partitions` — `batch=`: one call of a partitioned step computes many keys
-- `barca docs cache` — what is cached, artifacts, `--refresh` / `--refresh-all`, environments
+- `barca docs cache` — what is cached and what reruns after a change, cache states, environments
+- `barca docs refresh` — forcing a recompute: `--refresh`, `--refresh-all`, `--no-cascade`, `--dry-run`
+- `barca docs external-data` — data that changes in place (a `@sensor`), and `@asset(cutoff=True)`
 - `barca docs artifacts` — what a run reports per step, byte checks, and a cached result whose file
   is gone
 - `barca docs hashing` — which code and decorator arguments a run hash follows, and what it does not

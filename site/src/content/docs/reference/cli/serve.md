@@ -5,7 +5,7 @@ description: "Run the HTTP API, the cron scheduler and the web UI."
 
 Start an HTTP server with a JSON API, the cron scheduler and the web UI at `/ui/`. It binds to
 `127.0.0.1` by default; `--host 0.0.0.0` listens on every interface. Authentication is off
-unless you pass `--auth token` ([project tokens](/reference/server-mode/#opt-in-project-tokens)). See [Server API](/reference/server-api/) for the
+unless you pass `--auth token` ([project tokens](/serve/#requiring-a-token-authentication-login)). See [Server API](/reference/server-api/) for the
 endpoints and [Deploying](/deploying/) for running it behind nginx.
 
 ## Usage
@@ -38,7 +38,7 @@ barca serve pipeline.py --run-timeout 3600   # stop a run that takes longer than
 | `--max-runs <N>` | `[server] max_runs`, else one per core | How many runs execute at once; the others wait in the run queue, in order (experimental). |
 | `--capacity <N>` | `[server] capacity`, else none | The most the `weight=` of the running steps of every run may add up to, admitted first come, first served across runs; `GET /queue` shows it (experimental). |
 | `--run-timeout <SECONDS>` | `[server] run_timeout_seconds`, else none | Stop a run that takes longer, recorded as an error naming the setting. `0` is no limit; `Schedule(..., timeout_seconds=N)` wins for its ticks. |
-| `--auth <off\|token>` | `[server] auth`, else `off` | `token` requires a project bearer token on every API request ([project tokens](/reference/server-mode/#opt-in-project-tokens)); `BARCA_SERVER_AUTH` sets it too. |
+| `--auth <off\|token>` | `[server] auth`, else `off` | `token` requires a project bearer token on every API request ([project tokens](/serve/#requiring-a-token-authentication-login)); `BARCA_SERVER_AUTH` sets it too. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
 
 Every accepted run is recorded in the run queue before the server answers, and a restart resumes

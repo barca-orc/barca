@@ -59,8 +59,18 @@ pub const TOPICS: &[Topic] = &[
     ),
     topic!(
         "cache",
-        "Run hashes, artifacts, --refresh / --refresh-all, environments",
+        "Run hashes, what reruns after a change, cache states, incremental runs, environments",
         "cache.md"
+    ),
+    topic!(
+        "refresh",
+        "Forcing a recompute: --refresh, --refresh-all, --no-cascade, Manual upstreams, --dry-run",
+        "refresh.md"
+    ),
+    topic!(
+        "external-data",
+        "Data that changes in place (read it through a @sensor) and @asset(cutoff=True)",
+        "external-data.md"
     ),
     topic!(
         "artifacts",

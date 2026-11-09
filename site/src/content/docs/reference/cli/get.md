@@ -9,8 +9,9 @@ cache.
 
 ## Usage
 
-```txt wrap
-barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
+```txt wrap=false
+barca get [target[,target...]] [file.py|dir/ ...]
+          [--refresh a,b [--no-cascade] | --refresh-all]
 ```
 
 ## Flags

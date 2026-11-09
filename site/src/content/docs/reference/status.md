@@ -1,5 +1,5 @@
 ---
-title: "Status"
+title: "barca status"
 description: "barca status: every node's cache state and why, its last run, its artifact's shape, --problems and --state."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/status.md
 ---
@@ -152,7 +152,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 - A node that reads a `@sensor` is judged by the sensor's last recorded output: status runs
   nothing, so it assumes the sensor returns the same value next time, and `detail` says so. If
   the sensor recorded a new value since the node last ran (for example a scheduled sensor), the
-  node shows as `stale` ([`barca docs cache`](/reference/cache/), "External data that changes in place").
+  node shows as `stale` ([`barca docs external-data`](/reference/external-data/), "External data that changes in place").
 - A `partial` node's `partitions` has `changed` (experimental) when a key of `missing_keys`
   ran before: key -> what changed in its run hash, in the entries above. A new key has no
   entry. With keys from a dict sensor, `{"retailer=r2": ["value pipeline.py:versions"]}` says

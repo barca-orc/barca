@@ -233,7 +233,7 @@ uv run barca history --server http://barca.internal:8274
 Replace the URL with your server's address. These commands execute the **server's copy of
 the code**, print the result here, and keep the run history there. They do not upload local
 edits. The web UI is at the same address. Authentication is off by default: turn on
-[project tokens](/reference/server-mode/#opt-in-project-tokens), or keep the server on a private network or behind an authenticating proxy.
+[project tokens](/serve/#requiring-a-token-authentication-login), or keep the server on a private network or behind an authenticating proxy.
 
 Remote execution needs no shared bucket. If you also want laptops to compute locally
 against the same cache and history, follow [Share Results With a Team](/team-server/).

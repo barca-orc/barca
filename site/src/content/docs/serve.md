@@ -1,5 +1,5 @@
 ---
-title: Running barca serve
+title: "Running barca serve: Start Here"
 description: "What barca serve does, and which page answers which question: schedules, sharing results with a team, deploying, operating, the HTTP API and alerts."
 ---
 
@@ -25,7 +25,7 @@ Authentication is off by default ("Requiring a token" below).
 | Start runs and read results from code, over HTTP or with the Python client | [Server API](/reference/server-api/) |
 | Post to Slack when a job starts failing or recovers | [Slack Alerts](/reference/slack/) |
 | Send traces and metrics to Datadog | [Telemetry](/reference/telemetry/) |
-| Require tokens, and connect the web UI and laptops with them | [Server Mode: project tokens](/reference/server-mode/#opt-in-project-tokens) |
+| Require tokens, and connect the web UI and laptops with them | [Requiring a token](#requiring-a-token-authentication-login), below |
 | See what the web UI shows and does | [The Web UI](/web-ui/) |
 | See every flag of the command | [`barca serve`](/reference/cli/serve/) |
 

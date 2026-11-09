@@ -184,7 +184,7 @@ def asset[F: Callable[..., Any]](
     `cutoff=True` makes what reads the asset depend on the bytes it writes instead of
     on its run hash: when it reruns and writes the same bytes, its consumers stay
     cached. Its consumers are decided after it runs. A literal `True` or `False`; not
-    part of its own run hash. Experimental (see `barca docs cache`, "Early cutoff").
+    part of its own run hash. Experimental (see `barca docs external-data`, "Early cutoff").
 
     `batch` (on a partitioned asset) groups the keys that need to run into fewer calls:
     `batch=20` (at most 20 keys per call), `batch="all"`, `batches([...])` or

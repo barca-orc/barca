@@ -971,7 +971,9 @@ def test_cache_topic_external_data_sensor_example(binary, topics, tmp_path):
     """The etag sensor re-runs its consumers when the data changes in place, and only then; a
     dry run predicts from the sensor's last output, and is `unknown` before it ever ran (#183)."""
     (code,) = (
-        b for b in blocks(topics["cache"], "python") if "def orders_etag" in b and "@asset" in b
+        b
+        for b in blocks(topics["external-data"], "python")
+        if "def orders_etag" in b and "@asset" in b
     )
     (tmp_path / "pipeline.py").write_text(code)
     (tmp_path / "orders.csv").write_text("id,total\n1,10\n")
@@ -1007,14 +1009,14 @@ def test_cache_topic_external_data_sensor_example(binary, topics, tmp_path):
     assert by_name(third)["silver"]["status"] == "ran"
 
     # The trap block: a value that changes every run, flagged in the text.
-    (trap,) = (b for b in blocks(topics["cache"], "python") if "checked_at" in b)
+    (trap,) = (b for b in blocks(topics["external-data"], "python") if "checked_at" in b)
     assert "re-runs bronze every time" in trap
 
 
 def test_cache_topic_cutoff_example(binary, topics, tmp_path):
     """`@asset(cutoff=True)`: a rerun that writes the same bytes leaves every key below it
     cached; an edit to it makes what reads it `unknown` in a dry run (#628)."""
-    (code,) = (b for b in blocks(topics["cache"], "python") if "cutoff=True" in b)
+    (code,) = (b for b in blocks(topics["external-data"], "python") if "cutoff=True" in b)
     (tmp_path / "pipeline.py").write_text(code)
     (tmp_path / "rate.txt").write_text("0.91")
 

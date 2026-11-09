@@ -27,7 +27,7 @@ The asset's code and inputs are the same, so its run hash is the same and the ol
 served. Barca does not read the data a function opens in its own body. Put a `@sensor` in front
 of it that returns something identifying the current version of the data (an etag, a
 last-modified time, a row count) and make the asset read the sensor. It then reruns exactly when
-that value changes. See [External data that changes in place](/reference/cache/#external-data-that-changes-in-place)
+that value changes. See [External data that changes in place](/reference/external-data/#external-data-that-changes-in-place)
 and [Sensors](/guide/#4-sensors-data-from-outside).
 
 To recompute once by hand: `barca get revenue --refresh revenue`.
@@ -53,7 +53,7 @@ are: `inputs=`, `serializer=`, the dimension names and `partitions_from` source 
 
 What reads an asset folds in that asset's run hash, so when it reruns, everything below it reruns
 too, even if it wrote the same bytes. Mark it `@asset(cutoff=True)` (experimental) and what reads
-it depends on the bytes it wrote instead. See [Early cutoff](/reference/cache/#early-cutoff-assetcutofftrue).
+it depends on the bytes it wrote instead. See [Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue).
 
 ## A step reran although I did not touch it
 
@@ -77,7 +77,7 @@ are still served from cache. Use `@asset` for a result you want reused. See
 for**. With `--no-cascade`, or for an asset outside that target's dependencies, the downstream
 asset keeps its old result, and barca prints
 `warning: '…' was served from cache but depends on refreshed '…'`. Refresh again with a target
-below it, or name it in `--refresh`. See [Exactly what --refresh does](/reference/cache/#exactly-what---refresh-does).
+below it, or name it in `--refresh`. See [Exactly what --refresh does](/reference/refresh/#exactly-what---refresh-does).
 
 ## Nothing recomputes an asset, even with `--refresh`
 

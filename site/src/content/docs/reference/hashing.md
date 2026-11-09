@@ -195,7 +195,7 @@ these names keep their selective cones. The exact rules are in `specs/behavior/c
 ## Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`
-([`barca docs cache`](/reference/cache/), "Forcing a recompute"):
+([`barca docs refresh`](/reference/refresh/), "Forcing a recompute"):
 
 - installed packages and the standard library: after upgrading a package, recompute;
 - modules outside the project root (`../shared/`), and modules only a custom `sys.path` or
@@ -206,7 +206,7 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - names defined dynamically through runtime namespace mutation, and changes to the import path
   made by your code;
 - data your function reads that is not an input: a file, a table, an API. Bring it in through a
-  sensor ([`barca docs cache`](/reference/cache/), "External data that changes in place").
+  sensor ([`barca docs external-data`](/reference/external-data/), "External data that changes in place").
 
 ## A helper module that does not parse
 

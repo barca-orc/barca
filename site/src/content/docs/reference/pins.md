@@ -1,5 +1,5 @@
 ---
-title: "Pinning and Rollback"
+title: "barca pin: Pinning and Rollback"
 description: "barca pin and unpin: roll an asset back to an earlier materialization, held for every run until unpinned."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/pins.md
 ---
