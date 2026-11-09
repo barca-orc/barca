@@ -20,7 +20,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # What runs where. The required checks are `CI / test` and `CI / backends`, the two aggregator
-# jobs at the end of each group below; they report on every event. Three tiers:
+# jobs at the end of each group below; they report on every event. Four tiers:
+# UI-only diffs (ui/** plus optional CHANGELOG.md) run checks, build and ui on PRs
+# and merge groups. Mixed changes retain the normal tiers; releases/ci-full override.
 #
 # - fast (a pull request): `checks` (the CHANGELOG and specification checks, the prek hooks:
 #   ruff, ruff format, ty, cargo fmt, version sync, uv lock), `clippy`, `changes` only, so a
@@ -53,6 +55,7 @@ env:
     import json, os, sys
     tier = os.environ["TIER"]
     runs = {
+        "ui": {"checks", "changes", "build", "ui"},
         "fast": {"checks", "clippy", "changes"},
         "merge": {"checks", "clippy", "changes", "rust-tests", "build", "python", "perf"},
     }.get(tier)  # None: full, every job runs
@@ -164,6 +167,8 @@ jobs:
           npm run build
 
   clippy:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.tier != 'ui' }}
     runs-on: depot-ubuntu-24.04-4
     # A hung step fails the job instead of holding it for hours (#637).
     timeout-minutes: 30
@@ -199,8 +204,9 @@ jobs:
           key: ${{ steps.rust-cache.outputs.key }}
 
   rust-tests:
+    needs: [changes]
     # Tier merge and up.
-    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) }}
+    if: ${{ needs.changes.outputs.tier == 'merge' || needs.changes.outputs.tier == 'full' }}
     runs-on: depot-ubuntu-24.04-8
     # See clippy (#637).
     timeout-minutes: 30
@@ -294,8 +300,8 @@ jobs:
     # The performance budgets of specs/behavior/performance.md ("Gates"): the trivial
     # pipeline's wall time, coordinator CPU and memory, and the incremental_dag native budgets,
     # against the wheel `build` makes. Under a minute. Tier merge and up.
-    needs: [build]
-    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) }}
+    needs: [build, changes]
+    if: ${{ needs.changes.outputs.tier == 'merge' || needs.changes.outputs.tier == 'full' }}
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 10
     steps:
@@ -345,10 +351,13 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Decide which optional parts run
         id: decide
         env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           CI_HEAD_REF: ${{ github.head_ref }}
           CI_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         # The tier and the reasons go to the check's summary as well as the log.
@@ -394,8 +403,8 @@ jobs:
     needs: [changes, build]
     # The web UI's own checks, then the Playwright suites (ui/e2e, ui/e2e-auth) against the
     # wheel `build` makes. The build job builds `ui/dist` (or restores it) on its own.
-    # Tier full only.
-    if: ${{ needs.changes.outputs.tier == 'full' }}
+    # UI-only changes and full runs.
+    if: ${{ needs.changes.outputs.tier == 'full' || needs.changes.outputs.tier == 'ui' }}
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     steps:
@@ -442,11 +451,12 @@ jobs:
           if-no-files-found: ignore
 
   build:
+    needs: [changes]
     # Builds the wheel once, for both checks: the integration tests, the Python shards and
-    # the proxy tests. It does not wait for `changes`. The wheel is built with the `fast`
+    # the proxy tests. It waits for scope classification. The wheel is built with the `fast`
     # profile (no whole-program LTO); release wheels (release workflow) keep `--release`.
     # Tier merge and up.
-    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (startsWith(github.head_ref, 'release/v') || contains(github.event.pull_request.labels.*.name, 'ci-full'))) }}
+    if: ${{ needs.changes.outputs.tier != 'fast' }}
     runs-on: depot-ubuntu-24.04-16
     # See clippy (#637).
     timeout-minutes: 40
@@ -544,6 +554,7 @@ jobs:
         run: bash tests/integration/test_server_mode.sh
 
   python:
+    if: ${{ needs.changes.outputs.tier == 'merge' || needs.changes.outputs.tier == 'full' }}
     # Merge tier: one job, the quick subset in scripts/fast-tests.txt. Full tier: the suite
     # split by file into shards balanced by recorded duration (scripts/ci-shards.py), plus
     # the duckdb 1.x rerun.
