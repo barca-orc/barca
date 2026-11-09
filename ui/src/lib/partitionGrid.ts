@@ -444,3 +444,11 @@ export function issueSelection(g: Grid, issue: IssueGroup): string {
 export function issueFilter(issue: IssueGroup): Pick<KeyFilter, 'states' | 'error'> {
   return issue.kind === 'error' ? { states: ['failed'], error: issue.error } : { states: [issue.kind], error: null }
 }
+
+/** Exact rectangular selection only: never silently run a cross-product outside the view. */
+export function exactSelection(g: Grid, cells: readonly number[]): string | null {
+  if (cells.length === 0) return null
+  const values = g.dims.map((d, i) => [...new Set(cells.map(cell => Math.floor(cell / g.strides[i]!) % d.values.length))].sort((a, b) => a - b))
+  if (values.reduce((n, v) => n * v.length, 1) !== cells.length) return null
+  return JSON.stringify(Object.fromEntries(g.dims.map((d, i) => [d.name, values[i]!.map(v => d.values[v]!)])))
+}
