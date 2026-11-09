@@ -18,7 +18,7 @@
 //!
 //! **Narrowing.** Each entry of [`RULES`] is independent: to make an argument count, change its
 //! `counts` to `Counts::Yes`; to stop one counting, `Counts::No`; and change the same row of
-//! the table in `cache.md`. No other code has to change. Either way every definition hash that
+//! the table in `hashing.md`. No other code has to change. Either way every definition hash that
 //! the argument appears in changes once.
 
 use ruff_python_ast::{self as ast, Expr, Number};
@@ -60,7 +60,7 @@ pub(crate) const UNKNOWN_ARGUMENT: &str = "any other argument";
 /// The `@unsafe` marker.
 pub(crate) const UNSAFE: &str = "@unsafe";
 
-/// The list of what counts. Mirrored exactly in `crates/barca-cli/docs/cache.md`.
+/// The list of what counts. Mirrored exactly in `crates/barca-cli/docs/hashing.md`.
 pub(crate) const RULES: &[Rule] = &[
     Rule {
         part: "inputs",
@@ -1143,15 +1143,15 @@ def f(a, b, c):
         assert_eq!(keyword_rules.len(), names.len(), "duplicate keyword rules");
     }
 
-    /// `barca docs cache` lists exactly [`RULES`]: the same parts, in the same order, with the
+    /// `barca docs hashing` lists exactly [`RULES`]: the same parts, in the same order, with the
     /// same answer and the same reason.
     #[test]
     fn the_manual_lists_exactly_these_rules() {
-        let manual = include_str!("../../barca-cli/docs/cache.md");
+        let manual = include_str!("../../barca-cli/docs/hashing.md");
         let section = manual
-            .split("#### Which decorator arguments count")
+            .split("## Which decorator arguments count")
             .nth(1)
-            .expect("cache.md has the section 'Which decorator arguments count'");
+            .expect("hashing.md has the section 'Which decorator arguments count'");
         let section = section.split("\n#").next().unwrap();
         let rows: Vec<Vec<String>> = section
             .lines()

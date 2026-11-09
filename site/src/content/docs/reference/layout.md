@@ -44,7 +44,7 @@ root. Barca changes into the root before doing anything, so:
 - steps run with the root as their working directory, so `Path("data.txt")` inside a step means
   the root's `data.txt` wherever you invoke barca;
 - stderr says `barca: project root: <path>` whenever the root is not the current directory;
-- the project root is the boundary of the dependency cone ([`barca docs cache`](/reference/cache/), "Not followed").
+- the project root is the boundary of the dependency cone ([`barca docs hashing`](/reference/hashing/), "Not followed").
 
 Put an empty `barca.toml` at the top of a project to anchor it. Barca records the metadata
 format version and refuses a database it does not support rather than rebuilding it

@@ -207,7 +207,7 @@ More on sensors: [Sensors and External Observations](/workflows/06-sensors-and-e
 Adding a key runs the new key, and no other key of that asset, however the keys are written.
 Removing a key or reordering them runs no key. The keys are not part of the function's
 definition, so editing them never changes the run hash of a key that is already cached
-(`barca docs cache`, "Which decorator arguments count").
+(`barca docs hashing`, "Which decorator arguments count").
 
 This section was run with 0.19 and re-run with 0.30.2. Up to 0.18 it held only when the keys
 were written outside the decorator: adding a key to a literal list inside it re-ran every key of

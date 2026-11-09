@@ -50,7 +50,7 @@ def summary(all_sales: list[dict]) -> dict:
   list runs no key. Downstream, a `partitions_from` consumer runs for the new key only, and a
   `collect` fan-in runs again whenever a key is added or removed. This is the same however the
   keys are written: a literal list, a module-level constant, any other expression, or
-  `partitions_from`. The keys are not part of the function's definition ([`barca docs cache`](/reference/cache/),
+  `partitions_from`. The keys are not part of the function's definition ([`barca docs hashing`](/reference/hashing/),
   "Which decorator arguments count"); renaming the dimension is, and re-runs every key. (Up to
   0.18, editing a list written inside the decorator re-ran every key.)
 - `partitions()`, `partitions_from()` and `collect()` take exactly one argument, by position. A

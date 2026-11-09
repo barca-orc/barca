@@ -4,7 +4,7 @@ Up to 0.18 the definition hash covered the decorators as text, so adding a parti
 inline list, a description, a comment or a reformat re-ran every key of the asset and everything
 downstream. These tests edit the pipeline file between runs, the way a user does, for every way
 of writing the keys, and for each decorator argument that counts and each that does not
-(`barca docs cache`, "Which decorator arguments count").
+(`barca docs hashing`, "Which decorator arguments count").
 """
 
 import json

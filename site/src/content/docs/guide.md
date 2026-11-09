@@ -182,14 +182,13 @@ three flags. Use it also after a change the run hash does not see: an
 installed package, a module outside the project root, or an environment variable the
 function reads without declaring it in `@asset(env=[...])`.
 
-More: [`barca docs cache`](/reference/cache/) has the complete list, under "Not followed".
+More: [`barca docs hashing`](/reference/hashing/) has the complete list, under "Not followed".
 
 The run hash covers the function and every project definition it uses, followed through
 imports, decorators, defaults and the other places Python can reach a helper. Where barca
 cannot tell statically which definition a name means (a module-level `if`, a star import), it
 includes more rather than less, so an edit nearby can re-run a step that did not need it. The
-exact rules are in `barca docs cache`, "What the definition covers" and "Followed
-conservatively".
+exact rules are in [`barca docs hashing`](/reference/hashing/), "Followed conservatively".
 
 ## 5. Tasks, and `get` versus `run`
 
