@@ -134,6 +134,7 @@ addEventListener('hashchange', markSection);`,
           label: 'Scheduling and Servers',
           collapsed: true,
           items: [
+            { slug: 'serve' },
             { slug: 'scheduling' },
             { slug: 'deploying' },
             { slug: 'reference/server-mode' },
