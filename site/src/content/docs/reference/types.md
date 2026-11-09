@@ -45,7 +45,7 @@ json and pickle artifacts ignore annotations.
 `pl.LazyFrame` or duckdb relation reads nothing up front: the query the step builds decides
 which columns and row groups are read when it runs. For a large upstream that a step filters,
 projects or aggregates, annotate the input as lazy (`barca docs big-inputs`). With a remote artifact store, a lazy input
-is read in place and only the byte ranges its query touches are fetched ([`barca docs remote`](/reference/remote-storage/)).
+is read in place and only the byte ranges its query touches are fetched ([Remote Storage](/reference/remote-storage/)).
 
 ```python
 import duckdb
@@ -87,7 +87,7 @@ To see the data:
 
 - `barca get orders pipeline.py -o value` prints the value; a table (parquet, CSV, a pickled
   DataFrame) prints as a list of row objects. `-o value --json` puts it in `final_output`.
-- `barca sql "select * from orders"` queries it ([`barca docs sql`](/reference/sql/)).
+- `barca sql "select * from orders"` queries it ([barca sql](/reference/sql/)).
 - The Python API deserializes for you: `import barca; barca.get("orders", "pipeline.py")`
   returns a pandas `DataFrame` for parquet.
 - Or read the `path` yourself (`duckdb.sql("select * from '<path>'")`, or
@@ -139,7 +139,7 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
 - Everything is materialized between steps. To cache several results from one computation,
   define several assets or return the one you want cached.
 - duckdb 1.x and 2.x are both supported; what a pipeline must change for duckdb 2:
-  [`barca docs duckdb`](/reference/duckdb/).
+  [DuckDB Versions](/reference/duckdb/).
 
 ## CSV outputs
 
@@ -153,7 +153,7 @@ A dataset sink (`@sink("exports/orders/", partition_by=["order_date"])`, a path 
 `/`) is written by the library that made the returned value: DuckDB writes a relation
 (streaming, nothing loaded into Python; `rows_per_file=` and json stream Arrow batches to
 pyarrow), polars writes a polars frame, and pyarrow writes a pandas frame or an Arrow table. All
-three produce the same Hive layout and file names ([`barca docs sinks`](/reference/sinks/)).
+three produce the same Hive layout and file names ([Sinks](/reference/sinks/)).
 
 Consuming parameter annotations select the CSV reader using the table above. CSV
 readers infer types: indexes, exact dtypes, null/empty-string distinctions and nested
@@ -175,7 +175,7 @@ def orders() -> pd.DataFrame:
 
 The CSV boundary is specified in `specs/interfaces/artifact-formats.md`.
 
-See also: `barca docs big-inputs`, [`barca docs duckdb`](/reference/duckdb/), [`barca docs cache`](/reference/cache/), `barca docs examples/duckdb`.
+See also: `barca docs big-inputs`, [DuckDB Versions](/reference/duckdb/), [The Cache](/reference/cache/), `barca docs examples/duckdb`.
 
 ---
 

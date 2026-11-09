@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/exte
 
 <!-- Generated from crates/barca-cli/docs/external-data.md (barca docs external-data). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-Barca reruns a step when its run hash changes ([`barca docs cache`](/reference/cache/)). Two cases need more than the
+Barca reruns a step when its run hash changes ([The Cache](/reference/cache/)). Two cases need more than the
 hash: data that changes in place under the same path or table, which a `@sensor` makes visible,
 and a step whose rerun often writes the same bytes, where `@asset(cutoff=True)` keeps everything
 below it cached.
@@ -50,7 +50,7 @@ barca get silver pipeline.py     # after orders.csv changes: a new etag, bronze 
 
 How it works:
 
-- A sensor always runs. Its output is serialized like any other ([`barca docs types`](/reference/types/)), and the
+- A sensor always runs. Its output is serialized like any other ([Output Formats and Types](/reference/types/)), and the
   SHA-256 of those bytes is folded into the run hash of every asset that reads the sensor
   directly. Everything downstream of those assets changes with them, through their run hashes.
   Assets that do not depend on the sensor are not affected.
@@ -58,7 +58,7 @@ How it works:
   reaches, and is part of its consumers' run hashes next to the hash of its output. Editing
   the sensor's function re-runs the assets that read it, even when it returns the same value.
   Editing its `freshness=`, `description=` or another decorator argument that does not count
-  ([`barca docs hashing`](/reference/hashing/), "Which decorator arguments count") re-runs nothing.
+  ([The Run Hash: Which decorator arguments count](/reference/hashing/#which-decorator-arguments-count)) re-runs nothing.
 - The same code and the same output give the same run hash, so the consumer is served from
   cache. Going back to an earlier output (an etag that was current before) serves the
   materialization made then.
@@ -66,11 +66,11 @@ How it works:
   always uses the value the sensor returned in this run.
 - These examples return a value for content-based comparison. An explicit `False`
   retains the previous observation; `True` advances a separate freshness revision even
-  without a value. `(changed, value)` also supplies data ([`barca docs assets`](/reference/assets/), "Sensors").
+  without a value. `(changed, value)` also supplies data ([Assets, Sensors and Inputs: Sensors](/reference/assets/#sensors)).
 - A partitioned asset that reads a sensor re-runs every key when the sensor's output changes.
   To re-run only the keys whose data changed, let the sensor return a dict of key -> version
   and take the keys from it with `partitions_from(sensor)`: each key then folds in its own
-  value only ([`barca docs partitions`](/reference/partitions/), "Updating only what changed, across many partitions").
+  value only ([Partitions: Updating only what changed, across many partitions](/reference/partitions/#updating-only-what-changed-across-many-partitions)).
 - `--refresh` (with its cascade), `--no-cascade` and `--refresh-all` work on assets that read a
   sensor as on any other, on `get` and `run`.
 
@@ -134,7 +134,7 @@ barca get billed pipeline.py --dry-run    # after an edit to rates: billed is un
 How it works:
 
 - **What is hashed: the serialized bytes.** Every materialization already records the SHA-256 of
-  the artifact file it wrote (`content_hash` in `barca status --json`, [`barca docs artifacts`](/reference/artifacts/), "Recompute byte checks"
+  the artifact file it wrote (`content_hash` in `barca status --json`, [Run Reports and Missing Artifacts: Recompute byte checks](/reference/artifacts/#recompute-byte-checks)
   below). A consumer folds in that digest and the key it came from in place of the cutoff
   asset's run hash; nothing else is computed. The same value always gives the same bytes for
   `json` and `pickle`, and for `parquet` from pandas, polars, pyarrow and DuckDB with the same
@@ -150,12 +150,12 @@ How it works:
   reads; a `collect()` fan-in reads every key's bytes, by key.
 - **A dict `partitions_from` source.** An asset that returns `{key: value}` for
   `partitions_from(...)` with `cutoff=True` gives each key its own value only, not the source's
-  run hash, as a sensor source does ([`barca docs partitions`](/reference/partitions/), "Updating only what changed"):
+  run hash, as a sensor source does ([Partitions: Updating only what changed](/reference/partitions/#updating-only-what-changed-across-many-partitions)):
   when it reruns, only the keys whose value changed run.
 - **Only the cutoff asset's bytes stand in for it.** What reads it still reruns when its own
   code, its other inputs or its declared env change. Its code does not reach its consumers
   another way: a consumer's parameter named after it (`def billed(customer, rates)`) counts as
-  a use of the module-level name ([`barca docs hashing`](/reference/hashing/), "What counts as a use"), which for a
+  a use of the module-level name ([The Run Hash: What counts as a use](/reference/hashing/#what-counts-as-a-use)), which for a
   cutoff asset adds a constant marker, not its code. Calling a cutoff asset as a plain function
   from another step is not supported (read it as an input).
 - **`cutoff` itself does not count in the asset's run hash**: turning it on or off does not
@@ -167,10 +167,9 @@ How it works:
   runs only if it writes different bytes`). When the cutoff asset itself is cached, its
   recorded digest decides, and the prediction is exact. For a partitioned consumer the whole
   step is `unknown`, also when only some keys of a partitioned cutoff asset would run.
-- **`--refresh`** of a cutoff asset recomputes it; its cascade stops there ([`barca docs refresh`](/reference/refresh/), "Exactly what
-  `--refresh` does"). `--refresh-all` recomputes everything. `--partition` narrows as
+- **`--refresh`** of a cutoff asset recomputes it; its cascade stops there ([Forcing a Recompute: Exactly what `--refresh` does](/reference/refresh/#exactly-what---refresh-does)). `--refresh-all` recomputes everything. `--partition` narrows as
   usual.
-- **With a server** ([`barca docs server-mode`](/reference/server-mode/)) the ledger is asked for a consumer's run hash in
+- **With a server** ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) the ledger is asked for a consumer's run hash in
   the phase that decides it, once the cutoff asset ran or was found cached; the ledger rows
   carry the digest, so a laptop and the server compute the same consumer hashes.
 - **Sinks** are written when their step runs. A consumer kept cached by cutoff does not write
@@ -178,11 +177,11 @@ How it works:
 - **A nondeterministic asset** (a timestamp, a random sample, rows in no fixed order) writes
   new bytes on every rerun, so `cutoff=True` saves nothing on it, though it is legal. Barca does
   not warn when you set it; a rerun under the same run hash that writes other bytes gets the
-  usual warning ([`barca docs artifacts`](/reference/artifacts/), "Recompute byte checks"), unless the asset also says
+  usual warning ([Run Reports and Missing Artifacts: Recompute byte checks](/reference/artifacts/#recompute-byte-checks)), unless the asset also says
   `deterministic=False`. Either way what reads it reruns whenever its bytes differ, so it is
   never served stale. Sort rows before you return them.
 - Only on `@asset`. A sensor's output already counts below it; a task is never served from
-  cache. Experimental ([`barca docs contract`](/reference/cli-contract/)).
+  cache. Experimental ([CLI Contract](/reference/cli-contract/)).
 
 Why opt-in, not automatic for small outputs: turning cutoff on reruns everything below the
 asset once, so turning it on for every asset in an upgrade would rerun every pipeline; and every
@@ -191,7 +190,7 @@ Whether an output is small is only known after it ran, so an automatic rule woul
 plan and the dry run from run to run. You choose where the extra phase pays for itself: a global
 step read by many keys, or one whose inputs change more often than its result.
 
-See also: [`barca docs cache`](/reference/cache/), [`barca docs assets`](/reference/assets/) ("Sensors"), [`barca docs hashing`](/reference/hashing/), [`barca docs status`](/reference/status/).
+See also: [The Cache](/reference/cache/), [Assets, Sensors and Inputs: Sensors](/reference/assets/#sensors), [The Run Hash](/reference/hashing/), [barca status](/reference/status/).
 
 ---
 

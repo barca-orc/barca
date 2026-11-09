@@ -12,9 +12,9 @@ without any flag. List-shaped output is bounded by default (see "Bounded output"
 
 The complete surface (every command and flag, environment variable, exit code, JSON schema and
 `--agent` line), each marked stable or experimental, and the rules for changing it are in
-[`barca docs contract`](/reference/cli-contract/). It is checked against the real CLI in CI, so it matches this version.
+[CLI Contract](/reference/cli-contract/). It is checked against the real CLI in CI, so it matches this version.
 
-For a short version to load once, read [`barca docs skill`](/reference/agent-skill/): the same rules in about 1500 tokens,
+For a short version to load once, read [Agent Skill](/reference/agent-skill/): the same rules in about 1500 tokens,
 in the Agent Skills format (it is `SKILL.md` at the repository root). To install it as a skill,
 save it as a file, for example `barca docs skill > .claude/skills/barca/SKILL.md`.
 
@@ -48,7 +48,7 @@ BARCA_OUTPUT=json barca get total pipeline.py
 
 ## Output contract and errors
 
-The contract is written down once, in [`barca docs contract`](/reference/cli-contract/): stdout carries the result (one JSON
+The contract is written down once, in [CLI Contract](/reference/cli-contract/): stdout carries the result (one JSON
 object for `get`/`run`, the plan for `plan`, JSON for `list`/`status`/`history`/`stats` whenever
 the rule above picks JSON); stderr carries progress, warnings, your steps' prints in non-JSON
 modes and errors; the exit codes are its generated "Exit codes" table (0 success, 1
@@ -69,8 +69,7 @@ print one result line on stdout (`"status": "failed"`, `failed_node`, `error`, `
 0 downstream steps skipped (exit 1)`. From Python, `barca.BarcaError` carries the envelope as
 attributes. A worker that dies (the OOM killer, a segfault, `os._exit()`) fails its step with
 `kind` `step_failed` and an error naming how the process ended (`exited with SIGKILL (possibly
-the OOM killer)`); there is no traceback, and `retries=` applies ([`barca docs contract`](/reference/cli-contract/), "Error
-envelope"; [`barca docs assets`](/reference/assets/), "Heavy steps" for giving heavy steps a `weight=`).
+the OOM killer)`); there is no traceback, and `retries=` applies ([CLI Contract: Error envelope](/reference/cli-contract/#error-envelope-stable); [Assets, Sensors and Inputs: Heavy steps](/reference/assets/#heavy-steps-weight) for giving heavy steps a `weight=`).
 
 ### What `barca get` returns: paths by default
 
@@ -84,7 +83,7 @@ one per partition key. Read the file, query it with `barca sql`, or ask for the 
 | `barca get total pipeline.py -o path` | only the path, one per line (for `xargs`, `$(...)`) |
 | `barca get total pipeline.py -o value` | only the value, pretty-printed |
 | `barca get total pipeline.py -o value --json` | the JSON result with the value in `final_output` |
-| `barca get total pipeline.py -o url` | a signed HTTPS link per result in a cloud store (experimental; [`barca docs remote`](/reference/remote-storage/)) |
+| `barca get total pipeline.py -o url` | a signed HTTPS link per result in a cloud store (experimental; [Remote Storage](/reference/remote-storage/)) |
 
 `-o path` is the default spelled out: with `--json` it prints the default JSON. `-o value` reads
 json, parquet, CSV and pickle with the reader `barca.get()` uses; a table becomes a list of row
@@ -109,7 +108,7 @@ an object keyed by partition key (`dim=value`, dimensions sorted and joined with
 Past 1000 keys, unless `--partition` selected them, `final_output` is
 `{"_barca_partitions": {"keys", "computed", "cached", "outputs", "truncated", "hint"}}`: `outputs`
 holds only the keys this run computed (a tick that changed one key of 200k lists one), and
-`--partition` names the keys whose paths you need ([`barca docs partitions`](/reference/partitions/), "Many keys").
+`--partition` names the keys whose paths you need ([Partitions: Many keys](/reference/partitions/#many-keys)).
 
 Under `-o value` each key maps to its value. `--partition region=emea,amer` selects keys across
 the whole run: every partitioned node with that dimension, upstream and downstream, computes only
@@ -177,7 +176,7 @@ barca run check_a,check_b pipeline.py --dry-run
 ## Parallel runs
 
 It is safe to run several `barca` commands in one project at the same time: they queue briefly
-on the metadata DB (see [`barca docs cache`](/reference/cache/)) instead of failing with a lock error.
+on the metadata DB (see [The Cache](/reference/cache/)) instead of failing with a lock error.
 
 ## Long-running steps
 
@@ -250,11 +249,11 @@ message: use the input, remove it from `inputs=`, or rename the parameter with a
 it is there for ordering only. Any of the three makes the warning go away; there is no flag or
 configuration key that turns it off. A name that appears inside a string in the body (SQL, a
 pandas `query` expression) counts as used. The list is the same on every run of the same command, cached or not, and never
-changes the exit code ([`barca docs assets`](/reference/assets/), "Unused inputs"; [`barca docs contract`](/reference/cli-contract/)).
+changes the exit code ([Assets, Sensors and Inputs: Unused inputs](/reference/assets/#unused-inputs); [CLI Contract](/reference/cli-contract/)).
 
 The array holds plan warnings only. What a run finds out while it runs is on the step it
 concerns: `steps[].warning`, and for a store copy that differs from its recorded hash the marker
-`steps[].artifact_mismatch` ([`barca docs remote`](/reference/remote-storage/), "Checking a local copy against the store").
+`steps[].artifact_mismatch` ([Remote Storage: Checking a local copy against the store](/reference/remote-storage/#checking-a-local-copy-against-the-store)).
 
 ## Environment variables
 
@@ -269,7 +268,7 @@ log records which inputs a run used:
 
 `<unset>` means the variable was not set; secret-looking names (`*_TOKEN`, `*_SECRET`, `*_KEY`,
 `*_PASSWORD`) show `<redacted>`. Values with spaces are double-quoted. Undeclared variables are
-invisible to barca ([`barca docs assets`](/reference/assets/)).
+invisible to barca ([Assets, Sensors and Inputs](/reference/assets/)).
 
 ## Refreshing: syntax and pitfalls
 
@@ -278,7 +277,7 @@ invisible to barca ([`barca docs assets`](/reference/assets/)).
 - Several assets are one comma-separated list: `--refresh a,b`. Never `--refresh a b`.
 - `--refresh a` re-runs `a` and every asset downstream of it in the target's cone (reason
   `refresh_cascade`). `--no-cascade` re-runs only what you name; cached downstream assets then
-  do not reflect the refresh and barca warns on stderr. Details: [`barca docs cache`](/reference/cache/).
+  do not reflect the refresh and barca warns on stderr. Details: [The Cache](/reference/cache/).
 - `--refresh-all` re-runs every asset in the cone. The deprecated `--no-cache` alias was
   removed in 0.24.0; it is a usage error (exit 2). Python uses `refresh_all=True`.
 - On `get` the target itself may be named (`barca get total pipeline.py --refresh total`).
@@ -287,7 +286,7 @@ invisible to barca ([`barca docs assets`](/reference/assets/)).
 ## Inspect before you run
 
 Preview any `get`/`run` with `--dry-run`: it says which steps would run, which come from cache,
-and why, without executing steps or recording a run ([`barca docs cache`](/reference/cache/)):
+and why, without executing steps or recording a run ([The Cache](/reference/cache/)):
 
 ```bash
 barca run report pipeline.py --dry-run --refresh src
@@ -296,7 +295,7 @@ barca run report pipeline.py --dry-run --refresh src
 One call answers "what is here and what state is it in": `barca status` gives, per node, its
 kind and inputs, its cache state with the reason (the same decision `--dry-run` makes), its last
 materialization, and the artifact's row count and columns, without executing steps
-([`barca docs status`](/reference/status/)):
+([barca status](/reference/status/)):
 
 ```bash
 barca status pipeline.py --json                 # every node: cache state, last run, shape
@@ -329,12 +328,12 @@ barca gc --json                     # evict now, down to 80% of the limit
 For an old or container-owned run that still reads `running` after you verified it stopped,
 use `barca history --reconcile RUN_ID --json`. It records `interrupted`, prints just that
 run using the normal history envelope, preserves successful results, and refuses a proven
-live owner. Ordinary history inspection stays read-only. See [`barca docs cache`](/reference/cache/).
+live owner. Ordinary history inspection stays read-only. See [The Cache](/reference/cache/).
 
 ## Debugging pipelines
 
 To find what is wrong and why, ask in this order. Each step is read-only: nothing runs, nothing
-is written. With a server configured ([`barca docs server-mode`](/reference/server-mode/)), every command below answers
+is written. With a server configured ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)), every command below answers
 from the server, after `[barca] server <url> (<source>)` on stderr; add `--local` for this
 machine's own records, or `--server <url>` for another server.
 
@@ -342,19 +341,18 @@ machine's own records, or `--server <url>` for another server.
    and each failed check's detail ends with what to do. With a server it also checks the
    server: its version and API version against this client, its store against this project's
    `[remote]`, whether it is draining, the files it failed to load, its scheduler (schedules
-   paused or failing) and the runs this machine has not posted to it yet ([`barca docs doctor`](/reference/doctor/)).
+   paused or failing) and the runs this machine has not posted to it yet ([barca doctor: Local Debugging](/reference/doctor/)).
 2. **`barca status --problems`**: which nodes need attention, and why. Every state but `cached`
    and `always_runs`, a task or sensor whose last run failed, and a schedule that is paused or
    failing. A failed node's error is `last_materialization.error` in JSON and its first line
    is in the WHY column; a scheduled node has `schedule` (`failures`, `max_failures`,
-   `failing`, `paused`, `next_fire`). The summary still counts every node ([`barca docs status`](/reference/status/)).
+   `failing`, `paused`, `next_fire`). The summary still counts every node ([barca status](/reference/status/)).
 3. **`barca history --status failed`**: the failed runs, newest first, each with its first
    failed step and error; `--target NODE`, `--since 24h` and `--triggered-by schedule` narrow
    it. **`barca history RUN_ID`** shows one run: every step it recorded, each failed step's
-   error and traceback, and how a dead worker ended ([`barca docs status`](/reference/status/), "Finding and reading a
-   failed run").
+   error and traceback, and how a dead worker ended ([barca status: Finding and reading a failed run](/reference/status/#finding-and-reading-a-failed-run)).
 4. **`barca logs RUN_ID --step NODE --stream stderr`**: the step's traceback, warnings and
-   logging, as recorded ([`barca docs logs`](/reference/logs/)).
+   logging, as recorded ([barca logs](/reference/logs/)).
 5. **Fix, then re-run the same command.** Steps that succeeded stay cached. For a schedule that
    reached `max_failures`, a successful `barca get NODE --server` (`barca run` for a task) resets
    the count and its ticks resume.
@@ -373,7 +371,7 @@ barca status --problems --local                     # this machine's own state, 
 Against a server with an asset that raises, an asset whose code changed, and a scheduled task
 that failed `max_failures=2` ticks in a row, `barca status --problems` lists the three nodes with
 their WHY (`failed: ZeroDivisionError...`, `changed: code`, `last run failed: ...; failing 2/2`)
-before the summary of every node; the table is shown in [`barca docs status`](/reference/status/), "Finding problems".
+before the summary of every node; the table is shown in [barca status: Finding problems](/reference/status/#finding-problems---problems-and---state).
 The failed runs behind them:
 
 ```text
@@ -413,7 +411,7 @@ $ barca doctor
 ```
 
 `barca sql` answers the questions the commands above do not, over barca's own tables
-(`barca.runs`, `barca.materializations`, `barca.nodes`; [`barca docs sql`](/reference/sql/)), from the server's
+(`barca.runs`, `barca.materializations`, `barca.nodes`; [barca sql](/reference/sql/)), from the server's
 records with a server configured:
 
 ```bash
@@ -490,7 +488,7 @@ raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and
 `node`, `traceback`, `artifact_dir`, `phase`) come from the error envelope. Or read a parquet `path` directly with duckdb/pandas/polars.
 `barca.signed_url("s3://bucket/key.csv", expires=3600)` (experimental) returns a time-limited
 HTTPS link to any object in S3, GCS or Azure; `barca get <target> -o url` gives one for a result
-([`barca docs remote`](/reference/remote-storage/), "Sharing a result: signed URLs").
+([Remote Storage: Sharing a result: signed URLs](/reference/remote-storage/#sharing-a-result-signed-urls)).
 
 ## Looking at cached results
 
@@ -498,14 +496,14 @@ To inspect data (which rows failed a check, what an asset holds), query it inste
 script: `barca sql "select * from revenue where amount < 0" --json`. Every asset with a result is
 a view named after its function; the JSON is `{columns, rows, total, truncated}`. It never runs a
 step or imports user code. To recompute first, use `--refresh`; never delete files under
-`.barca/`. See [`barca docs sql`](/reference/sql/).
+`.barca/`. See [barca sql](/reference/sql/).
 
 ## Targets and files
 
 - Files are optional: with none, barca reads every `.py` file in the project that imports barca
   (`barca list`, `barca run validate`). Files or directories narrow it (`barca get total
   pipelines/`); a directory as the first argument needs a trailing `/` (or `.`), otherwise it is
-  read as a target name. See [`barca docs discovery`](/reference/discovery/).
+  read as a target name. See [Discovery](/reference/discovery/).
 - `barca get file.py` gets every asset and sensor (`final_output` is the last asset's). It never runs
   tasks (it used to): stderr names the skipped tasks and the `barca run` command. A file with only
   tasks gets nothing and exits 0 with `"steps": []`.
@@ -521,7 +519,7 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
 - You can run barca from any directory inside a project with a `barca.toml`: barca changes into
   that directory (the project root) first, reads file arguments relative to where you typed
   them, and uses the root's `.barca/` cache. Node ids are relative to the root. See
-  [`barca docs layout`](/reference/layout/). `barca list --json` and `barca status --json` carry the
+  [Where Things Live](/reference/layout/). `barca list --json` and `barca status --json` carry the
   absolute `root`.
 - `get` is for assets and `run` is for tasks; using the wrong one exits 2 and says which to use.
 - The target comes before the files. If the first positional ends in `.py` and a later one does
@@ -563,7 +561,7 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
 
 ## Editing a barca project: a safe loop
 
-1. Write or change the function with parameter annotations ([`barca docs types`](/reference/types/)).
+1. Write or change the function with parameter annotations ([Output Formats and Types](/reference/types/)).
 2. `barca list pipeline.py` — confirm the node, its kind and its dependencies were discovered.
 3. `barca get <target> pipeline.py` — check exit code, `steps_executed`, and the artifact it
    points to (`-o value` prints the value).
@@ -588,7 +586,7 @@ Workers and the transfer helper negotiate their socket protocol before receiving
 A version mismatch exits 3 and names the helper version and expected version; reinstall
 Barca in the Python environment used for the run. The handshake does not import pipeline code.
 
-See also: [`barca docs skill`](/reference/agent-skill/), [`barca docs contract`](/reference/cli-contract/), [`barca docs status`](/reference/status/).
+See also: [Agent Skill](/reference/agent-skill/), [CLI Contract](/reference/cli-contract/), [barca status](/reference/status/).
 
 ---
 

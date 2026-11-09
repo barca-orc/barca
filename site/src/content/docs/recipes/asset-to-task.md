@@ -103,4 +103,4 @@ To recompute the asset as well, name it: `barca run deploy pipeline.py --refresh
 - **A task that fails is not retried unless you ask.** See
   [Error Handling](/recipes/retries-timeouts-failures/).
 
-The same material is in the terminal manual: [`barca docs tasks`](/reference/tasks/).
+The same material is in the terminal manual: [Tasks](/reference/tasks/).

@@ -121,7 +121,7 @@ barca logs --step report --stream stderr --timestamps
 A failed step's traceback is the end of its stderr, so `barca logs --step report --stream
 stderr` after a failure shows what it logged and where it raised.
 
-Against a server ([`barca docs server-mode`](/reference/server-mode/)), the same commands read the server's runs: its
+Against a server ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)), the same commands read the server's runs: its
 scheduled runs, and runs started with `--server`. With a server configured (`BARCA_SERVER` or
 `[server] url`), `barca logs` asks it, after the usual `[barca] server <url> (<source>)` line;
 `--server <url>` names one for a single command, and `--local` reads this machine's runs
@@ -153,7 +153,7 @@ barca logs 7f30b3e9 --local
 ```
 
 The server answers `GET /runs/{run_id}/logs` (with `?step=` and `?stream=`), and `-f` reads
-the run's `GET /runs/{run_id}/events` stream ([`barca docs scheduling`](/scheduling/)). A run a laptop ran
+the run's `GET /runs/{run_id}/events` stream ([Scheduling With Cron](/scheduling/)). A run a laptop ran
 against the server's ledger keeps its lines on the laptop: read them there with `--local`.
 
 ## How lines are kept
@@ -181,7 +181,7 @@ a line when the run is recorded (a step that writes 100,000 lines to stderr took
 of 0.08 s, and its run 0.6 s more to record). A step that logs a few hundred lines does not
 notice.
 
-See also: [`barca docs tasks`](/reference/tasks/), [`barca docs status`](/reference/status/), [`barca docs agents`](/reference/agents/), `barca docs
+See also: [Tasks](/reference/tasks/), [barca status](/reference/status/), [Scripts and AI Agents](/reference/agents/), `barca docs
 server-mode`.
 
 ---

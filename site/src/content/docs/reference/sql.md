@@ -52,7 +52,7 @@ infer a schema from absent current results.
 
 ## Remote storage
 
-With remote storage ([`barca docs remote`](/reference/remote-storage/)) a result that exists only in the bucket is a view like
+With remote storage ([Remote Storage](/reference/remote-storage/)) a result that exists only in the bucket is a view like
 any other. When a query names such a view, barca downloads its artifact (for a partitioned asset,
 the current keys' artifacts) into `.barca/sql-cache/` and queries the copy. stderr says what was downloaded:
 
@@ -69,7 +69,7 @@ barca: fetched 1 remote artifact (2.2 KB) into .barca/sql-cache/
   when they differ, for example after `barca get revenue --refresh revenue`.
 - The copies mirror the object's URI (`.barca/sql-cache/s3/my-bucket/...`). They count toward the
   cache size limit and are the first thing it evicts, least recently used first (a copy used in
-  the last 5 minutes is kept; [`barca docs disk`](/reference/disk/)). Deleting `.barca/sql-cache/` is
+  the last 5 minutes is kept; [Disk Use](/reference/disk/)). Deleting `.barca/sql-cache/` is
   always safe: it holds nothing but copies.
 - `show tables` lists remote views without downloading them.
 - The download uses the filesystem, credentials and `[remote.storage_options.*]` the steps use.
@@ -103,7 +103,7 @@ barca sql "select r.target, m.node_id, m.size_bytes from barca.runs r join barca
 
 ## With a server
 
-With a server configured (`[server] url` or `BARCA_SERVER`, [`barca docs server-mode`](/reference/server-mode/)), `barca sql`
+With a server configured (`[server] url` or `BARCA_SERVER`, [Server Mode: a Shared Ledger and --server](/reference/server-mode/)), `barca sql`
 asks the server which result each view reads and runs the query on this machine:
 
 ```
@@ -189,7 +189,7 @@ the row count, `env="dev"` to select an environment, and `server=True` or
 `server="https://..."` to query a server. It queries cached results without
 executing assets and raises `barca.BarcaError` on failure.
 
-See also: [`barca docs status`](/reference/status/), [`barca docs types`](/reference/types/), [`barca docs cache`](/reference/cache/), [`barca docs server-mode`](/reference/server-mode/).
+See also: [barca status](/reference/status/), [Output Formats and Types](/reference/types/), [The Cache](/reference/cache/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/).
 
 ---
 

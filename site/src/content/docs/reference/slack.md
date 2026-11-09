@@ -122,8 +122,8 @@ channels, give each deployment its own webhook.
 - The reminder interval is fixed at 24 hours. There is no job filter and no per-job channel.
 - Runs recorded before this version have no job and do not count as a previous run.
 
-See also: [`barca docs telemetry`](/reference/telemetry/) (Datadog traces and metrics), [`barca docs scheduling`](/scheduling/),
-[`barca docs serve-ops`](/reference/serve-ops/).
+See also: [Telemetry (Datadog)](/reference/telemetry/) (Datadog traces and metrics), [Scheduling With Cron](/scheduling/),
+[Operating barca serve](/reference/serve-ops/).
 
 ---
 

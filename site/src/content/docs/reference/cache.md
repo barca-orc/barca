@@ -9,7 +9,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/cach
 Barca skips a step when it has already computed the same thing. This topic covers what "the
 same" means (the run hash), what the hash does and does not see, the states a cached result
 can be in, incremental runs and environments. Forcing a recompute and `--dry-run` are in
-[`barca docs refresh`](/reference/refresh/); data that changes in place and `cutoff=True` are in [`barca docs external-data`](/reference/external-data/).
+[Forcing a Recompute](/reference/refresh/); data that changes in place and `cutoff=True` are in [External Data and Early Cutoff](/reference/external-data/).
 
 ## At a glance
 
@@ -20,11 +20,11 @@ can be in, incremental runs and environments. Forcing a recompute and `--dry-run
 | A value a `@sensor` returns | The assets that read the sensor, and everything downstream |
 | A variable listed in the asset's `env=[...]` | That asset and everything downstream |
 | `inputs=`, `serializer=`, a partition dimension name or `partitions_from` source, a `@sink(...)`, or another decorator wrapping the function | That asset and everything downstream |
-| `retries=`, `timeout_seconds=`, `freshness=` or another option that does not change the result, or formatting | Nothing ([`barca docs hashing`](/reference/hashing/), "Which decorator arguments count") |
-| A file, table or bucket the asset reads in its own body, or an environment variable it does not list | Nothing: barca cannot see it. Read it through a `@sensor` ([`barca docs external-data`](/reference/external-data/)) or list it in `env=` |
+| `retries=`, `timeout_seconds=`, `freshness=` or another option that does not change the result, or formatting | Nothing ([The Run Hash: Which decorator arguments count](/reference/hashing/#which-decorator-arguments-count)) |
+| A file, table or bucket the asset reads in its own body, or an environment variable it does not list | Nothing: barca cannot see it. Read it through a `@sensor` ([External Data and Early Cutoff](/reference/external-data/)) or list it in `env=` |
 | A new partition key | That key's steps, and any `collect()` of the asset |
-| An `@asset(cutoff=True)` reran and wrote the same bytes | Nothing below it ([`barca docs external-data`](/reference/external-data/), "Early cutoff") |
-| Nothing, but you want a recompute | `--refresh name` reruns it and what is downstream; `--refresh-all` reruns the cone ([`barca docs refresh`](/reference/refresh/)) |
+| An `@asset(cutoff=True)` reran and wrote the same bytes | Nothing below it ([External Data and Early Cutoff: Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue)) |
+| Nothing, but you want a recompute | `--refresh name` reruns it and what is downstream; `--refresh-all` reruns the cone ([Forcing a Recompute](/reference/refresh/)) |
 
 Tasks and sensors are never served from cache: they run every time they are in a run.
 `barca status` says which state each node is in and why, and `--dry-run` shows what would run.
@@ -33,22 +33,22 @@ Tasks and sensors are never served from cache: they run every time they are in a
 
 Each asset step has a **run hash**: a hash of the function's definition, its inputs' run hashes,
 the output of any sensor or `Manual` asset it reads (and, in place of the run hash, the output
-of an `@asset(cutoff=True)` it reads: [`barca docs external-data`](/reference/external-data/), "Early cutoff"), for partitioned assets the partition key,
+of an `@asset(cutoff=True)` it reads: [External Data and Early Cutoff: Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue)), for partitioned assets the partition key,
 and the values of any environment variables it declares with `env=[...]`. If the hash matches a
 previous successful materialization, the artifact is reused and the function does not run.
 Change the function's code, any upstream, a sensor's or `Manual` asset's output or a declared
 environment variable and the hash changes, so only the affected subgraph re-runs.
 
 - Tasks and sensors are never served from cache. Partitioned assets are cached per key (see
-  [`barca docs partitions`](/reference/partitions/)).
+  [Partitions](/reference/partitions/)).
 - Each successful materialization also records a short digest of each part of its hash (the
   function, each decorator argument that counts, each helper, each input, each declared env
   var), so `barca status` and `--dry-run` can say which part changed since then
-  (`changed: helper pipelines/common.py:bucket_ltv`; [`barca docs status`](/reference/status/)). The digests explain
+  (`changed: helper pipelines/common.py:bucket_ltv`; [barca status](/reference/status/)). The digests explain
   a miss; they never decide one.
 - Environment variables a function reads **without** declaring them are not part of the hash:
   changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
-  ([`barca docs assets`](/reference/assets/)). Nodes that declare no env hash exactly as if `env=` did not exist.
+  ([Assets, Sensors and Inputs](/reference/assets/)). Nodes that declare no env hash exactly as if `env=` did not exist.
   A declared variable is read from barca's environment, and when it is not set there, from the
   project's `.env`, so a value a pipeline loads from `.env` at import is the one hashed:
   editing it in `.env` re-runs the asset. Barca warns about the undeclared reads it can see
@@ -93,7 +93,7 @@ The reads not declared in `env=` are reported, and nothing about caching changes
   env=: *_REGISTRY_CSV, PLANNING_SOURCE_MODE, REGION (+2 more); barca status lists them`. It
   names at most five variables or patterns, sorted. `--agent` prints the same line.
 - The JSON `warnings` array has one item per step and variable: `kind: "undeclared_env"`, the
-  variable in `param` ([`barca docs contract`](/reference/cli-contract/), "Plan warnings").
+  variable in `param` ([CLI Contract: Plan warnings](/reference/cli-contract/#plan-warnings)).
 - Each JSON `steps[]` entry of `get`, `run` and `--dry-run`, and each `nodes[]` entry of
   `barca status --json`, carries `undeclared_env`, the sorted list, when it is not empty.
   Experimental.
@@ -144,30 +144,30 @@ does not. `from helpers import clean` + `clean(...)`, `import pkg.mod as m` + `m
 way: only the definitions the step uses, never the whole module.
 
 The full rules for the definition, which helpers are followed and how precisely, which
-decorator arguments count, and what is not followed, are in [`barca docs hashing`](/reference/hashing/).
+decorator arguments count, and what is not followed, are in [The Run Hash](/reference/hashing/).
 
 ## Cached, stale, evicted, unsynced
 
 A result is a row in `.barca/metadata.db` (the run hash it was computed under) plus an artifact
 file. `barca status` names the state each node is in; the table of states and reasons is owned
-by [`barca docs status`](/reference/status/), "Cache state". In short: `cached` is served; `stale` runs again, because
+by [barca status: Cache state](/reference/status/#cache-state). In short: `cached` is served; `stale` runs again, because
 the run hash moved (`changed`, `upstream_stale`), the last attempt failed (`failed`), or the
 recorded file is gone and something needs to read it (`artifact_missing`, or `evicted` when the
-cache size limit deleted it, [`barca docs disk`](/reference/disk/); a copy the artifact store holds is downloaded instead
+cache size limit deleted it, [Disk Use](/reference/disk/); a copy the artifact store holds is downloaded instead
 and is not stale); `unsynced` is cached but not where it should be, and the next `get` repairs
-that without running a step ([`barca docs remote`](/reference/remote-storage/), [`barca docs server-mode`](/reference/server-mode/)); `blocked` keys wait
-on failed keys of an input ([`barca docs partitions`](/reference/partitions/)). A missing or evicted artifact that nothing
-needs to read leaves the node `cached` ([`barca docs artifacts`](/reference/artifacts/), "A cached result whose artifact is missing").
+that without running a step ([Remote Storage](/reference/remote-storage/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/)); `blocked` keys wait
+on failed keys of an input ([Partitions](/reference/partitions/)). A missing or evicted artifact that nothing
+needs to read leaves the node `cached` ([Run Reports and Missing Artifacts: A cached result whose artifact is missing](/reference/artifacts/#a-cached-result-whose-artifact-is-missing)).
 
 Store availability reported by inspection can reuse a cloud observation for five minutes.
 Local file and plain-directory-store identity changes invalidate digest evidence immediately.
 Inspection shape/digest evidence is bounded separately from the ledger; required reads and
-ledger publication still verify directly ([`barca docs remote`](/reference/remote-storage/), "Inspection cost and observation window").
+ledger publication still verify directly ([Remote Storage: Inspection cost and observation window](/reference/remote-storage/#inspection-cost-and-observation-window)).
 
 ## What a run reports, and missing artifacts
 
 What `get` and `run` report per step (status, reason, timing, byte checks against an earlier
-result), and what happens when a cached result's file is gone, are in [`barca docs artifacts`](/reference/artifacts/).
+result), and what happens when a cached result's file is gone, are in [Run Reports and Missing Artifacts](/reference/artifacts/).
 
 ## Incremental runs
 
@@ -194,7 +194,7 @@ server's ledger use normal validation. Batching controls function calls independ
 
 `.barca/` has a size limit (`[cache] max_size`, default 10% of its filesystem) and `barca gc`
 evicts down to it after every run; what counts, what is evicted in which order and how the
-metadata database keeps to its share are in [`barca docs disk`](/reference/disk/).
+metadata database keeps to its share are in [Disk Use](/reference/disk/).
 
 ## Environments
 
@@ -213,7 +213,7 @@ configured, so a one-off command on a box set up for another environment says so
 The source in brackets is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in
 default`. Credentials and signed URI queries are redacted. The line is never on stdout, so
 `--json` output is unchanged. With neither setting, nothing is printed. `serve` always prints
-the line, with `; metadata <path> (db format <n>)` added ([`barca docs scheduling`](/scheduling/), "The metadata
+the line, with `; metadata <path> (db format <n>)` added ([Scheduling With Cron](/scheduling/), "The metadata
 DB at startup").
 
 On a machine with more than one environment (`.barca/metadata.db` for `default`, and each
@@ -240,10 +240,10 @@ BARCA_REQUIRE_ENV=1 barca history --env prod   # what a box that requires --env 
 
 The project root, the `.barca/` directory, several barca processes in one project, what a run
 records while it goes and after it is killed, and what an upgrade recomputes are in
-[`barca docs layout`](/reference/layout/).
+[Where Things Live](/reference/layout/).
 
-See also: [`barca docs disk`](/reference/disk/), [`barca docs layout`](/reference/layout/), [`barca docs remote`](/reference/remote-storage/), [`barca docs types`](/reference/types/),
-[`barca docs partitions`](/reference/partitions/), [`barca docs status`](/reference/status/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs contract`](/reference/cli-contract/).
+See also: [Disk Use](/reference/disk/), [Where Things Live](/reference/layout/), [Remote Storage](/reference/remote-storage/), [Output Formats and Types](/reference/types/),
+[Partitions](/reference/partitions/), [barca status](/reference/status/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [CLI Contract](/reference/cli-contract/).
 
 ---
 

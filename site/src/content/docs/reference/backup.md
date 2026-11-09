@@ -8,7 +8,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/back
 
 This topic owns the backups of the metadata database: when they are taken, what one contains,
 what `barca state backups` lists and `barca state restore` does, and how a server's backups
-differ. The store they go to is [`barca docs remote`](/reference/remote-storage/).
+differ. The store they go to is [Remote Storage](/reference/remote-storage/).
 
 Each machine works on its own `.barca/metadata.db`, and it is the truth for that machine:
 nothing is ever downloaded before a run. With a store configured by `[remote] uri` or
@@ -167,7 +167,7 @@ says what moved and how to undo it:
 
 Artifacts are left on disk, and a second line says how much:
 `[barca] the 129 KB of artifacts under .barca/artifacts stay on disk, and no record names them now: the cache size limit evicts them first, barca gc --max-size off deletes them now, and until then the undo above brings them back`.
-No record names them, so they are the first thing the cache size limit evicts ([`barca docs disk`](/reference/disk/)); `barca gc --max-size off` deletes them now. The same holds after `barca
+No record names them, so they are the first thing the cache size limit evicts ([Disk Use](/reference/disk/)); `barca gc --max-size off` deletes them now. The same holds after `barca
 state restore` for the artifacts the restored copy does not name. The moved-aside databases
 themselves are never deleted: remove a `metadata.db.reset-<UTC>` yourself when you no longer
 need it (`barca gc` lists them under `held` as `db_copies`).
@@ -227,7 +227,7 @@ on the server takes the server's own newest and names any newer ones a client to
 with no backup of its own (a new host) it takes the newest and names who took it, so check
 `barca state backups` and pass `--from` with the server's.
 
-See also: [`barca docs remote`](/reference/remote-storage/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs layout`](/reference/layout/), [`barca docs contract`](/reference/cli-contract/).
+See also: [Remote Storage](/reference/remote-storage/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [Where Things Live](/reference/layout/), [CLI Contract](/reference/cli-contract/).
 
 ---
 

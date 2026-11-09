@@ -1047,49 +1047,134 @@ const SITE_PAGES: &[SitePage] = &[
     },
 ];
 
-/// Manual topics with a site page that is not generated from them, for links.
-const SITE_ROUTES: &[(&str, &str)] = &[
-    ("scheduling", "/scheduling/"),
-    ("skill", "/reference/agent-skill/"),
+/// Manual topics with a site page that is not generated from them, for links: topic, route,
+/// page title.
+const SITE_ROUTES: &[(&str, &str, &str)] = &[
+    ("scheduling", "/scheduling/", "Scheduling With Cron"),
+    ("skill", "/reference/agent-skill/", "Agent Skill"),
 ];
 
-fn site_route(topic: &str) -> Option<String> {
+/// A topic's site page: its route and title.
+fn site_route(topic: &str) -> Option<(String, &'static str)> {
     SITE_PAGES
         .iter()
         .find(|p| p.topic == topic)
-        .map(|p| format!("/{}/", p.slug))
+        .map(|p| (format!("/{}/", p.slug), p.title))
         .or_else(|| {
             SITE_ROUTES
                 .iter()
-                .find(|(t, _)| *t == topic)
-                .map(|(_, r)| r.to_string())
+                .find(|(t, _, _)| *t == topic)
+                .map(|(_, r, title)| (r.to_string(), *title))
         })
 }
 
-/// Turn `` `barca docs <topic>` `` into a link to the topic's site page, outside code blocks.
-/// Topics without a site page stay as they are: the reader runs the command.
-fn link_topics(body: &str) -> String {
-    const OPEN: &str = "`barca docs ";
-    let mut out = String::new();
+/// The anchor Starlight gives a heading (github-slugger): lowercase, punctuation dropped,
+/// spaces to hyphens.
+fn heading_anchor(heading: &str) -> String {
+    heading
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| match c {
+            ' ' => Some('-'),
+            c if c.is_alphanumeric() || c == '-' || c == '_' => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The anchor of the heading in `topic` that `section` names (a heading that starts with it,
+/// ignoring case and backticks), if there is one.
+fn section_anchor(topic: &str, section: &str) -> Option<String> {
+    // A page not generated from the topic has its own headings.
+    SITE_PAGES.iter().find(|p| p.topic == topic)?;
+    let body = crate::docs::find(topic)?.body;
+    let want = section.replace('`', "").to_lowercase();
     let mut fenced = false;
-    for line in body.split_inclusive('\n') {
+    body.lines().find_map(|line| {
         if line.trim_start().starts_with("```") {
             fenced = !fenced;
         }
+        let heading = line
+            .strip_prefix("## ")
+            .or_else(|| line.strip_prefix("### "))?;
+        let text = heading.replace('`', "");
+        (!fenced && text.to_lowercase().starts_with(&want)).then(|| heading_anchor(&text))
+    })
+}
+
+/// A quoted section name right after a topic reference: `, "Section"` or ` ("Section")`.
+/// Returns the section and how many bytes of `after` it spans.
+fn quoted_section(after: &str) -> Option<(String, usize)> {
+    let (open, close) = if after.starts_with(", \"") {
+        (3, "\"")
+    } else if after.starts_with(" (\"") {
+        (3, "\")")
+    } else {
+        return None;
+    };
+    let end = after[open..].find('"')?;
+    if !after[open + end..].starts_with(close) {
+        return None;
+    }
+    let section = after[open..open + end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((section, open + end + close.len()))
+}
+
+/// Turn `` `barca docs <topic>` `` into a link to the topic's site page, titled by the page,
+/// outside code blocks. A quoted section name after it (`, "Section"`) joins the link, which
+/// then goes to that heading. Topics without a site page stay as they are: the reader runs
+/// the command.
+fn link_topics(body: &str) -> String {
+    const OPEN: &str = "`barca docs ";
+    let mut out = String::new();
+    // Prose between fences, so a quoted section name may wrap onto the next line.
+    let mut chunks: Vec<(bool, String)> = vec![(false, String::new())];
+    let mut fenced = false;
+    for line in body.split_inclusive('\n') {
+        let fence = line.trim_start().starts_with("```");
+        if fence && !fenced {
+            fenced = true;
+            chunks.push((true, String::new()));
+        }
+        chunks.last_mut().expect("one chunk").1.push_str(line);
+        if fence && fenced && chunks.last().expect("one chunk").1.len() > line.len() {
+            fenced = false;
+            chunks.push((false, String::new()));
+        }
+    }
+    for (fenced, chunk) in chunks {
         if fenced {
-            out.push_str(line);
+            out.push_str(&chunk);
             continue;
         }
-        let mut rest = line;
+        let mut rest = chunk.as_str();
         while let Some(i) = rest.find(OPEN) {
             let after = &rest[i + OPEN.len()..];
             let Some(close) = after.find('`') else { break };
             let topic = &after[..close];
             let span_end = i + OPEN.len() + close + 1;
+            // Inside an existing link, keep the command as written.
+            let in_link = rest[..i].ends_with('[');
             match site_route(topic) {
-                Some(route) if !rest[..i].ends_with('[') => {
+                Some((route, title)) if !in_link => {
                     out.push_str(&rest[..i]);
-                    out.push_str(&format!("[{}]({route})", &rest[i..span_end]));
+                    let tail = &rest[span_end..];
+                    let section = quoted_section(tail)
+                        .and_then(|(s, n)| section_anchor(topic, &s).map(|a| (s, a, n)));
+                    match section {
+                        Some((name, anchor, n)) => {
+                            out.push_str(&format!("[{title}: {name}]({route}#{anchor})"));
+                            rest = &tail[n..];
+                        }
+                        None => {
+                            out.push_str(&format!("[{title}]({route})"));
+                            rest = tail;
+                        }
+                    }
+                    continue;
                 }
                 _ => out.push_str(&rest[..span_end]),
             }
@@ -1182,7 +1267,18 @@ fn site_links_skip_code_and_unknown_topics() {
     let body = "See `barca docs sql` and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n";
     assert_eq!(
         link_topics(body),
-        "See [`barca docs sql`](/reference/sql/) and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n"
+        "See [barca sql](/reference/sql/) and `barca docs big-inputs`.\n```\n`barca docs sql`\n```\n"
+    );
+}
+
+#[test]
+fn site_links_take_a_quoted_section() {
+    let body =
+        "See `barca docs cache`, \"Environment\nvariables\", and `barca docs cache`, \"Nope\".\n";
+    assert_eq!(
+        link_topics(body),
+        "See [The Cache: Environment variables](/reference/cache/#environment-variables), and \
+         [The Cache](/reference/cache/), \"Nope\".\n"
     );
 }
 

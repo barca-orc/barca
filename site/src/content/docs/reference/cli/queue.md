@@ -20,7 +20,7 @@ barca queue resume --server          # queued runs start again, in order
 ```
 
 `pause` and `resume` answer with the queue after the change, and exit 2 on a `--read-only`
-server. See [`barca docs serve-ops`](/reference/serve-ops/), "The run queue".
+server. See [Operating barca serve: The run queue](/reference/serve-ops/#the-run-queue).
 
 ---
 

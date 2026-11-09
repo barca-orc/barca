@@ -112,7 +112,7 @@ stability; the row adds the keys and routes that go with it.
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `/events/{run_id}`) are deprecated aliases with no scheduled removal; a removal migrates the Python `Client` first and lands as a breaking change in a minor release |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
-| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [`barca docs server-mode`](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [Server Mode: a Shared Ledger and --server](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
 | `barca sql` with a server (`GET /sql/views`, `GET /materializations`) and the `barca` schema (`barca.runs`, `barca.materializations`, `barca.nodes`) | new in 0.29.3: the columns of barca's tables, the limit of rows read from a server and the wording of the notes may change after field use; the result JSON is `sql`'s |
 | `logs -f/--follow` | new in 0.29.2: the end-of-run line on stderr (`barca: run <run_id> ended: <status>`) and the choice of the run to follow without a run id may change after field use; the exit codes (0 succeeded, 130 cancelled, 1 otherwise) and the JSON Lines on stdout are stable |
 | `status --problems`, `nodes[].schedule` and `filter` in `status --json` (and `GET /nodes?state=&problems=`) | new in 0.29.3: what counts as needing attention may grow (now every state but `cached` and `always_runs`, a task or sensor whose last run failed, and a paused or failing schedule); `schedule` may gain keys. `--state` and the summary counting every node are stable |
@@ -135,8 +135,8 @@ stability; the row adds the keys and routes that go with it.
 | `max_rss_bytes` and `median_max_rss_bytes` in `barca stats`, `steps[].max_rss_bytes` and `steps[].output_tail` in `barca history RUN_ID` | new in 0.31 (#627): what the peak covers (the worker's baseline is included) and how many lines the tail keeps may change |
 | `partitions.failed` and `partitions.failed_keys` in `status --json`, `steps_page.nodes` in `history RUN_ID --json`, `recent_runs[].keys` and `recent_runs[].failed_keys` in `stats --json` | new in 0.38.0: what counts as a failed key (its latest attempt failed, with no later success) may change after field use |
 | `steps[].batch_execution` and `metadata_seconds` in `get`/`run` JSON, the `[barca] batch:<node> ...` and `[barca] metadata ...` lines | new in 0.38.0 (RFC-0013): which phases are reported and what each one covers may change after field use |
-| `steps_page.nodes[].status` (`ran`, `cached`, `skipped`) and `steps_page.nodes[].blocked_by` in `history RUN_ID --json` with a server | the server lists every planned node of a finished run whose plan it can rebuild; the local `history RUN_ID` lists only nodes with recorded steps and never has these keys ([`barca docs server-mode`](/reference/server-mode/)) |
-| `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 ([`barca docs pins`](/reference/pins/)): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
+| `steps_page.nodes[].status` (`ran`, `cached`, `skipped`) and `steps_page.nodes[].blocked_by` in `history RUN_ID --json` with a server | the server lists every planned node of a finished run whose plan it can rebuild; the local `history RUN_ID` lists only nodes with recorded steps and never has these keys ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) |
+| `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 ([barca pin: Pinning and Rollback](/reference/pins/)): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key` | new in 0.42: every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
@@ -653,7 +653,7 @@ key in the same order. Past 1000 keys with no `--partition` (0.30.2, #623), `fin
 `{"_barca_partitions": {keys, computed, cached, outputs, truncated, hint}}` instead: `outputs` is
 that object for the keys the run computed only (at most 1000, `truncated` when there are
 more), `keys` and `cached` count the rest, and `-o path` prints the computed keys with a note on
-stderr ([`barca docs partitions`](/reference/partitions/), "Many keys"). `--partition` returns every key it selects. `--partition` narrows every partitioned node of the run with a named
+stderr ([Partitions: Many keys](/reference/partitions/#many-keys)). `--partition` returns every key it selects. `--partition` narrows every partitioned node of the run with a named
 dimension, with or without a target, on `get`, `run` and `plan`; the result then carries
 `partition_selection` (`selection`, `nodes[]` with `id`, `selected`, `skipped`, and
 `skipped_nodes`), and a node it does not run is a step with status (dry run: action) `skipped`
@@ -681,22 +681,22 @@ value of its first key only.
 | `BARCA_STORAGE_OPTIONS` | JSON object keyed by protocol, merged over `[remote.storage_options.*]` | stable |
 | `BARCA_ARTIFACT_URI` | literal artifact root, bypassing the environment prefix (warns with a non-default env) | experimental |
 | `BARCA_PROGRESS_SECS` | seconds between `still running` lines (default 15, `0` turns them off) | experimental |
-| `BARCA_POOL_SIZE` | the most Python workers a run starts (else `[execution] pool_size`, else the available cores), capped at the capacity when that is smaller ([`barca docs assets`](/reference/assets/), "Heavy steps") | experimental |
+| `BARCA_POOL_SIZE` | the most Python workers a run starts (else `[execution] pool_size`, else the available cores), capped at the capacity when that is smaller ([Assets, Sensors and Inputs: Heavy steps](/reference/assets/#heavy-steps-weight)) | experimental |
 | `BARCA_COMM_COST_SECONDS` | the scheduler's per-dispatch cost estimate | experimental |
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
 | `BARCA_CAPACITY` | the most the `weight=` of the steps running at once may add up to (beats `[execution] capacity` in `barca.toml`; default: the pool size); a whole number of at least 1, anything else is a usage error (exit 2) | experimental |
-| `BARCA_SERVER` | the configured barca server (beats `[server] url` in `barca.toml`): the ledger of a local `get`/`run`, what `status`/`history`/`stats`/`logs` answer from, and what a bare `--server` uses; empty is unset; an invalid URL is a usage error ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
-| `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one ([`barca docs telemetry`](/reference/telemetry/)). Its settings are Datadog's own variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_TAGS`, `DD_TRACE_AGENT_URL`, `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT`, `DD_TRACE_ENABLED`, and for `barca serve` metrics `DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, `DD_DOGSTATSD_PORT`) | experimental |
-| `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later ([`barca docs slack`](/reference/slack/)). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
+| `BARCA_SERVER` | the configured barca server (beats `[server] url` in `barca.toml`): the ledger of a local `get`/`run`, what `status`/`history`/`stats`/`logs` answer from, and what a bare `--server` uses; empty is unset; an invalid URL is a usage error ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) | experimental |
+| `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one ([Telemetry (Datadog)](/reference/telemetry/)). Its settings are Datadog's own variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_TAGS`, `DD_TRACE_AGENT_URL`, `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT`, `DD_TRACE_ENABLED`, and for `barca serve` metrics `DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, `DD_DOGSTATSD_PORT`) | experimental |
+| `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later ([Slack Alerts](/reference/slack/)). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
 | `BARCA_UI_URL` | base URL of the web UI; Slack posts link the run id to it | experimental |
-| `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name ([`barca docs telemetry`](/reference/telemetry/)) | experimental |
-| `BARCA_SERVER_AUTH` | server authentication mode, `off` (default) or `token`; overrides `[server] auth`, overridden by `serve --auth`; invalid values are exit 2 ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
-| `BARCA_SERVER_TOKEN` | server-only bearer credential for every CLI and deprecated Python Client request; nonempty ASCII without whitespace or control characters; cannot be combined with URL userinfo; invalid credentials are exit 2; removed from Python helper environments ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
+| `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name ([Telemetry (Datadog)](/reference/telemetry/)) | experimental |
+| `BARCA_SERVER_AUTH` | server authentication mode, `off` (default) or `token`; overrides `[server] auth`, overridden by `serve --auth`; invalid values are exit 2 ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) | experimental |
+| `BARCA_SERVER_TOKEN` | server-only bearer credential for every CLI and deprecated Python Client request; nonempty ASCII without whitespace or control characters; cannot be combined with URL userinfo; invalid credentials are exit 2; removed from Python helper environments ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) | experimental |
 | `BARCA_SERVER_RECONNECT` | seconds a `--server` client following a run (`get`/`run --server`, `logs -f --server`) waits for a server whose stream broke to come back, and follows the same run id there (default 60; `0`: give up at once, exit 3); not a number of seconds is a usage error (exit 2) | experimental |
-| `DD_SITE` | the Datadog site (`datadoghq.com`, `us3.datadoghq.com`) whose web app the UI's trace links open (beats `[telemetry] datadog_site` in `barca.toml`); one that is not a host name stops `barca serve` with exit 2 ([`barca docs telemetry`](/reference/telemetry/)) | experimental |
-| `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr ([`barca docs telemetry`](/reference/telemetry/), "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
+| `DD_SITE` | the Datadog site (`datadoghq.com`, `us3.datadoghq.com`) whose web app the UI's trace links open (beats `[telemetry] datadog_site` in `barca.toml`); one that is not a host name stops `barca serve` with exit 2 ([Telemetry (Datadog)](/reference/telemetry/)) | experimental |
+| `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr ([Telemetry (Datadog): Logs under barca serve](/reference/telemetry/#logs-under-barca-serve)); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 The experimental HTTP query `GET /state?targets=a,b` computes only the named nodes and their
 upstream dependencies, including durations. A target may be a group id (`group:FILE:NAME`, as
@@ -707,7 +707,7 @@ files answer `404`, ambiguous names `409`. It preserves the `NodeState` array sh
 it).
 
 `[server] url` in `barca.toml` or `BARCA_SERVER` (experimental) points `get` and `run` at a
-server's ledger ([`barca docs server-mode`](/reference/server-mode/)): they still run here, read cache hits from the server
+server's ledger ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)): they still run here, read cache hits from the server
 and post what they compute, over `http://` or `https://`. `status`, `history`, `stats` and `logs` answer
 from the server, and `doctor` checks it beside this machine. `--local` ignores it for one command. A server that cannot be reached, answers
 unexpectedly or speaks another API version is exit 3 naming its URL, with `--local` as the
@@ -723,7 +723,7 @@ barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID`, `BARCA_WORKER_AGEN
 `BARCA_STORAGE_OPTIONS`) for its own worker processes, and `BARCA_LIFELINE`, `BARCA_JOB_PGID`,
 `BARCA_UPLOAD_SNAPSHOT_PREFIX` and `BARCA_DOCTOR_REQUEST` for its Python helpers; these are
 internal, not part of the contract. `BARCA_TEST_*` variables are hooks for barca's own test suite, also not part of the
-contract. Variables your nodes declare with `@asset(env=[...])` are yours ([`barca docs assets`](/reference/assets/)).
+contract. Variables your nodes declare with `@asset(env=[...])` are yours ([Assets, Sensors and Inputs](/reference/assets/)).
 
 Removed in 0.26.0 (breaking, RFC-0009): `BARCA_STATE`, `BARCA_STATE_URI`, `BARCA_PUSH_RETRIES`
 and the `barca.toml` keys `[remote] state`, `[remote] state_uri`, `[remote] push_retries`. Any of
@@ -745,21 +745,21 @@ Each error `kind` has exactly one exit code (stable):
 
 `step_failed`: one of your steps raised (fix the code), or one of its `@sink`s could not be written (from 0.30.0; the error is a `SinkError` naming the sink). `usage`: bad arguments, unknown target,
 task/asset misuse, a `.py` file that does not parse, a decorator called with an argument it does
-not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; [`barca docs assets`](/reference/assets/),
+not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; [Assets, Sensors and Inputs](/reference/assets/),
 "Accepted arguments"), or with a value barca cannot read from the source (`tags=TAGS`,
 `inputs=make_inputs()`; "Values barca reads"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`, a
 `get`/`run` that reads (or a `get` that targets) a `Manual` node that has never been computed,
 without naming it in `--refresh` (the remediation is the command that computes it;
-[`barca docs cache`](/reference/cache/)). `infra`:
+[The Cache](/reference/cache/)). `infra`:
 barca or its environment failed (metadata DB, workers, the store, I/O); retrying may help.
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
 `docker stop` sends), at any point of a `get` or `run`: while steps run, and
 with an artifact store also while artifacts upload or download or the history is backed up.
 The exit code is 130 whatever the store does: a cancelled run spends at most 10 seconds backing
 its record up, a second Ctrl-C or SIGTERM ends that at once, and a backup that fails then is a
-line on stderr, not exit 3 ([`barca docs remote`](/reference/remote-storage/), "Ctrl-C").
+line on stderr, not exit 3 ([Remote Storage: Ctrl-C](/reference/remote-storage/#ctrl-c)).
 
 An artifact upload or history-backup upload that fails after every step succeeded is not exit 3
 either: the run exits 0 with a warning and an `uploads` object, and the results are uploaded
@@ -770,7 +770,7 @@ The exit code is 130 for SIGTERM as well as for SIGINT. Barca handles both signa
 (it stops the workers, records the run as `cancelled` and exits), and the exit code follows the
 error `kind`, which has one code. 143, which a shell reports for a process that SIGTERM killed,
 is never barca's own exit code. SIGKILL cannot be handled: the shell reports 137 and the run is
-later reported as `interrupted` ([`barca docs cache`](/reference/cache/)).
+later reported as `interrupted` ([The Cache](/reference/cache/)).
 
 `barca serve` is not a run. Every run it accepts is recorded in its run queue before it answers,
 and a restart resumes the queued runs in order under their ids. Stopped by SIGINT or SIGTERM it
@@ -778,17 +778,17 @@ drains: the queue pauses (new runs are still accepted, `202` with `status: pendi
 the next start) and it waits for the runs in flight for up to `--drain-timeout` seconds
 (`[server] drain_timeout` in `barca.toml`, default 30). It exits 0 when they all finished, and 0
 when the deadline passed and it put the runs left back in the queue, to start again from the
-beginning after the restart (at least once: [`barca docs serve-ops`](/reference/serve-ops/), "At least once"). A second
+beginning after the restart (at least once: [Operating barca serve: At least once](/reference/serve-ops/#at-least-once)). A second
 signal cancels the runs in flight instead (recorded as `cancelled`, reason `server shutdown`) and
 it exits 1 with a `step_failed` error naming how many were cancelled, so deploy tooling can tell
-a forced stop from a clean one ([`barca docs serve-ops`](/reference/serve-ops/), "Stopping the server"). Exit 1 from
+a forced stop from a clean one ([Operating barca serve: Stopping the server](/reference/serve-ops/#stopping-the-server)). Exit 1 from
 `serve` means a forced stop, not a failed step of yours.
 
 A writer `barca serve` (not `--read-only`) sets its metadata DB up before it binds the port. When
 it cannot (the file is not SQLite, in a newer format or has a malformed schema, or cannot be
 opened) it exits 3 with the error naming the file and the remediation, and serves nothing. A
 `--read-only` server keeps serving and reports the error in `GET /health` `metadata_error`
-([`barca docs scheduling`](/scheduling/), "The metadata DB at startup"). An empty file (0 bytes) is not an
+([Scheduling With Cron](/scheduling/), "The metadata DB at startup"). An empty file (0 bytes) is not an
 error: it holds no history, and a writer initializes it as a new database with one note line on
 stderr naming it.
 
@@ -913,13 +913,12 @@ change the exit code, and the error envelope on stderr never contains them. `lis
 `GET /plan` and in the run outcome of `GET /runs/{run_id}` (experimental with the rest of that
 API).
 
-`unused_input`: a step declares an input its function never uses ([`barca docs assets`](/reference/assets/), "Unused
-inputs", has the exact rule and what is never reported). Stability: the key, its presence and the
+`unused_input`: a step declares an input its function never uses ([Assets, Sensors and Inputs: Unused inputs](/reference/assets/#unused-inputs), has the exact rule and what is never reported). Stability: the key, its presence and the
 item keys are stable on `get` and `run`, and experimental with the rest of the output on `plan`;
 the set of `kind` values grows additively.
 
 `undeclared_env`: a step's code reads an environment variable it does not declare in `env=[...]`
-([`barca docs cache`](/reference/cache/), "Environment variables"), one item per step and variable; the items of one
+([The Cache: Environment variables](/reference/cache/#environment-variables)), one item per step and variable; the items of one
 step carry the same `message`. These items are not printed one by one: stderr gets a single
 summary line for the command, `[barca] warning: <n> step(s) read(s) environment variables not
 declared in env=: <at most 5 names, sorted> (+<k> more); barca status lists them`, printed only
@@ -967,24 +966,24 @@ may grow.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. A `cached` step served from a pin ([`barca docs pins`](/reference/pins/)) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
+  words. A `cached` step served from a pin ([barca pin: Pinning and Rollback](/reference/pins/)) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
   or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
   `partition_selection`, and the result has `partition_selection` (see "Partitioned targets").
   After a partition key fails, a key of a node that reads it key for key is a step with `status`
   `skipped`, `reason` `upstream_key_failed` and a `detail` naming the failed key
-  ([`barca docs partitions`](/reference/partitions/), "Failed keys block their own keys"); a node that reads every key
+  ([Partitions: Failed keys block their own keys](/reference/partitions/#failed-keys-block-their-own-keys)); a node that reads every key
   (a `collect()` fan-in, an unpartitioned node) is `skipped` with reason `upstream_failed`,
   as before. `barca status` reports such a node `blocked`. In a scheduled tick of `barca serve`,
-  a paused target (`barca pause`, [`barca docs incidents`](/reference/pausing/)) is `skipped` with reason `paused` and a
+  a paused target (`barca pause`, [barca pause: Pausing Assets](/reference/pausing/)) is `skipped` with reason `paused` and a
   `detail` naming `barca resume`. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
-  stale; [`barca docs cache`](/reference/cache/)) carries a `detail` starting `Manual`. Breaking in this release: a
+  stale; [The Cache](/reference/cache/)) carries a `detail` starting `Manual`. Breaking in this release: a
   stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
   `artifact_missing` is a step that has a cached result whose artifact file is gone
-  and is needed ([`barca docs cache`](/reference/cache/)); `evicted` is the same when the cache size limit deleted
-  the file (experimental, [`barca docs disk`](/reference/disk/)).
+  and is needed ([The Cache](/reference/cache/)); `evicted` is the same when the cache size limit deleted
+  the file (experimental, [Disk Use](/reference/disk/)).
 - `cache` (experimental) appears only when the check after the run found `.barca/` over its
   size limit: `{size_bytes, limit_bytes, evicted_files, evicted_bytes}`, sizes after eviction
-  ([`barca docs disk`](/reference/disk/)). It is on single- and multi-target results alike.
+  ([Disk Use](/reference/disk/)). It is on single- and multi-target results alike.
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
@@ -1000,7 +999,7 @@ coordinator's observed in-flight time. Slow module imports (> 1 second) add
 `import_seconds`, included in elapsed time and summed across attempts/keys. Reused
 modules add no import time. The conditional import field is snapshotted with a
 controlled slow-import/retry fixture below; ordinary schema fixtures exclude it to
-avoid depending on CI machine speed. [`barca docs status`](/reference/status/) explains the timing scopes.
+avoid depending on CI machine speed. [barca status](/reference/status/) explains the timing scopes.
 
 <!-- BEGIN GENERATED schema get_timing_retry -->
 | Key | Type | Present |
@@ -1407,7 +1406,7 @@ code, and whether the result lists the failed keys, is not decided yet.
 ### get and run: a store copy that differs from its recorded hash
 
 With an artifact store, an artifact fetched from the store is checked against the SHA-256
-recorded when it was written ([`barca docs remote`](/reference/remote-storage/), "Checking a local copy against the store"). A copy with
+recorded when it was written ([Remote Storage: Checking a local copy against the store](/reference/remote-storage/#checking-a-local-copy-against-the-store)). A copy with
 other bytes is still used, the exit code does not change, and the result says so on the step
 entries:
 
@@ -1448,7 +1447,7 @@ entries:
 - `steps[].warning` on the same entries is the finding in words: the store location, and the
   `--refresh` that recomputes the step. The wording is not contract; `artifact_mismatch` is.
 - Without a server, the run records the store copy's digest as the result's, so the finding is
-  reported by the run that made it and not by later ones ([`barca docs remote`](/reference/remote-storage/)).
+  reported by the run that made it and not by later ones ([Remote Storage](/reference/remote-storage/)).
 - The key appears on `get` and `run`, with one target or several, in a failed run's result
   line, with `--agent`, and in the `steps` of a `barca serve` run's outcome (`GET /runs/{run_id}`).
   `--fields` accepts it (`--fields id,status,artifact_mismatch`). It never appears with
@@ -1828,7 +1827,7 @@ Truncated (`--limit 1`):
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
 `next_fire` (string, `YYYY-MM-DD HH:MM:SS`): the next match of the cron expression in the local
 time of the machine `list` runs on. `list` talks to no server, so the value does not follow a
-server's `--timezone`; `GET /schedule` on the running server does ([`barca docs scheduling`](/scheduling/)).
+server's `--timezone`; `GET /schedule` on the running server does ([Scheduling With Cron](/scheduling/)).
 `list` reads no state, so it takes no `--env`.
 
 ### sql (experimental)
@@ -1976,7 +1975,7 @@ counts every node even when `nodes` is truncated.
   partitioned step of `--dry-run`: an object from each previewed key that will run
   (`missing_keys` / `will_run_keys`) and ran before to the same list for that key. A new key is
   absent; the object is absent when no key has an entry.
-- With a configured server (experimental, [`barca docs server-mode`](/reference/server-mode/)), `barca status` without
+- With a configured server (experimental, [Server Mode: a Shared Ledger and --server](/reference/server-mode/)), `barca status` without
   `--server` or `--local` is answered by the server and each node gets `local` (boolean: this
   machine has a copy of the result). A node the server has no result for whose result this
   machine computed and has not posted yet is `unsynced` with reason `not_in_ledger` (the table
@@ -2203,7 +2202,7 @@ preserved, and an unknown end time/duration is not invented. Ordinary history st
 to a server's ledger); `null` for runs recorded before barca recorded it. A scheduled run also
 has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled node); both are
 `null` on every other run. The three keys are additive. `runs[].client_run_id` is the run id
-a `client` run had on the laptop that posted it ([`barca docs server-mode`](/reference/server-mode/)), `null` on every other
+a `client` run had on the laptop that posted it ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)), `null` on every other
 run; additive and experimental.
 
 `runs[].job` (additive, 0.29.0) is what the run was for: `all` for a run without targets,
@@ -2240,7 +2239,7 @@ exception `Type: message` and the frames), `error_type`, `error_message` (the me
 name, `code N` or `disconnected`; `null` for a step that raised). A step that ran or failed in a run traced with
 `BARCA_TELEMETRY=datadog` also has `trace_id` (the Datadog trace it was sent as, 128 bits in 32
 hex digits) and `span_id` (its root `barca.step` span, decimal); the two keys are absent for
-every other step (experimental, additive, 0.41.0; [`barca docs telemetry`](/reference/telemetry/)).
+every other step (experimental, additive, 0.41.0; [Telemetry (Datadog)](/reference/telemetry/)).
 Cached steps are not listed: `run.steps_cached` counts them. `steps_page` is `{total,
 truncated}`: how many steps the run recorded and whether `steps` lists fewer (the table
 prints a note on stderr). `hint`, present when a step
@@ -2379,7 +2378,7 @@ progress or interrupted). `status` is `running`, `success`, `failed`, `cancelled
 for remote results. New committed shared progress is published every minute in healthy
 operation, followed by the final outcome at run end. A `running` run counts the steps
 it has recorded so far in `steps_executed`, and
-`interrupted` is a run whose process died without recording an outcome ([`barca docs layout`](/reference/layout/),
+`interrupted` is a run whose process died without recording an outcome ([Where Things Live](/reference/layout/),
 "While a run is going, and after one is killed").
 
 Terminal status/counts and successful/failed step rows commit in one transaction. A required
@@ -2547,7 +2546,7 @@ recorded before 0.31 hold the worker's peak over every step it had run, not the 
 <!-- END GENERATED schema get_cache_evicted -->
 
 `cache` appears only when the check after the run found `.barca/` over its size limit; its sizes
-are after eviction ([`barca docs disk`](/reference/disk/)).
+are after eviction ([Disk Use](/reference/disk/)).
 
 
 ### Project star-import discovery
@@ -2685,7 +2684,7 @@ contract.
 
 stderr carries progress, warnings, your steps' own `print` output and errors. Only the error
 envelope and the `--agent` lines below are contract. Other `[barca] ...` lines, such as
-`[barca] backed up the metadata DB ...` and `[barca] restored ...` ([`barca docs remote`](/reference/remote-storage/)), are
+`[barca] backed up the metadata DB ...` and `[barca] restored ...` ([Remote Storage](/reference/remote-storage/)), are
 informational and not contract. The same goes for the wording of an error: a backup that fails
 its check in `barca state restore` is exit 2 with `kind` `usage`, and the text that names it and
 the next newest backup is for people.
@@ -2799,26 +2798,26 @@ placeholders:
 | `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
-| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` ([`barca docs remote`](/reference/remote-storage/), "Ctrl-C") | stable |
-| `[barca] batch:<node> <n> call(s), <n> key(s) \| import <secs>s, load <secs>s, compute <secs>s, split <secs>s, write <secs>s` | before the end-of-run line, one per node whose keys ran in batched calls, with `--agent` or a progress bar; also recorded in the run's logs ([`barca docs batched-partitions`](/reference/batched-partitions/), "Seeing calls") | experimental |
+| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` ([Remote Storage: Ctrl-C](/reference/remote-storage/#ctrl-c)) | stable |
+| `[barca] batch:<node> <n> call(s), <n> key(s) \| import <secs>s, load <secs>s, compute <secs>s, split <secs>s, write <secs>s` | before the end-of-run line, one per node whose keys ran in batched calls, with `--agent` or a progress bar; also recorded in the run's logs ([Batched Partitions: Seeing calls](/reference/batched-partitions/#seeing-calls)) | experimental |
 | `[barca] metadata <secs>s recording this run's results` | after the end-of-run line of a run with such a node, with `--agent` or a progress bar; also recorded in the run's logs | experimental |
 | `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get` and `run` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>)` | once at startup of `serve`, always, after its metadata DB is set up: the line above plus the database and its format (`PRAGMA user_version`). `(unusable)` in place of `(db format <n>)` when it cannot be used (a writer then exits 3), `(not created yet)` when there is no database yet (the first run creates it) | experimental |
 | `[barca] note: no --env given, so this uses env <env> (<source>); this project has <n> environments (<names>). Pass --env NAME or set BARCA_ENV; require_env = true in barca.toml (or BARCA_REQUIRE_ENV=1) makes it required` | once per command that reads or writes an environment (every mode), when neither `--env` nor `BARCA_ENV` names one and the project has more than one (`.barca/metadata.db` and the directories of `.barca/envs/`) | experimental |
-| `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs, except within 5 minutes of a successful check of the same store, environment and storage options when the run does not refresh, is not `get -o url` and has no pending uploads: such a run prints it before its first fetch, if it fetches ([`barca docs remote`](/reference/remote-storage/), "How often the store is checked"); requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
+| `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs, except within 5 minutes of a successful check of the same store, environment and storage options when the run does not refresh, is not `get -o url` and has no pending uploads: such a run prints it before its first fetch, if it fetches ([Remote Storage: How often the store is checked](/reference/remote-storage/#how-often-the-store-is-checked)); requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
 | `[barca] uploading <n> pending results to <store> from an earlier run` | before workers start, when results an earlier run could not upload are retried (every mode); followed by `[barca] uploaded <n> pending results` or `[barca] <n> pending results still not uploaded (<k> uploaded): <why>` | experimental |
 | `[barca] still waiting for artifact uploads to <store> (<secs>s)` | every 10 seconds while the upload drain waits (every mode); destinations omit URI passwords and signed query parameters | experimental |
 | `[barca] progress checkpoint failed; recorded results remain local: <cause>` | a mid-run shared-state publication failed; committed local results are retained and retried at the next minute tick, without changing successful user work into a failed step | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
-| `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` ([`barca docs agents`](/reference/agents/)) | experimental |
-| `[barca] server <url> (<source>)` | once when a command uses the configured server (`BARCA_SERVER` or `[server] url in barca.toml`, every mode): a local `get`/`run` reads and posts to its ledger, `status`/`history`/`stats` and a bare `--server` are answered by it ([`barca docs server-mode`](/reference/server-mode/)) | experimental |
+| `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` ([Scripts and AI Agents](/reference/agents/)) | experimental |
+| `[barca] server <url> (<source>)` | once when a command uses the configured server (`BARCA_SERVER` or `[server] url in barca.toml`, every mode): a local `get`/`run` reads and posts to its ledger, `status`/`history`/`stats` and a bare `--server` are answered by it ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) | experimental |
 | `[barca] recorded run <id> on the server (run <server id>)` | a run this machine could not post before was accepted by the server's ledger, before the command's own lookup | experimental |
 | `[barca] warning: run <id> was not recorded on the server <url>: <why>; it stays on this machine (unsynced) and ...`, `[barca] warning: run <id> is still not recorded on the server <url>: <why>` | the server refused a run's post (`409`) or could not be reached after the run; the run's result and exit code are unchanged | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
-| `[barca] cache <size> over its <limit> limit; evicted <n> files (<size>): <n> <tier>, ...` | after `get`, `run` or a `serve` run, when `.barca/` was over `[cache] max_size` and something was evicted (every mode; [`barca docs disk`](/reference/disk/)) | experimental |
+| `[barca] cache <size> over its <limit> limit; evicted <n> files (<size>): <n> <tier>, ...` | after `get`, `run` or a `serve` run, when `.barca/` was over `[cache] max_size` and something was evicted (every mode; [Disk Use](/reference/disk/)) | experimental |
 | `[barca] <id>: its cached result was evicted to stay under the cache limit; computing it again` | a step whose cached result the size limit evicted is computed again because something reads it (every mode) | experimental |
-| `[barca] dataset sink <prefix>: deleted <n> key(s) its asset no longer has` | after a run, the directories of keys a dataset sink's asset no longer has were deleted ([`barca docs sinks`](/reference/sinks/)) | experimental |
+| `[barca] dataset sink <prefix>: deleted <n> key(s) its asset no longer has` | after a run, the directories of keys a dataset sink's asset no longer has were deleted ([Sinks](/reference/sinks/)) | experimental |
 | `[barca] warning: ...` | warnings (always this lowercase prefix; the text after it may change), including a dataset sink's size warning and a failed deletion of removed keys. Up to 0.29 a failed sink printed `[barca] SINK FAILED: ...`; from 0.30.0 it fails the step. A plan warning (see "Plan warnings") is printed before the first `step:` line, once per run, with or without `--agent`; read it from the JSON `warnings` array rather than from this line | experimental |
 
 Failed runs keep the complete `steps` fan-out and `failed_node` in JSON. Human output
@@ -2837,7 +2836,7 @@ the first failed step is summarized once; each target's error remains in JSON.
 Qualified and imported aliases of barca decorators/helpers receive the same node
 semantics and argument validation as direct imports. Explicit foreign or rebound
 names do not define barca nodes. For a foreign wrapper intended to remain a node,
-stack it with a genuine barca decorator; see [`barca docs assets`](/reference/assets/).
+stack it with a genuine barca decorator; see [Assets, Sensors and Inputs](/reference/assets/).
 
 `list --groups` is experimental: JSON returns `{groups: [{id, name, description, members, output}]}`. IDs and member/output references are strings; members is an array of strings. The default `list` schema is unchanged. Groups are organizational metadata and cannot be execution targets.
 
@@ -2849,7 +2848,7 @@ and adds `steps[].bytes_changed: true` (otherwise absent). Partitioned reports a
 that flag, and stderr identifies each changed key. This warning does not change exit codes.
 Status nodes optionally expose `last_bytes_change: {node_id, run_hash, content_hash, created_at}`,
 retained after later unchanged recomputes; latest materializations expose `content_hash`
-when known. These additive keys are stable. See [`barca docs cache`](/reference/cache/) and
+when known. These additive keys are stable. See [The Cache](/reference/cache/) and
 `specs/interfaces/materialization-digests.md`. A `barca get` that re-uploads a `mismatch` target (no step
 runs) prints the same warning and sets the same flag. Server-post semantics remain proposed.
 
@@ -2944,7 +2943,7 @@ An artifact reference may have `format: "csv"` and a `.csv` path when explicitly
 with `serializer="csv"`. CSV sink extensions select CSV automatically. Frames continue
 to default to Parquet. CSV requires a supported tabular value; readers infer types.
 Status samples represent CSV cells as strings, and SQL views support CSV artifacts.
-See [`barca docs types`](/reference/types/) and `specs/interfaces/artifact-formats.md`.
+See [Output Formats and Types](/reference/types/) and `specs/interfaces/artifact-formats.md`.
 
 ### Task stdout and logs
 
@@ -2980,7 +2979,7 @@ Task return values remain `final_output` as for assets. Get/run JSON mode suppre
 stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. A step's stderr is written
 to stderr as it comes, in every mode, as before. Agent framework lines
 remain `[barca]`-prefixed and are not recorded. Retrieve captured output with `barca logs`.
-See [`barca docs logs`](/reference/logs/) and `specs/interfaces/task-output.md` for flush, failure and ordering boundaries.
+See [barca logs](/reference/logs/) and `specs/interfaces/task-output.md` for flush, failure and ordering boundaries.
 
 <!-- BEGIN GENERATED schema logs -->
 | Key | Type | Present |
@@ -3073,7 +3072,7 @@ of refresh coordinates independently of the target domain. Each selector has one
 The existing refresh list in CLI, Python and server requests shares these semantics;
 `--partition` continues to narrow execution and skip affected fan-ins.
 
-See also: [`barca docs agents`](/reference/agents/) (how to drive barca from scripts and agents), [`barca docs skill`](/reference/agent-skill/).
+See also: [Scripts and AI Agents](/reference/agents/) (how to drive barca from scripts and agents), [Agent Skill](/reference/agent-skill/).
 
 ---
 

@@ -200,7 +200,7 @@ Known limits:
   hash it went back to) can find it gone while it reads it; it is then computed again.
 - Eviction deletes no `materializations` rows. Only trimming the metadata database does ("The metadata database").
 
-See also: [`barca docs cache`](/reference/cache/), [`barca docs layout`](/reference/layout/), [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).
+See also: [The Cache](/reference/cache/), [Where Things Live](/reference/layout/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 
 ---
 

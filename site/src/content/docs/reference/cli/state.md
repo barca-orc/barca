@@ -3,14 +3,7 @@ title: "barca state"
 description: "List the metadata backups, put one back, or start the database over."
 ---
 
-With a remote store (`[remote] uri` or `BARCA_REMOTE_URI`), `get` and `run` back the metadata
-DB up on a one-minute checkpoint and when they end, and `serve` every minute it changed: to
-`.barca/backups/<name>.db` and `<uri>/<env>/state/backups/<name>.db`, five copies kept in each,
-each with a `<name>.json` sidecar (`run_id`, `rows`, `digest`, `barca_version`, `db_format`,
-and from 0.29 `host` and `project`: the machine and project directory that took it). Nothing is
-downloaded before a run. A store is one machine's backup: when another machine's backup is
-newer than this one's own, a backup or `barca state backups` warns once, pruning keeps each
-machine's newest backup, and `restore` without `--from` picks this machine's.
+Metadata backups let you recover `.barca/metadata.db`, the record of what is cached. `barca state backups` lists them, `restore` puts one back, and `reset` starts the database over. Backups are taken only when a remote store is configured; see [Metadata Backups](/reference/backup/) for the full story.
 
 ## Usage
 
@@ -46,6 +39,17 @@ when stdin is not a terminal (exit 2 otherwise). `--json` prints `{database, mov
 undo}`. Exit 3: a run is in progress on this machine, or `barca serve` is running on the
 environment (use its UI's **Reset database** button or `POST /state/reset`). Undo with
 `barca state restore --from <the moved file>`, which also takes any database file's path.
+
+## When backups are taken
+
+With a remote store (`[remote] uri` or `BARCA_REMOTE_URI`), `get` and `run` back the metadata
+DB up on a one-minute checkpoint and when they end, and `serve` every minute it changed: to
+`.barca/backups/<name>.db` and `<uri>/<env>/state/backups/<name>.db`, five copies kept in each,
+each with a `<name>.json` sidecar (`run_id`, `rows`, `digest`, `barca_version`, `db_format`,
+and from 0.29 `host` and `project`: the machine and project directory that took it). Nothing is
+downloaded before a run. A store is one machine's backup: when another machine's backup is
+newer than this one's own, a backup or `barca state backups` warns once, pruning keeps each
+machine's newest backup, and `restore` without `--from` picks this machine's.
 
 ---
 

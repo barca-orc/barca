@@ -8,11 +8,10 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/batc
 
 This topic owns `batch=`: how keys are grouped into calls, what a batch function receives and
 returns, what does not change (run hashes, artifacts, caching per key), how calls are reported
-and the known limits. Partitions themselves are [`barca docs partitions`](/reference/partitions/).
+and the known limits. Partitions themselves are [Partitions](/reference/partitions/).
 
 The example pipeline these outputs come from (a `retailer_versions` sensor, `orders` and
-`scored` with `batch="all"` over 20 retailers) is in [`barca docs partitions`](/reference/partitions/), "Processing many
-keys per call", with the `--batch` overrides.
+`scored` with `batch="all"` over 20 retailers) is in [Partitions: Processing many keys per call](/reference/partitions/#processing-many-keys-per-call), with the `--batch` overrides.
 
 A tick where 3 of 20 retailers changed (real output; the first run made one call of 20 keys per
 asset):
@@ -97,7 +96,7 @@ The partition parameter is the list of the call's keys. Each input reads by wher
 The function returns either:
 
 - **a dict of key to value**: each value is written as that key's artifact, by the usual type
-  rules ([`barca docs types`](/reference/types/));
+  rules ([Output Formats and Types](/reference/types/));
 - **a table with the dimension as a column**: a pandas, polars or Arrow table, or a DuckDB
   relation. barca splits it into one table per key; a key with no rows gets an empty table with
   the schema. DuckDB relations, polars and Arrow tables stream through DuckDB's
@@ -189,7 +188,7 @@ def scored(retailer: list[str], cleaned: dict[str, pd.DataFrame]) -> dict:
   more keys than the dry run lists (20).
 - **Failed keys:** `barca status --json` and `GET /state` give a node's `partitions.failed` and
   the first 20 `failed_keys`, the keys whose latest attempt failed; a node below it that reads
-  those keys key for key is `blocked` ([`barca docs partitions`](/reference/partitions/), "Failed keys block their own keys"). `GET /assets/{name}/partitions`
+  those keys key for key is `blocked` ([Partitions: Failed keys block their own keys](/reference/partitions/#failed-keys-block-their-own-keys)). `GET /assets/{name}/partitions`
   pages through the keys that have an attempt (`?status=failed`, `?q=`) and groups the failures'
   errors. `barca history RUN_ID --json` adds `steps_page.nodes`: each node's keys, failed keys,
   summed time and calls over the whole run, however few keys `steps` lists.
@@ -230,11 +229,11 @@ barca get scored pipeline.py --refresh scored --batch scored=all       # every k
   cleaned`, `scored` is served from cache as it was, and `barca status` reports it `cached`.
   Refresh with a target below it (`barca get scored pipeline.py --refresh cleaned`), or name it
   in `--refresh`. Data that changes in place is better read through a sensor or
-  `freshness=Manual`: their bytes count in what reads them ([`barca docs cache`](/reference/cache/)).
+  `freshness=Manual`: their bytes count in what reads them ([The Cache](/reference/cache/)).
 - **A request with both `refresh` and `batch`** recomputes because of `refresh`: the same
   `refresh` list without `batch` recomputes the same keys, grouped by the declared `batch=`.
 
-See also: [`barca docs partitions`](/reference/partitions/), [`barca docs cache`](/reference/cache/), [`barca docs assets`](/reference/assets/), [`barca docs contract`](/reference/cli-contract/).
+See also: [Partitions](/reference/partitions/), [The Cache](/reference/cache/), [Assets, Sensors and Inputs](/reference/assets/), [CLI Contract](/reference/cli-contract/).
 
 ---
 

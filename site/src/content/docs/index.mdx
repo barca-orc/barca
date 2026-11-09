@@ -124,7 +124,7 @@ Python 3.12 or later. Wheels for macOS on Apple Silicon and Linux (x86-64 and ar
   <Card title="Outside data comes in through sensors" icon="information">
     An asset that reads a file or a bucket in its own body is computed once and then served from
     cache. Put a `@sensor` in front of it so barca notices when the data changes. See
-    [Sensors](/guide/#4-sensors-data-from-outside).
+    [Sensors](/reference/assets/#sensors).
   </Card>
   <Card title="Partitions cache each key on its own" icon="list-format">
     One function runs once per customer, date or region, and each key reruns only when it
@@ -139,10 +139,11 @@ Python 3.12 or later. Wheels for macOS on Apple Silicon and Linux (x86-64 and ar
 
 ## How it works
 
-The `barca` binary reads your Python source without importing it (except a non-literal
-`partitions(...)` or `batches(...)` expression or a `batches_by` function, which a subprocess
-evaluates), builds the dependency graph and runs each step in a pool of Python workers. A result is cached by a hash of its code and its
+The `barca` binary reads your Python source without importing it, builds the dependency graph
+and runs each step in a pool of Python workers. A result is cached by a hash of its code and its
 inputs, so a step reruns only when one of those changes. Because the graph is read statically,
-decorator arguments such as `inputs=` must be written literally.
+decorator arguments such as `inputs=` must be written literally. (The one exception to "without
+importing": a partition list or batch grouping computed by code is evaluated in a subprocess;
+see [Architecture](/architecture/).)
 [Architecture](/architecture/#a-run) walks through a run step by step, and
 [Philosophy](/philosophy/) says what each design choice costs.

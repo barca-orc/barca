@@ -9,7 +9,7 @@ A `@task` is a step that does something: deploy, notify, migrate. It is never ca
 every time it is in a run, and you run it with `barca run <task> <files>`.
 
 Everything on this page was first run with barca 0.18.0 and rechecked with 0.42.0. The terminal manual covers tasks in
-[`barca docs tasks`](/reference/tasks/).
+[Tasks](/reference/tasks/).
 
 ## Assets and tasks
 

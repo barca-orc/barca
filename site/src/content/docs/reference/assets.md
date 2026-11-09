@@ -74,28 +74,27 @@ Star-import dependency hashing remains conservative.
 |---|---|
 | `inputs={"param": upstream}` | Wire upstream nodes to parameters. The param name must match a function parameter; barca checks this when it reads the file ("Inputs and parameters" below). |
 | `name="..."` | Explicit node name (the default is the function name). |
-| `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>", max_failures=5, timeout_seconds=3600)`. See [`barca docs scheduling`](/scheduling/). |
-| `serializer=` | Force `"json"`, `"pickle"`, `"parquet"` or `"csv"`. See [`barca docs types`](/reference/types/). |
-| `partitions=` | Fan one asset out over keys. See [`barca docs partitions`](/reference/partitions/). |
+| `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>", max_failures=5, timeout_seconds=3600)`. See [Scheduling With Cron](/scheduling/). |
+| `serializer=` | Force `"json"`, `"pickle"`, `"parquet"` or `"csv"`. See [Output Formats and Types](/reference/types/). |
+| `partitions=` | Fan one asset out over keys. See [Partitions](/reference/partitions/). |
 | `timeout_seconds=` | Per-attempt time limit (default 300). |
 | `retries=` | Total attempts on failure; 1 means no retry. |
 | `retry_backoff=` | Base delay in seconds; the delay grows linearly with the attempt number. |
 | `env=["NAME", ...]` | Environment variables the function reads. Their values are part of the cache key and are reported per step. See below. |
 | `weight=` | How much of the pool's capacity the step takes while it runs (default 1). Experimental. See "Heavy steps" below. |
-| `deterministic=False` | `@asset` only: new bytes for the same code and inputs are expected, so barca does not warn that the function is not deterministic. Caching is unchanged. See [`barca docs artifacts`](/reference/artifacts/), "Recompute byte checks". |
-| `cutoff=True` | What reads the asset depends on the bytes it wrote, not its run hash: a rerun that writes the same bytes leaves everything below it cached. `@asset` only. Experimental. See [`barca docs external-data`](/reference/external-data/), "Early cutoff". |
-| `batch=` | On partitioned assets and tasks, group stale keys into calls: a positive integer, `"all"`, `batches([...])` or `batches_by(fn)`. The function receives lists of keys; caching stays per key. See [`barca docs partitions`](/reference/partitions/), "Processing many keys per call". |
+| `deterministic=False` | `@asset` only: new bytes for the same code and inputs are expected, so barca does not warn that the function is not deterministic. Caching is unchanged. See [Run Reports and Missing Artifacts: Recompute byte checks](/reference/artifacts/#recompute-byte-checks). |
+| `cutoff=True` | What reads the asset depends on the bytes it wrote, not its run hash: a rerun that writes the same bytes leaves everything below it cached. `@asset` only. Experimental. See [External Data and Early Cutoff: Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue). |
+| `batch=` | On partitioned assets and tasks, group stale keys into calls: a positive integer, `"all"`, `batches([...])` or `batches_by(fn)`. The function receives lists of keys; caching stays per key. See [Partitions: Processing many keys per call](/reference/partitions/#processing-many-keys-per-call). |
 | `description=`, `tags=` | Metadata. |
 
 Stacked under `@asset`, `@sink("path")` writes the output to a file as well, and
 `@sink("prefix/", partition_by=[...], rows_per_file=N)` (a path ending in `/`) writes it as a
 Hive-partitioned dataset with one directory level per partition dimension of the asset. A sink
-that fails fails the step. See [`barca docs sinks`](/reference/sinks/).
+that fails fails the step. See [Sinks](/reference/sinks/).
 
 `inputs=`, `serializer=` and the dimension names in `partitions=` are part of the asset's run
 hash: changing one runs the asset again. The other options, the partition keys and the
-formatting of the decorator are not: editing them re-runs nothing. [`barca docs cache`](/reference/cache/) ("Which
-decorator arguments count") has the full list and the reason for each.
+formatting of the decorator are not: editing them re-runs nothing. [The Run Hash: Which decorator arguments count](/reference/hashing/#which-decorator-arguments-count) has the full list and the reason for each.
 
 A step that raises an exception fails without stopping its worker: the same Python process
 runs the next step, or the retry, so module-level state carries over from a failed attempt. A
@@ -148,13 +147,13 @@ Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 ```
 
 In JSON mode the first line is the envelope's `error` and the second its `remediation`
-([`barca docs contract`](/reference/cli-contract/)).
+([CLI Contract](/reference/cli-contract/)).
 
 - The error names the node (`file.py:function`), the line of the argument, the argument and
   everything the call accepts. "Did you mean" names the closest accepted argument within one
   edit of what was written (two edits for a name longer than four characters), or two that
   tie: `input`, `partition`, `serialiser`. `after` or `when` get the list and no guess. It is
-  the rule every mistyped name follows ([`barca docs agents`](/reference/agents/)).
+  the rule every mistyped name follows ([Scripts and AI Agents](/reference/agents/)).
 - The helpers and `@sink` take exactly one argument by position. Passing it by keyword
   (`partitions(values=[...])`, `collect(asset_fn=x)`, `Schedule(cron="...")`,
   `@sink(path="...")`) is rejected, and the error says to pass the value as the first argument.
@@ -163,7 +162,7 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
   `serializer="json"`) is rejected too; Python refuses those calls as well.
 - `@sink`'s `partition_by=` (a list of column names) and `rows_per_file=` (a whole number)
   apply to a dataset sink, a path ending in `/`; on a file sink, or written as anything but
-  literals, they are rejected when the file is read, exit 2 ([`barca docs sinks`](/reference/sinks/)).
+  literals, they are rejected when the file is read, exit 2 ([Sinks](/reference/sinks/)).
 - `@asset`, `@sensor` and `@task` take keyword arguments only. `@asset(**options)`,
   `@asset(*args)` and `@asset("x")` are rejected: barca reads the arguments from the source
   without running it and cannot see what a `**` or `*` holds.
@@ -172,7 +171,7 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
   command fails if it reads a file with such an argument, whatever its target. `list`, `plan`,
   `status`, `get`, `run` (with or without `--dry-run`), `stats` and `sql` exit 2 and run
   nothing. With no file arguments barca reads every pipeline file of the project
-  ([`barca docs discovery`](/reference/discovery/)), so one such argument anywhere stops all of them until it is
+  ([Discovery](/reference/discovery/)), so one such argument anywhere stops all of them until it is
   corrected; `barca get report good.py` reads `good.py` only. `barca serve` starts, and
   answers `400` with the same message on the routes that read the pipeline.
 - Only the first such argument in a file is reported. Fix it and run the command again.
@@ -261,7 +260,7 @@ does not define (above).
   ```
 
 - A parameter with no default that is neither an `inputs=` key, a partition dimension nor the
-  upstream of a `partitions_from(...)` (passed under its name, [`barca docs partitions`](/reference/partitions/)). The
+  upstream of a `partitions_from(...)` (passed under its name, [Partitions](/reference/partitions/)). The
   line is the parameter's:
 
   ```
@@ -271,7 +270,7 @@ does not define (above).
 
 - A function with `**kwargs` takes any key; a parameter with a default may be left unfilled.
 - A `@task`'s parameters are not reported missing: a task with parameters is how a `parallel()`
-  branch receives its arguments ([`barca docs tasks`](/reference/tasks/)). Its `inputs=` keys are checked.
+  branch receives its arguments ([Tasks](/reference/tasks/)). Its `inputs=` keys are checked.
 - When `inputs=` or `partitions=` is not a dict literal with string keys, which arguments
   arrive cannot be known, and no parameter is reported missing.
 
@@ -344,7 +343,7 @@ line for the command before anything runs:
 The JSON result lists them per step as `undeclared_env` (also in `--dry-run` and in
 `barca status --json`), and the `warnings` array has one `undeclared_env` item per variable.
 Declare the variable to make it count, or ignore the warning if the value never changes the
-result. [`barca docs cache`](/reference/cache/), "Environment variables", has the exact rules and what is not seen.
+result. [The Cache: Environment variables](/reference/cache/#environment-variables), has the exact rules and what is not seen.
 
 ## Heavy steps: `weight=`
 
@@ -400,7 +399,7 @@ def embed_c() -> dict:
 - The capacity is per run: each run has its own pool of workers. Two runs at the same time
   (two `barca get` commands) each fill their own capacity. Under `barca serve`, `--capacity N`
   or `[server] capacity = N` adds one capacity that every run of the server shares (experimental,
-  [`barca docs serve-ops`](/reference/serve-ops/), "A capacity shared by every run"): a step starts only when it fits
+  [Operating barca serve: A capacity shared by every run](/reference/serve-ops/#a-capacity-shared-by-every-run)): a step starts only when it fits
   both its run's capacity and the server's.
 - `barca plan` shows `pool_size` and `pool_source` (where the pool size came from:
   `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the capacity setting that bounded the
@@ -427,12 +426,12 @@ A node id is `<file>:<function>` (for example `pipeline.py:clean`), or the expli
 Targets on the command line can use the bare function name (`barca get clean pipeline.py`).
 Several targets are one comma-separated list (`barca get clean,report pipeline.py`): their
 upstream cones are planned together, so an asset both need materializes once, and the JSON
-output is keyed by target ([`barca docs agents`](/reference/agents/)).
+output is keyed by target ([Scripts and AI Agents](/reference/agents/)).
 With no target, `barca get pipeline.py` materializes every asset and sensor in the file and skips
 tasks (previously it ran them too); run a task with `barca run <task> pipeline.py`.
 An input defined in another file is imported like any Python name (`from pipelines.sources
 import raw`, then `inputs={"r": raw}`); barca resolves the import statically. Use
-`asset_ref("other/file.py:raw")` to name one without importing it. See [`barca docs discovery`](/reference/discovery/).
+`asset_ref("other/file.py:raw")` to name one without importing it. See [Discovery](/reference/discovery/).
 
 ## Naming
 
@@ -501,7 +500,7 @@ on its own: a docstring that describes an input does not use it. Comments never 
 
 - an input whose name starts with `_`. This is the way to say "unused on purpose": the step
   still runs after the upstream and still re-runs when the upstream changes, but nothing is
-  loaded and the parameter is `None` ([`barca docs tasks`](/reference/tasks/)). Rename both
+  loaded and the parameter is `None` ([Tasks](/reference/tasks/)). Rename both
   the key in `inputs=` and the parameter;
 - a function whose body is only a docstring, `pass`, `...` or `raise`: a stub, or a gate that
   only raises, uses nothing by definition;
@@ -528,9 +527,9 @@ on its own: a docstring that describes an input does not use it. Comments never 
   Query entry points: `sql`, `execute`, `executemany`, `query`, `from_query`, `table`, `view`, `read_sql`, `read_sql_query`, `SQLContext`.
 - an input annotated `duckdb.DuckDBPyRelation`: barca binds it as a view named after the
   parameter, so SQL in a helper function, which this check does not read, can use it without
-  the step's body naming it at all ([`barca docs types`](/reference/types/));
+  the step's body naming it at all ([Output Formats and Types](/reference/types/));
 - an input that comes from a `@sensor`: depending on a sensor without reading its value is how
-  a step is made to re-run when outside state changes ([`barca docs cache`](/reference/cache/)).
+  a step is made to re-run when outside state changes ([The Cache](/reference/cache/)).
 
 **Where it appears.** `barca plan`, `barca get`, `barca run` and `get|run --dry-run` report the
 same warnings in the same two places: one `[barca] warning: ...` line per unused input on
@@ -603,10 +602,10 @@ observing is read-only. Tasks are the only nodes a bare `get` skips.
 Explicit references to `globals`, `locals`, `vars`, `exec`, `eval` or `__builtins__` make imported barca
 names uncertain, even when the reference is aliased, qualified or shadowed. Such names are
 left to Python's argument checks and their nodes conservatively hash the whole module
-([`barca docs cache`](/reference/cache/)). The static checks do not resolve arbitrary reflective indirection
+([The Cache](/reference/cache/)). The static checks do not resolve arbitrary reflective indirection
 or runtime side effects.
 
-See also: [`barca docs tasks`](/reference/tasks/), [`barca docs cache`](/reference/cache/), [`barca docs scheduling`](/scheduling/).
+See also: [Tasks](/reference/tasks/), [The Cache](/reference/cache/), [Scheduling With Cron](/scheduling/).
 
 ---
 

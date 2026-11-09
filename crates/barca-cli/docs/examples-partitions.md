@@ -30,7 +30,7 @@ What to notice:
 - Add `"latam"` to the list in the decorator and run `barca get summary pipeline.py` again: 2
   steps run, `sales` for `latam` and `summary`. The other three regions are served from cache.
   Remove a region and only `summary` runs. The keys are not part of the function's definition,
-  so editing the list never re-runs a key that is already cached (`barca docs cache`, "Which
+  so editing the list never re-runs a key that is already cached (`barca docs hashing`, "Which
   decorator arguments count").
 - Each partition has its own artifact under `.barca/artifacts/`, for example
   `pipeline.py--sales_region_emea/`.

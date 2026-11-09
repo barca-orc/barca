@@ -4,37 +4,6 @@ One read-only view of every node: what it is, whether it is cached and why, when
 and what its artifact looks like. It answers in one call what would otherwise take `barca list`,
 `--dry-run`, `barca history` and a script that opens the artifact.
 
-The experimental `disk_usage` summary reports project-wide storage across all environments,
-even when node selection or filters narrow the graph: `budget_bytes`, `backup_bytes`,
-physical `size_bytes` and `limit_bytes`. Recognized local metadata backups are outside the
-cache budget and included in the physical total. Human output shows the same distinction.
-Budgeted bytes use the last maintained GC measurement; status does not walk artifacts or
-refresh that measurement. Backup directories are checked directly with a bounded survey
-(at most 4096 directory entries across environments and backup files). Unmeasured counts,
-including an incomplete backup survey, are `null` and displayed as unmeasured. Use `barca
-doctor` or `barca gc --dry-run` for a full measurement. Server status reports server storage.
-The UI's `/state` node array does no additional disk-accounting work.
-
-Status inspection reuses bounded evidence instead of re-reading unchanged artifact bytes.
-Local file identities include device, inode, size, mtime and ctime; changed or missing local
-copies and directory-store objects are checked again immediately. Cloud availability and
-remote shape observations can be up to five minutes old; cache hits do not extend that
-window. Local materialization changes, confirmed transfers, credential changes and Python
-import-environment changes invalidate the affected evidence. Inspection prefers an already
-verified local copy for shape. This is availability
-and shape evidence, not a new freshness proof. Required reads, transfers and server ledger
-publication keep their direct verification paths.
-
-Local inspection evidence is reusable only after the file's change timestamp is at least
-one second old. Recently changed files are read directly without retaining evidence, so
-inode reuse within a filesystem timestamp tick cannot preserve an old observation.
-
-The disposable inspection cache is limited to 8 MiB and 8192 entries per environment, with
-at most 64 KiB per value. Corruption, eviction or an unwritable cache causes another check;
-a busy cache-write lock is skipped. Cold inspection still hashes selected local copies and
-plain-directory store objects once, so its cost grows with their bytes. These limits do not
-resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
-
 ```python
 import pandas as pd
 from barca import asset, task
@@ -488,5 +457,38 @@ that failed are listed: cached steps are counted in the run's `steps_cached` (th
 new row), and steps a failure skipped are not recorded. With a server configured, both forms
 answer from the server (`barca docs server-mode`); a run id only this machine has is an error
 whose remediation is `barca history RUN_ID --local`.
+
+## Disk usage and inspection cost
+
+The experimental `disk_usage` summary reports project-wide storage across all environments,
+even when node selection or filters narrow the graph: `budget_bytes`, `backup_bytes`,
+physical `size_bytes` and `limit_bytes`. Recognized local metadata backups are outside the
+cache budget and included in the physical total. Human output shows the same distinction.
+Budgeted bytes use the last maintained GC measurement; status does not walk artifacts or
+refresh that measurement. Backup directories are checked directly with a bounded survey
+(at most 4096 directory entries across environments and backup files). Unmeasured counts,
+including an incomplete backup survey, are `null` and displayed as unmeasured. Use `barca
+doctor` or `barca gc --dry-run` for a full measurement. Server status reports server storage.
+The UI's `/state` node array does no additional disk-accounting work.
+
+Status inspection reuses bounded evidence instead of re-reading unchanged artifact bytes.
+Local file identities include device, inode, size, mtime and ctime; changed or missing local
+copies and directory-store objects are checked again immediately. Cloud availability and
+remote shape observations can be up to five minutes old; cache hits do not extend that
+window. Local materialization changes, confirmed transfers, credential changes and Python
+import-environment changes invalidate the affected evidence. Inspection prefers an already
+verified local copy for shape. This is availability
+and shape evidence, not a new freshness proof. Required reads, transfers and server ledger
+publication keep their direct verification paths.
+
+Local inspection evidence is reusable only after the file's change timestamp is at least
+one second old. Recently changed files are read directly without retaining evidence, so
+inode reuse within a filesystem timestamp tick cannot preserve an old observation.
+
+The disposable inspection cache is limited to 8 MiB and 8192 entries per environment, with
+at most 64 KiB per value. Corruption, eviction or an unwritable cache causes another check;
+a busy cache-write lock is skipped. Cold inspection still hashes selected local copies and
+plain-directory store objects once, so its cost grows with their bytes. These limits do not
+resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
 
 See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.

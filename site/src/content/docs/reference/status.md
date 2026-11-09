@@ -10,37 +10,6 @@ One read-only view of every node: what it is, whether it is cached and why, when
 and what its artifact looks like. It answers in one call what would otherwise take `barca list`,
 `--dry-run`, `barca history` and a script that opens the artifact.
 
-The experimental `disk_usage` summary reports project-wide storage across all environments,
-even when node selection or filters narrow the graph: `budget_bytes`, `backup_bytes`,
-physical `size_bytes` and `limit_bytes`. Recognized local metadata backups are outside the
-cache budget and included in the physical total. Human output shows the same distinction.
-Budgeted bytes use the last maintained GC measurement; status does not walk artifacts or
-refresh that measurement. Backup directories are checked directly with a bounded survey
-(at most 4096 directory entries across environments and backup files). Unmeasured counts,
-including an incomplete backup survey, are `null` and displayed as unmeasured. Use `barca
-doctor` or `barca gc --dry-run` for a full measurement. Server status reports server storage.
-The UI's `/state` node array does no additional disk-accounting work.
-
-Status inspection reuses bounded evidence instead of re-reading unchanged artifact bytes.
-Local file identities include device, inode, size, mtime and ctime; changed or missing local
-copies and directory-store objects are checked again immediately. Cloud availability and
-remote shape observations can be up to five minutes old; cache hits do not extend that
-window. Local materialization changes, confirmed transfers, credential changes and Python
-import-environment changes invalidate the affected evidence. Inspection prefers an already
-verified local copy for shape. This is availability
-and shape evidence, not a new freshness proof. Required reads, transfers and server ledger
-publication keep their direct verification paths.
-
-Local inspection evidence is reusable only after the file's change timestamp is at least
-one second old. Recently changed files are read directly without retaining evidence, so
-inode reuse within a filesystem timestamp tick cannot preserve an old observation.
-
-The disposable inspection cache is limited to 8 MiB and 8192 entries per environment, with
-at most 64 KiB per value. Corruption, eviction or an unwritable cache causes another check;
-a busy cache-write lock is skipped. Cold inspection still hashes selected local copies and
-plain-directory store objects once, so its cost grows with their bytes. These limits do not
-resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
-
 ```python
 import pandas as pd
 from barca import asset, task
@@ -92,7 +61,7 @@ the same remediation as `get` and `run`. A target is one name or several, comma-
 spaces (`a,b`), parsed exactly as `get` and `run` parse them; the JSON names them in `targets`
 (and the single one in `target`).
 
-With an artifact store ([`barca docs remote`](/reference/remote-storage/)), status also asks the store about every cached
+With an artifact store ([Remote Storage](/reference/remote-storage/)), status also asks the store about every cached
 unpartitioned node, with one `python -m barca._state stat` for all of them, and reports a node
 whose copies do not agree as `unsynced` (below). Nothing is downloaded or uploaded.
 
@@ -105,8 +74,8 @@ Like `list`, status returns every node in JSON unless `--limit N` is explicit. T
 table shows at most 100 nodes unless you pass `--limit N` or `--all`. The
 `summary` still counts every node, and the JSON adds `total` and `truncated` (with a `hint` when
 truncated). Each node also lists `env`, the environment variables it declares with `env=[...]`
-([`barca docs assets`](/reference/assets/)), and, when its code reads variables it does not declare, `undeclared_env`
-(experimental; [`barca docs cache`](/reference/cache/), "Environment variables"). `--fields` keeps only the named keys
+([Assets, Sensors and Inputs](/reference/assets/)), and, when its code reads variables it does not declare, `undeclared_env`
+(experimental; [The Cache: Environment variables](/reference/cache/#environment-variables)). `--fields` keeps only the named keys
 on each node.
 
 ## Cache state
@@ -118,11 +87,11 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
-| `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree ([`barca docs remote`](/reference/remote-storage/), "`cached` and `unsynced` with a store"), and `get` on it repairs that without running a step; with a configured server, the server has no result but this machine computed one whose post to the server's ledger is pending ([`barca docs server-mode`](/reference/server-mode/)) | `local_only`, `store_only`, `mismatch`, `not_in_ledger` (the table prints `local only`, `store only`, `mismatch`, `not in ledger`) |
+| `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree ([Remote Storage: `cached` and `unsynced` with a store](/reference/remote-storage/#cached-and-unsynced-with-a-store)), and `get` on it repairs that without running a step; with a configured server, the server has no result but this machine computed one whose post to the server's ledger is pending ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) | `local_only`, `store_only`, `mismatch`, `not_in_ledger` (the table prints `local only`, `store only`, `mismatch`, `not in ledger`) |
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
-| `blocked` | a partitioned asset whose missing keys wait on the same keys of an input, which failed: a run computes its other keys and skips these ([`barca docs partitions`](/reference/partitions/), "Failed keys block their own keys") | `upstream_failed` (`detail`: `39 of 39 missing keys wait on 'demand_forecast': the same keys of it failed`) |
+| `blocked` | a partitioned asset whose missing keys wait on the same keys of an input, which failed: a run computes its other keys and skips these ([Partitions: Failed keys block their own keys](/reference/partitions/#failed-keys-block-their-own-keys)) | `upstream_failed` (`detail`: `39 of 39 missing keys wait on 'demand_forecast': the same keys of it failed`) |
 | `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, an asset reading a sensor with no recorded output, or an asset reading an `@asset(cutoff=True)` that would run first (and what depends on any of them); `not_planned` when the dry run status is computed from has no step for the node | `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`, `not_planned` |
 | `always_runs` | tasks and sensors are never cached | `task`, `sensor` |
 
@@ -136,12 +105,12 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   | entry | what changed |
   |---|---|
   | `code` | the function, from `def` on |
-  | `decorator argument NAME` | an argument of `@asset` / `@sensor` / `@task` that counts (`serializer`, `inputs`, ...; [`barca docs cache`](/reference/cache/)) |
+  | `decorator argument NAME` | an argument of `@asset` / `@sensor` / `@task` that counts (`serializer`, `inputs`, ...; [The Cache](/reference/cache/)) |
   | `decorator NAME` | another decorator that counts (`@sink`, `@functools.lru_cache`, ...) |
   | `helper FILE:NAME` | a definition the function uses, in its own file or a project module (`pipelines/common.py:bucket_ltv`); `helper FILE` for a module it uses whole |
   | `input ID` | an upstream's run hash: its code or its own inputs changed |
   | `sensor ID` | a sensor it reads returned a new value (or its code changed) |
-  | `value ID` | a dict `partitions_from` source returned a new value for this key (or its code changed; [`barca docs partitions`](/reference/partitions/)) |
+  | `value ID` | a dict `partitions_from` source returned a new value for this key (or its code changed; [Partitions](/reference/partitions/)) |
   | `env NAME` | a declared environment variable's value |
   | `kind` | the node became an asset, task or sensor |
 
@@ -152,7 +121,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 - A node that reads a `@sensor` is judged by the sensor's last recorded output: status runs
   nothing, so it assumes the sensor returns the same value next time, and `detail` says so. If
   the sensor recorded a new value since the node last ran (for example a scheduled sensor), the
-  node shows as `stale` ([`barca docs external-data`](/reference/external-data/), "External data that changes in place").
+  node shows as `stale` ([External Data and Early Cutoff: External data that changes in place](/reference/external-data/#external-data-that-changes-in-place)).
 - A `partial` node's `partitions` has `changed` (experimental) when a key of `missing_keys`
   ran before: key -> what changed in its run hash, in the entries above. A new key has no
   entry. With keys from a dict sensor, `{"retailer=r2": ["value pipeline.py:versions"]}` says
@@ -166,9 +135,8 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   input, or it is the output the run returns: a target, or with no target the last asset), so
   it would be computed again. A missing
   artifact that nothing would read does not make a node stale: it stays `cached`, and
-  `cache.artifact` then names a file that is not there ([`barca docs artifacts`](/reference/artifacts/), "A cached result
-  whose artifact is missing").
-- `evicted`: the same, because the cache size limit deleted the artifact file ([`barca docs disk`](/reference/disk/)). A result the artifact store holds is not stale: a run downloads it again.
+  `cache.artifact` then names a file that is not there ([Run Reports and Missing Artifacts: A cached result whose artifact is missing](/reference/artifacts/#a-cached-result-whose-artifact-is-missing)).
+- `evicted`: the same, because the cache size limit deleted the artifact file ([Disk Use](/reference/disk/)). A result the artifact store holds is not stale: a run downloads it again.
 
 - `local_only`, `store_only`, `mismatch`: only with an artifact store. `local_only`: the result
   is on this machine and not in the store, or its upload is pending (`detail` then carries the
@@ -177,7 +145,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   bytes, for a store that is a plain directory), or this machine's copy is not the one
   recorded. When this machine's copy is the recorded one, `get` uploads it again, with the
   changed-bytes warning; otherwise `get` fetches the store's copy, warns once and records its
-  digest, so the result is `cached` afterwards ([`barca docs remote`](/reference/remote-storage/)).
+  digest, so the result is `cached` afterwards ([Remote Storage](/reference/remote-storage/)).
   A result in neither place is `stale` with `artifact_missing`. Object stores give no checksum,
   so a same-size object with other bytes is not noticed there. A partitioned asset is
   `unsynced` (`local_only`) only when one of its keys has a pending upload. A store that cannot
@@ -191,7 +159,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 
 With `BARCA_SERVER` or `[server] url` set, `barca status` (without `--server` or `--local`) is
 answered by the server's ledger for its deployed code, after `[barca] server <url> (<source>)`
-on stderr ([`barca docs server-mode`](/reference/server-mode/)). Each node gets `local`: `true` when this machine has a copy
+on stderr ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)). Each node gets `local`: `true` when this machine has a copy
 of the result the server would serve, which is what `barca sql` can query here. A node the
 server has no result for, but whose result this machine computed and has not posted yet (the
 post was refused or the server could not be reached), is `unsynced` with reason `not_in_ledger`
@@ -256,7 +224,7 @@ table adds a SCHEDULE column when a node it shows is scheduled:
 | `next_fire` | when it next matches (RFC 3339, UTC) |
 | `last_fired` | the last tick fired (RFC 3339, UTC), or `null` |
 | `last_status` | the status of the run that tick started, while the server remembers it (`null` after a restart) |
-| `failures`, `max_failures`, `failing` | consecutive failed ticks, `Schedule(..., max_failures=N)` (default 5), and `failures >= max_failures`: ticks are skipped ([`barca docs scheduling`](/scheduling/)) |
+| `failures`, `max_failures`, `failing` | consecutive failed ticks, `Schedule(..., max_failures=N)` (default 5), and `failures >= max_failures`: ticks are skipped ([Scheduling With Cron](/scheduling/)) |
 | `paused`, `paused_until` | held back by `POST /schedule/{id}/pause`; `paused_until` is `null` for a pause until resumed |
 | `skip_reason` | why the last due tick was skipped: `in_flight` or `paused`, or `null` |
 | `live` | `true` when a running scheduler reported this entry |
@@ -291,7 +259,7 @@ the same code and inputs (the same run hash): `{node_id, run_hash, content_hash,
 with the exact node id (a partition key included). It is absent when that never happened. The
 table prints one line per such node under the rows:
 `total: different bytes for the same code and inputs at 2026-10-02 11:56:43 UTC (pipeline.py:total)`.
-It means the function is not deterministic ([`barca docs cache`](/reference/cache/)).
+It means the function is not deterministic ([The Cache](/reference/cache/)).
 
 ## Artifact shape
 
@@ -317,7 +285,7 @@ artifact that is too large or cannot be reached (below).
 
 ### Remote artifacts
 
-With remote storage ([`barca docs remote`](/reference/remote-storage/)) the shape is read from the bucket, through the same
+With remote storage ([Remote Storage](/reference/remote-storage/)) the shape is read from the bucket, through the same
 filesystem, credentials and `[remote.storage_options.*]` the steps use. There is no flag for it:
 
 ```bash
@@ -377,7 +345,7 @@ A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-2
 `--problems` add `"filter"` beside `summary`.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column
-order. `--env <name>` reads another environment's state ([`barca docs cache`](/reference/cache/)).
+order. `--env <name>` reads another environment's state ([The Cache](/reference/cache/)).
 
 An explicit `@asset(name="orders_clean")` uses `orders_clean` in status and as its SQL
 view name, matching `list`, `get` and `stats`. Inspection reads the existing artifact
@@ -492,10 +460,43 @@ barca logs 7f30b3e9 --step clean --stream stderr
 Replace the example id with a `run_id` from `barca history`. Only the steps a run executed or
 that failed are listed: cached steps are counted in the run's `steps_cached` (they recorded no
 new row), and steps a failure skipped are not recorded. With a server configured, both forms
-answer from the server ([`barca docs server-mode`](/reference/server-mode/)); a run id only this machine has is an error
+answer from the server ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)); a run id only this machine has is an error
 whose remediation is `barca history RUN_ID --local`.
 
-See also: [`barca docs cache`](/reference/cache/), [`barca docs logs`](/reference/logs/), [`barca docs sql`](/reference/sql/), [`barca docs agents`](/reference/agents/).
+## Disk usage and inspection cost
+
+The experimental `disk_usage` summary reports project-wide storage across all environments,
+even when node selection or filters narrow the graph: `budget_bytes`, `backup_bytes`,
+physical `size_bytes` and `limit_bytes`. Recognized local metadata backups are outside the
+cache budget and included in the physical total. Human output shows the same distinction.
+Budgeted bytes use the last maintained GC measurement; status does not walk artifacts or
+refresh that measurement. Backup directories are checked directly with a bounded survey
+(at most 4096 directory entries across environments and backup files). Unmeasured counts,
+including an incomplete backup survey, are `null` and displayed as unmeasured. Use `barca
+doctor` or `barca gc --dry-run` for a full measurement. Server status reports server storage.
+The UI's `/state` node array does no additional disk-accounting work.
+
+Status inspection reuses bounded evidence instead of re-reading unchanged artifact bytes.
+Local file identities include device, inode, size, mtime and ctime; changed or missing local
+copies and directory-store objects are checked again immediately. Cloud availability and
+remote shape observations can be up to five minutes old; cache hits do not extend that
+window. Local materialization changes, confirmed transfers, credential changes and Python
+import-environment changes invalidate the affected evidence. Inspection prefers an already
+verified local copy for shape. This is availability
+and shape evidence, not a new freshness proof. Required reads, transfers and server ledger
+publication keep their direct verification paths.
+
+Local inspection evidence is reusable only after the file's change timestamp is at least
+one second old. Recently changed files are read directly without retaining evidence, so
+inode reuse within a filesystem timestamp tick cannot preserve an old observation.
+
+The disposable inspection cache is limited to 8 MiB and 8192 entries per environment, with
+at most 64 KiB per value. Corruption, eviction or an unwritable cache causes another check;
+a busy cache-write lock is skipped. Cold inspection still hashes selected local copies and
+plain-directory store objects once, so its cost grows with their bytes. These limits do not
+resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
+
+See also: [The Cache](/reference/cache/), [barca logs](/reference/logs/), [barca sql](/reference/sql/), [Scripts and AI Agents](/reference/agents/).
 
 ---
 

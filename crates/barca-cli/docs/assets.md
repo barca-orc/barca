@@ -88,7 +88,7 @@ that fails fails the step. See `barca docs sinks`.
 
 `inputs=`, `serializer=` and the dimension names in `partitions=` are part of the asset's run
 hash: changing one runs the asset again. The other options, the partition keys and the
-formatting of the decorator are not: editing them re-runs nothing. `barca docs cache` ("Which
+formatting of the decorator are not: editing them re-runs nothing. `barca docs hashing` ("Which
 decorator arguments count") has the full list and the reason for each.
 
 A step that raises an exception fails without stopping its worker: the same Python process

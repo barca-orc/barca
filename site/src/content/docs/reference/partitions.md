@@ -45,17 +45,17 @@ def summary(all_sales: list[dict]) -> dict:
   warning.
 - The partition key is passed to the function as the parameter named in `partitions={...}`. A
   dimension that is not a parameter of the function is an error when the file is read, exit 2
-  ([`barca docs assets`](/reference/assets/), "Inputs and parameters").
+  ([Assets, Sensors and Inputs: Inputs and parameters](/reference/assets/#inputs-and-parameters)).
 - Changing the keys: adding a key runs that key and no other; removing a key or reordering the
   list runs no key. Downstream, a `partitions_from` consumer runs for the new key only, and a
   `collect` fan-in runs again whenever a key is added or removed. This is the same however the
   keys are written: a literal list, a module-level constant, any other expression, or
-  `partitions_from`. The keys are not part of the function's definition ([`barca docs hashing`](/reference/hashing/),
+  `partitions_from`. The keys are not part of the function's definition ([The Run Hash](/reference/hashing/),
   "Which decorator arguments count"); renaming the dimension is, and re-runs every key. (Up to
   0.18, editing a list written inside the decorator re-ran every key.)
 - `partitions()`, `partitions_from()` and `collect()` take exactly one argument, by position. A
   keyword (`partitions(values=[...])`, `collect(asset_fn=sales)`), no argument or two are
-  errors when the file is read, exit 2 ([`barca docs assets`](/reference/assets/), "Accepted arguments").
+  errors when the file is read, exit 2 ([Assets, Sensors and Inputs: Accepted arguments](/reference/assets/#accepted-arguments)).
 - `partitions=` works on `@task` and `@sensor` as on `@asset`: one run per key.
 - `partitions_from(upstream)` on a partitioned `upstream` gives the asset the same keys, and
   each key is called with the key and that key's output of `upstream`, passed as the parameter
@@ -108,7 +108,7 @@ def summary(all_sales: list[dict]) -> dict:
   asset has one key or barca has one worker.
 - Which keys run, and each key's run hash, do not depend on the number of workers
   (`BARCA_POOL_SIZE`, else `[execution] pool_size`, else the machine's core count, capped at
-  the capacity; [`barca docs assets`](/reference/assets/), "Heavy steps"). Up to 0.18.1 they could: with a
+  the capacity; [Assets, Sensors and Inputs: Heavy steps](/reference/assets/#heavy-steps-weight)). Up to 0.18.1 they could: with a
   chain of `partitions_from` assets and fewer workers than keys, some keys of the second asset
   were recorded under a run hash that depended on how the keys were split across workers, and
   ran again when the split changed. Such a key, and a fan-in over it, runs once more after
@@ -198,7 +198,7 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (input pipeline.
   the keys of a nested dict, changes nothing; an integer outside 64 bits is compared as a
   float.
 - Editing the source's code (its query) changes its run hash, and every key runs again, as for
-  anything that reads a sensor ([`barca docs cache`](/reference/cache/)). Its `freshness=` does not count.
+  anything that reads a sensor ([The Cache](/reference/cache/)). Its `freshness=` does not count.
 - The source may be an asset instead of a sensor. With `@asset(cutoff=True)` on it, each key
   folds in its own value only, not the source's run hash, so when the asset reruns (an upstream
   changed) only the keys whose value changed run. Without `cutoff`, every rerun of the asset
@@ -228,7 +228,7 @@ key below it whenever it reruns, even when it wrote the same bytes. Mark it
 `@asset(cutoff=True)` and what reads it folds in the bytes it wrote instead of its run hash: a
 rerun that writes the same bytes leaves every key cached, new bytes rerun all of them. Before
 it runs, a dry run reports the keys below it `unknown` (reason `cutoff_pending`). On a
-partitioned asset, `cutoff=True` applies per key. [`barca docs external-data`](/reference/external-data/), "Early cutoff", has the
+partitioned asset, `cutoff=True` applies per key. [External Data and Early Cutoff: Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue), has the
 details.
 
 ## Processing many keys per call
@@ -271,7 +271,7 @@ barca get scored pipeline.py --batch scored=all --batch orders=100   # per node
 
 How the keys are grouped (`batches()`, `batches_by()`, the `--batch` override), what a batch
 function receives and returns, what stays the same, how calls are reported (the dry run and
-history of this example) and the known limits are in [`barca docs batched-partitions`](/reference/batched-partitions/).
+history of this example) and the known limits are in [Batched Partitions](/reference/batched-partitions/).
 
 ## Getting partitions
 
@@ -455,7 +455,7 @@ wrong first:
   listed. Keys are known once their source ran: for a `partitions_from(<asset>)` asset that has
   not, the explorer says so.
 
-See also: [`barca docs batched-partitions`](/reference/batched-partitions/), [`barca docs sinks`](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
+See also: [Batched Partitions](/reference/batched-partitions/), [Sinks](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
 directory per key), `barca docs examples/partitions`.
 
 ---

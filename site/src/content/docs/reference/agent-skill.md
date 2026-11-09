@@ -12,7 +12,7 @@ the repository it is a short guide and covers what an agent needs before its fir
 - when to use barca, and the loop: `barca list` and `barca status` to see what exists and what is
   cached, `--dry-run` to preview, `barca get` (assets) and `barca run` (tasks) to execute, and
   `barca sql` to look at a cached result without running anything;
-- no file arguments needed: barca reads the whole project ([`barca docs discovery`](/reference/discovery/));
+- no file arguments needed: barca reads the whole project ([Discovery](/reference/discovery/));
 - the argument order (target, then files) and comma-separated targets and `--refresh`, which
   cascades downstream unless `--no-cascade`;
 - the output contract: the JSON result on stdout (its last line), the error envelope as the last
@@ -26,7 +26,7 @@ the repository it is a short guide and covers what an agent needs before its fir
   by deleting files, and one spelling per task.
 
 The same text is compiled into the binary, so it works offline and describes the installed
-version ([`barca docs skill`](/reference/agent-skill/) in 0.18.0 prints exactly the repository's `SKILL.md` at that tag):
+version ([Agent Skill](/reference/agent-skill/) in 0.18.0 prints exactly the repository's `SKILL.md` at that tag):
 
 ```bash
 barca docs skill
@@ -41,13 +41,13 @@ barca docs skill > .claude/skills/barca/SKILL.md
 ```
 
 The longer reference, with the full error envelope, several-target output and bounded output, is
-[`barca docs agents`](/reference/agents/) (see also the [CLI reference](/reference/cli/)). Every command, flag and JSON
+[Scripts and AI Agents](/reference/agents/) (see also the [CLI reference](/reference/cli/)). Every command, flag and JSON
 schema, marked stable or experimental, is in the [CLI contract](/reference/cli-contract/).
 
 ## What the skill does not cover
 
 The skill is short on purpose. Three things an agent working with data should also know, from
-[`barca docs sql`](/reference/sql/), [`barca docs partitions`](/reference/partitions/) and [`barca docs cache`](/reference/cache/):
+[barca sql](/reference/sql/), [Partitions](/reference/partitions/) and [The Cache](/reference/cache/):
 
 - `barca sql` returns at most 100 rows unless you pass `--limit N` or `--all`, and its JSON is
   one indented document (`columns`, `rows`, `total`, `truncated`), not one line. Only parquet and

@@ -42,7 +42,7 @@ barca get summary pipeline.py     # one asset and what it depends on
   unit test like any other function.
 - Assets that do not depend on each other run in parallel, in separate worker processes.
 
-More: [`barca docs assets`](/reference/assets/).
+More: [Assets, Sensors and Inputs](/reference/assets/).
 
 ## 2. Where results live
 
@@ -63,19 +63,19 @@ A run creates `.barca/` in the project root:
   of the output.
 - **The format follows the returned value.** A dict, list, string or number is stored as
   json. A DataFrame, Arrow table or DuckDB relation is stored as parquet. Anything else is
-  pickled ([`barca docs types`](/reference/types/)).
+  pickled ([Output Formats and Types](/reference/types/)).
 - **Results are written locally first.** A remote store is this machine's backup and
   read-through cache: set `BARCA_REMOTE_URI` (or `[remote] uri` in `barca.toml`) and every
   result and a backup of the history are uploaded there. See
   [Remote storage](/reference/remote-storage/). Sharing results between machines means a
-  server they all point at ([`barca docs server-mode`](/reference/server-mode/), [Deploying](/deploying/)).
+  server they all point at ([Server Mode: a Shared Ledger and --server](/reference/server-mode/), [Deploying](/deploying/)).
 - **`--env <name>`** (or `BARCA_ENV`) keeps a separate cache and history, so dev and prod
   do not share results.
 
 Do not delete files under `.barca/` to force a recompute. Use `--refresh` (section 4). Every
 file under `.barca/` is listed in [Configuration](/reference/config/#where-things-live).
 
-More: [`barca docs cache`](/reference/cache/), [`barca docs remote`](/reference/remote-storage/).
+More: [The Cache](/reference/cache/), [Remote Storage](/reference/remote-storage/).
 
 ## 3. Seeing what barca sees
 
@@ -111,7 +111,7 @@ errors go to stderr. The JSON shapes and exit codes are in the
 [CLI reference](/reference/cli/#output-format), and the [agent skill](/reference/agent-skill/)
 is a short guide for AI agents.
 
-More: [`barca docs status`](/reference/status/), [`barca docs sql`](/reference/sql/).
+More: [barca status](/reference/status/), [barca sql](/reference/sql/).
 
 ## 4. Sensors: data from outside
 
@@ -183,13 +183,13 @@ three flags. Use it also after a change the run hash does not see: an
 installed package, a module outside the project root, or an environment variable the
 function reads without declaring it in `@asset(env=[...])`.
 
-More: [`barca docs hashing`](/reference/hashing/) has the complete list, under "Not followed".
+More: [The Run Hash](/reference/hashing/) has the complete list, under "Not followed".
 
 The run hash covers the function and every project definition it uses, followed through
 imports, decorators, defaults and the other places Python can reach a helper. Where barca
 cannot tell statically which definition a name means (a module-level `if`, a star import), it
 includes more rather than less, so an edit nearby can re-run a step that did not need it. The
-exact rules are in [`barca docs hashing`](/reference/hashing/), "Followed conservatively".
+exact rules are in [The Run Hash: Followed conservatively](/reference/hashing/#followed-conservatively).
 
 ## 5. Tasks, and `get` versus `run`
 
@@ -234,7 +234,7 @@ null
 - An input whose name starts with `_` is for ordering only: the step runs after it, the
   value is not loaded, and the parameter receives `None`.
 
-More: [`barca docs tasks`](/reference/tasks/).
+More: [Tasks](/reference/tasks/).
 
 ## 6. Large inputs
 
@@ -251,7 +251,7 @@ about one the function never mentions. `barca get` on an asset stored as parquet
 pointer to the file, not the rows; use `barca sql` to look at it.
 [Large inputs](/recipes/large-inputs/) has a worked example and the limits.
 
-More: [`barca docs big-inputs`](/recipes/large-inputs/), [`barca docs types`](/reference/types/).
+More: [Read Large Inputs Lazily](/recipes/large-inputs/), [Output Formats and Types](/reference/types/).
 
 ## 7. Partitions
 
@@ -329,7 +329,7 @@ Limits:
   above has three rows.
 
 [Parametrized Assets and Partitions](/examples/partitions/) shows
-each of these with output. More: [`barca docs partitions`](/reference/partitions/).
+each of these with output. More: [Partitions](/reference/partitions/).
 
 ## 8. Projects with several files
 
@@ -393,7 +393,7 @@ barca get total pipelines/      # read only the files under pipelines/
 Which directories and files a walk skips, and the `[discovery]` settings that change it, are
 in [Discovery](/reference/discovery/).
 
-More: [`barca docs discovery`](/reference/discovery/), [`barca docs cache`](/reference/cache/).
+More: [Discovery](/reference/discovery/), [The Cache](/reference/cache/).
 
 ## 9. Schedules
 

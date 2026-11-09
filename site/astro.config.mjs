@@ -17,7 +17,6 @@ export default defineConfig({
     '/reference/cli/resume/': '/reference/pausing/',
     '/reference/cli/pin/': '/reference/pins/',
     '/reference/cli/unpin/': '/reference/pins/',
-    '/reference/cli/tokens/': '/serve/#requiring-a-token-authentication-login',
     '/patterns/01-asset-to-asset/': '/recipes/chain-assets/',
     '/patterns/02-asset-to-task/': '/recipes/asset-to-task/',
     '/patterns/03-ordering-only-deps/': '/recipes/ordering-only-deps/',
@@ -46,7 +45,6 @@ export default defineConfig({
     '/reference/cli/unpin/': '/reference/pins/',
     '/reference/cli/pause/': '/reference/pausing/',
     '/reference/cli/resume/': '/reference/pausing/',
-    '/reference/cli/tokens/': '/reference/server-mode/#opt-in-project-tokens',
     '/workflows/': '/examples/',
   },
 
@@ -69,8 +67,13 @@ export default defineConfig({
       },
       favicon: '/favicon.svg',
       expressiveCode: {
-        // Long lines wrap (keeping their indent) instead of hiding trailing comments off-screen.
-        defaultProps: { wrap: true, hangingIndent: 4 },
+        // Long commands wrap (keeping their indent) instead of hiding trailing comments
+        // off-screen; terminal output and file trees keep their columns and scroll instead.
+        defaultProps: {
+          wrap: true,
+          hangingIndent: 4,
+          overridesByLang: { ',plaintext,txt,text,ansi': { wrap: false } },
+        },
         styleOverrides: {
           codeFontFamily: 'var(--sl-font-mono)',
         },
@@ -175,7 +178,7 @@ addEventListener('hashchange', markSection);`,
             { slug: 'reference/cli/state' },
             { slug: 'reference/cli/stats' },
             { slug: 'reference/status' },
-            { label: 'barca tokens', link: '/serve/#requiring-a-token-authentication-login' },
+            { slug: 'reference/cli/tokens' },
             { slug: 'reference/cli/version' },
           ],
         },
