@@ -174,6 +174,11 @@ a[aria-current='true'] {
   box-decoration-break: clone;
 }
 
+/* A flag or command in a table cell stays on one line ("--dry-run" never breaks after "--") */
+.sl-markdown-content td code {
+  white-space: nowrap;
+}
+
 /* A flag in an outline entry ("--refresh") stays on one line */
 starlight-toc code,
 mobile-starlight-toc code {

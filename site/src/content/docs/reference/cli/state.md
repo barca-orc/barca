@@ -14,7 +14,7 @@ machine's newest backup, and `restore` without `--from` picks this machine's.
 
 ## Usage
 
-```
+```txt wrap
 barca state backups [--json]
 barca state restore [--from N|NAME|PATH]
 barca state reset [--yes]

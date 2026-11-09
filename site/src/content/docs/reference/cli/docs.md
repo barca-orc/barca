@@ -8,7 +8,7 @@ Every command's `--help` ends with examples.
 
 ## Usage
 
-```
+```txt wrap
 barca docs [topic] [--all] [--json]
 ```
 

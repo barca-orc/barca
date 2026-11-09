@@ -10,7 +10,7 @@ only the value.
 
 ## Usage
 
-```
+```txt wrap
 barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
 ```
 

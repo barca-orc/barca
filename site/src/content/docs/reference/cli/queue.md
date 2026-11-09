@@ -8,7 +8,7 @@ a server (`--server URL`, `BARCA_SERVER` or `[server] url`); without one it exit
 
 ## Usage
 
-```
+```txt wrap
 barca queue [pause|resume] [--server [URL]] [--json]
 ```
 

@@ -8,7 +8,7 @@ Consumers of saved plans should reject unsupported versions.
 
 ## Usage
 
-```
+```txt wrap
 barca plan [file.py|dir/ ...]
 ```
 

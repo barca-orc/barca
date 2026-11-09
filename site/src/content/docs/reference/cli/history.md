@@ -15,7 +15,7 @@ The change is local to the selected environment's metadata database.
 
 ## Usage
 
-```
+```txt wrap
 barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
 ```
 

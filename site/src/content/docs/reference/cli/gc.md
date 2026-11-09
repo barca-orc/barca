@@ -10,7 +10,7 @@ Evict cached results so `.barca/` stays under its size limit (`[cache].max_size`
 
 ## Usage
 
-```
+```txt wrap
 barca gc [--dry-run] [--max-size SIZE] [--json]
 ```
 

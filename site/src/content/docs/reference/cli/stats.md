@@ -9,7 +9,7 @@ Times are UTC.
 
 ## Usage
 
-```
+```txt wrap
 barca stats <target> [file.py|dir/ ...]
 ```
 

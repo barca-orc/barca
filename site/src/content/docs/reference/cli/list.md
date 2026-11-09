@@ -12,7 +12,7 @@ the cron expression in the local time of the machine `list` runs on (the table c
 
 ## Usage
 
-```
+```txt wrap
 barca list [file.py|dir/ ...] [-l N | --all] [--json]
 ```
 

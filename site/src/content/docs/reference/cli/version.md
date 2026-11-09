@@ -10,7 +10,7 @@ barca 0.27.0
 
 ## Usage
 
-```
+```txt wrap
 barca version
 ```
 

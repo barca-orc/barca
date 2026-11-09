@@ -9,7 +9,7 @@ endpoints and [Deploying](/deploying/) for running it behind nginx.
 
 ## Usage
 
-```
+```txt wrap
 barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
 ```
 
