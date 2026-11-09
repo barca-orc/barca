@@ -217,6 +217,11 @@ mobile-starlight-toc code {
   order: 2;
   width: 100% !important;
 }
+/* The hero heading is a sentence, not a one-word logo: keep it to two or three lines */
+.hero h1 {
+  font-size: clamp(2rem, 1.25rem + 2.5vw, 3.25rem) !important;
+  line-height: 1.15 !important;
+}
 .hero .tagline code {
   font-size: 0.9em;
   white-space: nowrap;

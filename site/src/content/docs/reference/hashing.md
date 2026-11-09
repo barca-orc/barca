@@ -1,5 +1,5 @@
 ---
-title: "The Run Hash: Code and Decorator Arguments"
+title: "The Run Hash: Functions, Helpers and Decorator Arguments"
 description: "Which project code a step's run hash follows from its function, which decorator arguments count, and what barca does not follow."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/hashing.md
 ---

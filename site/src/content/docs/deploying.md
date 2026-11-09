@@ -96,56 +96,20 @@ and sends nothing. With a remote store the server backs its history up there, as
 
 ## Restarting without losing work
 
-A deploy, a reboot or a config change restarts the server. Every run it accepted (a request,
-a `--server` command, the UI, a scheduled tick) is in its run queue, kept in the metadata DB on
-the persistent `.barca/`, so nothing is lost or cancelled:
+A deploy, a reboot or a config change restarts the server, and no accepted run is lost: the run
+queue lives in the metadata DB on the persistent `.barca/`, the server drains on SIGTERM, and the
+new server resumes the queue in order.
 
 ```bash
 barca queue pause --server       # optional: nothing new starts; runs in flight finish
 systemctl restart barca          # or: docker restart barca, docker compose up -d
-barca queue --server             # the queue is back; still paused if you paused it
 barca queue resume --server      # if you paused it
 ```
 
-1. **Pause (optional).** The runs in flight finish while nothing new starts, so the stop that
-   follows waits only for them. The pause is kept across the restart.
-2. **Restart.** The supervisor sends SIGTERM: the server drains, and exits 0 once the runs in
-   flight finished, or at `--drain-timeout` after putting the ones left back at the head of the
-   queue. Runs submitted meanwhile are accepted and queued.
-3. **The queue resumes.** The new server prints `[barca] resuming N queued runs` and starts them
-   in order under their run ids. `barca get|run --server` and `barca logs -f --server` clients
-   waiting on a run reconnect (for up to 60 seconds, `BARCA_SERVER_RECONNECT`) and follow it to
-   its end.
-
-A requeued run starts again from its beginning, so a run is executed at least once: assets that
-finished are cache hits unless the deploy changed their code or inputs, and an interrupted step
-or task runs again. Make tasks with side
-effects safe to repeat, or give them a longer drain timeout.
-
-The supervisor's grace period must cover the drain timeout plus what the server takes after it:
-12 seconds with a drain timeout of 10 or more (10 for stopped runs to record themselves, 2 for
-open connections), plus up to 31 for the last metadata backup with a store and 3 for the
-telemetry flush with `BARCA_TELEMETRY`. With a drain timeout under 10 seconds these shrink: half
-the drain timeout (at least 2 s) for the runs, 1 s for connections, the drain timeout (at least
-5 s) for the backup. So `drain_timeout = 5` without a store needs 9 seconds and fits Docker's
-default of 10. Under a supervisor (process 1 of a container, systemd, Kubernetes) `barca serve`
-prints the number at startup:
-
-```text
-[barca] stop grace: the container runtime must allow at least 9s between SIGTERM and SIGKILL (drain timeout 5s + 4s for stopping runs and closing connections); set docker stop -t or stop_grace_period (Docker's default is 10s)
-```
-
-A supervisor that kills the server mid-drain costs the runs in flight the time the drain gave
-them: the next server puts them back in the queue (once per run; a run in flight through two
-killed drains in a row is recorded as interrupted). The queued runs survive it too.
-
-| Supervisor | Setting | Default | With the default 30 s drain timeout |
-|---|---|---|---|
-| systemd | `TimeoutStopSec=` | 90 s | enough |
-| Docker | `docker stop -t`, `stop_grace_period` | 10 s | `45s` |
-| Kubernetes | `terminationGracePeriodSeconds` | 30 | `45` |
-
-More in `barca docs serve-ops` ("The run queue", "Stopping the server").
+Give the supervisor a stop grace longer than the drain timeout; under a supervisor, `barca serve`
+prints the number it needs at startup. A requeued run starts again from its beginning, so make tasks with side
+effects safe to repeat. [Serve Operations](/reference/serve-ops/#restarting-without-losing-work)
+has the drain, the grace period for systemd, Docker and Kubernetes, and what a killed drain costs.
 
 ## Listen on another interface
 
@@ -281,23 +245,10 @@ before you bind it to anything wider, add [authentication](#authentication) at t
 
 ### Containers with a memory limit
 
-Steps run in separate worker processes, independent ones at the same time. Under a hard memory
-limit (`mem_limit`, a pod's limit), heavy steps that become ready together can add up past it,
-and the kernel kills one: the step fails with
-`worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)` (see
-[A worker that dies](/reference/cli/#a-worker-that-dies)). Give those steps a `weight=`
-(experimental): the steps running at once add up to at most the capacity, the pool size unless
-`[execution] capacity` in `barca.toml` or `BARCA_CAPACITY` sets it.
-
-```toml
-# barca.toml
-[execution]
-capacity = 4
-```
-
-With `@asset(weight=2)` on the heavy assets, two of them run at once and light steps use what is
-left. The capacity is per run: two schedules that fire together run with a capacity
-each. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight).
+Under a hard memory limit, heavy steps that become ready together can add up past it and the
+kernel kills one. Give those steps a `weight=` so the steps running at once fit the capacity;
+[Serve Operations](/reference/serve-ops/#containers-with-a-memory-limit) and
+[Heavy steps](/reference/api/decorators/#heavy-steps-weight) show how.
 
 ### Native Debian and Alpine targets
 
