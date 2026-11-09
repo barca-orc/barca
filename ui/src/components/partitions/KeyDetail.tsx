@@ -131,7 +131,13 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
               ))}
             </Section>
           )}
-          <Section title="Output">
+          <Section title={state === 'fresh' ? 'Output' : 'Last successful output'}>
+            {detail.output && state === 'failed' && (
+              <p className="barca-note">The latest attempt failed; this data is from an earlier successful attempt.</p>
+            )}
+            {detail.output && state !== 'fresh' && state !== 'failed' && (
+              <p className="barca-note">This retained result may be out of date for the current code and inputs.</p>
+            )}
             {detail.output ? <Shape artifact={detail.output} label={`${keyName} output`} /> : <p className="barca-schema-empty">No successful result for this key yet.</p>}
           </Section>
           {detail.attempts.length > 0 && (

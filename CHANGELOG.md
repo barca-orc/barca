@@ -21,6 +21,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- **Partition recovery feedback:** the key explorer’s primary run follows its visible filters without widening an inexact selection; completed retries report their outcome and refresh the open key. Retained results on failed or stale keys are labeled as the last successful output.
+
 - Web UI: the graph fits once its nodes are measured and re-fits when the canvas changes size until you pan or zoom; switching from List to Graph could leave it unfitted at the canvas's top-left corner.
 
 ## 0.41.0 (2026-11-08)

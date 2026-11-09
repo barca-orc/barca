@@ -83,3 +83,37 @@ test('says what is wrong and where, shows those keys, zooms and opens one', asyn
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
 })
+
+test('the primary run follows search and state filters', async ({ page }) => {
+  await mock(page)
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&q=d2`)
+  const run = page.locator('.barca-view-head').getByRole('button', { name: 'Run 1 key shown' })
+  await expect(run).toBeVisible()
+  await page.route(/\/runs$/, route => route.request().method() === 'POST' ? route.fulfill({ json: { run_id: 'r9' } }) : route.fallback())
+  const request = page.waitForRequest(r => r.method() === 'POST' && r.url().endsWith('/runs'))
+  await run.click()
+  expect((await request).postDataJSON().partition).toBe(JSON.stringify({ day: ['d2'], region: ['emea'] }))
+})
+
+test('a failed key labels retained output as historical', async ({ page }) => {
+  await mock(page)
+  await page.route(/\/assets\/[^/]+\/partitions\/key\?/, route => route.fulfill({ json: { ...detail, output: detail.inputs[0] } }))
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&key=day%3Dd2%2Cregion%3Demea`)
+  const panel = page.getByRole('complementary', { name: 'Key day=d2,region=emea' })
+  await expect(panel).toContainText('Last successful output')
+  await expect(panel).toContainText('The latest attempt failed; this data is from an earlier successful attempt.')
+})
+
+test('retry completion refreshes the open key and reports failure', async ({ page }) => {
+  await mock(page)
+  let finished = false
+  await page.route(/\/assets\/[^/]+\/partitions\/key\?/, route => route.fulfill({ json: {
+    ...detail, attempts: finished ? [{ ...detail.attempts[0], error: 'ValueError: retry still failed', run_id: 'r9' }] : detail.attempts,
+  } }))
+  await page.route(/\/runs$/, route => route.request().method() === 'POST' ? route.fulfill({ json: { run_id: 'r9' } }) : route.fallback())
+  await page.route(/\/runs\/r9$/, route => { finished = true; return route.fulfill({ json: { run_id: 'r9', status: 'failed' } }) })
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&key=day%3Dd2%2Cregion%3Demea`)
+  await page.getByRole('button', { name: 'Run this key' }).click()
+  await expect(page.locator('.barca-keys-notice')).toContainText('Run failed')
+  await expect(page.getByRole('complementary', { name: 'Key day=d2,region=emea' })).toContainText('ValueError: retry still failed')
+})
