@@ -25,7 +25,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Documentation
 
-- barca.sh: attach the Worker custom domains in `site/wrangler.jsonc`, build the site in CI's fast tier, and make the release `deploy-site` job non-blocking with `continue-on-error` so a Cloudflare failure does not mark the release workflow failed after PyPI publish.
+- barca.sh: attach the Worker custom domains in `site/wrangler.jsonc` and build the site in CI's fast tier so docs deploy fixes are validated without touching the release workflow.
 
 ## 0.41.0 (2026-11-08)
 

@@ -74,15 +74,13 @@ a pre-commit hook.
    publish), and four `verify-published-linux` jobs install the published wheel and the
    released binary in compiler-free containers once it is.
 7. **Deploys the docs site**, [barca.sh](https://barca.sh), from the tag: a `deploy-site` job
-   runs `npm ci` and `npm run deploy` in `site/` (Node 24; the Worker and the `barca.sh` custom
-   domains are in `site/wrangler.jsonc`). It starts after the GitHub Release and the PyPI upload
-   and nothing waits on it, so a failed deploy leaves the release published; rerun the job once
-   the cause is fixed. The job uses `continue-on-error`, so a failed deploy does not turn the
-   release workflow red after PyPI publish. It needs two repository secrets,
-   `CLOUDFLARE_API_TOKEN` (a Cloudflare API token from the "Edit Cloudflare Workers" template,
-   scoped to the account that owns the `barca` Worker) and `CLOUDFLARE_ACCOUNT_ID` (the same
-   account `npx wrangler whoami` prints). With either missing it warns, naming the secret, and
-   deploys nothing; the run stays green.
+   runs `npm ci`, `npm run build` and `npx wrangler deploy` in `site/` (Node 24; the Worker and
+   the `barca.sh` custom domains are in `site/wrangler.jsonc`). It starts after the GitHub
+   Release and the PyPI upload and nothing waits on it, so a failed deploy leaves the release
+   published; rerun the job once the cause is fixed. It needs two repository secrets,
+   `CLOUDFLARE_API_TOKEN` (a Cloudflare API token from the "Edit Cloudflare Workers" template)
+   and `CLOUDFLARE_ACCOUNT_ID`. With either missing it warns, naming the secret, and deploys
+   nothing; the run stays green.
 
 There are no wheels for Windows, Linux arm64 or macOS x86_64. On those platforms `pip` builds
 from the sdist, which needs a Rust toolchain.
