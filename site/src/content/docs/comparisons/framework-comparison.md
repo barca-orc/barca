@@ -225,7 +225,7 @@ each project's documentation.
 | Web UI | Yes (`dagster dev`) | Yes (Prefect Cloud or server) | Yes (webserver) | Yes, served by `barca serve` at `/ui/` ([Server API](/reference/server-api/)) |
 | Run history | Event log, asset catalog | Flow run and task run tracking | DagRun and TaskInstance records | Rows in a local database: `barca history`, `barca stats`, `barca status` ([#50]) |
 | Retry on failure | Per-op retries | Per-task retries | Retries | `retries=N, retry_backoff=...` on the decorator, linear backoff ([#51]) |
-| Alerting | Sensors and hooks | Automations | Email and other notifiers | Slack: a post when a job starts failing, recovers, or is still failing a day later ([Telemetry](/reference/telemetry/), [#52]) |
+| Alerting | Sensors and hooks | Automations | Email and other notifiers | Slack: a post when a job starts failing, recovers, or is still failing a day later ([Slack Alerts](/reference/slack/), [#52]) |
 | Scheduling | Cron schedules and sensors | Deployments | Scheduler | Cron in `barca serve`, 5 or 6 fields, 1-second resolution, one catch-up fire after downtime ([Scheduling](/scheduling/), [#54]) |
 | Server mode | `dagster dev` | `prefect server` | Webserver and scheduler | `barca serve`: HTTP API, scheduler and web UI; binds 127.0.0.1 by default (`--host` to change); opt-in project bearer tokens (`--auth token`). Other machines point at it as the team's ledger ([Deploying](/deploying/), [#53]) |
 | Remote storage | I/O managers | Result storage | XCom backends | Artifacts on S3, S3-compatible stores, GCS or Azure through fsspec, and backups of the run history database ([Remote storage](/reference/remote-storage/), [#55]) |

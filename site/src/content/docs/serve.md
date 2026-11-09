@@ -23,7 +23,8 @@ Authentication is off by default ("Requiring a token" below).
 | Understand how laptops and the server share results, and what `--server` does | [Server Mode](/reference/server-mode/) |
 | Manage the run queue, restarts, stop grace, capacity and run timeouts | [Serve Operations](/reference/serve-ops/) |
 | Start runs and read results from code, over HTTP or with the Python client | [Server API](/reference/server-api/) |
-| Send traces and metrics to Datadog, or post failures to Slack | [Telemetry and Slack Alerts](/reference/telemetry/) |
+| Post to Slack when a job starts failing or recovers | [Slack Alerts](/reference/slack/) |
+| Send traces and metrics to Datadog | [Telemetry](/reference/telemetry/) |
 | Require tokens, and connect the web UI and laptops with them | [Server Mode: project tokens](/reference/server-mode/#opt-in-project-tokens) |
 | See what the web UI shows and does | [The Web UI](/web-ui/) |
 | See every flag of the command | [`barca serve`](/reference/cli/serve/) |

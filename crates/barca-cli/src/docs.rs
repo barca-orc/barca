@@ -155,8 +155,13 @@ pub const TOPICS: &[Topic] = &[
     ),
     topic!(
         "telemetry",
-        "Report runs and steps to Datadog; post to Slack when a job starts failing or recovers",
+        "Report runs and steps to Datadog; JSON logs and metrics from barca serve",
         "telemetry.md"
+    ),
+    topic!(
+        "slack",
+        "Post to Slack when a job starts failing, recovers, or is still failing a day later",
+        "slack.md"
     ),
     topic!(
         "examples",

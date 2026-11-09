@@ -100,9 +100,10 @@ Getting work done:
 - `barca docs server-mode` — one `barca serve` as the team's ledger: local runs read cache hits from it and post what they compute; `--server` runs `get`, `run`, `status`, `list`, `history`, `stats` there; `--local` leaves it out
 - `barca docs remote` — this machine's backup and read-through cache (S3, GCS, Azure), set with a few environment variables; sharing means a server (`barca docs server-mode`)
 - `barca docs backup` — metadata backups in the store, `barca state backups` / `barca state restore`, a server's backups
-- `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`), post
-  to Slack when a job starts failing or recovers (`BARCA_SLACK_WEBHOOK_URL`), and JSON log lines
-  from `barca serve` (`BARCA_LOG=json`)
+- `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`), and
+  JSON log lines from `barca serve` (`BARCA_LOG=json`)
+- `barca docs slack` — post to Slack when a job starts failing, recovers or is still failing a day
+  later (`BARCA_SLACK_WEBHOOK_URL`)
 
 Examples and reference:
 
