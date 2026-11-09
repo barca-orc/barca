@@ -220,6 +220,11 @@ pub fn planned_run_nodes(
     recorded: Vec<RunNodeSummary>,
 ) -> Option<Vec<RunNodeSummary>> {
     use std::collections::{HashMap, HashSet};
+    // An interrupted call may have started without recording a result. Absence of a
+    // step is not evidence of a cache hit when the run did not finish normally.
+    if !matches!(status, "success" | "failed") {
+        return None;
+    }
     let config = crate::planner::ResourceConfig {
         pool_size: std::thread::available_parallelism().map_or(4, |n| n.get()),
         concurrency_groups: HashMap::new(),
@@ -826,6 +831,16 @@ mod planned_nodes_tests {
         assert!(
             planned_run_nodes(&dag, "get", &["p.py:publish"], "failed", None, vec![]).is_none()
         );
+    }
+
+    #[test]
+    fn interrupted_runs_do_not_infer_cache_hits_from_missing_steps() {
+        for status in ["cancelled", "interrupted", "error"] {
+            assert!(
+                planned_run_nodes(&dag(), "get", &["p.py:publish"], status, Some(5), vec![])
+                    .is_none()
+            );
+        }
     }
 
     #[test]

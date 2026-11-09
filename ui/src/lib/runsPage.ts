@@ -174,7 +174,10 @@ export function stepsLabel(executed: number, cached: number, failed = 0, skipped
 }
 
 /** `stepsLabel` for a run's detail: failed keys and skipped nodes from its per-node summary. */
-export function runViewSteps(run: { steps_executed: number; steps_cached: number }, nodes: readonly RunNodeSummary[]): string {
+export function runViewSteps(run: { steps_executed: number; steps_cached: number; status?: string }, nodes: readonly RunNodeSummary[]): string {
+  if (run.status === 'cancelled' || run.status === 'interrupted' || run.status === 'error') {
+    return `${run.steps_executed.toLocaleString()} started · ${run.steps_cached.toLocaleString()} cached`
+  }
   const failed = nodes.reduce((sum, n) => sum + n.failed, 0)
   const skipped = nodes.filter((n) => n.status === 'skipped').length
   return stepsLabel(run.steps_executed, run.steps_cached, failed, skipped)
@@ -186,7 +189,9 @@ export function runProgress(run: RunSummary): { steps: string; stoppedAt: string
   const planned = total === null ? [] : [`${total.toLocaleString()} node${total === 1 ? '' : 's'} planned`]
   const stopped = run.first_failure ? [`stopped at ${run.first_failure.node_id}`] : []
   return {
-    steps: stepsLabel(run.steps_executed, run.steps_cached, run.steps_failed ?? 0),
+    steps: ['cancelled', 'interrupted', 'error'].includes(run.status)
+      ? `${run.steps_executed.toLocaleString()} started · ${run.steps_cached.toLocaleString()} cached`
+      : stepsLabel(run.steps_executed, run.steps_cached, run.steps_failed ?? 0),
     stoppedAt: run.first_failure && runFailed(run.status) ? stepName(run.first_failure.node_id) : null,
     title: ['Steps are keys: a partitioned node counts one per key', ...planned, ...stopped].join(' · '),
   }

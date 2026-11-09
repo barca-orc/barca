@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useHealth } from '@/hooks/useHealth'
 import { api } from '@/lib/api'
 import { rerunAllRequest, rerunFailedRequest, retryStepRequest } from '@/lib/runRecovery'
 import type { RunRequest, RunView } from '@/lib/types'
+import { ConfirmDialog } from './ConfirmDialog'
 import { Button } from './Button'
 
 type Rerunnable = Pick<RunView, 'command' | 'target' | 'files'>
@@ -54,5 +55,33 @@ export function RetryStep({ run, stepId, onStarted }: { run: Rerunnable; stepId:
     <Button size="sm" variant="ghost" loading={busy} disabled={busy || readOnly} title={readOnly ? READ_ONLY : `Run ${stepId} again`}
       onClick={(e) => { e.stopPropagation(); void start(retryStepRequest(run, stepId)) }}>Retry</Button>
     {error && <span className="barca-run-error" role="alert">{error}</span>}
+  </>
+}
+
+/** Cancel one live run, keeping the request visible until polling reports its terminal state. */
+export function CancelRun({ id, queued }: { id: string; queued: boolean }) {
+  const client = useQueryClient()
+  const readOnly = useHealth().data?.read_only ?? true
+  const [asking, setAsking] = useState(false)
+  const cancel = useMutation({
+    mutationFn: () => api.cancelRun(id),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['runs'] })
+      void client.invalidateQueries({ queryKey: ['queue'] })
+    },
+  })
+  if (readOnly) return null
+  return <>
+    <Button size="sm" disabled={cancel.isPending || cancel.isSuccess} onClick={() => setAsking(true)}>
+      {cancel.isSuccess ? 'Cancellation requested' : cancel.isPending ? 'Cancelling…' : 'Cancel run'}
+    </Button>
+    {cancel.isError && <span role="alert">Could not cancel: {cancel.error.message}</span>}
+    {asking && <ConfirmDialog
+      title={`Cancel run ${id}?`}
+      body={queued ? 'Remove this run from the queue so it does not start.' : 'Stop this run and its active work. Results already completed stay recorded.'}
+      action="Cancel run"
+      onCancel={() => setAsking(false)}
+      onConfirm={() => { setAsking(false); cancel.mutate() }}
+    />}
   </>
 }
