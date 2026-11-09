@@ -3,6 +3,7 @@
 //! A selection names one or more dimensions and, for each, the values to keep:
 //! `region=emea,amer` or, for compound keys, a JSON object
 //! `{"region": "emea", "day": ["2026-10-13", "2026-10-14"]}`.
+//! An array of objects selects exact combinations instead of their cross-product.
 //!
 //! [`PartitionSelection::apply`] narrows the plan of one run:
 //!
@@ -25,9 +26,12 @@ use crate::step_status::StepStatus;
 use crate::targets::short_name;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-/// The keys `--partition` selects: dimension → accepted values.
+/// The keys `--partition` selects: a rectangular dimension filter or exact combinations.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PartitionSelection(pub BTreeMap<String, BTreeSet<String>>);
+pub struct PartitionSelection {
+    pub(crate) dimensions: BTreeMap<String, BTreeSet<String>>,
+    exact_keys: Option<Vec<BTreeMap<String, String>>>,
+}
 
 const USAGE: &str = "Use --partition region=emea,amer (one dimension, comma-separated values) or a \
      JSON object for compound keys: --partition '{\"region\": \"emea\", \"day\": \"2026-10-14\"}'";
@@ -36,6 +40,9 @@ impl PartitionSelection {
     /// Parse the `--partition` argument.
     pub fn parse(raw: &str) -> Result<Self, String> {
         let raw = raw.trim();
+        if raw.starts_with('[') {
+            return Self::parse_exact(raw).map_err(|error| format!("{error}\n{USAGE}"));
+        }
         let mut dims: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         if raw.starts_with('{') {
             let parsed: serde_json::Value = serde_json::from_str(raw)
@@ -86,16 +93,92 @@ impl PartitionSelection {
         if dims.is_empty() {
             return Err(format!("--partition: nothing selected.\n{USAGE}"));
         }
-        Ok(Self(dims))
+        Ok(Self {
+            dimensions: dims,
+            exact_keys: None,
+        })
+    }
+
+    /// Preserve tuples in queued requests; legacy rectangular selections remain objects.
+    pub fn to_json(&self) -> serde_json::Value {
+        match &self.exact_keys {
+            Some(keys) => serde_json::json!(keys),
+            None => serde_json::json!(self.dimensions),
+        }
+    }
+
+    fn parse_exact(raw: &str) -> Result<Self, String> {
+        let entries: Vec<serde_json::Value> = serde_json::from_str(raw)
+            .map_err(|e| format!("--partition: not a JSON key list ({e})."))?;
+        if entries.is_empty() {
+            return Err("--partition: nothing selected.".into());
+        }
+        let mut dimensions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut keys = BTreeSet::new();
+        let mut names = None;
+        for entry in entries {
+            let serde_json::Value::Object(obj) = entry else {
+                return Err("--partition: each exact key must be a JSON object.".into());
+            };
+            if obj.is_empty() || obj.keys().any(|d| d.is_empty()) {
+                return Err("--partition: each exact key needs named dimensions.".into());
+            }
+            let current: BTreeSet<String> = obj.keys().cloned().collect();
+            if names.as_ref().is_some_and(|expected| expected != &current) {
+                return Err("--partition: exact keys must name the same dimensions.".into());
+            }
+            names = Some(current);
+            let mut key = BTreeMap::new();
+            for (dim, value) in obj {
+                let value = match value {
+                    serde_json::Value::String(s) => s,
+                    serde_json::Value::Number(n) => n.to_string(),
+                    _ => {
+                        return Err(format!(
+                            "--partition: exact key '{dim}' must be a string or number."
+                        ));
+                    }
+                };
+                dimensions
+                    .entry(dim.clone())
+                    .or_default()
+                    .insert(value.clone());
+                key.insert(dim, value);
+            }
+            keys.insert(key);
+        }
+        Ok(Self {
+            dimensions,
+            exact_keys: Some(keys.into_iter().collect()),
+        })
     }
 
     /// Whether `key` is selected: each named dimension that `key` has holds one of its listed
     /// values. Dimensions the key does not have are not checked, so a key with none of them
     /// matches; [`Self::apply`] narrows only nodes that have at least one.
     pub fn matches(&self, key: &PartitionKey) -> bool {
-        self.0
-            .iter()
-            .all(|(dim, values)| key.0.get(dim).is_none_or(|v| values.contains(v)))
+        match &self.exact_keys {
+            // Parsed keys are sorted and have identical dimension names. Full keys use a
+            // logarithmic lookup, even for thousands of scattered failures.
+            Some(keys) if self.dimensions.keys().all(|d| key.0.contains_key(d)) => keys
+                .binary_search_by(|selected| {
+                    selected
+                        .iter()
+                        .map(|(d, v)| v.cmp(&key.0[d]))
+                        .find(|order| !order.is_eq())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .is_ok(),
+            Some(keys) => keys.iter().any(|selected| {
+                selected
+                    .iter()
+                    .all(|(dim, value)| key.0.get(dim).is_none_or(|v| v == value))
+            }),
+            None => self
+                .dimensions
+                .iter()
+                .all(|(dim, values)| key.0.get(dim).is_none_or(|v| values.contains(v))),
+        }
     }
 
     /// The planner's pre-filter for one node's static dimensions (dimension → its values): when
@@ -103,11 +186,11 @@ impl PartitionSelection {
     /// the keys left out are never built. A dimension that would be left with no value is kept
     /// whole; [`Self::apply`] then removes the node's keys.
     pub(crate) fn prefilter(&self, dims: &mut HashMap<String, Vec<String>>) {
-        if !self.0.keys().any(|d| dims.contains_key(d)) {
+        if !self.dimensions.keys().any(|d| dims.contains_key(d)) {
             return;
         }
         let filtered: Vec<(String, Vec<String>)> = self
-            .0
+            .dimensions
             .iter()
             .filter_map(|(dim, selected)| {
                 let values = dims.get(dim)?;
@@ -129,7 +212,7 @@ impl PartitionSelection {
 
     /// Whether a node with these dimensions is narrowed: it has a named dimension.
     fn narrows(&self, dims: &HashMap<String, crate::model::PartitionSpec>) -> bool {
-        self.0.keys().any(|d| dims.contains_key(d))
+        self.dimensions.keys().any(|d| dims.contains_key(d))
     }
 
     /// Narrow `plan` (the plan of one run, for `targets`) to the selection; see the module
@@ -156,7 +239,11 @@ impl PartitionSelection {
             .filter_map(|id| dims_of(id))
             .flat_map(|d| d.keys().map(String::as_str))
             .collect();
-        if let Some(dim) = self.0.keys().find(|d| !cone_dims.contains(d.as_str())) {
+        if let Some(dim) = self
+            .dimensions
+            .keys()
+            .find(|d| !cone_dims.contains(d.as_str()))
+        {
             let scope = match targets {
                 [] => "this run".to_string(),
                 [one] => format!("the cone of '{}'", short_name(one)),
@@ -319,7 +406,7 @@ impl PartitionSelection {
             .flat_map(|s| &s.steps)
             .filter(|st| narrowed.contains(st.step_id.base_id()))
             .collect();
-        for (dim, values) in &self.0 {
+        for (dim, values) in &self.dimensions {
             let carriers = || {
                 steps
                     .iter()
@@ -572,9 +659,10 @@ impl Narrowing {
     /// The `partition_selection` object of the JSON results.
     pub fn report(&self) -> crate::results::PartitionSelectionReport {
         crate::results::PartitionSelectionReport {
+            exact_keys: self.selection.exact_keys.clone(),
             selection: self
                 .selection
-                .0
+                .dimensions
                 .iter()
                 .map(|(d, vs)| (d.clone(), vs.iter().cloned().collect()))
                 .collect(),
@@ -987,6 +1075,30 @@ def notify(retailer, orders):
         assert!(!s.matches(&key(&[("region", "amer")])));
         let n = PartitionSelection::parse(r#"{"n": 3}"#).unwrap();
         assert!(n.matches(&key(&[("n", "3")])));
+    }
+
+    #[test]
+    fn exact_keys_preserve_pairs_and_project_onto_upstream_dimensions() {
+        let s = PartitionSelection::parse(
+            r#"[{"day":"d1","region":"east"},{"day":"d2","region":"west"}]"#,
+        )
+        .unwrap();
+        assert!(s.matches(&key(&[("day", "d1"), ("region", "east")])));
+        assert!(!s.matches(&key(&[("day", "d1"), ("region", "west")])));
+        assert!(s.matches(&key(&[("day", "d2")])));
+        assert!(s.matches(&key(&[("unrelated", "x")])));
+        assert_eq!(
+            PartitionSelection::parse(&s.to_json().to_string()).unwrap(),
+            s
+        );
+        for bad in [
+            "[]",
+            "[{}]",
+            r#"[{"day":["d1"]}]"#,
+            r#"[{"day":"d1"},{"region":"east"}]"#,
+        ] {
+            assert!(PartitionSelection::parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

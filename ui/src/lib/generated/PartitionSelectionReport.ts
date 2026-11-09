@@ -7,6 +7,10 @@ import type { SelectedNode } from "./SelectedNode";
  */
 export type PartitionSelectionReport = {
 /**
+ * When present, only these combinations are selected; `selection` summarizes their values.
+ */
+exact_keys?: Array<{ [key in string]: string }> | null,
+/**
  * Dimension → the selected values, sorted.
  */
 selection: { [key in string]: Array<string> },

@@ -299,7 +299,7 @@ default, and any aliases.
 | `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | Signed URL lifetime: 30m, 12h, 7d or seconds (default: 1h; maximum: 7d) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped |
 | `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use | Override declared batching: none, all, N or NODE=N (experimental) |
 | `--refresh` | comma-separated names | - | stable | Recompute assets or selected keys and their dependents: --refresh a,b |
 | `--no-cascade` | - | default `false` | stable | Refresh only named assets; cached downstream results may be outdated |
@@ -321,7 +321,7 @@ default, and any aliases.
 | `--refresh` | comma-separated names | - | stable | Recompute assets or selected keys and their dependents: --refresh a,b |
 | `--no-cascade` | - | default `false` | stable | Refresh only named assets; cached downstream results may be outdated |
 | `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
-| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped |
 | `--batch` | `[NODE=]none\|all\|N` | - | experimental: new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use | Override declared batching: none, all, N or NODE=N (experimental) |
 | `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
 | `-o, --output` | `json\|value\|pretty` | - | deprecated: -o json\|pretty are the older spellings of --json / --pretty; -o value has no replacement yet and keeps working | Choose the result output mode (see possible values) |
@@ -340,7 +340,7 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories; default: discover the project |
-| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | experimental (with the command) | Select keys, e.g. customer=acme; affected collect() fan-ins are skipped |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | experimental (with the command) | Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped |
 | `--json` | - | default `false` | experimental (with the command) | Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing |
 | `--pretty` | - | default `false` | experimental (with the command) | Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing (there is no table form) |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |

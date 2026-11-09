@@ -128,7 +128,9 @@ describe('what is wrong, where', () => {
 
 it('never widens a nonrectangular key selection into additional partitions', () => {
   const g = gridOf(dayRegion('ffffff'))
-  expect(exactSelection(g, [0, 3])).toBeNull()
+  expect(JSON.parse(exactSelection(g, [0, 3])!)).toEqual([
+    { day: 'd1', region: 'emea' }, { day: 'd2', region: 'apac' },
+  ])
   expect(exactSelection(g, [])).toBeNull()
   expect(JSON.parse(exactSelection(g, [0, 1])!)).toEqual({ day: ['d1'], region: ['emea', 'apac'] })
 })

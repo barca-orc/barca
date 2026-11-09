@@ -13,7 +13,7 @@ Options:
       --refresh-all
           Recompute every asset needed by the target
       --partition <KEY=VALUE[,VALUE]|JSON>
-          Select keys, e.g. customer=acme; affected collect() fan-ins are skipped
+          Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped
       --batch <[NODE=]none|all|N>
           Override declared batching: none, all, N or NODE=N (experimental)
       --dry-run

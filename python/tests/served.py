@@ -54,7 +54,10 @@ class Materializations:
 
     def __call__(self, status: str = "success") -> dict[str, int]:
         listing = get(self.port, "/runs?limit=1000")
-        assert not listing["truncated"], "more runs than one page: count them another way"
+        # WAL readers can observe a newly committed run in the total after the
+        # list was read. That transient truncation is not a full page: the next
+        # poll sees the new run. Only exceeding the requested limit loses history.
+        assert listing["total"] <= 1000, "more runs than one page: count them another way"
         counts: Counter[str] = Counter()
         for run in listing["runs"]:
             run_id = run["run_id"]

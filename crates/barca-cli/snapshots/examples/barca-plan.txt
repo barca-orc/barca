@@ -8,7 +8,7 @@ Arguments:
 
 Options:
       --partition <KEY=VALUE[,VALUE]|JSON>
-          Select keys, e.g. customer=acme; affected collect() fan-ins are skipped
+          Select keys: dimension values or JSON exact-key list; collect() fan-ins are skipped
 
       --json
           Accepted for symmetry with the other commands: the plan is always pretty-printed JSON, so this changes nothing

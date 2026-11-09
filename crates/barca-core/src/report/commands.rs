@@ -98,7 +98,11 @@ pub(crate) fn selection_lines(selection: &crate::results::PartitionSelectionRepo
             }
         })
         .collect();
-    let mut out = format!("--partition {}: {}\n", named.join(" "), nodes.join(", "));
+    let scope = match &selection.exact_keys {
+        Some(keys) => format!("{} exact key combinations", keys.len()),
+        None => named.join(" "),
+    };
+    let mut out = format!("--partition {scope}: {}\n", nodes.join(", "));
     if !selection.skipped_nodes.is_empty() {
         let skipped: Vec<&str> = selection
             .skipped_nodes

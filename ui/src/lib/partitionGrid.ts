@@ -431,16 +431,9 @@ export function heatmap(g: Grid, layout: GridLayout, columns: number, window: [n
   return { along, rows, ticks, window: [lo, hi] }
 }
 
-/** The run selection that covers an issue's keys: each dimension's values among them (with a few more keys, served from cache when fresh). */
-export function issueSelection(g: Grid, issue: IssueGroup): string {
-  const selection: Record<string, string[]> = {}
-  g.dims.forEach((d, i) => {
-    const seen = new Set<number>()
-    for (const cell of issue.cells) seen.add(Math.floor(cell / g.strides[i]!) % d.values.length)
-    selection[d.name] = [...seen].sort((a, b) => a - b).map((v) => d.values[v]!)
-  })
-  if (g.dims.length === 1 && selection[g.dims[0]!.name]!.length === 1) return `${g.dims[0]!.name}=${selection[g.dims[0]!.name]![0]}`
-  return JSON.stringify(selection)
+/** The run selection preserves an issue's exact key combinations. */
+export function issueSelection(g: Grid, issue: IssueGroup): string | null {
+  return exactSelection(g, issue.cells)
 }
 
 /** The filter that shows an issue's keys in the table. */
@@ -448,10 +441,14 @@ export function issueFilter(issue: IssueGroup): Pick<KeyFilter, 'states' | 'erro
   return issue.kind === 'error' ? { states: ['failed'], error: issue.error } : { states: [issue.kind], error: null }
 }
 
-/** Exact rectangular selection only: never silently run a cross-product outside the view. */
+/** Compact rectangle when possible; otherwise send exact tuples, never their cross-product. */
 export function exactSelection(g: Grid, cells: readonly number[]): string | null {
   if (cells.length === 0) return null
   const values = g.dims.map((d, i) => [...new Set(cells.map(cell => Math.floor(cell / g.strides[i]!) % d.values.length))].sort((a, b) => a - b))
-  if (values.reduce((n, v) => n * v.length, 1) !== cells.length) return null
+  if (values.reduce((n, v) => n * v.length, 1) !== cells.length) {
+    return JSON.stringify(cells.map(cell => Object.fromEntries(g.dims.map((d, i) =>
+      [d.name, d.values[Math.floor(cell / g.strides[i]!) % d.values.length]!],
+    ))))
+  }
   return JSON.stringify(Object.fromEntries(g.dims.map((d, i) => [d.name, values[i]!.map(v => d.values[v]!)])))
 }
