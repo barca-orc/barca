@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/layo
 
 <!-- Generated from crates/barca-cli/docs/layout.md (barca docs layout). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs layout`: the CLI prints the same text.
-:::
-
 Everything barca keeps is under `.barca/` in the project root. This topic says where that root
 is and what the directory holds, what happens when several barca processes share one project,
 what a run records while it goes and after it is killed, and what an upgrade recomputes.
@@ -162,3 +158,7 @@ the first run after upgrading; the release notes say so (`CHANGELOG.md`, GitHub 
 
 See also: [`barca docs cache`](/reference/cache/), [`barca docs disk`](/reference/disk/), [`barca docs discovery`](/reference/discovery/), [`barca docs status`](/reference/status/),
 [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs layout`.*

@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/duck
 
 <!-- Generated from crates/barca-cli/docs/duckdb.md (barca docs duckdb). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs duckdb`: the CLI prints the same text.
-:::
-
 `barca[sql]` accepts duckdb 1.4 up to (not including) 3, and barca's tests run on 1.x and 2.x.
 duckdb 1.1 to 1.3 are not supported (on 1.1, for one, dataset sinks fail).
 
@@ -43,3 +39,7 @@ Moving a pipeline to duckdb 2 can need these changes in your own code (checked w
   `ATTACH 'file.duckdb' (STORAGE_VERSION 'v1.5.0')` so 1.x can still open it.
 
 See also: [`barca docs types`](/reference/types/), `barca docs big-inputs`, [`barca docs sql`](/reference/sql/), `barca docs examples/duckdb`.
+
+---
+
+*The same text is in your terminal: `barca docs duckdb`.*

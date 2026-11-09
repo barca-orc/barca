@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/asse
 
 <!-- Generated from crates/barca-cli/docs/assets.md (barca docs assets). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs assets`: the CLI prints the same text.
-:::
-
 An asset is a function whose output barca caches and tracks.
 
 ```python
@@ -611,3 +607,7 @@ left to Python's argument checks and their nodes conservatively hash the whole m
 or runtime side effects.
 
 See also: [`barca docs tasks`](/reference/tasks/), [`barca docs cache`](/reference/cache/), [`barca docs scheduling`](/scheduling/).
+
+---
+
+*The same text is in your terminal: `barca docs assets`.*

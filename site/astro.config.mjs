@@ -42,7 +42,14 @@ export default defineConfig({
   if (!cur) return;
   const r = cur.getBoundingClientRect(), p = pane.getBoundingClientRect();
   if (p.height && (r.top < p.top || r.bottom > p.bottom)) pane.scrollTop += r.top - p.top - p.height / 2;
-});`,
+});
+// Sidebar shortcuts into a section ("Exit Codes") show as current while that section is open.
+const markSection = () => document.querySelectorAll('.sidebar-content a[href*="#"]').forEach((a) => {
+  const u = new URL(a.href);
+  a.classList.toggle('current-section', u.pathname === location.pathname && u.hash === location.hash);
+});
+document.addEventListener('DOMContentLoaded', markSection);
+addEventListener('hashchange', markSection);`,
         },
       ],
       components: {
@@ -94,13 +101,33 @@ export default defineConfig({
           items: [
             { slug: 'troubleshooting' },
             { slug: 'reference/cli' },
+            { label: 'Exit Codes', link: '/reference/cli/#errors-and-exit-codes' },
             { slug: 'reference/cache' },
-            { slug: 'reference/status' },
-            { slug: 'reference/logs' },
-            { slug: 'reference/sql' },
-            { slug: 'reference/pins' },
+            { label: 'Forcing a Recompute', link: '/reference/cache/#forcing-a-recompute' },
             { slug: 'reference/incidents' },
-            { slug: 'reference/doctor' },
+            {
+              label: 'Commands',
+              collapsed: true,
+              items: [
+                { slug: 'reference/cli/docs' },
+                { label: 'barca doctor', slug: 'reference/doctor' },
+                { slug: 'reference/cli/gc' },
+                { slug: 'reference/cli/get' },
+                { slug: 'reference/cli/history' },
+                { slug: 'reference/cli/list' },
+                { label: 'barca logs', slug: 'reference/logs' },
+                { label: 'barca pin and unpin', slug: 'reference/pins' },
+                { slug: 'reference/cli/plan' },
+                { slug: 'reference/cli/queue' },
+                { slug: 'reference/cli/run' },
+                { slug: 'reference/cli/serve' },
+                { label: 'barca sql', slug: 'reference/sql' },
+                { slug: 'reference/cli/state' },
+                { slug: 'reference/cli/stats' },
+                { label: 'barca status', slug: 'reference/status' },
+                { slug: 'reference/cli/version' },
+              ],
+            },
           ],
         },
         {
@@ -113,6 +140,7 @@ export default defineConfig({
             { slug: 'reference/serve-ops' },
             { slug: 'reference/server-api' },
             { slug: 'reference/telemetry' },
+            { label: 'Slack Alerts', link: '/reference/telemetry/#slack' },
           ],
         },
         {
@@ -128,7 +156,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Scripts and AI Agents',
+          label: 'Automation and Agents',
           collapsed: true,
           items: [
             { slug: 'reference/agents' },
@@ -162,7 +190,7 @@ export default defineConfig({
                 { label: 'Freshness and Schedules', slug: 'workflows/05-schedule-driven-reconciliation-and-effects' },
                 { label: 'Sensors and Outside Data', slug: 'workflows/06-sensors-and-external-observations' },
                 { label: 'Timeouts and Cancelling', slug: 'workflows/09-execution-controls-and-ad-hoc-params' },
-                { label: 'Tasks', slug: 'workflows/10-tasks-and-workflow-management' },
+                { label: 'Tasks, Step by Step', slug: 'workflows/10-tasks-and-workflow-management' },
               ],
             },
           ],

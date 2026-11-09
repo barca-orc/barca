@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/part
 
 <!-- Generated from crates/barca-cli/docs/partitions.md (barca docs partitions). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs partitions`: the CLI prints the same text.
-:::
-
 Partitions split one asset into independent steps, one per key; the keys run in parallel.
 Each key is cached on its own: it has its own run hash, so a re-run serves unchanged keys from
 cache and executes only keys with no successful materialization (a new key, or a key whose
@@ -461,3 +457,7 @@ wrong first:
 
 See also: [`barca docs batched-partitions`](/reference/batched-partitions/), [`barca docs sinks`](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
 directory per key), `barca docs examples/partitions`.
+
+---
+
+*The same text is in your terminal: `barca docs partitions`.*

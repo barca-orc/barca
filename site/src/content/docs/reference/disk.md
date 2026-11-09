@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/disk
 
 <!-- Generated from crates/barca-cli/docs/disk.md (barca docs disk). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs disk`: the CLI prints the same text.
-:::
-
 This topic owns what the size limit of `.barca/` counts, what is evicted in which order, what is
 never evicted and how the metadata database keeps to its own share; `barca gc` runs the same
 eviction on demand.
@@ -205,3 +201,7 @@ Known limits:
 - Eviction deletes no `materializations` rows. Only trimming the metadata database does ("The metadata database").
 
 See also: [`barca docs cache`](/reference/cache/), [`barca docs layout`](/reference/layout/), [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs disk`.*

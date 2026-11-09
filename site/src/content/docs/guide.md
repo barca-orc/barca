@@ -42,7 +42,7 @@ barca get summary pipeline.py     # one asset and what it depends on
   unit test like any other function.
 - Assets that do not depend on each other run in parallel, in separate worker processes.
 
-More: `barca docs assets`.
+More: [`barca docs assets`](/reference/assets/).
 
 ## 2. Where results live
 
@@ -75,7 +75,7 @@ A run creates `.barca/` in the project root:
 Do not delete files under `.barca/` to force a recompute. Use `--refresh` (section 4). Every
 file under `.barca/` is listed in [Configuration](/reference/config/#where-things-live).
 
-More: `barca docs cache`, `barca docs remote`.
+More: [`barca docs cache`](/reference/cache/), [`barca docs remote`](/reference/remote-storage/).
 
 ## 3. Seeing what barca sees
 
@@ -111,7 +111,7 @@ errors go to stderr. The JSON shapes and exit codes are in the
 [CLI reference](/reference/cli/#output-format), and the [agent skill](/reference/agent-skill/)
 is a short guide for AI agents.
 
-More: `barca docs status`, `barca docs sql`.
+More: [`barca docs status`](/reference/status/), [`barca docs sql`](/reference/sql/).
 
 ## 4. Sensors: data from outside
 
@@ -182,7 +182,7 @@ three flags. Use it also after a change the run hash does not see: an
 installed package, a module outside the project root, or an environment variable the
 function reads without declaring it in `@asset(env=[...])`.
 
-More: `barca docs cache` has the complete list, under "Not followed".
+More: [`barca docs cache`](/reference/cache/) has the complete list, under "Not followed".
 
 The run hash covers the function and every project definition it uses, followed through
 imports, decorators, defaults and the other places Python can reach a helper. Where barca
@@ -234,7 +234,7 @@ null
 - An input whose name starts with `_` is for ordering only: the step runs after it, the
   value is not loaded, and the parameter receives `None`.
 
-More: `barca docs tasks`.
+More: [`barca docs tasks`](/reference/tasks/).
 
 ## 6. Large inputs
 
@@ -251,7 +251,7 @@ about one the function never mentions. `barca get` on an asset stored as parquet
 pointer to the file, not the rows; use `barca sql` to look at it.
 [Large inputs](/patterns/08-large-inputs/) has a worked example and the limits.
 
-More: `barca docs big-inputs`, `barca docs types`.
+More: [`barca docs big-inputs`](/patterns/08-large-inputs/), [`barca docs types`](/reference/types/).
 
 ## 7. Partitions
 
@@ -291,7 +291,7 @@ barca get total pipeline.py     # 3 steps: latam's sales and margin, total
 
 <figure class="diagram">
 <svg class="dg-wide" viewBox="0 0 720 262" role="img" aria-label="Partitions: sales and margin run once per region; total collects every key. Adding latam reruns only sales[latam], margin[latam] and total"><defs><marker id="arr-part" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="dg-head"/></marker></defs><rect class="dg-box " x="20" y="14" width="170" height="40" rx="6"/><text x="105.0" y="39.0" text-anchor="middle">sales[emea]</text><rect class="dg-box " x="270" y="14" width="170" height="40" rx="6"/><text x="355.0" y="39.0" text-anchor="middle">margin[emea]</text><path class="dg-edge " d="M190,34 L266,34" marker-end="url(#arr-part)"/><path class="dg-edge " d="M440,34 C480,34 480,123 516,123" marker-end="url(#arr-part)"/><rect class="dg-box " x="20" y="70" width="170" height="40" rx="6"/><text x="105.0" y="95.0" text-anchor="middle">sales[amer]</text><rect class="dg-box " x="270" y="70" width="170" height="40" rx="6"/><text x="355.0" y="95.0" text-anchor="middle">margin[amer]</text><path class="dg-edge " d="M190,90 L266,90" marker-end="url(#arr-part)"/><path class="dg-edge " d="M440,90 C480,90 480,123 516,123" marker-end="url(#arr-part)"/><rect class="dg-box " x="20" y="126" width="170" height="40" rx="6"/><text x="105.0" y="151.0" text-anchor="middle">sales[apac]</text><rect class="dg-box " x="270" y="126" width="170" height="40" rx="6"/><text x="355.0" y="151.0" text-anchor="middle">margin[apac]</text><path class="dg-edge " d="M190,146 L266,146" marker-end="url(#arr-part)"/><path class="dg-edge " d="M440,146 C480,146 480,123 516,123" marker-end="url(#arr-part)"/><rect class="dg-box dg-run" x="20" y="182" width="170" height="40" rx="6"/><text x="105.0" y="207.0" text-anchor="middle">sales[latam]</text><rect class="dg-box dg-run" x="270" y="182" width="170" height="40" rx="6"/><text x="355.0" y="207.0" text-anchor="middle">margin[latam]</text><path class="dg-edge dg-hot" d="M190,202 L266,202" marker-end="url(#arr-part)"/><path class="dg-edge dg-hot" d="M440,202 C480,202 480,123 516,123" marker-end="url(#arr-part)"/><rect class="dg-box dg-run" x="520" y="96" width="180" height="54" rx="6"/><text x="610.0" y="120.0" text-anchor="middle">total</text><text class="dg-sub" x="610.0" y="137.0" text-anchor="middle">collect(sales), collect(margin)</text><text class="dg-label" x="105" y="250" text-anchor="middle">partitions(REGIONS)</text><text class="dg-label" x="355" y="250" text-anchor="middle">partitions_from(sales)</text></svg>
-<svg class="dg-tall" viewBox="0 0 350 310" role="img" aria-label="Partitions: sales and margin run once per region; total collects every key. Adding latam reruns only sales[latam], margin[latam] and total"><defs><marker id="arr-part-t" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="dg-head"/></marker></defs><rect class="dg-box " x="10" y="10" width="140" height="36" rx="6"/><text x="80.0" y="33.0" text-anchor="middle">sales[emea]</text><rect class="dg-box " x="190" y="10" width="140" height="36" rx="6"/><text x="260.0" y="33.0" text-anchor="middle">margin[emea]</text><path class="dg-edge " d="M150,28 L186,28" marker-end="url(#arr-part-t)"/><rect class="dg-box " x="10" y="62" width="140" height="36" rx="6"/><text x="80.0" y="85.0" text-anchor="middle">sales[amer]</text><rect class="dg-box " x="190" y="62" width="140" height="36" rx="6"/><text x="260.0" y="85.0" text-anchor="middle">margin[amer]</text><path class="dg-edge " d="M150,80 L186,80" marker-end="url(#arr-part-t)"/><rect class="dg-box " x="10" y="114" width="140" height="36" rx="6"/><text x="80.0" y="137.0" text-anchor="middle">sales[apac]</text><rect class="dg-box " x="190" y="114" width="140" height="36" rx="6"/><text x="260.0" y="137.0" text-anchor="middle">margin[apac]</text><path class="dg-edge " d="M150,132 L186,132" marker-end="url(#arr-part-t)"/><rect class="dg-box dg-run" x="10" y="166" width="140" height="36" rx="6"/><text x="80.0" y="189.0" text-anchor="middle">sales[latam]</text><rect class="dg-box dg-run" x="190" y="166" width="140" height="36" rx="6"/><text x="260.0" y="189.0" text-anchor="middle">margin[latam]</text><path class="dg-edge dg-hot" d="M150,184 L186,184" marker-end="url(#arr-part-t)"/><path class="dg-edge" d="M330,28 C350,28 350,230 274,256" marker-end="url(#arr-part-t)"/><path class="dg-edge" d="M330,80 C350,80 350,230 274,256" marker-end="url(#arr-part-t)"/><path class="dg-edge" d="M330,132 C350,132 350,230 274,256" marker-end="url(#arr-part-t)"/><rect class="dg-box dg-run" x="90" y="250" width="180" height="50" rx="6"/><text x="180.0" y="272.0" text-anchor="middle">total</text><text class="dg-sub" x="180.0" y="289.0" text-anchor="middle">collect(sales), collect(margin)</text><path class="dg-edge dg-hot" d="M330,190 C345,215 300,235 274,262" marker-end="url(#arr-part-t)"/><text class="dg-label" x="80" y="232" text-anchor="middle">one step per key</text></svg>
+<svg class="dg-tall" viewBox="0 0 345 296" role="img" aria-label="Partitions: sales and margin run once per region; total collects every key. Adding latam reruns only sales[latam], margin[latam] and total"><defs><marker id="arr-part-t" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="dg-head"/></marker></defs><text class="dg-label" x="75" y="16" text-anchor="middle">partitions(REGIONS)</text><text class="dg-label" x="240" y="16" text-anchor="middle">partitions_from(sales)</text><rect class="dg-box " x="10" y="28" width="130" height="34" rx="6"/><text x="75.0" y="50.0" text-anchor="middle">sales[emea]</text><rect class="dg-box " x="175" y="28" width="130" height="34" rx="6"/><text x="240.0" y="50.0" text-anchor="middle">margin[emea]</text><path class="dg-edge " d="M140,45 L171,45" marker-end="url(#arr-part-t)"/><path class="dg-edge " d="M305,45 L330,45"/><rect class="dg-box " x="10" y="78" width="130" height="34" rx="6"/><text x="75.0" y="100.0" text-anchor="middle">sales[amer]</text><rect class="dg-box " x="175" y="78" width="130" height="34" rx="6"/><text x="240.0" y="100.0" text-anchor="middle">margin[amer]</text><path class="dg-edge " d="M140,95 L171,95" marker-end="url(#arr-part-t)"/><path class="dg-edge " d="M305,95 L330,95"/><rect class="dg-box " x="10" y="128" width="130" height="34" rx="6"/><text x="75.0" y="150.0" text-anchor="middle">sales[apac]</text><rect class="dg-box " x="175" y="128" width="130" height="34" rx="6"/><text x="240.0" y="150.0" text-anchor="middle">margin[apac]</text><path class="dg-edge " d="M140,145 L171,145" marker-end="url(#arr-part-t)"/><path class="dg-edge " d="M305,145 L330,145"/><rect class="dg-box dg-run" x="10" y="178" width="130" height="34" rx="6"/><text x="75.0" y="200.0" text-anchor="middle">sales[latam]</text><rect class="dg-box dg-run" x="175" y="178" width="130" height="34" rx="6"/><text x="240.0" y="200.0" text-anchor="middle">margin[latam]</text><path class="dg-edge dg-hot" d="M140,195 L171,195" marker-end="url(#arr-part-t)"/><path class="dg-edge dg-hot" d="M305,195 L330,195"/><path class="dg-edge" d="M330,45 L330,195"/><path class="dg-edge dg-hot" d="M330,195 L330,261 L274,261" marker-end="url(#arr-part-t)"/><rect class="dg-box dg-run" x="70" y="236" width="200" height="50" rx="6"/><text x="170" y="258" text-anchor="middle">total</text><text class="dg-sub" x="170" y="275" text-anchor="middle">collect(sales), collect(margin)</text></svg>
 <figcaption>Each key is cached on its own. After <code>"latam"</code> is added, the highlighted steps run (3 steps); the other six come from the cache.</figcaption>
 </figure>
 
@@ -321,7 +321,7 @@ Limits:
   a module-level constant as above, another expression, or `partitions_from(...)`.
 - **`barca get sales` returns every key**: one artifact path per key (`-o value` for the
   values). Past 1000 keys it lists only the keys the run computed and counts the rest
-  ([many partition keys](/reference/cli/#many-partition-keys)). `--partition region=emea` computes and returns only that key, and scopes
+  ([many partition keys](/reference/cli/get/#many-partition-keys)). `--partition region=emea` computes and returns only that key, and scopes
   `--refresh sales` to it. It narrows upstream partitioned assets too, and skips a `collect()`
   fan-in over them.
 - **A removed key's result stays on disk** until the cache size limit evicts it, and its runs stay
@@ -329,7 +329,7 @@ Limits:
   above has three rows.
 
 [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/) shows
-each of these with output. More: `barca docs partitions`.
+each of these with output. More: [`barca docs partitions`](/reference/partitions/).
 
 ## 8. Projects with several files
 
@@ -393,7 +393,7 @@ barca get total pipelines/      # read only the files under pipelines/
 Which directories and files a walk skips, and the `[discovery]` settings that change it, are
 in [Discovery](/reference/discovery/).
 
-More: `barca docs discovery`, `barca docs cache`.
+More: [`barca docs discovery`](/reference/discovery/), [`barca docs cache`](/reference/cache/).
 
 ## 9. Schedules
 

@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/pins
 
 <!-- Generated from crates/barca-cli/docs/pins.md (barca docs pins). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs pins`: the CLI prints the same text.
-:::
-
 When an asset produced bad data, `barca pin` puts a previous good materialization back in
 service at once, without editing code or recomputing anything. Artifacts are addressed by run
 hash (`.barca/artifacts/<node>/<run_hash><ext>`), so earlier results are usually still on disk.
@@ -147,3 +143,7 @@ configured server) act on the server's database.
 
 See also: [`barca docs cache`](/reference/cache/) (run hashes and artifacts), [`barca docs disk`](/reference/disk/) (what eviction keeps),
 [`barca docs server-mode`](/reference/server-mode/).
+
+---
+
+*The same text is in your terminal: `barca docs pins`.*

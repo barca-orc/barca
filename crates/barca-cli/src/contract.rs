@@ -1080,15 +1080,14 @@ fn site_page(page: &SitePage, topic: &str) -> String {
          <!-- Generated from crates/barca-cli/docs/{file} (barca docs {topic}). Edit that file, \
          then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: \
          (or scripts/update-cli-snapshots.sh). -->\n\n\
-         :::note\n\
-         This page is the manual topic `barca docs {topic}`: the CLI prints the same text.\n\
-         :::\n\n\
-         {body}",
+         {body}\n\n\
+         ---\n\n\
+         *The same text is in your terminal: `barca docs {topic}`.*\n",
         title = yaml(page.title),
         description = yaml(page.description),
         file = page.file,
         topic = page.topic,
-        body = link_topics(body.trim_start_matches('\n')),
+        body = link_topics(body.trim_start_matches('\n').trim_end()),
     )
 }
 

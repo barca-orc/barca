@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/agen
 
 <!-- Generated from crates/barca-cli/docs/agents.md (barca docs agents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs agents`: the CLI prints the same text.
-:::
-
 Conventions that make barca easy to drive programmatically. Everything here is stable CLI
 behavior. When stdout is not a terminal (a pipe, a subprocess, an agent) every result is JSON
 without any flag. List-shaped output is bounded by default (see "Bounded output" below).
@@ -593,3 +589,7 @@ A version mismatch exits 3 and names the helper version and expected version; re
 Barca in the Python environment used for the run. The handshake does not import pipeline code.
 
 See also: [`barca docs skill`](/reference/agent-skill/), [`barca docs contract`](/reference/cli-contract/), [`barca docs status`](/reference/status/).
+
+---
+
+*The same text is in your terminal: `barca docs agents`.*

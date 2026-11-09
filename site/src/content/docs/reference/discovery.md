@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/disc
 
 <!-- Generated from crates/barca-cli/docs/discovery.md (barca docs discovery). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs discovery`: the CLI prints the same text.
-:::
-
 A barca project is a directory tree. Every command reads the `.py` files in it that import
 barca and builds one DAG from all their `@asset`, `@task` and `@sensor` functions. You do not
 pass the file list: `barca list`, `barca run validate`, `barca get total` work from anywhere in
@@ -230,3 +226,7 @@ the producer module's import-time setup once; it does not execute the producer a
   Cache entries recorded under another spelling are not found once; the first run recomputes them.
 
 See also: [`barca docs assets`](/reference/assets/), [`barca docs cache`](/reference/cache/), [`barca docs doctor`](/reference/doctor/).
+
+---
+
+*The same text is in your terminal: `barca docs discovery`.*

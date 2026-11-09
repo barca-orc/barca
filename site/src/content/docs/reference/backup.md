@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/back
 
 <!-- Generated from crates/barca-cli/docs/backup.md (barca docs backup). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs backup`: the CLI prints the same text.
-:::
-
 This topic owns the backups of the metadata database: when they are taken, what one contains,
 what `barca state backups` lists and `barca state restore` does, and how a server's backups
 differ. The store they go to is [`barca docs remote`](/reference/remote-storage/).
@@ -232,3 +228,7 @@ with no backup of its own (a new host) it takes the newest and names who took it
 `barca state backups` and pass `--from` with the server's.
 
 See also: [`barca docs remote`](/reference/remote-storage/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs layout`](/reference/layout/), [`barca docs contract`](/reference/cli-contract/).
+
+---
+
+*The same text is in your terminal: `barca docs backup`.*

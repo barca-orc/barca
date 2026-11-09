@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/remo
 
 <!-- Generated from crates/barca-cli/docs/remote.md (barca docs remote). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs remote`: the CLI prints the same text.
-:::
-
 Point barca at a bucket and every result is uploaded there, and the metadata database (run
 history and what is cached) is backed up there. The store is this machine's backup and
 read-through cache: a lost laptop or a wiped container gets everything back with
@@ -618,3 +614,7 @@ Run `barca doctor --pretty` before a run to check configured stores and credenti
 See [`barca docs doctor`](/reference/doctor/) for check limits and a copyable local-only debugging profile.
 
 See also: [`barca docs backup`](/reference/backup/), [`barca docs cache`](/reference/cache/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs doctor`](/reference/doctor/).
+
+---
+
+*The same text is in your terminal: `barca docs remote`.*

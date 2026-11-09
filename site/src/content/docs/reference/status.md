@@ -6,10 +6,6 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/stat
 
 <!-- Generated from crates/barca-cli/docs/status.md (barca docs status). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-:::note
-This page is the manual topic `barca docs status`: the CLI prints the same text.
-:::
-
 One read-only view of every node: what it is, whether it is cached and why, when it last ran,
 and what its artifact looks like. It answers in one call what would otherwise take `barca list`,
 `--dry-run`, `barca history` and a script that opens the artifact.
@@ -500,3 +496,7 @@ answer from the server ([`barca docs server-mode`](/reference/server-mode/)); a 
 whose remediation is `barca history RUN_ID --local`.
 
 See also: [`barca docs cache`](/reference/cache/), [`barca docs logs`](/reference/logs/), [`barca docs sql`](/reference/sql/), [`barca docs agents`](/reference/agents/).
+
+---
+
+*The same text is in your terminal: `barca docs status`.*
