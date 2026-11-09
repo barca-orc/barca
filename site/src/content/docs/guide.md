@@ -42,7 +42,7 @@ barca get summary pipeline.py     # one asset and what it depends on
   unit test like any other function.
 - Assets that do not depend on each other run in parallel, in separate worker processes.
 
-More: `barca docs assets`.
+More: [`barca docs assets`](/reference/assets/).
 
 ## 2. Where results live
 
@@ -75,7 +75,7 @@ A run creates `.barca/` in the project root:
 Do not delete files under `.barca/` to force a recompute. Use `--refresh` (section 4). Every
 file under `.barca/` is listed in [Configuration](/reference/config/#where-things-live).
 
-More: `barca docs cache`, `barca docs remote`.
+More: [`barca docs cache`](/reference/cache/), [`barca docs remote`](/reference/remote-storage/).
 
 ## 3. Seeing what barca sees
 
@@ -111,7 +111,7 @@ errors go to stderr. The JSON shapes and exit codes are in the
 [CLI reference](/reference/cli/#output-format), and the [agent skill](/reference/agent-skill/)
 is a short guide for AI agents.
 
-More: `barca docs status`, `barca docs sql`.
+More: [`barca docs status`](/reference/status/), [`barca docs sql`](/reference/sql/).
 
 ## 4. Sensors: data from outside
 
@@ -182,7 +182,7 @@ three flags. Use it also after a change the run hash does not see: an
 installed package, a module outside the project root, or an environment variable the
 function reads without declaring it in `@asset(env=[...])`.
 
-More: `barca docs cache` has the complete list, under "Not followed".
+More: [`barca docs cache`](/reference/cache/) has the complete list, under "Not followed".
 
 The run hash covers the function and every project definition it uses, followed through
 imports, decorators, defaults and the other places Python can reach a helper. Where barca
@@ -234,7 +234,7 @@ null
 - An input whose name starts with `_` is for ordering only: the step runs after it, the
   value is not loaded, and the parameter receives `None`.
 
-More: `barca docs tasks`.
+More: [`barca docs tasks`](/reference/tasks/).
 
 ## 6. Large inputs
 
@@ -251,7 +251,7 @@ about one the function never mentions. `barca get` on an asset stored as parquet
 pointer to the file, not the rows; use `barca sql` to look at it.
 [Large inputs](/patterns/08-large-inputs/) has a worked example and the limits.
 
-More: `barca docs big-inputs`, `barca docs types`.
+More: [`barca docs big-inputs`](/patterns/08-large-inputs/), [`barca docs types`](/reference/types/).
 
 ## 7. Partitions
 
@@ -329,7 +329,7 @@ Limits:
   above has three rows.
 
 [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/) shows
-each of these with output. More: `barca docs partitions`.
+each of these with output. More: [`barca docs partitions`](/reference/partitions/).
 
 ## 8. Projects with several files
 
@@ -393,7 +393,7 @@ barca get total pipelines/      # read only the files under pipelines/
 Which directories and files a walk skips, and the `[discovery]` settings that change it, are
 in [Discovery](/reference/discovery/).
 
-More: `barca docs discovery`, `barca docs cache`.
+More: [`barca docs discovery`](/reference/discovery/), [`barca docs cache`](/reference/cache/).
 
 ## 9. Schedules
 

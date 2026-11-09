@@ -21,12 +21,12 @@ available topics for scripts and agents. Help and examples never load a project 
 | Run a task | `barca run publish` | [run](/reference/cli/run/) |
 | See what would run, without running it | `barca get revenue --dry-run` | [get](/reference/cli/get/) |
 | Recompute an asset and what is downstream | `barca get revenue --refresh orders` | [The Cache](/reference/cache/#forcing-a-recompute) |
-| See every node's cache state and why | `barca status` | [status](/reference/cli/status/) |
-| See only what failed or is stale | `barca status --problems` | [status](/reference/cli/status/) |
+| See every node's cache state and why | `barca status` | [status](/reference/status/) |
+| See only what failed or is stale | `barca status --problems` | [status](/reference/status/) |
 | See recent runs, or one run's errors | `barca history` | [history](/reference/cli/history/) |
 | Read a step's printed output | `barca logs` | [Logs](/reference/logs/) |
-| Query cached results with SQL | `barca sql "select * from revenue"` | [sql](/reference/cli/sql/) |
-| Roll an asset back one version | `barca pin revenue --previous` | [pin and unpin](/reference/cli/pin-and-unpin/) |
+| Query cached results with SQL | `barca sql "select * from revenue"` | [sql](/reference/sql/) |
+| Roll an asset back one version | `barca pin revenue --previous` | [pin and unpin](/reference/pins/) |
 | Run schedules, the web UI and the HTTP API | `barca serve` | [serve](/reference/cli/serve/) |
 | Free disk space under `.barca/` | `barca gc` | [gc](/reference/cli/gc/) |
 | Check the setup without running anything | `barca doctor` | [Doctor](/reference/doctor/) |
@@ -240,14 +240,14 @@ prints the same syntax for the version you have installed.
 | [`barca logs`](/reference/logs/) | A run's recorded step output; follow a live run. |
 | [`barca doctor`](/reference/doctor/) | Check the project's prerequisites without running anything. |
 | [`barca history`](/reference/cli/history/) | Show recent runs, or one run with its steps and errors. |
-| [`barca pin and unpin`](/reference/cli/pin-and-unpin/) | Hold an asset at an earlier result or supplied data, and release it (experimental). |
+| [`barca pin and unpin`](/reference/pins/) | Hold an asset at an earlier result or supplied data, and release it (experimental). |
 | [`barca gc`](/reference/cli/gc/) | Evict cached results to keep .barca/ under its size limit (experimental). |
 | [`barca stats`](/reference/cli/stats/) | Timing and cache statistics for one asset. |
 | [`barca serve`](/reference/cli/serve/) | Run the HTTP API, the cron scheduler and the web UI. |
 | [`barca queue`](/reference/cli/queue/) | A server's run queue; pause or resume it (experimental). |
 | [`barca list`](/reference/cli/list/) | List the assets, tasks and sensors barca finds, with their inputs. |
-| [`barca status`](/reference/cli/status/) | Cache state and why, last run and artifact shape for each node. |
-| [`barca sql`](/reference/cli/sql/) | Query cached results with DuckDB (experimental). |
+| [`barca status`](/reference/status/) | Cache state and why, last run and artifact shape for each node. |
+| [`barca sql`](/reference/sql/) | Query cached results with DuckDB (experimental). |
 | [`barca state`](/reference/cli/state/) | List the metadata backups, put one back, or start the database over. |
 | [`barca docs`](/reference/cli/docs/) | The built-in manual, for the installed version. |
 | [`barca version`](/reference/cli/version/) | Print the installed version. |
