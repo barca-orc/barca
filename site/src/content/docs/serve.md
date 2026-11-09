@@ -11,7 +11,8 @@ can hold one record of results and runs for a whole team. Start it in a project 
 barca serve                      # 127.0.0.1:8274; add --host 0.0.0.0 to reach it from elsewhere
 ```
 
-It has no login. Keep it on a private network or behind a proxy that authenticates.
+Authentication is off by default: turn on [project tokens](/reference/server-mode/#opt-in-project-tokens)
+with `--auth token`, or keep it on a private network or behind a proxy that authenticates.
 
 ## Which page do I need?
 
@@ -24,6 +25,8 @@ It has no login. Keep it on a private network or behind a proxy that authenticat
 | Manage the run queue, restarts, stop grace, capacity and run timeouts | [Serve Operations](/reference/serve-ops/) |
 | Start runs and read results from code, over HTTP or with the Python client | [Server API](/reference/server-api/) |
 | Send traces and metrics to Datadog, or post failures to Slack | [Telemetry and Slack Alerts](/reference/telemetry/) |
+| Require tokens, and connect the web UI and laptops with them | [Server Mode: project tokens](/reference/server-mode/#opt-in-project-tokens) |
+| See what the web UI shows and does | [The Web UI](/web-ui/) |
 | See every flag of the command | [`barca serve`](/reference/cli/serve/) |
 
 A first setup usually goes Scheduling With Cron (if you need schedules), then Share Results With
