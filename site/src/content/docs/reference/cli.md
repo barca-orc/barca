@@ -13,6 +13,29 @@ usage, and `barca <command> --examples` for the complete runnable example collec
 For detailed behavior, load one topic with `barca docs <topic>`; `barca docs --json` lists
 available topics for scripts and agents. Help and examples never load a project or run work.
 
+## Common tasks
+
+| I want to… | Command | More |
+|---|---|---|
+| Get an asset, from cache when nothing changed | `barca get revenue` | [get](#get) |
+| Run a task | `barca run publish` | [run](#run) |
+| See what would run, without running it | `barca get revenue --dry-run` | [get](#get) |
+| Recompute an asset and what is downstream | `barca get revenue --refresh orders` | [The Cache](/reference/cache/#forcing-a-recompute) |
+| See every node's cache state and why | `barca status` | [status](#status) |
+| See only what failed or is stale | `barca status --problems` | [status](#status) |
+| See recent runs, or one run's errors | `barca history` | [history](#history) |
+| Read a step's printed output | `barca logs` | [Logs](/reference/logs/) |
+| Query cached results with SQL | `barca sql "select * from revenue"` | [sql](#sql) |
+| Roll an asset back one version | `barca pin revenue --previous` | [pin and unpin](#pin-and-unpin) |
+| Run schedules, the web UI and the HTTP API | `barca serve` | [serve](#serve) |
+| Free disk space under `.barca/` | `barca gc` | [gc](#gc) |
+| Check the setup without running anything | `barca doctor` | [Doctor](/reference/doctor/) |
+| Read the manual in the terminal | `barca docs cache` | [docs](#docs) |
+
+`get`, `run`, `list`, `status`, `sql`, `history` and `stats` print JSON when their output is
+piped ([Output format](#output-format)); exit codes are under
+[Errors and exit codes](#errors-and-exit-codes).
+
 ## Command shape
 
 The target comes first, then the files:
