@@ -6,7 +6,7 @@ import Default from '@astrojs/starlight/components/SocialIcons.astro';
 const path = Astro.url.pathname;
 const links = [
   { label: 'Recipes', href: '/patterns/', match: (p: string) => p.startsWith('/patterns') || p.startsWith('/workflows') },
-  { label: 'All Pages', href: '/reference/', match: (p: string) => p.startsWith('/reference') },
+  { label: 'All Pages', href: '/reference/', match: (p: string) => p === '/reference/' },
   { label: 'Changelog', href: '/contributing/changelog/', match: (p: string) => p.startsWith('/contributing/changelog') },
 ];
 // "Docs" is every other page: the guides, concepts and comparisons.
