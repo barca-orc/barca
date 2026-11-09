@@ -28,6 +28,16 @@ export default defineConfig({
     '/workflows/10-tasks-and-workflow-management/': '/examples/tasks/',
     '/reference/incidents/': '/reference/pausing/',
     '/patterns/': '/recipes/',
+    '/reference/': '/all-pages/',
+    '/reference/cli/status/': '/reference/status/',
+    '/reference/cli/logs/': '/reference/logs/',
+    '/reference/cli/sql/': '/reference/sql/',
+    '/reference/cli/doctor/': '/reference/doctor/',
+    '/reference/cli/pin/': '/reference/pins/',
+    '/reference/cli/unpin/': '/reference/pins/',
+    '/reference/cli/pause/': '/reference/pausing/',
+    '/reference/cli/resume/': '/reference/pausing/',
+    '/reference/cli/tokens/': '/reference/server-mode/#opt-in-project-tokens',
     '/workflows/': '/examples/',
   },
 
@@ -50,6 +60,8 @@ export default defineConfig({
       },
       favicon: '/favicon.svg',
       expressiveCode: {
+        // Long lines wrap (keeping their indent) instead of hiding trailing comments off-screen.
+        defaultProps: { wrap: true },
         styleOverrides: {
           codeFontFamily: 'var(--sl-font-mono)',
         },
@@ -90,7 +102,7 @@ addEventListener('hashchange', markSection);`,
             { slug: 'guide' },
             { slug: 'team-server' },
             { slug: 'serve' },
-            { slug: 'reference' },
+            { slug: 'all-pages' },
           ],
         },
         {
@@ -167,7 +179,6 @@ addEventListener('hashchange', markSection);`,
             { slug: 'reference/serve-ops' },
             { slug: 'reference/server-api' },
             { slug: 'reference/telemetry' },
-            { label: 'Slack Alerts', link: '/reference/telemetry/#slack' },
           ],
         },
         {
