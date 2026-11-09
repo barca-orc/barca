@@ -10,12 +10,10 @@ const links = [
   { label: 'All Pages', href: '/reference/', match: (p: string) => p === '/reference/' },
   { label: 'Changelog', href: '/contributing/changelog/', match: (p: string) => p.startsWith('/contributing/changelog') },
 ];
-// "Docs" is every other page: the guides, concepts and comparisons.
-const sections = [...links];
 links.unshift({
   label: 'Get Started',
   href: '/getting-started/',
-  match: (p: string) => p !== '/' && !sections.some((l) => l.match(p)),
+  match: (p: string) => p.startsWith('/getting-started'),
 });
 ---
 
