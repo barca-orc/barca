@@ -161,6 +161,7 @@ addEventListener('hashchange', markSection);`,
           collapsed: true,
           items: [
             { slug: 'scheduling' },
+            { slug: 'web-ui' },
             { slug: 'deploying' },
             { slug: 'reference/server-mode' },
             { slug: 'reference/serve-ops' },

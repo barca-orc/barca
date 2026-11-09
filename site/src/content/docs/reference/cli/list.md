@@ -6,8 +6,7 @@ description: "List the assets, tasks and sensors barca finds, with their inputs.
 List every asset, task and sensor barca finds, with its kind, freshness and inputs. A scheduled
 node also shows its cron and its next fire time, to the second. The time is the next match of
 the cron expression in the local time of the machine `list` runs on (the table column is
-`NEXT FIRE (LOCAL TIME)`). `list` talks to no server, so it does not know a server's
-`--timezone`: a server started with one fires at the same wall-clock time in that zone, and its
+`NEXT FIRE (LOCAL TIME)`). Run locally, `list` does not know a server's `--timezone`: a server started with one fires at the same wall-clock time in that zone, and its
 [`GET /schedule`](/reference/server-api/#get-schedule) reports the times it will fire at.
 
 ## Usage
@@ -31,7 +30,7 @@ under `barca serve`.
 ```bash
 barca list                        # every node in the project
 barca list pipelines/             # only files under pipelines/
-barca list pipeline.py --json     # {"nodes": [{id, kind, freshness, schedule?, inputs, env, next_fire?}], "total", "truncated", "root"}
+barca list pipeline.py --json     # {"nodes": [{id, kind, freshness, schedule?, inputs, env, next_fire?, file, line}], "total", "truncated", "root"}
 barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
 ```
 
@@ -43,6 +42,11 @@ also has `schedule`, its cron expression. `list` reads no state, so it takes no 
 
 When any node declares environment variables (`@asset(env=["SOURCE_CSV"])`), the table gains an
 ENV column listing them; `--json` always includes `env` (an empty list when none are declared).
+
+
+`--groups` shows the organizational hierarchy of [groups](/reference/groups/) (groups are never
+executable nodes). `--server [URL]` lists a server's deployed definitions, and `--local` ignores
+a configured server.
 
 ---
 

@@ -18,8 +18,8 @@ can be in, how to force a recompute, the cache size limit, and where everything 
 | An asset's code, or helper code it calls | That asset and everything downstream of it |
 | A value a `@sensor` returns | The assets that read the sensor, and everything downstream |
 | A variable listed in the asset's `env=[...]` | That asset and everything downstream |
-| `inputs=`, `serializer=` or a partition dimension name | That asset and everything downstream |
-| Another decorator option (`retries=`, `timeout_seconds=`, ...) or formatting | Nothing |
+| `inputs=`, `serializer=`, a partition dimension name or `partitions_from` source, a `@sink(...)`, or another decorator wrapping the function | That asset and everything downstream |
+| `retries=`, `timeout_seconds=`, `freshness=` or another option that does not change the result, or formatting | Nothing ([`barca docs hashing`](/reference/hashing/), "Which decorator arguments count") |
 | A file, table or bucket the asset reads in its own body, or an environment variable it does not list | Nothing: barca cannot see it. Read it through a `@sensor` ("External data that changes in place") or list it in `env=` |
 | A new partition key | That key's steps, and any `collect()` of the asset |
 | An `@asset(cutoff=True)` reran and wrote the same bytes | Nothing below it ("Early cutoff") |

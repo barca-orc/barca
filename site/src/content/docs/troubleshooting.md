@@ -4,8 +4,9 @@ description: "Common surprises: an asset that did not rerun after its data, an e
 ---
 
 Barca reruns an asset when its **run hash** changes: a hash of its code (and the helper code it
-calls), its inputs' run hashes, what the sensors it reads returned, its partition key and the
-environment variables it lists in `env=`. Anything outside that list is invisible to the cache.
+calls), its inputs' run hashes, what the sensors and `Manual` assets it reads returned (the
+output bytes of a `cutoff=True` asset), its partition key and the environment variables it lists
+in `env=`. Anything outside that list is invisible to the cache.
 [The Cache](/reference/cache/#at-a-glance) has the full table.
 
 ## First, ask barca
@@ -41,9 +42,12 @@ Only variables listed in the asset's `env=[...]` are part of its run hash. Barca
 
 ## I changed `retries=` or `timeout_seconds=` and nothing reran
 
-That is intended. Of the decorator's options, only `inputs=`, `serializer=` and the dimension
-names in `partitions=` are part of the run hash; changing the others, or reformatting the
-decorator, reruns nothing. See [Which decorator arguments count](/reference/hashing/#which-decorator-arguments-count).
+That is intended. Options that change only when or how often a step runs (`retries=`,
+`timeout_seconds=`, `freshness=`, `weight=`, `name=`, `description=` and the like) are not part
+of the run hash, and neither is the decorator's formatting. The ones that can change the result
+are: `inputs=`, `serializer=`, the dimension names and `partitions_from` source of `partitions=`,
+`@sink(...)`, and any other decorator wrapping the function. The full table is in
+[Which decorator arguments count](/reference/hashing/#which-decorator-arguments-count).
 
 ## Everything downstream reran, although the result did not change
 
@@ -74,6 +78,20 @@ for**. With `--no-cascade`, or for an asset outside that target's dependencies, 
 asset keeps its old result, and barca prints
 `warning: '…' was served from cache but depends on refreshed '…'`. Refresh again with a target
 below it, or name it in `--refresh`. See [Exactly what --refresh does](/reference/cache/#exactly-what---refresh-does).
+
+## Nothing recomputes an asset, even with `--refresh`
+
+It may be pinned. A pinned asset (`barca pin`) is served from the result it was pinned to on
+every run, `--refresh` and `--refresh-all` included; a run reports its step `cached` with
+reason `pinned`.
+`barca unpin <asset>` releases it. See [Pinning and Rollback](/reference/pins/).
+
+## A schedule skipped an asset, or `barca get` refuses it
+
+It may be paused. A scheduled tick does not compute an asset paused with `barca pause`: its step
+is `skipped` with reason `paused`. A `barca get` that names it is refused (exit 2) unless you add
+`--allow-paused`. `barca resume <asset>` lets the next tick compute it again. See
+[Pausing Assets](/reference/pausing/).
 
 ## Still stuck
 

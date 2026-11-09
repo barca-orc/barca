@@ -82,7 +82,10 @@ barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .b
 barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
                                                Run the HTTP API server
 barca queue [pause|resume] [--server [URL]] [--json]  A server's run queue; pause or resume it (experimental)
-barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
+barca pause [target] [--downstream] [--json]  Stop scheduled ticks and requests from computing an asset (experimental)
+barca resume [target] [--downstream | --all] [--json]  Let a paused asset be computed again (experimental)
+barca tokens bootstrap                        Print a one-use code to connect to a server with --auth token (experimental)
+barca list [file.py|dir/ ...] [--groups] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]
                                                Cache state, last run and artifact shape per node
 barca sql "<query>" [file.py|dir/ ...] [--json] [-l N | --all]
@@ -244,6 +247,8 @@ prints the same syntax for the version you have installed.
 | [`barca gc`](/reference/cli/gc/) | Evict cached results to keep .barca/ under its size limit (experimental). |
 | [`barca stats`](/reference/cli/stats/) | Timing and cache statistics for one asset. |
 | [`barca serve`](/reference/cli/serve/) | Run the HTTP API, the cron scheduler and the web UI. |
+| [`barca pause` and `barca resume`](/reference/pausing/) | Stop scheduled ticks and requests from computing an asset, and let them again (experimental). |
+| [`barca tokens`](/reference/server-mode/#opt-in-project-tokens) | Print a one-use code to connect to a server that runs with `--auth token` (experimental). |
 | [`barca queue`](/reference/cli/queue/) | A server's run queue; pause or resume it (experimental). |
 | [`barca list`](/reference/cli/list/) | List the assets, tasks and sensors barca finds, with their inputs. |
 | [`barca status`](/reference/status/) | Cache state and why, last run and artifact shape for each node. |
@@ -291,7 +296,7 @@ complete. `plan` has no per-item objects (its steps are id strings), so it takes
 
 ## `--env`
 
-`get`, `run`, `status`, `sql`, `history`, `stats`, `serve`, `state backups`, `state restore` and `state reset` accept `--env <name>` (default:
+`get`, `run`, `status`, `sql`, `history`, `stats`, `serve`, `logs`, `gc`, `doctor`, `pin`, `unpin`, `queue`, `pause`, `resume`, `state backups`, `state restore` and `state reset` accept `--env <name>` (default:
 `BARCA_ENV`, then `default_env` in `barca.toml`, then `default`). `plan` and `list` read no
 state and reject it. Each environment has its own cache, artifacts, history and remote
 location. `get`, `run` and `serve` print the environment and artifact store once at startup

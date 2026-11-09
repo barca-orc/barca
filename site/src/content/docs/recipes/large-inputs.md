@@ -66,17 +66,11 @@ barca get eager,per_bucket,bucket_3,after_events pipeline.py
 All five steps run. `eager` received a pandas DataFrame of every row and column
 (`"rows": 100000`, `"type": "DataFrame"`). `per_bucket` and `bucket_3` return a relation and a
 lazy frame. Barca executes them into the step's parquet file when the step ends, and
-`barca get` prints a pointer to the file, not the rows:
+`barca get` prints the path of the file, not the rows (`--json` gives the same as a
+`{"_barca_artifact": {...}}` pointer, and `-o value` prints the rows):
 
 ```
-per_bucket: success
-{
-  "_barca_artifact": {
-    "format": "parquet",
-    "path": ".barca/artifacts/pipeline.py--per_bucket/1cbb617a...759caa.parquet",
-    "size_bytes": 462
-  }
-}
+.barca/artifacts/pipeline.py--per_bucket/1cbb617a...759caa.parquet
 ```
 
 `after_events` ran after `events` and received `None`: a `_` input is never loaded.

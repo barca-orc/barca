@@ -2,7 +2,7 @@
 sidebar:
   order: 4
 title: "Worked Example: Renaming and Moving an Asset"
-description: What happens to an asset's cache and history when its function is renamed or its file is moved, with and without an explicit name=, on barca 0.18.0.
+description: What happens to an asset's cache and history when its function is renamed or its file is moved, with and without an explicit name=, rechecked on barca 0.42.0.
 ---
 
 An asset's identity is its node id: `<file>:<function>`, or the explicit `name=` if it has
@@ -12,7 +12,7 @@ stays the same, its history continues.
 
 An earlier version of this page also described tables of definition snapshots, an indexing
 step and a UI that shows an asset's definition history. Those are not built. Everything
-below was observed by renaming and moving assets with barca 0.18.0.
+below was observed by renaming and moving assets with barca 0.18.0 and rechecked with 0.42.0.
 
 ## Summary
 
@@ -146,10 +146,9 @@ fetch_prices pricing.py` answers `Asset 'fetch_prices' not found. Available: pri
 
 ## Limits
 
-- **`barca status` and `barca sql` use the function name, not `name=`.** After the rename
-  above, `barca status` lists the asset as `fetch_prices` and the SQL view is `fetch_prices`,
-  while `barca list`, `barca get` and `barca stats` call it `prices`. A rename therefore
-  changes the view name that saved queries use, even with `name=`.
+- **Every command uses `name=`.** After the rename above, `barca status` lists the asset as
+  `prices` and the SQL view is `prices`, as in `barca list`, `barca get` and `barca stats`, so
+  saved queries keep working across a rename when the asset has a `name=`.
 - **Names must be unique in the project.** Two assets with the same `name=` are an error
   (exit 2), and because commands without file arguments read the whole project, the error
   stops those commands too:
@@ -160,8 +159,9 @@ fetch_prices pricing.py` answers `Asset 'fetch_prices' not found. Available: pri
 
 - **`name=` keeps the cache across a move, not across a rename.** A renamed function
   recomputes once, with or without `name=`.
-- **Old results are never removed.** Results under ids that no longer exist stay on disk.
-  Barca has no command that prunes them.
+- **Old results stay until the cache size limit evicts them.** Results under ids that no longer
+  exist stay on disk until `.barca/` reaches its size limit or you run `barca gc`
+  ([Disk Use](/reference/disk/)).
 - **Downstream assets follow their upstream.** When an asset recomputes because of a rename
   or move, everything downstream of it recomputes too.
 

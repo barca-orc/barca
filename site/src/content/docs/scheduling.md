@@ -65,6 +65,11 @@ upstream, is computed once and then served from cache on every tick
 The older `POST /run/{task}` alias on the server is different from a tick: it recomputes every
 upstream asset. `POST /runs` with `{"command": "run"}` behaves like a tick.
 
+A tick does not compute an asset paused with `barca pause`: its step is `skipped` with reason
+`paused`, and a paused asset upstream is read as it is, like a `Manual` node. Ticks skipped while
+it was paused are not caught up after `barca resume`. That is separate from pausing a schedule
+("Pausing one job" under [Caveats](#caveats)); see [Pausing Assets](/reference/pausing/).
+
 ## `Always` and `Manual`
 
 `Always` (the default for assets and tasks) and `Manual` (the default for sensors) say how a
@@ -315,7 +320,7 @@ The pool of each run is the cores, bounded by the capacity, so `capacity = 1` st
 A run has no time limit by default (before 0.31.0, a fixed 600 seconds). `--run-timeout`,
 `[server] run_timeout_seconds` or `Schedule("...", timeout_seconds=N)` for one schedule set one;
 a run that takes longer is recorded as `error`, `run timed out after Ns (<setting>)`.
-[`barca docs scheduling`](/scheduling/) has the details.
+`barca docs scheduling` has the same details in the terminal.
 
 ## Inspecting the schedule
 

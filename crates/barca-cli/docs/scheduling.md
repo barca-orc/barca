@@ -301,10 +301,12 @@ barca serve pipeline.py --env prod             # the startup line names .barca/e
 curl -s http://127.0.0.1:8274/health           # {..., "scheduler_enabled": true, "metadata_error": null}
 ```
 
-`serve` binds to `127.0.0.1` by default and has no authentication. `--host 0.0.0.0` (or `::`)
+`serve` binds to `127.0.0.1` by default, and authentication is off unless you turn on project
+tokens (`--auth token`; `barca docs server-mode`, "Opt-in project tokens"). `--host 0.0.0.0` (or `::`)
 listens on every interface, which a container or VM needs for the port to be reachable from
 outside; barca then prints a warning on stderr, because anyone who can reach the port can trigger
-runs. Keep it on a private network or behind a proxy that authenticates. Open
+runs when authentication is off. Turn on tokens, or keep it on a private network or behind a
+proxy that authenticates. Open
 `http://127.0.0.1:8274/` for the web UI. Endpoints are documented at
 https://barca.sh/reference/server-api/; the normative wire contract is
 https://github.com/barca-orc/barca/blob/main/specs/interfaces/server-api.openapi.yaml. Handler errors are

@@ -44,16 +44,19 @@ def scored(retailer: str, cleaned: dict) -> dict:
 
 ```bash
 barca get scored pipeline.py               # first run: every retailer
+barca get retailer_versions pipeline.py    # after the data changes: let the sensor record it
 barca get scored pipeline.py --dry-run     # which retailers would run, and why
 barca serve pipeline.py                    # every 5 minutes: the sensor, then what changed
 ```
 
 A tick where 1 of 10,000 retailers changed runs three steps (the sensor and the retailer's
 key of each asset) and serves the other 19,998 keys from cache; `barca history` records
-`STEPS 3, CACHED 19998`. The dry run names the key and the reason:
+`STEPS 3, CACHED 19998`. A dry run does not run the sensor: before it has recorded the new
+versions (a scheduled poll, or `barca get retailer_versions`), it reports every key cached. After
+that, it names the key and the reason:
 
 ```
-partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.py:versions changed)  pipeline.py:cleaned
+partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.py:retailer_versions changed)  pipeline.py:cleaned
 ```
 
 ## What to know

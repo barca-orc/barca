@@ -4,7 +4,7 @@ title: 'RFC-0015: Configurable Metadata Backup Cadence'
 description: 'Control routine whole-database backups, retain the final shutdown backup, and report local backup storage outside the cache budget.'
 ---
 
-- **Status:** Accepted for 0.36.0; implementation present, not released
+- **Status:** Implemented (0.36.0)
 - **Date:** 2026-10-29
 - **Touches:** barca-core | barca-cli | HTTP server
 - **Supersedes / Related:** Amends the cadence and local disk accounting in

@@ -18,13 +18,19 @@ the available cores, or the capacity when it is smaller; `pool_size` and `pool_s
 Experimental: the layout follows the planner and may change between releases. Each phase's
 `reason` is `{"type": "initial"}` or `{"type": "fan_in", "node_id": "..."}`. Planning reads no
 state, so `plan` takes no `--env` and does not say what is cached; use `--dry-run` or
-`barca status` for that. Its only option is `--help`.
+`barca status` for that. Its options are `--partition` (plan only the selected keys, as `barca get`
+takes it) and `--json` / `--pretty`.
 
 ```
 $ barca plan pipeline.py
 {
   "plan_version": 1,
   "total_steps": 3,
+  "pool_size": 16,
+  "pool_source": "cores",
+  "capacity": 16,
+  "capacity_source": "pool size",
+  "weights": {},
   "phases": [
     {
       "reason": {

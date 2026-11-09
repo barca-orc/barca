@@ -17,12 +17,13 @@ barca stats <target> [file.py|dir/ ...]
 $ barca stats total pipeline.py
 Asset: pipeline.py:total
 Total materializations: 1
-Timing:  avg 0.001s  median 0.001s  p95 0.001s  max 0.001s
+Timing:  avg 0.000s  median 0.000s  p95 0.000s  max 0.000s
 Re-executed with unchanged inputs: 0.0%
+Peak memory (RSS):  median 27.8 MB  max 27.8 MB
 
 Recent runs:
-  ELAPSED    STATUS    ATTEMPTS CREATED
-  0.001s     success   1        2026-10-21 02:39:25 UTC
+  ELAPSED    STATUS    ATTEMPTS PEAK_RSS   RUN          CREATED
+  0.000s     success   1        27.8 MB    792c575938f8 2026-11-09 20:05:36 UTC
 ```
 
 A cache hit executes nothing, so it is not counted here; `barca history` counts cache hits per

@@ -2,10 +2,10 @@
 sidebar:
   order: 9
 title: "Anti-Patterns to Avoid"
-description: Things that fail or give stale or wrong results in barca, what was observed on 0.18.0, and what to do instead.
+description: Things that fail or give stale or wrong results in barca, what happens on current barca (rechecked on 0.42.0), and what to do instead.
 ---
 
-Each section names something to avoid, says what happens on barca 0.18.0, and gives the
+Each section names something to avoid, says what happens on barca (first observed on 0.18.0, rechecked on 0.42.0), and gives the
 alternative.
 
 ## Reading outside data in an asset body
@@ -167,9 +167,10 @@ def amer_total(orders: duckdb.DuckDBPyRelation, _after) -> dict:
 
 ```
 $ barca get amer_total pipeline.py
-[barca] 2/3 steps | failed in 25.1s
-[barca] run failed: step 'pipeline.py:amer_total' failed (exit 1)
+[barca] 2/3 steps | failed in 0.2s
 Step 'pipeline.py:amer_total' failed: CatalogException: Catalog Error: View with name "picked" already exists!
+  File "pipeline.py", line 21, in amer_total
+  ...
 ```
 
 Running the same command again succeeds: `emea_total` is now cached, so `amer_total` is the

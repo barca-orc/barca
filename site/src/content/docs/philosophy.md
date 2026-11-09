@@ -32,8 +32,8 @@ loop is not seen. Some code changes are not seen by the cache either, a module l
 `barca get` plans, runs and exits. State is the `.barca/` directory. `barca.toml` is optional.
 
 Cost: nothing happens when no command is running. Cron schedules need `barca serve`
-([Scheduling](/scheduling/)), which has no authentication of its own
-([Deploying](/deploying/)).
+([Scheduling](/scheduling/)), whose authentication is off unless you turn on project tokens
+([Deploying](/deploying/#authentication)).
 
 ## One install
 
