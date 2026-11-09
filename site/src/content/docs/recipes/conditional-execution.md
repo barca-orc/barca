@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 5
 title: "Branch or Stop Conditionally"
 description: Barca has no conditional construct. Branch inside the function body, or raise in a gate step to stop what depends on it.
 ---

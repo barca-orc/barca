@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 7
 title: "Worked Example: Timeouts and Cancelling"
 description: Timeouts, retries and cancellation as they work in barca 0.29.1. Ad hoc runtime parameters are not implemented.
 ---

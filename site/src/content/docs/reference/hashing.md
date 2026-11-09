@@ -6,42 +6,17 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/hash
 
 <!-- Generated from crates/barca-cli/docs/hashing.md (barca docs hashing). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-[`barca docs cache`](/reference/cache/) says what a step's run hash covers: its definition, its inputs, the sensors it
-reads, its partition key and the environment variables it lists. This topic is the full rule for
-the definition part: which project code is followed from the function, which decorator
-arguments count, and what barca does not follow.
+A step runs again when its run hash changes ([`barca docs cache`](/reference/cache/), "At a glance"). This topic is the
+full rule for the part of that hash that comes from code. In short:
 
-The definition covers the function as written, the decorator arguments that affect its result,
-and its dependency cone: every module-level function, class, constant and import it uses,
-followed transitively into helper modules of your project ([`barca docs cache`](/reference/cache/), "What the
-definition covers", has an example).
-
-## A helper module that does not parse
-
-A project module that does not parse stops the steps that cannot run without it, before
-anything runs. If `helpers.py` has a syntax error, every step of a file that imports it
-(directly, through another project module, or inside a function) is refused with exit 2 by the
-command that plans it (`get`, `run`, `--dry-run`, `plan`, `status`), with the module, the line,
-the column and the source line:
-
-```
-Parse error: syntax error in helpers.py: line 4, column 20: Expected `:`, found newline (imported by pipeline.py, so step 'pipeline.py:raw' cannot run)
-helpers.py:4:20:
-    def normalize(rows)
-                       ^
-Fix the syntax error: the worker imports helpers.py when it loads pipeline.py, so no step of pipeline.py can run until it parses.
-```
-
-A command that plans only steps of files that do not import the module is not affected, and
-`barca list` plans nothing. An import barca cannot see (`importlib.import_module("helpers")`)
-still fails in the step; its traceback ends with the file, the line and a caret at the error.
-
-## Naming the pipeline file
-
-The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
-`./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
-directory all compute the same run hash and the same node id, relative to the project root
-(`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
+- **The function and the project code it uses.** The function as written, and every module-level
+  function, class, constant and import it uses, followed into helper modules of your project
+  ("What counts as a use"). Editing a helper the step does not use re-runs nothing.
+- **Some decorator arguments.** `inputs=`, `serializer=`, the shape of `partitions=` (not its
+  keys), `@sink(...)` and any other decorator count; `retries=`, `timeout_seconds=`,
+  `freshness=`, `name=`, `description=` and the rest do not ("Which decorator arguments count").
+- **Not installed packages, and not code barca cannot see.** Followed only inside the project
+  root; dynamic imports and the like are listed under "Not followed".
 
 ## What counts as a use
 
@@ -220,7 +195,7 @@ these names keep their selective cones. The exact rules are in `specs/behavior/c
 ## Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`
-("Forcing a recompute"):
+([`barca docs cache`](/reference/cache/), "Forcing a recompute"):
 
 - installed packages and the standard library: after upgrading a package, recompute;
 - modules outside the project root (`../shared/`), and modules only a custom `sys.path` or
@@ -231,7 +206,34 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - names defined dynamically through runtime namespace mutation, and changes to the import path
   made by your code;
 - data your function reads that is not an input: a file, a table, an API. Bring it in through a
-  sensor (next section).
+  sensor ([`barca docs cache`](/reference/cache/), "External data that changes in place").
+
+## A helper module that does not parse
+
+A project module that does not parse stops the steps that cannot run without it, before
+anything runs. If `helpers.py` has a syntax error, every step of a file that imports it
+(directly, through another project module, or inside a function) is refused with exit 2 by the
+command that plans it (`get`, `run`, `--dry-run`, `plan`, `status`), with the module, the line,
+the column and the source line:
+
+```
+Parse error: syntax error in helpers.py: line 4, column 20: Expected `:`, found newline (imported by pipeline.py, so step 'pipeline.py:raw' cannot run)
+helpers.py:4:20:
+    def normalize(rows)
+                       ^
+Fix the syntax error: the worker imports helpers.py when it loads pipeline.py, so no step of pipeline.py can run until it parses.
+```
+
+A command that plans only steps of files that do not import the module is not affected, and
+`barca list` plans nothing. An import barca cannot see (`importlib.import_module("helpers")`)
+still fails in the step; its traceback ends with the file, the line and a caret at the error.
+
+## Naming the pipeline file
+
+The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
+`./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
+directory all compute the same run hash and the same node id, relative to the project root
+(`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
 
 See also: [`barca docs cache`](/reference/cache/), [`barca docs assets`](/reference/assets/), [`barca docs discovery`](/reference/discovery/).
 

@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 7
 title: "Read Large Inputs Lazily"
 description: A parquet input with no annotation is read whole with pandas. Annotate it as a DuckDB relation or a polars LazyFrame to read only what the step uses.
 ---

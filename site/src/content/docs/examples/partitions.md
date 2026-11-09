@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 3
 title: "Worked Example: Partitions"
 description: One asset definition run once per key, each key cached on its own. What runs when keys, code or a sensor change, how to look at the results, and the limits on 0.30.2.
 ---

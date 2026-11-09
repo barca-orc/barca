@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 3
 title: "Run After a Step Without Its Value"
 description: Start an input's name with an underscore when a step must run after another but does not need its value.
 ---

@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 8
 title: "Rerun Only Changed Partitions"
 description: One sensor query returns every key and its version; partitions_from over that dict runs only the keys whose version changed, through a chain of partitioned assets.
 ---
