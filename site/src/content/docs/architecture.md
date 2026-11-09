@@ -15,7 +15,7 @@ This page describes the current source layout. The reasons behind the main choic
 
 ## Layout
 
-```
+```text wrap=false
 crates/
   barca-core/src/             library: no HTTP dependencies
     parse.rs, discover.rs     read decorated functions from source with ruff's parser; find the project's .py files

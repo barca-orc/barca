@@ -65,39 +65,35 @@ code and JSON output schema, marked stable or experimental, with the policy for 
 
 ## All commands
 
-```
-barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
-                                               Get assets — cache-aware; prints their artifact paths
-barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
-barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
-barca doctor [file.py|dir/ ...] [--json] [--server [URL] | --local]
-                                               Diagnose project prerequisites (and a server) without running steps
-barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]  A run's recorded step stdout and stderr (default: the most recent run)
-barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
-                                               Show recent runs, or one run's steps and errors
-barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
-barca pin [target] [--previous|--run-hash H|--from-file F|--versions]  Hold an asset at an earlier result or supplied data (experimental)
-barca unpin <target>                         Release a pinned asset (experimental)
-barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
-barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS]
-                                               Run the HTTP API server
-barca queue [pause|resume] [--server [URL]] [--json]  A server's run queue; pause or resume it (experimental)
-barca pause [target] [--downstream] [--json]  Stop scheduled ticks and requests from computing an asset (experimental)
-barca resume [target] [--downstream | --all] [--json]  Let a paused asset be computed again (experimental)
-barca tokens bootstrap                        Print a one-use code to connect to a server with --auth token (experimental)
-barca list [file.py|dir/ ...] [--groups] [-l N | --all] [--json]  List discovered definitions and their deps
-barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]
-                                               Cache state, last run and artifact shape per node
-barca sql "<query>" [file.py|dir/ ...] [--json] [-l N | --all]
-                                               Query cached results with DuckDB (experimental)
-                                               (install: uv add 'barca[sql]')
-barca state backups [--json]                  List the metadata backups, local and in the store
-barca state restore [--from N|NAME|PATH]      Put a metadata backup back (the current DB is kept aside)
-barca state reset [--yes]                     Start the metadata DB over (the old one is moved aside)
-barca docs [topic] [--all] [--json]           Built-in manual
-barca version                                 Print version
-barca --help                                  Show help
-```
+Each command links to its page. `barca <command> --help` prints the same syntax for the version
+you have installed.
+
+| Command | Syntax | What it does |
+|---|---|---|
+| [`get`](/reference/cli/get/) | `barca get [target[,target...]] [file.py\|dir/ ...] [--refresh a,b [--no-cascade] \| --refresh-all]` | Get assets — cache-aware; prints their artifact paths |
+| [`run`](/reference/cli/run/) | `barca run <task[,task...]> [file.py\|dir/ ...] [--refresh a,b [--no-cascade] \| --refresh-all]` | Run task(s) (always re-run) |
+| [`plan`](/reference/cli/plan/) | `barca plan [file.py\|dir/ ...]` | Emit the execution plan as JSON (experimental) |
+| [`doctor`](/reference/doctor/) | `barca doctor [file.py\|dir/ ...] [--json] [--server [URL] \| --local]` | Diagnose project prerequisites (and a server) without running steps |
+| [`logs`](/reference/logs/) | `barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]` | A run's recorded step stdout and stderr (default: the most recent run) |
+| [`history`](/reference/cli/history/) | `barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N \| --all] [--json\|--pretty]` | Show recent runs, or one run's steps and errors |
+| [`stats`](/reference/cli/stats/) | `barca stats <target> [file.py\|dir/ ...]` | Show timing/cache stats for an asset |
+| [`pin`](/reference/pins/) | `barca pin [target] [--previous\|--run-hash H\|--from-file F\|--versions]` | Hold an asset at an earlier result or supplied data (experimental) |
+| [`unpin`](/reference/pins/) | `barca unpin <target>` | Release a pinned asset (experimental) |
+| [`gc`](/reference/cli/gc/) | `barca gc [--dry-run] [--max-size SIZE] [--json]` | Evict cached results to keep .barca/ under its size limit (experimental) |
+| [`serve`](/reference/cli/serve/) | `barca serve [file.py\|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS] [--auth off\|token]` | Run the HTTP API server |
+| [`queue`](/reference/cli/queue/) | `barca queue [pause\|resume] [--server [URL]] [--json]` | A server's run queue; pause or resume it (experimental) |
+| [`pause`](/reference/pausing/) | `barca pause [target] [--downstream] [--json]` | Stop scheduled ticks and requests from computing an asset (experimental) |
+| [`resume`](/reference/pausing/) | `barca resume [target] [--downstream \| --all] [--json]` | Let a paused asset be computed again (experimental) |
+| [`tokens`](/reference/server-mode/#opt-in-project-tokens) | `barca tokens bootstrap` | Print a one-use code to connect to a server with --auth token (experimental) |
+| [`list`](/reference/cli/list/) | `barca list [file.py\|dir/ ...] [--groups] [-l N \| --all] [--json]` | List discovered definitions and their deps |
+| [`status`](/reference/status/) | `barca status [target[,target...]] [file.py\|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]` | Cache state, last run and artifact shape per node |
+| [`sql`](/reference/sql/) | `barca sql "<query>" [file.py\|dir/ ...] [--json] [-l N \| --all]` | Query cached results with DuckDB (experimental) (install: uv add 'barca[sql]') |
+| [`state backups`](/reference/cli/state/) | `barca state backups [--json]` | List the metadata backups, local and in the store |
+| [`state restore`](/reference/cli/state/) | `barca state restore [--from N\|NAME\|PATH]` | Put a metadata backup back (the current DB is kept aside) |
+| [`state reset`](/reference/cli/state/) | `barca state reset [--yes]` | Start the metadata DB over (the old one is moved aside) |
+| [`docs`](/reference/cli/docs/) | `barca docs [topic] [--all] [--json]` | Built-in manual |
+| [`version`](/reference/cli/version/) | `barca version` | Print version |
+| `--help` | `barca --help` | Show help |
 
 `get`, `run`, `status`, `list`, `history` and `stats` also take `--server [<url>]`, which runs
 the command on a `barca serve` and prints it here as the local command would, and `--local`,
@@ -229,33 +225,6 @@ run at once (see [Decorators](/reference/api/decorators/#heavy-steps-weight)). A
 its `parallel()` branches adds `while it waited for its parallel() branches`. When the exit
 status is not available within a few hundred milliseconds, the error is the plain
 `worker disconnected`.
-
-## Commands in detail
-
-Each command has its own page with its flags, examples and output. `barca <command> --help`
-prints the same syntax for the version you have installed.
-
-| Command | What it does |
-|---|---|
-| [`barca get`](/reference/cli/get/) | Get assets, from cache when nothing changed; prints where their results are. |
-| [`barca run`](/reference/cli/run/) | Run tasks. A task always runs; the assets it reads come from cache. |
-| [`barca plan`](/reference/cli/plan/) | Print the execution plan as JSON without running anything (experimental). |
-| [`barca logs`](/reference/logs/) | A run's recorded step output; follow a live run. |
-| [`barca doctor`](/reference/doctor/) | Check the project's prerequisites without running anything. |
-| [`barca history`](/reference/cli/history/) | Show recent runs, or one run with its steps and errors. |
-| [`barca pin and unpin`](/reference/pins/) | Hold an asset at an earlier result or supplied data, and release it (experimental). |
-| [`barca gc`](/reference/cli/gc/) | Evict cached results to keep .barca/ under its size limit (experimental). |
-| [`barca stats`](/reference/cli/stats/) | Timing and cache statistics for one asset. |
-| [`barca serve`](/reference/cli/serve/) | Run the HTTP API, the cron scheduler and the web UI. |
-| [`barca pause` and `barca resume`](/reference/pausing/) | Stop scheduled ticks and requests from computing an asset, and let them again (experimental). |
-| [`barca tokens`](/reference/server-mode/#opt-in-project-tokens) | Print a one-use code to connect to a server that runs with `--auth token` (experimental). |
-| [`barca queue`](/reference/cli/queue/) | A server's run queue; pause or resume it (experimental). |
-| [`barca list`](/reference/cli/list/) | List the assets, tasks and sensors barca finds, with their inputs. |
-| [`barca status`](/reference/status/) | Cache state and why, last run and artifact shape for each node. |
-| [`barca sql`](/reference/sql/) | Query cached results with DuckDB (experimental). |
-| [`barca state`](/reference/cli/state/) | List the metadata backups, put one back, or start the database over. |
-| [`barca docs`](/reference/cli/docs/) | The built-in manual, for the installed version. |
-| [`barca version`](/reference/cli/version/) | Print the installed version. |
 
 ## Run timing
 

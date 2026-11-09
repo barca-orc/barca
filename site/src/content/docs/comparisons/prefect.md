@@ -3,6 +3,12 @@ title: "Barca vs Prefect"
 description: Install size, import time, steps to a first result, run time, run output, error output and caching for the same pipeline, measured on 2026-10-21 with barca 0.28.0 and Prefect 3.9.0.
 ---
 
+:::note[Which numbers are current]
+This page is a dated measurement of one pipeline. The newest run times, measured with barca
+0.39.4 against Dagster, Prefect and Airflow on the same machine, are in
+[Same Pipelines in Four Tools](/comparisons/framework-comparison/#run-times-nothing-cached).
+:::
+
 Last measured: 2026-10-21, with barca 0.28.0 and Prefect 3.9.0, both from PyPI with `uv`,
 Python 3.13, on Linux (AMD Ryzen AI MAX+ 395). Setup and commands are in
 [`benchmarks/RESULTS.md`](https://github.com/barca-orc/barca/blob/main/benchmarks/RESULTS.md).
