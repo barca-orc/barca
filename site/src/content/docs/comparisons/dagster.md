@@ -3,11 +3,42 @@ title: "Barca vs Dagster"
 description: Install size, steps to a first result, run time, run output and error output for the same two-asset pipeline, measured on 2026-10-21 with barca 0.28.0 and Dagster 1.13.26.
 ---
 
-:::note[Which numbers are current]
-This page is a dated measurement of one pipeline. The newest run times, measured with barca
-0.39.4 against Dagster, Prefect and Airflow on the same machine, are in
+## Coming from Dagster
+
+| Dagster | barca |
+|---|---|
+| `@asset` | `@asset` |
+| `deps=` / `AssetIn` / a parameter named after the upstream asset | `inputs={"param": upstream_fn}` ([Assets](/reference/assets/)) |
+| An `@op` or job that does something (deploy, notify) | `@task`: runs every time it is in a run, never served from cache ([Tasks](/reference/tasks/)) |
+| `Definitions` and a project scaffold | None: barca reads the `.py` files that import it ([Discovery](/reference/discovery/)) |
+| IO manager | `serializer=` (`json`, `pickle`, `parquet`, `csv`), picked from the returned value by default; a remote store for object storage ([Output Formats and Types](/reference/types/), [Remote Storage](/reference/remote-storage/)) |
+| `materialize` / `dg launch` | `barca get` |
+| A sensor that starts runs | `@sensor`: a function whose return value barca records; the assets that read it rerun when it changes ([External Data and Early Cutoff](/reference/external-data/)) |
+| `ScheduleDefinition` | `@asset(freshness=Schedule("0 5 * * *"))`, fired by `barca serve` ([Scheduling With Cron](/scheduling/)) |
+| `DailyPartitionsDefinition` and friends | `partitions=` on `@asset`, and `collect()` for a fan-in ([Partitions](/reference/partitions/)) |
+| `RetryPolicy`, op timeouts | `retries=`, `timeout_seconds=` ([Retries, Timeouts and Failures](/recipes/retries-timeouts-failures/)) |
+| `dagster dev` and the UI | `barca serve`, with a web UI ([The Web UI](/web-ui/)) |
+| Run storage (SQLite or Postgres) and the daemon | `.barca/metadata.db`, written by the command that runs; no daemon |
+| Caching via code versions and data versions | Every asset step is cached by a hash of its code, its inputs and declared `env=` variables; nothing to declare ([The Cache](/reference/cache/)) |
+
+## Choose Dagster when
+
+- **One run has to spread across machines** (Kubernetes, Celery, cloud run launchers). A barca
+  run executes on the machine that starts it; that is a standing non-goal.
+- **You need user accounts, roles or SSO** in the UI. barca's server has opt-in API tokens with
+  no accounts or roles; anything more sits in a proxy in front of it.
+- **You rely on Dagster's integrations** (dbt, Airbyte, Fivetran, and the rest) or on a hosted
+  offering. barca runs plain Python functions and has no integration catalog.
+- **Runs must wait on approvals or external events.** barca has no approval gates.
+
+Choose barca when the pipeline is Python on one machine or one server, and what you want is
+that nothing reruns unless its code or inputs changed, with no platform to stand up.
+
+## The measurements
+
+The rest of this page is a dated measurement of one pipeline. The newest run times, measured
+with barca 0.39.4 against Dagster, Prefect and Airflow on the same machine, are in
 [Same Pipelines in Four Tools](/comparisons/framework-comparison/#run-times-nothing-cached).
-:::
 
 Last measured: 2026-10-21, with barca 0.28.0 and Dagster 1.13.26, both from PyPI with `uv`, on
 Linux (AMD Ryzen AI MAX+ 395). barca ran under Python 3.13; the Dagster project scaffold chose
@@ -164,28 +195,3 @@ Stack Trace:
 ```
 
 The frame from the user's file is the last one, below the Dagster frames.
-
-## Other things observed on 2026-06-10
-
-These are notes from using Dagster 1.13.8 on 2026-06-10. They have not been checked against a
-later Dagster release, except where a note dated 2026-10-21 says so.
-
-- `dg list defs` printed a table of every asset with its deps, group and kind, without running
-  anything. barca's equivalent is `barca list`, added in 0.2.1.
-- The Dagster scaffold included a `.gitignore` covering the files Dagster writes. barca 0.2.0
-  created `.barca/` without one. Note, 2026-10-07: barca 0.18.0 writes `.barca/.gitignore`
-  containing `*`, so the directory ignores itself.
-- A `.py` file placed in the scaffold's `defs/` folder was picked up without registration.
-  barca 0.2.0 needed the files named on the command line. Note, 2026-10-07: barca 0.18.0 reads
-  every `.py` file under the project root that imports barca when no file is named; see
-  [Discovery](/reference/discovery/).
-- The Dagster project needed a `pyproject.toml`, a `src` layout, `definitions.py` and a `defs/`
-  folder before `dg launch` ran. `barca get file.py` runs on a single file.
-- Each asset printed 14 DEBUG lines per run. No option to reduce this was found during the test.
-- `create-dagster` asked "Run uv sync? (y/n)". No `--yes` flag was found during the test. Note,
-  2026-10-21: `create-dagster@1.13.26 project myproj --uv-sync` ran without asking.
-- `dg` commands printed a five-line warning when the project's virtualenv was not activated,
-  including when run as `.venv/bin/dg`. Note, 2026-10-21: in 1.13.26 the warning is seven lines
-  and says that adding `project_and_activated_venv_mismatch` to `cli.suppress_warnings` turns it
-  off.
-- Both a `dagster` command and a `dg` command were installed.
