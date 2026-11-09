@@ -1,5 +1,5 @@
 ---
-title: "Workflow: Sensors and External Observations"
+title: "Worked Example: Sensors and Outside Data"
 description: A sensor reports the version of data that lives outside the graph, so the assets that read that data re-run when it changes.
 ---
 

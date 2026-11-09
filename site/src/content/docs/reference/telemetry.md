@@ -1,5 +1,5 @@
 ---
-title: "Telemetry"
+title: "Telemetry and Slack Alerts"
 description: "Report every step and every run to Datadog as a trace of its own, barca serve as DogStatsD metrics, and post to Slack when a job starts failing or recovers."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/telemetry.md
 ---

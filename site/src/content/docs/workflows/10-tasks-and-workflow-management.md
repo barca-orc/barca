@@ -1,5 +1,5 @@
 ---
-title: "Workflow: Tasks and Workflow Management"
+title: "Worked Example: Tasks"
 description: A task does something (deploy, notify, migrate), always runs, and is run with barca run. A worked example with real output.
 ---
 

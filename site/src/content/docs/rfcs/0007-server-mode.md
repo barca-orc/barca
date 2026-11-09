@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0007: Server Mode — the server is the ledger'
 description: 'One deployed barca serve owns the record of what exists. Laptops run their own work against it, or send a run to it. Still one node per run.'
 ---

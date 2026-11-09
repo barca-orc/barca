@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0006: Configuration & Shared Remote State'
 description: 'barca.toml, env var/CLI precedence, --env separation, and the optimistic shared-state sync protocol.'
 ---

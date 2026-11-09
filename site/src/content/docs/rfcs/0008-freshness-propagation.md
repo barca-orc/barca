@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0008: Freshness Propagation in barca serve'
 description: 'What Always and Manual do at run time: a scheduled tick brings the Always nodes below it up to date in one run; Manual is refreshed by hand only and pins itself.'
 ---

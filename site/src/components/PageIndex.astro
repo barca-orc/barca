@@ -8,9 +8,8 @@ import { getCollection } from 'astro:content';
 interface Props {
   prefix?: string;
   all?: boolean;
-  stripPrefix?: string;
 }
-const { prefix, all = false, stripPrefix } = Astro.props;
+const { prefix, all = false } = Astro.props;
 
 const SECTIONS: [string, string][] = [
   ['patterns/', 'Recipe'],
@@ -31,28 +30,76 @@ let pages = docs.filter((d) => {
   return d.id.startsWith(prefix ?? '') && d.id !== (prefix ?? '').replace(/\/$/, '');
 });
 
-const clean = (t: string) =>
-  stripPrefix ? t.replace(new RegExp(`^${stripPrefix}\\s*`), '') : t.replace(/^(Pattern|Workflow):\s*/, '');
+// The "Kind" label says a page is a worked example, so the title's prefix is not repeated.
+const clean = (t: string) => t.replace(/^Worked Example:\s*/, '');
+const sortKey = clean;
 pages = all
-  ? pages.sort((a, b) => clean(a.data.title).localeCompare(clean(b.data.title)))
+  ? pages.sort((a, b) => sortKey(a.data.title).localeCompare(sortKey(b.data.title)))
   : pages.sort((a, b) => a.id.localeCompare(b.id));
 
+const letterOf = (p: (typeof pages)[number]) => sortKey(p.data.title).charAt(0).toUpperCase();
+const letters = [...new Set(pages.map(letterOf))];
+const groups = letters.map((l) => [l, pages.filter((p) => letterOf(p) === l)] as const);
 const section = (id: string) => SECTIONS.find(([p]) => id.startsWith(p))?.[1] ?? 'Guide';
 ---
 
-<ul class="page-index" role="list">
-  {
-    pages.map((p) => (
-      <li>
-        <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
-        {all && <span class="kind">{section(p.id)}</span>}
-        <p>{p.data.description}</p>
-      </li>
+{
+  all && (
+    <nav class="az-jump" aria-label="Jump to letter">
+      {letters.map((l) => (
+        <a href={`#letter-${l.toLowerCase()}`}>{l}</a>
+      ))}
+    </nav>
+  )
+}
+
+{
+  all ? (
+    groups.map(([letter, group]) => (
+      <section class="az-group">
+        <h2 id={`letter-${letter.toLowerCase()}`}>{letter}</h2>
+        <ul class="page-index" role="list">
+          {group.map((p) => (
+            <li>
+              <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
+              <span class="kind">{section(p.id)}</span>
+              <p>{p.data.description}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
     ))
-  }
-</ul>
+  ) : (
+    <ul class="page-index" role="list">
+      {pages.map((p) => (
+        <li>
+          <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
+          <p>{p.data.description}</p>
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 <style>
+  .az-jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    margin-bottom: 1rem;
+    font-family: var(--sl-font-mono);
+  }
+  .az-jump a {
+    text-decoration: none;
+    color: var(--sl-color-text-accent);
+  }
+  .az-group h2 {
+    margin-top: 1.5rem;
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xl);
+    color: var(--sl-color-accent-high);
+    scroll-margin-top: 5rem;
+  }
   .page-index {
     list-style: none;
     padding: 0;

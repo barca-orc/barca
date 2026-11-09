@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0009: The store as backup, and restore'
 description: 'A remote store with no server is this machine''s backup and read-through cache. The metadata database is backed up on the minute, five copies are kept, and restore is one explicit command.'
 ---

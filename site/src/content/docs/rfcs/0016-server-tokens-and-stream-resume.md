@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0016: Server Tokens and Resumable Run Events'
 description: 'Opt-in Barca-issued API tokens, browser token management without accounts, consistent client credentials, and attempt-scoped Last-Event-ID replay.'
 ---

@@ -1,5 +1,5 @@
 ---
-title: "Pattern: Parallel Tasks"
+title: "Run Tasks in Parallel"
 description: Inside a task, parallel() and parallel_map() run other tasks in separate worker processes and return their results in order.
 ---
 

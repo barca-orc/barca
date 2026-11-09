@@ -1,4 +1,5 @@
 ---
+pagefind: false
 title: 'RFC-0005: Artifact Serialization & Content-Addressed Storage'
 description: 'json/pickle/parquet artifact formats, local and remote storage, staged writes, and @sink.'
 ---

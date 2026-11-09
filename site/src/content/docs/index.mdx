@@ -7,7 +7,7 @@ hero:
   tagline: >-
     Cached Python pipelines, with no platform to run. Decorate functions, declare their inputs, and
     barca runs only what changed. Everything else comes from the cache. One <code>uv add</code>,
-    no daemon, no database, no config.
+    no daemon or database server to run, no config file needed.
   image:
     html: |
       <div class="hero-demo" aria-label="A two-asset pipeline and two runs of barca get">
@@ -32,6 +32,7 @@ hero:
       icon: right-arrow
     - text: Compare with Dagster, Prefect, Airflow
       link: /comparisons/
+      icon: right-arrow
       variant: minimal
 ---
 
@@ -52,8 +53,8 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   </a>
 </div>
 <p class="stat-note">
-  Measured with barca 0.28.0 and Dagster 1.13.26 on 2026-10-21;
-  [method and raw numbers](/comparisons/dagster/).
+  Benchmarked with barca 0.28.0 and Dagster 1.13.26 on one Linux machine
+  ([method and raw numbers](/comparisons/dagster/)).
 </p>
 
 ## Install
@@ -68,34 +69,44 @@ Python 3.12 or later. Wheels for macOS on Apple Silicon and Linux (x86-64 and ar
 
 <CardGrid>
   <LinkCard
-    title="New to barca"
+    title="New to Barca"
     description="Write two assets, run them, change the code and see what reruns."
     href="/getting-started/"
   />
   <LinkCard
-    title="Choosing a tool"
+    title="Choosing a Tool"
     description="The same pipelines in barca, Dagster, Prefect and Airflow, with install size and run time measured."
     href="/comparisons/"
   />
   <LinkCard
-    title="Writing a pipeline"
+    title="Writing a Pipeline"
     description="Short recipes: chain assets, run tasks in parallel, retry, read large inputs lazily, rerun changed partitions."
     href="/patterns/"
   />
   <LinkCard
-    title="Running it on a schedule"
+    title="Running It on a Schedule"
     description="barca serve runs cron schedules and serves a web UI and an HTTP API. Deploy it as one service."
     href="/scheduling/"
   />
   <LinkCard
-    title="Driving it from a script or AI agent"
+    title="Driving It From a Script or AI Agent"
     description="JSON on stdout, stable exit codes and an agent skill file."
     href="/reference/agents/"
   />
   <LinkCard
-    title="Looking something up"
+    title="Looking Something Up"
     description="Every page A to Z, or press ⌘K / Ctrl+K to search."
     href="/reference/"
+  />
+  <LinkCard
+    title="Every Command"
+    description="A table of common tasks, then each command with its flags and output."
+    href="/reference/cli/"
+  />
+  <LinkCard
+    title="Something Did Not Rerun (or Did)"
+    description="The common caching surprises and how to ask barca why."
+    href="/troubleshooting/"
   />
 </CardGrid>
 

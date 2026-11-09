@@ -174,6 +174,26 @@ a[aria-current='true'] {
   box-decoration-break: clone;
 }
 
+/* A flag in an outline entry ("--refresh") stays on one line */
+starlight-toc code,
+mobile-starlight-toc code {
+  white-space: nowrap;
+}
+
+/* MDX leaves empty paragraphs around block HTML; they only add stray space */
+.sl-markdown-content > p:empty {
+  display: none;
+}
+
+/* The search box starts at the same place on every page: the site-title column is always the
+   sidebar's width (Starlight sizes it from the page layout, so it moved between the homepage,
+   pages without an outline and the rest) */
+@media (min-width: 50rem) {
+  .header {
+    grid-template-columns: calc(var(--sl-sidebar-width) - var(--sl-nav-pad-x)) 1fr auto !important;
+  }
+}
+
 /* ----------------------------------------------------------------
    Homepage
    ---------------------------------------------------------------- */
@@ -192,6 +212,22 @@ a[aria-current='true'] {
 }
 .hero .tagline code {
   font-size: 0.9em;
+  white-space: nowrap;
+}
+/* On a phone the sample wraps instead of being cut off at the edge */
+@media (max-width: 49.99rem) {
+  .hero .stack {
+    text-align: start;
+  }
+  .hero .copy,
+  .hero .actions {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+  .hero-demo pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 }
 
 .hero-demo {
@@ -280,8 +316,24 @@ a[aria-current='true'] {
 .diagram svg {
   display: block;
   width: 100%;
-  min-width: 36rem;
   height: auto;
+}
+.diagram svg.dg-wide {
+  min-width: 36rem;
+}
+/* A phone gets the same diagram laid out top to bottom, at a readable size */
+.diagram svg.dg-tall {
+  display: none;
+  max-width: 24rem;
+  margin-inline: auto;
+}
+@media (max-width: 49.99rem) {
+  .diagram svg.dg-wide {
+    display: none;
+  }
+  .diagram svg.dg-tall {
+    display: block;
+  }
 }
 .diagram figcaption {
   margin-top: 0.5rem;
