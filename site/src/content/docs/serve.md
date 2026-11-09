@@ -8,7 +8,7 @@ binary run as a long-lived process: it fires schedules, serves an HTTP API and a
 can hold one record of results and runs for a whole team. Start it in a project with:
 
 ```bash
-barca serve                      # 127.0.0.1:8274; add --host 0.0.0.0 to reach it from elsewhere
+barca serve                  # 127.0.0.1:8274 (--host 0.0.0.0 for other machines)
 ```
 
 Authentication is off by default ("Requiring a token" below).

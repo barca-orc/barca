@@ -1009,7 +1009,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "telemetry",
         file: "telemetry.md",
         slug: "reference/telemetry",
-        title: "Telemetry: Datadog Traces and Metrics",
+        title: "Telemetry (Datadog)",
         description: "Report every step and every run to Datadog as a trace of its own, and \
                       barca serve as DogStatsD metrics and JSON logs.",
     },

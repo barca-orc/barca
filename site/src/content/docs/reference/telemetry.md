@@ -1,5 +1,5 @@
 ---
-title: "Telemetry: Datadog Traces and Metrics"
+title: "Telemetry (Datadog)"
 description: "Report every step and every run to Datadog as a trace of its own, and barca serve as DogStatsD metrics and JSON logs."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/telemetry.md
 ---

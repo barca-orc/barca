@@ -282,7 +282,7 @@ cancels them instead (reason `server shutdown`, exit 1). When it starts, the ser
 queued runs in order under their run ids. systemd waits 90 seconds (`TimeoutStopSec`) before it
 kills the service; keep that longer than the number `barca serve` prints at startup under
 systemd (`[barca] stop grace: ...`: the drain timeout plus 12 seconds, more with a store). The full recipe is
-[Restarting without losing work](/deploying/#restarting-without-losing-work); for a container,
+[Restarting without losing work](/reference/serve-ops/#restarting-without-losing-work); for a container,
 see [Deploying](/deploying/#in-a-container).
 
 ## Overlapping runs share their steps
