@@ -104,7 +104,7 @@ annotation was meant to avoid.
 - **A declared input is always loaded** unless its name starts with `_`, whether or not the
   function uses it. Barca warns at plan time about a step that never uses one of its inputs;
   the warning is shown in
-  [Ordering-Only Dependencies](/patterns/03-ordering-only-deps/#an-unused-input-without-the-prefix-is-loaded-and-reported).
+  [Ordering-Only Dependencies](/recipes/ordering-only-deps/#an-unused-input-without-the-prefix-is-loaded-and-reported).
   Remove an unused input, or rename it `_<name>` (the key in `inputs=` and the parameter) when
   it is there for ordering only.
 - **Only parquet artifacts can be read lazily.** A json or pickle input is deserialized whole,
@@ -123,7 +123,7 @@ annotation was meant to avoid.
   touches, when every reader of the artifact in that phase is lazy. An eager input is
   downloaded whole, once. See [Remote storage](/reference/remote-storage/).
 - Steps that use DuckDB share one connection per worker process. See
-  [Anti-Patterns](/patterns/07-anti-patterns/#fixed-names-on-duckdbs-shared-connection).
+  [Anti-Patterns](/recipes/anti-patterns/#fixed-names-on-duckdbs-shared-connection).
 
 The same material is in the terminal manual: `barca docs big-inputs`. Input annotations are
 listed in `barca docs types`.

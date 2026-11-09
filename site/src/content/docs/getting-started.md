@@ -212,7 +212,7 @@ uv run barca get report pipeline.py --partition customer=acme
 
 The first command computes both keys. The second reuses `acme`'s result. Each key has its
 own cache entry. To react to changes in external data for individual keys, use a sensor
-and `partitions_from`; see [Partitions](/workflows/03-parametrized-assets-and-partitions/).
+and `partitions_from`; see [Partitions](/examples/partitions/).
 
 ## Run on another machine
 
@@ -257,7 +257,7 @@ Each asset becomes a view named after its function. This query returns `n = 3`, 
   is computed once and then served from cache, even after the data changes. Put a
   `@sensor` in front of it: [Sensors](/guide/#4-sensors-data-from-outside).
 - **Large inputs.** An unannotated DataFrame input is read in full with pandas:
-  [Large inputs](/patterns/08-large-inputs/).
+  [Large inputs](/recipes/large-inputs/).
 - **Environments and remote stores.** `--env prod` keeps a separate cache and history, and a
   remote store keeps results and backups of the history: [Configuration](/reference/config/),
   [Remote storage](/reference/remote-storage/).

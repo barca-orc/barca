@@ -79,5 +79,5 @@ below it, or name it in `--refresh`. See [Exactly what --refresh does](/referenc
 
 [`barca doctor`](/reference/doctor/) checks the project's prerequisites without running anything,
 and [Logs](/reference/logs/) shows what a step printed. The
-[Anti-Patterns](/patterns/07-anti-patterns/) page lists the mistakes that give stale or wrong
+[Anti-Patterns](/recipes/anti-patterns/) page lists the mistakes that give stale or wrong
 results.

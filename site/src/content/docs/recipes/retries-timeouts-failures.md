@@ -139,7 +139,7 @@ Step 'pipeline.py:slow' failed: TimeoutError: Step 'pipeline.py:slow' exceeded t
 - **Barca does not see a loop in the body.** A hand-written retry loop works, but barca sees
   one attempt, and the attempts share one `timeout_seconds`.
 - **Branches of `parallel()` are not retried**, whatever their task declares:
-  [Parallel Tasks](/patterns/04-parallel-tasks/).
+  [Parallel Tasks](/recipes/parallel-tasks/).
 - **A failed asset is not cached.** `barca status` shows it as `never-run` with `failed` under
   WHY, and the next `barca get` tries it again.
 - `sys.exit()` in a step, with any code, fails the step (`barca docs tasks`).

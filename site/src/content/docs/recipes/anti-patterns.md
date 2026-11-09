@@ -56,7 +56,7 @@ def orders(version: str) -> list:
 For a one-off recompute without a sensor, name the asset:
 `barca get total pipeline.py --refresh orders`.
 
-[Sensors and External Observations](/workflows/06-sensors-and-external-observations/) shows
+[Sensors and External Observations](/examples/sensors/) shows
 both versions with output, what `--dry-run` and `barca status` report, and what goes wrong
 when a sensor's value changes on every run.
 
@@ -284,7 +284,7 @@ inner run fails, the outer step succeeds unless it checks the return code.
 
 **What to do instead.** Declare the dependency with `inputs=` and let one run plan both. To
 fan work out from inside a task, use
-[`parallel()`](/patterns/04-parallel-tasks/).
+[`parallel()`](/recipes/parallel-tasks/).
 
 ## Sharing outside state between steps with no dependency
 
@@ -303,7 +303,7 @@ def announce_report() -> None:
 between them may run in either order, or at the same time in different workers.
 
 **What to do instead.** Declare the order. An input whose name starts with `_` orders two
-steps without passing a value ([Ordering-Only Dependencies](/patterns/03-ordering-only-deps/)):
+steps without passing a value ([Ordering-Only Dependencies](/recipes/ordering-only-deps/)):
 
 ```python
 @task(inputs={"_write": write_report})

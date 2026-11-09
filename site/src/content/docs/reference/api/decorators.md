@@ -257,7 +257,7 @@ writer; they are read from the source, so use the conventional names.
 Every result is written in full to an artifact file when the step ends; nothing lazy is passed
 between steps. A `pl.LazyFrame` or `duckdb.DuckDBPyRelation` input reads nothing up front, and
 the step's query decides which columns and row groups are read. See
-[Large inputs](/patterns/08-large-inputs/) and `barca docs types`.
+[Large inputs](/recipes/large-inputs/) and `barca docs types`.
 
 ### Declared environment variables (`env=`)
 
@@ -479,7 +479,7 @@ On an unpartitioned `upstream` that returns a dict (0.29.6):
   error naming the key or the expected types;
 - `--dry-run --json` and `barca status --json` report per key what changed
   (`partitions.changed`, `value ID` for a new value). See
-  [Only What Changed, Across Many Partitions](/patterns/09-changed-partitions/).
+  [Only What Changed, Across Many Partitions](/recipes/changed-partitions/).
 
 ### `collect(upstream)`
 
@@ -693,7 +693,7 @@ the same tick brings up to date the `Always` assets and tasks below it, so when 
 changes they are recomputed or fired in that run. `@sensor(freshness=Always)` is accepted
 without an error.
 
-See [Sensors and External Observations](/workflows/06-sensors-and-external-observations/) for
+See [Sensors and External Observations](/examples/sensors/) for
 a walk-through, and `barca docs assets` ("Sensors").
 
 ## @task
@@ -796,7 +796,7 @@ inspects the results and raises. A branch whose return value cannot be passed ba
 file, a lambda) makes `parallel()` raise `BranchResultError`, which fails the calling step.
 Branches are not retried and not cached. A call from an `@asset` body also runs its branches,
 but the asset is then cached like any other, so a fan-out that should happen on every run
-belongs in a task. See [Parallel Tasks](/patterns/04-parallel-tasks/).
+belongs in a task. See [Parallel Tasks](/recipes/parallel-tasks/).
 
 ## @unsafe
 
@@ -852,7 +852,7 @@ Import-time setup remains available to later steps. User-created objects and ses
 persist, including after failures; Barca cleans up its bound input views after materialization.
 Avoid project catalog names that collide with input parameters: existing tables are skipped
 during binding, and existing views can be replaced and then dropped. For naming and cleanup
-patterns, see [Anti-Patterns](/patterns/07-anti-patterns/#fixed-names-on-duckdbs-shared-connection).
+patterns, see [Anti-Patterns](/recipes/anti-patterns/#fixed-names-on-duckdbs-shared-connection).
 
 Explicit references to `globals`, `locals`, `vars`, `exec`, `eval` or `__builtins__`
 make imported barca names uncertain, including imported aliases and qualified or shadowed

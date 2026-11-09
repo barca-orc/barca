@@ -8,7 +8,7 @@ kind of change. Output on this page is from barca 0.30.2.
 
 This page used to be a design specification (a proposed decorator signature, an indexing
 step, a `.barcafiles/` layout). What follows is what the binary does. The shorter version of
-the same pattern is [Asset-to-Asset](/patterns/01-asset-to-asset/).
+the same pattern is [Asset-to-Asset](/recipes/chain-assets/).
 
 ## The two assets
 
@@ -156,6 +156,6 @@ runs with how many steps each executed and how many it served from cache.
 - `a`'s result is written to a file and read back for `b`. `b` receives a deserialized copy,
   not the object `a` returned. Formats and readers: `barca docs types`.
 - An asset that reads a file or a bucket in its body has no input that changes when the data
-  does. See [Sensors and External Observations](/workflows/06-sensors-and-external-observations/).
+  does. See [Sensors and External Observations](/examples/sensors/).
 
-Next: [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/).
+Next: [Parametrized Assets and Partitions](/examples/partitions/).

@@ -90,7 +90,7 @@ Results are files under `.barca/artifacts/<node>/<run_hash>.json` (or `.parquet`
 - **The run hash covers code and inputs, not the outside world.** An asset that reads a file,
   a bucket or a database in its own body is computed once and then served from cache, whatever
   happens to that data. Put a sensor in front of it:
-  [Sensors and outside data](/workflows/06-sensors-and-external-observations/).
+  [Sensors and outside data](/examples/sensors/).
 - **A dependency must be declared in `inputs=`.** Calling another asset's function from the
   body is an ordinary Python call. It works, but barca does not list it as a dependency
   (`barca list` shows `-` under DEPS), does not cache the called function's result on its own,
@@ -99,6 +99,6 @@ Results are files under `.barca/artifacts/<node>/<run_hash>.json` (or `.parquet`
 - **Every result is written to a file between steps.** Return data, not handles (an open
   connection or a generator cannot be stored). Formats: `barca docs types`.
 - **Do not edit an input in place.** A step receives its own copy of a cached value, with some
-  gaps; see [Anti-Patterns](/patterns/07-anti-patterns/#mutating-asset-inputs-in-place).
+  gaps; see [Anti-Patterns](/recipes/anti-patterns/#mutating-asset-inputs-in-place).
 - A large parquet input is read whole unless its parameter is annotated as lazy:
-  [Large Inputs](/patterns/08-large-inputs/).
+  [Large Inputs](/recipes/large-inputs/).

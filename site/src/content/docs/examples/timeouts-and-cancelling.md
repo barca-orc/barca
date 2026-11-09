@@ -8,7 +8,7 @@ This page covers timeouts, retries and cancellation. Everything shown was run wi
 **Ad hoc runtime parameters are not implemented.** An earlier version of this page proposed a
 `--param x=7` flag. No such flag exists: `barca get flaky pipeline.py --param x=7` exits 2 with
 `unexpected argument '--param' found`. To run one function over a set of values, use
-[partitions](/workflows/03-parametrized-assets-and-partitions/). To make a value from outside
+[partitions](/examples/partitions/). To make a value from outside
 part of the cache key, declare an environment variable with `env=[...]` (`barca docs assets`).
 
 ## Example
@@ -78,7 +78,7 @@ When every attempt fails, the step fails with the last error and the run exits 1
 ```
 
 A retry re-runs one step. It does not re-run the step's upstream, and a downstream step's
-retries do not re-run this one. See [Error Handling](/patterns/06-error-handling/).
+retries do not re-run this one. See [Error Handling](/recipes/retries-timeouts-failures/).
 
 ## Timeouts
 
