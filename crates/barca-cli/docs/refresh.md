@@ -5,7 +5,7 @@ forcing one to run anyway: `--refresh` and `--refresh-all`, what they do to what
 refreshing selected partition keys, `Manual` upstreams, and `--dry-run`, which shows what a
 command would run without running it.
 
-## Forcing a recompute
+## Commands at a glance
 
 | Goal | Command |
 |---|---|

@@ -84,10 +84,18 @@ export default defineConfig({
   if (p.height && (r.top < p.top || r.bottom > p.bottom)) pane.scrollTop += r.top - p.top - p.height / 2;
 });
 // Sidebar shortcuts into a section ("Exit Codes") show as current while that section is open.
-const markSection = () => document.querySelectorAll('.sidebar-content a[href*="#"]').forEach((a) => {
-  const u = new URL(a.href);
-  a.classList.toggle('current-section', u.pathname === location.pathname && u.hash === location.hash);
-});
+// The page's own entry then steps back, so only one entry is highlighted.
+const markSection = () => {
+  let inSection = false;
+  document.querySelectorAll('.sidebar-content a[href*="#"]').forEach((a) => {
+    const u = new URL(a.href);
+    const on = u.pathname === location.pathname && u.hash === location.hash;
+    a.classList.toggle('current-section', on);
+    inSection ||= on;
+  });
+  document.querySelectorAll('.sidebar-content a[aria-current="page"]').forEach((a) =>
+    a.classList.toggle('section-open', inSection));
+};
 document.addEventListener('DOMContentLoaded', markSection);
 addEventListener('hashchange', markSection);`,
         },

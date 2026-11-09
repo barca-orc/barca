@@ -189,7 +189,7 @@ these names keep their selective cones. The exact rules are in `specs/behavior/c
 ## Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`
-(`barca docs refresh`, "Forcing a recompute"):
+(`barca docs refresh`):
 
 - installed packages and the standard library: after upgrading a package, recompute;
 - modules outside the project root (`../shared/`), and modules only a custom `sys.path` or

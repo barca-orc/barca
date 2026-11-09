@@ -8,7 +8,7 @@ const links = [
   { label: 'Recipes', href: '/recipes/', match: (p: string) => p.startsWith('/recipes') || p.startsWith('/examples') },
   { label: 'CLI', href: '/reference/cli/', match: (p: string) => p.startsWith('/reference/cli') },
   { label: 'All Pages', href: '/all-pages/', match: (p: string) => p === '/all-pages/' },
-  { label: 'Changelog', href: '/releases/', match: (p: string) => p.startsWith('/releases') },
+  { label: 'Release Notes', href: '/releases/', match: (p: string) => p.startsWith('/releases') },
 ];
 links.unshift({
   label: 'Get Started',
@@ -43,6 +43,18 @@ links.unshift({
   .top-links a:hover,
   .top-links a[aria-current='page'] {
     color: var(--sl-color-white);
+  }
+  /* In the phone menu the links take their own wrapping row, and the icons follow below. */
+  @media (max-width: 49.99rem) {
+    :global(.mobile-preferences) {
+      flex-wrap: wrap;
+    }
+    .top-links {
+      flex-basis: 100%;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.25rem;
+      margin-block-end: 0.5rem;
+    }
   }
   @media (min-width: 50rem) and (max-width: 72rem) {
     .top-links a:last-child,
