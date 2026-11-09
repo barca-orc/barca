@@ -856,7 +856,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "server-mode",
         file: "server-mode.md",
         slug: "reference/server-mode",
-        title: "Server Mode",
+        title: "Server Mode: a Shared Ledger and --server",
         description: "One barca serve as the team's ledger: laptops read its cache hits and post \
                       their runs, and --server runs a command on it.",
     },
@@ -893,10 +893,18 @@ const SITE_PAGES: &[SitePage] = &[
                       cutoff, dry runs, environments and what a run reports.",
     },
     SitePage {
+        topic: "artifacts",
+        file: "artifacts.md",
+        slug: "reference/artifacts",
+        title: "Run Reports and Missing Artifacts",
+        description: "What barca get and barca run report for each step, recompute byte \
+                      checks, and what happens when a cached result's file is gone.",
+    },
+    SitePage {
         topic: "hashing",
         file: "hashing.md",
         slug: "reference/hashing",
-        title: "The Run Hash: Functions, Helpers and Decorator Arguments",
+        title: "The Run Hash",
         description: "Which project code a step's run hash follows from its function, which \
                       decorator arguments count, and what barca does not follow.",
     },
@@ -936,7 +944,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "serve-ops",
         file: "serve-ops.md",
         slug: "reference/serve-ops",
-        title: "Serve Operations",
+        title: "Operating barca serve",
         description: "Operating barca serve: the run queue, stopping and restarting without \
                       losing work, the stop grace a supervisor needs, a shared capacity and the \
                       run timeout.",

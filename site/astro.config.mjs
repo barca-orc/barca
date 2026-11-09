@@ -141,6 +141,7 @@ addEventListener('hashchange', markSection);`,
             { slug: 'reference/cache' },
             { label: 'Forcing a Recompute', link: '/reference/cache/#forcing-a-recompute' },
             { slug: 'reference/hashing' },
+            { slug: 'reference/artifacts' },
           ],
         },
         {

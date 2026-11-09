@@ -160,7 +160,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   input, or it is the output the run returns: a target, or with no target the last asset), so
   it would be computed again. A missing
   artifact that nothing would read does not make a node stale: it stays `cached`, and
-  `cache.artifact` then names a file that is not there (`barca docs cache`, "A cached result
+  `cache.artifact` then names a file that is not there (`barca docs artifacts`, "A cached result
   whose artifact is missing").
 - `evicted`: the same, because the cache size limit deleted the artifact file (`barca docs disk`). A result the artifact store holds is not stale: a run downloads it again.
 

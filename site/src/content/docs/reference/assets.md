@@ -82,7 +82,7 @@ Star-import dependency hashing remains conservative.
 | `retry_backoff=` | Base delay in seconds; the delay grows linearly with the attempt number. |
 | `env=["NAME", ...]` | Environment variables the function reads. Their values are part of the cache key and are reported per step. See below. |
 | `weight=` | How much of the pool's capacity the step takes while it runs (default 1). Experimental. See "Heavy steps" below. |
-| `deterministic=False` | `@asset` only: new bytes for the same code and inputs are expected, so barca does not warn that the function is not deterministic. Caching is unchanged. See [`barca docs cache`](/reference/cache/), "Recompute byte checks". |
+| `deterministic=False` | `@asset` only: new bytes for the same code and inputs are expected, so barca does not warn that the function is not deterministic. Caching is unchanged. See [`barca docs artifacts`](/reference/artifacts/), "Recompute byte checks". |
 | `cutoff=True` | What reads the asset depends on the bytes it wrote, not its run hash: a rerun that writes the same bytes leaves everything below it cached. `@asset` only. Experimental. See [`barca docs cache`](/reference/cache/), "Early cutoff". |
 | `batch=` | On partitioned assets and tasks, group stale keys into calls: a positive integer, `"all"`, `batches([...])` or `batches_by(fn)`. The function receives lists of keys; caching stays per key. See [`barca docs partitions`](/reference/partitions/), "Processing many keys per call". |
 | `description=`, `tags=` | Metadata. |

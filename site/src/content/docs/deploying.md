@@ -100,7 +100,7 @@ A deploy, a reboot or a config change restarts the server without losing accepte
 queue is in the metadata DB on the persistent `.barca/`, the server drains on SIGTERM, and the new
 server resumes it. Give the supervisor a stop grace of at least what `barca serve` prints at
 startup. Under a container memory limit, give heavy steps a `weight=`.
-[Serve Operations](/reference/serve-ops/) owns both: the drain, grace periods for systemd, Docker
+[Operating barca serve](/reference/serve-ops/) owns both: the drain, grace periods for systemd, Docker
 and Kubernetes, the run queue and capacity.
 
 ## Listen on another interface
