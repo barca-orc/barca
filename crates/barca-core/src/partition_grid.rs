@@ -21,6 +21,8 @@ use crate::model::{PartitionKey, PartitionSpec, PartitionValue};
 pub mod state {
     /// Served from cache: a successful result matches its code and inputs.
     pub const FRESH: char = 'c';
+    /// An operator holds this key at a chosen version until unpinned.
+    pub const PINNED: char = 'p';
     /// It succeeded before, and its code or inputs changed since: it runs again.
     pub const STALE: char = 's';
     /// No attempt recorded: it runs.
@@ -47,6 +49,8 @@ pub struct GridDimension {
 pub struct GridCounts {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub fresh: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub pinned: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub stale: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -168,6 +172,11 @@ pub(crate) async fn chain_states(
             );
         }
     }
+    let pins: HashSet<String> = crate::db::get_pins(&cfg.db_path)
+        .await?
+        .into_iter()
+        .map(|p| p.node_id)
+        .collect();
     let empty = BTreeSet::new();
     let mut states: HashMap<String, BTreeMap<String, char>> = HashMap::new();
     for node in &chain {
@@ -185,7 +194,9 @@ pub(crate) async fn chain_states(
         for display in members.get(node).unwrap_or(&empty) {
             let step = crate::StepId::parse(display);
             let key = step.partition.suffix();
-            let state = if !runs.contains(display) {
+            let state = if pins.contains(display) {
+                state::PINNED
+            } else if !runs.contains(display) {
                 state::FRESH
             } else {
                 match latest.get(&key).map(|r| r.status.as_str()) {
@@ -320,6 +331,7 @@ pub(crate) fn grid_of(dag: &Dag, id: &str, chain: &ChainStates) -> PartitionGrid
         let state = own.get(&suffix).copied().unwrap_or(state::NONE);
         match state {
             state::FRESH => grid.counts.fresh += 1,
+            state::PINNED => grid.counts.pinned += 1,
             state::STALE => grid.counts.stale += 1,
             state::NEVER_RUN => grid.counts.never_run += 1,
             state::FAILED => grid.counts.failed += 1,
@@ -507,15 +519,22 @@ pub async fn partition_key_detail(
     } else {
         None
     };
+    let pins = match &reader {
+        Some(reader) => crate::db::pins_on(reader.conn()).await?,
+        None => BTreeMap::new(),
+    };
     let mut found: Vec<KeyArtifact> = Vec::new();
     for (node, step) in &wanted {
-        let latest = match &reader {
-            Some(reader) => crate::db::latest_success(reader, step).await,
+        let output = match &reader {
+            Some(reader) => match pins.get(step) {
+                Some(pin) => crate::db::success_at(reader, step, &pin.run_hash).await,
+                None => crate::db::latest_success(reader, step)
+                    .await
+                    .map(|l| l.output),
+            },
             None => None,
-        };
-        let output = latest
-            .map(|l| l.output)
-            .filter(|o| cfg.allows_artifact(&o.path));
+        }
+        .filter(|o| cfg.allows_artifact(&o.path));
         found.push(KeyArtifact {
             id: node.clone(),
             step: step.clone(),

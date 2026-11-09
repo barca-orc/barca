@@ -3,4 +3,4 @@
 /**
  * How many keys are in each state.
  */
-export type GridCounts = { fresh: number, stale: number, never_run: number, failed: number, blocked: number, };
+export type GridCounts = { fresh: number, pinned: number, stale: number, never_run: number, failed: number, blocked: number, };

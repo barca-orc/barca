@@ -7,12 +7,12 @@
 import type { Glyph } from './glyph'
 import type { GridDimension, PartitionGrid } from './types'
 
-export type KeyState = 'failed' | 'blocked' | 'stale' | 'never_run' | 'fresh'
+export type KeyState = 'failed' | 'blocked' | 'stale' | 'never_run' | 'fresh' | 'pinned'
 
 /** Every key state, most urgent first: the order of the filter chips and the legend. */
-export const KEY_STATES: readonly KeyState[] = ['failed', 'blocked', 'stale', 'never_run', 'fresh']
+export const KEY_STATES: readonly KeyState[] = ['failed', 'blocked', 'stale', 'never_run', 'pinned', 'fresh']
 
-const CODES: Record<string, KeyState> = { c: 'fresh', s: 'stale', n: 'never_run', f: 'failed', b: 'blocked' }
+const CODES: Record<string, KeyState> = { p: 'pinned', c: 'fresh', s: 'stale', n: 'never_run', f: 'failed', b: 'blocked' }
 
 export const KEY_STATE_WORD: Record<KeyState, string> = {
   failed: 'failed',
@@ -20,6 +20,7 @@ export const KEY_STATE_WORD: Record<KeyState, string> = {
   stale: 'stale',
   never_run: 'never run',
   fresh: 'fresh',
+  pinned: 'pinned',
 }
 
 export const KEY_STATE_GLYPH: Record<KeyState, Glyph> = {
@@ -28,6 +29,7 @@ export const KEY_STATE_GLYPH: Record<KeyState, Glyph> = {
   stale: 'stale',
   never_run: 'never_run',
   fresh: 'fresh',
+  pinned: 'pinned',
 }
 
 /** What each state means for one key, for a tooltip or the detail. */
@@ -36,6 +38,7 @@ export const KEY_STATE_MEANING: Record<KeyState, string> = {
   blocked: 'It waits on the same key of an input that failed.',
   stale: 'Its code or inputs changed since it succeeded; a run computes it again.',
   never_run: 'It has never run.',
+  pinned: 'Held at an operator-chosen version. Runs read this data until the key is unpinned.',
   fresh: 'Served from cache: a successful result matches its code and inputs.',
 }
 
@@ -195,7 +198,7 @@ export function filterCells(g: Grid, f: KeyFilter): number[] {
 
 /** How many of `cells` are in each state. */
 export function countStates(g: Grid, cells: readonly number[] | null): Record<KeyState, number> {
-  const counts: Record<KeyState, number> = { failed: 0, blocked: 0, stale: 0, never_run: 0, fresh: 0 }
+  const counts: Record<KeyState, number> = { failed: 0, blocked: 0, stale: 0, never_run: 0, fresh: 0, pinned: 0 }
   if (cells === null) {
     for (let cell = 0; cell < g.size; cell++) {
       const s = stateOf(g, cell)
@@ -212,7 +215,7 @@ export function countStates(g: Grid, cells: readonly number[] | null): Record<Ke
 
 /** Keys a run would compute: every state but fresh. */
 export function needsRun(state: KeyState | null): boolean {
-  return state !== null && state !== 'fresh'
+  return state !== null && state !== 'fresh' && state !== 'pinned'
 }
 
 /**
@@ -411,7 +414,7 @@ export function heatmap(g: Grid, layout: GridLayout, columns: number, window: [n
   const rows = layout.blocks.map((block) => ({
     label: block.label.replace(/[^=, ]+=/g, ''),
     bins: Array.from({ length: cols }, (_, b): HeatBin => {
-      const counts: Record<KeyState, number> = { failed: 0, blocked: 0, stale: 0, never_run: 0, fresh: 0 }
+      const counts: Record<KeyState, number> = { failed: 0, blocked: 0, stale: 0, never_run: 0, fresh: 0, pinned: 0 }
       for (let i = edges[b]!; i < edges[b + 1]!; i++) {
         const s = stateOf(g, block.cells[i]!)
         if (s) counts[s]++

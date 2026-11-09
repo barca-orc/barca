@@ -49,9 +49,10 @@ describe('AssetVersionsView', () => {
     expect(text(html)).toContain('latest')
     expect(text(html)).toContain('evicted')
     const rollbacks = buttons(html).filter((b) => b.label === 'Roll back to this')
-    expect(rollbacks).toHaveLength(3)
+    expect(rollbacks).toHaveLength(2)
+    expect(buttons(html).some((b) => b.label === 'Pin this version')).toBe(true)
     // An evicted version cannot be pinned.
-    expect(rollbacks.map((b) => b.disabled)).toEqual([false, false, true])
+    expect(rollbacks.map((b) => b.disabled)).toEqual([false, true])
     expect(html).not.toContain('Pinned at')
   })
 
@@ -63,7 +64,7 @@ describe('AssetVersionsView', () => {
     const html = render(pinned)
     expect(text(html)).toContain('Pinned at bbbbbbbbbbbb')
     expect(text(html)).toContain('by token:ops: bad feed')
-    expect(buttons(html).map((b) => b.label)).toEqual(['Unpin', 'Roll back to this'])
+    expect(buttons(html).map((b) => b.label)).toEqual(['Unpin', 'Pin this version'])
   })
 
   it('disables every action on a read-only server', () => {
@@ -85,7 +86,7 @@ describe('AssetVersionsView', () => {
   it('says why a partitioned asset has no rollback, and shows an error', () => {
     const html = render(data({ pinnable: false }), { error: 'HTTP 403' })
     expect(buttons(html).filter((b) => b.label === 'Roll back to this')).toHaveLength(0)
-    expect(text(html)).toContain('Only an asset without partitions can be pinned.')
+    expect(text(html)).toContain('Select a single partition key to pin its data.')
     expect(text(html)).toContain('Could not change the pin: HTTP 403')
   })
 

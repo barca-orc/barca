@@ -4,7 +4,7 @@ Usage: barca pin [OPTIONS] [TARGET] [FILES]...
 
 Arguments:
   [TARGET]
-          The asset (a function name or node id); omit to list every pin
+          The asset or complete key (e.g. orders[region=emea]); omit to list every pin
 
   [FILES]...
           Python files or directories; default: discover the project
@@ -56,6 +56,7 @@ Examples:
   barca pin orders pipeline.py --previous --json   # {node_id, pin, version, replaced}
   barca pin                                    # every pinned asset
   barca pin --json                             # {pins: [...]}
+  barca pin 'orders[region=emea]' --from-file fixed.json --reason "bad key"
   barca pin orders --versions --limit 5 --json # {node_id, pinnable, pin, versions}
   barca pin orders --previous --server         # pin on the configured barca server
   barca pin orders --from-file fixed.parquet --reason "hand-corrected feed"   # override with your data

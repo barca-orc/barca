@@ -359,6 +359,21 @@ pub(super) async fn expand_and_decide<'p>(
     {
         narrowing.narrow_projected(expanded, &expansion.key_counts);
     }
+    if !session.prepared.user_pins.is_empty() {
+        let expanded = expanded_phase.get_or_insert_with(|| phase.clone());
+        let targets: Vec<&str> = session
+            .prepared
+            .targets
+            .iter()
+            .map(|(_, id)| id.as_str())
+            .collect();
+        crate::pins::prune_expanded_inputs(
+            &session.prepared.dag,
+            expanded,
+            &targets,
+            &session.prepared.user_pins,
+        );
+    }
     let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
     // The whole key set of each asset with a dataset sink, before the cache drops the keys
     // that do not run.

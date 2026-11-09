@@ -1297,3 +1297,8 @@
 .barca-heat-bin[data-some][data-state='never_run'] { --bin-mark: var(--state-idle); }
 .barca-keys-error-link { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .barca-keys-error-link b { flex: none; font-variant-numeric: tabular-nums; }
+
+.barca-version-reason { display: grid; gap: 6px; margin-top: 14px; }
+.barca-version-reason input { width: 100%; box-sizing: border-box; padding: 7px 9px; font: inherit; color: inherit; background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: 4px; }
+
+.barca-heat-bin[data-state="pinned"] { background: var(--state-pinned); }

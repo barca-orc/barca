@@ -5,6 +5,7 @@ use super::*;
 use std::collections::HashSet;
 
 pub(super) struct Prepared {
+    pub(super) user_pins: Vec<db::AssetPin>,
     pub(super) dag: std::sync::Arc<Dag>,
     pub(super) targets: Vec<(String, String)>,
     pub(super) job_name: String,
@@ -389,6 +390,7 @@ pub(super) async fn prepare_run(
     }
 
     Ok(Prepared {
+        user_pins,
         dag,
         targets,
         job_name,

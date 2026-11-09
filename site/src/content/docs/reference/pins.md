@@ -46,6 +46,26 @@ is pinned:
 the pin: usually it is computed again (it was stale, or its latest result is the bad one; use
 `--refresh orders` to recompute it with the same code), and what reads it follows.
 
+## Repairing one partition
+
+Name one complete key in brackets, quoting it for your shell. All dimensions must be supplied:
+
+```bash
+barca pin 'orders[region=emea,day=2026-11-08]' --versions
+barca pin 'orders[region=emea,day=2026-11-08]' --from-file fixed.json --reason "bad feed"
+barca unpin 'orders[region=emea,day=2026-11-08]'
+```
+
+The pin holds only that key. Its consumers use the replacement's run hash; neighboring keys
+keep their own data and normal cache decisions. Uploading to an unknown value is refused.
+Runtime-derived keys are checked against their source's current recorded output; run the source
+first if its keys are not known. The source still supplies membership during a run: a pin does
+not invent a key or retain one that the source removed. Unpinning restores normal computation.
+
+The key explorer shows held keys as **pinned**. Open a key to upload replacement data, select
+an earlier version, or unpin. The confirmation names the complete key and accepts a reason.
+The output preview and input previews read pinned versions when present.
+
 ## Choosing a version
 
 `barca pin TARGET --versions` lists the asset's successful materializations that recorded an
@@ -113,7 +133,7 @@ configured server) act on the server's database.
 
 ## Limits
 
-- Only assets without partitions can be pinned: not tasks, sensors or partitioned assets.
+- Only assets or complete keys of partitioned assets can be pinned. Tasks, sensors and a whole partitioned asset cannot be pinned.
 - A pin lives in one metadata database. A server's pin holds for the server's own runs
   (scheduled, requested, `--server`); a laptop's local `barca get` against that server's ledger
   does not read the server's pins, and a local pin is not sent to a server.

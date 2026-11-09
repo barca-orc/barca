@@ -117,3 +117,32 @@ test('retry completion refreshes the open key and reports failure', async ({ pag
   await expect(page.locator('.barca-keys-notice')).toContainText('Run failed')
   await expect(page.getByRole('complementary', { name: 'Key day=d2,region=emea' })).toContainText('ValueError: retry still failed')
 })
+
+test('repair names one key, records the reason, and refreshes its pin', async ({ page }) => {
+  await mock(page)
+  const step = `${NODE}[${detail.key}]`
+  let pinned = false
+  const pin = { node_id: step, run_hash: 'a'.repeat(64), pinned_at: '2026-11-08T12:00:00Z', pinned_by: null, reason: 'repair the broken feed', run_id: null, upload: null }
+  await page.route(/\/assets\/[^/]+\/versions$/, route => route.fulfill({ json: {
+    node_id: step, pinnable: true, pin: pinned ? pin : null, versions: [],
+  } }))
+  await page.route(/\/pin\/upload\?/, route => {
+    pinned = true
+    return route.fulfill({ json: { node_id: step, pin } })
+  })
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&key=${encodeURIComponent(detail.key)}`)
+  const panel = page.getByRole('complementary', { name: `Key ${detail.key}` })
+  await panel.getByLabel(`Replacement data for events[${detail.key}]`).setInputFiles({ name: 'repair.json', mimeType: 'application/json', buffer: Buffer.from('{"v":21}') })
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText(`events[${detail.key}]`)
+  await dialog.getByLabel('Reason (optional)').fill('repair the broken feed')
+  const sent = page.waitForRequest(r => r.method() === 'POST' && r.url().includes('/pin/upload?'))
+  await dialog.getByRole('button', { name: 'Upload and pin' }).click()
+  const request = await sent
+  const url = new URL(request.url())
+  expect(decodeURIComponent(url.pathname)).toBe(`/assets/${step}/pin/upload`)
+  expect(url.searchParams.get('reason')).toBe('repair the broken feed')
+  expect(request.postData()).toBe('{"v":21}')
+  await expect(panel).toContainText('Pinned at')
+  await expect(panel).toContainText('repair the broken feed')
+})

@@ -1,8 +1,9 @@
+import type { ReactNode } from 'react'
 import { Button } from './Button'
 
 export interface ConfirmDialogProps {
   title: string
-  body: string
+  body: ReactNode
   /** The confirm button's words: what it does, not "OK". */
   action: string
   onConfirm: () => void
@@ -16,7 +17,7 @@ export function ConfirmDialog({ title, body, action, onConfirm, onCancel }: Conf
     <div className="barca-confirm-backdrop">
       <div className="barca-confirm" role="dialog" aria-modal="true" aria-labelledby="barca-confirm-title">
         <h2 id="barca-confirm-title">{title}</h2>
-        <p>{body}</p>
+        <div className="barca-confirm-body">{body}</div>
         <div className="barca-confirm-actions">
           <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
           <Button variant="signal" size="sm" onClick={onConfirm} autoFocus>{action}</Button>

@@ -192,7 +192,13 @@ pub(crate) async fn explain_dag_with_keys(
     let mut steps: Vec<StepReport> = Vec::new();
     let mut summary = ExplainSummary::default();
 
+    let user_pins: Vec<db::AssetPin> = match &cache {
+        Some(cache) => db::pins_on(cache.conn()).await?.into_values().collect(),
+        None => Vec::new(),
+    };
     let mut prediction = Prediction {
+        targets: &target_ids,
+        user_pins: &user_pins,
         dag,
         policy: &policy,
         cache: cache.as_ref(),
@@ -294,6 +300,8 @@ pub(crate) async fn explain_dag_with_keys(
 }
 
 pub(super) struct Prediction<'a> {
+    pub(super) targets: &'a [&'a str],
+    pub(super) user_pins: &'a [db::AssetPin],
     pub(super) dag: &'a Dag,
     pub(super) policy: &'a CachePolicy,
     pub(super) cache: Option<&'a db::CacheReader>,
@@ -378,6 +386,14 @@ pub(super) async fn predict_steps(
     ctx: &mut Prediction<'_>,
     phase_ref: &Phase,
 ) -> Result<Vec<crate::planner::StreamStep>, BarcaError> {
+    let mut pruned;
+    let phase_ref = if ctx.user_pins.is_empty() {
+        phase_ref
+    } else {
+        pruned = phase_ref.clone();
+        crate::pins::prune_expanded_inputs(ctx.dag, &mut pruned, ctx.targets, ctx.user_pins);
+        &pruned
+    };
     ctx.state.register_phase(phase_ref);
     if let Some(ledger) = ctx.cache.and_then(|c| c.ledger()) {
         ledger
