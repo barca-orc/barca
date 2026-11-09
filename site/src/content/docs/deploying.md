@@ -34,7 +34,7 @@ HTTP API or the CLI's `--server` flag; the work executes on that server's machin
 
 ```bash
 # On the server, from the project directory; install the pipeline's dependencies too.
-uv add 'barca==0.28.0'
+uv add 'barca==0.42.0'
 uv run barca serve pipeline.py --timezone utc
 ```
 
@@ -76,7 +76,7 @@ the deployed version` and continues; deploy the change to run it there. Use the 
 path prefix included (`https://example.com/barca`). A server that cannot be reached, or one
 that is not barca or runs another API version, is exit 3 naming the URL; nothing runs locally
 instead. If the connection drops during a run, the client exits 3 naming the run id, and the
-run continues on the server (`barca history --server`). `barca docs server-mode` has the full
+run continues on the server (`barca history --server`). [`barca docs server-mode`](/reference/server-mode/) has the full
 rules, and the few declared differences from a local run (the server's paths, `triggered_by`).
 
 The client sends no credentials. Reach the server over a private network (a VPN, Tailscale,
@@ -96,56 +96,20 @@ and sends nothing. With a remote store the server backs its history up there, as
 
 ## Restarting without losing work
 
-A deploy, a reboot or a config change restarts the server. Every run it accepted (a request,
-a `--server` command, the UI, a scheduled tick) is in its run queue, kept in the metadata DB on
-the persistent `.barca/`, so nothing is lost or cancelled:
+A deploy, a reboot or a config change restarts the server, and no accepted run is lost: the run
+queue lives in the metadata DB on the persistent `.barca/`, the server drains on SIGTERM, and the
+new server resumes the queue in order.
 
 ```bash
 barca queue pause --server       # optional: nothing new starts; runs in flight finish
 systemctl restart barca          # or: docker restart barca, docker compose up -d
-barca queue --server             # the queue is back; still paused if you paused it
 barca queue resume --server      # if you paused it
 ```
 
-1. **Pause (optional).** The runs in flight finish while nothing new starts, so the stop that
-   follows waits only for them. The pause is kept across the restart.
-2. **Restart.** The supervisor sends SIGTERM: the server drains, and exits 0 once the runs in
-   flight finished, or at `--drain-timeout` after putting the ones left back at the head of the
-   queue. Runs submitted meanwhile are accepted and queued.
-3. **The queue resumes.** The new server prints `[barca] resuming N queued runs` and starts them
-   in order under their run ids. `barca get|run --server` and `barca logs -f --server` clients
-   waiting on a run reconnect (for up to 60 seconds, `BARCA_SERVER_RECONNECT`) and follow it to
-   its end.
-
-A requeued run starts again from its beginning, so a run is executed at least once: assets that
-finished are cache hits unless the deploy changed their code or inputs, and an interrupted step
-or task runs again. Make tasks with side
-effects safe to repeat, or give them a longer drain timeout.
-
-The supervisor's grace period must cover the drain timeout plus what the server takes after it:
-12 seconds with a drain timeout of 10 or more (10 for stopped runs to record themselves, 2 for
-open connections), plus up to 31 for the last metadata backup with a store and 3 for the
-telemetry flush with `BARCA_TELEMETRY`. With a drain timeout under 10 seconds these shrink: half
-the drain timeout (at least 2 s) for the runs, 1 s for connections, the drain timeout (at least
-5 s) for the backup. So `drain_timeout = 5` without a store needs 9 seconds and fits Docker's
-default of 10. Under a supervisor (process 1 of a container, systemd, Kubernetes) `barca serve`
-prints the number at startup:
-
-```text
-[barca] stop grace: the container runtime must allow at least 9s between SIGTERM and SIGKILL (drain timeout 5s + 4s for stopping runs and closing connections); set docker stop -t or stop_grace_period (Docker's default is 10s)
-```
-
-A supervisor that kills the server mid-drain costs the runs in flight the time the drain gave
-them: the next server puts them back in the queue (once per run; a run in flight through two
-killed drains in a row is recorded as interrupted). The queued runs survive it too.
-
-| Supervisor | Setting | Default | With the default 30 s drain timeout |
-|---|---|---|---|
-| systemd | `TimeoutStopSec=` | 90 s | enough |
-| Docker | `docker stop -t`, `stop_grace_period` | 10 s | `45s` |
-| Kubernetes | `terminationGracePeriodSeconds` | 30 | `45` |
-
-More in `barca docs serve-ops` ("The run queue", "Stopping the server").
+Give the supervisor a stop grace longer than the drain timeout; under a supervisor, `barca serve`
+prints the number it needs at startup. A requeued run starts again from its beginning, so make tasks with side
+effects safe to repeat. [Serve Operations](/reference/serve-ops/#restarting-without-losing-work)
+has the drain, the grace period for systemd, Docker and Kubernetes, and what a killed drain costs.
 
 ## Listen on another interface
 
@@ -160,13 +124,13 @@ network. An nginx upstream can then be `http://barca:8274/`, with no shared netw
 
 ## In a container
 
-This example pins barca 0.28.0. It has two services: barca, and an nginx that shares
+This example pins barca 0.42.0. It has two services: barca, and an nginx that shares
 barca's network namespace so that it can reach `127.0.0.1:8274`.
 
 ```dockerfile
 # Dockerfile
 FROM python:3.13-slim
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.28.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.42.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -217,7 +181,7 @@ server {
 ```
 $ docker compose up -d
 $ curl -s http://127.0.0.1:8080/health
-{"api_version":1,"cache":{"limit_bytes":3351192780,"size_bytes":284484},"env":"default","load_errors":[],"metadata_error":null,"read_only":false,"scheduler":true,"scheduler_enabled":true,"status":"ok","store_uri":null,"version":"0.28.0"}
+{"api_version":1,"cache":{"limit_bytes":3351192780,"size_bytes":284484},"capabilities":{"event_resume":1},"env":"default","load_errors":[],"metadata_error":null,"queue":{"capacity":null,"max_runs":16,"paused":false,"queued":0,"running":0},"read_only":false,"scheduler":true,"scheduler_enabled":true,"started_at":"2026-11-09T20:02:23.000Z","status":"ok","store_uri":null,"version":"0.42.0"}
 ```
 
 `docker compose ps` shows the `barca` service as `healthy` once the first check passes, and
@@ -281,23 +245,10 @@ before you bind it to anything wider, add [authentication](#authentication) at t
 
 ### Containers with a memory limit
 
-Steps run in separate worker processes, independent ones at the same time. Under a hard memory
-limit (`mem_limit`, a pod's limit), heavy steps that become ready together can add up past it,
-and the kernel kills one: the step fails with
-`worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)` (see
-[A worker that dies](/reference/cli/#a-worker-that-dies)). Give those steps a `weight=`
-(experimental): the steps running at once add up to at most the capacity, the pool size unless
-`[execution] capacity` in `barca.toml` or `BARCA_CAPACITY` sets it.
-
-```toml
-# barca.toml
-[execution]
-capacity = 4
-```
-
-With `@asset(weight=2)` on the heavy assets, two of them run at once and light steps use what is
-left. The capacity is per run: two schedules that fire together run with a capacity
-each. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight).
+Under a hard memory limit, heavy steps that become ready together can add up past it and the
+kernel kills one. Give those steps a `weight=` so the steps running at once fit the capacity;
+[Serve Operations](/reference/serve-ops/#containers-with-a-memory-limit) and
+[Heavy steps](/reference/api/decorators/#heavy-steps-weight) show how.
 
 ### Native Debian and Alpine targets
 
@@ -317,7 +268,7 @@ For an Alpine core deployment, use the same Compose configuration with this imag
 
 ```dockerfile
 FROM python:3.13-alpine
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.28.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.42.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -406,7 +357,8 @@ tracing are in [Telemetry](/reference/telemetry/#datadog).
   more seconds (10 for the runs to stop, 2 for open connections). From 0.27.0 to 0.29.3 a
   draining server refused new runs with `503` and cancelled the runs left at the deadline;
   before 0.27.0 the first signal cancelled the runs in progress at once. Give the supervisor
-  a grace period longer than the drain timeout plus 15 seconds (`stop_grace_period` above);
+  a grace period at least the stop grace `barca serve` prints at startup: the drain timeout
+  plus about 12 seconds, more with a store or telemetry (`stop_grace_period` above);
   otherwise Docker kills the container mid-drain, as in the next case.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
   and are served from cache next time. In 0.19.0 and earlier the run in progress stays in
@@ -417,16 +369,17 @@ tracing are in [Telemetry](/reference/telemetry/#datadog).
   history. That holds for a `.barca` on a named volume, as here. With `.barca` on a bind mount from a Docker Desktop
   host the run can stay `running`: after a restart of the machine, or when another
   container was started before the replacement. The rule and its limits are in
-  `barca docs layout`, "While a run is going, and after one is killed".
-- **Runs are not resumed.** Nothing restarts a cancelled or killed run. The next tick or
+  [`barca docs layout`](/reference/layout/), "While a run is going, and after one is killed".
+- **Queued runs resume.** Runs waiting in the queue, and runs the drain put back at its
+  deadline, start again at the next startup under their run ids; a run whose drain was killed
+  is put back once. A run cancelled by a second signal is not restarted: the next tick or
   request starts a new one, which reuses whatever was cached.
 - **Schedules catch up once.** If a tick passed while the server was down, the job fires once
   at startup (`[barca] catch-up run pipeline.py:report → ...`). Several missed ticks of one
   job still produce one run.
-- **Finished runs are kept, runs in flight are not resumed.** `GET /runs/{run_id}` answers
-  from the metadata DB, so a run that finished before the restart shows the same outcome after
-  it; its live event stream is gone (`404`). A run still queued at the restart never started.
-  A paused schedule stays paused.
+- **Finished runs are kept.** `GET /runs/{run_id}` answers from the metadata DB, so a run that
+  finished before the restart shows the same outcome after it; its live event stream is gone
+  (`404`). A paused schedule stays paused.
 
 ### With a remote store
 
@@ -522,9 +475,12 @@ Traefik needs no streaming settings: run events pass straight through.
 
 ## Authentication
 
-Barca has none. Anyone who can reach the server can start and cancel runs. Put authentication
-in front of it at the proxy, for example nginx basic auth or an SSO proxy such as
-oauth2-proxy:
+Authentication is off by default: anyone who can reach the server can start and cancel runs.
+Turn on [project tokens](/reference/server-mode/#opt-in-project-tokens) with `barca serve --auth token` (or `[server] auth = "token"`): every API request,
+health probes included, then needs a bearer token, which `barca tokens bootstrap` on the host
+starts. A health check in a Compose file or Kubernetes probe needs that token too. You can
+instead, or as well, authenticate at the proxy, for example with nginx basic auth or an SSO
+proxy such as oauth2-proxy:
 
 ```nginx
 location /barca/ {
@@ -537,8 +493,9 @@ location /barca/ {
 ## Read-only dashboards
 
 `barca serve --read-only` serves the UI and the API and changes nothing: run and cancel
-endpoints return `403`, the scheduler does not start, and the metadata database is read
-through a private copy, so it is never opened in place, created or written. Use it to show a
+endpoints return `403`, the scheduler does not start, and the metadata database is never
+created or written: a compatible WAL database is read in place through read-only connections,
+and one that would need a migration is read through a private copy. Use it to show a
 project to people who should only look, including a project that another barca process is
 running. The UI shows a `read-only` tag and disables its run buttons.
 

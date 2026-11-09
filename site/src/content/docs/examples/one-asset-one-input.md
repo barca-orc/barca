@@ -1,10 +1,12 @@
 ---
+sidebar:
+  order: 2
 title: "Worked Example: One Asset, One Input"
-description: One asset that reads another, run with barca 0.30.2. What runs after each kind of change, and what --refresh and --no-cascade do.
+description: One asset that reads another, rechecked with barca 0.42.0. What runs after each kind of change, and what --refresh and --no-cascade do.
 ---
 
 Two assets, one reading the other: how the input is passed, and which steps run after each
-kind of change. Output on this page is from barca 0.30.2.
+kind of change. Output on this page was captured with barca 0.30.2 and rechecked with 0.42.0.
 
 This page used to be a design specification (a proposed decorator signature, an indexing
 step, a `.barcafiles/` layout). What follows is what the binary does. The shorter version of
@@ -154,7 +156,7 @@ runs with how many steps each executed and how many it served from cache.
 - The upstream must be named statically in `inputs=`. An input defined in another file is
   imported like any Python name; see [Discovery](/reference/discovery/).
 - `a`'s result is written to a file and read back for `b`. `b` receives a deserialized copy,
-  not the object `a` returned. Formats and readers: `barca docs types`.
+  not the object `a` returned. Formats and readers: [`barca docs types`](/reference/types/).
 - An asset that reads a file or a bucket in its body has no input that changes when the data
   does. See [Sensors and External Observations](/examples/sensors/).
 

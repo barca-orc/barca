@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 8
 title: "Rerun Only Changed Partitions"
 description: One sensor query returns every key and its version; partitions_from over that dict runs only the keys whose version changed, through a chain of partitioned assets.
 ---
@@ -42,16 +44,19 @@ def scored(retailer: str, cleaned: dict) -> dict:
 
 ```bash
 barca get scored pipeline.py               # first run: every retailer
+barca get retailer_versions pipeline.py    # after the data changes: let the sensor record it
 barca get scored pipeline.py --dry-run     # which retailers would run, and why
 barca serve pipeline.py                    # every 5 minutes: the sensor, then what changed
 ```
 
 A tick where 1 of 10,000 retailers changed runs three steps (the sensor and the retailer's
 key of each asset) and serves the other 19,998 keys from cache; `barca history` records
-`STEPS 3, CACHED 19998`. The dry run names the key and the reason:
+`STEPS 3, CACHED 19998`. A dry run does not run the sensor: before it has recorded the new
+versions (a scheduled poll, or `barca get retailer_versions`), it reports every key cached. After
+that, it names the key and the reason:
 
 ```
-partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.py:versions changed)  pipeline.py:cleaned
+partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.py:retailer_versions changed)  pipeline.py:cleaned
 ```
 
 ## What to know
@@ -76,5 +81,5 @@ partial   9999 of 10000 keys cached; will run: retailer=r000010 (value pipeline.
 - Measured costs at 10k, 50k and 200k keys are in `benchmarks/RESULTS.md` ("Keyed
   partitions"); the per-tick cost grows with the key count even when one key changed.
 
-The manual has the details: `barca docs partitions`, "Updating only what changed, across many
+The manual has the details: [`barca docs partitions`](/reference/partitions/), "Updating only what changed, across many
 partitions".

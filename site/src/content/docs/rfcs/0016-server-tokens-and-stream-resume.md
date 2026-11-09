@@ -4,7 +4,7 @@ title: 'RFC-0016: Server Tokens and Resumable Run Events'
 description: 'Opt-in Barca-issued API tokens, browser token management without accounts, consistent client credentials, and attempt-scoped Last-Event-ID replay.'
 ---
 
-- **Status:** Accepted; implemented for pending 0.36.0
+- **Status:** Implemented (0.36.0)
 - **Date:** 2026-10-29
 - **Touches:** barca-core | barca-cli | python/barca | HTTP server | UI
 - **Related:** [#706](https://github.com/barca-orc/barca/issues/706),

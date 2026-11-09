@@ -1,12 +1,12 @@
 ---
 title: Core Constraints
-description: The rules barca was designed around, which of them 0.28.0 implements, and what happens where it does not.
+description: The rules barca was designed around, which of them 0.42.0 implements, and what happens where it does not.
 ---
 
 These are the rules barca was designed around. Some were written before the code existed. Each
-section gives the rule, whether 0.28.0 implements it, and what happens where it does not.
+section gives the rule, whether 0.42.0 implements it, and what happens where it does not.
 
-| Constraint | In 0.28.0 |
+| Constraint | In 0.42.0 |
 |---|---|
 | [Graphs are acyclic](#directed-acyclic-graphs-only) | Implemented |
 | [Python interpreter resolution](#python-interpreter-resolution) | Implemented (no `uv` requirement) |
@@ -79,7 +79,7 @@ edit pipeline files during a run; if you did, run the affected assets again with
 
 History rows are never pruned. Result files are: `.barca/` has a size limit (`[cache].max_size`,
 default 10% of the filesystem), and past it barca evicts files after every `get` and `run`, or
-when you run `barca gc` (`barca docs cache`). An evicted result keeps its row, marked evicted.
+when you run `barca gc` ([`barca docs cache`](/reference/cache/)). An evicted result keeps its row, marked evicted.
 You can also delete files under `.barca/artifacts/` yourself. Barca handles a missing file:
 when a step needs to read a cached result whose file is gone, the step that produced it runs
 again (the JSON output gives the reason `artifact_missing`). A missing file that nothing needs
@@ -134,7 +134,7 @@ $ barca get b prov.py -o value --json
 
 This is why old artifact files are kept, until the cache size limit evicts them (see
 [Pruning](#pruning)). What the hash does not see is listed in
-`barca docs cache`.
+[`barca docs cache`](/reference/cache/).
 
 ## Asset identity
 
@@ -171,4 +171,5 @@ function's source for provenance. It does not: the metadata database holds hashe
 - The graph is validated on every command.
 - Helper code a function reaches is part of its hash, so changing a helper invalidates the
   functions that use it.
-- Old results stay usable, and stay on disk, until you delete them.
+- Old results stay usable, and stay on disk, until the cache size limit evicts them or you delete
+  them ([Disk Use](/reference/disk/)).

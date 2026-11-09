@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 2
 title: "Feed an Asset to a Task"
 description: An asset produces a cached value; a task reads it and does something with it. The task runs every time.
 ---
@@ -101,4 +103,4 @@ To recompute the asset as well, name it: `barca run deploy pipeline.py --refresh
 - **A task that fails is not retried unless you ask.** See
   [Error Handling](/recipes/retries-timeouts-failures/).
 
-The same material is in the terminal manual: `barca docs tasks`.
+The same material is in the terminal manual: [`barca docs tasks`](/reference/tasks/).

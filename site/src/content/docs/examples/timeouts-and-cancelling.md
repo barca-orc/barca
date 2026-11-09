@@ -1,15 +1,17 @@
 ---
+sidebar:
+  order: 7
 title: "Worked Example: Timeouts and Cancelling"
-description: Timeouts, retries and cancellation as they work in barca 0.29.1. Ad hoc runtime parameters are not implemented.
+description: Timeouts, retries and cancellation as they work in barca 0.42.0. Ad hoc runtime parameters are not implemented.
 ---
 
-This page covers timeouts, retries and cancellation. Everything shown was run with barca 0.29.1.
+This page covers timeouts, retries and cancellation. Everything shown was run with barca 0.29.1 and rechecked with 0.42.0.
 
 **Ad hoc runtime parameters are not implemented.** An earlier version of this page proposed a
 `--param x=7` flag. No such flag exists: `barca get flaky pipeline.py --param x=7` exits 2 with
 `unexpected argument '--param' found`. To run one function over a set of values, use
 [partitions](/examples/partitions/). To make a value from outside
-part of the cache key, declare an environment variable with `env=[...]` (`barca docs assets`).
+part of the cache key, declare an environment variable with `env=[...]` ([`barca docs assets`](/reference/assets/)).
 
 ## Example
 
@@ -116,8 +118,8 @@ barca get long_running pipeline.py --agent     # then Ctrl-C after two seconds
 The exit code is 130. The interrupted step leaves no result: steps that finished before the
 cancel stay cached, and the next run computes the rest.
 
-Under `barca serve`, `DELETE /run/{run_id}` cancels a run the same way
-([Server API](/reference/server-api/)).
+Under `barca serve`, `DELETE /runs/{run_id}` cancels a run the same way, and so does the
+Cancel button in the web UI's run inspector ([Server API](/reference/server-api/#cancelling-a-run)).
 
 ## Seeing what happened
 
@@ -145,12 +147,13 @@ flaky         asset  cached     materialized  success 2026-10-21 21:07:54 UTC 0.
 ```
 
 Run statuses in `barca history` are `success`, `failed`, `cancelled`, `running` and
-`interrupted` (the process was killed; `barca docs cache`). There is no separate `timed_out`
+`interrupted` (the process was killed; [`barca docs cache`](/reference/cache/)). There is no separate `timed_out`
 status. The cancelled run above is listed with 1 step although its step did not finish.
 
 ## Limits
 
-- Retry attempts are not visible in the output or in `barca history`.
-- There is no terminal UI for watching or cancelling a run. `barca status` from a second
-  terminal shows the steps a running command has finished; the web UI and the cancel endpoint
-  need `barca serve`.
+- Retry attempts show in the `--agent` line (`attempts=3`), in the JSON step (`"attempts": 3`)
+  and in `barca stats` (ATTEMPTS); `barca history` does not list them.
+- There is no terminal UI for cancelling a run other than Ctrl-C. From a second terminal,
+  `barca logs -f` follows a running run's output and `barca status` shows the steps it has
+  finished; the web UI's cancel button and the cancel endpoint need `barca serve`.

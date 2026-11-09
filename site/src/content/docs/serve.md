@@ -11,7 +11,7 @@ can hold one record of results and runs for a whole team. Start it in a project 
 barca serve                      # 127.0.0.1:8274; add --host 0.0.0.0 to reach it from elsewhere
 ```
 
-It has no login. Keep it on a private network or behind a proxy that authenticates.
+Authentication is off by default ("Requiring a token" below).
 
 ## Which page do I need?
 
@@ -24,7 +24,26 @@ It has no login. Keep it on a private network or behind a proxy that authenticat
 | Manage the run queue, restarts, stop grace, capacity and run timeouts | [Serve Operations](/reference/serve-ops/) |
 | Start runs and read results from code, over HTTP or with the Python client | [Server API](/reference/server-api/) |
 | Send traces and metrics to Datadog, or post failures to Slack | [Telemetry and Slack Alerts](/reference/telemetry/) |
+| Require tokens, and connect the web UI and laptops with them | [Server Mode: project tokens](/reference/server-mode/#opt-in-project-tokens) |
+| See what the web UI shows and does | [The Web UI](/web-ui/) |
 | See every flag of the command | [`barca serve`](/reference/cli/serve/) |
 
 A first setup usually goes Scheduling With Cron (if you need schedules), then Share Results With
 a Team (if more than one person runs barca), then Deploying barca serve.
+
+## Requiring a token (authentication, login)
+
+With authentication off, anyone who can reach the port can start and cancel runs. To require a
+credential on every API request, health checks included:
+
+```bash
+barca serve --auth token          # or [server] auth = "token" in barca.toml, or BARCA_SERVER_AUTH=token
+barca tokens bootstrap            # on the server's host: prints a one-use code, valid 15 minutes
+```
+
+Open the web UI and paste the code on its Connect screen, then create named API tokens under
+**API tokens** (each secret is shown once, and can be revoked there). A laptop or script sends one
+with `BARCA_SERVER_TOKEN=<token>`. The details, including the HTTP routes for scripts, are in
+[Server Mode: project tokens](/reference/server-mode/#opt-in-project-tokens). Without tokens,
+keep the server on a private network or behind a proxy that authenticates
+([Deploying](/deploying/#authentication)).

@@ -17,7 +17,7 @@ const SECTIONS: [string, string][] = [
   ['comparisons/', 'Comparison'],
   ['reference/', 'Reference'],
 ];
-const SECTION_INDEXES = ['reference', 'recipes', 'examples', 'comparisons', 'rfcs', 'contributing', '404'];
+const SECTION_INDEXES = ['all-pages', 'recipes', 'examples', 'comparisons', 'rfcs', 'contributing', '404'];
 
 const docs = await getCollection('docs');
 let pages = docs.filter((d) => {
@@ -35,7 +35,10 @@ const clean = (t: string) => t.replace(/^Worked Example:\s*/, '');
 const sortKey = clean;
 pages = all
   ? pages.sort((a, b) => sortKey(a.data.title).localeCompare(sortKey(b.data.title)))
-  : pages.sort((a, b) => a.id.localeCompare(b.id));
+  : pages.sort(
+      (a, b) =>
+        (a.data.sidebar?.order ?? 999) - (b.data.sidebar?.order ?? 999) || a.id.localeCompare(b.id),
+    );
 
 const letterOf = (p: (typeof pages)[number]) => sortKey(p.data.title).charAt(0).toUpperCase();
 const letters = [...new Set(pages.map(letterOf))];

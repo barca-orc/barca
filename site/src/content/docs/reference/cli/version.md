@@ -5,7 +5,7 @@ description: "Print the installed version."
 
 ```
 $ barca version
-barca 0.27.0
+barca 0.42.0
 ```
 
 ## Usage

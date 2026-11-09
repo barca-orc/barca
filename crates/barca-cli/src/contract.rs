@@ -896,7 +896,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "hashing",
         file: "hashing.md",
         slug: "reference/hashing",
-        title: "The Run Hash: Code and Decorator Arguments",
+        title: "The Run Hash: Functions, Helpers and Decorator Arguments",
         description: "Which project code a step's run hash follows from its function, which \
                       decorator arguments count, and what barca does not follow.",
     },

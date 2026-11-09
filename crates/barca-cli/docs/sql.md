@@ -128,8 +128,8 @@ emea    12.0
 - An unreachable server exits 3 with remediation `--local`. Nothing falls back to this machine's
   records.
 - The server never runs SQL. DuckDB reads and writes files (`COPY ... TO`, `read_csv('/etc/...')`)
-  and the API has no authentication, so a query run on the server would be remote file access to
-  it. This is deliberate: every query runs on the machine that typed it.
+  and the API is unauthenticated by default, so a query run on the server would be remote file
+  access to it. This is deliberate: every query runs on the machine that typed it.
 
 ## Output
 

@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 4
 title: "Run Tasks in Parallel"
 description: Inside a task, parallel() and parallel_map() run other tasks in separate worker processes and return their results in order.
 ---
@@ -151,7 +153,7 @@ Through 0.19.0 these files were written into the artifact directory under the br
 never removed, and two runs of one pipeline at the same time could receive each other's branch
 results.
 
-Protocol v3 passes every branch result through its run-owned artifact file, including small
+The worker protocol passes every branch result through its run-owned artifact file, including small
 JSON values. Result metadata is batched; transient completion receipts preserve finished
 items when a later batch item crashes. Older worker packages are refused during startup
 with an instruction to reinstall matching Barca packages.

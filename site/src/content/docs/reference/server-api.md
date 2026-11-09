@@ -6,9 +6,10 @@ description: The HTTP and JSON API of barca serve, with its endpoints, asynchron
 `barca serve` starts an HTTP server that runs assets and tasks on request, fires
 `Schedule(...)` nodes on their cron, and serves a web UI at `/ui/`.
 
-The server binds to `127.0.0.1` and has no authentication: anyone who can reach the port can
-start and cancel runs. To reach it from another machine, put a reverse proxy that authenticates
-in front of it (see [Deploying](/deploying/)).
+The server binds to `127.0.0.1`, and authentication is off by default: anyone who can reach the
+port can start and cancel runs. To reach it from another machine, turn on [project tokens](/reference/server-mode/#opt-in-project-tokens)
+(`--auth token`; requests then carry `Authorization: Bearer <token>`), put a reverse proxy that
+authenticates in front of it, or both (see [Deploying](/deploying/#authentication)).
 
 **Scope:** this is the implemented `barca serve` API, including the run contract and
 inspection routes of the [server-mode RFC](/rfcs/0007-server-mode/) (section 3.4), and its
@@ -32,20 +33,22 @@ barca serve --port 8400 --timezone utc    # every file in the project
 ```
 
 The flags (`--host`, `--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`,
-`--drain-timeout`, `--env`) are in
-the [CLI reference](/reference/cli/serve/). On start the server prints its address and the
-schedule on stderr:
+`--drain-timeout`, `--max-runs`, `--capacity`, `--run-timeout`, `--auth`, `--env`) are in
+the [CLI reference](/reference/cli/serve/). On start the server prints its environment, the
+schedule and its address on stderr:
 
 ```
-[barca] serving on http://127.0.0.1:8274  (1 file)
+[barca] env default (built-in default); artifact store local (.barca/artifacts); metadata .barca/metadata.db (not created yet)
 [barca] scheduling 1 asset:
-  pipeline.py:daily — 0 5 * * * (next 2026-10-08 05:00:00)
+  pipeline.py:daily — 0 5 * * * (next 2026-11-10 05:00:00)
+[barca] serving on http://127.0.0.1:8274  (1 file)
 ```
 
 The default bind address is `127.0.0.1`. `--host` takes an IP address, including `::` for
-IPv6; hostnames are rejected. `0.0.0.0` listens on every IPv4 interface. There is no
-authentication, so anyone who can reach the port can trigger runs. A non-loopback address
-prints a startup warning; use a private network or an authenticating proxy.
+IPv6; hostnames are rejected. `0.0.0.0` listens on every IPv4 interface. With authentication
+off (the default) anyone who can reach the port can trigger runs; a non-loopback address prints
+a startup warning. Turn on [project tokens](/reference/server-mode/#opt-in-project-tokens), or
+use a private network or an authenticating proxy.
 
 `--watch` re-parses the DAG when a source file changes, so `/assets` and `/plan` reflect edits
 without a restart. Files added after the server started are not picked up until a restart, with
@@ -78,7 +81,7 @@ return the corresponding headers without a body.
 | `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
 
-<a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to (`barca docs server-mode`).
+<a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to ([`barca docs server-mode`](/reference/server-mode/)).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -157,6 +160,9 @@ Content-Type: application/json
   "refresh": [], "refresh_all": false, "cascade": true,
   "dry_run": false,
   "batch": ["scored=1000"],     // optional --batch overrides for nodes declaring batch=
+  "partition": "region=emea",   // optional --partition, as the flag takes it (a JSON object or array for exact keys)
+  "values": false,              // get -o value: final_output holds the values, not artifact pointers
+  "allow_paused": false,        // --allow-paused: run a target that `barca pause` paused
   "agent": true                 // which stderr lines the client will print
 }
 ```
@@ -193,8 +199,9 @@ the check and the run; its outcome is then an `error` with the CLI's envelope.
 
 Every run is one node: it executes in worker processes on the server's machine, bounded by a
 run pool sized to the machine's CPUs, and is written to `.barca/metadata.db` like a run from the
-command line, with `triggered_by: "api"`. A run that exceeds the server's 10-minute limit is
-stopped and ends with an `error` outcome.
+command line, with `triggered_by: "api"`. A run that exceeds the run timeout (`--run-timeout`
+or `[server] run_timeout_seconds`; no limit by default) is stopped and ends with an `error`
+outcome.
 
 ### Following a run
 
@@ -354,13 +361,18 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.27.0", "api_version": 1, "env": "default", "store_uri": null,
+{ "status": "ok", "version": "0.42.0", "api_version": 1, "env": "default", "store_uri": null,
   "read_only": false, "scheduler": true, "scheduler_enabled": true, "metadata_error": null,
-  "load_errors": [], "cache": { "size_bytes": 1830000000, "limit_bytes": 20000000000 } }
+  "load_errors": [], "cache": { "size_bytes": 1830000000, "limit_bytes": 20000000000 },
+  "capabilities": { "event_resume": 1 }, "started_at": "2026-11-09T20:02:23.000Z",
+  "queue": { "running": 0, "queued": 0, "paused": false, "max_runs": 16, "capacity": null } }
 ```
 
 `status` is `ok`, or `draining` from the first SIGTERM or SIGINT until the server exits (see
-[the drain](#stopping-the-drain)); the response is `200` either way.
+[the drain](#stopping-the-drain)); the response is `200` either way. `queue` is the run queue as
+`GET /queue` reports it, `started_at` when this server started, and `capabilities` the optional
+protocol features it supports (`event_resume`: run event streams resume from `Last-Event-ID`).
+With `--auth token`, `/health` needs a bearer token like every other API route.
 
 `api_version` is the major version of this API (`1`); a client refuses another, and additive
 fields do not bump it. `env` is the environment the server runs in. `store_uri` is the artifact
@@ -522,8 +534,8 @@ it remembered are cleared with the database.
 `moved_to` and `undo` are `null` when there was no database. Undo with `undo`, run with the
 server stopped. `409` while a run is pending or running (this server's, or a local run's on this
 machine), naming it, with nothing changed; `403` under `--read-only`; `503` while the server
-drains. There is no authentication (`barca serve` has none by design): anyone who can open the UI
-can reset.
+drains. With authentication off (the default), anyone who can open the UI can reset; with
+[project tokens](/reference/server-mode/#opt-in-project-tokens), only a token holder can.
 
 ### Logs
 
@@ -597,8 +609,9 @@ status `error` and `"error": "run timed out after Ns (<setting>)\n..."`.
 ### Read-only mode
 
 With `--read-only`, every route that runs, cancels, pauses or resets (`POST /runs` other than a
-dry run, `DELETE /runs/{run_id}`, the schedule pause and resume, `POST /state/reset`, and the older
-trigger routes)
+dry run, `DELETE /runs/{run_id}`, the schedule pause and resume, `/queue/pause` and
+`/queue/resume`, the asset pause routes under `/pauses`, the pin routes, `POST /state/reset`, and
+the older trigger routes)
 returns `403` and the scheduler does not start. A current WAL metadata database is read in
 place through read-only connections, without writing rows, migrating or checkpointing it.
 SQLite can create `-wal` and `-shm` beside it. A database requiring migration (or not in WAL
@@ -816,12 +829,14 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 ## Limits
 
-- No authentication and no TLS. The server listens on `127.0.0.1` by default; `--host` can
-  make it reachable from other machines. Authenticate at a proxy.
+- No TLS, and authentication only if you turn on [project tokens](/reference/server-mode/#opt-in-project-tokens). The server listens on
+  `127.0.0.1` by default; `--host` can make it reachable from other machines. Terminate TLS at a
+  proxy.
 - One server per project. Machines share results by pointing at it ([the ledger](#the-ledger));
   a second server on the same project, or a bucket on its own, shares nothing (RFC-0007).
-- Runs in progress are not resumed after a restart. A finished run's outcome is kept and
-  `GET /runs/{run_id}` answers it; a run still queued at the restart never started.
+- A run cancelled by a second shutdown signal is not restarted. Queued runs, and runs the drain
+  put back, resume at the next start ([Restarting without losing work](/deploying/#restarting-without-losing-work));
+  a finished run's outcome is kept and `GET /runs/{run_id}` answers it.
 - One machine: steps run in worker processes on the host that runs the server.
 
 ### Input and output schemas
@@ -834,5 +849,5 @@ field names and types, JSON lists also report `item_types`; pickle reports its t
 appear in `shape.note`. No artifact or a failed latest attempt gives `shape: null`.
 For partitioned nodes this describes the key `barca status` reports (the latest run's first key in sort order), named in
 `last_materialization.partition`, rather than a union of every key's schema.
-No sample values are returned. Nested JSON fields report their container type (`dict` or `list`); this is not a recursive schema. Pickle types or constructors are identified from opcodes without executing them, and pickle column schemas are unavailable. This endpoint is available in read-only mode;
+No sample values are returned unless `?sample=N` asks for them. Nested JSON fields report their container type (`dict` or `list`); this is not a recursive schema. Pickle types or constructors are identified from opcodes without executing them, and pickle column schemas are unavailable. This endpoint is available in read-only mode;
 unknown and ambiguous names return 404 and 409 respectively.

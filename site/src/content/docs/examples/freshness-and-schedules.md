@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 5
 title: "Worked Example: Freshness and Schedules"
 description: What the freshness argument does. Schedule fires a node under barca serve, Always nodes below it follow its ticks, and a Manual node is refreshed by hand only.
 ---
@@ -164,4 +166,4 @@ schedule the sensor once and let the `Always` nodes below it follow instead.
 - [Sensors](/examples/sensors/): outside data, and what a
   scheduled sensor does.
 - [Server API](/reference/server-api/): `GET /schedule`, pausing a schedule, `POST /runs`, cancelling a run.
-- `barca docs scheduling` in the terminal.
+- [`barca docs scheduling`](/scheduling/) in the terminal.

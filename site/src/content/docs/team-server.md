@@ -26,8 +26,9 @@ barca history --server http://barca.internal:8274
 ```
 
 This executes the server's copy of the project and keeps results and history there. It
-needs no bucket on your laptop and does not upload local edits. Keep the server on a
-private network or behind an authenticating proxy; it has no login.
+needs no bucket on your laptop and does not upload local edits. Authentication is off by
+default: turn on [project tokens](/reference/server-mode/#opt-in-project-tokens), or keep the server on a private network or behind an
+authenticating proxy.
 
 ## Also want laptops to compute against the same cache?
 
@@ -58,12 +59,13 @@ url = "http://barca.internal:8274"   # where step 2 runs
 uri = "s3://team-bucket/barca"       # gs:// and az:// work too
 ```
 
-Commit it. Everyone, the server included, uses this same file. `barca serve` ignores the
-`[server]` section, and each laptop reads it to find the server.
+Commit it. Everyone, the server included, uses this same file. `barca serve` ignores
+`[server] url` (it reads the section's other keys, such as `auth` and `drain_timeout`), and each
+laptop reads `url` to find the server.
 
 Install the extra for your bucket, for example with `uv add 'barca[s3]'` (or `barca[gcs]`
 or `barca[azure]`). Bucket credentials come from the usual places, such as `AWS_PROFILE`, so
-`barca docs remote` has the details.
+[`barca docs remote`](/reference/remote-storage/) has the details.
 
 ## 2. Start the server
 
@@ -81,8 +83,9 @@ uv run barca serve --host 0.0.0.0
 port 8274 can trigger runs
 ```
 
-The web UI is at `http://barca.internal:8274/`. There is no login, so keep the server on a
-private network or behind a proxy that authenticates ([Deploying](/deploying/)).
+The web UI is at `http://barca.internal:8274/`. The warning is there because authentication is
+off by default: turn on [project tokens](/reference/server-mode/#opt-in-project-tokens) with `--auth token`, or keep the server on a private
+network or behind a proxy that authenticates ([Deploying](/deploying/#authentication)).
 
 ## 3. Use barca as usual
 
@@ -175,4 +178,4 @@ you mean it.
 - [Deploying](/deploying/): run the server under systemd or Docker, behind nginx or Traefik.
 - [Server Mode reference](/reference/server-mode/): every rule, including what is shared,
   what happens when a post fails, and the HTTP routes. In the terminal, run
-  `barca docs server-mode`.
+  [`barca docs server-mode`](/reference/server-mode/).

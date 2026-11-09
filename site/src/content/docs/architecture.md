@@ -15,7 +15,7 @@ This page describes the current source layout. The reasons behind the main choic
 
 ## Layout
 
-```
+```text wrap=false
 crates/
   barca-core/src/             library: no HTTP dependencies
     parse.rs, discover.rs     read decorated functions from source with ruff's parser; find the project's .py files
@@ -43,7 +43,7 @@ crates/
     decorator_args.rs         accepted decorator/helper arguments and static validation
     term.rs                   ordered output and child streams that tolerate closed pipes
     helper_proc.rs            Python command construction, serialized spawning and helper lifetime
-    telemetry/                run reports; one Datadog trace per run
+    telemetry/                run reports; Datadog traces, one per step and one per run
   barca-server/src/           axum HTTP API, cron scheduler, file watcher, embedded web UI
   barca-cli/                  the `barca` binary; only `serve` calls barca-server
     src/args.rs               clap argument definitions
@@ -56,7 +56,7 @@ crates/
 python/barca/
   __init__.py                 decorators (they return the function unchanged), parallel()
   _worker.py, _runtime.py     the worker (`python -m barca._worker`) and its socket client
-  _artifacts.py, _duckdb.py   json, pickle and parquet reading and writing; DuckDB connections
+  _artifacts.py, _duckdb.py   json, pickle, parquet and CSV reading and writing; DuckDB connections
   _storage.py, _transfer.py, _state.py   remote store backends, artifact transfer, metadata backups
   _inspect.py, _sql.py        artifact shape for `barca status`; the query for `barca sql`
   api.py, client.py           Python API that shells out to the binary; HTTP client for `barca serve`
@@ -74,9 +74,9 @@ pyproject.toml                maturin build: binary and Python package in one wh
 <figcaption>What <code>barca get</code> does. Steps 1–4 happen in the Rust binary in milliseconds; only steps that miss the cache reach a Python worker.</figcaption>
 </figure>
 
-1. **Parse.** Each file is parsed with ruff's Python parser. Nothing is imported. The one
-   exception is `partitions(<expression>)` with a non-literal expression, which a Python
-   subprocess evaluates.
+1. **Parse.** Each file is parsed with ruff's Python parser. Nothing is imported. The
+   exceptions are a non-literal `partitions(...)` or `batches(...)` expression and a `batches_by`
+   function, which a resolver subprocess evaluates.
 2. **Graph.** `dag.rs` builds a petgraph graph from the decorators and rejects cycles, unknown
    inputs, a sensor with inputs, a task used as an input to an asset or sensor, and two nodes
    with the same id.
@@ -117,7 +117,7 @@ Planning happens on every command. There is no stored plan to go stale between c
 `barca serve` runs the same commands as the CLI, in the same process. A run started over HTTP
 or by the scheduler runs as a background task; its status and live events are held in memory,
 and finished runs are also in the `runs` table. The scheduler fires nodes declared with
-`freshness=Schedule(...)`. The server binds `127.0.0.1` and has no authentication. See
+`freshness=Schedule(...)`. The server binds `127.0.0.1`; authentication is off unless you turn on [project tokens](/reference/server-mode/#opt-in-project-tokens). See
 [Scheduling](/scheduling/), [Deploying](/deploying/) and the
 [Server API](/reference/server-api/).
 
@@ -137,7 +137,7 @@ Only `Schedule` freshness has an effect at run time today; see
 Everything is under `.barca/` in the project root (under `.barca/envs/<env>/` for an
 environment other than `default`).
 
-`.barca/metadata.db` is a Turso (SQLite-compatible) database written only by the Rust binary.
+`.barca/metadata.db` is a SQLite-compatible libSQL database written only by the Rust binary.
 Its tables are `materializations` (one row per step result: node id, run hash, status,
 artifact path, timings, attempts, error), `runs` (one row per run), `logs` (captured stdout of
 steps), `cost_estimates` (the time estimate per node, used to size batches) and
@@ -148,7 +148,7 @@ materialization by `barca pin`), and for `barca serve`
 `run_queue` (the runs it accepted and has not finished, in order) and `server_state` (whether
 that queue is paused).
 
-Artifacts are files at `.barca/artifacts/{node}/{run_hash}{ext}`, in json, pickle or parquet.
+Artifacts are files at `.barca/artifacts/{node}/{run_hash}{ext}`, in json, pickle, parquet or CSV.
 They are cached by run hash: the hash covers the function's code, the helper code it reaches
 and its inputs, not the bytes of the result. A step's result is always written to a file, and
 the next step reads that file.
@@ -159,7 +159,7 @@ puts one back. See [Remote storage](/reference/remote-storage/).
 
 ## Dependencies
 
-- **Rust**: `ruff_python_parser`, `petgraph`, `turso`, `serde`, `sha2`, `tokio`, `croner`,
+- **Rust**: `ruff_python_parser`, `petgraph`, `libsql`, `serde`, `sha2`, `tokio`, `croner`,
   `clap`, `toml`; the server adds `axum`, `notify`, `chrono-tz` and `rust-embed`.
 - **Python**: 3.12 or later, standard library only. Extras: `parquet`, `fast` (orjson), and
   `s3`, `r2`, `gcs`, `azure`, `remote` (fsspec and the store's client).

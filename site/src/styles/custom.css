@@ -175,8 +175,9 @@ a[aria-current='true'] {
   box-decoration-break: clone;
 }
 
-/* A flag or command in a table cell stays on one line ("--dry-run" never breaks after "--") */
-.sl-markdown-content td code {
+/* A flag in a table's first column stays on one line ("--dry-run" never breaks after "--");
+   longer commands in other columns may wrap so the table keeps its width */
+.sl-markdown-content td:first-child code {
   white-space: nowrap;
 }
 
@@ -215,6 +216,11 @@ mobile-starlight-toc code {
 .hero > .hero-html {
   order: 2;
   width: 100% !important;
+}
+/* The hero heading is a sentence, not a one-word logo: keep it to two or three lines */
+.hero h1 {
+  font-size: clamp(2rem, 1.25rem + 2.5vw, 3.25rem) !important;
+  line-height: 1.15 !important;
 }
 .hero .tagline code {
   font-size: 0.9em;
@@ -410,4 +416,25 @@ starlight-menu-button[aria-expanded='true'] button {
 .sidebar-content a.current-section {
   background-color: var(--sl-color-accent-low);
   color: var(--sl-color-white);
+}
+
+/* The homepage uses the doc template so phones get the menu button (a splash page has none), but
+   on wider screens it hides the sidebar and uses the full width, as a landing page should */
+@media (min-width: 50rem) {
+  :root[data-has-hero] .sidebar-pane {
+    display: none !important;
+  }
+  :root[data-has-hero] .main-frame {
+    padding-inline-start: 0 !important;
+  }
+  :root[data-has-hero] {
+    --sl-content-width: 67.5rem;
+  }
+  :root[data-has-hero] .content-panel {
+    padding-inline: clamp(1.5rem, 5vw, 6rem) !important;
+  }
+}
+:root[data-has-hero] .content-panel:first-of-type,
+:root[data-has-hero] main > .content-panel + .content-panel {
+  border-top: none;
 }

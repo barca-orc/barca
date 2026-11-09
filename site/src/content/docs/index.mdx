@@ -1,12 +1,14 @@
 ---
 title: Cached Python pipelines, no platform to run
 description: Barca runs Python functions as a dependency graph and reuses every result whose code and inputs have not changed. One package, no daemon or database to set up.
-template: splash
+template: doc
+tableOfContents: false
+editUrl: false
 hero:
-  title: Barca
+  title: Cached Python pipelines, no platform to run
   tagline: >-
-    Cached Python pipelines, with no platform to run. Decorate functions, declare their inputs, and
-    barca runs only what changed. Everything else comes from the cache. One <code>uv add</code>,
+    Decorate functions, declare their inputs, and
+    barca runs only what changed. Everything else comes from the cache. One <code>uv&nbsp;add&nbsp;barca</code>,
     no daemon or database server to run, no config file needed.
   image:
     html: |
@@ -43,18 +45,20 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     <strong>1</strong>
     <span>package to install. Dagster installs 48</span>
   </a>
-  <a href="/comparisons/dagster/">
-    <strong>73 ms</strong>
-    <span>for a first run of two assets. Dagster takes 3.6 s</span>
+  <a href="/comparisons/framework-comparison/#run-times-nothing-cached">
+    <strong>45 ms</strong>
+    <span>to run a one-asset pipeline, nothing cached. Dagster takes 1.07 s</span>
   </a>
-  <a href="/comparisons/dagster/">
-    <strong>13 ms</strong>
-    <span>for a rerun when nothing changed</span>
+  <a href="/comparisons/framework-comparison/#run-times-nothing-cached">
+    <strong>118 ms</strong>
+    <span>for a chain of 100 assets. Dagster takes 1.88 s</span>
   </a>
 </div>
 <p class="stat-note">
-  Benchmarked with barca 0.28.0 and Dagster 1.13.26 on one Linux machine
-  ([method and raw numbers](/comparisons/dagster/)).
+  Run times: barca 0.39.4 and Dagster 1.13.26 on one Linux machine, medians
+  ([method and raw numbers](/comparisons/framework-comparison/#run-times-nothing-cached)).
+  Package count: barca 0.42.0 installs one package (checked 2026-11-09); Dagster 1.13.26 installs
+  48 ([2026-10-21](/comparisons/dagster/)).
 </p>
 
 ## Install
@@ -96,7 +100,7 @@ Python 3.12 or later. Wheels for macOS on Apple Silicon and Linux (x86-64 and ar
   <LinkCard
     title="All Pages (A–Z)"
     description="Every page A to Z, or press ⌘K / Ctrl+K to search."
-    href="/reference/"
+    href="/all-pages/"
   />
   <LinkCard
     title="CLI Reference"
@@ -137,8 +141,9 @@ Python 3.12 or later. Wheels for macOS on Apple Silicon and Linux (x86-64 and ar
 
 ## How it works
 
-The `barca` binary reads your Python source without importing it, builds the dependency graph and
-runs each step in a pool of Python workers. A result is cached by a hash of its code and its
+The `barca` binary reads your Python source without importing it (except a non-literal
+`partitions(...)` or `batches(...)` expression or a `batches_by` function, which a subprocess
+evaluates), builds the dependency graph and runs each step in a pool of Python workers. A result is cached by a hash of its code and its
 inputs, so a step reruns only when one of those changes. Because the graph is read statically,
 decorator arguments such as `inputs=` must be written literally.
 [Architecture](/architecture/#a-run) walks through a run step by step, and

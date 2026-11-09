@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 3
 title: "Run After a Step Without Its Value"
 description: Start an input's name with an underscore when a step must run after another but does not need its value.
 ---
@@ -74,7 +76,7 @@ A `_`-prefixed input is never reported. There is no flag or configuration key th
 warning off. A name that appears inside a string in the body counts as used (SQL such as
 `duckdb.sql("select * from orders")`, a pandas `query("x > @limit")`). The exact rule, and what
 is never reported (stubs, `**kwargs`, `locals()`, queries built outside the body, DuckDB
-relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
+relation inputs, sensor inputs), is in [`barca docs assets`](/reference/assets/), "Unused inputs".
 
 ## Limits
 
@@ -90,7 +92,7 @@ relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
   usage error (exit 2) for every command that reads the file:
 
   ```
-  Parse error: after.py:seed_data (line 9): `after` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env
+  Parse error: after.py:seed_data (line 9): `after` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight, batch
   Remove `after`, or replace it with an argument @task accepts. See `barca docs tasks`.
   ```
 

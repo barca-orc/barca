@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 6
 title: "Retries, Timeouts and Failures"
 description: Declare retries and a timeout on the decorator. A step that still fails stops the steps that depend on it and the command exits 1.
 ---
@@ -142,7 +144,7 @@ Step 'pipeline.py:slow' failed: TimeoutError: Step 'pipeline.py:slow' exceeded t
   [Parallel Tasks](/recipes/parallel-tasks/).
 - **A failed asset is not cached.** `barca status` shows it as `never-run` with `failed` under
   WHY, and the next `barca get` tries it again.
-- `sys.exit()` in a step, with any code, fails the step (`barca docs tasks`).
+- `sys.exit()` in a step, with any code, fails the step ([`barca docs tasks`](/reference/tasks/)).
 - **A failed attempt keeps its worker only when the interpreter is still sound.** After an
   exception the worker goes on to its next step. It is replaced by a fresh one when the step
   called `sys.exit()`, ran out of memory (`MemoryError`), was still running at its

@@ -3,6 +3,12 @@ title: "Barca vs Dagster"
 description: Install size, steps to a first result, run time, run output and error output for the same two-asset pipeline, measured on 2026-10-21 with barca 0.28.0 and Dagster 1.13.26.
 ---
 
+:::note[Which numbers are current]
+This page is a dated measurement of one pipeline. The newest run times, measured with barca
+0.39.4 against Dagster, Prefect and Airflow on the same machine, are in
+[Same Pipelines in Four Tools](/comparisons/framework-comparison/#run-times-nothing-cached).
+:::
+
 Last measured: 2026-10-21, with barca 0.28.0 and Dagster 1.13.26, both from PyPI with `uv`, on
 Linux (AMD Ryzen AI MAX+ 395). barca ran under Python 3.13; the Dagster project scaffold chose
 Python 3.14. Setup and commands are in
