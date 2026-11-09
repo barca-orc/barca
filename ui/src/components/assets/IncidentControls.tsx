@@ -41,6 +41,9 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const name = shortName(node.id)
   const file = fileOf(node.id)
+  const filePauses = (pauses.data?.paused ?? []).filter(p => fileOf(p.id) === file)
+  const fileNodes = graph.filter(n => fileOf(n.id) === file)
+  const wholeFilePaused = fileNodes.length > 0 && fileNodes.every(n => filePauses.some(p => p.id === n.id))
   const pause = pauses.data?.paused.find((p) => p.id === node.id) ?? null
   const radius = useMemo(() => blastRadius(node.id, graph, jobs ?? []), [node.id, graph, jobs])
   const running = radius.schedules.filter((s) => !s.job.paused)
@@ -86,15 +89,24 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
             Pause this asset and downstream
           </Button>
         )}
-        <Button size="sm" disabled={disabled}
+        {!wholeFilePaused && <Button size="sm" disabled={disabled}
           onClick={() => ask({
-            title: `Pause every asset of ${file}?`,
+            title: `Pause every node of ${file}?`,
             body: `Scheduled runs skip every node defined in ${file} until resumed.`,
             action: 'Pause pipeline',
             run: () => toggle.mutate({ pause: true, target: file }),
           })}>
           Pause pipeline (file)
-        </Button>
+        </Button>}
+        {filePauses.length > 0 && <Button size="sm" disabled={disabled}
+          onClick={() => ask({
+            title: `Resume ${file}?`,
+            body: `Resume ${filePauses.length} paused ${filePauses.length === 1 ? 'node' : 'nodes'} defined in ${file}. Scheduled and sensor-triggered runs may compute them again.`,
+            action: 'Resume pipeline',
+            run: () => toggle.mutate({ pause: false, target: file }),
+          })}>
+          Resume pipeline (file)
+        </Button>}
         {running.length > 0 && (
           <Button size="sm" disabled={disabled}
             onClick={() => ask({

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 4. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 5. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -43,6 +43,12 @@ behavior follows the coordinator dependency rules, not ordinary data-failure pro
 | A scheduled tick meets a paused node (`asset_pauses`, `barca pause`) | Do not compute it: a paused target is reported `skipped` with reason `paused`; a paused node upstream of a target is read as its latest result, and a target reading a paused node that has never been computed is `skipped`, reason `paused`. A request naming a paused node is refused (usage) unless it allows paused targets |
 | Caller cancels | Stop owned work, persist truthful progress/outcome and reap owned helpers |
 | Server drains/restarts | Apply queue requeue/interruption rules and reuse already committed successes |
+
+A cancelled, interrupted, or infrastructure-error run cannot infer cache hits from planned
+nodes with no recorded result: an interrupted call may have started without completing.
+Run inspectors preserve recorded results and label dispatch counts as started, not successful.
+The run inspector offers confirmed cancellation while queued or running and reports the
+request separately from the eventual terminal state.
 
 Wire and metadata status spellings are intentionally left to their owners; queued, live,
 terminal and historical states are not interchangeable. See the [run

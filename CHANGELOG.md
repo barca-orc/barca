@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Cancel queued or active runs from their inspector, with confirmation and cancellation progress. Incomplete runs no longer claim unrecorded steps were cached or successful. Resume a paused pipeline directly from its Incident controls, with the affected file and count confirmed before resuming. Pauses in other pipelines remain in place.
+
 - Retry exactly the partition keys shown or grouped under one issue, including scattered multi-dimensional combinations. `--partition` also accepts a JSON array of exact key objects; queued runs retain that scope across restarts.
 
 ### Features

@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import { match } from 'ts-pattern'
 import { Absolute, Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
-import { RetryStep, RunActions } from '@/components/RunActions'
+import { CancelRun, RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
 import { failedSteps, failureGroups, raisedAt, traceUrl } from '@/lib/runRecovery'
 import { keysHref } from '@/lib/keysPage'
@@ -143,7 +143,10 @@ export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = nul
   const retry = <Button size="sm" onClick={() => dispatch({ type: 'retry_detail' })}>Retry</Button>
   return (
     <SidePanel label="Run details" title="Run details" subtitleMono subtitle={run.kind === 'ready' ? run.data.run_id : id} subtitleText={run.kind === 'ready' ? run.data.run_id : id}
-      actions={<IconButton label="Close run details" size="sm" onClick={() => dispatch({ type: 'panel_closed' })}><X size={14} /></IconButton>}>
+      actions={<>
+        {run.kind === 'ready' && runIsLive(run.data.status) && <CancelRun key={run.data.run_id} id={run.data.run_id} queued={run.data.status !== 'running'} />}
+        <IconButton label="Close run details" size="sm" onClick={() => dispatch({ type: 'panel_closed' })}><X size={14} /></IconButton>
+      </>}>
       {match(run)
         .with({ kind: 'loading' }, () => <Skeleton height={180} />)
         .with({ kind: 'failed' }, ({ error }) => (
