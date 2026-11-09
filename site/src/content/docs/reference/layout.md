@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/layo
 
 <!-- Generated from crates/barca-cli/docs/layout.md (barca docs layout). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-Everything barca keeps is under `.barca/` in the project root. This topic says where that root
+Everything barca keeps is under `.barca/` in the project root. Below: where that root
 is and what the directory holds, what happens when several barca processes share one project,
 what a run records while it goes and after it is killed, and what an upgrade recomputes.
 
@@ -155,7 +155,7 @@ The change is local to the selected environment's metadata database.
 A barca release that changes how run hashes are computed recomputes the affected steps once, on
 the first run after upgrading; the release notes say so (`CHANGELOG.md`, GitHub Releases).
 
-See also: [The Cache](/reference/cache/), [Disk Use](/reference/disk/), [Discovery](/reference/discovery/), [barca status](/reference/status/),
+See also: [The Cache](/reference/cache/), [Disk Use](/reference/disk/), [Discovery](/reference/discovery/), [barca status](/reference/cli/status/),
 [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 
 ---

@@ -11,7 +11,7 @@ can hold one record of results and runs for a whole team. Start it in a project 
 barca serve                  # 127.0.0.1:8274 (--host 0.0.0.0 for other machines)
 ```
 
-Authentication is off by default ("Requiring a token" below).
+Authentication is off by default ([Authentication and Tokens](/auth/)).
 
 ## Which page do I need?
 
@@ -25,7 +25,7 @@ Authentication is off by default ("Requiring a token" below).
 | Start runs and read results from code, over HTTP or with the Python client | [Server API](/reference/server-api/) |
 | Post to Slack when a job starts failing or recovers | [Slack Alerts](/reference/slack/) |
 | Send traces and metrics to Datadog | [Telemetry](/reference/telemetry/) |
-| Require tokens, and connect the web UI and laptops with them | [Requiring a token](#requiring-a-token-authentication-login), below |
+| Require tokens, and connect the web UI and laptops with them | [Authentication and Tokens](/auth/) |
 | See what the web UI shows and does | [The Web UI](/web-ui/) |
 | See every flag of the command | [`barca serve`](/reference/cli/serve/) |
 
@@ -34,17 +34,7 @@ a Team (if more than one person runs barca), then Deploying barca serve.
 
 ## Requiring a token (authentication, login)
 
-With authentication off, anyone who can reach the port can start and cancel runs. To require a
-credential on every API request, health checks included:
-
-```bash
-barca serve --auth token          # or [server] auth = "token" in barca.toml, or BARCA_SERVER_AUTH=token
-barca tokens bootstrap            # on the server's host: prints a one-use code, valid 15 minutes
-```
-
-Open the web UI and paste the code on its Connect screen, then create named API tokens under
-**API tokens** (each secret is shown once, and can be revoked there). A laptop or script sends one
-with `BARCA_SERVER_TOKEN=<token>`. The details, including the HTTP routes for scripts, are in
-[Server Mode: project tokens](/reference/server-mode/#opt-in-project-tokens). Without tokens,
-keep the server on a private network or behind a proxy that authenticates
-([Deploying](/deploying/#authentication)).
+Authentication is off by default. `barca serve --auth token` requires a token on every API
+request; `barca tokens bootstrap` prints a one-use code that connects the web UI, where you
+create tokens for laptops and scripts. The steps are in
+[Authentication and Tokens](/auth/).

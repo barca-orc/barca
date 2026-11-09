@@ -1,5 +1,5 @@
 ---
-title: "barca pause: Pausing Assets"
+title: "barca pause and resume"
 description: "Containing an incident: barca pause and barca resume, and what scheduled runs and requests do with a paused asset."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/incidents.md
 ---

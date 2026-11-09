@@ -438,3 +438,18 @@ starlight-menu-button[aria-expanded='true'] button {
 :root[data-has-hero] main > .content-panel + .content-panel {
   border-top: none;
 }
+
+/* Release notes: the changelog's own "# Changelog" heading repeats the page title. */
+.release-notes > h1:first-child,
+.release-notes > h1:first-child + p {
+  display: none;
+}
+
+/* The All commands table: on a phone, the syntax column (on each command's page anyway)
+   would wrap one bracket group per line and push "What it does" off screen. */
+@media (max-width: 40rem) {
+  .cmd-table th:nth-child(2),
+  .cmd-table td:nth-child(2) {
+    display: none;
+  }
+}

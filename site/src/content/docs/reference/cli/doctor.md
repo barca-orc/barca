@@ -1,5 +1,5 @@
 ---
-title: "barca doctor: Local Debugging"
+title: "barca doctor"
 description: "Check project prerequisites, stores and credential identity without running steps."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/doctor.md
 ---
@@ -87,7 +87,7 @@ The failed check's `detail` ends with a line that says what to do (in the table,
 
 Doctor only reads: it changes nothing on the server and sends no pending post. The scheduler
 counts are those of `GET /schedule`, the numbers the web UI shows. `barca status --problems`
-lists the schedules that are paused or failing with their nodes' errors ([barca status](/reference/status/)).
+lists the schedules that are paused or failing with their nodes' errors ([barca status](/reference/cli/status/)).
 
 ## Local-only debugging profile
 

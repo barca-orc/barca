@@ -1,6 +1,7 @@
 # Batched partitions: many keys per call
 
-This topic owns `batch=`: how keys are grouped into calls, what a batch function receives and
+`batch=` makes one call of a partitioned step compute several keys, for steps where each call
+has a cost of its own (loading a model, opening a connection). Below: how keys are grouped into calls, what a batch function receives and
 returns, what does not change (run hashes, artifacts, caching per key), how calls are reported
 and the known limits. Partitions themselves are `barca docs partitions`.
 

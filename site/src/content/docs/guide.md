@@ -103,7 +103,7 @@ n  total
 ```
 
 It returns at most 100 rows unless you pass `--limit N` or `--all`, shows the last result even
-when the asset is stale (stderr says so). Install SQL support with `uv add 'barca[sql]'`. See [barca sql](/reference/sql/).
+when the asset is stale (stderr says so). Install SQL support with `uv add 'barca[sql]'`. See [barca sql](/reference/cli/sql/).
 
 `get`, `run`, `list`, `status`, `sql`, `history` and `stats` print a table or summary in a
 terminal and JSON when piped or captured; `--json` and `--pretty` override that. Progress and
@@ -111,7 +111,7 @@ errors go to stderr. The JSON shapes and exit codes are in the
 [CLI reference](/reference/cli/#output-format), and the [agent skill](/reference/agent-skill/)
 is a short guide for AI agents.
 
-More: [barca status](/reference/status/), [barca sql](/reference/sql/).
+More: [barca status](/reference/cli/status/), [barca sql](/reference/cli/sql/).
 
 ## 4. Sensors: data from outside
 

@@ -1,8 +1,11 @@
 # Metadata backups and restore
 
-This topic owns the backups of the metadata database: when they are taken, what one contains,
-what `barca state backups` lists and `barca state restore` does, and how a server's backups
-differ. The store they go to is `barca docs remote`.
+With a store configured, barca backs up its metadata database, the record of what is cached, so
+you can put it back after losing a disk or a machine. Below: when backups are taken, what one
+contains, what `barca state backups` lists and `barca state restore` does, and how a server's
+backups differ. The store they go to is `barca docs remote`.
+
+## When backups are taken
 
 Each machine works on its own `.barca/metadata.db`, and it is the truth for that machine:
 nothing is ever downloaded before a run. With a store configured by `[remote] uri` or
@@ -47,6 +50,8 @@ without `--local`: the server is the ledger and backs up its own database ("With
 A backup whose bytes would equal the newest one is not taken. None is taken under
 `BARCA_REMOTE=off`, or when only `BARCA_ARTIFACT_URI` / `[remote] artifacts_uri` name the store.
 
+## What a backup is
+
 A backup is the database's main file, copied right after its write-ahead log is folded in,
 so a write in progress never produces a torn copy. Only the fold holds the database's lock: a read
 of the folded file, started before the lock is released, keeps every checkpoint out of the main
@@ -83,6 +88,8 @@ local copy carries a `<name>.unsent` marker until the store confirms it, and the
 uploads it even if nothing changed. Minute checkpoints that fail print one warning per run, after
 three in a row.
 
+## Listing backups
+
 List the backups, newest first, local and in the store merged:
 
 ```bash
@@ -101,6 +108,8 @@ size and digest (`null` with one copy). `host` and `project` (JSON) say who took
 `mine` whether it was this host and project directory (`null` for a backup from barca 0.28 or
 earlier). The `HOST` column shows another project directory on this host as `host:/path`. A store that cannot be listed is a warning on stderr and
 `store_error` in JSON; the local copies are still listed.
+
+## Restoring a backup
 
 Put one back, only when you ask:
 
@@ -142,7 +151,9 @@ mv .barca/metadata.db.pre-restore .barca/metadata.db
 rm -f .barca/metadata.db-wal .barca/metadata.db-shm
 ```
 
-**Start over (`barca state reset`, experimental).** When the metadata database cannot be used
+## Starting over: `barca state reset`
+
+Experimental. When the metadata database cannot be used
 (the UI says `Can't load pipeline: Database error: ...`, a format this barca cannot migrate, a
 corrupt file), or you want an empty history, reset it. Nothing is deleted:
 
@@ -178,12 +189,16 @@ To undo, with `barca serve` stopped, restore the moved file: `barca state restor
 .barca/metadata.db.reset-<UTC>` checks it and puts it back (the empty database it replaces moves
 to `metadata.db.pre-restore`). `--from` takes the path of any barca database file.
 
-**A wiped laptop or a fresh container.** Clone the project, set the same `BARCA_REMOTE_URI`
+## A wiped laptop or a fresh container
+
+Clone the project, set the same `BARCA_REMOTE_URI`
 and credentials, and run `barca state restore`: it lists the store's backups (shown as `store`)
 and fetches the chosen one. That is the only time a database comes down from the store. After
 it, `barca get` serves cached results from the bucket.
 
-**Two machines on one store with no server** is not supported. Each backs up to the same prefix
+## Two machines on one store
+
+Two machines on one store with no server is not supported. Each backs up to the same prefix
 and the five-copy retention interleaves their histories; nothing coordinates them. Use a server
 (RFC-0007) to share state, or give each machine its own `[remote] uri`. barca notices: when a
 backup finds that another host (or another project directory) took a backup after this one's
@@ -194,7 +209,9 @@ A machine with no backup of its own yet (one restoring another's) is not warned;
 write, both are. Pruning keeps each machine's newest backup, and `restore` without `--from`
 picks this machine's, so neither loses its last copy to the other.
 
-**Upgrading from the shared history.** barca 0.26.0 removed `optimistic` mode: `[remote] state`,
+## Upgrading from the shared history
+
+barca 0.26.0 removed `optimistic` mode: `[remote] state`,
 `[remote] state_uri`, `[remote] push_retries`, `BARCA_STATE`, `BARCA_STATE_URI`,
 `BARCA_PUSH_RETRIES`, the pull before each run and the conditional push after it, and the
 `metadata.db.prev` copy a pull kept. A `barca.toml` or environment that still sets one of them

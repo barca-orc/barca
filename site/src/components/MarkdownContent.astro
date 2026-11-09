@@ -12,12 +12,31 @@ const isProject = isRfc || id.startsWith('contributing/');
 const BOOST: Record<string, string> = {
   troubleshooting: '3',
   scheduling: '2',
+  serve: '2',
+  auth: '2',
+  // A short command page; the how-to is Authentication and Tokens.
+  'reference/cli/tokens': '0.5',
   // A comparison that names cron in every line outranked the how-to for "cron".
-  'comparisons/cron': '0.3',
+  'comparisons/cron': '0.1',
   // The CLI reference is the home of the exit-code table; the contract repeats it in full.
   'reference/cli-contract': '0.2',
+  // Every release note names a feature; the pages that explain it should rank first.
+  releases: '0.2',
 };
 const weight = isProject ? '0.1' : BOOST[id];
+// Words people type in a whole-sentence search that a page answers without using them all.
+// Pagefind matches every word of a query, so "asset didn't rerun after csv changed" needs
+// "didn't" and "after" somewhere on the page that answers it.
+const KEYWORDS: Record<string, string> = {
+  troubleshooting:
+    "asset didn't rerun after csv changed, file changed, data changed, not updating, stale result, why did it run, why didn't it run, rerun, recompute, cache not invalidated",
+  auth: 'login, log in, password, require a token, authentication, access control, secure the server, api key',
+  serve: 'which server page, which page, server, server overview, start here, where to start with the server',
+  scheduling: 'cron, crontab, run on a cron schedule, run every day, run nightly, schedule a job, timer',
+  'reference/refresh': 'force a recompute, force rerun, rerun everything, ignore cache, bust cache, invalidate cache',
+  'web-ui': 'ui status colors, colours, icons, what the states mean, dashboard',
+};
+const keywords = KEYWORDS[id];
 ---
 
 <div data-pagefind-weight={weight}>
@@ -31,9 +50,13 @@ const weight = isProject ? '0.1' : BOOST[id];
     )
   }
   <Default><slot /></Default>
+  {keywords && <p class="search-keywords" aria-hidden="true" data-pagefind-weight="10">{keywords}</p>}
 </div>
 
 <style>
+  .search-keywords {
+    display: none;
+  }
   .rfc-note {
     margin-bottom: 1.5rem;
     padding: 0.75rem 1rem;

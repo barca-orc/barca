@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/cach
 
 <!-- Generated from crates/barca-cli/docs/cache.md (barca docs cache). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-Barca skips a step when it has already computed the same thing. This topic covers what "the
+Barca skips a step when it has already computed the same thing. Below: what "the
 same" means (the run hash), what the hash does and does not see, the states a cached result
 can be in, incremental runs and environments. Forcing a recompute and `--dry-run` are in
 [Forcing a Recompute](/reference/refresh/); data that changes in place and `cutoff=True` are in [External Data and Early Cutoff](/reference/external-data/).
@@ -44,7 +44,7 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 - Each successful materialization also records a short digest of each part of its hash (the
   function, each decorator argument that counts, each helper, each input, each declared env
   var), so `barca status` and `--dry-run` can say which part changed since then
-  (`changed: helper pipelines/common.py:bucket_ltv`; [barca status](/reference/status/)). The digests explain
+  (`changed: helper pipelines/common.py:bucket_ltv`; [barca status](/reference/cli/status/)). The digests explain
   a miss; they never decide one.
 - Environment variables a function reads **without** declaring them are not part of the hash:
   changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
@@ -150,7 +150,7 @@ decorator arguments count, and what is not followed, are in [The Run Hash](/refe
 
 A result is a row in `.barca/metadata.db` (the run hash it was computed under) plus an artifact
 file. `barca status` names the state each node is in; the table of states and reasons is owned
-by [barca status: Cache state](/reference/status/#cache-state). In short: `cached` is served; `stale` runs again, because
+by [barca status: Cache state](/reference/cli/status/#cache-state). In short: `cached` is served; `stale` runs again, because
 the run hash moved (`changed`, `upstream_stale`), the last attempt failed (`failed`), or the
 recorded file is gone and something needs to read it (`artifact_missing`, or `evicted` when the
 cache size limit deleted it, [Disk Use](/reference/disk/); a copy the artifact store holds is downloaded instead
@@ -243,7 +243,7 @@ records while it goes and after it is killed, and what an upgrade recomputes are
 [Where Things Live](/reference/layout/).
 
 See also: [Disk Use](/reference/disk/), [Where Things Live](/reference/layout/), [Remote Storage](/reference/remote-storage/), [Output Formats and Types](/reference/types/),
-[Partitions](/reference/partitions/), [barca status](/reference/status/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [CLI Contract](/reference/cli-contract/).
+[Partitions](/reference/partitions/), [barca status](/reference/cli/status/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [CLI Contract](/reference/cli-contract/).
 
 ---
 

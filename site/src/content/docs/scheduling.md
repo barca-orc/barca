@@ -68,7 +68,7 @@ upstream asset. `POST /runs` with `{"command": "run"}` behaves like a tick.
 A tick does not compute an asset paused with `barca pause`: its step is `skipped` with reason
 `paused`, and a paused asset upstream is read as it is, like a `Manual` node. Ticks skipped while
 it was paused are not caught up after `barca resume`. That is separate from pausing a schedule
-("Pausing one job" under [Caveats](#caveats)); see [Pausing Assets](/reference/pausing/).
+("Pausing one job" under [Caveats](#caveats)); see [Pausing Assets](/reference/cli/pause/).
 
 ## `Always` and `Manual`
 

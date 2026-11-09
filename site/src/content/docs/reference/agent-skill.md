@@ -47,7 +47,7 @@ schema, marked stable or experimental, is in the [CLI contract](/reference/cli-c
 ## What the skill does not cover
 
 The skill is short on purpose. Three things an agent working with data should also know, from
-[barca sql](/reference/sql/), [Partitions](/reference/partitions/) and [The Cache](/reference/cache/):
+[barca sql](/reference/cli/sql/), [Partitions](/reference/partitions/) and [The Cache](/reference/cache/):
 
 - `barca sql` returns at most 100 rows unless you pass `--limit N` or `--all`, and its JSON is
   one indented document (`columns`, `rows`, `total`, `truncated`), not one line. Only parquet and

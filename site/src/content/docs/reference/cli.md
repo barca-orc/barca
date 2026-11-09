@@ -21,15 +21,15 @@ available topics for scripts and agents. Help and examples never load a project 
 | Run a task | `barca run publish` | [run](/reference/cli/run/) |
 | See what would run, without running it | `barca get revenue --dry-run` | [get](/reference/cli/get/) |
 | Recompute an asset and what is downstream | `barca get revenue --refresh orders` | [Forcing a Recompute](/reference/refresh/) |
-| See every node's cache state and why | `barca status` | [status](/reference/status/) |
-| See only what failed or is stale | `barca status --problems` | [status](/reference/status/) |
+| See every node's cache state and why | `barca status` | [status](/reference/cli/status/) |
+| See only what failed or is stale | `barca status --problems` | [status](/reference/cli/status/) |
 | See recent runs, or one run's errors | `barca history` | [history](/reference/cli/history/) |
-| Read a step's printed output | `barca logs` | [Logs](/reference/logs/) |
-| Query cached results with SQL | `barca sql "select * from revenue"` | [sql](/reference/sql/) |
-| Roll an asset back one version | `barca pin revenue --previous` | [pin and unpin](/reference/pins/) |
+| Read a step's printed output | `barca logs` | [Logs](/reference/cli/logs/) |
+| Query cached results with SQL | `barca sql "select * from revenue"` | [sql](/reference/cli/sql/) |
+| Roll an asset back one version | `barca pin revenue --previous` | [pin and unpin](/reference/cli/pin/) |
 | Run schedules, the web UI and the HTTP API | `barca serve` | [serve](/reference/cli/serve/) |
 | Free disk space under `.barca/` | `barca gc` | [gc](/reference/cli/gc/) |
-| Check the setup without running anything | `barca doctor` | [Doctor](/reference/doctor/) |
+| Check the setup without running anything | `barca doctor` | [Doctor](/reference/cli/doctor/) |
 | Read the manual in the terminal | `barca docs cache` | [docs](/reference/cli/docs/) |
 
 `get`, `run`, `list`, `status`, `sql`, `history` and `stats` print JSON when their output is
@@ -68,32 +68,36 @@ code and JSON output schema, marked stable or experimental, with the policy for 
 Each command links to its page. `barca <command> --help` prints the same syntax for the version
 you have installed.
 
+<div class="cmd-table">
+
 | Command | Syntax | What it does |
 |---|---|---|
 | [`get`](/reference/cli/get/) | `barca get [target[,target...]] [file.py\|dir/ ...] [--refresh a,b [--no-cascade] \| --refresh-all]` | Get assets — cache-aware; prints their artifact paths |
 | [`run`](/reference/cli/run/) | `barca run <task[,task...]> [file.py\|dir/ ...] [--refresh a,b [--no-cascade] \| --refresh-all]` | Run task(s) (always re-run) |
 | [`plan`](/reference/cli/plan/) | `barca plan [file.py\|dir/ ...]` | Emit the execution plan as JSON (experimental) |
-| [`doctor`](/reference/doctor/) | `barca doctor [file.py\|dir/ ...] [--json] [--server [URL] \| --local]` | Diagnose project prerequisites (and a server) without running steps |
-| [`logs`](/reference/logs/) | `barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]` | A run's recorded step stdout and stderr (default: the most recent run) |
+| [`doctor`](/reference/cli/doctor/) | `barca doctor [file.py\|dir/ ...] [--json] [--server [URL] \| --local]` | Diagnose project prerequisites (and a server) without running steps |
+| [`logs`](/reference/cli/logs/) | `barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]` | A run's recorded step stdout and stderr (default: the most recent run) |
 | [`history`](/reference/cli/history/) | `barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N \| --all] [--json\|--pretty]` | Show recent runs, or one run's steps and errors |
 | [`stats`](/reference/cli/stats/) | `barca stats <target> [file.py\|dir/ ...]` | Show timing/cache stats for an asset |
-| [`pin`](/reference/pins/) | `barca pin [target] [--previous\|--run-hash H\|--from-file F\|--versions]` | Hold an asset at an earlier result or supplied data (experimental) |
-| [`unpin`](/reference/pins/) | `barca unpin <target>` | Release a pinned asset (experimental) |
+| [`pin`](/reference/cli/pin/) | `barca pin [target] [--previous\|--run-hash H\|--from-file F\|--versions]` | Hold an asset at an earlier result or supplied data (experimental) |
+| [`unpin`](/reference/cli/pin/) | `barca unpin <target>` | Release a pinned asset (experimental) |
 | [`gc`](/reference/cli/gc/) | `barca gc [--dry-run] [--max-size SIZE] [--json]` | Evict cached results to keep .barca/ under its size limit (experimental) |
 | [`serve`](/reference/cli/serve/) | `barca serve [file.py\|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS] [--auth off\|token]` | Run the HTTP API server |
 | [`queue`](/reference/cli/queue/) | `barca queue [pause\|resume] [--server [URL]] [--json]` | A server's run queue; pause or resume it (experimental) |
-| [`pause`](/reference/pausing/) | `barca pause [target] [--downstream] [--json]` | Stop scheduled ticks and requests from computing an asset (experimental) |
-| [`resume`](/reference/pausing/) | `barca resume [target] [--downstream \| --all] [--json]` | Let a paused asset be computed again (experimental) |
+| [`pause`](/reference/cli/pause/) | `barca pause [target] [--downstream] [--json]` | Stop scheduled ticks and requests from computing an asset (experimental) |
+| [`resume`](/reference/cli/pause/) | `barca resume [target] [--downstream \| --all] [--json]` | Let a paused asset be computed again (experimental) |
 | [`tokens`](/reference/cli/tokens/) | `barca tokens bootstrap` | Print a one-use code to connect to a server with --auth token (experimental) |
 | [`list`](/reference/cli/list/) | `barca list [file.py\|dir/ ...] [--groups] [-l N \| --all] [--json]` | List discovered definitions and their deps |
-| [`status`](/reference/status/) | `barca status [target[,target...]] [file.py\|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]` | Cache state, last run and artifact shape per node |
-| [`sql`](/reference/sql/) | `barca sql "<query>" [file.py\|dir/ ...] [--json] [-l N \| --all]` | Query cached results with DuckDB (experimental) (install: uv add 'barca[sql]') |
+| [`status`](/reference/cli/status/) | `barca status [target[,target...]] [file.py\|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]` | Cache state, last run and artifact shape per node |
+| [`sql`](/reference/cli/sql/) | `barca sql "<query>" [file.py\|dir/ ...] [--json] [-l N \| --all]` | Query cached results with DuckDB (experimental) (install: uv add 'barca[sql]') |
 | [`state backups`](/reference/cli/state/) | `barca state backups [--json]` | List the metadata backups, local and in the store |
 | [`state restore`](/reference/cli/state/) | `barca state restore [--from N\|NAME\|PATH]` | Put a metadata backup back (the current DB is kept aside) |
 | [`state reset`](/reference/cli/state/) | `barca state reset [--yes]` | Start the metadata DB over (the old one is moved aside) |
 | [`docs`](/reference/cli/docs/) | `barca docs [topic] [--all] [--json]` | Built-in manual |
 | [`version`](/reference/cli/version/) | `barca version` | Print version |
 | `--help` | `barca --help` | Show help |
+
+</div>
 
 `get`, `run`, `status`, `list`, `history` and `stats` also take `--server [<url>]`, which runs
 the command on a `barca serve` and prints it here as the local command would, and `--local`,
@@ -346,11 +350,11 @@ barca logs --step report --stream stderr --timestamps   # after a failure: its l
 ```
 
 With a server configured (or `--server`), `barca logs` reads the server's runs, scheduled ones
-included; `--local` reads this machine's ([barca logs: Debugging a live pipeline](/reference/logs/#debugging-a-live-pipeline).
+included; `--local` reads this machine's ([barca logs: Debugging a live pipeline](/reference/cli/logs/#debugging-a-live-pipeline).
 
 Task return values remain usable through `barca run --json`, `-o value`, and `barca.run(...)`.
 During get/run, non-JSON modes print stdout lines to stderr with `[node_id]` prefixes;
 `--agent` framework lines keep `[barca]` prefixes. JSON output suppresses captured prints;
 retrieve them with `barca logs` using the result's run id.
 
-See [Doctor and local debugging](/reference/doctor/) for prerequisite checks and a local-only debugging profile.
+See [Doctor and local debugging](/reference/cli/doctor/) for prerequisite checks and a local-only debugging profile.

@@ -117,7 +117,7 @@ Planning happens on every command. There is no stored plan to go stale between c
 `barca serve` runs the same commands as the CLI, in the same process. A run started over HTTP
 or by the scheduler runs as a background task; its status and live events are held in memory,
 and finished runs are also in the `runs` table. The scheduler fires nodes declared with
-`freshness=Schedule(...)`. The server binds `127.0.0.1`; authentication is off unless you turn on [project tokens](/serve/#requiring-a-token-authentication-login). See
+`freshness=Schedule(...)`. The server binds `127.0.0.1`; authentication is off unless you turn on [project tokens](/auth/). See
 [Scheduling](/scheduling/), [Deploying](/deploying/) and the
 [Server API](/reference/server-api/).
 

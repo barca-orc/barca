@@ -22,7 +22,7 @@ barca history --server http://barca.internal:8274
 This runs the server's code and keeps history there; it does not upload local edits.
 No shared artifact store is needed for this path. Turn on project tokens ("Opt-in project
 tokens" below), or keep the server on a private network or behind an authenticating proxy
-(https://barca.sh/deploying/).
+([Deploying barca serve](/deploying/)).
 
 ## Local computation with shared results
 
@@ -31,7 +31,7 @@ is the ledger**: it holds the one record of which results exist (run hashes, art
 history) and it is the only process that writes it. The artifact bytes stay in the store
 (`[remote]`, [Remote Storage](/reference/remote-storage/)); the server never moves them. Server mode is experimental
 ([CLI Contract](/reference/cli-contract/)). To set it up in three steps, see
-https://barca.sh/team-server/.
+[Share Results With a Team](/team-server/).
 
 Server mode remains experimental after 0.36.0. Runs of one server compute a matching asset step
 once, experimentally since 0.39.4 ([Operating barca serve: Runs share the steps they have in common](/reference/serve-ops/#runs-share-the-steps-they-have-in-common)): cancelling the run that computes it makes the waiting run execute it again, the result
@@ -103,9 +103,9 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
   `sql` and `doctor`. `serve`, `plan`, `docs` and `version` always run on this machine;
   `--server` or `--local` on them is a usage error. `barca list` without `--server` reads this
   machine's files. `barca sql` always runs its query on this machine: a server only says which
-  results its views read ([barca sql: With a server](/reference/sql/#with-a-server)); the server never runs SQL.
+  results its views read ([barca sql: With a server](/reference/cli/sql/#with-a-server)); the server never runs SQL.
   `doctor` runs its checks here and, with a server (configured, or `--server`), checks the
-  server too; `--local` leaves it out ([barca doctor: Local Debugging: Checking a server](/reference/doctor/#checking-a-server)).
+  server too; `--local` leaves it out ([barca doctor: Checking a server](/reference/cli/doctor/#checking-a-server)).
 
 ## A local run against the server's ledger
 
@@ -191,7 +191,7 @@ With a server configured, `barca status`, `barca history`, `barca stats` and `ba
 from the server, as `--server` does, after printing `[barca] server <url> (<source>)`. The server
 answers for its deployed code. `barca logs` reads the server's runs (`GET /runs/{run_id}/logs`,
 and `-f` its event stream); the lines of a run this machine ran against the ledger stay here,
-with `--local` ([barca logs: Debugging a live pipeline](/reference/logs/#debugging-a-live-pipeline)). Nothing falls back to this
+with `--local` ([barca logs: Debugging a live pipeline](/reference/cli/logs/#debugging-a-live-pipeline)). Nothing falls back to this
 machine, but `barca logs RUN_ID` for a run only this machine has fails (exit 2) with the
 remediation `this run is on this machine: barca logs RUN_ID --local`, and `barca logs` without a
 run id adds `[barca] note: this machine has a newer run <id> (...); barca logs --local reads it`
@@ -221,13 +221,13 @@ artifact, so its `local` is `false`.
 
 `barca sql` asks the server which result each view reads (`GET /sql/views`) and reads barca's
 tables (`barca.runs`, `barca.materializations`, `barca.nodes`) from its records, then runs the
-query here over the store; the server never runs SQL ([barca sql: With a server](/reference/sql/#with-a-server)). An
+query here over the store; the server never runs SQL ([barca sql: With a server](/reference/cli/sql/#with-a-server)). An
 unsynced result is not mixed into a view: the error or note says so and names `--local`.
 
 `barca status --problems` (or `--state <states>`) keeps the nodes that need attention, the
 server's failures, stale results and failing or paused schedules among them, plus this
 machine's `not_in_ledger` results; each scheduled node carries the server scheduler's view in
-`schedule` ([barca status: Schedules](/reference/status/#schedules)). `barca doctor` checks the server itself.
+`schedule` ([barca status: Schedules](/reference/cli/status/#schedules)). `barca doctor` checks the server itself.
 
 `barca history --reconcile` writes this machine's history and runs here. Add `--local` to see
 this machine's own runs, statuses and timings.
@@ -348,7 +348,7 @@ in a minor release.
 ## Deploying and the HTTP routes
 
 Run `barca serve --host 0.0.0.0` behind a private network or an authenticating, TLS-terminating
-proxy; authentication defaults off (https://barca.sh/deploying/). Point clients at the
+proxy; authentication defaults off ([Deploying barca serve](/deploying/)). Point clients at the
 proxy's URL, prefix included; `https://` works for every request, ledger ones included.
 Server URL userinfo is omitted from printed addresses in errors, announcements, ledger
 warnings, stream-drop messages, SQL provenance and doctor output, including JSON. For example,
@@ -465,7 +465,7 @@ Read-only servers disable the actions.
 The selected node shows as running as soon as the server accepts it; View run opens its
 durable status, steps and logs. Ungrouped list panels offer the same action.
 The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
-described at https://barca.sh/reference/server-api/.
+described at [Server API](/reference/server-api/).
 
 See also: [Scheduling With Cron](/scheduling/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 

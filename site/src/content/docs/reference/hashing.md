@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/hash
 
 <!-- Generated from crates/barca-cli/docs/hashing.md (barca docs hashing). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-A step runs again when its run hash changes ([The Cache: At a glance](/reference/cache/#at-a-glance)). This topic is the
+A step runs again when its run hash changes ([The Cache: At a glance](/reference/cache/#at-a-glance)). Here is the
 full rule for the part of that hash that comes from code. In short:
 
 - **The function and the project code it uses.** The function as written, and every module-level

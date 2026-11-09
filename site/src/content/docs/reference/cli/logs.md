@@ -181,7 +181,7 @@ a line when the run is recorded (a step that writes 100,000 lines to stderr took
 of 0.08 s, and its run 0.6 s more to record). A step that logs a few hundred lines does not
 notice.
 
-See also: [Tasks](/reference/tasks/), [barca status](/reference/status/), [Scripts and AI Agents](/reference/agents/), `barca docs
+See also: [Tasks](/reference/tasks/), [barca status](/reference/cli/status/), [Scripts and AI Agents](/reference/agents/), `barca docs
 server-mode`.
 
 ---

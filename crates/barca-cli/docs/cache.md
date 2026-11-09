@@ -1,6 +1,6 @@
 # Caching, artifacts and environments
 
-Barca skips a step when it has already computed the same thing. This topic covers what "the
+Barca skips a step when it has already computed the same thing. Below: what "the
 same" means (the run hash), what the hash does and does not see, the states a cached result
 can be in, incremental runs and environments. Forcing a recompute and `--dry-run` are in
 `barca docs refresh`; data that changes in place and `cutoff=True` are in `barca docs external-data`.

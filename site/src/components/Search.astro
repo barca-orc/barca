@@ -7,7 +7,36 @@ import Default from '@astrojs/starlight/components/Search.astro';
 <Default />
 <a class="mobile-docs-link" href="/getting-started/">Get Started</a>
 
+<script>
+  // When a search finds nothing, say what to try: Pagefind needs every word to match.
+  const HINT =
+    'Try fewer words (a sentence needs every word to match), or start from ' +
+    '<a href="/troubleshooting/">Why Did (or Didn\'t) It Run?</a> or <a href="/all-pages/">All Pages</a>.';
+  new MutationObserver(() => {
+    for (const msg of document.querySelectorAll('.pagefind-ui__message')) {
+      const empty = /^No results/.test(msg.textContent ?? '');
+      const hint = msg.parentElement?.querySelector('.search-hint');
+      if (empty && !hint) {
+        const p = document.createElement('p');
+        p.className = 'search-hint';
+        p.innerHTML = HINT;
+        msg.after(p);
+      } else if (!empty && hint) {
+        hint.remove();
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true, characterData: true });
+</script>
+
 <style>
+  :global(.search-hint) {
+    margin: 0.5rem 0 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  :global(.search-hint a) {
+    color: var(--sl-color-text-accent);
+  }
   .mobile-docs-link {
     display: none;
   }

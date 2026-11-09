@@ -1,8 +1,10 @@
 ---
 pagefind: false
-title: Changelog
-description: Where to find what changed in each barca release.
+title: Writing Release Notes
+description: How a change adds its line to CHANGELOG.md, and how that becomes the release notes.
 ---
+
+The notes themselves are on [Release Notes](/releases/).
 
 [`CHANGELOG.md`](https://github.com/barca-orc/barca/blob/main/CHANGELOG.md) is the source of
 barca's release notes. Each release has a `## <version> (<date>)` section with `### Breaking`,

@@ -3,11 +3,38 @@ title: "Barca vs Prefect"
 description: Install size, import time, steps to a first result, run time, run output, error output and caching for the same pipeline, measured on 2026-10-21 with barca 0.28.0 and Prefect 3.9.0.
 ---
 
-:::note[Which numbers are current]
-This page is a dated measurement of one pipeline. The newest run times, measured with barca
-0.39.4 against Dagster, Prefect and Airflow on the same machine, are in
+## Coming from Prefect
+
+| Prefect | barca |
+|---|---|
+| `@task` that computes a value | `@asset`: cached by a hash of its code and inputs, with no policy to set ([The Cache](/reference/cache/)) |
+| `@task` that does something (deploy, notify) | `@task`: runs every time it is in a run ([Tasks](/reference/tasks/)) |
+| `@flow` calling tasks | No flow function: `inputs={"param": upstream_fn}` declares the graph, and barca orders it ([Assets](/reference/assets/)) |
+| `cache_policy=INPUTS`, `cache_key_fn` | Nothing to set: every asset is cached; `env=[...]` adds environment variables to its hash |
+| `task.map(items)` | `partitions=` on an asset, or `parallel_map()` inside a task ([Partitions](/reference/partitions/), [Run Tasks in Parallel](/recipes/parallel-tasks/)) |
+| `retries=`, `timeout_seconds=` | The same names on `@asset` and `@task` ([Retries, Timeouts and Failures](/recipes/retries-timeouts-failures/)) |
+| `flow.serve(cron=...)`, deployments, work pools | `@asset(freshness=Schedule("0 8 * * *"))` and `barca serve` ([Scheduling With Cron](/scheduling/)) |
+| `python flow.py` | `barca get pipeline.py`, or `barca.get(...)` from Python ("Why barca has no `python file.py` mode", below) |
+| `prefect flow-run ls` | `barca history` |
+| The Prefect server and UI | `barca serve`, with a web UI ([The Web UI](/web-ui/)); nothing runs in the background otherwise |
+
+## Choose Prefect when
+
+- **Runs execute on remote infrastructure** through work pools and workers (Kubernetes, ECS,
+  serverless). A barca run executes on the machine that starts it.
+- **Flows wait on events, approvals or human input**, or are triggered by automations. barca has
+  no approval gates and no event automations.
+- **You want a hosted control plane** with accounts and roles. barca's server has opt-in API
+  tokens with no accounts or roles.
+
+Choose barca when what you want is that nothing reruns unless its code or inputs changed, with
+no server to start for a local run.
+
+## The measurements
+
+The rest of this page is a dated measurement of one pipeline. The newest run times, measured
+with barca 0.39.4 against Dagster, Prefect and Airflow on the same machine, are in
 [Same Pipelines in Four Tools](/comparisons/framework-comparison/#run-times-nothing-cached).
-:::
 
 Last measured: 2026-10-21, with barca 0.28.0 and Prefect 3.9.0, both from PyPI with `uv`,
 Python 3.13, on Linux (AMD Ryzen AI MAX+ 395). Setup and commands are in
@@ -137,35 +164,6 @@ Prefect has `cache_policy=INPUTS`. With both tasks set to it and two `python pip
 on Prefect 3.9.0 under the temporary server, the second run reported `summary` as
 `Cached(type=COMPLETED)` and ran `raw_data`, which takes no inputs, again. On 2026-06-10, with
 Prefect 3.7.4, neither task was cached on the second run.
-
-## Other things observed on 2026-06-10
-
-These are notes from using Prefect 3.7.4 on 2026-06-10. They have not been checked against a
-later Prefect release, except where a note dated 2026-10-21 says so.
-
-- `process_customer.map(customer_ids)` fans one task out over a list in one call. barca's
-  equivalents are `parallel_map` inside a task and `partitions` on an asset
-  ([Parallel tasks](/recipes/parallel-tasks/)).
-- Flow runs get generated names such as "tricky-kiwi". barca run ids are hexadecimal strings.
-- `prefect flow-run ls` listed past runs with their status across separate invocations.
-  barca's equivalent is `barca history`.
-- `main.serve(name="my-deployment", cron="0 8 * * *")` turned a flow into a scheduled
-  long-running process. barca's equivalent is `Schedule("0 8 * * *")` on the function and
-  `barca serve` ([Scheduling](/scheduling/)).
-- Every `python file.py` run and every `prefect` CLI command started a temporary HTTP server,
-  which took 2 to 3 seconds. A flow computing `1 + 2` took 3.5 seconds. Note, 2026-10-21: with
-  Prefect 3.9.0 on the Linux machine, the two-task pipeline above took 4.6 seconds and the
-  server start 1.6 seconds of it.
-- `prefect --help` listed 31 subcommands. The names recorded were: api, artifact, automation,
-  block, cloud, concurrency-limit, config, dashboard, deploy, deployment, dev, events,
-  experimental, flow, flow-run, global-concurrency-limit, init, plugins, profile, sdk, server,
-  shell, task, task-run, transfer, variable, version, work-pool, work-queue, worker.
-- `prefect init --help` answered "Unknown option: --help. Did you mean --field?".
-- Every run printed the server start and stop lines, the flow run line and one line per task.
-  No option to suppress them was found during the test.
-- `@flow` and `@task` wrap the function, and the original is reached through `.fn`. barca's
-  decorators return the function unchanged, so a decorated function can be called as plain
-  Python; barca then does no caching and records nothing.
 
 ## Why barca has no `python file.py` mode
 

@@ -343,7 +343,7 @@ region=latam  latam   50
 
 `summary`, which uses `collect(sales)`, received the same three keys
 (`{"regions": 3, "total": 130}`). Putting `amer` back in the list ran no step: its result and
-the four-key `summary` were still cached. [barca sql](/reference/sql/) describes which keys a view covers.
+the four-key `summary` were still cached. [barca sql](/reference/cli/sql/) describes which keys a view covers.
 
 ## Selecting keys with `--partition`
 

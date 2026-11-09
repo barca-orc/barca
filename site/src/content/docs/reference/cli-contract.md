@@ -136,7 +136,7 @@ stability; the row adds the keys and routes that go with it.
 | `partitions.failed` and `partitions.failed_keys` in `status --json`, `steps_page.nodes` in `history RUN_ID --json`, `recent_runs[].keys` and `recent_runs[].failed_keys` in `stats --json` | new in 0.38.0: what counts as a failed key (its latest attempt failed, with no later success) may change after field use |
 | `steps[].batch_execution` and `metadata_seconds` in `get`/`run` JSON, the `[barca] batch:<node> ...` and `[barca] metadata ...` lines | new in 0.38.0 (RFC-0013): which phases are reported and what each one covers may change after field use |
 | `steps_page.nodes[].status` (`ran`, `cached`, `skipped`) and `steps_page.nodes[].blocked_by` in `history RUN_ID --json` with a server | the server lists every planned node of a finished run whose plan it can rebuild; the local `history RUN_ID` lists only nodes with recorded steps and never has these keys ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) |
-| `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 ([barca pin: Pinning and Rollback](/reference/pins/)): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
+| `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 ([barca pin and unpin](/reference/cli/pin/)): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key` | new in 0.42: every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
@@ -966,7 +966,7 @@ may grow.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. A `cached` step served from a pin ([barca pin: Pinning and Rollback](/reference/pins/)) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
+  words. A `cached` step served from a pin ([barca pin and unpin](/reference/cli/pin/)) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
   or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
   `partition_selection`, and the result has `partition_selection` (see "Partitioned targets").
   After a partition key fails, a key of a node that reads it key for key is a step with `status`
@@ -974,7 +974,7 @@ may grow.
   ([Partitions: Failed keys block their own keys](/reference/partitions/#failed-keys-block-their-own-keys)); a node that reads every key
   (a `collect()` fan-in, an unpartitioned node) is `skipped` with reason `upstream_failed`,
   as before. `barca status` reports such a node `blocked`. In a scheduled tick of `barca serve`,
-  a paused target (`barca pause`, [barca pause: Pausing Assets](/reference/pausing/)) is `skipped` with reason `paused` and a
+  a paused target (`barca pause`, [barca pause and resume](/reference/cli/pause/)) is `skipped` with reason `paused` and a
   `detail` naming `barca resume`. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
   stale; [The Cache](/reference/cache/)) carries a `detail` starting `Manual`. Breaking in this release: a
   stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
@@ -999,7 +999,7 @@ coordinator's observed in-flight time. Slow module imports (> 1 second) add
 `import_seconds`, included in elapsed time and summed across attempts/keys. Reused
 modules add no import time. The conditional import field is snapshotted with a
 controlled slow-import/retry fixture below; ordinary schema fixtures exclude it to
-avoid depending on CI machine speed. [barca status](/reference/status/) explains the timing scopes.
+avoid depending on CI machine speed. [barca status](/reference/cli/status/) explains the timing scopes.
 
 <!-- BEGIN GENERATED schema get_timing_retry -->
 | Key | Type | Present |
@@ -2979,7 +2979,7 @@ Task return values remain `final_output` as for assets. Get/run JSON mode suppre
 stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. A step's stderr is written
 to stderr as it comes, in every mode, as before. Agent framework lines
 remain `[barca]`-prefixed and are not recorded. Retrieve captured output with `barca logs`.
-See [barca logs](/reference/logs/) and `specs/interfaces/task-output.md` for flush, failure and ordering boundaries.
+See [barca logs](/reference/cli/logs/) and `specs/interfaces/task-output.md` for flush, failure and ordering boundaries.
 
 <!-- BEGIN GENERATED schema logs -->
 | Key | Type | Present |

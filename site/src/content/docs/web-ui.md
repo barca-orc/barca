@@ -27,7 +27,7 @@ states `barca status` prints:
 | `failing`: the last attempt failed, with "last good 3h ago" or "never succeeded" | `stale` with reason `failed` |
 | `blocked`: a failing node upstream keeps it from running, with a link to that failure | `blocked` for partition keys; otherwise derived in the UI from the graph |
 
-A pinned asset shows `pinned` beside its version ([Pinning and Rollback](/reference/pins/)).
+A pinned asset shows `pinned` beside its version ([Pinning and Rollback](/reference/cli/pin/)).
 
 ## Runs: what failed, and running it again
 
@@ -52,9 +52,9 @@ An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **H
 
 - **Incident** holds the controls for an incident: pausing and resuming the asset, as
   `barca pause` and `barca resume` do, and resuming a paused pipeline
-  ([Pausing Assets](/reference/pausing/)). Uploading replacement data and holding an earlier
+  ([Pausing Assets](/reference/cli/pause/)). Uploading replacement data and holding an earlier
   version are on the asset panel and in the key explorer, as `barca pin` does
-  ([Pinning and Rollback](/reference/pins/)).
+  ([Pinning and Rollback](/reference/cli/pin/)).
 - For a partitioned asset, the **key explorer** shows every key at once, coloured by state, with
   each problem as one line (an error and the keys it hit, blocked keys, stale and never-run
   keys) and a Run button for the keys that are not fresh. See
@@ -64,4 +64,4 @@ An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **H
 
 When the server runs with `--auth token`, the UI asks for a bootstrap code or an API token on its
 Connect screen, and **API tokens** in the sidebar creates and revokes named tokens. The steps are
-in [Requiring a token](/serve/#requiring-a-token-authentication-login).
+in [Authentication and Tokens](/auth/).
