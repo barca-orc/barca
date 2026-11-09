@@ -27,7 +27,7 @@ one; that kind of decision belongs in
    `Status: Draft`.
 3. Open a PR. Reviewers argue about the design in the PR, not just the code.
 4. On merge, set `Status: Accepted` (or `Rejected`, if the PR closes without
-   merging the design) and add the page to the `RFCs` group in
+   merging the design) and add the page to the `Design Records (RFCs)` group in
    `site/astro.config.mjs`.
 5. When the implementation ships, set `Status: Implemented (X.Y.Z)`, naming the
    release. If only part of it has shipped, set `Status: Partially implemented

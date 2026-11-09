@@ -1,0 +1,90 @@
+---
+// Lists docs pages with their descriptions, read from the content collection so a new page
+// shows up without editing an index by hand.
+//   <PageIndex prefix="patterns/" />          pages under one section, in file order
+//   <PageIndex all />                         every user-facing page, A to Z, with its section
+import { getCollection } from 'astro:content';
+
+interface Props {
+  prefix?: string;
+  all?: boolean;
+  stripPrefix?: string;
+}
+const { prefix, all = false, stripPrefix } = Astro.props;
+
+const SECTIONS: [string, string][] = [
+  ['patterns/', 'Recipe'],
+  ['workflows/', 'Worked example'],
+  ['comparisons/', 'Comparison'],
+  ['reference/', 'Reference'],
+];
+const SECTION_INDEXES = ['reference', 'patterns', 'workflows', 'comparisons', 'rfcs', 'contributing'];
+
+const docs = await getCollection('docs');
+let pages = docs.filter((d) => {
+  if (d.id === 'index') return false;
+  if (all) {
+    if (d.id.startsWith('rfcs') || d.id.startsWith('contributing')) return false;
+    if (SECTION_INDEXES.includes(d.id)) return false;
+    return true;
+  }
+  return d.id.startsWith(prefix ?? '') && d.id !== (prefix ?? '').replace(/\/$/, '');
+});
+
+const clean = (t: string) =>
+  stripPrefix ? t.replace(new RegExp(`^${stripPrefix}\\s*`), '') : t.replace(/^(Pattern|Workflow):\s*/, '');
+pages = all
+  ? pages.sort((a, b) => clean(a.data.title).localeCompare(clean(b.data.title)))
+  : pages.sort((a, b) => a.id.localeCompare(b.id));
+
+const section = (id: string) => SECTIONS.find(([p]) => id.startsWith(p))?.[1] ?? 'Guide';
+---
+
+<ul class="page-index" role="list">
+  {
+    pages.map((p) => (
+      <li>
+        <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
+        {all && <span class="kind">{section(p.id)}</span>}
+        <p>{p.data.description}</p>
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .page-index {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+    gap: 0.25rem 1.5rem;
+  }
+  .page-index li {
+    margin: 0;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--sl-color-hairline-light);
+  }
+  .page-index a {
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--sl-color-white);
+  }
+  .page-index a:hover {
+    color: var(--sl-color-text-accent);
+    text-decoration: underline;
+  }
+  .page-index .kind {
+    margin-inline-start: 0.5rem;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .page-index p {
+    margin: 0.25rem 0 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.5;
+    color: var(--sl-color-gray-2);
+  }
+</style>
