@@ -164,3 +164,106 @@ a[aria-current='true'] {
 .isMobile a[aria-current='true']::after {
   background-color: var(--sl-color-accent-high) !important;
 }
+
+/* ----------------------------------------------------------------
+   Inline code that wraps keeps its padding and background on both
+   lines (it used to leave "--" hanging in the gutter on phones)
+   ---------------------------------------------------------------- */
+.sl-markdown-content :not(pre) > code {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* ----------------------------------------------------------------
+   Homepage
+   ---------------------------------------------------------------- */
+
+/* The hero's right column is a real code sample and its output, so give it room */
+@media (min-width: 50rem) {
+  .hero {
+    grid-template-columns: 5fr 6fr !important;
+    padding-block: 3rem 2rem !important;
+  }
+}
+/* On a phone the pitch comes first and the sample after it */
+.hero > .hero-html {
+  order: 2;
+  width: 100% !important;
+}
+.hero .tagline code {
+  font-size: 0.9em;
+}
+
+.hero-demo {
+  width: 100%;
+  text-align: start;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--sl-color-bg-nav);
+  font-size: var(--sl-text-xs);
+}
+.hero-demo-file {
+  padding: 0.4rem 0.9rem;
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  font-family: var(--sl-font-mono);
+  color: var(--sl-color-gray-2);
+}
+.hero-demo pre {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  overflow-x: auto;
+  font-family: var(--sl-font-mono);
+  line-height: 1.6;
+  color: var(--sl-color-white);
+  background: transparent;
+}
+.hero-demo-term {
+  border-top: 1px solid var(--sl-color-hairline-light);
+  background: var(--sl-color-bg) !important;
+}
+.hero-demo .k { color: #c678dd; }
+.hero-demo .d { color: var(--sl-color-text-accent); }
+.hero-demo .f { color: var(--sl-color-accent-high); }
+.hero-demo .s { color: #d19a66; }
+.hero-demo .p { color: var(--sl-color-gray-3); user-select: none; }
+.hero-demo .m { color: var(--sl-color-gray-2); }
+.hero-demo .ok { color: var(--sl-color-accent-high); font-weight: 600; }
+:root[data-theme='light'] .hero-demo .k { color: #8b3fb0; }
+:root[data-theme='light'] .hero-demo .s { color: #a35a12; }
+
+/* Measured numbers under the hero */
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 1rem;
+}
+.stat-strip a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  background: var(--sl-color-bg-nav);
+  text-decoration: none;
+  color: var(--sl-color-gray-2);
+}
+.stat-strip a:hover {
+  border-color: var(--sl-color-accent-high);
+}
+.stat-strip strong {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-2xl);
+  color: var(--sl-color-white);
+  font-weight: 600;
+}
+.stat-strip span {
+  font-size: var(--sl-text-sm);
+  line-height: 1.4;
+}
+.stat-note {
+  margin-top: 0.5rem !important;
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+}

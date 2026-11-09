@@ -1,0 +1,47 @@
+---
+// Text links to the main entry points before the GitHub icon, so every page (the splash
+// homepage has no sidebar) can reach the docs, recipes and the A-Z list in one click.
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+
+const path = Astro.url.pathname;
+const links = [
+  { label: 'Docs', href: '/getting-started/', match: (p: string) => p.startsWith('/getting-started') },
+  { label: 'Recipes', href: '/patterns/', match: (p: string) => p.startsWith('/patterns') || p.startsWith('/workflows') },
+  { label: 'Reference', href: '/reference/', match: (p: string) => p === '/reference/' },
+  { label: 'Changelog', href: '/contributing/changelog/', match: (p: string) => p.startsWith('/contributing/changelog') },
+];
+---
+
+<nav class="top-links" aria-label="Top">
+  {
+    links.map((l) => (
+      <a href={l.href} aria-current={l.match(path) ? 'page' : undefined}>
+        {l.label}
+      </a>
+    ))
+  }
+</nav>
+<Default />
+
+<style>
+  .top-links {
+    display: flex;
+    gap: 1.25rem;
+    margin-inline-end: 0.75rem;
+    font-size: var(--sl-text-sm);
+  }
+  .top-links a {
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .top-links a:hover,
+  .top-links a[aria-current='page'] {
+    color: var(--sl-color-white);
+  }
+  @media (max-width: 72rem) {
+    .top-links a:last-child {
+      display: none;
+    }
+  }
+</style>
