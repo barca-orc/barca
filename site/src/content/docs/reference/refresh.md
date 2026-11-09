@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/refr
 
 <!-- Generated from crates/barca-cli/docs/refresh.md (barca docs refresh). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-A step that is cached is not run again ([`barca docs cache`](/reference/cache/), "At a glance"). This topic covers
+A step that is cached is not run again ([The Cache: At a glance](/reference/cache/#at-a-glance)). This topic covers
 forcing one to run anyway: `--refresh` and `--refresh-all`, what they do to what is downstream,
 refreshing selected partition keys, `Manual` upstreams, and `--dry-run`, which shows what a
 command would run without running it.
@@ -42,9 +42,9 @@ command would run without running it.
 - It does **not** reach assets outside the target's cone. When a refresh writes new bytes, a
   consumer that another target reads keeps its run hash and its old result, and `barca status`
   reports it `cached`: refresh again with a target below it, or name it in `--refresh`
-  ([`barca docs batched-partitions`](/reference/batched-partitions/), "When a consumer's keys are stale").
+  ([Batched Partitions: When a consumer's keys are stale](/reference/batched-partitions/#when-a-consumers-keys-are-stale)).
 - The cascade stops at an `@asset(cutoff=True)`: what reads it is decided by the bytes the
-  refresh wrote ([`barca docs external-data`](/reference/external-data/), "Early cutoff"). Same bytes, it stays cached and carries no warning; new
+  refresh wrote ([External Data and Early Cutoff: Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue)). Same bytes, it stays cached and carries no warning; new
   bytes, it runs as `not_materialized`. Name it in `--refresh`, or use `--refresh-all`, to
   recompute it anyway.
 - `--no-cascade` re-materializes **only** the assets you name. Run hashes cover definitions and
@@ -55,7 +55,7 @@ command would run without running it.
 - With `--partition`, only the selected keys of every partitioned node with that dimension are
   planned, upstream and downstream, so `--refresh` of any of them recomputes only those keys. A
   `collect()` fan-in over them is skipped, and naming it in `--refresh` is a usage error
-  ([`barca docs partitions`](/reference/partitions/), "Selecting keys").
+  ([Partitions: Selecting keys](/reference/partitions/#selecting-keys)).
 
 ### Refresh selected keys in a complete DAG
 
@@ -90,12 +90,12 @@ Python uses `refresh=["source[account=A]", "source[account=C]"]`; POST `/runs` u
 strings in its `refresh` array. Both use the CLI's cache engine.
 
 For external data that changes in place (a blob overwritten at the same path), the canonical
-answer is a sensor ([`barca docs external-data`](/reference/external-data/)). Without one, `--refresh`
+answer is a sensor ([External Data and Early Cutoff](/reference/external-data/)). Without one, `--refresh`
 the asset that reads it with a target downstream of everything built from it: what is built from
 it in that target's cone re-runs.
 
 Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
-consistent. To look at a cached result, use `barca sql` ([`barca docs sql`](/reference/sql/)).
+consistent. To look at a cached result, use `barca sql` ([barca sql](/reference/sql/)).
 
 ### A `Manual` upstream is read as it is
 
@@ -131,7 +131,7 @@ recompute it:
   (`--partition region=emea --refresh sales`) makes that key of what reads it stale.
 - A `Manual` asset runs in a phase of its own, before what reads it, as a sensor does.
 - On `barca serve`, `POST /runs` (what `--server` sends) and ticks read them as they are, as
-  `barca get` does ([`barca docs scheduling`](/scheduling/)); the older aliases `POST /get/{target}`,
+  `barca get` does ([Scheduling With Cron](/scheduling/)); the older aliases `POST /get/{target}`,
   `POST /run/{target}` and `POST /run` compute `Manual` upstreams as before.
 
 ## Seeing what will happen: `--dry-run`
@@ -163,18 +163,18 @@ Each step has an `action`:
 | `cached` | Served from the cache (`artifact` is the file). |
 | `run` | Will execute; `reason` says why (below). |
 | `partial` | A partitioned asset where some keys are cached; `partitions` lists the counts and the keys that will run. |
-| `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), or an asset reading an `@asset(cutoff=True)` that would run first (`reason: "cutoff_pending"`, [`barca docs external-data`](/reference/external-data/), "Early cutoff"), and anything that depends on any of them. |
+| `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), or an asset reading an `@asset(cutoff=True)` that would run first (`reason: "cutoff_pending"`, [External Data and Early Cutoff: Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue)), and anything that depends on any of them. |
 
 `reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
 `refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),
 `not_materialized` (no cached result for this code and these inputs: never run, or the code, an
 upstream or a sensor's output changed; when the step succeeded before, `changed` lists what
 differs from that success and `detail` reads `changed: code (+1 more)`, with the entries
-[`barca docs status`](/reference/status/) describes; for a partitioned step, those of its first key that runs),
+[barca status](/reference/status/) describes; for a partitioned step, those of its first key that runs),
 `artifact_missing` (the result is cached, but its
 artifact is gone and something needs to read it) or `evicted` (the same, because the cache size
 limit deleted it). A `cached` step of an asset pinned with `barca pin` has `reason` `pinned`
-([`barca docs pins`](/reference/pins/)). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
+([barca pin: Pinning and Rollback](/reference/pins/)). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
 `warning`. A step that reads a sensor is predicted from the sensor's last recorded output, and
 its `detail` says so. `summary` counts steps, one per partition key.
 
@@ -182,7 +182,7 @@ A dry run makes the same decisions a real run makes (it calls the same code), an
 checks that `will_run` equals the real run's `steps_executed` across cold, warm, `--refresh`,
 `--refresh --no-cascade` and `--refresh-all` runs.
 
-See also: [`barca docs cache`](/reference/cache/), [`barca docs partitions`](/reference/partitions/), [`barca docs status`](/reference/status/), [`barca docs hashing`](/reference/hashing/).
+See also: [The Cache](/reference/cache/), [Partitions](/reference/partitions/), [barca status](/reference/status/), [The Run Hash](/reference/hashing/).
 
 ---
 

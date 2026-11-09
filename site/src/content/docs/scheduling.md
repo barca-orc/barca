@@ -295,7 +295,7 @@ same report, or two targets that share an upstream, wait for each other's steps 
 computing them twice; the run that waited reports the step `cached`. Keys the runs do not have in
 common still run concurrently. Tasks, sensors and `parallel()` branches are never shared. If the
 run computing a step fails it or is cancelled, a waiting run computes it itself (from the start).
-Details: [`barca docs serve-ops`](/reference/serve-ops/), "Runs share the steps they have in common".
+Details: [Operating barca serve: Runs share the steps they have in common](/reference/serve-ops/#runs-share-the-steps-they-have-in-common).
 
 ## Heavy rebuilds beside a frequent job
 

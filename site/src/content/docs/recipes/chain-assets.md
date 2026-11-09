@@ -99,7 +99,7 @@ Results are files under `.barca/artifacts/<node>/<run_hash>.json` (or `.parquet`
   and runs it inside the caller every time the caller runs. Editing the called function still
   re-runs the caller, because functions a step uses are part of its hash.
 - **Every result is written to a file between steps.** Return data, not handles (an open
-  connection or a generator cannot be stored). Formats: [`barca docs types`](/reference/types/).
+  connection or a generator cannot be stored). Formats: [Output Formats and Types](/reference/types/).
 - **Do not edit an input in place.** A step receives its own copy of a cached value, with some
   gaps; see [Anti-Patterns](/recipes/anti-patterns/#mutating-asset-inputs-in-place).
 - A large parquet input is read whole unless its parameter is annotated as lazy:

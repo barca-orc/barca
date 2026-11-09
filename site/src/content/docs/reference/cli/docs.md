@@ -23,8 +23,8 @@ barca docs --fields name      # JSON index with only topic names (name, summary,
 barca docs cache --pretty     # markdown, the default even when piped
 ```
 
-[`barca docs skill`](/reference/agent-skill/) is the short [agent skill](/reference/agent-skill/) an AI agent loads once.
-[`barca docs contract`](/reference/cli-contract/) is the [CLI contract](/reference/cli-contract/). [`barca docs agents`](/reference/agents/)
+[Agent Skill](/reference/agent-skill/) is the short [agent skill](/reference/agent-skill/) an AI agent loads once.
+[CLI Contract](/reference/cli-contract/) is the [CLI contract](/reference/cli-contract/). [Scripts and AI Agents](/reference/agents/)
 describes the output contract for scripts and AI agents.
 
 ---

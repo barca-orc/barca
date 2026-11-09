@@ -29,13 +29,12 @@ tokens" below), or keep the server on a private network or behind an authenticat
 Sharing results between machines means one `barca serve` that everyone points at. **The server
 is the ledger**: it holds the one record of which results exist (run hashes, artifact paths, run
 history) and it is the only process that writes it. The artifact bytes stay in the store
-(`[remote]`, [`barca docs remote`](/reference/remote-storage/)); the server never moves them. Server mode is experimental
-([`barca docs contract`](/reference/cli-contract/)). To set it up in three steps, see
+(`[remote]`, [Remote Storage](/reference/remote-storage/)); the server never moves them. Server mode is experimental
+([CLI Contract](/reference/cli-contract/)). To set it up in three steps, see
 https://barca.sh/team-server/.
 
 Server mode remains experimental after 0.36.0. Runs of one server compute a matching asset step
-once, experimentally since 0.39.4 ([`barca docs serve-ops`](/reference/serve-ops/), "Runs share the steps they have in
-common"): cancelling the run that computes it makes the waiting run execute it again, the result
+once, experimentally since 0.39.4 ([Operating barca serve: Runs share the steps they have in common](/reference/serve-ops/#runs-share-the-steps-they-have-in-common)): cancelling the run that computes it makes the waiting run execute it again, the result
 reaches the waiting run before the computing run's row is durable, and a run that decided the step
 before another run finished it can execute it a second time. A stable designation
 also requires closing those gaps (#654), bounded cold/full-domain planning and
@@ -89,7 +88,7 @@ for one command. The URL is `http://` or `https://`, with any path prefix a prox
 (`https://host.example.com/barca`).
 
 The server is an ordinary `barca serve` of the project with the same `[remote]` and no
-`[server]` section ([`barca docs scheduling`](/scheduling/), "Calling the server").
+`[server]` section ([Scheduling With Cron](/scheduling/), "Calling the server").
 
 - A command that uses the configured server prints `[barca] server <url> (<where it came
   from>)` once on stderr. A URL typed after `--server` is not announced.
@@ -104,9 +103,9 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
   `sql` and `doctor`. `serve`, `plan`, `docs` and `version` always run on this machine;
   `--server` or `--local` on them is a usage error. `barca list` without `--server` reads this
   machine's files. `barca sql` always runs its query on this machine: a server only says which
-  results its views read ([`barca docs sql`](/reference/sql/), "With a server"); the server never runs SQL.
+  results its views read ([barca sql: With a server](/reference/sql/#with-a-server)); the server never runs SQL.
   `doctor` runs its checks here and, with a server (configured, or `--server`), checks the
-  server too; `--local` leaves it out ([`barca docs doctor`](/reference/doctor/), "Checking a server").
+  server too; `--local` leaves it out ([barca doctor: Local Debugging: Checking a server](/reference/doctor/#checking-a-server)).
 
 ## A local run against the server's ledger
 
@@ -155,23 +154,23 @@ it again, after which the refused post is accepted too.
 
 Only successful runs are posted. A run that failed keeps the steps that succeeded on this
 machine; they are computed again by the next machine that needs them. A run some of whose
-results could not be uploaded to the store (their upload is pending, [`barca docs remote`](/reference/remote-storage/)) is
+results could not be uploaded to the store (their upload is pending, [Remote Storage](/reference/remote-storage/)) is
 held: it prints `[barca] warning: run <id> is not recorded on the server <url> yet: some of its
 results are not in the artifact store yet ...`, and its post is kept `unsynced` (`barca status`
 shows its results `not_in_ledger`) without being sent, since the server would refuse it. The
 next command that opens the store uploads the pending results first and then posts the run
 (`[barca] recorded run <id> on the server ...`), before it decides its own steps, which are
 then hits; other machines get hits from then on. A pending result whose local file is gone is
-dropped ([`barca docs remote`](/reference/remote-storage/)) and taken out of the post, and the rest of the run is posted.
+dropped ([Remote Storage](/reference/remote-storage/)) and taken out of the post, and the rest of the run is posted.
 
-A server that is draining before it stops (SIGTERM, [`barca docs scheduling`](/scheduling/)) refuses posts with
+A server that is draining before it stops (SIGTERM, [Scheduling With Cron](/scheduling/)) refuses posts with
 `503`; the run stays `unsynced` here and the next command against the server sends it again.
 
 ### Backups
 
 The server backs up its database to the store; the machines that use it take no backups. What
 a restore on the server takes, and the client backups older barca versions left in the store,
-are in [`barca docs backup`](/reference/backup/), "With a server".
+are in [Metadata Backups: With a server](/reference/backup/#with-a-server).
 
 ### Two machines, same run hash, different bytes
 
@@ -192,7 +191,7 @@ With a server configured, `barca status`, `barca history`, `barca stats` and `ba
 from the server, as `--server` does, after printing `[barca] server <url> (<source>)`. The server
 answers for its deployed code. `barca logs` reads the server's runs (`GET /runs/{run_id}/logs`,
 and `-f` its event stream); the lines of a run this machine ran against the ledger stay here,
-with `--local` ([`barca docs logs`](/reference/logs/), "Debugging a live pipeline"). Nothing falls back to this
+with `--local` ([barca logs: Debugging a live pipeline](/reference/logs/#debugging-a-live-pipeline)). Nothing falls back to this
 machine, but `barca logs RUN_ID` for a run only this machine has fails (exit 2) with the
 remediation `this run is on this machine: barca logs RUN_ID --local`, and `barca logs` without a
 run id adds `[barca] note: this machine has a newer run <id> (...); barca logs --local reads it`
@@ -222,13 +221,13 @@ artifact, so its `local` is `false`.
 
 `barca sql` asks the server which result each view reads (`GET /sql/views`) and reads barca's
 tables (`barca.runs`, `barca.materializations`, `barca.nodes`) from its records, then runs the
-query here over the store; the server never runs SQL ([`barca docs sql`](/reference/sql/), "With a server"). An
+query here over the store; the server never runs SQL ([barca sql: With a server](/reference/sql/#with-a-server)). An
 unsynced result is not mixed into a view: the error or note says so and names `--local`.
 
 `barca status --problems` (or `--state <states>`) keeps the nodes that need attention, the
 server's failures, stale results and failing or paused schedules among them, plus this
 machine's `not_in_ledger` results; each scheduled node carries the server scheduler's view in
-`schedule` ([`barca docs status`](/reference/status/), "Schedules"). `barca doctor` checks the server itself.
+`schedule` ([barca status: Schedules](/reference/status/#schedules)). `barca doctor` checks the server itself.
 
 `barca history --reconcile` writes this machine's history and runs here. Add `--local` to see
 this machine's own runs, statuses and timings.
@@ -296,7 +295,7 @@ the server, as JSON (a table as a list of row objects).
 A draining server (one that is restarting) accepts a new `--server` run into its run queue;
 the client keeps following it: when the stream breaks it waits up to 60 seconds
 (`BARCA_SERVER_RECONNECT`) for the server to come back and follows the same run id there, and
-only then exits 3 ([`barca docs serve-ops`](/reference/serve-ops/), "Restarting without losing work"). On servers
+only then exits 3 ([Operating barca serve: Restarting without losing work](/reference/serve-ops/#restarting-without-losing-work)). On servers
 advertising event resume in `/health`, reconnects send the last successfully processed
 `Last-Event-ID`; older servers retain replay-count fallback. An attempt change resets live
 presentation while following the same run ID, without submitting another run.
@@ -468,7 +467,7 @@ durable status, steps and logs. Ungrouped list panels offer the same action.
 The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
 described at https://barca.sh/reference/server-api/.
 
-See also: [`barca docs scheduling`](/scheduling/), [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).
+See also: [Scheduling With Cron](/scheduling/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 
 ---
 

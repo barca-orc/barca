@@ -30,7 +30,7 @@ available topics for scripts and agents. Help and examples never load a project 
 | Run schedules, the web UI and the HTTP API | `barca serve` | [serve](/reference/cli/serve/) |
 | Free disk space under `.barca/` | `barca gc` | [gc](/reference/cli/gc/) |
 | Check the setup without running anything | `barca doctor` | [Doctor](/reference/doctor/) |
-| Read the manual in the terminal | [`barca docs cache`](/reference/cache/) | [docs](/reference/cli/docs/) |
+| Read the manual in the terminal | `barca docs cache` | [docs](/reference/cli/docs/) |
 
 `get`, `run`, `list`, `status`, `sql`, `history` and `stats` print JSON when their output is
 piped ([Output format](#output-format)).
@@ -84,7 +84,7 @@ you have installed.
 | [`queue`](/reference/cli/queue/) | `barca queue [pause\|resume] [--server [URL]] [--json]` | A server's run queue; pause or resume it (experimental) |
 | [`pause`](/reference/pausing/) | `barca pause [target] [--downstream] [--json]` | Stop scheduled ticks and requests from computing an asset (experimental) |
 | [`resume`](/reference/pausing/) | `barca resume [target] [--downstream \| --all] [--json]` | Let a paused asset be computed again (experimental) |
-| [`tokens`](/serve/#requiring-a-token-authentication-login) | `barca tokens bootstrap` | Print a one-use code to connect to a server with --auth token (experimental) |
+| [`tokens`](/reference/cli/tokens/) | `barca tokens bootstrap` | Print a one-use code to connect to a server with --auth token (experimental) |
 | [`list`](/reference/cli/list/) | `barca list [file.py\|dir/ ...] [--groups] [-l N \| --all] [--json]` | List discovered definitions and their deps |
 | [`status`](/reference/status/) | `barca status [target[,target...]] [file.py\|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]` | Cache state, last run and artifact shape per node |
 | [`sql`](/reference/sql/) | `barca sql "<query>" [file.py\|dir/ ...] [--json] [-l N \| --all]` | Query cached results with DuckDB (experimental) (install: uv add 'barca[sql]') |
@@ -98,7 +98,7 @@ you have installed.
 `get`, `run`, `status`, `list`, `history` and `stats` also take `--server [<url>]`, which runs
 the command on a `barca serve` and prints it here as the local command would, and `--local`,
 which ignores a configured server (experimental; [Server mode](/reference/config/#server-mode),
-[`barca docs server-mode`](/reference/server-mode/)). `sql` takes both too: a server resolves its views, and the query
+[Server Mode: a Shared Ledger and --server](/reference/server-mode/)). `sql` takes both too: a server resolves its views, and the query
 always runs here. `doctor` takes both too: `--server` checks that server beside this
 machine (a configured one is checked without it), `--local` checks this machine only.
 
@@ -140,13 +140,13 @@ errors always go to stderr; the progress bar (the only ANSI output) draws only w
 terminal, and `--agent` replaces it with plain progress lines.
 
 A library warning that a step's process repeats is printed once per run and then counted
-(`[barca] 79 more: ...`); see [`barca docs agents`](/reference/agents/), "Repeated warnings".
+(`[barca] 79 more: ...`); see [Scripts and AI Agents: Repeated warnings](/reference/agents/#repeated-warnings).
 
 `plan`, `get`, `run` and `--dry-run` also report plan-time warnings: one `[barca] warning: ...`
 line each on stderr, and a `warnings` array in their JSON output (`[]` when there are none).
 The one warning so far is `unused_input`: a step declares an input its function never uses,
 which is still loaded and still part of the cache key. Warnings do not change the exit code
-([`barca docs assets`](/reference/assets/), "Unused inputs"). A query receiver shadowed by a `match` capture
+([Assets, Sensors and Inputs: Unused inputs](/reference/assets/#unused-inputs). A query receiver shadowed by a `match` capture
 or nested function/class definition is treated conservatively, so dynamic SQL access does
 not cause a false unused-input warning.
 
@@ -346,7 +346,7 @@ barca logs --step report --stream stderr --timestamps   # after a failure: its l
 ```
 
 With a server configured (or `--server`), `barca logs` reads the server's runs, scheduled ones
-included; `--local` reads this machine's ([`barca docs logs`](/reference/logs/), "Debugging a live pipeline").
+included; `--local` reads this machine's ([barca logs: Debugging a live pipeline](/reference/logs/#debugging-a-live-pipeline).
 
 Task return values remain usable through `barca run --json`, `-o value`, and `barca.run(...)`.
 During get/run, non-JSON modes print stdout lines to stderr with `[node_id]` prefixes;

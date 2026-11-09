@@ -7,7 +7,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/tele
 <!-- Generated from crates/barca-cli/docs/telemetry.md (barca docs telemetry). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
 barca can report every step and every run to a telemetry backend, and post to Slack when a job
-starts failing or recovers ([`barca docs slack`](/reference/slack/); it has its own switch). Each backend is off
+starts failing or recovers ([Slack Alerts](/reference/slack/); it has its own switch). Each backend is off
 unless you switch it on. Datadog is switched on by name:
 
 ```bash
@@ -76,7 +76,7 @@ barca.run        get daily_revenue        one trace per run; error.message names
   `get daily_revenue,orders`; a run of everything in its files is `get pipeline.py`, and one
   with no file named `get all`. `publish` and `pipeline.py:publish` are the same resource. The
   target as typed stays in `barca.target`. A scheduled tick is one run with several targets, the
-  scheduled node and the `Always` nodes below it ([`barca docs scheduling`](/scheduling/)): its resource names
+  scheduled node and the `Always` nodes below it ([Scheduling With Cron](/scheduling/)): its resource names
   all of them (`get inbox,orders`), its `barca.job` is the scheduled node and its
   `barca.trigger` is `schedule`. It is sent when the run ends, after its steps.
 - **A run's traces share `barca.run_id`.** `@barca.run_id:0179afe0cb58` lists a run's steps
@@ -239,7 +239,7 @@ Limits:
 
 - What a step writes to its stderr is not barca's line and stays on stderr as it is: Python's
   `logging` writes there by default, and so does a traceback from a worker that died. It is
-  recorded with the run all the same (`barca logs <run_id> --stream stderr`, [`barca docs logs`](/reference/logs/)).
+  recorded with the run all the same (`barca logs <run_id> --stream stderr`, [barca logs](/reference/logs/)).
 - A notice from a worker process, such as `importing <file>`, is a JSON line without a run or
   a node.
 - `level` is read from the line, so a new kind of line may be filed at `info` until barca
@@ -303,7 +303,7 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
   its course, as 20,000 web requests would; Datadog's ingestion controls apply per `resource`.
 - The traceback of a chained exception (`raise ... from e`) does not include its cause.
 - A failed upload to a remote store is not in the trace: the step shows as succeeded, and
-  the upload is retried by the next command ([`barca docs remote`](/reference/remote-storage/)).
+  the upload is retried by the next command ([Remote Storage](/reference/remote-storage/)).
 - The run is reported before the history is backed up. A backup that then fails is not
   reflected in the trace.
 - Uploads to a remote store, and the time spent waiting for them, are not spans.
@@ -346,10 +346,10 @@ telemetry failures, with diagnostics that omit the address.
 ## Slack
 
 Posting to Slack when a job starts failing, recovers or is still failing a day later has its own
-switch, `BARCA_SLACK_WEBHOOK_URL`, and its own topic: [`barca docs slack`](/reference/slack/).
+switch, `BARCA_SLACK_WEBHOOK_URL`, and its own topic: [Slack Alerts](/reference/slack/).
 
-See also: [`barca docs scheduling`](/scheduling/), [`barca docs groups`](/reference/groups/), [`barca docs partitions`](/reference/partitions/),
-[`barca docs contract`](/reference/cli-contract/).
+See also: [Scheduling With Cron](/scheduling/), [Groups](/reference/groups/), [Partitions](/reference/partitions/),
+[CLI Contract](/reference/cli-contract/).
 
 ---
 

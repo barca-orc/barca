@@ -20,7 +20,7 @@ barca get total                              # results and a history backup go t
 
 Sharing state between machines means a server (RFC-0007), not a shared bucket. Up to 0.25,
 `optimistic` mode pulled a shared history from the bucket before each run and pushed it after;
-barca 0.26.0 removed it ([`barca docs backup`](/reference/backup/), "Upgrading from the shared history").
+barca 0.26.0 removed it ([Metadata Backups](/reference/backup/), "Upgrading from the shared history").
 
 ## Each cloud
 
@@ -92,8 +92,7 @@ endpoint, the credentials, and `BARCA_REMOTE=off` to run one command without the
 A warning that a storage library repeats on every operation (aiohttp's `Could not parse .netrc
 file` under adlfs, when `~/.netrc` is malformed) is printed once per run, then counted:
 `[barca] 79 more: Could not parse .netrc file`. This applies while logging is unconfigured; if
-the project configures logging, every record is printed. See [`barca docs agents`](/reference/agents/), "Repeated
-warnings".
+the project configures logging, every record is printed. See [Scripts and AI Agents: Repeated warnings](/reference/agents/#repeated-warnings).
 
 ## In barca.toml instead
 
@@ -140,7 +139,7 @@ not turn off a TOML remote root.
 <uri>/<env>/state/backups/<name>.json            what each backup holds (its sidecar)
 ```
 
-`<env>` is `default` unless you pass `--env` ([`barca docs cache`](/reference/cache/)). Barca reads and writes
+`<env>` is `default` unless you pass `--env` ([The Cache](/reference/cache/)). Barca reads and writes
 objects and reads their metadata. It lists the bucket before it recomputes a result whose
 artifact is missing (see "Failures") and when it lists or prunes backups, and it deletes only
 backups older than the five newest. In practice that is `s3:GetObject`, `s3:PutObject`,
@@ -155,7 +154,7 @@ ignored: never read, never deleted. Remove it yourself once you no longer need i
 With a store, the metadata database is backed up to it on a cadence and at run end, five copies
 rotating, and `barca state backups` / `barca state restore` list and put one back. The whole
 of it, including what a backup contains, the cadence settings and a server's backups, is
-[`barca docs backup`](/reference/backup/).
+[Metadata Backups](/reference/backup/).
 
 ## What happens during a run
 
@@ -171,13 +170,13 @@ of it, including what a backup contains, the cadence settings and a server's bac
   still recorded, and kept on this machine as a pending upload (see "When an upload fails
   after the steps succeeded"); every other row points at an object that is in the store.
 - The metadata DB is backed up on the minute checkpoint and at the end, unless the run
-  recorded no new result ([`barca docs backup`](/reference/backup/)).
+  recorded no new result ([Metadata Backups](/reference/backup/)).
 - Within 5 minutes of a successful startup check of the same store, a run that uploads and
   fetches nothing starts no transfer helper at all (next section).
 
 stderr reports each part, so remote cost is visible. The first line names the environment
 and the store, printed once at startup by `get`, `run` and `serve` whenever a store is
-configured ([`barca docs cache`](/reference/cache/), "Environments"):
+configured ([The Cache: Environments](/reference/cache/#environments)):
 
 ```
 [barca] env default (built-in default); artifact store s3://bucket/proj/default/artifacts
@@ -254,7 +253,7 @@ the store's object and the digest recorded with the result all agree. It asks th
 every such node with one `python -m barca._state stat`. Anything else is `unsynced`, with the
 reason in `cache.reason` (WHY in the table): `local_only`, `store_only` or `mismatch`. The
 states and reasons, what each means and what `get` does about it are owned by
-[`barca docs status`](/reference/status/), "Cache state"; the repair of a `mismatch` is "Checking a local copy against
+[barca status: Cache state](/reference/status/#cache-state); the repair of a `mismatch` is "Checking a local copy against
 the store" below. A result in neither place is `stale` with reason `artifact_missing`. A store
 that cannot be asked leaves the states as they are, with a note in `cache.detail`.
 
@@ -280,7 +279,7 @@ not their whole upstream cone.
 
 A result produced on this machine is already on disk, and steps read that file. For a cache hit
 whose file is only in the store, the input's annotation decides how many bytes move
-([`barca docs types`](/reference/types/)):
+([Output Formats and Types](/reference/types/)):
 
 - A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
   only the byte ranges the step's query touches are fetched, and nothing is downloaded. A query
@@ -291,8 +290,7 @@ whose file is only in the store, the input's annotation decides how many bytes m
   the ranges no earlier read fetched. The directory is keyed by the result's run hash and the
   store object's version (its ETag or generation, size and modified time), so a rewritten
   object is never served from the old one's ranges. The cache size limit counts these
-  directories and evicts them first, least recently used first ([`barca docs cache`](/reference/cache/), "Disk
-  use"); a range that is gone is fetched again.
+  directories and evicts them first, least recently used first ([The Cache: Disk use](/reference/cache/#disk-use)); a range that is gone is fetched again.
 - Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
   pickle) is downloaded once into `.barca/artifacts/` and read from there by this run and
   later ones.
@@ -324,7 +322,7 @@ metadata DB. Barca uses that hash to decide whether a local copy is current:
   bytes, the record names the old ones, and the next `get` that returns or reads the result
   records the new ones. `--refresh <file.py:name>` recomputes the step instead, uploads the new
   bytes over the object and records their hash. With a server, its ledger keeps its record
-  ([`barca docs server-mode`](/reference/server-mode/)).
+  ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)).
 
 The JSON result carries the same finding, so a script or agent does not have to read stderr:
 
@@ -340,7 +338,7 @@ barca get total --json --fields id,status,artifact_mismatch
 `steps[].artifact_mismatch` is `true` on the step the artifact belongs to and on every step that
 read it as an input in this run; on every other step the key is absent. `steps[].warning` has
 the text. It is reported per step and not in the top-level `warnings` array, which holds plan
-warnings only ([`barca docs contract`](/reference/cli-contract/)).
+warnings only ([CLI Contract](/reference/cli-contract/)).
 
 A mismatch and a missing object are different findings and never stand in for each other: a
 copy with other bytes is used and flagged, as above; an object that is not in the store at all
@@ -444,8 +442,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Cached artifact missing from the store** (the object was deleted, and there is no copy in
   `.barca/artifacts/` either): if something needs to read it, its step is computed again and
   uploaded, with `reason: "artifact_missing"` and a warning on stderr; the run does not fail.
-  If nothing reads it, it stays cached and is not recomputed ([`barca docs cache`](/reference/cache/), "A cached
-  result whose artifact is missing"). A local copy is enough: a store that is unavailable does
+  If nothing reads it, it stays cached and is not recomputed ([Run Reports and Missing Artifacts: A cached result whose artifact is missing](/reference/artifacts/#a-cached-result-whose-artifact-is-missing)). A local copy is enough: a store that is unavailable does
   not lose a cache hit whose file is in `.barca/artifacts/`.
 - **The store itself is gone** (the bucket or container was deleted, its name is misspelled,
   the directory is not mounted, or the endpoint answers "not found" to everything): every
@@ -473,8 +470,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   legitimately take longer than 10 minutes to move.
 
 - **A directory where a local copy belongs**: not a store problem and not an error. The store's
-  copy is fetched and the directory is moved aside, never deleted ([`barca docs cache`](/reference/cache/), "A
-  directory at an artifact's path"). If barca may not rename it (no write permission on the
+  copy is fetched and the directory is moved aside, never deleted ([Run Reports and Missing Artifacts: A directory at an artifact's path](/reference/artifacts/#a-directory-at-an-artifacts-path)). If barca may not rename it (no write permission on the
   directory that holds it), the run exits 3 and says so, naming the path.
 - **A directory at an object's path in the store** (a store that is a shared directory): barca
   changes nothing in a store but its own objects, so the transfer fails with
@@ -485,7 +481,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   the same directory.
 
 `.barca/artifacts/` doubles as a local cache of the store, bounded by the cache size limit
-(`[cache] max_size`, default 10% of the filesystem; [`barca docs disk`](/reference/disk/)). Past the
+(`[cache] max_size`, default 10% of the filesystem; [Disk Use](/reference/disk/)). Past the
 limit, local copies of results the store holds are evicted before any result that would have to
 be computed again, and are downloaded again when something reads them. Deleting the directory by
 hand is safe too (anything needed later is downloaded again, or computed again if it is no
@@ -508,8 +504,8 @@ barca sql "select * from total"          # downloads `total` into .barca/sql-cac
 
 `barca status` reads a parquet footer by ranged requests and downloads json or pickle results of
 up to 16 MB; a store it cannot read is a `note` on each shape, not a failed command
-([`barca docs status`](/reference/status/)). `barca sql` downloads the artifacts of the views a query names and reuses
-the copies while the objects are unchanged ([`barca docs sql`](/reference/sql/)).
+([barca status](/reference/status/)). `barca sql` downloads the artifacts of the views a query names and reuses
+the copies while the objects are unchanged ([barca sql](/reference/sql/)).
 
 ## Sharing a result: signed URLs
 
@@ -591,7 +587,7 @@ resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
 ## Limitations
 
 - Backups are this machine's: two machines on one store without a server interleave them, with
-  a warning ([`barca docs backup`](/reference/backup/)). Sharing state means a server (RFC-0007). A machine is
+  a warning ([Metadata Backups](/reference/backup/)). Sharing state means a server (RFC-0007). A machine is
   its host name and project directory: a container whose host name changes at every start is a
   new machine each time.
 - Retention is fixed at five backups in each place. A backup is a whole copy of the database,
@@ -604,16 +600,16 @@ resolve the broader cold/per-key planning and inspection gaps (#655 and #656).
   (see "How often the store is checked").
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
-- `.barca/artifacts/` is subject to the project cache budget ([`barca docs cache`](/reference/cache/)). Recognized
+- `.barca/artifacts/` is subject to the project cache budget ([The Cache](/reference/cache/)). Recognized
   local metadata backups are reported outside that budget and retained by their five-copy
   rotation. Physical totals and filesystem free space still include them.
 
 ## Diagnose configuration
 
 Run `barca doctor --pretty` before a run to check configured stores and credential identity.
-See [`barca docs doctor`](/reference/doctor/) for check limits and a copyable local-only debugging profile.
+See [barca doctor: Local Debugging](/reference/doctor/) for check limits and a copyable local-only debugging profile.
 
-See also: [`barca docs backup`](/reference/backup/), [`barca docs cache`](/reference/cache/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs doctor`](/reference/doctor/).
+See also: [Metadata Backups](/reference/backup/), [The Cache](/reference/cache/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [barca doctor: Local Debugging](/reference/doctor/).
 
 ---
 

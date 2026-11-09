@@ -190,7 +190,7 @@ Of these arguments, `inputs`, `serializer` and the dimension names in `partition
 the run hash, with stacked `@sink` decorators and any decorator that is not barca's: changing
 one runs the asset again. `name`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`,
 `weight`, `deterministic`, `cutoff`, `description`, `tags` and the partition keys are not, and neither is the formatting of the
-decorator: editing them re-runs nothing. [`barca docs cache`](/reference/cache/) has the full list with the reason
+decorator: editing them re-runs nothing. [The Run Hash](/reference/hashing/#which-decorator-arguments-count) has the full list with the reason
 for each (from 0.19; up to 0.18 any edit to the decorator re-ran the asset).
 
 `env` declares the environment variables the function reads. See
@@ -257,7 +257,7 @@ writer; they are read from the source, so use the conventional names.
 Every result is written in full to an artifact file when the step ends; nothing lazy is passed
 between steps. A `pl.LazyFrame` or `duckdb.DuckDBPyRelation` input reads nothing up front, and
 the step's query decides which columns and row groups are read. See
-[Large inputs](/recipes/large-inputs/) and [`barca docs types`](/reference/types/).
+[Large inputs](/recipes/large-inputs/) and [Output Formats and Types](/reference/types/).
 
 ### Declared environment variables (`env=`)
 
@@ -303,7 +303,7 @@ Barca finds such reads statically, in the function and in the project helpers it
 fields), and prints one warning line for the command before anything runs: how many steps
 read undeclared variables, and up to five of their names. The JSON result lists them per step as `undeclared_env` (also in `--dry-run` and
 `barca status --json`, experimental), and the `warnings` array has one `undeclared_env` item per
-variable. [`barca docs cache`](/reference/cache/), "Environment variables", has the exact rules.
+variable. [The Cache: Environment variables](/reference/cache/#environment-variables), has the exact rules.
 
 ### Heavy steps (`weight=`)
 
@@ -391,7 +391,7 @@ def billed(customer: str, rates: dict) -> dict:
 - On `@asset` only. A nondeterministic asset writes new bytes every rerun, so cutoff saves
   nothing on it.
 
-[`barca docs cache`](/reference/cache/) ("Early cutoff") has the details: what is hashed, parquet and library
+[External Data and Early Cutoff: Early cutoff](/reference/external-data/#early-cutoff-assetcutofftrue) has the details: what is hashed, parquet and library
 versions, server mode, sinks, and why it is opt-in.
 
 ## Partitions
@@ -513,7 +513,7 @@ Up to 0.11 this passed the list without an error.
 - `barca status` shows a partitioned asset as one node with `partitions: {total, cached,
   missing, missing_keys}`.
 
-See [`barca docs partitions`](/reference/partitions/).
+See [Partitions](/reference/partitions/).
 
 ## asset_ref
 
@@ -621,7 +621,7 @@ select * from read_parquet('s3://bucket/exports/scored/**/*.parquet', hive_parti
 - `partition_by=` and `rows_per_file=` on a file sink (no trailing `/`) are a usage error,
   exit 2.
 
-[`barca docs sinks`](/reference/sinks/) has the details and how to choose partition columns.
+[Sinks](/reference/sinks/) has the details and how to choose partition columns.
 
 ## @sensor
 
@@ -694,7 +694,7 @@ changes they are recomputed or fired in that run. `@sensor(freshness=Always)` is
 without an error.
 
 See [Sensors and External Observations](/examples/sensors/) for
-a walk-through, and [`barca docs assets`](/reference/assets/) ("Sensors").
+a walk-through, and [Assets, Sensors and Inputs: Sensors](/reference/assets/#sensors).
 
 ## @task
 
@@ -840,10 +840,10 @@ seconds field. There is no year field. See [Scheduling](/scheduling/) for what a
 
 | Name | What it is |
 |---|---|
-| `duckdb_connection()` | The DuckDB connection barca binds `duckdb.DuckDBPyRelation` inputs to, one per worker process. Configure it at import time of your module. See [`barca docs types`](/reference/types/). |
+| `duckdb_connection()` | The DuckDB connection barca binds `duckdb.DuckDBPyRelation` inputs to, one per worker process. Configure it at import time of your module. See [Output Formats and Types](/reference/types/). |
 | `ParallelError` | What `parallel()` returns in place of a branch that raised. |
 | `BranchResultError` | Raised by `parallel()` when a branch returned a value that cannot be passed back to the caller. |
-| `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See [`barca docs agents`](/reference/agents/), "Getting values, not pointers". |
+| `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See [Scripts and AI Agents: Getting values, not pointers](/reference/agents/#getting-values-not-pointers). |
 | `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`, `phase`. |
 | `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |
 | `sql()` | Query cached results with DuckDB from Python, as `barca sql` does. See [SQL](/reference/sql/). |

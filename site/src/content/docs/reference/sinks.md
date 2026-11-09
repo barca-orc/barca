@@ -31,21 +31,21 @@ def summary() -> dict:
   matching extra (`pip install "barca[s3]"`, `[azure]`, `[gcs]`, or `[remote]`).
 - The format comes from `serializer=` (`json`, `pickle`, `parquet`, `csv`), else the path extension
   (`.json`, `.pkl`/`.pickle`, `.parquet`, `.csv`), else the parent asset's artifact format.
-- A CSV sink writes a header with no pandas index. CSV readers infer types; see [`barca docs types`](/reference/types/).
+- A CSV sink writes a header with no pandas index. CSV readers infer types; see [Output Formats and Types](/reference/types/).
 - A parquet or CSV sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
   failure: barca never writes pickle bytes under a `.parquet` or `.csv` name.
 - Several `@sink` decorators may be stacked on one asset.
 - A sink is written when its asset runs. Adding a `@sink` or editing one (its path or
   `serializer=`) changes the asset's run hash, so the next run executes the asset and writes
-  the sink ([`barca docs cache`](/reference/cache/)). A cache hit writes a sink only when the sink holds another run
+  the sink ([The Cache](/reference/cache/)). A cache hit writes a sink only when the sink holds another run
   hash's output ("Cache hits" below).
-- What `@sink` takes is in the table in [`barca docs assets`](/reference/assets/), "Accepted arguments". A path
+- What `@sink` takes is in the table in [Assets, Sensors and Inputs: Accepted arguments](/reference/assets/#accepted-arguments). A path
   passed as `path=`, no path, a second positional argument (`@sink("out.txt", "json")`) or any
   other keyword is an error when the file is read, exit 2. Up to 0.18.1 `@sink(path=...)`
   declared no sink and `@sink("out.txt", "json")` ignored the format.
 - The path is a string literal, read from the source. A constant, an f-string or a
   concatenation (`@sink(EXPORT_PATH)`, `@sink(f"exports/{name}.parquet")`) is an error when the
-  file is read, exit 2 ([`barca docs assets`](/reference/assets/), "Values barca reads"). Up to 0.33.1 such a sink was
+  file is read, exit 2 ([Assets, Sensors and Inputs: Values barca reads](/reference/assets/#values-barca-reads)). Up to 0.33.1 such a sink was
   dropped without a message and never written.
 - Writes are staged and finalized atomically, so a crash never leaves a partial file.
 - A sink path is yours: barca writes the file there and changes nothing else. If the path is a
@@ -54,7 +54,7 @@ def summary() -> dict:
 - Sinks are leaf nodes: no other node may take a sink as an input.
 - **A sink that fails fails its step**, for every sink: the step's error is a `SinkError`
   naming each sink that failed (`SinkError: sink ./exports/out.parquet: ValueError: ...`), the
-  run exits 1 with a `step_failed` envelope ([`barca docs contract`](/reference/cli-contract/)), and the step is not
+  run exits 1 with a `step_failed` envelope ([CLI Contract](/reference/cli-contract/)), and the step is not
   recorded, so the next run tries it again. Every sink of the step is still attempted. Up to
   0.29 a failed sink only printed `[barca] SINK FAILED: ...` on stderr and the asset succeeded.
 - For partitioned assets each partition writes its own file with the key inserted before the
@@ -218,7 +218,7 @@ only that directory; a column nobody filters on only adds directories.
   floats and timestamps make awkward, lossy names. A null becomes
   `__HIVE_DEFAULT_PARTITION__`.
 
-See also: [`barca docs types`](/reference/types/), [`barca docs partitions`](/reference/partitions/).
+See also: [Output Formats and Types](/reference/types/), [Partitions](/reference/partitions/).
 
 ---
 

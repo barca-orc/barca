@@ -438,7 +438,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Cached artifact missing from the store** (the object was deleted, and there is no copy in
   `.barca/artifacts/` either): if something needs to read it, its step is computed again and
   uploaded, with `reason: "artifact_missing"` and a warning on stderr; the run does not fail.
-  If nothing reads it, it stays cached and is not recomputed (`barca docs cache`, "A cached
+  If nothing reads it, it stays cached and is not recomputed (`barca docs artifacts`, "A cached
   result whose artifact is missing"). A local copy is enough: a store that is unavailable does
   not lose a cache hit whose file is in `.barca/artifacts/`.
 - **The store itself is gone** (the bucket or container was deleted, its name is misspelled,
@@ -467,7 +467,7 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   legitimately take longer than 10 minutes to move.
 
 - **A directory where a local copy belongs**: not a store problem and not an error. The store's
-  copy is fetched and the directory is moved aside, never deleted (`barca docs cache`, "A
+  copy is fetched and the directory is moved aside, never deleted (`barca docs artifacts`, "A
   directory at an artifact's path"). If barca may not rename it (no write permission on the
   directory that holds it), the run exits 3 and says so, naming the path.
 - **A directory at an object's path in the store** (a store that is a shared directory): barca

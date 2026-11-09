@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/hash
 
 <!-- Generated from crates/barca-cli/docs/hashing.md (barca docs hashing). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
 
-A step runs again when its run hash changes ([`barca docs cache`](/reference/cache/), "At a glance"). This topic is the
+A step runs again when its run hash changes ([The Cache: At a glance](/reference/cache/#at-a-glance)). This topic is the
 full rule for the part of that hash that comes from code. In short:
 
 - **The function and the project code it uses.** The function as written, and every module-level
@@ -62,7 +62,7 @@ re-run, never a stale result.
 | `inputs=` | yes | decides which upstream feeds which parameter |
 | `serializer=` | yes | changes the bytes that are stored |
 | `partitions=` | the shape, not the keys | the dimension names and a `partitions_from` source decide how the function is called; the keys do not count, because each key is part of its own run hash |
-| `@sink(...)` | yes | a cached step writes a sink only when it holds another run hash's output ([`barca docs sinks`](/reference/sinks/)), so a new or edited sink has to run the asset to be written |
+| `@sink(...)` | yes | a cached step writes a sink only when it holds another run hash's output ([Sinks](/reference/sinks/)), so a new or edited sink has to run the asset to be written |
 | any other decorator | yes | it wraps the function and can change what it returns |
 | any other argument | yes | conservative fallback for unvalidated calls; recognized barca calls reject it |
 | `env=` | no | the declared names and their values are already part of the run hash |
@@ -83,7 +83,7 @@ The same list applies to `@asset`, `@sensor` and `@task`; a test checks every `(
 argument)` pair against it. "Any other decorator" is one that is not barca's:
 `@functools.cache`, a wrapper of your own. "Any other argument" is a keyword barca does not
 define, a positional argument, or `**options`, in a call barca cannot positively identify from
-its imports; a call barca does identify rejects these at plan time ([`barca docs assets`](/reference/assets/),
+its imports; a call barca does identify rejects these at plan time ([Assets, Sensors and Inputs](/reference/assets/),
 "Accepted arguments").
 
 What this means in practice:
@@ -97,7 +97,7 @@ def sales(region: str) -> dict:
 - Add `"apac"` to the list: only `sales[region=apac]` runs. Remove a key or reorder the list:
   nothing runs. This holds however the keys are written: a literal list, a module-level
   constant, a comprehension, a function call, or `partitions_from`
-  ([`barca docs partitions`](/reference/partitions/)).
+  ([Partitions](/reference/partitions/)).
 - Edit the description, add `tags=` or `retries=`, change `freshness=`: nothing runs.
 - Change `serializer=`, add or edit a `@sink`, change which upstream an `inputs=` entry names,
   rename the partition dimension, or put another decorator on the function: the step runs
@@ -140,7 +140,7 @@ Known limits:
   (`partitions(REGIONS)` and `REGIONS` in the body) re-runs every key when the constant is
   edited: the body's use puts the constant in the cone.
 - A sink is written when its asset runs, and by a cache hit whose run hash differs from the one
-  the sink last published ([`barca docs sinks`](/reference/sinks/), "Cache hits"). Removing a `@sink` also re-runs
+  the sink last published ([Sinks: Cache hits](/reference/sinks/#cache-hits)). Removing a `@sink` also re-runs
   the asset once, although nothing new has to be written.
 
 ## Which file a module name means
@@ -167,7 +167,7 @@ Use the root-relative module name: `from b.shared import f` for `b/shared.py`, n
 import f` in the hope that another pipeline made it importable. Conflicting project imports are
 rejected before user code runs: if two pipeline directories each have `helpers.py`, qualify the
 imports (`from east.helpers import value`, `from west.helpers import value`) so hashing and
-workers pick the same files ([`barca docs discovery`](/reference/discovery/), "Node ids"). Literal imports in inactive
+workers pick the same files ([Discovery: Node ids](/reference/discovery/#node-ids)). Literal imports in inactive
 branches and unused functions may conservatively require qualification. Unambiguous sibling
 helpers keep ordinary Python lookup.
 
@@ -195,7 +195,7 @@ these names keep their selective cones. The exact rules are in `specs/behavior/c
 ## Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`
-([`barca docs refresh`](/reference/refresh/), "Forcing a recompute"):
+([Forcing a Recompute: Forcing a recompute](/reference/refresh/#forcing-a-recompute)):
 
 - installed packages and the standard library: after upgrading a package, recompute;
 - modules outside the project root (`../shared/`), and modules only a custom `sys.path` or
@@ -206,7 +206,7 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - names defined dynamically through runtime namespace mutation, and changes to the import path
   made by your code;
 - data your function reads that is not an input: a file, a table, an API. Bring it in through a
-  sensor ([`barca docs external-data`](/reference/external-data/), "External data that changes in place").
+  sensor ([External Data and Early Cutoff: External data that changes in place](/reference/external-data/#external-data-that-changes-in-place)).
 
 ## A helper module that does not parse
 
@@ -235,7 +235,7 @@ The pipeline file can be named any way on the command line: `barca get rows pipe
 directory all compute the same run hash and the same node id, relative to the project root
 (`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
 
-See also: [`barca docs cache`](/reference/cache/), [`barca docs assets`](/reference/assets/), [`barca docs discovery`](/reference/discovery/).
+See also: [The Cache](/reference/cache/), [Assets, Sensors and Inputs](/reference/assets/), [Discovery](/reference/discovery/).
 
 ---
 

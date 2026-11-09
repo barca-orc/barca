@@ -10,7 +10,7 @@ A running server accepts runs into a durable queue, drains when told to stop and
 queue when it starts again. This topic is for the person who deploys and restarts it: the run
 queue and `barca queue`, what each signal does and the exit code it ends with, the stop grace a
 supervisor must allow, memory limits in containers, a capacity shared by every run, and the run
-timeout. What a schedule does is [`barca docs scheduling`](/scheduling/).
+timeout. What a schedule does is [Scheduling With Cron](/scheduling/).
 
 ## The run queue
 
@@ -149,7 +149,7 @@ to finish (`--drain-timeout`), or cancel it with a second signal when a repeat w
 than no run.
 
 SIGHUP and SIGQUIT are not handled. Outside a container they end the process at once, and a run
-in flight is then reported as `interrupted` ([`barca docs cache`](/reference/cache/)); `nohup barca serve` keeps
+in flight is then reported as `interrupted` ([The Cache](/reference/cache/)); `nohup barca serve` keeps
 ignoring SIGHUP. A process that is process 1 of a container never receives them. SIGKILL cannot
 be handled by any program: the queued runs survive it, the runs in flight are interrupted.
 
@@ -229,7 +229,7 @@ the kernel kills one, and the step fails with
 `worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)`. The same step
 succeeds alone.
 
-Give the heavy steps a `weight=` (experimental, [`barca docs assets`](/reference/assets/), "Heavy steps"): the steps
+Give the heavy steps a `weight=` (experimental, [Assets, Sensors and Inputs: Heavy steps](/reference/assets/#heavy-steps-weight)): the steps
 running at once add up to at most the capacity, the pool size unless `[execution] capacity` in
 barca.toml or `BARCA_CAPACITY` sets it. With
 
@@ -331,8 +331,8 @@ outcome: `run timed out after 240s (Schedule(timeout_seconds=) of sync)`, naming
 that applied. Before 0.31.0 every run under `barca serve` stopped at 600 seconds, a limit that was
 not configurable; `--run-timeout 600` restores it.
 
-See also: [`barca docs scheduling`](/scheduling/), [`barca docs server-mode`](/reference/server-mode/), [`barca docs telemetry`](/reference/telemetry/),
-[`barca docs contract`](/reference/cli-contract/).
+See also: [Scheduling With Cron](/scheduling/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [Telemetry (Datadog)](/reference/telemetry/),
+[CLI Contract](/reference/cli-contract/).
 
 ---
 

@@ -59,7 +59,7 @@ barca get summary,orders pipeline.py --dry-run                     # preview the
 
 A failed target is `{"status": "failed", "failed_node": "pipeline.py:...", "error": "..."}`.
 `--dry-run` with several targets reports `targets` in place of `target`, each with a `summary`
-counted over that target's cone. The full shapes are in [`barca docs agents`](/reference/agents/).
+counted over that target's cone. The full shapes are in [Scripts and AI Agents](/reference/agents/).
 
 ---
 

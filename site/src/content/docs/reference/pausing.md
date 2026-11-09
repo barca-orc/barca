@@ -60,7 +60,7 @@ back every queued run); the web UI's asset panel offers all three in one place.
 - `--downstream` pauses the nodes below the target when the pause is made. A node added below it
   later is not paused.
 
-See also: [`barca docs serve-ops`](/reference/serve-ops/) (the run queue), [`barca docs scheduling`](/scheduling/) (schedules and their pause), [`barca docs server-mode`](/reference/server-mode/).
+See also: [Operating barca serve](/reference/serve-ops/) (the run queue), [Scheduling With Cron](/scheduling/) (schedules and their pause), [Server Mode: a Shared Ledger and --server](/reference/server-mode/).
 
 ---
 

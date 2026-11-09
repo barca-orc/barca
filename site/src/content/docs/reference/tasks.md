@@ -41,9 +41,8 @@ def notify(_migrate) -> None:
 - An `inputs` key starting with `_` means "run after, but do not load the data": the
   parameter receives `None` and no artifact is deserialized.
 - `@task(freshness=Schedule("<cron>"))` runs on a timer under `barca serve`.
-- `@task` takes the same arguments as `@asset`; the table is in [`barca docs assets`](/reference/assets/), "Accepted
-  arguments". `partitions=` runs the task once per key, with the key passed as the parameter
-  named in the dict ([`barca docs partitions`](/reference/partitions/)). `serializer=` forces the format its return value
+- `@task` takes the same arguments as `@asset`; the table is in [Assets, Sensors and Inputs: Accepted arguments](/reference/assets/#accepted-arguments). `partitions=` runs the task once per key, with the key passed as the parameter
+  named in the dict ([Partitions](/reference/partitions/)). `serializer=` forces the format its return value
   is stored in. Any other argument (`when=`, `after=`, a misspelt `input=`) is an error when
   the file is read, exit 2.
 
@@ -68,7 +67,7 @@ A partitioned task returns a dict keyed by partition key in `final_output` and f
 `barca.run(...)`, including when `--partition` selects one key. Each value is that key's
 result; tables are JSON rows. A task returning `None` produces a null value for each key.
 This applies with and without `batch=`. More than 1000 keys use the bounded partition summary
-unless `--partition` selects the keys ([`barca docs partitions`](/reference/partitions/), "Many keys").
+unless `--partition` selects the keys ([Partitions: Many keys](/reference/partitions/#many-keys)).
 
 ## Several tasks in one run
 
@@ -156,7 +155,7 @@ barca run check_all pipeline.py
 
 **What a branch may return.** Anything a step may return. The branch's worker writes the value
 as an artifact, in the format barca picks for any step output (json, pickle or parquet by type:
-[`barca docs types`](/reference/types/)), and the caller reads it back:
+[Output Formats and Types](/reference/types/)), and the caller reads it back:
 
 - A set, a `date` or `datetime`, a `Decimal`, `bytes`, a dataclass or an object of your own
   class, a numpy array, and containers of these (the dict above) come back equal and of the
@@ -202,7 +201,7 @@ happen on every run belongs in a task.
   `ParallelError` holding a `TimeoutError`. The calling step's own `timeout_seconds` keeps
   counting while it waits for its branches.
 - Each branch takes the `weight=` of the step that called `parallel()` (experimental,
-  [`barca docs assets`](/reference/assets/), "Heavy steps"): with `@task(weight=2)` and a capacity of 4, two branches
+  [Assets, Sensors and Inputs: Heavy steps](/reference/assets/#heavy-steps-weight)): with `@task(weight=2)` and a capacity of 4, two branches
   run at a time. The calling step is not counted while it waits for its branches.
 - What a branch returns belongs to the run and is not a cached artifact. Every result,
   including small JSON values, is a file,
@@ -221,7 +220,7 @@ A task (or asset) that raises, or calls `sys.exit()` with any code, fails the ru
 the traceback on stderr and exits 1, and nothing downstream runs. To fail on purpose, for example
 on a validation error, raise an exception. A `parallel()` branch that raises fails the run only
 if the calling step raises; a branch whose return value cannot be passed back fails the calling
-step (see above). Exit codes: [`barca docs agents`](/reference/agents/).
+step (see above). Exit codes: [Scripts and AI Agents](/reference/agents/).
 
 Parallel branch results, including small JSON values, are always passed as file references.
 Protocol v3 batches result metadata into columnar arrays and uses transient metadata receipts
@@ -232,7 +231,7 @@ before execution; reinstall matching barca packages if a protocol mismatch is re
 
 A task follows the same output rules as an asset. A returned dict appears in `final_output`
 under `barca run --json`, under `-o value`, and from `barca.run(...)`. The CLI still uses
-artifact references for binary/tabular formats ([`barca docs types`](/reference/types/)); the Python API reads
+artifact references for binary/tabular formats ([Output Formats and Types](/reference/types/)); the Python API reads
 those references. Captured stdout is stored
 separately. Human/value modes show each print on stderr as `[pipeline.py:report] text`;
 `--agent` progress keeps its `[barca]` prefix. JSON output suppresses captured prints.
@@ -240,9 +239,9 @@ Use `barca logs RUN_ID --pretty` for only the recorded lines, or `--json` for
 `[{node_id, stream, ts, line}]`. What a task writes to `sys.stderr` (`logging`, warnings) is
 recorded too, as `stream: "stderr"`, and so is the traceback of a failed attempt. Complete
 lines and trailing partial lines flushed on return/failure are recorded. `--step report` selects a function name; exact node ids disambiguate.
-See [`barca docs logs`](/reference/logs/) for the full contract.
+See [barca logs](/reference/logs/) for the full contract.
 
-See also: [`barca docs cache`](/reference/cache/), `barca docs examples/deploy-task`, [`barca docs logs`](/reference/logs/).
+See also: [The Cache](/reference/cache/), `barca docs examples/deploy-task`, [barca logs](/reference/logs/).
 
 ---
 

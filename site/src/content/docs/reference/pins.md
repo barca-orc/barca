@@ -76,7 +76,7 @@ its duration and size, the run id, and whether it is the latest, the pinned one,
 
 Pinning a pinned asset replaces its pin. A version whose artifact is no longer on disk cannot be
 pinned. The pin records when, and who: `user@host` for the CLI, `token:<name>` for a server
-request made with a project token ([`barca docs server-mode`](/reference/server-mode/)), nothing otherwise.
+request made with a project token ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)), nothing otherwise.
 
 ## Pinning to data you supply
 
@@ -141,8 +141,8 @@ configured server) act on the server's database.
 - An uploaded file is written to the local artifact directory of the machine that pins (the
   server's, for `--server` and the UI); with a remote store it is not copied to the store.
 
-See also: [`barca docs cache`](/reference/cache/) (run hashes and artifacts), [`barca docs disk`](/reference/disk/) (what eviction keeps),
-[`barca docs server-mode`](/reference/server-mode/).
+See also: [The Cache](/reference/cache/) (run hashes and artifacts), [Disk Use](/reference/disk/) (what eviction keeps),
+[Server Mode: a Shared Ledger and --server](/reference/server-mode/).
 
 ---
 

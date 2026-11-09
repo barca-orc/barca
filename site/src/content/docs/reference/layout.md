@@ -25,13 +25,13 @@ files `state restore` and `state reset` move aside, a batched call's `.batch-*` 
 owns it, when it is removed and whether `barca gc` evicts it or the size budget counts it, is the
 table in `specs/interfaces/dot-barca-layout.md`, the one owner of the layout; the site's
 configuration page points there too. Delete nothing by hand to force a recompute: use
-`--refresh` ([`barca docs refresh`](/reference/refresh/), "Forcing a recompute").
+`--refresh` ([Forcing a Recompute: Forcing a recompute](/reference/refresh/#forcing-a-recompute)).
 
-`<ext>` is `.json`, `.pkl`, `.parquet` or `.csv` (see [`barca docs types`](/reference/types/)). An artifact's path
+`<ext>` is `.json`, `.pkl`, `.parquet` or `.csv` (see [Output Formats and Types](/reference/types/)). An artifact's path
 names the computation, not the bytes: the run hash covers the step's code and inputs, so the same
 step with the same inputs always writes the same path, and computing it again overwrites the file
-([`barca docs artifacts`](/reference/artifacts/), "Recompute byte checks"). To keep artifacts and a backup of the history in a bucket, set
-`BARCA_REMOTE_URI` and your cloud's credentials ([`barca docs remote`](/reference/remote-storage/)).
+([Run Reports and Missing Artifacts: Recompute byte checks](/reference/artifacts/#recompute-byte-checks)). To keep artifacts and a backup of the history in a bucket, set
+`BARCA_REMOTE_URI` and your cloud's credentials ([Remote Storage](/reference/remote-storage/)).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
 from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
@@ -44,7 +44,7 @@ root. Barca changes into the root before doing anything, so:
 - steps run with the root as their working directory, so `Path("data.txt")` inside a step means
   the root's `data.txt` wherever you invoke barca;
 - stderr says `barca: project root: <path>` whenever the root is not the current directory;
-- the project root is the boundary of the dependency cone ([`barca docs hashing`](/reference/hashing/), "Not followed").
+- the project root is the boundary of the dependency cone ([The Run Hash: Not followed](/reference/hashing/#not-followed)).
 
 Put an empty `barca.toml` at the top of a project to anchor it. Barca records the metadata
 format version and refuses a database it does not support rather than rebuilding it
@@ -94,7 +94,7 @@ barca history --json            # the run is `running`; `steps_executed` is the 
   Ctrl-C and SIGTERM (a supervisor, `docker stop`) are different: the run stops its workers,
   records itself and is `cancelled` (exit 130). With an artifact store that also holds while
   artifacts upload or download or the history is backed up, and the cancelled run then backs
-  its record up for at most 10 seconds; a second Ctrl-C ends that ([`barca docs remote`](/reference/remote-storage/), "Ctrl-C").
+  its record up for at most 10 seconds; a second Ctrl-C ends that ([Remote Storage: Ctrl-C](/reference/remote-storage/#ctrl-c)).
 
 **When a run is `interrupted`.** Only when barca can observe that the run's process is gone;
 whenever it cannot, the run stays `running`. Barca looks at the process table on the same
@@ -106,13 +106,12 @@ live run look dead.
 
 Known limits:
 
-- With a store ([`barca docs remote`](/reference/remote-storage/)) all of this holds on the machine the run is on. Newly
+- With a store ([Remote Storage](/reference/remote-storage/)) all of this holds on the machine the run is on. Newly
   committed progress is backed up every minute in healthy operation, without ending the run,
   and the final outcome when it ends; a backup is restored only by `barca state restore`.
 - With a remote artifact store, an unfinished upload is never recorded as reusable progress.
   A failed upload is recorded at the end of the run as a pending upload, `unsynced` in
-  `barca status` and uploaded by the next command ([`barca docs remote`](/reference/remote-storage/), "When an upload fails
-  after the steps succeeded"). A failed backup leaves local history intact and is retried;
+  `barca status` and uploaded by the next command ([Remote Storage: When an upload fails after the steps succeeded](/reference/remote-storage/#when-an-upload-fails-after-the-steps-succeeded)). A failed backup leaves local history intact and is retried;
   ticks with nothing new take no backup.
 - A run that is going is shown as `running` from everywhere that sees the project directory.
   The one situation in which a history says `interrupted` for a run that is going somewhere is
@@ -156,8 +155,8 @@ The change is local to the selected environment's metadata database.
 A barca release that changes how run hashes are computed recomputes the affected steps once, on
 the first run after upgrading; the release notes say so (`CHANGELOG.md`, GitHub Releases).
 
-See also: [`barca docs cache`](/reference/cache/), [`barca docs disk`](/reference/disk/), [`barca docs discovery`](/reference/discovery/), [`barca docs status`](/reference/status/),
-[`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).
+See also: [The Cache](/reference/cache/), [Disk Use](/reference/disk/), [Discovery](/reference/discovery/), [barca status](/reference/status/),
+[Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 
 ---
 
