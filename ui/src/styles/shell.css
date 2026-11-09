@@ -1307,3 +1307,5 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.barca-heat-bin[data-some][data-state='pinned'] { --bin-mark: var(--state-pinned); }

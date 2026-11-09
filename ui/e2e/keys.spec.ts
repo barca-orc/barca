@@ -126,6 +126,7 @@ test('repair names one key, records the reason, and refreshes its pin', async ({
   await page.route(/\/assets\/[^/]+\/versions$/, route => route.fulfill({ json: {
     node_id: step, pinnable: true, pin: pinned ? pin : null, versions: [],
   } }))
+  await page.route(/\/pins$/, route => route.fulfill({ json: { pins: pinned ? [pin] : [] } }))
   await page.route(/\/pin\/upload\?/, route => {
     pinned = true
     return route.fulfill({ json: { node_id: step, pin } })
@@ -135,6 +136,11 @@ test('repair names one key, records the reason, and refreshes its pin', async ({
   await panel.getByLabel(`Replacement data for events[${detail.key}]`).setInputFiles({ name: 'repair.json', mimeType: 'application/json', buffer: Buffer.from('{"v":21}') })
   const dialog = page.getByRole('dialog')
   await expect(dialog).toContainText(`events[${detail.key}]`)
+  await expect(dialog.getByLabel('Reason (optional)')).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(dialog.getByRole('button', { name: 'Upload and pin' })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByLabel('Reason (optional)')).toBeFocused()
   await dialog.getByLabel('Reason (optional)').fill('repair the broken feed')
   const sent = page.waitForRequest(r => r.method() === 'POST' && r.url().includes('/pin/upload?'))
   await dialog.getByRole('button', { name: 'Upload and pin' }).click()
@@ -145,4 +151,5 @@ test('repair names one key, records the reason, and refreshes its pin', async ({
   expect(request.postData()).toBe('{"v":21}')
   await expect(panel).toContainText('Pinned at')
   await expect(panel).toContainText('repair the broken feed')
+  await expect(page.getByRole('link', { name: '1 key pinned in events' })).toHaveAttribute('href', new RegExp(`keys\\?node=${encodeURIComponent(NODE)}&state=pinned$`))
 })

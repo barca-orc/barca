@@ -5001,7 +5001,7 @@ components:
         key: *id003
         state:
           type: string
-          enum: [c, s, n, f, b]
+          enum: [c, p, s, n, f, b]
           description: As PartitionGrid.states.
         chain:
           type: array
@@ -5014,7 +5014,7 @@ components:
               id: *id003
               state:
                 type: string
-                enum: [c, s, n, f, b, '-']
+                enum: [c, p, s, n, f, b, '-']
         attempts:
           type: array
           maxItems: 20

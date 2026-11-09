@@ -238,7 +238,8 @@ pub(crate) async fn explain_dag_with_keys(
         &evicted,
         &mut steps,
         &mut summary,
-    );
+        &state.pinned,
+    )?;
 
     let mut steps = merge_partition_reports(steps);
     if let Some(n) = &narrowing {
@@ -330,7 +331,10 @@ pub(super) fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: Str
     }
 }
 
-pub(super) fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phase {
+pub(super) fn expand_prediction(
+    ctx: &mut Prediction<'_>,
+    phase: &Phase,
+) -> Result<Phase, BarcaError> {
     // A `partitions_from` source is read to expand its consumers: if its artifact is
     // missing it runs again first, and its keys are not known until it has.
     let sources = dispatch::partition_sources(phase, ctx.all_outputs)
@@ -345,7 +349,8 @@ pub(super) fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phas
         ctx.evicted,
         ctx.steps,
         ctx.summary,
-    );
+        &ctx.state.pinned,
+    )?;
 
     // Dynamic partitions need their source's output to know their keys. If the source is
     // not available (it would have to run first) the step cannot be expanded.
@@ -379,7 +384,7 @@ pub(super) fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phas
         });
     }
 
-    ready
+    Ok(ready)
 }
 
 pub(super) async fn predict_steps(
@@ -656,7 +661,7 @@ pub(super) async fn predict_phase(
     ctx: &mut Prediction<'_>,
     phase: &Phase,
 ) -> Result<(), BarcaError> {
-    let ready = expand_prediction(ctx, phase);
+    let ready = expand_prediction(ctx, phase)?;
     let expansion = dispatch::expand_pending_partitions_filtered(
         ctx.dag,
         &ready,
@@ -710,6 +715,7 @@ pub(super) async fn predict_phase(
         ctx.evicted,
         ctx.steps,
         ctx.summary,
-    );
+        &ctx.state.pinned,
+    )?;
     Ok(())
 }

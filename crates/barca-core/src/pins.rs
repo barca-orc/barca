@@ -631,6 +631,7 @@ pub(crate) fn prune_expanded_inputs(
         targets: HashSet<&'a str>,
         held: HashSet<&'a str>,
         memo: HashMap<String, bool>,
+        relevant: HashSet<String>,
     }
     impl Demand<'_> {
         fn needed(&mut self, id: &str, key: &crate::PartitionKey) -> bool {
@@ -640,6 +641,9 @@ pub(crate) fn prune_expanded_inputs(
             }
             let needed = self.targets.contains(id)
                 || self.dag.downstream(id).into_iter().any(|down| {
+                    if !self.relevant.contains(down) {
+                        return false;
+                    }
                     let node = self.dag.get_node(down).expect("downstream node exists");
                     // A dimension not carried by this input may fan out to unpinned keys.
                     if !node
@@ -667,7 +671,15 @@ pub(crate) fn prune_expanded_inputs(
     if pins.is_empty() {
         return;
     }
+    let mut relevant = HashSet::new();
+    let mut pending: Vec<String> = targets.iter().map(|id| id.to_string()).collect();
+    while let Some(id) = pending.pop() {
+        if relevant.insert(id.clone()) {
+            pending.extend(dag.upstream(&id).into_iter().map(str::to_string));
+        }
+    }
     let mut demand = Demand {
+        relevant,
         dag,
         targets: targets.iter().copied().collect(),
         held: pins.iter().map(|p| p.node_id.as_str()).collect(),

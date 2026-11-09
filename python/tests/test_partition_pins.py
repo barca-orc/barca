@@ -7,7 +7,7 @@ import pytest
 from .helpers import barca
 
 PIPELINE = """
-from barca import asset, partitions, partitions_from
+from barca import asset, collect, partitions, partitions_from
 
 @asset(partitions={"account": partitions(["bad", "good"])})
 def raw(account: str) -> dict:
@@ -18,6 +18,10 @@ def raw(account: str) -> dict:
 @asset(partitions={"account": partitions_from(raw)})
 def doubled(account: str, raw: dict) -> dict:
     return {"v": raw["v"] * 2}
+
+@asset(partitions={"region": partitions(["us", "eu"])}, inputs={"rows": collect(raw)})
+def unrelated(region: str, rows: dict) -> int:
+    return len(rows)
 """
 
 
@@ -121,3 +125,25 @@ def test_http_repair_and_rollback_show_the_held_version(repair_project):
         status, versions = served.request("GET", path + "/versions")
         assert status == 200, versions
         assert versions["pin"]["run_hash"] == first["pin"]["run_hash"]
+
+
+def test_missing_pinned_file_never_recomputes_the_key(repair_project):
+    from pathlib import Path
+
+    project = repair_project
+    barca(project, "get", "doubled", "--json")
+    replacement = project / "repair.json"
+    replacement.write_text('{"v": 21}')
+    result = barca(project, "pin", "raw[account=bad]", "--from-file", str(replacement), "--json")
+    assert result.returncode == 0, result.stderr
+    artifact = Path(json.loads(result.stdout)["version"]["artifact"])
+    (artifact if artifact.is_absolute() else project / artifact).unlink()
+    run = barca(project, "get", "doubled", "--partition", "account=bad", "--json")
+    assert run.returncode == 2, run.stderr
+    assert "pinned" in run.stderr
+    assert "broken feed" not in run.stderr
+    prediction = barca(
+        project, "get", "doubled", "--partition", "account=bad", "--dry-run", "--json"
+    )
+    assert prediction.returncode == 2, prediction.stderr
+    assert "pinned" in prediction.stderr

@@ -23,6 +23,16 @@ pub(super) async fn select_work<'p>(
         Work::Recompute(mut ids) => {
             // One of them may have been computed again since this was queued.
             ids.retain(|id| session.state.cached_node_ids.contains(id));
+            if let Some(id) = ids.iter().find(|id| {
+                session
+                    .state
+                    .decide_state
+                    .pinned
+                    .get(*id)
+                    .is_some_and(|pin| pin.user.is_some())
+            }) {
+                return Err(BarcaError::Usage(crate::freshness::pin_lost(id)));
+            }
             match session.state.cached_steps.phase_for(&ids) {
                 Some(phase) => (phase, true),
                 None => return Ok(None),
