@@ -101,6 +101,19 @@ const markSection = () => {
     a.classList.toggle('section-open', inSection));
 };
 document.addEventListener('DOMContentLoaded', markSection);
+// Screenshots open at full size in a new tab.
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.sl-markdown-content img[src*="/_astro/"]').forEach((img) => {
+    if (img.closest('a')) return;
+    const a = document.createElement('a');
+    a.href = img.currentSrc || img.src;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.title = 'Open full size';
+    img.replaceWith(a);
+    a.append(img);
+  });
+});
 addEventListener('hashchange', markSection);`,
         },
       ],
@@ -122,7 +135,7 @@ addEventListener('hashchange', markSection);`,
           ],
         },
         {
-          label: 'Why Barca',
+          label: 'Why Barca and How It Works',
           collapsed: true,
           items: [
             { slug: 'philosophy' },
@@ -131,6 +144,9 @@ addEventListener('hashchange', markSection);`,
             { slug: 'comparisons/dagster' },
             { slug: 'comparisons/prefect' },
             { slug: 'comparisons/cron' },
+            { slug: 'architecture' },
+            { slug: 'architecture-decisions' },
+            { slug: 'core-constraints' },
           ],
         },
         {
@@ -166,28 +182,33 @@ addEventListener('hashchange', markSection);`,
           items: [
             { label: 'All Commands (CLI Reference)', slug: 'reference/cli' },
             { label: 'Exit Codes', link: '/reference/cli/#errors-and-exit-codes' },
-            { label: 'Run', collapsed: true, items: [ { slug: 'reference/cli/get' }, { slug: 'reference/cli/run' }, { slug: 'reference/cli/plan' }, { slug: 'reference/cli/queue' }, ] },
-            { label: 'Inspect', collapsed: true, items: [ { slug: 'reference/cli/status' }, { slug: 'reference/cli/history' }, { slug: 'reference/cli/logs' }, { slug: 'reference/cli/list' }, { slug: 'reference/cli/stats' }, { slug: 'reference/cli/sql' }, ] },
-            { label: 'Manage', collapsed: true, items: [ { slug: 'reference/cli/pin' }, { slug: 'reference/cli/pause' }, { slug: 'reference/cli/gc' }, { slug: 'reference/cli/state' }, { slug: 'reference/cli/doctor' }, ] },
-            { label: 'Server', collapsed: true, items: [ { slug: 'reference/cli/serve' }, { slug: 'reference/cli/tokens' }, ] },
-            { label: 'Other', collapsed: true, items: [ { slug: 'reference/cli/docs' }, { slug: 'reference/cli/version' }, ] },
+            { label: 'Run', items: [ { slug: 'reference/cli/get' }, { slug: 'reference/cli/run' }, { slug: 'reference/cli/plan' }, { slug: 'reference/cli/queue' }, ] },
+            { label: 'Inspect', items: [ { slug: 'reference/cli/status' }, { slug: 'reference/cli/history' }, { slug: 'reference/cli/logs' }, { slug: 'reference/cli/list' }, { slug: 'reference/cli/stats' }, { slug: 'reference/cli/sql' }, ] },
+            { label: 'Manage', items: [ { slug: 'reference/cli/pin' }, { slug: 'reference/cli/pause' }, { slug: 'reference/cli/gc' }, { slug: 'reference/cli/state' }, { slug: 'reference/cli/doctor' }, ] },
+            { label: 'Server', items: [ { slug: 'reference/cli/serve' }, { slug: 'reference/cli/tokens' }, ] },
+            { label: 'Other', items: [ { slug: 'reference/cli/docs' }, { slug: 'reference/cli/version' }, ] },
           ],
         },
         {
-          label: 'Scheduling and Servers',
+          label: 'Servers: Guides',
           collapsed: true,
           items: [
             { slug: 'serve' },
-            { slug: 'team-server' },
             { slug: 'scheduling' },
             { slug: 'web-ui' },
             { slug: 'auth' },
             { slug: 'deploying' },
+            { slug: 'reference/slack' },
+          ],
+        },
+        {
+          label: 'Servers: Reference',
+          collapsed: true,
+          items: [
             { slug: 'reference/server-mode' },
             { slug: 'reference/serve-ops' },
             { slug: 'reference/server-api' },
             { slug: 'reference/server-api-endpoints' },
-            { slug: 'reference/slack' },
             { slug: 'reference/telemetry' },
           ],
         },
@@ -241,15 +262,6 @@ addEventListener('hashchange', markSection);`,
             { slug: 'examples/sensors' },
             { slug: 'examples/timeouts-and-cancelling' },
             { slug: 'examples/tasks' },
-          ],
-        },
-        {
-          label: 'Internals',
-          collapsed: true,
-          items: [
-            { slug: 'architecture' },
-            { slug: 'architecture-decisions' },
-            { slug: 'core-constraints' },
           ],
         },
         {

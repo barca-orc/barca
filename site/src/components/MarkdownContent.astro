@@ -21,8 +21,6 @@ const BOOST: Record<string, string> = {
   'comparisons/cron': '0.1',
   // The CLI reference is the home of the exit-code table; the contract repeats it in full.
   'reference/cli-contract': '0.2',
-  // Every release note names a feature; the pages that explain it should rank first.
-  releases: '0.2',
 };
 const weight = isProject ? '0.1' : BOOST[id];
 // Words people type in a whole-sentence search that a page answers without using them all.
@@ -43,7 +41,9 @@ const KEYWORDS: Record<string, string> = {
   'reference/cli': 'exit code 1, exit code 2, exit code 3, exit code 130, exit status, return code',
   'reference/agents': 'run from python, call from python, python api, barca.get, use results in python, notebook',
   'team-server': 'share the cache with my team, shared cache, team cache, share results, cache with my team, several machines, colleagues',
-  'reference/server-api': 'trigger a run from a script, start a run over http, curl, POST /runs, rest api, webhook, http api',
+  'reference/server-api': 'http api, rest, trigger a run from a script, start a run over http, curl, POST /runs, rest api, webhook, http api',
+  'reference/slack': 'notifications, notify, alerts, alerting, webhook, on failure, failure alert',
+  'getting-started': 'requirements, python version, install, installation, prerequisites, uv add barca, pip install',
   'web-ui': 'states, state colours, status colors, what does stale mean in the web ui, ui status colors, colours, icons, what the states mean, dashboard',
 };
 const keywords = KEYWORDS[id];

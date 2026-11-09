@@ -4,7 +4,9 @@ description: Where results live, how to see what is cached and why, and how sens
 ---
 
 This guide follows [Getting Started](/getting-started/), which installs barca and runs two
-assets. The examples here were checked against barca 0.42.0. Each section names the manual topic
+assets. It is the tutorial: read it in order. For one task at a time, see
+[Recipes](/recipes/); for a longer walk-through of one feature with real output after each
+change, see [Worked Examples](/examples/). The examples here were checked against barca 0.42.0. Each section names the manual topic
 (`barca docs <topic>`) that has the full rules.
 
 ## 1. Assets and inputs
