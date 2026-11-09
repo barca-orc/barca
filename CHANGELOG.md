@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.42.0 (2026-11-09)
+
 ### Features
 
 - Cancel queued or active runs from their inspector, with confirmation and cancellation progress. Incomplete runs no longer claim unrecorded steps were cached or successful. Resume a paused pipeline directly from its Incident controls, with the affected file and count confirmed before resuming. Pauses in other pipelines remain in place.

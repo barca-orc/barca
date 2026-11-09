@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats
     from barca.client import Client, Run
 
-__version__ = "0.41.0"
+__version__ = "0.42.0"
 
 __all__ = [
     "group",
