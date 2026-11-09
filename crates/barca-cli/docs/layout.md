@@ -19,7 +19,7 @@ files `state restore` and `state reset` move aside, a batched call's `.batch-*` 
 owns it, when it is removed and whether `barca gc` evicts it or the size budget counts it, is the
 table in `specs/interfaces/dot-barca-layout.md`, the one owner of the layout; the site's
 configuration page points there too. Delete nothing by hand to force a recompute: use
-`--refresh` (`barca docs cache`, "Forcing a recompute").
+`--refresh` (`barca docs refresh`, "Forcing a recompute").
 
 `<ext>` is `.json`, `.pkl`, `.parquet` or `.csv` (see `barca docs types`). An artifact's path
 names the computation, not the bytes: the run hash covers the step's code and inputs, so the same

@@ -258,7 +258,7 @@ def test_a_sensor_s_schedule_and_description_do_not_rerun_its_consumers(project)
 
 def test_editing_a_sensor_s_code_reruns_its_consumers_even_with_the_same_value(project):
     """The sensor's run hash covers its code and is part of its consumers' run hashes, next to
-    the hash of its output (`barca docs cache`, "External data that changes in place")."""
+    the hash of its output (`barca docs external-data`, "External data that changes in place")."""
 
     def source(body: str) -> str:
         return (

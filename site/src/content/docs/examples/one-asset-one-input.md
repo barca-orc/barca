@@ -1,7 +1,7 @@
 ---
 sidebar:
   order: 2
-title: "Worked Example: One Asset, One Input"
+title: "One Asset, One Input"
 description: One asset that reads another, rechecked with barca 0.42.0. What runs after each kind of change, and what --refresh and --no-cascade do.
 ---
 

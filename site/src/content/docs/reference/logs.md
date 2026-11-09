@@ -1,5 +1,5 @@
 ---
-title: "Logs"
+title: "barca logs"
 description: "barca logs: a run's recorded step stdout and stderr, following a live run, and how lines are kept."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/logs.md
 ---

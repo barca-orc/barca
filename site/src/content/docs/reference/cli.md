@@ -20,7 +20,7 @@ available topics for scripts and agents. Help and examples never load a project 
 | Get an asset, from cache when nothing changed | `barca get revenue` | [get](/reference/cli/get/) |
 | Run a task | `barca run publish` | [run](/reference/cli/run/) |
 | See what would run, without running it | `barca get revenue --dry-run` | [get](/reference/cli/get/) |
-| Recompute an asset and what is downstream | `barca get revenue --refresh orders` | [The Cache](/reference/cache/#forcing-a-recompute) |
+| Recompute an asset and what is downstream | `barca get revenue --refresh orders` | [Forcing a Recompute](/reference/refresh/) |
 | See every node's cache state and why | `barca status` | [status](/reference/status/) |
 | See only what failed or is stale | `barca status --problems` | [status](/reference/status/) |
 | See recent runs, or one run's errors | `barca history` | [history](/reference/cli/history/) |

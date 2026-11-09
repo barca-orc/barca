@@ -1,7 +1,7 @@
 ---
 sidebar:
   order: 1
-title: "Worked Example: One Asset, No Inputs"
+title: "One Asset, No Inputs"
 description: One asset with no inputs, rechecked with barca 0.42.0. What is written to disk, when it is served from cache, and how to look at the result.
 ---
 

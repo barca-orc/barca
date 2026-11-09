@@ -1,5 +1,5 @@
 ---
-title: "SQL"
+title: "barca sql"
 description: "barca sql: query cached results with DuckDB while debugging, without writing a step."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/sql.md
 ---

@@ -7,7 +7,7 @@ description: The HTTP and JSON API of barca serve, with its endpoints, asynchron
 `Schedule(...)` nodes on their cron, and serves a web UI at `/ui/`.
 
 The server binds to `127.0.0.1`, and authentication is off by default: anyone who can reach the
-port can start and cancel runs. To reach it from another machine, turn on [project tokens](/reference/server-mode/#opt-in-project-tokens)
+port can start and cancel runs. To reach it from another machine, turn on [project tokens](/serve/#requiring-a-token-authentication-login)
 (`--auth token`; requests then carry `Authorization: Bearer <token>`), put a reverse proxy that
 authenticates in front of it, or both (see [Deploying](/deploying/#authentication)).
 
@@ -47,7 +47,7 @@ schedule and its address on stderr:
 The default bind address is `127.0.0.1`. `--host` takes an IP address, including `::` for
 IPv6; hostnames are rejected. `0.0.0.0` listens on every IPv4 interface. With authentication
 off (the default) anyone who can reach the port can trigger runs; a non-loopback address prints
-a startup warning. Turn on [project tokens](/reference/server-mode/#opt-in-project-tokens), or
+a startup warning. Turn on [project tokens](/serve/#requiring-a-token-authentication-login), or
 use a private network or an authenticating proxy.
 
 `--watch` re-parses the DAG when a source file changes, so `/assets` and `/plan` reflect edits
@@ -535,7 +535,7 @@ it remembered are cleared with the database.
 server stopped. `409` while a run is pending or running (this server's, or a local run's on this
 machine), naming it, with nothing changed; `403` under `--read-only`; `503` while the server
 drains. With authentication off (the default), anyone who can open the UI can reset; with
-[project tokens](/reference/server-mode/#opt-in-project-tokens), only a token holder can.
+[project tokens](/serve/#requiring-a-token-authentication-login), only a token holder can.
 
 ### Logs
 
@@ -829,7 +829,7 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 ## Limits
 
-- No TLS, and authentication only if you turn on [project tokens](/reference/server-mode/#opt-in-project-tokens). The server listens on
+- No TLS, and authentication only if you turn on [project tokens](/serve/#requiring-a-token-authentication-login). The server listens on
   `127.0.0.1` by default; `--host` can make it reachable from other machines. Terminate TLS at a
   proxy.
 - One server per project. Machines share results by pointing at it ([the ledger](#the-ledger));

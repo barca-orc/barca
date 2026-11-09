@@ -1,7 +1,7 @@
 ---
 sidebar:
   order: 3
-title: "Worked Example: Partitions"
+title: "Partitions, Step by Step"
 description: One asset definition run once per key, each key cached on its own. What runs when keys, code or a sensor change, how to look at the results, and the limits on 0.30.2.
 ---
 
@@ -349,7 +349,7 @@ the four-key `summary` were still cached. [`barca docs sql`](/reference/sql/) de
 
 A key cannot be named as a target; select keys with `--partition` instead. (`--refresh` does take
 keys, such as `--refresh 'sales[region=emea]'`, to recompute those keys inside a full run:
-[Refresh selected keys](/reference/cache/#refresh-selected-keys-in-a-complete-dag).) The
+[Refresh selected keys](/reference/refresh/#refresh-selected-keys-in-a-complete-dag).) The
 selection applies to the whole run, upstream and downstream:
 
 ```

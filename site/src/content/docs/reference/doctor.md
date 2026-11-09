@@ -1,5 +1,5 @@
 ---
-title: "Doctor and Local Debugging"
+title: "barca doctor: Local Debugging"
 description: "Check project prerequisites, stores and credential identity without running steps."
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/doctor.md
 ---

@@ -71,7 +71,7 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 - A global asset that many partition keys read: `@asset(cutoff=True)` makes what reads it
   depend on the bytes it wrote, so a rerun with unchanged output reruns nothing below it.
   Before it runs, `--dry-run` and `status` report its consumers `unknown` (reason
-  `cutoff_pending`). See `barca docs cache`, "Early cutoff".
+  `cutoff_pending`). See `barca docs external-data`, "Early cutoff".
 - Several targets: the result has `targets` (per name: `status`, then `final_output`, or
   `failed_node` and `error`) instead of `final_output`. Every target runs even if another fails.
 - A partitioned target returns every key; past 1000 keys `final_output` is a

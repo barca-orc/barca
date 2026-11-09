@@ -222,7 +222,7 @@ key below it whenever it reruns, even when it wrote the same bytes. Mark it
 `@asset(cutoff=True)` and what reads it folds in the bytes it wrote instead of its run hash: a
 rerun that writes the same bytes leaves every key cached, new bytes rerun all of them. Before
 it runs, a dry run reports the keys below it `unknown` (reason `cutoff_pending`). On a
-partitioned asset, `cutoff=True` applies per key. `barca docs cache`, "Early cutoff", has the
+partitioned asset, `cutoff=True` applies per key. `barca docs external-data`, "Early cutoff", has the
 details.
 
 ## Processing many keys per call

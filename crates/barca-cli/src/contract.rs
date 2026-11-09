@@ -823,7 +823,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "doctor",
         file: "doctor.md",
         slug: "reference/doctor",
-        title: "Doctor and Local Debugging",
+        title: "barca doctor: Local Debugging",
         description: "Check project prerequisites, stores and credential identity without \
                       running steps.",
     },
@@ -893,6 +893,22 @@ const SITE_PAGES: &[SitePage] = &[
                       cutoff, dry runs, environments and what a run reports.",
     },
     SitePage {
+        topic: "refresh",
+        file: "refresh.md",
+        slug: "reference/refresh",
+        title: "Forcing a Recompute",
+        description: "barca get --refresh, --refresh-all and --no-cascade: what reruns, refreshing \
+                      selected partition keys, Manual upstreams, and --dry-run.",
+    },
+    SitePage {
+        topic: "external-data",
+        file: "external-data.md",
+        slug: "reference/external-data",
+        title: "External Data and Early Cutoff",
+        description: "Rerun a step when a file or table changes in place by reading it through a \
+                      @sensor, and keep what is downstream cached with @asset(cutoff=True).",
+    },
+    SitePage {
         topic: "artifacts",
         file: "artifacts.md",
         slug: "reference/artifacts",
@@ -953,7 +969,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "incidents",
         file: "incidents.md",
         slug: "reference/pausing",
-        title: "Pausing Assets",
+        title: "barca pause: Pausing Assets",
         description: "Containing an incident: barca pause and barca resume, and what scheduled \
                       runs and requests do with a paused asset.",
     },
@@ -977,7 +993,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "status",
         file: "status.md",
         slug: "reference/status",
-        title: "Status",
+        title: "barca status",
         description: "barca status: every node's cache state and why, its last run, its \
                       artifact's shape, --problems and --state.",
     },
@@ -985,7 +1001,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "pins",
         file: "pins.md",
         slug: "reference/pins",
-        title: "Pinning and Rollback",
+        title: "barca pin: Pinning and Rollback",
         description: "barca pin and unpin: roll an asset back to an earlier materialization, \
                       held for every run until unpinned.",
     },
@@ -993,7 +1009,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "logs",
         file: "logs.md",
         slug: "reference/logs",
-        title: "Logs",
+        title: "barca logs",
         description: "barca logs: a run's recorded step stdout and stderr, following a live \
                       run, and how lines are kept.",
     },
@@ -1009,7 +1025,7 @@ const SITE_PAGES: &[SitePage] = &[
         topic: "sql",
         file: "sql.md",
         slug: "reference/sql",
-        title: "SQL",
+        title: "barca sql",
         description: "barca sql: query cached results with DuckDB while debugging, without \
                       writing a step.",
     },
