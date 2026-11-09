@@ -11,18 +11,37 @@ port can start and cancel runs. To reach it from another machine, turn on [proje
 (`--auth token`; requests then carry `Authorization: Bearer <token>`), put a reverse proxy that
 authenticates in front of it, or both (see [Deploying](/deploying/#authentication)).
 
-**Scope:** this is the implemented `barca serve` API, including the run contract and
-inspection routes of the [server-mode RFC](/rfcs/0007-server-mode/) (section 3.4), and its
-[ledger](#the-ledger) (#402). The CLI is a client of these routes: `barca get daily_report
---server <url>` runs on the server and prints what a local run prints
-([Deploying](/deploying/#running-commands-on-the-server-from-another-machine)), and with a
-server configured (`[server] url` or `BARCA_SERVER`) a laptop's `barca get` reads and posts to
-the ledger routes over `http://` or `https://`.
-
 Runs execute inside the server process, in the background. `POST /runs` answers at once with the
 run's id, which is its database run id (the one `barca history` shows); the run's events stream
 from `GET /runs/{run_id}/events`, and `GET /runs/{run_id}` answers from `.barca/metadata.db`
 once it has finished, so the answer survives a restart.
+
+## Quick start: a run from a script
+
+```bash
+curl -s -X POST localhost:8274/runs -H 'Content-Type: application/json' \
+  -d '{"command": "get", "targets": ["customers"]}'
+# {"position":null,"run_id":"81c4f8e97588","status":"running"}
+
+curl -s localhost:8274/runs/81c4f8e97588           # status, then its outcome when finished
+curl -s localhost:8274/runs/81c4f8e97588/output    # the result's bytes: [0, 1, 2, ...]
+curl -sN localhost:8274/runs/81c4f8e97588/events   # or follow it live (server-sent events)
+```
+
+With `--auth token`, add `-H "Authorization: Bearer $BARCA_SERVER_TOKEN"`
+([Authentication and Tokens](/auth/)). From Python, `barca.get("customers", server=True)` does
+the same and returns the value ([Python client](#python-client)).
+
+| I want to… | Read |
+|---|---|
+| Start a run and the fields it takes | [Starting a run](#starting-a-run) |
+| Follow a run live, or reconnect to it | [Following a run](#following-a-run) |
+| Know whether it succeeded, and what it returned | [Outcomes](#outcomes) |
+| Cancel a run | [Cancelling a run](#cancelling-a-run) |
+| Check the server from a load balancer or monitor | [Health](#health) |
+| List, pause or resume schedules | [Scheduling](#scheduling) |
+| See every route | [Endpoints](#endpoints) |
+| Handle errors | [Errors](#errors) |
 
 ## Starting the server
 
@@ -133,20 +152,6 @@ client prints it as it would print the local command's.
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
 | `GET`  | `/ui/` | The web UI, compiled into the binary. |
 
-**Older routes, retained for Python `Client` compatibility.** They run on the same functions as
-the routes above, and the `run_id` they answer with is the database run id. New integrations
-should use `/runs`. The aliases remain deprecated, with no scheduled removal; removing them
-requires migrating `Client` first and announcing the breaking change in a minor release.
-
-| Method | Path | Use instead |
-|--------|------|-------------|
-| `POST` | `/run` | `POST /runs` with `{"command": "get"}` |
-| `POST` | `/run/{target}` | `POST /runs` with `{"command": "run", "targets": [...], "refresh_all": true}` (the alias recomputes upstream assets) |
-| `POST` | `/get/{target}` | `POST /runs` with `{"command": "get", "targets": [...]}` |
-| `DELETE` | `/run/{run_id}` | `DELETE /runs/{run_id}` |
-| `GET`  | `/status/{run_id}` | `GET /runs/{run_id}` |
-| `GET`  | `/events/{run_id}` | `GET /runs/{run_id}/events` |
-
 ### Starting a run
 
 ```
@@ -209,8 +214,8 @@ outcome.
 GET /runs/{run_id}/events   → text/event-stream
 ```
 
-Each event is a server-sent event whose `data:` is JSON with a `type`, and whose `id:` is its
-number in the run, from `0`:
+Each event is a server-sent event whose `data:` is JSON with a `type`, and whose `id:` is
+`<attempt>:<n>`: the run attempt and the event's number in it, from `1`:
 
 | `type` | Payload | Meaning |
 |---|---|---|
@@ -851,3 +856,27 @@ For partitioned nodes this describes the key `barca status` reports (the latest 
 `last_materialization.partition`, rather than a union of every key's schema.
 No sample values are returned unless `?sample=N` asks for them. Nested JSON fields report their container type (`dict` or `list`); this is not a recursive schema. Pickle types or constructors are identified from opcodes without executing them, and pickle column schemas are unavailable. This endpoint is available in read-only mode;
 unknown and ambiguous names return 404 and 409 respectively.
+
+## Scope and deprecated routes
+
+**Scope:** this is the implemented `barca serve` API, including the run contract and
+inspection routes of the [server-mode RFC](/rfcs/0007-server-mode/) (section 3.4), and its
+[ledger](#the-ledger) (#402). The CLI is a client of these routes: `barca get daily_report
+--server <url>` runs on the server and prints what a local run prints
+([Deploying](/deploying/#running-commands-on-the-server-from-another-machine)), and with a
+server configured (`[server] url` or `BARCA_SERVER`) a laptop's `barca get` reads and posts to
+the ledger routes over `http://` or `https://`.
+
+**Older routes, retained for Python `Client` compatibility.** They run on the same functions as
+the routes above, and the `run_id` they answer with is the database run id. New integrations
+should use `/runs`. The aliases remain deprecated, with no scheduled removal; removing them
+requires migrating `Client` first and announcing the breaking change in a minor release.
+
+| Method | Path | Use instead |
+|--------|------|-------------|
+| `POST` | `/run` | `POST /runs` with `{"command": "get"}` |
+| `POST` | `/run/{target}` | `POST /runs` with `{"command": "run", "targets": [...], "refresh_all": true}` (the alias recomputes upstream assets) |
+| `POST` | `/get/{target}` | `POST /runs` with `{"command": "get", "targets": [...]}` |
+| `DELETE` | `/run/{run_id}` | `DELETE /runs/{run_id}` |
+| `GET`  | `/status/{run_id}` | `GET /runs/{run_id}` |
+| `GET`  | `/events/{run_id}` | `GET /runs/{run_id}/events` |

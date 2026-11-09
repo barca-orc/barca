@@ -473,3 +473,9 @@ starlight-menu-button[aria-expanded='true'] button {
     display: none;
   }
 }
+
+/* Screenshots: a hairline frame so a dark UI capture does not bleed into a dark page. */
+.sl-markdown-content img[src*='/_astro/'] {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 6px;
+}

@@ -7,6 +7,8 @@ description: "What barca serve's web UI shows and does: assets and their states,
 project, history and cache as the CLI, and its buttons start the same runs as `barca get` and
 `barca run` on the server. A `--read-only` server shows a `read-only` tag and disables them.
 
+![The Assets view: a pipeline with one failing partitioned asset, one blocked asset waiting on it, and two fresh assets, with filters for each state along the top](../../assets/web-ui/assets.png)
+
 ## Finding your way
 
 The sidebar holds Search, then **Assets**, **Runs**, **Schedules**, **Tasks** and **Sensors**,
@@ -16,8 +18,9 @@ what is open. Filters and the open item are in the address, so a link reopens th
 
 ## States
 
-Each node shows one state in plain words, with an icon beside its colour. They map onto the
-states `barca status` prints:
+Each node shows one state in plain words, with an icon beside its colour. The UI and the CLI use
+different words for some of them (the UI says `fresh` where `barca status` says `cached`); this is
+how they map:
 
 | Web UI | `barca status` |
 |---|---|
@@ -31,16 +34,19 @@ A pinned asset shows `pinned` beside its version ([Pinning and Rollback](/refere
 
 ## Runs: what failed, and running it again
 
-A run's panel opens with what failed: each failed step, its error and where it raised. Its
-actions:
+A run's panel opens with what failed: each failed step, its error and where it raised.
 
-- **Re-run failed steps + downstream**: the same target, cache-aware, so the steps that
-  succeeded are served from cache.
-- **Re-run whole run**: the same target with `refresh_all`.
+![A failed run's panel: the failed step revenue[region=apac] with its ValueError and the line it raised at, Re-run failed and Re-run all buttons, and the run's trigger, target, timing and step counts](../../assets/web-ui/run-panel.png)
+
+Its actions:
+
+- **Re-run failed**: the failed steps and everything downstream of them, the same target
+  again, so the steps that succeeded are served from cache.
+- **Re-run all**: the same target with every step recomputed (`--refresh-all`).
 - **Retry** on one failed step or partition key.
 - **Copy incident summary**: markdown with the run's link, target, trigger, timing and failed
   steps.
-- **Cancel**, for a queued or running run, with a confirmation. A cancelled run does not claim
+- **Cancel run**, for a queued or running run, with a confirmation. A cancelled run does not claim
   that steps it never recorded were cached or succeeded.
 
 The logs filter by step, by text, and to errors only.
@@ -49,6 +55,8 @@ The logs filter by step, by text, and to errors only.
 
 An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **History** and
 **Incident**.
+
+![The panel of a partitioned asset with one failed key: 2 of 3 keys cached, the error grouped by message, and a Run button that computes only the failed key](../../assets/web-ui/asset-panel.png)
 
 - **Incident** holds the controls for an incident: pausing and resuming the asset, as
   `barca pause` and `barca resume` do, and resuming a paused pipeline

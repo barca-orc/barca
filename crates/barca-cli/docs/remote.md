@@ -16,6 +16,14 @@ Sharing state between machines means a server (RFC-0007), not a shared bucket. U
 `optimistic` mode pulled a shared history from the bucket before each run and pushed it after;
 barca 0.26.0 removed it (`barca docs backup`, "Upgrading from the shared history").
 
+| To | Sections |
+|---|---|
+| Set it up | "Each cloud", "Any other storage option", "Check that it works", "In barca.toml instead" |
+| Know what it does during a run | "What barca keeps in the bucket", "What happens during a run", "How steps read inputs from the store" |
+| Read `barca status` with a store | "`cached` and `unsynced` with a store", "How often the store is checked" |
+| Fix a problem | "Failures", "When an upload fails after the steps succeeded", "Diagnose configuration", "Limitations" |
+| Use results in the bucket | "Looking at results in the bucket", "Sharing a result: signed URLs" |
+
 ## Each cloud
 
 Amazon S3, and S3-compatible stores (Cloudflare R2, MinIO):

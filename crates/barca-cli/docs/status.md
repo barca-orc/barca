@@ -47,32 +47,9 @@ def notify(t: dict) -> None:
     print(t)
 ```
 
-Status executes no pipeline step and records no new run, and it does not create `.barca/`.
-Source parsing is static, but `partitions(<expression>)` may evaluate Python and import its
-module while resolving keys. Times in the table (`LAST RUN`, like `STARTED` in `barca history`
-and `CREATED` in `barca stats`) are UTC and say so; the JSON has the same UTC values. Like every inspection command, the result goes to stdout (a table in a terminal, JSON
-when piped; `--json` / `--pretty` override) and errors to stderr; an unknown target is a usage
-error (exit 2) that ends with ``Run `barca list <files>` to see available assets and tasks.``,
-the same remediation as `get` and `run`. A target is one name or several, comma-separated with no
-spaces (`a,b`), parsed exactly as `get` and `run` parse them; the JSON names them in `targets`
-(and the single one in `target`).
-
-With an artifact store (`barca docs remote`), status also asks the store about every cached
-unpartitioned node, with one `python -m barca._state stat` for all of them, and reports a node
-whose copies do not agree as `unsynced` (below). Nothing is downloaded or uploaded.
-
-Status reads the metadata DB as it is at that moment, and a run records each step as it
-finishes. So while a `barca get` is running, status in another terminal already shows the steps
-it has finished as `cached` (a partitioned asset as `partial`, with counts); see `barca docs
-layout`, "While a run is going, and after one is killed".
-
-Like `list`, status returns every node in JSON unless `--limit N` is explicit. The human
-table shows at most 100 nodes unless you pass `--limit N` or `--all`. The
-`summary` still counts every node, and the JSON adds `total` and `truncated` (with a `hint` when
-truncated). Each node also lists `env`, the environment variables it declares with `env=[...]`
-(`barca docs assets`), and, when its code reads variables it does not declare, `undeclared_env`
-(experimental; `barca docs cache`, "Environment variables"). `--fields` keeps only the named keys
-on each node.
+Status runs nothing and records nothing; it reads the metadata DB as it is at that moment, so
+during a run it already shows the steps that run has finished. Output, targets, limits and what
+it asks an artifact store are in "Details" at the end.
 
 ## Cache state
 
@@ -459,6 +436,35 @@ that failed are listed: cached steps are counted in the run's `steps_cached` (th
 new row), and steps a failure skipped are not recorded. With a server configured, both forms
 answer from the server (`barca docs server-mode`); a run id only this machine has is an error
 whose remediation is `barca history RUN_ID --local`.
+
+## Details
+
+Status executes no pipeline step and records no new run, and it does not create `.barca/`.
+Source parsing is static, but `partitions(<expression>)` may evaluate Python and import its
+module while resolving keys. Times in the table (`LAST RUN`, like `STARTED` in `barca history`
+and `CREATED` in `barca stats`) are UTC and say so; the JSON has the same UTC values. Like every inspection command, the result goes to stdout (a table in a terminal, JSON
+when piped; `--json` / `--pretty` override) and errors to stderr; an unknown target is a usage
+error (exit 2) that ends with ``Run `barca list <files>` to see available assets and tasks.``,
+the same remediation as `get` and `run`. A target is one name or several, comma-separated with no
+spaces (`a,b`), parsed exactly as `get` and `run` parse them; the JSON names them in `targets`
+(and the single one in `target`).
+
+With an artifact store (`barca docs remote`), status also asks the store about every cached
+unpartitioned node, with one `python -m barca._state stat` for all of them, and reports a node
+whose copies do not agree as `unsynced` (below). Nothing is downloaded or uploaded.
+
+Status reads the metadata DB as it is at that moment, and a run records each step as it
+finishes. So while a `barca get` is running, status in another terminal already shows the steps
+it has finished as `cached` (a partitioned asset as `partial`, with counts); see `barca docs
+layout`, "While a run is going, and after one is killed".
+
+Like `list`, status returns every node in JSON unless `--limit N` is explicit. The human
+table shows at most 100 nodes unless you pass `--limit N` or `--all`. The
+`summary` still counts every node, and the JSON adds `total` and `truncated` (with a `hint` when
+truncated). Each node also lists `env`, the environment variables it declares with `env=[...]`
+(`barca docs assets`), and, when its code reads variables it does not declare, `undeclared_env`
+(experimental; `barca docs cache`, "Environment variables"). `--fields` keeps only the named keys
+on each node.
 
 ## Disk usage and inspection cost
 

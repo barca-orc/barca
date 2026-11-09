@@ -4,39 +4,22 @@ description: Arguments and behavior of @asset, @sensor, @task, @sink and @unsafe
 ---
 
 Everything here is imported from `barca`. The decorators return the function unchanged: the
-`barca` binary extracts their arguments from source without importing your module. Literal
-partition key lists need no resolver import; a nonliteral `partitions(<expression>)` imports
-the pipeline module to evaluate its keys. Arguments must therefore be written literally (a dict literal for `inputs=`, a list of
-string literals for `env=`; "Values barca reads" below), or barca exits 2; a decorator built in a loop or installed through a runtime assignment is not
-seen. Qualified names and imported aliases are supported as described below. The signatures below are those of `python/barca/__init__.py`; unless a version is named,
-the behavior was checked by running 0.18.0.
+`barca` binary reads their arguments from the source without importing your module, so write
+them literally (a dict literal for `inputs=`, a list of string literals for `env=`), or barca
+exits 2 naming the argument ("Values barca reads" below).
 
-## Qualified and aliased imports
-
-Barca recognizes top-level imports such as `import barca`, `import barca as b`
-and `from barca import asset as a`, for decorators and their helpers:
-
-```python
-import barca as b
-
-@b.asset(partitions={"key": b.partitions(["a", "b"])})
-def rows(key):
-    return {"key": key}
-```
-
-Planning reads these bindings statically and never imports your module. A name
-reassigned or imported from another library does not define a Barca node; local
-parameters or assignments also shadow task-body helpers such as `parallel`.
-Dynamic alias assignments and conditional imports are not resolved. Explicit writes to a Barca module export
-conservatively disable recognition of that export through every module alias and
-direct import, including earlier copies; unaffected exports remain available.
-
-If a foreign decorator previously became a node merely because it was named
-`asset`, `sensor` or `task`, import the actual Barca decorator instead. To keep a
-foreign wrapper on a node, stack it with a genuine Barca decorator (qualified or
-aliased imports work). Bare names with no competing binding retain legacy
-source-snippet recognition. Namespace reflection retains conservative discovery,
-but disables provenance-based validation and uses conservative hashing.
+| Name | What it is for |
+|---|---|
+| [`@asset`](#asset) | A function whose result is cached and reused until its code or inputs change |
+| [`@sensor`](#sensor) | A function that checks something outside (a file, a table) on every run; what reads it reruns when its value changes |
+| [`@task`](#task) | A function that does something (deploy, notify) and runs every time |
+| [`@sink`](#sink) | Also write an asset's result to a path you choose, local or in a bucket |
+| [`partitions`, `partitions_from`, `collect`](#partitions) | Run one function per key, and gather the keys back |
+| [`Schedule`, `Manual`, `Always`](#schedule) | When `barca serve` runs an asset (`freshness=`) |
+| [`parallel`, `parallel_map`](#parallel) | Inside a task, run other tasks at the same time |
+| [`asset_ref`](#asset_ref) | Name an input by its id (`path/file.py:function`) instead of importing it |
+| [`@unsafe`](#unsafe) | Mark a function that reads globals or does I/O, which silences purity warnings |
+| [Other exports](#other-exports) | `barca.get`, `barca.sql`, `Group`, `duckdb_connection` and the rest |
 
 ## Accepted arguments
 
@@ -835,6 +818,39 @@ other keyword, `cron=` included, is an error when the file is read (exit 2).
 
 The cron has 5 fields (`minute hour day-of-month month day-of-week`) or 6 with a leading
 seconds field. There is no year field. See [Scheduling](/scheduling/) for what a tick does.
+
+## Qualified and aliased imports
+
+Barca recognizes top-level imports such as `import barca`, `import barca as b`
+and `from barca import asset as a`, for decorators and their helpers:
+
+```python
+import barca as b
+
+@b.asset(partitions={"key": b.partitions(["a", "b"])})
+def rows(key):
+    return {"key": key}
+```
+
+Planning reads these bindings statically and never imports your module. A name
+reassigned or imported from another library does not define a Barca node; local
+parameters or assignments also shadow task-body helpers such as `parallel`.
+Dynamic alias assignments and conditional imports are not resolved. Explicit writes to a Barca module export
+conservatively disable recognition of that export through every module alias and
+direct import, including earlier copies; unaffected exports remain available.
+
+If a foreign decorator previously became a node merely because it was named
+`asset`, `sensor` or `task`, import the actual Barca decorator instead. To keep a
+foreign wrapper on a node, stack it with a genuine Barca decorator (qualified or
+aliased imports work). Bare names with no competing binding retain legacy
+source-snippet recognition. Namespace reflection retains conservative discovery,
+but disables provenance-based validation and uses conservative hashing.
+
+Literal partition key lists need no import; a nonliteral `partitions(<expression>)` imports
+the pipeline module in a subprocess to evaluate its keys. A decorator built in a loop or
+installed through a runtime assignment is not seen. The signatures here are those of
+`python/barca/__init__.py`; unless a version is named, the behavior was checked by running
+0.18.0.
 
 ## Other exports
 
