@@ -36,7 +36,7 @@ barca run publish pipeline.py
 
 ```
 [barca] 2/2 steps | done in 0.0s
-Run 14fcc4d8648c | ran 'publish' in 0.098s (2 steps, 2 phases)
+Run 14fcc4d8648c | ran 'publish' in 0.098s (2 steps, 1 phase)
 
 Value:
 {

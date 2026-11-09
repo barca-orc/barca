@@ -27,8 +27,12 @@ barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] 
 | `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
 | `--partition KEY=V[,V]` | Select partition keys across the cone (a JSON object for compound keys): every partitioned node with that dimension computes only them, and fan-ins over them are skipped. Works without a target. |
 | `--agent` | Plain progress lines on stderr in place of the progress bar. |
-| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
+| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution`. |
 | `--env <name>` | Use a named environment's cache and history. |
+| `-o url`, `--expires <DURATION>` | Print a signed HTTPS link to each result in a cloud store, valid for `--expires` (default `1h`, at most `7d`). Experimental. |
+| `--batch <[NODE=]none\|all\|N>` | Override how keys are grouped into calls for nodes that declare `batch=` ([Batched Partitions](/reference/batched-partitions/)). |
+| `--allow-paused` | Run a target that `barca pause` paused ([Pausing Assets](/reference/pausing/)). |
+| `--server [URL]`, `--local` | Run on a `barca serve` (its deployed code), or ignore a configured server ([Server Mode](/reference/server-mode/)). |
 
 
 ## Example

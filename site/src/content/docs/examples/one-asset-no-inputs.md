@@ -2,11 +2,11 @@
 sidebar:
   order: 1
 title: "Worked Example: One Asset, No Inputs"
-description: One asset with no inputs, run with barca 0.30.2. What is written to disk, when it is served from cache, and how to look at the result.
+description: One asset with no inputs, rechecked with barca 0.42.0. What is written to disk, when it is served from cache, and how to look at the result.
 ---
 
 One asset with no inputs: what `barca get` does with it, what ends up on disk, and when the
-function runs again. Output on this page is from barca 0.30.2.
+function runs again. Output on this page was captured with barca 0.30.2 and rechecked with 0.42.0.
 
 This page used to be a design specification (a `.barcafiles/` directory with `code.txt` and
 `metadata.json`, an indexing step that imports modules, a hash that covers `uv.lock` and the
@@ -127,7 +127,7 @@ table (a string here) is one row with one column named `json`. `barca history` l
 ## When the function runs again
 
 The run hash covers the function's source, the decorator arguments that affect its result
-([`barca docs cache`](/reference/cache/) lists them), and the module-level names it uses. Each of these was run in
+([Which decorator arguments count](/reference/hashing/#which-decorator-arguments-count) lists them), and the module-level names it uses. Each of these was run in
 order after the steps above:
 
 | Change | Result |

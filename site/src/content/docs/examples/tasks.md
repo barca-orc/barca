@@ -8,7 +8,7 @@ description: A task does something (deploy, notify, migrate), always runs, and i
 A `@task` is a step that does something: deploy, notify, migrate. It is never cached. It runs
 every time it is in a run, and you run it with `barca run <task> <files>`.
 
-Everything on this page was run with barca 0.18.0. The terminal manual covers tasks in
+Everything on this page was first run with barca 0.18.0 and rechecked with 0.42.0. The terminal manual covers tasks in
 [`barca docs tasks`](/reference/tasks/).
 
 ## Assets and tasks
@@ -77,10 +77,8 @@ barca run notify pipeline.py --agent
 ```
 [barca] step:pipeline.py:raw_data completed 0.0s (1/5)
 [barca] step:pipeline.py:trained_model completed 0.0s (2/5)
-deploying model v1
 [barca] step:pipeline.py:deploy completed 0.0s (3/5)
 [barca] step:pipeline.py:smoke_test completed 0.0s (4/5)
-deploy succeeded
 [barca] step:pipeline.py:notify completed 0.0s (5/5)
 [barca] 5/5 steps | done in 0.0s
 {"elapsed_seconds":0.154927667,"final_output":null,"phases":1,"run_id":"5209eb30e900","status":"success","steps":[...],"steps_executed":5,"warnings":[]}
@@ -89,17 +87,17 @@ deploy succeeded
 The same command again runs three steps: the two assets are cached and the three tasks run.
 
 ```
-[barca] step:pipeline.py:raw_data cached
-[barca] step:pipeline.py:trained_model cached
-deploying model v1
 [barca] step:pipeline.py:deploy completed 0.0s (1/5)
 [barca] step:pipeline.py:smoke_test completed 0.0s (2/5)
-deploy succeeded
 [barca] step:pipeline.py:notify completed 0.0s (3/5)
+[barca] step:pipeline.py:raw_data cached
+[barca] step:pipeline.py:trained_model cached
 [barca] 3/5 steps | done in 0.0s
 ```
 
-A task's `print` goes to stderr with the progress lines. stdout is one JSON object.
+stdout is one JSON object. A task's `print` output is not mixed into this `--agent` output: in
+a terminal it appears on stderr, prefixed with the step (`[pipeline.py:deploy] deploying model
+v1`), and `barca logs` keeps it for every run (`barca logs --step deploy`).
 
 `barca run smoke_test pipeline.py` stops at `smoke_test`: `deploy` and `smoke_test` run, and
 `notify` is not part of the run.

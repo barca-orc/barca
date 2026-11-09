@@ -184,8 +184,11 @@ barca get report pipeline.py --agent
 run can print it more than once. It names the file's absolute path, shortened to `pipeline.py`
 on this page.
 
-A sensor's value is one value for the whole asset. There is no per-key sensor: if only one
-ticker's data changed, all keys still run. The same is true of any unpartitioned input.
+This sensor's value is one value for the whole asset: if only one ticker's data changed, all keys
+still run. The same is true of any unpartitioned input. To rerun only the keys whose data
+changed, give each key its own version: a sensor returning `{key: version}` that `partitions_from`
+reads ([Rerun Only Changed Partitions](/recipes/changed-partitions/)), or a partitioned sensor,
+`@sensor(partitions={"ticker": partitions(TICKERS)})`, which makes one call per key.
 
 `--dry-run` does not run the sensor. Before the run above it predicted from the sensor's last
 recorded value and reported everything as cached:
@@ -344,8 +347,10 @@ the four-key `summary` were still cached. [`barca docs sql`](/reference/sql/) de
 
 ## Selecting keys with `--partition`
 
-A key cannot be named as a target or in `--refresh`; select keys with `--partition` instead.
-The selection applies to the whole run, upstream and downstream:
+A key cannot be named as a target; select keys with `--partition` instead. (`--refresh` does take
+keys, such as `--refresh 'sales[region=emea]'`, to recompute those keys inside a full run:
+[Refresh selected keys](/reference/cache/#refresh-selected-keys-in-a-complete-dag).) The
+selection applies to the whole run, upstream and downstream:
 
 ```
 $ barca get 'sales[region=emea]' pipeline.py
@@ -431,8 +436,9 @@ per key, not what your functions cost.
 
 ## Limits
 
-- **A key is selected with `--partition`, never named** (above): `sales[region=emea]` is not a
-  target, and `--refresh` of an upstream asset addresses all its keys.
+- **A key is selected with `--partition`, never named as a target** (above): `sales[region=emea]`
+  is not a target. `--refresh` takes keys too (`--refresh 'sales[region=emea]'`); naming the asset
+  alone refreshes all its keys.
 - **Up to 0.18, editing a literal key list re-ran every key** (above). From 0.19 a new key
   runs alone wherever the keys are written, and editing `description=`, `tags=` or `retries=`
   on a partitioned asset re-runs nothing. Changing `serializer=`, `inputs=`, a `@sink` or the

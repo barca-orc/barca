@@ -96,6 +96,12 @@ include = ["pipelines/**/*.py"]            # only these files (replaces the walk
 max_size = "20GB"
 
 [server]
+# The barca serve that is the team's ledger (experimental). get and run still run here,
+# read cache hits from its ledger and post what they compute (needs [remote] with the
+# server's store); status, history and stats answer from it; --server runs a command there.
+url = "https://barca.internal.example.com"
+# "token" makes barca serve require project bearer tokens. Default: "off".
+auth = "off"
 # Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before putting them back
 # in its run queue for the next start.
 drain_timeout = 30
@@ -137,11 +143,6 @@ backup_interval = "1m"     # routine metadata backups; "off" retains final backu
 [remote.storage_options.s3]
 endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 
-[server]
-# The barca serve that is the team's ledger (experimental). get and run still run here,
-# read cache hits from its ledger and post what they compute (needs [remote] with the
-# server's store); status, history and stats answer from it; --server runs a command there.
-url = "https://barca.internal.example.com"
 ```
 
 | Key | Default | Meaning |
@@ -172,7 +173,7 @@ valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `require_env`, `remote`, `discovery`, `cache`, `server`, `execution`
+unknown field `defualt_env`, expected one of `default_env`, `require_env`, `remote`, `discovery`, `cache`, `server`, `execution`, `telemetry`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.

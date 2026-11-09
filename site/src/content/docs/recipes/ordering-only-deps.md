@@ -92,7 +92,7 @@ relation inputs, sensor inputs), is in [`barca docs assets`](/reference/assets/)
   usage error (exit 2) for every command that reads the file:
 
   ```
-  Parse error: after.py:seed_data (line 9): `after` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env
+  Parse error: after.py:seed_data (line 9): `after` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight, batch
   Remove `after`, or replace it with an argument @task accepts. See `barca docs tasks`.
   ```
 

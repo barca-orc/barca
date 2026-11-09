@@ -17,6 +17,7 @@ The change is local to the selected environment's metadata database.
 
 ```txt wrap
 barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
+barca history --reconcile RUN_ID
 ```
 
 
@@ -36,7 +37,7 @@ RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME 
 
 Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `job`, `status`,
 `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`,
-`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`. `triggered_by` says what
+`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`. `triggered_by` says what
 started the run: `manual` (a command typed on a machine), `api` (an HTTP request to
 `barca serve`), `schedule` (a cron tick, with the tick in `scheduled_at`, RFC 3339 in UTC, and
 the scheduled node in `schedule_id`) or `client`; it is `null` for runs recorded before barca

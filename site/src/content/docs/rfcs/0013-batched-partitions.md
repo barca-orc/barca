@@ -4,7 +4,7 @@ title: 'RFC-0013: Batched Partitions'
 description: 'batch= lets one call of a partitioned step compute many keys: N at a time, all of them, or groups you name. Each key keeps its own run hash and artifact, so caching, selection and change detection are the same as one key per call.'
 ---
 
-- **Status:** Accepted; implemented for 0.32.0
+- **Status:** Implemented (0.32.0)
 - **Date:** 2026-10-23
 - **Touches:** barca-core | barca-cli | python/barca | HTTP server
 - **Supersedes / Related:** #643 (this design). Builds on keyed partition sources (#622, 0.29.6), `--partition` across the cone (#614, 0.29.3), lazy inputs (`barca docs big-inputs`), dataset sinks (#621, 0.30.0), early cutoff (#636, 0.31.0) and server-wide capacity (#635, 0.31.0).

@@ -2,11 +2,11 @@
 sidebar:
   order: 2
 title: "Worked Example: One Asset, One Input"
-description: One asset that reads another, run with barca 0.30.2. What runs after each kind of change, and what --refresh and --no-cascade do.
+description: One asset that reads another, rechecked with barca 0.42.0. What runs after each kind of change, and what --refresh and --no-cascade do.
 ---
 
 Two assets, one reading the other: how the input is passed, and which steps run after each
-kind of change. Output on this page is from barca 0.30.2.
+kind of change. Output on this page was captured with barca 0.30.2 and rechecked with 0.42.0.
 
 This page used to be a design specification (a proposed decorator signature, an indexing
 step, a `.barcafiles/` layout). What follows is what the binary does. The shorter version of

@@ -22,10 +22,6 @@ barca queue resume --server          # queued runs start again, in order
 `pause` and `resume` answer with the queue after the change, and exit 2 on a `--read-only`
 server. See [`barca docs serve-ops`](/reference/serve-ops/), "The run queue".
 
-With a remote store, `barca serve` backs its metadata DB up every minute it changed (not with
-`--read-only`), and `barca state restore` refuses to run while it is up. See
-[Remote storage](/reference/remote-storage/).
-
 ---
 
 [All commands](/reference/cli/) · [Output format](/reference/cli/#output-format) · [Errors and exit codes](/reference/cli/#errors-and-exit-codes)

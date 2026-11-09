@@ -846,6 +846,10 @@ seconds field. There is no year field. See [Scheduling](/scheduling/) for what a
 | `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See [`barca docs agents`](/reference/agents/), "Getting values, not pointers". |
 | `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`, `phase`. |
 | `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |
+| `sql()` | Query cached results with DuckDB from Python, as `barca sql` does. See [SQL](/reference/sql/). |
+| `signed_url()` | A time-limited HTTPS link to an object in S3, GCS or Azure. See [Remote Storage](/reference/remote-storage/#sharing-a-result-signed-urls). |
+| `batches()`, `batches_by()`, `Failed` | Grouping for `batch=`, and the value that fails one key of a batched call alone. See [Batched Partitions](/reference/batched-partitions/). |
+| `group()`, `Group` | Organize nodes in the UI and CLI without changing execution or caching. See [Groups](/reference/groups/). |
 
 DuckDB steps share one default connection per worker process and execute sequentially.
 Import-time setup remains available to later steps. User-created objects and session settings
