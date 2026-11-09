@@ -17,7 +17,7 @@ hit. Valid hashes and cache decisions remain independent of worker pool size.
 An earlier version of this page was a design document (identity model, proposed
 `materialize()` and `list_partitions()` helpers, a `.barcafiles/` layout). This page
 describes the shipped workflow. The examples were first verified with 0.18.0 and re-run with
-0.30.2, which printed the output shown below; `barca docs partitions` is the current behavior
+0.30.2, which printed the output shown below; [`barca docs partitions`](/reference/partitions/) is the current behavior
 reference.
 
 ## Example
@@ -209,7 +209,7 @@ More on sensors: [Sensors and External Observations](/examples/sensors/).
 Adding a key runs the new key, and no other key of that asset, however the keys are written.
 Removing a key or reordering them runs no key. The keys are not part of the function's
 definition, so editing them never changes the run hash of a key that is already cached
-(`barca docs hashing`, "Which decorator arguments count").
+([`barca docs hashing`](/reference/hashing/), "Which decorator arguments count").
 
 This section was run with 0.19 and re-run with 0.30.2. Up to 0.18 it held only when the keys
 were written outside the decorator: adding a key to a literal list inside it re-ran every key of
@@ -340,7 +340,7 @@ region=latam  latam   50
 
 `summary`, which uses `collect(sales)`, received the same three keys
 (`{"regions": 3, "total": 130}`). Putting `amer` back in the list ran no step: its result and
-the four-key `summary` were still cached. `barca docs sql` describes which keys a view covers.
+the four-key `summary` were still cached. [`barca docs sql`](/reference/sql/) describes which keys a view covers.
 
 ## Selecting keys with `--partition`
 
@@ -409,7 +409,7 @@ key, laid out as it is locally. The store is this machine's backup and read-thro
 the local copies of both keys of a `sales` deleted, the next `barca get sales` ran no step and
 printed `[barca] fetched 2 cached artifacts (66 B) in 0.0s`. This was run with a `file://` store;
 a cloud store was not tried for this page. Another machine reuses those keys only through a
-server they both point at (`barca docs server-mode`).
+server they both point at ([`barca docs server-mode`](/reference/server-mode/)).
 
 ## A few thousand keys
 
@@ -450,7 +450,7 @@ per key, not what your functions cost.
   dimension keeps every key. Up to 0.29.2 `--partition` narrowed only the target.
 - With `@sink("out.parquet")`, each key writes its own file; with a path ending in `/`,
   `@sink("out/")` writes one Hive-partitioned dataset with a `retailer=r1/` directory per key:
-  `barca docs sinks`.
+  [`barca docs sinks`](/reference/sinks/).
 - To fan work out at run time from inside a task, without caching, see
   [Parallel Tasks](/recipes/parallel-tasks/).
 

@@ -128,4 +128,4 @@ annotation was meant to avoid.
   [Anti-Patterns](/recipes/anti-patterns/#fixed-names-on-duckdbs-shared-connection).
 
 The same material is in the terminal manual: `barca docs big-inputs`. Input annotations are
-listed in `barca docs types`.
+listed in [`barca docs types`](/reference/types/).

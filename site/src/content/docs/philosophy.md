@@ -25,7 +25,7 @@ imports the module.)
 
 Cost: decorators, `inputs=` and `freshness=` must be written literally. `inputs` built in a
 loop is not seen. Some code changes are not seen by the cache either, a module loaded with
-`importlib.import_module(name)` for example; `barca docs cache` lists them.
+`importlib.import_module(name)` for example; [`barca docs cache`](/reference/cache/) lists them.
 
 ## No server and no configuration by default
 

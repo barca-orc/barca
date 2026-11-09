@@ -11,7 +11,7 @@ This page covers timeouts, retries and cancellation. Everything shown was run wi
 `--param x=7` flag. No such flag exists: `barca get flaky pipeline.py --param x=7` exits 2 with
 `unexpected argument '--param' found`. To run one function over a set of values, use
 [partitions](/examples/partitions/). To make a value from outside
-part of the cache key, declare an environment variable with `env=[...]` (`barca docs assets`).
+part of the cache key, declare an environment variable with `env=[...]` ([`barca docs assets`](/reference/assets/)).
 
 ## Example
 
@@ -147,7 +147,7 @@ flaky         asset  cached     materialized  success 2026-10-21 21:07:54 UTC 0.
 ```
 
 Run statuses in `barca history` are `success`, `failed`, `cancelled`, `running` and
-`interrupted` (the process was killed; `barca docs cache`). There is no separate `timed_out`
+`interrupted` (the process was killed; [`barca docs cache`](/reference/cache/)). There is no separate `timed_out`
 status. The cancelled run above is listed with 1 step although its step did not finish.
 
 ## Limits

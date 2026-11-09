@@ -95,7 +95,7 @@ The run created `.barca/` in the project root:
 
 - `metadata.db` holds run history and the record of each result.
 - The artifact is the returned value, stored as json because a string is JSON-serializable
-  (`barca docs types` lists the formats). It is cached by run hash: the file name is a hash of
+  ([`barca docs types`](/reference/types/) lists the formats). It is cached by run hash: the file name is a hash of
   the function's code and its inputs, not of the output.
 - `.barca/.gitignore` contains `*`, so git ignores the directory.
 
@@ -127,7 +127,7 @@ table (a string here) is one row with one column named `json`. `barca history` l
 ## When the function runs again
 
 The run hash covers the function's source, the decorator arguments that affect its result
-(`barca docs cache` lists them), and the module-level names it uses. Each of these was run in
+([`barca docs cache`](/reference/cache/) lists them), and the module-level names it uses. Each of these was run in
 order after the steps above:
 
 | Change | Result |
@@ -139,7 +139,7 @@ order after the steps above:
 | `barca get a pipeline.py --refresh a` | runs, and overwrites the artifact for that hash |
 
 What the hash does not cover (installed packages, environment variables that are not declared
-with `env=`, files the function reads) is listed in `barca docs cache`. A function that reads a
+with `env=`, files the function reads) is listed in [`barca docs cache`](/reference/cache/). A function that reads a
 file or a bucket is computed once and then served from cache; see
 [Sensors and external observations](/examples/sensors/).
 

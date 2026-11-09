@@ -243,7 +243,7 @@ after `test_emea_total`.
 - When the inputs are not DuckDB relations (pandas, polars, Arrow), use a connection of the
   step's own: `con = duckdb.connect()`, `con.register("picked", df)`, `con.sql(...)`,
   `con.close()`. This does not work with inputs annotated `duckdb.DuckDBPyRelation`: they live
-  on barca's connection and cannot be combined with another one (`barca docs types`,
+  on barca's connection and cannot be combined with another one ([`barca docs types`](/reference/types/),
   "DuckDB connections").
 - In tests, give every test a new default connection:
 

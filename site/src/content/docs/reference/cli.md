@@ -30,7 +30,7 @@ available topics for scripts and agents. Help and examples never load a project 
 | Run schedules, the web UI and the HTTP API | `barca serve` | [serve](/reference/cli/serve/) |
 | Free disk space under `.barca/` | `barca gc` | [gc](/reference/cli/gc/) |
 | Check the setup without running anything | `barca doctor` | [Doctor](/reference/doctor/) |
-| Read the manual in the terminal | `barca docs cache` | [docs](/reference/cli/docs/) |
+| Read the manual in the terminal | [`barca docs cache`](/reference/cache/) | [docs](/reference/cli/docs/) |
 
 `get`, `run`, `list`, `status`, `sql`, `history` and `stats` print JSON when their output is
 piped ([Output format](#output-format)).
@@ -99,7 +99,7 @@ barca --help                                  Show help
 `get`, `run`, `status`, `list`, `history` and `stats` also take `--server [<url>]`, which runs
 the command on a `barca serve` and prints it here as the local command would, and `--local`,
 which ignores a configured server (experimental; [Server mode](/reference/config/#server-mode),
-`barca docs server-mode`). `sql` takes both too: a server resolves its views, and the query
+[`barca docs server-mode`](/reference/server-mode/)). `sql` takes both too: a server resolves its views, and the query
 always runs here. `doctor` takes both too: `--server` checks that server beside this
 machine (a configured one is checked without it), `--local` checks this machine only.
 
@@ -141,13 +141,13 @@ errors always go to stderr; the progress bar (the only ANSI output) draws only w
 terminal, and `--agent` replaces it with plain progress lines.
 
 A library warning that a step's process repeats is printed once per run and then counted
-(`[barca] 79 more: ...`); see `barca docs agents`, "Repeated warnings".
+(`[barca] 79 more: ...`); see [`barca docs agents`](/reference/agents/), "Repeated warnings".
 
 `plan`, `get`, `run` and `--dry-run` also report plan-time warnings: one `[barca] warning: ...`
 line each on stderr, and a `warnings` array in their JSON output (`[]` when there are none).
 The one warning so far is `unused_input`: a step declares an input its function never uses,
 which is still loaded and still part of the cache key. Warnings do not change the exit code
-(`barca docs assets`, "Unused inputs"). A query receiver shadowed by a `match` capture
+([`barca docs assets`](/reference/assets/), "Unused inputs"). A query receiver shadowed by a `match` capture
 or nested function/class definition is treated conservatively, so dynamic SQL access does
 not cause a false unused-input warning.
 
@@ -372,7 +372,7 @@ barca logs --step report --stream stderr --timestamps   # after a failure: its l
 ```
 
 With a server configured (or `--server`), `barca logs` reads the server's runs, scheduled ones
-included; `--local` reads this machine's (`barca docs logs`, "Debugging a live pipeline").
+included; `--local` reads this machine's ([`barca docs logs`](/reference/logs/), "Debugging a live pipeline").
 
 Task return values remain usable through `barca run --json`, `-o value`, and `barca.run(...)`.
 During get/run, non-JSON modes print stdout lines to stderr with `[node_id]` prefixes;

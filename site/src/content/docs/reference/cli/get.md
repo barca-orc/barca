@@ -91,7 +91,7 @@ dimension no node in the cone has, a value no node with that dimension has, or a
 selection would skip is a usage error (exit 2). See [Parametrized Assets and Partitions](/examples/partitions/#selecting-keys-with---partition). When some keys fail the run
 fails (exit 1, `failed_node` names the key) and `final_output` in the result line holds the
 keys that succeeded; how a partial failure is reported may still change
-(`barca docs partitions`).
+([`barca docs partitions`](/reference/partitions/)).
 
 ## Many partition keys
 

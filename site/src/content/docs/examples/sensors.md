@@ -15,7 +15,7 @@ on subsequent unchanged runs. Removing a key removes it from current results; it
 remains available subject to the normal artifact cache policy.
 
 The examples below use version values for comparison. The terminal manual covers the same ground in
-`barca docs cache` ("External data that changes in place") and `barca docs assets` ("Sensors").
+[`barca docs cache`](/reference/cache/) ("External data that changes in place") and [`barca docs assets`](/reference/assets/) ("Sensors").
 
 ## Outside data that changes in place
 
@@ -355,6 +355,6 @@ ticks coincide may both compute a shared upstream.
 - Only assets that read the sensor directly have its value in their run hash. Assets further
   downstream change because their upstream's run hash changed.
 - A partitioned asset that reads a sensor re-runs every key when the value changes
-  (`barca docs cache`).
+  ([`barca docs cache`](/reference/cache/)).
 - One value is kept per sensor: each run overwrites the previous one. `barca history` lists the
   runs, not the values observed.
