@@ -15,22 +15,22 @@ available topics for scripts and agents. Help and examples never load a project 
 
 ## Common tasks
 
-| I want to… | Command | More |
-|---|---|---|
-| Get an asset, from cache when nothing changed | `barca get revenue` | [get](/reference/cli/get/) |
-| Run a task | `barca run publish` | [run](/reference/cli/run/) |
-| See what would run, without running it | `barca get revenue --dry-run` | [get](/reference/cli/get/) |
-| Recompute an asset and what is downstream | `barca get revenue --refresh orders` | [Forcing a Recompute](/reference/refresh/) |
-| See every node's cache state and why | `barca status` | [status](/reference/cli/status/) |
-| See only what failed or is stale | `barca status --problems` | [status](/reference/cli/status/) |
-| See recent runs, or one run's errors | `barca history` | [history](/reference/cli/history/) |
-| Read a step's printed output | `barca logs` | [Logs](/reference/cli/logs/) |
-| Query cached results with SQL | `barca sql "select * from revenue"` | [sql](/reference/cli/sql/) |
-| Roll an asset back one version | `barca pin revenue --previous` | [pin and unpin](/reference/cli/pin/) |
-| Run schedules, the web UI and the HTTP API | `barca serve` | [serve](/reference/cli/serve/) |
-| Free disk space under `.barca/` | `barca gc` | [gc](/reference/cli/gc/) |
-| Check the setup without running anything | `barca doctor` | [Doctor](/reference/cli/doctor/) |
-| Read the manual in the terminal | `barca docs cache` | [docs](/reference/cli/docs/) |
+| I want to… | Command (links to its page) |
+|---|---|
+| Get an asset, from cache when nothing changed | [`barca get revenue`](/reference/cli/get/) |
+| Run a task | [`barca run publish`](/reference/cli/run/) |
+| See what would run, without running it | [`barca get revenue --dry-run`](/reference/cli/get/) |
+| Recompute an asset and what is downstream | [`barca get revenue --refresh orders`](/reference/refresh/) |
+| See every node's cache state and why | [`barca status`](/reference/cli/status/) |
+| See only what failed or is stale | [`barca status --problems`](/reference/cli/status/) |
+| See recent runs, or one run's errors | [`barca history`](/reference/cli/history/) |
+| Read a step's printed output | [`barca logs`](/reference/cli/logs/) |
+| Query cached results with SQL | [`barca sql "select * from revenue"`](/reference/cli/sql/) |
+| Roll an asset back one version | [`barca pin revenue --previous`](/reference/cli/pin/) |
+| Run schedules, the web UI and the HTTP API | [`barca serve`](/reference/cli/serve/) |
+| Free disk space under `.barca/` | [`barca gc`](/reference/cli/gc/) |
+| Check the setup without running anything | [`barca doctor`](/reference/cli/doctor/) |
+| Read the manual in the terminal | [`barca docs cache`](/reference/cli/docs/) |
 
 `get`, `run`, `list`, `status`, `sql`, `history` and `stats` print JSON when their output is
 piped ([Output format](#output-format)).

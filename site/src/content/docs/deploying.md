@@ -11,9 +11,7 @@ barca serve                      # API, scheduler and web UI on 127.0.0.1:8274
 open http://127.0.0.1:8274/      # redirects to /ui/
 ```
 
-The UI opens on the Assets table: every node under its source file, with its cache state and
-last run (and its typical duration and next scheduled run, when some node has one), refreshed
-every 10 seconds. Failed and stale nodes are listed first.
+What the UI shows is in [The Web UI](/web-ui/).
 
 Three facts shape every deployment:
 

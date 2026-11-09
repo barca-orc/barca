@@ -1,5 +1,5 @@
 ---
-title: "Running barca serve: Start Here"
+title: "barca serve Overview"
 description: "What barca serve does, and which page answers which question: schedules, sharing results with a team, deploying, operating, the HTTP API and alerts."
 ---
 

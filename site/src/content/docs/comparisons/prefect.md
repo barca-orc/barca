@@ -3,6 +3,11 @@ title: "Barca vs Prefect"
 description: Install size, import time, steps to a first result, run time, run output, error output and caching for the same pipeline, measured on 2026-10-21 with barca 0.28.0 and Prefect 3.9.0.
 ---
 
+Prefect orchestrates Python functions as flows and tasks run through a server and workers. barca
+reads your functions as a dependency graph and caches every result by its code and inputs, with
+no server for a local run. This page maps Prefect's concepts to barca's, says when to choose
+Prefect, and then measures the same pipeline in both.
+
 ## Coming from Prefect
 
 | Prefect | barca |
