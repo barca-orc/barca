@@ -14,6 +14,24 @@ Barca skips a step when it has already computed the same thing. This topic cover
 same" means (the run hash), what the hash does and does not see, the states a cached result
 can be in, how to force a recompute, the cache size limit, and where everything is stored.
 
+## At a glance
+
+| What changed | What runs again |
+|---|---|
+| Nothing | No asset: each is served from cache. Sensors and tasks in the run still run |
+| An asset's code, or helper code it calls | That asset and everything downstream of it |
+| A value a `@sensor` returns | The assets that read the sensor, and everything downstream |
+| A variable listed in the asset's `env=[...]` | That asset and everything downstream |
+| `inputs=`, `serializer=` or a partition dimension name | That asset and everything downstream |
+| Another decorator option (`retries=`, `timeout_seconds=`, ...) or formatting | Nothing |
+| A file, table or bucket the asset reads in its own body, or an environment variable it does not list | Nothing: barca cannot see it. Read it through a `@sensor` ("External data that changes in place") or list it in `env=` |
+| A new partition key | That key's steps, and any `collect()` of the asset |
+| An `@asset(cutoff=True)` reran and wrote the same bytes | Nothing below it ("Early cutoff") |
+| Nothing, but you want a recompute | `--refresh name` reruns it and what is downstream; `--refresh-all` reruns the cone ("Forcing a recompute") |
+
+Tasks and sensors are never served from cache: they run every time they are in a run.
+`barca status` says which state each node is in and why, and `--dry-run` shows what would run.
+
 ## Incremental runs
 
 A normal `get` or `run` reuses previously validated freshness before expanding partition
