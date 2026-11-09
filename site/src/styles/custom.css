@@ -216,6 +216,14 @@ mobile-starlight-toc code {
 }
 /* On a phone the sample wraps instead of being cut off at the edge */
 @media (max-width: 49.99rem) {
+  .hero .stack {
+    text-align: start;
+  }
+  .hero .copy,
+  .hero .actions {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
   .hero-demo pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;

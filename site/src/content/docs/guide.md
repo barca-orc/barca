@@ -283,10 +283,10 @@ def total(all_sales: list[dict], margins: list[dict]) -> dict:
 ```
 
 ```bash
-barca get total pipeline.py     # 7 steps: three keys each of sales and margin, then total
+barca get total pipeline.py     # 7 steps: 3 keys of sales, 3 of margin, total
 barca get total pipeline.py     # 0 steps
 # ... "latam" is added to REGIONS ...
-barca get total pipeline.py     # 3 steps: sales and margin for latam, then total
+barca get total pipeline.py     # 3 steps: latam's sales and margin, total
 ```
 
 <figure class="diagram">

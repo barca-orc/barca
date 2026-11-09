@@ -63,6 +63,7 @@ export default defineConfig({
         },
         {
           label: 'Why Barca',
+          collapsed: true,
           items: [
             { slug: 'philosophy' },
             { slug: 'comparisons' },
@@ -74,6 +75,7 @@ export default defineConfig({
         },
         {
           label: 'Writing Pipelines',
+          collapsed: true,
           items: [
             { slug: 'reference/assets' },
             { slug: 'reference/tasks' },
@@ -88,6 +90,7 @@ export default defineConfig({
         },
         {
           label: 'Running and Caching',
+          collapsed: true,
           items: [
             { slug: 'troubleshooting' },
             { slug: 'reference/cli' },
@@ -102,6 +105,7 @@ export default defineConfig({
         },
         {
           label: 'Scheduling and Servers',
+          collapsed: true,
           items: [
             { slug: 'scheduling' },
             { slug: 'deploying' },
@@ -113,6 +117,7 @@ export default defineConfig({
         },
         {
           label: 'Storage and Configuration',
+          collapsed: true,
           items: [
             { slug: 'reference/config' },
             { slug: 'reference/layout' },
@@ -124,6 +129,7 @@ export default defineConfig({
         },
         {
           label: 'Scripts and AI Agents',
+          collapsed: true,
           items: [
             { slug: 'reference/agents' },
             { slug: 'reference/agent-skill' },
@@ -132,6 +138,7 @@ export default defineConfig({
         },
         {
           label: 'Recipes',
+          collapsed: true,
           items: [
             { slug: 'patterns' },
             { slug: 'patterns/01-asset-to-asset' },
@@ -150,7 +157,7 @@ export default defineConfig({
                 { slug: 'workflows' },
                 { label: 'One Asset, No Inputs', slug: 'workflows/01-single-asset-no-inputs' },
                 { label: 'One Asset, One Input', slug: 'workflows/02-single-asset-one-input' },
-                { label: 'Partitions', slug: 'workflows/03-parametrized-assets-and-partitions' },
+                { label: 'Partitions, Step by Step', slug: 'workflows/03-parametrized-assets-and-partitions' },
                 { label: 'Renaming and Moving an Asset', slug: 'workflows/04-asset-continuity-rename-and-move' },
                 { label: 'Freshness and Schedules', slug: 'workflows/05-schedule-driven-reconciliation-and-effects' },
                 { label: 'Sensors and Outside Data', slug: 'workflows/06-sensors-and-external-observations' },

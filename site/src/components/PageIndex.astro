@@ -39,6 +39,7 @@ pages = all
 
 const letterOf = (p: (typeof pages)[number]) => sortKey(p.data.title).charAt(0).toUpperCase();
 const letters = [...new Set(pages.map(letterOf))];
+const groups = letters.map((l) => [l, pages.filter((p) => letterOf(p) === l)] as const);
 const section = (id: string) => SECTIONS.find(([p]) => id.startsWith(p))?.[1] ?? 'Guide';
 ---
 
@@ -52,24 +53,33 @@ const section = (id: string) => SECTIONS.find(([p]) => id.startsWith(p))?.[1] ??
   )
 }
 
-<ul class="page-index" role="list">
-  {
-    pages.map((p, i) => (
-      <>
-        {all && (i === 0 || letterOf(pages[i - 1]) !== letterOf(p)) && (
-          <li class="az-letter" id={`letter-${letterOf(p).toLowerCase()}`}>
-            {letterOf(p)}
-          </li>
-        )}
+{
+  all ? (
+    groups.map(([letter, group]) => (
+      <section class="az-group">
+        <h2 id={`letter-${letter.toLowerCase()}`}>{letter}</h2>
+        <ul class="page-index" role="list">
+          {group.map((p) => (
+            <li>
+              <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
+              <span class="kind">{section(p.id)}</span>
+              <p>{p.data.description}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))
+  ) : (
+    <ul class="page-index" role="list">
+      {pages.map((p) => (
         <li>
           <a href={`/${p.id}/`}>{clean(p.data.title)}</a>
-          {all && <span class="kind">{section(p.id)}</span>}
           <p>{p.data.description}</p>
         </li>
-      </>
-    ))
-  }
-</ul>
+      ))}
+    </ul>
+  )
+}
 
 <style>
   .az-jump {
@@ -83,13 +93,10 @@ const section = (id: string) => SECTIONS.find(([p]) => id.startsWith(p))?.[1] ??
     text-decoration: none;
     color: var(--sl-color-text-accent);
   }
-  .page-index .az-letter {
-    grid-column: 1 / -1;
-    border-top: none;
-    padding: 1rem 0 0;
+  .az-group h2 {
+    margin-top: 1.5rem;
     font-family: var(--sl-font-mono);
     font-size: var(--sl-text-xl);
-    font-weight: 600;
     color: var(--sl-color-accent-high);
     scroll-margin-top: 5rem;
   }
