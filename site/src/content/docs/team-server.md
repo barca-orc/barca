@@ -1,6 +1,9 @@
 ---
 title: Share Results With a Team
 description: One barca serve and one bucket give a whole team the same cache and run history, in three steps.
+next:
+  link: /recipes/
+  label: Recipes
 ---
 
 Once one person has computed something, nobody else has to compute it again. You run one

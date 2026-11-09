@@ -417,6 +417,11 @@ starlight-menu-button[aria-expanded='true'] button {
   background-color: var(--sl-color-accent-low);
   color: var(--sl-color-white);
 }
+.sidebar-content a[aria-current='page'].section-open {
+  font-weight: 400 !important;
+  color: var(--sl-color-gray-2) !important;
+  background-color: transparent !important;
+}
 
 /* The homepage uses the doc template so phones get the menu button (a splash page has none), but
    on wider screens it hides the sidebar and uses the full width, as a landing page should */
@@ -439,10 +444,25 @@ starlight-menu-button[aria-expanded='true'] button {
   border-top: none;
 }
 
-/* Release notes: the changelog's own "# Changelog" heading repeats the page title. */
+/* Release notes: the changelog's own "# Changelog" heading and intro repeat the page's, and
+   Pending (not released yet) stays in CHANGELOG.md: hide it and everything up to the next h2. */
 .release-notes > h1:first-child,
-.release-notes > h1:first-child + p {
+.release-notes > h1:first-child + p,
+.release-notes > h2#pending,
+.release-notes > h2#pending ~ *:not(h2#pending ~ h2):not(h2#pending ~ h2 ~ *) {
   display: none;
+}
+.release-latest {
+  padding: 0.75rem 1rem;
+  border-inline-start: 3px solid var(--sl-color-text-accent);
+  background: var(--sl-color-gray-6);
+}
+.release-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-sm);
 }
 
 /* The All commands table: on a phone, the syntax column (on each command's page anyway)

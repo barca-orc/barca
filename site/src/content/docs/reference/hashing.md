@@ -195,7 +195,7 @@ these names keep their selective cones. The exact rules are in `specs/behavior/c
 ## Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`
-([Forcing a Recompute: Forcing a recompute](/reference/refresh/#forcing-a-recompute)):
+([Forcing a Recompute](/reference/refresh/)):
 
 - installed packages and the standard library: after upgrading a package, recompute;
 - modules outside the project root (`../shared/`), and modules only a custom `sys.path` or

@@ -4,11 +4,22 @@ description: What changed in each barca release, newest first, including breakin
 tableOfContents: false
 ---
 
-import Changelog from '../../../../CHANGELOG.md';
+import Changelog, { getHeadings as changelogHeadings } from '../../../../CHANGELOG.md';
 
-This is [`CHANGELOG.md`](https://github.com/barca-orc/barca/blob/main/CHANGELOG.md) from the
-repository. **Pending** lists changes merged since the last release; they ship in the next one.
-Upgrade with `uv add barca@latest` (or `pip install -U barca`).
+export const versions = changelogHeadings().filter((h) => h.depth === 2 && /^\d/.test(h.text));
+export const latest = versions[0];
+
+<div class="release-latest">
+  <strong>Latest: <a href={`#${latest.slug}`}>{latest.text}</a></strong>. Upgrade with
+  <code>uv add barca@latest</code> or <code>pip install -U barca</code>. Each release's notes
+  are also its <a href="https://github.com/barca-orc/barca/releases">GitHub release</a>; changes
+  merged since the latest release are in
+  [`CHANGELOG.md`](https://github.com/barca-orc/barca/blob/main/CHANGELOG.md) under Pending.
+</div>
+
+<nav class="release-index" aria-label="Releases">
+  {versions.map((v) => <a href={`#${v.slug}`}>{v.text.split(' ')[0]}</a>)}
+</nav>
 
 <div class="release-notes">
   <Changelog />
