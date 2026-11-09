@@ -21,6 +21,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- **Recovery actions together:** replacement upload and version pinning now live in the asset’s Incident tab beside pause/resume. The summary links to pin review instead of unpinning without confirmation.
+
+- **Readable grouped tables and explicit graph fit:** mixed group/node tables preserve column widths and scroll instead of overlapping values. Fit to screen shows every graph node, including on laptop windows, and a delayed automatic fit no longer overrides the operator’s view.
+
 - Web UI: the graph fits once its nodes are measured and re-fits when the canvas changes size until you pan or zoom; switching from List to Graph could leave it unfitted at the canvas's top-left corner.
 
 ## 0.41.0 (2026-11-08)

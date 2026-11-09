@@ -59,22 +59,14 @@ test('fit-to-screen zooms out a little, never past 0.8, to show the failures tog
   }
 })
 
-test('a graph too wide even at 0.8 is shown at 1:1 from its first failure', async ({ page }) => {
+test('explicit fit includes every node at laptop width', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 })
   await page.getByRole('button', { name: 'Fit to screen' }).click()
-  await page.waitForTimeout(500)
-  for (const box of await page.locator('.react-flow__node').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))) {
-    expect(box).toBeGreaterThanOrEqual(208)
-  }
-  // Centred on the failed node upstream, which is on screen; the one downstream is not.
-  const failed = page.locator(node('demand_forecast'))
   const canvas = (await page.locator('.react-flow').boundingBox())!
-  const box = (await failed.boundingBox())!
-  expect(box.x).toBeGreaterThan(canvas.x)
-  expect(box.x + box.width).toBeLessThan(canvas.x + canvas.width)
-  expect(Math.abs(box.x + box.width / 2 - (canvas.x + canvas.width / 2))).toBeLessThan(canvas.width / 4)
-  const publish = (await page.locator(node('publish_plan')).boundingBox())!
-  expect(publish.x).toBeGreaterThan(canvas.x + canvas.width)
+  await expect.poll(async () => page.locator('.react-flow__node').evaluateAll((nodes, c) => nodes.every(n => {
+    const b = n.getBoundingClientRect()
+    return b.left >= c.x && b.right <= c.x + c.width && b.top >= c.y && b.bottom <= c.y + c.height
+  }), canvas)).toBe(true)
 })
 
 test('a consumer a failure upstream kept from running reads blocked and names the failure in its hint', async ({ page }) => {
