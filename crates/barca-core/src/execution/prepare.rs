@@ -76,6 +76,7 @@ pub(super) async fn existing_cache(
 /// error; under a tick it blocks the targets that read it instead, which are moved to the
 /// returned list. Stale ones get a note on stderr (not under a tick).
 pub(super) struct Planned<'a> {
+    pub(super) user_pins: Vec<db::AssetPin>,
     pub(super) cone: Option<Vec<&'a str>>,
     pub(super) pinned: HashMap<String, crate::freshness::Pin>,
     pub(super) blocked: Vec<(String, TargetOutcome)>,
@@ -104,6 +105,7 @@ pub(super) async fn pin_manual<'a>(
     file_args: &[String],
 ) -> Result<Planned<'a>, BarcaError> {
     let mut planned = Planned {
+        user_pins: Vec::new(),
         cone: None,
         pinned: HashMap::new(),
         blocked: Vec::new(),
@@ -141,6 +143,7 @@ pub(super) async fn pin_manual<'a>(
         None => Default::default(),
     };
     let user_ids: HashSet<String> = user.keys().cloned().collect();
+    planned.user_pins = user.values().cloned().collect();
     if !rules.pin_manual && user.is_empty() {
         return Ok(planned);
     }
@@ -292,6 +295,7 @@ pub(super) async fn prepare_run(
     };
     let mut targets = resolve_targets(&dag, target_names, resolve_as)?;
     let Planned {
+        user_pins,
         cone,
         pinned,
         blocked,
@@ -348,7 +352,6 @@ pub(super) async fn prepare_run(
         Some(selection) => Some(selection.apply(&dag, &mut exec_plan, &target_ids)?),
         None => None,
     };
-    let user_pins = db::get_pins(&request.cfg.db_path).await?;
     crate::pins::prune_partition_inputs(&dag, &mut exec_plan, &target_ids, &user_pins);
     trace("planned");
 
