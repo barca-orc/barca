@@ -188,7 +188,8 @@ child output before exiting.
 ## Git workflow
 
 Trunk-based: `main` is the integration branch — always green, but not necessarily
-released. Merging to main never publishes anything; only pushing a `v*` tag does.
+released. Merging to main publishes no package (only pushing a `v*` tag does); a merge that
+changes `site/` or `CHANGELOG.md` redeploys barca.sh.
 
 - **Always use worktrees** for local development work — see [AGENTS.md](AGENTS.md):
   `scripts/new-worktree.sh <slug> [type]` creates `.worktrees/<slug>` on `<type>/<slug>` off
@@ -220,7 +221,10 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   its merge group (head commit `chore(release): ...`); its `durations` job uploads the suite's
   per-file durations, which `scripts/release.sh` merges into `scripts/ci-test-durations.json`.
   A PR labelled `ci-full` runs the full tier too. Nothing runs on push to main: main only
-  moves to a merge group's commit, which the queue has tested. A failure the full tier finds
+  moves to a merge group's commit, which the queue has tested. The one exception is the
+  site: `.github/workflows/site.yml` deploys barca.sh when a commit on main changes `site/`
+  or `CHANGELOG.md`, and uploads a preview of a PR that does, linked in a PR comment
+  (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets). A failure the full tier finds
   on a release PR is in one of the PRs merged since the previous release. Details:
   `contributing/testing.md` on the site.
 - **Release**: `scripts/release.sh X.Y.Z`, from the trunk on an up-to-date main
@@ -239,9 +243,7 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   `git tag -a vX.Y.Z -m vX.Y.Z <merge sha> && git push origin vX.Y.Z` (the tag-push trigger
   still works; the tagging workflow skips a tag that already exists). The `release/` prefix
   keeps branch and tag names from colliding, so `git push origin v<x.y.z>` and
-  `git log v<x.y.z>..` are unambiguous. The same workflow then deploys barca.sh from the tag
-  (`deploy-site`, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets);
-  nothing waits on it, so a failed deploy never blocks a release. PyPI's simple index is
+  `git log v<x.y.z>..` are unambiguous. PyPI's simple index is
   cached by its CDN for up to 10 minutes, so a new version can be uploaded but not yet
   installable; the workflow's post-publish check waits for it.
 
