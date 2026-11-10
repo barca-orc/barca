@@ -998,6 +998,14 @@ const SITE_PAGES: &[SitePage] = &[
                       artifact's shape, --problems and --state.",
     },
     SitePage {
+        topic: "status-fields",
+        file: "status-fields.md",
+        slug: "reference/cli/status-fields",
+        title: "barca status: Fields and JSON",
+        description: "What barca status reports for each node beyond its state (last materialization, \
+                      artifact shape, run timing, trigger), its JSON document, limits and disk usage.",
+    },
+    SitePage {
         topic: "pins",
         file: "pins.md",
         slug: "reference/cli/pin",

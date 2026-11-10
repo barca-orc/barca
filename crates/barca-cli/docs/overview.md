@@ -94,6 +94,7 @@ Getting work done:
 - `barca docs big-inputs` — large inputs: lazy types load only the columns and rows a step needs
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs status` — one view of cache state, last run and artifact shape per node
+- `barca docs status-fields` — each node's fields in `barca status`, its JSON document, limits and disk usage
 - `barca docs logs` — a run's recorded step output (stdout, stderr, tracebacks), following a live run
 - `barca docs sql` — query cached results with DuckDB while debugging, without writing a step
 - `barca docs doctor` — prerequisite checks without running steps, and a copyable local-only debugging profile
