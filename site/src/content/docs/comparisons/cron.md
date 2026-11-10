@@ -3,11 +3,8 @@ title: "Barca vs Cron and systemd Timers"
 description: What a scheduled job gets from a crontab line, a systemd timer, and a barca Schedule under barca serve, feature by feature.
 ---
 
-:::caution[Written in 2026-07]
-This page has no timings. Its comparison was written on 2026-07-19 with barca 0.7.0, and the barca output on it is from 0.18.0. It has not been re-checked against the current release. A re-run of the comparison pages is tracked in [#65](https://github.com/barca-orc/barca/issues/65).
-:::
-
-Last measured: 2026-07-19, with barca 0.7.0 and cron and systemd (versions not recorded), on a machine that was not recorded. Not re-run since. Re-run tracked in [#65](https://github.com/barca-orc/barca/issues/65).
+Checked on 2026-11-09 against barca 0.42.0: the `barca list` output, catch-up after downtime,
+overlap skipping and retries below were run on that release.
 
 This page contains no timings. It compares what each tool does for one scheduled job. The cron
 column describes [cronie's crontab(5)](https://man7.org/linux/man-pages/man5/crontab.5.html) and
@@ -61,13 +58,23 @@ def refresh() -> None:
 barca serve job.py
 ```
 
-`barca list job.py` shows the schedule and its next fire time without starting the server
-(output from barca 0.29.1):
+`barca list job.py --pretty` shows the schedule and its next fire time without starting the
+server (output from barca 0.42.0):
 
 ```
 NAME            KIND  FRESHNESS           NEXT FIRE (LOCAL TIME)  DEPS
 ----------------------------------------------------------------------
-job.py:refresh  task  cron: */10 * * * *  2026-10-21 17:10:00     -
+job.py:refresh  task  cron: */10 * * * *  2026-11-09 19:20:00     -
+```
+
+Under `barca serve`, a tick that comes while the previous run is still going is skipped, and a
+restart after a missed tick fires the job once (barca 0.42.0, a 5-second job every 3 seconds):
+
+```
+[barca] scheduled run job.py:refresh → 86c1a9378180
+[barca] scheduled run job.py:refresh skipped — run 86c1a9378180 of the same node still in flight
+...
+[barca] catch-up run job.py:refresh → 86c6be85fb38
 ```
 
 ## Feature by feature
@@ -86,9 +93,9 @@ job.py:refresh  task  cron: */10 * * * *  2026-10-21 17:10:00     -
 | **Process model** | starts a process per tick | starts a process per tick | one long-running `barca serve` process |
 
 The barca column is from the [Scheduling guide](/scheduling/) and
-[Server API](/reference/server-api-endpoints/#scheduling), and `--timezone`, `barca list` and the example
-above were run on barca 0.18.0. Catch-up, overlap skipping and retries were not re-tested for
-this page.
+[Server API Endpoints](/reference/server-api-endpoints/#scheduling). `barca list`, catch-up,
+overlap skipping and retries were run on barca 0.42.0 for this page; the cron and systemd
+columns were checked against their manual pages on 2026-10-07.
 
 Three limits on the barca side:
 
