@@ -103,6 +103,11 @@ release workflow publishes each version's section as its
 [conventional commits](https://www.conventionalcommits.org/) form (`feat:`, `fix:`,
 `refactor:`, `polish:`, `doc:`, `test:`, `perf:`, `remove:`).
 
+On barca.sh, [Release Notes](/releases/) renders CHANGELOG.md and opens with a short
+**Highlights** section written by hand in `site/src/content/docs/releases.mdx`: when you cut a
+release, add two or three sentences for it there, in a user's words (what they can now do, and
+anything breaking), and drop the oldest entry so three releases remain.
+
 ## Compatibility between releases
 
 Before 1.0 a release may break the command line, with a minor bump and a "Breaking" line in
