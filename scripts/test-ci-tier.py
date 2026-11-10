@@ -29,6 +29,29 @@ class TierTests(unittest.TestCase):
         self.assertEqual(select("pull_request", "feat/ui", ["ci-full"], "", ["ui/a"]), "full")
         self.assertEqual(select("merge_group", "", [], "chore(release)", ["ui/a"]), "full")
 
+    def test_site_scope(self):
+        for files in (
+            ["site/src/content/docs/guide.md"],
+            ["site/astro.config.mjs", "CHANGELOG.md"],
+            ["site/wrangler.jsonc", ".github/workflows/site.yml"],
+        ):
+            self.assertEqual(select("pull_request", "doc/x", [], "", files), "site")
+            self.assertEqual(select("merge_group", "", [], "doc: x", files), "site-merge")
+        for files in (
+            ["CHANGELOG.md"],
+            [".github/workflows/site.yml"],
+            ["site/a.md", "crates/barca-cli/docs/cache.md"],
+            ["site/a.md", "python/barca/a.py"],
+            ["site/a.md", ".depot/workflows/ci.yml"],
+            ["site/a.md", "ui/src/App.tsx"],
+            ["site/src/content/docs/recipes/ordering-only-deps.md"],
+        ):
+            self.assertEqual(select("pull_request", "doc/x", [], "", files), "fast")
+            self.assertEqual(select("merge_group", "", [], "doc: x", files), "merge")
+        self.assertEqual(select("pull_request", "release/v1", [], "", ["site/a"]), "full")
+        self.assertEqual(select("pull_request", "doc/x", ["ci-full"], "", ["site/a"]), "full")
+        self.assertEqual(select("merge_group", "", [], "chore(release)", ["site/a"]), "full")
+
     def test_prs(self):
         self.assertEqual(select("pull_request", "release/v0.36.0", [], ""), "full")
         self.assertEqual(select("pull_request", "fix/copy", ["ci-full"], ""), "full")

@@ -20,9 +20,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # What runs where. The required checks are `CI / test` and `CI / backends`, the two aggregator
-# jobs at the end of each group below; they report on every event. Four tiers:
+# jobs at the end of each group below; they report on every event. The tiers:
 # UI-only diffs (ui/** plus optional CHANGELOG.md) run checks, build and ui on PRs
-# and merge groups. Mixed changes retain the normal tiers; releases/ci-full override.
+# and merge groups. Site-only diffs (site/** plus optional CHANGELOG.md and
+# .github/workflows/site.yml) run checks, which builds the site, on a PR (`site`), and checks
+# plus rust-tests, which read the site's pages, in a merge group (`site-merge`): no clippy,
+# wheel, Python tests or perf. Mixed changes retain the normal tiers; releases/ci-full override.
 #
 # - fast (a pull request): `checks` (the CHANGELOG and specification checks, the prek hooks:
 #   ruff, ruff format, ty, cargo fmt, version sync, uv lock), `clippy`, `changes` only, so a
@@ -56,6 +59,8 @@ env:
     tier = os.environ["TIER"]
     runs = {
         "ui": {"checks", "changes", "build", "ui"},
+        "site": {"checks", "changes"},
+        "site-merge": {"checks", "changes", "rust-tests"},
         "fast": {"checks", "clippy", "changes"},
         "merge": {"checks", "clippy", "changes", "rust-tests", "build", "python", "perf"},
     }.get(tier)  # None: full, every job runs
@@ -168,7 +173,7 @@ jobs:
 
   clippy:
     needs: [changes]
-    if: ${{ needs.changes.outputs.tier != 'ui' }}
+    if: ${{ needs.changes.outputs.tier != 'ui' && needs.changes.outputs.tier != 'site' && needs.changes.outputs.tier != 'site-merge' }}
     runs-on: depot-ubuntu-24.04-4
     # A hung step fails the job instead of holding it for hours (#637).
     timeout-minutes: 30
@@ -205,8 +210,8 @@ jobs:
 
   rust-tests:
     needs: [changes]
-    # Tier merge and up.
-    if: ${{ needs.changes.outputs.tier == 'merge' || needs.changes.outputs.tier == 'full' }}
+    # Tier merge and up, and a site-only merge group (the tests read site pages).
+    if: ${{ needs.changes.outputs.tier == 'merge' || needs.changes.outputs.tier == 'full' || needs.changes.outputs.tier == 'site-merge' }}
     runs-on: depot-ubuntu-24.04-8
     # See clippy (#637).
     timeout-minutes: 30
@@ -456,7 +461,7 @@ jobs:
     # the proxy tests. It waits for scope classification. The wheel is built with the `fast`
     # profile (no whole-program LTO); release wheels (release workflow) keep `--release`.
     # Tier merge and up.
-    if: ${{ needs.changes.outputs.tier != 'fast' }}
+    if: ${{ needs.changes.outputs.tier != 'fast' && needs.changes.outputs.tier != 'site' && needs.changes.outputs.tier != 'site-merge' }}
     runs-on: depot-ubuntu-24.04-16
     # See clippy (#637).
     timeout-minutes: 40

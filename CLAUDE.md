@@ -220,7 +220,10 @@ changes `site/` or `CHANGELOG.md` redeploys barca.sh.
   (`test_minute_checkpoints.py`, about 2 min), as the `release/v*` PR's own run and again in
   its merge group (head commit `chore(release): ...`); its `durations` job uploads the suite's
   per-file durations, which `scripts/release.sh` merges into `scripts/ci-test-durations.json`.
-  A PR labelled `ci-full` runs the full tier too. Nothing runs on push to main: main only
+  A PR labelled `ci-full` runs the full tier too. A site-only diff (`site/**`, optionally
+  `CHANGELOG.md`) skips clippy, the wheel, Python and perf: its PR runs `checks` (which builds
+  the site) and its merge group adds the Rust tests, which read site pages
+  (`scripts/ci-tier.py`). Nothing runs on push to main: main only
   moves to a merge group's commit, which the queue has tested. The one exception is the
   site: `.github/workflows/site.yml` deploys barca.sh when a commit on main changes `site/`
   or `CHANGELOG.md`, and uploads a preview of a PR that does, linked in a PR comment
