@@ -82,7 +82,7 @@ jobs:
 
       - name: Restore the web UI build
         id: ui-dist
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ui/dist
           key: ui-dist-v1-${{ hashFiles('ui/**') }}
@@ -183,7 +183,7 @@ jobs:
 
       - name: Restore the web UI build
         id: ui-dist
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ui/dist
           key: ui-dist-v1-${{ hashFiles('ui/**') }}
