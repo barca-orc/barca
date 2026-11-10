@@ -216,6 +216,8 @@ commit, which the queue has just tested. The required checks are `CI / test` and
 
 UI-only diffs (`ui/**`, plus optional `CHANGELOG.md`) run the UI tier on both pull requests and merge groups: repository checks, one wheel build for the real-server browser tests, and UI typecheck, lint, unit and Playwright tests. Clippy, Rust tests, Python suites, proxy tests and performance tests are skipped. Mixed changes retain the tiers below. Releases and `ci-full` override UI scoping; missing diff history retains the broader gates.
 
+Site-only diffs (`site/**`, plus optional `CHANGELOG.md` and `.github/workflows/site.yml`) build no wheel and run no clippy, Python suites or performance tests. On a pull request (the `site` tier) they run the repository checks, which include building the site; in a merge group (`site-merge`) they also run the Rust tests, which read site pages (the sidebar, the pages generated from manual topics, the decorator-argument table and the repository-wide unused-input sweep). A diff that touches `site/src/content/docs/recipes/ordering-only-deps.md`, which a Python test executes, runs the normal tiers. Releases and `ci-full` override site scoping too.
+
 Other changes run in three tiers. A pull request runs the fast tier, so it can enter the queue about a
 minute after a push. A merge group runs the merge tier, which gates the merge, in about two
 minutes. A release runs the full tier twice: as the `release/v*` pull request's own run, and

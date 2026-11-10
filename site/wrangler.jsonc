@@ -4,6 +4,8 @@
 	"compatibility_flags": ["global_fetch_strictly_public"],
 	"name": "barca",
 	"workers_dev": true,
+	// Preview versions of PRs (.github/workflows/site.yml) at <alias>-barca.<subdomain>.workers.dev.
+	"preview_urls": true,
 	"main": "@astrojs/cloudflare/entrypoints/server",
 	"routes": [
 		{ "pattern": "barca.sh", "custom_domain": true },

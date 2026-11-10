@@ -21,6 +21,15 @@ npm run deploy    # build and wrangler deploy (production Worker + barca.sh rout
 ```
 
 `site/wrangler.jsonc` names the Worker (`barca`), attaches `barca.sh` and `www.barca.sh`, and
-points assets at `dist/client` after `astro build`. Release tags deploy through the `deploy-site`
-job in `.github/workflows/release.yml` with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
-Between releases, deploy from this directory after `npx wrangler login` or with those variables set.
+points assets at `dist/client` after `astro build`. `.github/workflows/site.yml` deploys it, with the `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` secrets:
+
+- a commit on `main` that changes `site/` or `CHANGELOG.md` runs `wrangler deploy`, so barca.sh
+  serves main a few minutes after a merge;
+- a pull request from a branch of this repository that changes them uploads a preview version
+  (`wrangler versions upload --preview-alias <branch>`) at
+  `https://<branch>-barca.<account subdomain>.workers.dev`, which production does not serve; a
+  PR comment links it and is updated on each push. PRs from forks get no preview.
+
+Run the workflow by hand (Actions > Site > Run workflow) to redeploy a branch, or deploy from
+this directory after `npx wrangler login` or with those variables set.

@@ -74,13 +74,13 @@ a pre-commit hook.
    every Linux wheel is listed (the simple index is cached for up to 10 minutes after a
    publish), and four `verify-published-linux` jobs install the published wheel and the
    released binary in compiler-free containers once it is.
-7. **Deploys the docs site**, [barca.sh](https://barca.sh), from the tag: a `deploy-site` job
-   runs `npm ci`, `npm run build` and `npx wrangler deploy` in `site/` (Node 24; the Worker and
-   the `barca.sh` custom domains are in `site/wrangler.jsonc`). It starts after the GitHub
-   Release and the PyPI upload and nothing waits on it, so a failed deploy leaves the release
-   published; rerun the job once the cause is fixed. It needs two repository secrets,
-   `CLOUDFLARE_API_TOKEN` (a Cloudflare API token from the "Edit Cloudflare Workers" template)
-   and `CLOUDFLARE_ACCOUNT_ID`. With either missing it warns, naming the secret, and deploys
+7. **Updates the docs site.** barca.sh is not deployed by this workflow: `.github/workflows/site.yml`
+   deploys it whenever a commit on main changes `site/` or `CHANGELOG.md`, so the release PR's
+   merge publishes the new Release Notes, and every merged docs change is live a few minutes
+   after it merges. The same workflow uploads a preview of each pull request that changes the
+   site and links it in a PR comment. It needs two repository secrets, `CLOUDFLARE_API_TOKEN`
+   (a Cloudflare API token from the "Edit Cloudflare Workers" template) and
+   `CLOUDFLARE_ACCOUNT_ID`; with either missing it warns, naming the secret, and deploys
    nothing; the run stays green.
 
 There are no wheels for Windows, Linux arm64 or macOS x86_64. On those platforms `pip` builds
@@ -88,9 +88,9 @@ from the sdist, which needs a Rust toolchain.
 
 The workflow also runs on a pull request that changes `release.yml`; it then builds everything,
 checks that `CHANGELOG.md` has a section for the version in `pyproject.toml`, and skips the
-release, the PyPI upload and the site deploy.
+release and the PyPI upload.
 
-To deploy the site by hand, for example to publish a docs fix between releases, run
+To redeploy the site by hand, run the Site workflow from the Actions tab, or run
 `cd site && npm ci && npm run deploy` with the same two variables set, or after
 `npx wrangler login`.
 
