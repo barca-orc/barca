@@ -17,6 +17,23 @@ export const latest = versions[0];
   [`CHANGELOG.md`](https://github.com/barca-orc/barca/blob/main/CHANGELOG.md) under Pending.
 </div>
 
+## Highlights
+
+**0.42.0 (2026-11-09).** Repair one key of a partitioned asset: upload replacement data or pin
+an earlier version of just that key, from the web UI's key explorer or with
+`barca pin 'asset[dimension=value]'`. The web UI has one navigation in the sidebar, a key
+explorer that shows every key of a partitioned asset at once, and a quieter layout.
+
+**0.41.0 (2026-11-08).** The Runs page opens on what failed, with Re-run failed, Re-run all,
+Retry and Copy incident summary, and links each step to its Datadog trace. *Breaking, web UI
+only:* a node reads `fresh` where it read `cached`, and a node whose last attempt failed reads
+`failing`; the CLI and JSON keep their words.
+
+**0.40.0 (2026-11-05).** *Breaking, Datadog only:* each step is its own trace, sent as soon as
+the step ends, so a failure shows in Datadog seconds after it happens.
+
+Every change, by version:
+
 <nav class="release-index" id="versions" aria-label="Releases">
   {versions.map((v) => <a href={`#${v.slug}`}>{v.text.split(' ')[0]} <small>{(v.text.match(/\((.*)\)/) || [])[1]}</small></a>)}
 </nav>
