@@ -57,4 +57,4 @@ With a remote store, `barca serve` backs its metadata DB up every minute it chan
 
 ---
 
-[All commands](/reference/cli/) · [Output format](/reference/cli/#output-format) · [Errors and exit codes](/reference/cli/#errors-and-exit-codes)
+[All commands](/reference/cli/) · [Output format](/reference/cli/#output-format) · [Errors and exit codes](/reference/cli/exit-codes/)

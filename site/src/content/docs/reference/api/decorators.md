@@ -293,7 +293,7 @@ variable. [The Cache: Environment variables](/reference/cache/#environment-varia
 Experimental (0.29). Independent steps run at the same time, one per worker. Under a hard
 memory limit, several heavy steps that become ready together can add up past it, and the
 kernel kills one (`worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)`,
-see [A worker that dies](/reference/cli/#a-worker-that-dies)). `weight=` limits how many of
+see [A worker that dies](/reference/cli/exit-codes/#a-worker-that-dies)). `weight=` limits how many of
 them run at once without lowering `BARCA_POOL_SIZE` for every step.
 
 ```python

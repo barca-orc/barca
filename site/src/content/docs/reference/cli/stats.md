@@ -43,4 +43,4 @@ barca stats summary --fields run_id,elapsed_seconds,max_rss_bytes   # each recen
 
 ---
 
-[All commands](/reference/cli/) · [Output format](/reference/cli/#output-format) · [Errors and exit codes](/reference/cli/#errors-and-exit-codes)
+[All commands](/reference/cli/) · [Output format](/reference/cli/#output-format) · [Errors and exit codes](/reference/cli/exit-codes/)

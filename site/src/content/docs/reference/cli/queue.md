@@ -24,4 +24,4 @@ server. See [Operating barca serve: The run queue](/reference/serve-ops/#the-run
 
 ---
 
-[All commands](/reference/cli/) · [Output format](/reference/cli/#output-format) · [Errors and exit codes](/reference/cli/#errors-and-exit-codes)
+[All commands](/reference/cli/) · [Output format](/reference/cli/#output-format) · [Errors and exit codes](/reference/cli/exit-codes/)

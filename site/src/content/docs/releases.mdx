@@ -21,6 +21,8 @@ export const latest = versions[0];
   {versions.map((v) => <a href={`#${v.slug}`}>{v.text.split(' ')[0]} <small>{(v.text.match(/\((.*)\)/) || [])[1]}</small></a>)}
 </nav>
 
+Releases 0.1.2 to 0.23.x have their notes only on [GitHub Releases](https://github.com/barca-orc/barca/releases), apart from the upgrade notes for 0.10.0 to 0.20.0 kept below.
+
 <div class="release-notes" data-pagefind-ignore="all">
   <Changelog />
 </div>
