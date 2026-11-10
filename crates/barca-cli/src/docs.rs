@@ -122,6 +122,11 @@ pub const TOPICS: &[Topic] = &[
         "barca status: cache state, last run and artifact shape per node",
         "status.md"
     ),
+    topic!(
+        "status-fields",
+        "barca status's per-node fields, its JSON document, limits and disk usage",
+        "status-fields.md"
+    ),
     topic!("logs", "Read a run's recorded step stdout", "logs.md"),
     topic!(
         "sql",
