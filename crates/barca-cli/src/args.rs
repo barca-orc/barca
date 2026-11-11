@@ -338,7 +338,7 @@ More: barca docs agents, barca docs cache";
 const GC_HELP: &str = "\
 Examples:
   barca gc --dry-run              # what would be evicted, per tier, and what it leaves
-  barca gc                        # evict now, down to 80% of [cache] max_size
+  barca gc                        # all superseded results, then down to 80% of [cache] max_size
   barca gc --max-size 5GB         # a one-off tighter budget
   barca gc --max-size off         # only leftovers and superseded results, all of them
   barca gc --json                 # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}

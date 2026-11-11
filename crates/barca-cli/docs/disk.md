@@ -32,8 +32,9 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
 
 At the end of `barca get` and `barca run` (after results are recorded and uploads have
 finished), after every run under `barca serve`, and once a minute under `barca serve`. When
-`.barca/` is over the limit, barca deletes files in this order until it is at or below **80%** of
-the limit:
+`.barca/` is over the limit, barca deletes every leftover and every superseded result (each
+node keeps its newest result), then current results in this order until it is at or below
+**80%** of the limit:
 
 | Order | What | Which first | Costs when needed again |
 |---|---|---|---|
@@ -142,7 +143,7 @@ and `--dry-run` predicts `run` with reason `evicted`. A result the store holds i
 
 ```bash
 barca gc --dry-run              # what would be evicted, per tier, and what it leaves
-barca gc                        # evict now, down to 80% of max_size
+barca gc                        # every leftover and superseded result, then down to 80% of max_size
 barca gc --max-size 5GB         # a one-off tighter budget
 barca gc --max-size off         # no limit: every leftover and superseded result, nothing else
 barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, held, ...}
@@ -155,7 +156,9 @@ target apply to those budgeted bytes. Human output labels backups as outside the
 cache-size check. Excluding backups is not a free-space guarantee: they still occupy disk.
 
 `--dry-run` lists exactly what `barca gc` then deletes (the same order, from the same
-measurement), unless something changes in between. With the limit `off`, `barca gc` evicts every
+measurement), unless something changes in between. It always evicts every leftover and
+superseded result, even under the limit, so each node keeps only its newest result locally (an
+older one the store holds is downloaded again if the code returns to it). With the limit `off`, `barca gc` evicts every
 leftover and superseded result, which never costs a recompute of anything current. `--env NAME`
 evicts only that environment's results (leftovers are shared; every environment's rows decide
 which files are named). A file that cannot be deleted is skipped with one warning; `barca gc`

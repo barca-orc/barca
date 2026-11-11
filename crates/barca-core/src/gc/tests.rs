@@ -265,7 +265,15 @@ async fn a_database_past_its_share_does_not_evict_artifacts_that_fit() {
     // The dry run trims nothing, so the database is still past its 2 MB share.
     let result = f.gc(MaxSize::Bytes(20_000_000), true).await;
     assert!(result.size_bytes > 50_000_000);
-    assert!(result.evicted.is_empty(), "{:?}", result.evicted);
+    // Under the budget only leftovers and superseded results go: no current result is evicted.
+    assert!(
+        result
+            .evicted
+            .iter()
+            .all(|e| e.tier == "superseded" || e.tier == "leftovers"),
+        "{:?}",
+        result.evicted
+    );
 }
 
 #[tokio::test]
@@ -319,7 +327,14 @@ async fn backup_growth_does_not_evict_artifacts_and_unrelated_files_still_count(
     );
     let result = f.gc(MaxSize::Bytes(limit), false).await;
     assert!(result.size_bytes > limit && result.budget_before_bytes < result.target_bytes.unwrap());
-    assert_eq!(result.evicted_files, 0);
+    assert!(
+        result
+            .evicted
+            .iter()
+            .all(|e| e.tier == "superseded" || e.tier == "leftovers"),
+        "{:?}",
+        result.evicted
+    );
     assert_eq!(result.backup_bytes, initial * 10);
     // Merely using the backup directory/name somewhere else is no quota bypass.
     for rel in [
@@ -332,7 +347,7 @@ async fn backup_growth_does_not_evict_artifacts_and_unrelated_files_still_count(
     }
     let after = f.gc(MaxSize::Bytes(limit), true).await;
     assert_eq!(after.backup_bytes, result.backup_bytes);
-    assert_eq!(after.budget_before_bytes, result.budget_before_bytes + 2000);
+    assert_eq!(after.budget_before_bytes, result.budget_after_bytes + 2000);
 }
 
 #[tokio::test]

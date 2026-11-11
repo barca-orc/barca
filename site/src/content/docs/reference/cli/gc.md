@@ -30,10 +30,11 @@ would evict 4 files (1.4 MB), leaving 342 KB of 400 KB:
 ```
 
 Each tier that has something to evict gets a line; `leftovers` and `held by the store` appear
-the same way. Under the limit it prints one line, such as `nothing to evict: 284 KB of 3.4 GB`.
+the same way. With nothing to evict it prints one line, such as `nothing to evict: 284 KB of 3.4 GB`.
 
-The order is leftovers, superseded results, local copies the artifact store holds, then the
-least recently read current results. `--dry-run` lists exactly what `barca gc` then deletes.
+Every leftover and superseded result is always evicted, even under the limit, so each node keeps
+only its newest result locally. Then, while over the target, local copies the artifact store
+holds go, then the least recently read current results. `--dry-run` lists exactly what `barca gc` then deletes.
 While another run is in progress on this `.barca/`, only leftovers and superseded results are
 considered (`restricted` says why). `--env NAME` evicts only that environment's results. A file
 that cannot be deleted is skipped with a warning; exit 3 only when a metadata database cannot be

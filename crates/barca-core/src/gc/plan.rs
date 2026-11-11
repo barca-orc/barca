@@ -2,7 +2,8 @@
 //!
 //! [`plan`] takes what is on disk (materialization rows with their files, leftovers), what
 //! must not be touched ([`Protections`]) and the budget ([`Goal`]), and returns the ordered
-//! eviction list. `barca gc --dry-run` prints the list, `barca gc` and the check after every
+//! eviction list. Tiers 1 and 2 are always evicted in full; tiers 3 and 4 only until the
+//! budget is met. `barca gc --dry-run` prints the list, `barca gc` and the check after every
 //! command delete it, so a prediction cannot drift from what is deleted.
 //!
 //! The order (RFC-0012):
@@ -162,7 +163,8 @@ impl Protections {
 /// How far to evict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Goal {
-    /// Evict in order until the total is at or below `target` bytes.
+    /// Evict every leftover and superseded result, then current results in order until the
+    /// total is at or below `target` bytes.
     DownTo { target: u64 },
     /// Evict everything the protections allow (`barca gc` with no limit: tiers 1 and 2).
     Everything,
@@ -335,7 +337,11 @@ pub fn plan(
         short: false,
     };
     for eviction in ordered {
+        // Leftovers and superseded results always go in full: the newest result of every node
+        // stays, so pruning them never costs a recompute of anything current. Only current
+        // results stop at the target.
         if let Goal::DownTo { target } = goal
+            && eviction.tier >= Tier::StoreHeld
             && out.after <= target
         {
             break;
@@ -485,11 +491,15 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_evicted_under_the_target() {
+    fn under_the_target_only_leftovers_and_superseded_go() {
         let (rows, left) = project();
         let plan = plan(500, &rows, &left, &open(), Goal::DownTo { target: 500 });
-        assert!(plan.evictions.is_empty());
-        assert_eq!(plan.after, 500);
+        assert_eq!(
+            names(&plan),
+            ["x.moved-aside", ".barca/artifacts/p.py:a/h1.json"]
+        );
+        assert_eq!(plan.after, 300);
+        assert!(!plan.short);
     }
 
     #[test]

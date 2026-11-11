@@ -10,6 +10,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - UI-only PRs and merge groups run UI checks and browser tests without unrelated backend suites; releases keep full coverage.
 
+### Bug Fixes
+
+- **`barca gc` prunes every old version:** eviction (`barca gc`, and the check after a command once `.barca/` is over its limit) now always deletes every leftover and superseded result, keeping only each node's newest result locally, instead of stopping as soon as it reached 80% of the limit. Current results are still evicted only while over the target. An older version the store holds is downloaded again if the code returns to it; one it does not hold is recomputed.
+
 ### Documentation
 
 - **barca.sh deploys from main:** a merge that changes the site is live a few minutes later instead of at the next release, and a pull request that changes it gets a preview link in a comment (`.github/workflows/site.yml`; the release workflow no longer deploys the site). CI runs no clippy, wheel build, Python tests or performance tests for a change only to the site.
