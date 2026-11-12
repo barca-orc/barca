@@ -139,6 +139,10 @@ pub(crate) fn normalize_step(step: &Value) -> Value {
     if item.get("timeout_seconds") == Some(&json!(0)) {
         item.remove("timeout_seconds");
     }
+    // The worker reads a missing weight as 1, the default.
+    if item.get("weight") == Some(&json!(1)) {
+        item.remove("weight");
+    }
     Value::Object(item)
 }
 

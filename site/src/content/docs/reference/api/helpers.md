@@ -317,6 +317,7 @@ installed through a runtime assignment is not seen. The signatures here are thos
 | Name | What it is |
 |---|---|
 | `duckdb_connection()` | The DuckDB connection barca binds `duckdb.DuckDBPyRelation` inputs to, one per worker process. Configure it at import time of your module. See [Output Formats and Types](/reference/types/). |
+| `on_step_start()`, `StepStart` | A callback the worker runs before each step, with its `node_id` and `weight`, to size per-step settings such as DuckDB's `memory_limit`. Experimental. See [Assets: Sizing the worker for each step](/reference/assets/#sizing-the-worker-for-each-step-barcaon_step_start). |
 | `ParallelError` | What `parallel()` returns in place of a branch that raised. |
 | `BranchResultError` | Raised by `parallel()` when a branch returned a value that cannot be passed back to the caller. |
 | `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See [Scripts and AI Agents: Getting values, not pointers](/reference/agents/#getting-values-not-pointers). |

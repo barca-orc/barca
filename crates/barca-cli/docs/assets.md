@@ -415,6 +415,50 @@ barca get pipeline.py --dry-run --json
 barca doctor pipeline.py
 ```
 
+### Sizing the worker for each step: `barca.on_step_start`
+
+`weight=` decides how many steps run at once; it does not change what a step may use. A
+worker runs many steps one after another, and a setting it holds, such as DuckDB's
+`memory_limit` on the shared connection (`barca docs types`), stays at whatever the last step
+or the module's import set. Register a callback with `barca.on_step_start` to set it per
+step: the worker calls it with a `barca.StepStart` (`node_id`, with any partition key, and
+`weight`, 1 unless the decorator set one) after importing the step's module and before
+reading its inputs.
+
+```python
+import barca
+from barca import asset
+
+CAPACITY = 4
+BUDGET_MIB = 16 * 1024
+
+
+@barca.on_step_start
+def size_for(step):
+    share = BUDGET_MIB * min(step.weight, CAPACITY) // CAPACITY
+    barca.duckdb_connection().execute(f"SET memory_limit = '{share}MiB'")
+
+
+@asset(weight=4)
+def whole_book() -> int:
+    return 1
+
+
+@asset
+def one_account() -> int:
+    return 2
+```
+
+- Register at import time of an asset module; registering the same function again does
+  nothing. Callbacks run in the order they were registered.
+- It runs once per step that runs: a cached step starts nothing. A batched call
+  (`barca docs batched-partitions`) starts once for all its keys, and a `parallel()` branch
+  starts with its caller's weight.
+- What it prints goes to the step's log. An exception fails the step before its inputs load,
+  as an exception in the function would.
+- It runs inside the worker only. A step function called directly, outside barca, runs no
+  callback.
+
 ## How a node is identified
 
 A node id is `<file>:<function>` (for example `pipeline.py:clean`), or the explicit `name=`.

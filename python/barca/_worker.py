@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from barca import _duckdb, _runtime, _sinks, _storage, _telemetry
+from barca import _duckdb, _hooks, _runtime, _sinks, _storage, _telemetry
 from barca._artifacts import (
     _FORMAT_EXTENSIONS,
     FORMAT_OF_EXTENSION,
@@ -759,6 +759,10 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
         # From here until the result is written, Ctrl-C interrupts the step.
         _ctrl_c_interrupts_the_step()
 
+        # `barca.on_step_start` callbacks size the worker for this step before its inputs load.
+        with captured(begun.out, begun.err):
+            _hooks.run_step_start(step)
+
         phase = LOAD_INPUTS
         kwargs = _resolve_inputs(begun.fn, [step], lru)
         bound_views = _duckdb.bind_inputs(kwargs, step.get("param_types") or {})
@@ -955,6 +959,10 @@ def _run_daemon_call(
         import_seconds = begun.import_seconds
         imported = True
         _ctrl_c_interrupts_the_step()
+
+        # One call, one start: the keys of a batched call share their node's weight.
+        with captured(begun.out, begun.err):
+            _hooks.run_step_start(first)
 
         phase = LOAD_INPUTS
         load_start = time.perf_counter()

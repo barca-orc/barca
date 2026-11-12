@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- **`barca.on_step_start(callback)`** (experimental): the worker calls `callback(step)` before each step that runs, after importing its module and before reading its inputs, with a `barca.StepStart` holding the step's `node_id` and `weight`. A worker runs many steps in turn, so this is where a project sizes per-step settings, such as DuckDB's `memory_limit` on the shared connection, by `weight=`. The worker frame carries `weight` when it is above 1 (`specs/interfaces/worker-protocol.md`). See `barca docs assets`, "Sizing the worker for each step".
+
 - UI-only PRs and merge groups run UI checks and browser tests without unrelated backend suites; releases keep full coverage.
 
 ### Documentation

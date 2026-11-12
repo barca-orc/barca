@@ -254,6 +254,51 @@ fn build_step_json_empty_sinks_serializes_as_empty_array() {
     assert_eq!(step["run_hash"], serde_json::Value::Null);
 }
 
+#[test]
+fn build_step_json_carries_the_weight_and_the_wire_drops_the_default() {
+    let spec = |weight: u32| ItemSpec {
+        fn_ref: "f.py:a".to_string(),
+        function_name: "a".to_string(),
+        source_file: "f.py".to_string(),
+        direct_args: Vec::new(),
+        direct_kwargs: HashMap::new(),
+        dag_inputs: HashMap::new(),
+        timeout_seconds: 0,
+        retries: 1,
+        weight,
+        retry_backoff_seconds: 0.0,
+        serializer: None,
+        sinks: Vec::new(),
+        run_hash: None,
+        upstream_inputs: HashMap::new(),
+        collected_inputs: HashMap::new(),
+        param_types: HashMap::new(),
+        return_type: None,
+        kind: "asset".to_string(),
+        keyed_inputs: HashMap::new(),
+        partition_source: false,
+        previous_sensor: None,
+    };
+    let mut coord = Coordinator::new();
+    let heavy = coord.add_item(
+        crate::StepId::unpartitioned("f.py:heavy"),
+        spec(3),
+        Vec::new(),
+    );
+    let light = coord.add_item(
+        crate::StepId::unpartitioned("f.py:light"),
+        spec(1),
+        Vec::new(),
+    );
+
+    let heavy = build_step_json(coord.item(heavy), &coord);
+    let light = build_step_json(coord.item(light), &coord);
+    assert_eq!(heavy["weight"], 3);
+    assert_eq!(light["weight"], 1);
+    assert_eq!(crate::wire::normalize_step(&heavy)["weight"], 3);
+    assert!(crate::wire::normalize_step(&light).get("weight").is_none());
+}
+
 /// Regression test for #93: a `collect()` param must be sent to the
 /// worker as the `{"_collected": true, "artifacts": [...]}` marker with
 /// every partition artifact, not collapsed to a single path.

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from barca._batch import Failed
 from barca._branches import BranchResultError, ParallelError, parallel, parallel_map
+from barca._hooks import StepStart
 
 if TYPE_CHECKING:
     from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats
@@ -42,6 +43,8 @@ __all__ = [
     "ParallelError",
     "BranchResultError",
     "duckdb_connection",
+    "on_step_start",
+    "StepStart",
     "get",
     "run",
     "plan",
@@ -424,6 +427,24 @@ def duckdb_connection() -> Any:
     from barca import _duckdb
 
     return _duckdb.connection()
+
+
+# ─── Worker callbacks ─────────────────────────────────────────────────────────
+
+
+def on_step_start(callback: Callable[[StepStart], Any], /) -> Callable[[StepStart], Any]:
+    """Run ``callback(step)`` in the worker before each step, after its module is imported and
+    before its inputs are read. ``step`` is a ``StepStart`` with ``node_id`` and ``weight``.
+
+    Register at import time of your asset module (usable as a decorator). A worker runs many
+    steps in turn, so this is where per-step process settings belong, such as DuckDB's
+    ``memory_limit`` sized by ``weight=``. What the callback prints goes to the step's log; an
+    exception fails the step. Registering the same function twice registers it once.
+    See ``barca docs assets``, "Heavy steps".
+    """
+    from barca import _hooks
+
+    return _hooks.on_step_start(callback)
 
 
 # ─── Python API ──────────────────────────────────────────────────────────────

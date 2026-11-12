@@ -78,6 +78,8 @@ pub(crate) fn build_step_json(item: &Item, coord: &Coordinator) -> serde_json::V
         "kind": &item.spec.kind,
         "inputs": inputs,
         "timeout_seconds": item.spec.timeout_seconds,
+        // `weight=`, so `barca.on_step_start` callbacks can size the step (memory, threads).
+        "weight": item.spec.weight,
         "direct_args": item.spec.direct_args,
         "direct_kwargs": item.spec.direct_kwargs,
         "serializer": item.spec.serializer.as_deref(),
