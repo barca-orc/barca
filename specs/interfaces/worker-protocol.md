@@ -48,8 +48,8 @@ table; constant dimensions may be hoisted. The worker reconstructs `direct_kwarg
 No-input/argument/type/sink empties, null optional fields, `branch:false` and zero
 (timeout disabled) are omitted. Missing timeout means zero, not the 300-second
 coordinator default. Items carry `weight` (the node's `weight=`) when it is above 1; a missing
-weight means 1. The worker passes it to `barca.on_step_start` callbacks, once per step or
-call, after importing the module and before reading inputs. Retry policy stays coordinator-owned; artifact directory is
+weight means 1 ([Python worker lifetime](../behavior/python-runtime.md) says what the worker
+does with it). Retry policy stays coordinator-owned; artifact directory is
 already hoisted into worker environment setup. Singleton `execute` uses the same
 normalized step fields without a table.
 

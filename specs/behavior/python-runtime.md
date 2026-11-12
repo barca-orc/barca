@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 2. Status: implemented.
+Specification version: 3. Status: implemented.
 Scope: module and DuckDB connection lifetime within a worker. Process/socket ownership is
 specified by [execution](execution.md) and [worker protocol](../interfaces/worker-protocol.md).
 
@@ -29,6 +29,20 @@ not outlive their connection or be carried to later steps through the artifact L
 User-created catalog changes are not reset or rolled back by Barca. Colliding view names can
 be replaced and dropped; use deliberate names and cleanup rather than relying on collision
 preservation. An import-time macro must not be lost through a hidden per-step reset.
+
+### Step-start callbacks
+
+`barca.on_step_start(callback)` adds `callback` to a registry held by the worker process, not by
+the module that registered it; the same function registers once. Before each step or batched
+call it runs, after importing the step's module and before reading its inputs, the worker calls
+every registered callback in registration order with a `StepStart(node_id, weight)`: the
+step's node id (a batched call's first key) and its `weight=` from the step frame (1 when the
+frame has none). A cached step starts nothing; a `parallel()` branch has its caller's weight.
+Callbacks run under the step's `timeout_seconds` with the step's output capture. One that
+raises fails that step as a user-code failure, before its inputs load; the worker survives and
+runs its next step. Callbacks are not part of any run hash: they exist to size per-step
+resources (DuckDB `memory_limit`, threads) on the shared connection, which otherwise keeps
+whatever the previous step or the module's import set.
 
 A DB-API result of `execute()` that a step leaves unread on the shared connection is discarded
 once the step's function returns, before its output is materialized, and again when the call
@@ -68,6 +82,10 @@ rewritten. Conformance: [legacy pickle tests](../../python/tests/test_explicit_p
 - **INV-WORKER-VIEW-01:** Orchestration-created input views are cleaned after success and
   failure without advertising restoration of arbitrary project-created catalog state.
 
+- **INV-WORKER-START-01:** Every registered step-start callback runs, in registration order,
+  before the inputs of each step or batched call the worker runs, and only for steps that run;
+  a callback that raises fails that step and not the worker.
+
 - **INV-WORKER-RESULT-01:** A result a step left unread on the shared connection blocks neither
   the materialization of that step's output nor later calls on the worker.
 
@@ -86,7 +104,8 @@ separate-worker state and lazy-result materialization lifetime.
 
 Conformance: [DuckDB connection tests](../../python/tests/test_duckdb_connection.py), including
 `test_worker_shared_setup_survives_but_input_views_are_cleaned` and
-`test_a_result_left_unread_does_not_block_writing_or_the_next_step`,
+`test_a_result_left_unread_does_not_block_writing_or_the_next_step`;
+[step-start callback tests](../../python/tests/test_step_start.py) for INV-WORKER-START-01;
 [worker module/import behavior](../../python/barca/_worker.py),
 [connection adapter](../../python/barca/_duckdb.py).
 The [reproduction](../../docs/engineering/reproductions/duckdb_step_isolation.py) demonstrates

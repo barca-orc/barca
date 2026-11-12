@@ -4,6 +4,9 @@ A worker process runs many steps one after another, and settings it holds (DuckD
 ``memory_limit`` on the shared connection, thread counts) were set for whatever ran last. A
 callback runs after the step's module is imported and before its inputs are read, so it can
 size the process for this step from its ``weight=``.
+
+The registry is per worker process, not per module: a callback runs for every step the worker
+runs after the module that registered it was imported, whichever file the step is in.
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ _callbacks: list[Callable[[StepStart], Any]] = []
 def on_step_start(callback: Callable[[StepStart], Any]) -> Callable[[StepStart], Any]:
     """Register ``callback``; registering the same function again does nothing."""
     if not callable(callback):
-        raise TypeError(f"on_step_start takes a function of one StepStart, not {type(callback).__name__}")
+        kind = type(callback).__name__
+        raise TypeError(f"on_step_start takes a function of one StepStart, not {kind}")
     if callback not in _callbacks:
         _callbacks.append(callback)
     return callback
@@ -40,10 +44,13 @@ def step_start(step: dict[str, Any]) -> StepStart:
     return StepStart(node_id=step.get("node_id", "unknown"), weight=int(step.get("weight", 1)))
 
 
+def registered() -> bool:
+    """Whether any callback is registered, so the worker can skip the call when none is."""
+    return bool(_callbacks)
+
+
 def run_step_start(step: dict[str, Any]) -> None:
-    """Call every registered callback, in registration order. A callback that raises fails the step."""
-    if not _callbacks:
-        return
+    """Call every registered callback, in registration order. One that raises fails the step."""
     started = step_start(step)
     for callback in list(_callbacks):
         callback(started)

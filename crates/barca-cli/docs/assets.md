@@ -449,13 +449,20 @@ def one_account() -> int:
     return 2
 ```
 
-- Register at import time of an asset module; registering the same function again does
-  nothing. Callbacks run in the order they were registered.
+- Register once, in a module every asset module imports (a shared `env.py`, say). The
+  registry is per worker process, not per module: a callback runs for every step the worker
+  runs once the module that registered it is imported, whichever file the step is in, and for
+  no step before that. Registering the same function again does nothing; callbacks run in the
+  order they were registered.
 - It runs once per step that runs: a cached step starts nothing. A batched call
-  (`barca docs batched-partitions`) starts once for all its keys, and a `parallel()` branch
-  starts with its caller's weight.
-- What it prints goes to the step's log. An exception fails the step before its inputs load,
-  as an exception in the function would.
+  ((`barca docs batched-partitions`)) starts once for all its keys, with its first key's
+  `node_id`, and a `parallel()` branch starts with its caller's weight.
+- It runs within the step's `timeout_seconds`, timed on its own. What it prints goes to the
+  step's log. An exception fails the step before its inputs load, as an exception in the
+  function would, and the worker goes on to its next step.
+- It is for resource settings. It is not part of any run hash (`barca docs hashing`): editing it re-runs
+  nothing, so a setting that changes what a step returns (a time zone, a seed) belongs in the
+  step's own code.
 - It runs inside the worker only. A step function called directly, outside barca, runs no
   callback.
 

@@ -2,7 +2,9 @@
 
 import json
 import os
+import re
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -41,8 +43,10 @@ def total(a: int, b: int) -> int:
 """
 
 
-def cli(root, *args, code=0):
-    proc = barca(root, *args, env={**os.environ, "BARCA_REMOTE": "off", "BARCA_CAPACITY": "4"})
+def cli(root, *args, code=0, **env):
+    proc = barca(
+        root, *args, env={**os.environ, "BARCA_REMOTE": "off", "BARCA_CAPACITY": "4", **env}
+    )
     assert proc.returncode == code, proc.stderr
     return proc
 
@@ -171,6 +175,188 @@ def test_a_callback_that_raises_fails_the_step(tmp_path):
     proc = cli(tmp_path, "get", "a", "p.py", code=1)
 
     assert "no room for p.py:a" in proc.stderr
+
+
+def write(root, body):
+    (root / "p.py").write_text(textwrap.dedent(body))
+
+
+def test_callbacks_run_in_order_and_print_to_the_steps_log(tmp_path):
+    write(
+        tmp_path,
+        """
+        import barca
+        from barca import asset
+
+
+        @barca.on_step_start
+        def first(step):
+            print(f"first {step.node_id}")
+
+
+        @barca.on_step_start
+        def second(step):
+            print(f"second {step.node_id}")
+
+
+        @asset
+        def a() -> int:
+            return 1
+        """,
+    )
+
+    cli(tmp_path, "get", "a", "p.py")
+    log = cli(tmp_path, "logs", "--step", "a", "--pretty").stdout
+
+    assert log.index("first p.py:a") < log.index("second p.py:a")
+
+
+def test_the_worker_runs_its_next_step_after_a_callback_raises(tmp_path):
+    write(
+        tmp_path,
+        """
+        import os
+        from pathlib import Path
+
+        import barca
+        from barca import asset
+
+        PIDS = Path(__file__).parent / "pids.txt"
+
+
+        @barca.on_step_start
+        def refuse_a(step):
+            with PIDS.open("a") as f:
+                f.write(f"{step.node_id} {os.getpid()}\\n")
+            if step.node_id.endswith(":a"):
+                raise RuntimeError("no room for a")
+
+
+        @asset
+        def a() -> int:
+            return 1
+
+
+        @asset
+        def b() -> int:
+            return 2
+        """,
+    )
+
+    proc = cli(tmp_path, "get", "a,b", "p.py", "--json", code=1, BARCA_POOL_SIZE="1")
+
+    steps = {s["id"]: s["status"] for s in json.loads(proc.stdout)["steps"]}
+    assert steps["p.py:a"] == "failed" and steps["p.py:b"] == "ran"
+    pids = {line.split()[1] for line in (tmp_path / "pids.txt").read_text().splitlines()}
+    assert len(pids) == 1
+
+
+INPUT_ORDER = """
+from pathlib import Path
+
+import barca
+from barca import asset
+
+LOG = Path(__file__).parent / "order.txt"
+
+
+def note(line):
+    with LOG.open("a") as f:
+        f.write(line + "\\n")
+
+
+class Loaded:
+    def __init__(self):
+        self.rows = 1  # pickle calls __setstate__ only for a non-empty state
+
+    def __setstate__(self, state):
+        note("input read")
+
+
+@barca.on_step_start
+def start(step):
+    note(f"start {step.node_id.split(':')[-1]}")
+    if step.node_id.endswith(":down") and REFUSE:
+        raise RuntimeError("no room for down")
+
+
+@asset(serializer="pickle")
+def up() -> Loaded:
+    return Loaded()
+
+
+@asset(inputs={"value": up})
+def down(value: Loaded) -> int:
+    return 1
+"""
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_the_callback_runs_before_the_inputs_are_read(tmp_path, refuse):
+    write(tmp_path, f"REFUSE = {refuse}\n" + INPUT_ORDER)
+
+    # `up` first, in a run of its own, so `down`'s worker reads it from disk.
+    cli(tmp_path, "get", "up", "p.py")
+    (tmp_path / "order.txt").unlink()
+
+    cli(tmp_path, "get", "down", "p.py", code=1 if refuse else 0)
+
+    order = (tmp_path / "order.txt").read_text().splitlines()
+    assert order == (["start down"] if refuse else ["start down", "input read"])
+
+
+def test_the_steps_timeout_covers_the_callback(tmp_path):
+    write(
+        tmp_path,
+        """
+        import time
+
+        import barca
+        from barca import asset
+
+
+        @barca.on_step_start
+        def stall(step):
+            time.sleep(5)
+
+
+        @asset(timeout_seconds=1)
+        def a() -> int:
+            return 1
+        """,
+    )
+
+    proc = cli(tmp_path, "get", "a", "p.py", code=1)
+
+    assert "exceeded timeout" in proc.stderr
+
+
+MANUAL = Path(__file__).resolve().parents[2] / "crates/barca-cli/docs/assets.md"
+
+
+def test_the_manuals_example_sizes_each_step_by_its_weight(tmp_path):
+    body = MANUAL.read_text().split("barca.on_step_start`", 1)[1]
+    example = re.search(r"```python\n(.*?)```", body, re.S).group(1)
+    probe = """
+import duckdb
+
+
+@asset(weight=4)
+def heavy_limit() -> str:
+    return duckdb.sql("select current_setting('memory_limit')").fetchall()[0][0]
+
+
+@asset
+def light_limit() -> str:
+    return duckdb.sql("select current_setting('memory_limit')").fetchall()[0][0]
+"""
+    (tmp_path / "p.py").write_text(example + probe)
+
+    heavy = json.loads(cli(tmp_path, "get", "heavy_limit", "p.py", "-o", "value", "--json").stdout)
+    light = json.loads(cli(tmp_path, "get", "light_limit", "p.py", "-o", "value", "--json").stdout)
+
+    assert heavy["final_output"] == "16.0 GiB"
+    assert light["final_output"] == "4.0 GiB"
 
 
 def test_registering_twice_registers_once(monkeypatch):

@@ -721,6 +721,18 @@ def _call(
         return fn(*args, **kwargs)
 
 
+def _start_step(begun: _Begun, step: Step, label: str) -> None:
+    """Run the `barca.on_step_start` callbacks, output captured, within the step's timeout."""
+    if not _hooks.registered():
+        return
+    timeout = step.get("timeout_seconds", 0)
+    with captured(begun.out, begun.err):
+        if timeout and timeout > 0:
+            _run_with_timeout(lambda: _hooks.run_step_start(step), {}, timeout, label=label)
+        else:
+            _hooks.run_step_start(step)
+
+
 def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactLRU) -> bool:
     """Execute one step in daemon mode and emit its result or error.
 
@@ -760,8 +772,7 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
         _ctrl_c_interrupts_the_step()
 
         # `barca.on_step_start` callbacks size the worker for this step before its inputs load.
-        with captured(begun.out, begun.err):
-            _hooks.run_step_start(step)
+        _start_step(begun, step, node_id)
 
         phase = LOAD_INPUTS
         kwargs = _resolve_inputs(begun.fn, [step], lru)
@@ -961,8 +972,7 @@ def _run_daemon_call(
         _ctrl_c_interrupts_the_step()
 
         # One call, one start: the keys of a batched call share their node's weight.
-        with captured(begun.out, begun.err):
-            _hooks.run_step_start(first)
+        _start_step(begun, first, log_id)
 
         phase = LOAD_INPUTS
         load_start = time.perf_counter()

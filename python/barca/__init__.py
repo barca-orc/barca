@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
+from barca import _hooks
 from barca._batch import Failed
 from barca._branches import BranchResultError, ParallelError, parallel, parallel_map
 from barca._hooks import StepStart
@@ -436,14 +437,14 @@ def on_step_start(callback: Callable[[StepStart], Any], /) -> Callable[[StepStar
     """Run ``callback(step)`` in the worker before each step, after its module is imported and
     before its inputs are read. ``step`` is a ``StepStart`` with ``node_id`` and ``weight``.
 
-    Register at import time of your asset module (usable as a decorator). A worker runs many
-    steps in turn, so this is where per-step process settings belong, such as DuckDB's
-    ``memory_limit`` sized by ``weight=``. What the callback prints goes to the step's log; an
-    exception fails the step. Registering the same function twice registers it once.
+    Usable as a decorator. The registry is per worker process: a callback runs for every step
+    the worker runs once its module is imported, whichever file the step is in, so register
+    once, in a module every asset module imports. A worker runs many steps in turn, so this is
+    where per-step resource settings belong, such as DuckDB's ``memory_limit`` sized by
+    ``weight=``. It runs within the step's ``timeout_seconds``; what it prints goes to the
+    step's log; an exception fails the step. It is not part of any run hash.
     See ``barca docs assets``, "Heavy steps".
     """
-    from barca import _hooks
-
     return _hooks.on_step_start(callback)
 
 
