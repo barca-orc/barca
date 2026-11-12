@@ -38,7 +38,9 @@ call it runs, after importing the step's module and before reading its inputs, t
 every registered callback in registration order with a `StepStart(node_id, weight)`: the
 step's node id (a batched call's first key) and its `weight=` from the step frame (1 when the
 frame has none). A cached step starts nothing; a `parallel()` branch has its caller's weight.
-Callbacks run under the step's `timeout_seconds` with the step's output capture. One that
+Callbacks run with the step's output capture and share the step's `timeout_seconds` with
+its function (input reading is not counted); under a timeout they run on a helper thread, so
+they are for process-wide settings. One that
 raises fails that step as a user-code failure, before its inputs load; the worker survives and
 runs its next step. Callbacks are not part of any run hash: they exist to size per-step
 resources (DuckDB `memory_limit`, threads) on the shared connection, which otherwise keeps

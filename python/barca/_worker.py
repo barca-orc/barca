@@ -708,12 +708,24 @@ def _begin(step: Step, modules: Modules, log_id: str) -> _Begun:
 
 
 def _call(
-    begun: _Begun, step: Step, kwargs: dict[str, Any], label: str, args: Sequence[Any] = ()
+    begun: _Begun,
+    step: Step,
+    kwargs: dict[str, Any],
+    label: str,
+    args: Sequence[Any] = (),
+    started: float = 0.0,
 ) -> Any:
-    """Run the step's function with its stdout and stderr captured, within its timeout."""
+    """Run the step's function with its stdout and stderr captured, within its timeout.
+
+    `started` is how long the step's `barca.on_step_start` callbacks took: they share the
+    timeout with the function.
+    """
     # Legacy pickle recovery may have activated a different producer directory.
     activate_source_path(begun.source)
     timeout = step.get("timeout_seconds", 0)
+    if timeout and timeout > 0 and started:
+        # What the callbacks left. They finished within the timeout, so this is above zero.
+        timeout = max(timeout - started, 1e-3)
     fn = begun.fn
     with captured(begun.out, begun.err):
         if timeout and timeout > 0:
@@ -721,16 +733,26 @@ def _call(
         return fn(*args, **kwargs)
 
 
-def _start_step(begun: _Begun, step: Step, label: str) -> None:
-    """Run the `barca.on_step_start` callbacks, output captured, within the step's timeout."""
+def _start_step(begun: _Begun, step: Step, label: str) -> float:
+    """Run the `barca.on_step_start` callbacks, output captured, within the step's timeout.
+
+    Returns the seconds they took, which `_call` takes off the function's share of the timeout.
+    """
     if not _hooks.registered():
-        return
+        return 0.0
     timeout = step.get("timeout_seconds", 0)
+    start = time.perf_counter()
     with captured(begun.out, begun.err):
         if timeout and timeout > 0:
-            _run_with_timeout(lambda: _hooks.run_step_start(step), {}, timeout, label=label)
+            _run_with_timeout(
+                lambda: _hooks.run_step_start(step),
+                {},
+                timeout,
+                label=f"{label} (on_step_start)",
+            )
         else:
             _hooks.run_step_start(step)
+    return time.perf_counter() - start
 
 
 def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactLRU) -> bool:
@@ -772,7 +794,7 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
         _ctrl_c_interrupts_the_step()
 
         # `barca.on_step_start` callbacks size the worker for this step before its inputs load.
-        _start_step(begun, step, node_id)
+        started = _start_step(begun, step, node_id)
 
         phase = LOAD_INPUTS
         kwargs = _resolve_inputs(begun.fn, [step], lru)
@@ -780,7 +802,9 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
 
         phase = USER_CODE
         # Direct args from parallel() dispatch; kwargs carry its direct kwargs already.
-        result = _call(begun, step, kwargs, node_id, args=step.get("direct_args", []))
+        result = _call(
+            begun, step, kwargs, node_id, args=step.get("direct_args", []), started=started
+        )
 
         wall = time.perf_counter() - t0
         cpu = time.process_time() - c0
@@ -972,7 +996,7 @@ def _run_daemon_call(
         _ctrl_c_interrupts_the_step()
 
         # One call, one start: the keys of a batched call share their node's weight.
-        _start_step(begun, first, log_id)
+        started = _start_step(begun, first, log_id)
 
         phase = LOAD_INPUTS
         load_start = time.perf_counter()
@@ -981,7 +1005,7 @@ def _run_daemon_call(
 
         phase = USER_CODE
         compute_start = time.perf_counter()
-        result = _call(begun, first, kwargs, log_id)
+        result = _call(begun, first, kwargs, log_id, started=started)
         # Splitting the result runs DuckDB on the shared connection: see finish_open_result.
         _duckdb.finish_open_result()
 

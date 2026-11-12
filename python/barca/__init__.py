@@ -441,8 +441,9 @@ def on_step_start(callback: Callable[[StepStart], Any], /) -> Callable[[StepStar
     the worker runs once its module is imported, whichever file the step is in, so register
     once, in a module every asset module imports. A worker runs many steps in turn, so this is
     where per-step resource settings belong, such as DuckDB's ``memory_limit`` sized by
-    ``weight=``. It runs within the step's ``timeout_seconds``; what it prints goes to the
-    step's log; an exception fails the step. It is not part of any run hash.
+    ``weight=``. It shares the step's ``timeout_seconds`` with the function and may run on a
+    helper thread, so set process-wide settings only; what it prints goes to the step's log;
+    an exception fails the step. It is not part of any run hash.
     See ``barca docs assets``, "Heavy steps".
     """
     return _hooks.on_step_start(callback)

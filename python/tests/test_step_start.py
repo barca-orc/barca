@@ -225,11 +225,12 @@ def test_the_worker_runs_its_next_step_after_a_callback_raises(tmp_path):
 
 
         @barca.on_step_start
-        def refuse_a(step):
+        def refuse_the_first(step):
+            first = not PIDS.exists()
             with PIDS.open("a") as f:
-                f.write(f"{step.node_id} {os.getpid()}\\n")
-            if step.node_id.endswith(":a"):
-                raise RuntimeError("no room for a")
+                f.write(f"{step.node_id.split(':')[-1]} {os.getpid()}\\n")
+            if first:
+                raise RuntimeError(f"no room for {step.node_id}")
 
 
         @asset
@@ -240,15 +241,22 @@ def test_the_worker_runs_its_next_step_after_a_callback_raises(tmp_path):
         @asset
         def b() -> int:
             return 2
+
+
+        @asset
+        def c() -> int:
+            return 3
         """,
     )
 
-    proc = cli(tmp_path, "get", "a,b", "p.py", "--json", code=1, BARCA_POOL_SIZE="1")
+    proc = cli(tmp_path, "get", "a,b,c", "p.py", "--json", code=1, BARCA_POOL_SIZE="1")
 
-    steps = {s["id"]: s["status"] for s in json.loads(proc.stdout)["steps"]}
-    assert steps["p.py:a"] == "failed" and steps["p.py:b"] == "ran"
-    pids = {line.split()[1] for line in (tmp_path / "pids.txt").read_text().splitlines()}
-    assert len(pids) == 1
+    statuses = sorted(s["status"] for s in json.loads(proc.stdout)["steps"])
+    assert statuses == ["failed", "ran", "ran"]
+    # The first step to start failed; the other two started after it, on the same process.
+    starts = [line.split() for line in (tmp_path / "pids.txt").read_text().splitlines()]
+    assert len(starts) == 3
+    assert {pid for _, pid in starts} == {starts[0][1]}
 
 
 INPUT_ORDER = """
@@ -328,7 +336,35 @@ def test_the_steps_timeout_covers_the_callback(tmp_path):
 
     proc = cli(tmp_path, "get", "a", "p.py", code=1)
 
-    assert "exceeded timeout" in proc.stderr
+    assert "'p.py:a (on_step_start)' exceeded timeout" in proc.stderr
+
+
+def test_the_callback_and_the_function_share_the_timeout(tmp_path):
+    # Each fits in the timeout alone; together they don't.
+    write(
+        tmp_path,
+        """
+        import time
+
+        import barca
+        from barca import asset
+
+
+        @barca.on_step_start
+        def slow_start(step):
+            time.sleep(1.2)
+
+
+        @asset(timeout_seconds=2)
+        def a() -> int:
+            time.sleep(1.2)
+            return 1
+        """,
+    )
+
+    proc = cli(tmp_path, "get", "a", "p.py", code=1)
+
+    assert "'p.py:a' exceeded timeout" in proc.stderr
 
 
 MANUAL = Path(__file__).resolve().parents[2] / "crates/barca-cli/docs/assets.md"

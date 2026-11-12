@@ -460,14 +460,18 @@ def one_account() -> int:
   no step before that. Registering the same function again does nothing; callbacks run in the
   order they were registered.
 - It runs once per step that runs: a cached step starts nothing. A batched call
-  (([Batched Partitions](/reference/batched-partitions/))) starts once for all its keys, with its first key's
+  ([Batched Partitions](/reference/batched-partitions/)) starts once for all its keys, with its first key's
   `node_id`, and a `parallel()` branch starts with its caller's weight.
-- It runs within the step's `timeout_seconds`, timed on its own. What it prints goes to the
-  step's log. An exception fails the step before its inputs load, as an exception in the
-  function would, and the worker goes on to its next step.
-- It is for resource settings. It is not part of any run hash ([Hashing](/reference/hashing/)): editing it re-runs
-  nothing, so a setting that changes what a step returns (a time zone, a seed) belongs in the
-  step's own code.
+- The callbacks and the function share the step's `timeout_seconds` (reading the inputs is not
+  counted), and a timeout in a callback names it: `'p.py:a (on_step_start)' exceeded timeout`.
+  Under a timeout the callback runs on a helper thread, so set process-wide settings only (the
+  DuckDB connection, environment variables, a library's thread pool), not thread-local ones
+  or signal handlers.
+- What it prints goes to the step's log. An exception fails the step before its inputs load,
+  as an exception in the function would, and the worker goes on to its next step.
+- It is for resource settings, and it is not part of any run hash
+  ([Hashing](/reference/hashing/)): editing it re-runs nothing, so a setting that
+  changes what a step returns (a time zone, a seed) belongs in the step's own code.
 - It runs inside the worker only. A step function called directly, outside barca, runs no
   callback.
 
