@@ -39,7 +39,8 @@ every registered callback in registration order with a `StepStart(node_id, weigh
 step's node id (a batched call's first key) and its `weight=` from the step frame (1 when the
 frame has none). A cached step starts nothing; a `parallel()` branch has its caller's weight.
 Callbacks run with the step's output capture and share the step's `timeout_seconds` with
-its function (input reading is not counted); under a timeout they run on a helper thread, so
+its function (input reading is not counted; a timeout message names the step's
+`timeout_seconds`). Unless the step sets `timeout_seconds=0` they run on a helper thread, so
 they are for process-wide settings. One that
 raises fails that step as a user-code failure, before its inputs load; the worker survives and
 runs its next step. Callbacks are not part of any run hash: they exist to size per-step

@@ -444,7 +444,7 @@ def on_step_start(callback: Callable[[StepStart], Any], /) -> Callable[[StepStar
     ``weight=``. It shares the step's ``timeout_seconds`` with the function and may run on a
     helper thread, so set process-wide settings only; what it prints goes to the step's log;
     an exception fails the step. It is not part of any run hash.
-    See ``barca docs assets``, "Heavy steps".
+    See ``barca docs assets``, "Sizing the worker for each step".
     """
     return _hooks.on_step_start(callback)
 

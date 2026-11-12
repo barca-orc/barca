@@ -364,7 +364,8 @@ def test_the_callback_and_the_function_share_the_timeout(tmp_path):
 
     proc = cli(tmp_path, "get", "a", "p.py", code=1)
 
-    assert "'p.py:a' exceeded timeout" in proc.stderr
+    # The message names the timeout the step set, not what the callback left of it.
+    assert "'p.py:a' exceeded timeout of 2s" in proc.stderr
 
 
 MANUAL = Path(__file__).resolve().parents[2] / "crates/barca-cli/docs/assets.md"

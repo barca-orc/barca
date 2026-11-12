@@ -459,9 +459,9 @@ def one_account() -> int:
   `node_id`, and a `parallel()` branch starts with its caller's weight.
 - The callbacks and the function share the step's `timeout_seconds` (reading the inputs is not
   counted), and a timeout in a callback names it: `'p.py:a (on_step_start)' exceeded timeout`.
-  Under a timeout the callback runs on a helper thread, so set process-wide settings only (the
-  DuckDB connection, environment variables, a library's thread pool), not thread-local ones
-  or signal handlers.
+  Unless the step sets `timeout_seconds=0`, the callback runs on a helper thread (not the
+  function's), so set process-wide settings only (the DuckDB connection, environment
+  variables, a library's thread pool), not thread-local ones or signal handlers.
 - What it prints goes to the step's log. An exception fails the step before its inputs load,
   as an exception in the function would, and the worker goes on to its next step.
 - It is for resource settings, and it is not part of any run hash

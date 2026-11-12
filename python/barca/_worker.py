@@ -139,8 +139,13 @@ def _run_with_timeout(
     timeout_seconds: float,
     *,
     label: str | None = None,
+    limit_seconds: float | None = None,
 ) -> Any:
-    """Run a function with a timeout. Raises TimeoutError if exceeded."""
+    """Run a function with a timeout. Raises TimeoutError if exceeded.
+
+    `limit_seconds` is the timeout the message names when it differs from the time waited (a
+    step's function gets what its `barca.on_step_start` callbacks left of `timeout_seconds`).
+    """
     import threading
     from contextvars import copy_context
 
@@ -166,7 +171,7 @@ def _run_with_timeout(
     if thread.is_alive():
         error = TimeoutError(
             f"Step '{label or getattr(fn, '__name__', 'step')}' exceeded timeout of "
-            f"{timeout_seconds}s"
+            f"{limit_seconds if limit_seconds is not None else timeout_seconds}s"
         )
         # The step is still running in its thread: this interpreter is not free for more work.
         error._barca_still_running = True  # ty: ignore[unresolved-attribute]
@@ -722,14 +727,17 @@ def _call(
     """
     # Legacy pickle recovery may have activated a different producer directory.
     activate_source_path(begun.source)
-    timeout = step.get("timeout_seconds", 0)
+    limit = step.get("timeout_seconds", 0)
+    timeout = limit
     if timeout and timeout > 0 and started:
         # What the callbacks left. They finished within the timeout, so this is above zero.
         timeout = max(timeout - started, 1e-3)
     fn = begun.fn
     with captured(begun.out, begun.err):
         if timeout and timeout > 0:
-            return _run_with_timeout(lambda: fn(*args, **kwargs), {}, timeout, label=label)
+            return _run_with_timeout(
+                lambda: fn(*args, **kwargs), {}, timeout, label=label, limit_seconds=limit
+            )
         return fn(*args, **kwargs)
 
 
