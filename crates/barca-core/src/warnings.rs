@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-use serde::{Deserialize, Serialize};
+pub use crate::reports::PlanWarning;
 
 use crate::dag::Dag;
 use crate::model::{DagNode, NodeKind};
@@ -46,23 +46,6 @@ const NAMES_IN_LINE: usize = 6;
 
 /// At most this many names or patterns are spelled out in the stderr summary line.
 const NAMES_IN_SUMMARY: usize = 5;
-
-/// A plan-time warning about one step, found by static analysis (no user code is imported).
-///
-/// `get`, `run`, their `--dry-run` and `plan` report the same list for the same plan: one line
-/// each on stderr and the `warnings` array in JSON output (`barca docs contract`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct PlanWarning {
-    /// What was found: `unused_input` or `undeclared_env`.
-    pub kind: String,
-    /// The step's node id (`file.py:name`).
-    pub node: String,
-    /// The parameter concerned (`unused_input`), or the environment variable (`undeclared_env`).
-    pub param: String,
-    /// The warning in words, with what to do about it.
-    pub message: String,
-}
 
 /// The warnings for the steps of `plan`, sorted by node, parameter and kind: one per (step,
 /// unused input) and one per (step, undeclared environment variable).

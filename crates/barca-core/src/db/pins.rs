@@ -4,7 +4,7 @@
 //! it as that materialization and never computes it ([`crate::freshness::load_pins`]).
 
 use super::*;
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 use serde::{Deserialize, Serialize};
 
 /// The table, created by `init_db` and by the additive migration (`schema::ddl::ADDED_TABLES`).

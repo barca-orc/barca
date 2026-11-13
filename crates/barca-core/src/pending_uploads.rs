@@ -190,14 +190,14 @@ pub(crate) async fn settle(
 pub(crate) fn report(
     pending: &[PendingUpload],
     error: Option<String>,
-) -> Option<crate::results::UploadsReport> {
+) -> Option<crate::reports::UploadsReport> {
     if pending.is_empty() && error.is_none() {
         return None;
     }
     let mut nodes: Vec<String> = pending.iter().map(|u| u.node_id.clone()).collect();
     nodes.sort();
     nodes.dedup();
-    Some(crate::results::UploadsReport {
+    Some(crate::reports::UploadsReport {
         pending: pending.len(),
         error: error.or_else(|| pending.iter().rev().find_map(|u| u.error.clone())),
         nodes,
