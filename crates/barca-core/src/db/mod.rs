@@ -92,10 +92,9 @@ pub use pins::{
     set_pin,
 };
 pub(crate) use pins::{pins_on, success_at};
-pub(crate) use run_liveness::local_host;
 pub use run_liveness::{AliveRun, alive_running_runs, alive_running_runs_in};
 use run_liveness::{interrupted_runs, mark_interrupted_runs};
-pub(crate) use run_liveness::{live_runs, pid_alive, runs_alive_here};
+pub(crate) use run_liveness::{live_runs, runs_alive_here};
 pub(crate) use run_steps::get_run_steps;
 #[cfg(test)]
 pub(crate) use run_steps::worker_exit;
@@ -328,14 +327,14 @@ pub(crate) struct DbLock {
 }
 
 pub(crate) async fn lock_db(db_path: &str) -> Result<DbLock, BarcaError> {
-    lock_db_with_until(db_path, crate::helper_proc::Until::done()).await
+    lock_db_with_until(db_path, crate::process::Until::done()).await
 }
 
 /// Cancellation applies only to lock admission. The caller must finish any admitted
 /// atomic database mutation before releasing this lock.
 pub(crate) async fn lock_db_with_until(
     db_path: &str,
-    until: crate::helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<DbLock, BarcaError> {
     let guard = until.admit(db_guard()).await?;
     let lock = until
@@ -622,12 +621,12 @@ pub(crate) fn empty_file(path: &str) -> bool {
 /// for the duration of their work on the returned connection; the returned
 /// handle holds the cross-process lock until it is dropped.
 pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, libsql::Connection), BarcaError> {
-    open_conn_with_until(db_path, crate::helper_proc::Until::done()).await
+    open_conn_with_until(db_path, crate::process::Until::done()).await
 }
 
 pub(crate) async fn open_conn_with_until(
     db_path: &str,
-    until: crate::helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<(DbHandle, libsql::Connection), BarcaError> {
     if is_read_view(db_path) {
         until.check()?;
@@ -955,7 +954,7 @@ mod fold_log_tests {
             })
         };
         let copy = dir.path().join("backup.db");
-        let digest = copy_for_backup(&path, &copy, None, crate::helper_proc::Until::done())
+        let digest = copy_for_backup(&path, &copy, None, crate::process::Until::done())
             .await
             .unwrap()
             .unwrap();

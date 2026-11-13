@@ -281,7 +281,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             run.target.unwrap_or("").to_string(),
             run.steps_total.map(|n| n.to_string()).unwrap_or_default(),
             std::process::id().to_string(),
-            local_host(),
+            crate::process::local_host(),
             owner,
             run.trigger.triggered_by.as_str().to_string(),
             run.trigger.scheduled_at.clone().unwrap_or_default(),
@@ -712,7 +712,7 @@ pub(crate) async fn insert_run_if_absent(
             target.unwrap_or("").to_string(),
             steps_total.to_string(),
             std::process::id().to_string(),
-            local_host(),
+            crate::process::local_host(),
         ],
     )
     .await

@@ -193,7 +193,7 @@ pub(crate) async fn write_in(
     conn.execute(CREATE, ())
         .await
         .map_err(failed("creating the table"))?;
-    let host = db::local_host();
+    let host = crate::process::local_host();
     let mut upsert = db::sink_publications::UpsertPublication::prepare(conn)
         .await
         .map_err(failed("recording"))?;
@@ -253,7 +253,7 @@ mod tests {
         .await;
         record(&path, "r2", &[publication("p.py:a", "out.json", "B")]).await;
         let read = published(&path, &wanted()).await.unwrap();
-        let host = db::local_host();
+        let host = crate::process::local_host();
         assert_eq!(
             read.verdict(&host, "p.py:a", "out.json", "B"),
             Verdict::Current
