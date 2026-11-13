@@ -24,7 +24,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]  # --root overrides
 CRATES = ["barca-cli", "barca-compile", "barca-core", "barca-model", "barca-server"]
-LOCKED = {"barca", "barca-compile", "barca-core", "barca-model", "barca-server"}  # Cargo.lock package names
+# Cargo.lock package names
+LOCKED = {"barca", "barca-compile", "barca-core", "barca-model", "barca-server"}
 HEADINGS = {"Breaking", "Features", "Bug Fixes", "Performance", "Removed", "Documentation"}
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 

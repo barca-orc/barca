@@ -63,9 +63,7 @@ def test_unrelated_changes_turn_nothing_on(monkeypatch):
     monkeypatch.setattr(
         ci_changes, "changed_lines_mention", lambda base, path, pattern, head="HEAD": False
     )
-    why = ci_changes.decide(
-        "base", ["README.md", "crates/barca-compile/src/dag.rs", "ui/src/x.ts"]
-    )
+    why = ci_changes.decide("base", ["README.md", "crates/barca-compile/src/dag.rs", "ui/src/x.ts"])
     assert why == {"emulators": [], "duckdb1": [], "checkpoint": []}
 
 

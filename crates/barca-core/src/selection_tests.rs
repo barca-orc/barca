@@ -25,47 +25,47 @@ from barca import asset, collect, partitions, partitions_from, task
 
 @asset()
 def rate():
-return 2
+    return 2
 
 @asset(inputs={"rate": rate}, partitions={"retailer": partitions(["r1", "r2", "r3", "r4"])})
 def orders(retailer, rate):
-return 1
+    return 1
 
 @asset(partitions={"retailer": partitions_from(orders)})
 def revenue(retailer, orders):
-return 1
+    return 1
 
 @asset(partitions={"retailer": partitions(["r1", "r2", "r9"])})
 def returns(retailer):
-return 1
+    return 1
 
 @asset(partitions={"day": partitions(["d1", "d2"])})
 def calendar(day):
-return 1
+    return 1
 
 @asset(inputs={"calendar": calendar}, partitions={"retailer": partitions_from(revenue)})
 def daily(retailer, revenue, calendar):
-return 1
+    return 1
 
 @asset(inputs={"all": collect(revenue)})
 def total(all):
-return 1
+    return 1
 
 @asset(inputs={"total": total})
 def report(total):
-return 1
+    return 1
 
 @asset()
 def names():
-return ["r1", "r2"]
+    return ["r1", "r2"]
 
 @asset(partitions={"retailer": partitions_from(names)})
 def late(retailer):
-return 1
+    return 1
 
 @task(partitions={"retailer": partitions_from(orders)})
 def notify(retailer, orders):
-return None
+    return None
 "#;
 
 fn dag() -> Dag {
